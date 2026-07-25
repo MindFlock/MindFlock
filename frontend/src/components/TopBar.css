@@ -1,0 +1,257 @@
+/* Defensively neutralize the LEGACY Electron title-strip injection. Older app
+   builds inject `#grid { margin-top:32px !important; height:calc(100vh-32px) }`
+   which, now that #grid lives below a real top bar, pushes it off the bottom of
+   the window (content cut off). The current shell no longer injects it, but a
+   running Electron process keeps the old main.js until it's fully quit — a
+   window reload won't drop it. Higher specificity + !important wins. */
+body #grid {
+  margin-top: 0 !important;
+  height: auto !important;
+  align-self: auto !important;
+}
+
+/* Same legacy-injection defense for the window-controls strip. The old main.js
+   stretched #mf-winctl across the whole top (left:0 / left:260px) as a drag
+   region at max z-index, so it sat ON TOP of the top-bar buttons and swallowed
+   their clicks. Force it back to a right-anchored, content-width cluster (the
+   new shell already does this) so New / Recent / Command / Settings are
+   clickable even before Electron is fully restarted. */
+body #mf-winctl {
+  left: auto !important;
+  width: auto !important;
+}
+
+/* Top bar (VSCode/Cursor-style): a fixed full-width strip. Kept OUT of the body
+   grid on purpose — collapsing the sidebar (Ctrl+B) must not re-lay-out the top
+   bar, or Electron leaves its -webkit-app-region drag map stale and the window
+   buttons stop responding until the next toggle. */
+#topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 60;
+  height: var(--topbar-h, 40px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 8px;
+  /* --panel / --border / --text are REBOUND for this whole region in
+     styles/regions.css, so every var() below already carries the top bar's own
+     hue under a multi-color theme set (Macaw &c.). Nothing to do per rule. */
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  /* Native window drag in the Electron shell; ignored in a browser. Interactive
+     controls below opt back out with -webkit-app-region: no-drag. */
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+#topbar .tb-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Wordmark in normal flow between two equal flex:1 zones (the left cluster+menu
+   on one side, the drag region on the other). Equal zones => the brand sits at
+   true window center whenever there's room. When the left zone's content is
+   wider than its share it grows past it (default min-width:auto), pushing the
+   brand toward the right while the drag zone shrinks — so it shifts instead of
+   ever overlapping the menu. pointer-events:none so it never steals a click or
+   the window-drag. */
+#topbar .tb-brand {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--topbar-h, 40px);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Left zone holds the sidebar/theme cluster + the menu; flex:1 balances the
+   drag zone so the brand lands dead-center when the window is wide enough. */
+#topbar .tb-start {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+}
+
+#topbar .tb-menu {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The flexible tail is the drag handle; Electron window buttons overlay it. */
+#topbar .tb-drag {
+  flex: 1;
+  align-self: stretch;
+}
+
+/* Everything clickable opts out of the drag region. */
+#topbar button,
+#topbar .tb-drop {
+  -webkit-app-region: no-drag;
+}
+
+/* One consistent font for every top-bar control. Native <button> does NOT
+   inherit the page font-family by default, so without this some buttons render
+   in the UA button font while the wordmark uses the app font. */
+#topbar button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* Icon/label buttons in the top bar. */
+#topbar .tb-item,
+#topbar .tb-drop-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-width: 30px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#topbar .tb-item:hover,
+#topbar .tb-drop-btn:hover {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+/* Flock mark before the sidebar toggle. The PNG is used as a pure-alpha mask
+   painted with the theme's text color, so it flips automatically between
+   light/dark mode and recolors with every surface theme. */
+#topbar #brand-logo {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  background-color: var(--text);
+  -webkit-mask: url(/logo.png) center / contain no-repeat;
+  mask: url(/logo.png) center / contain no-repeat;
+  pointer-events: none;
+}
+
+#topbar #sidebar-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  width: 32px;
+  padding: 0;
+  line-height: 0;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#topbar #sidebar-toggle:hover {
+  background: var(--panel-2);
+  color: var(--accent);
+}
+
+#topbar #sidebar-toggle svg {
+  display: block;
+}
+
+#topbar #theme-btn {
+  height: 28px;
+  padding: 0 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text);
+  cursor: pointer;
+}
+
+#topbar #theme-btn:hover {
+  background: var(--panel-2);
+}
+
+/* Kills the inline-SVG baseline gap (same as #sidebar-toggle svg). */
+#topbar #theme-btn svg {
+  display: block;
+}
+
+/* Matches the neutral .tb-item look (same as the Recent button). */
+#topbar #new-btn.tb-new {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#topbar #new-btn.tb-new:hover {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+#topbar #notif-btn {
+  position: relative;
+}
+
+/* Top-bar dropdown (combined Recent / Disk menu). */
+#topbar .tb-drop {
+  position: relative;
+}
+
+#topbar .tb-drop-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 3200;
+  display: none;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+#topbar .tb-drop.open .tb-drop-panel {
+  display: flex;
+}
+
+#topbar .tb-drop-panel button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#topbar .tb-drop-panel button:hover {
+  background: var(--panel-2);
+}
+

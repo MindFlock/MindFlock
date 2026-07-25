@@ -1,0 +1,112 @@
+/* Settings → Mobile: white QR card + URL rows */
+#mobile-qr {
+  background: #fff;
+  border-radius: 12px;
+  padding: 12px;
+  width: max-content;
+  margin: 6px 0 16px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
+}
+
+#mobile-qr svg {
+  display: block;
+  width: 200px;
+  height: 200px;
+}
+
+/* Fixed label column + flexible URL column so every row aligns and long
+   URLs wrap inside their own cell instead of shoving the label around. */
+.mobile-url-row {
+  display: grid;
+  grid-template-columns: 104px 1fr;
+  align-items: baseline;
+  gap: 4px 14px;
+  margin: 6px 0;
+}
+
+.mobile-url-row .set-label {
+  min-width: 0;
+}
+
+.mobile-url-row a {
+  color: var(--accent);
+  word-break: break-all;
+  justify-self: start;
+}
+
+/* Settings → System logs: toolbar + read-only monospace tail viewer */
+.logs-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0 10px;
+  flex-wrap: wrap;
+}
+
+.logs-toolbar select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.logs-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#logs-meta {
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.logs-view {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 12px;
+  margin: 0;
+  height: 56vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* System logs pane: a grid box tailing /api/logs (toggled by the 🗒 button). */
+.syslogs-pane .pane-head .state {
+  display: inline;
+  flex: none;
+  color: var(--muted);
+}
+
+.syslogs-source {
+  margin-left: 8px;
+  max-width: 170px;
+  font-size: 11px;
+  padding: 2px 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.syslogs-view {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg);
+  color: var(--text);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+

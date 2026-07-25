@@ -1,0 +1,54 @@
+/* Global stylesheet manifest — the only file that knows the whole picture.
+ *
+ * Two things live here and nowhere else:
+ *
+ * 1. The cascade LAYER ORDER, declared below. Layers beat specificity, so a
+ *    rule in `theme` always wins over one in `components`, no matter which file
+ *    loaded first or how specific either selector is. That's what lets
+ *    component sheets sit next to their components without a numbering scheme
+ *    to police them.
+ * 2. The list of component sheets. Order within `components` still breaks ties
+ *    between equally-specific rules, so the original style.css sequence is
+ *    preserved here (old NNN- prefixes kept as comments for traceability).
+ *
+ * Adding a component? Drop `Foo.css` next to `Foo.tsx` and add one line to the
+ * components block. Rules that must override everything go in theme-light.css. */
+@layer tokens, base, components, theme;
+
+@import "@xterm/xterm/css/xterm.css" layer(base);
+
+@import "./tokens.css" layer(tokens);
+@import "./base.css" layer(base);
+
+@import "../components/TopBar.css" layer(components); /* 020 */
+@import "../components/sidebar/Sidebar.css" layer(components); /* 030 */
+@import "../components/settings/SettingsDialog.css" layer(components); /* 040 */
+@import "../components/settings/screens/screens.css" layer(components); /* 050 */
+@import "../components/sidebar/toolbars.css" layer(components); /* 060 */
+@import "../components/dialogs/todoPrompts.css" layer(components); /* 070 */
+@import "../components/sidebar/SidebarRow.css" layer(components); /* 080 */
+@import "../components/usage/usage.css" layer(components); /* 090 */
+@import "../components/grid/QueueTab.css" layer(components); /* 100 */
+@import "../components/NotificationsBell.css" layer(components); /* 110 + 270 */
+@import "../components/sidebar/BulkBar.css" layer(components); /* 110 */
+@import "../components/sidebar/SessionFilter.css" layer(components); /* 110 */
+@import "../components/palette/ShortcutsSheet.css" layer(components); /* 120 */
+@import "../components/grid/budgetNotifyTemplates.css" layer(components); /* 130 */
+@import "../components/grid/Pane.css" layer(components); /* 140 */
+@import "../components/grid/DiffTab.css" layer(components); /* 150 */
+@import "../components/grid/paneOverlays.css" layer(components); /* 160 */
+@import "../components/dialogs/NewSessionDialog.css" layer(components); /* 170 */
+@import "../components/dialogs/smallDialogs.css" layer(components); /* 180 */
+@import "../components/ConnBanner.css" layer(components); /* 200 */
+@import "../components/dialogs/SetupDialog.css" layer(components); /* 210 */
+@import "../components/palette/CommandPalette.css" layer(components); /* 220 */
+@import "../components/grid/contextPresets.css" layer(components); /* 230 */
+@import "../components/grid/missingWorkspace.css" layer(components); /* 240 */
+@import "../components/settings/screens/ticketingConnections.css" layer(components); /* 250 */
+@import "../components/settings/screens/mobileLogs.css" layer(components); /* 260 */
+@import "../components/capsGate.css" layer(components); /* 270 */
+@import "../components/dialogs/DeviceDialog.css" layer(components); /* 270 */
+@import "../components/settings/screens/Appearance.css" layer(components); /* 280 */
+
+@import "./regions.css" layer(theme);
+@import "./theme-light.css" layer(theme); /* 190 */

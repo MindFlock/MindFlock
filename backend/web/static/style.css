@@ -1,0 +1,7716 @@
+/* Getting-started hint callout. Uses the accent tint so it reads as a friendly
+   nudge, not a warning. Inline in the layout flow — see Hint.tsx. */
+
+.hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px;
+  padding: 8px 9px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  animation: hint-in 160ms ease-out;
+}
+
+@keyframes hint-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.hint-icon {
+  flex: none;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.hint-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.hint-text {
+  color: var(--text);
+}
+
+.hint-text b,
+.hint-text strong {
+  font-weight: 600;
+}
+
+.hint-action {
+  margin-top: 6px;
+  padding: 3px 10px;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hint-action:hover {
+  filter: brightness(1.08);
+}
+
+.hint-dismiss {
+  flex: none;
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hint-dismiss:hover {
+  color: var(--text);
+}
+
+/* In the sidebar footer the surrounding padding already spaces things out. */
+.hint.hint-footer {
+  margin: 0 0 8px;
+}
+/* The welcome walkthrough card. Rides the shared .modal overlay. */
+
+#welcome-tour {
+  z-index: 200;
+}
+
+.wt-card {
+  position: relative;
+  width: min(460px, calc(100vw - 40px));
+  /* Constant size across every slide — the body flexes to absorb length
+     differences so the card never resizes as you page through. */
+  height: 440px;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 28px 26px 20px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  text-align: center;
+  animation: wt-in 180ms ease-out;
+}
+
+@keyframes wt-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.wt-skip {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wt-skip:hover {
+  color: var(--text);
+}
+
+/* Centered content region — holds the head, body and (optional) setup button as
+   one group and vertically centers them, so the card looks balanced at its fixed
+   height regardless of how much text a slide has. Scrolls if a slide overflows. */
+.wt-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.wt-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.wt-icon {
+  font-size: 38px;
+  line-height: 1;
+}
+
+/* MindFlock mark, recolored with the accent via CSS mask (same technique as the
+   top-bar logo) so it flips cleanly across themes. */
+.wt-logo {
+  width: 44px;
+  height: 44px;
+  background-color: var(--accent);
+  -webkit-mask: url(/logo.png) center / contain no-repeat;
+  mask: url(/logo.png) center / contain no-repeat;
+}
+
+.wt-title {
+  margin: 0;
+  font-size: 19px;
+  color: var(--text);
+}
+
+.wt-body {
+  margin: 0;
+  max-width: 42ch;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.wt-body b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.wt-body code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/* Secondary CTA on setup slides — jumps straight to the relevant Settings
+   screen. Sits between the body and the progress dots. */
+.wt-setup {
+  align-self: center;
+  margin-top: 16px;
+  padding: 6px 14px;
+  background: color-mix(in srgb, var(--accent) 15%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wt-setup:hover {
+  background: color-mix(in srgb, var(--accent) 25%, var(--panel));
+}
+
+/* Footer group — dots + nav, pinned at the bottom of the fixed-height card. */
+.wt-foot {
+  flex: none;
+  padding-top: 16px;
+}
+
+.wt-dots {
+  display: flex;
+  justify-content: center;
+  gap: 7px;
+  margin-bottom: 16px;
+}
+
+.wt-dot {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--border);
+  cursor: pointer;
+  transition: background 120ms, transform 120ms;
+}
+
+.wt-dot:hover {
+  background: var(--muted);
+}
+
+.wt-dot.active {
+  background: var(--accent);
+  transform: scale(1.25);
+}
+
+.wt-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.wt-nav-end {
+  display: flex;
+  gap: 8px;
+}
+
+.wt-btn {
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.wt-btn.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.wt-btn.primary:hover {
+  filter: brightness(1.08);
+}
+
+.wt-btn.ghost {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.wt-btn.ghost:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+
+.wt-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* Global stylesheet manifest — the only file that knows the whole picture.
+ *
+ * Two things live here and nowhere else:
+ *
+ * 1. The cascade LAYER ORDER, declared below. Layers beat specificity, so a
+ *    rule in `theme` always wins over one in `components`, no matter which file
+ *    loaded first or how specific either selector is. That's what lets
+ *    component sheets sit next to their components without a numbering scheme
+ *    to police them.
+ * 2. The list of component sheets. Order within `components` still breaks ties
+ *    between equally-specific rules, so the original style.css sequence is
+ *    preserved here (old NNN- prefixes kept as comments for traceability).
+ *
+ * Adding a component? Drop `Foo.css` next to `Foo.tsx` and add one line to the
+ * components block. Rules that must override everything go in theme-light.css. */
+@layer tokens, base, components, theme;
+@layer base{
+
+/**
+ * Copyright (c) 2014 The xterm.js authors. All rights reserved.
+ * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)
+ * https://github.com/chjj/term.js
+ * @license MIT
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ *
+ * Originally forked from (with the author's permission):
+ *   Fabrice Bellard's javascript vt100 for jslinux:
+ *   http://bellard.org/jslinux/
+ *   Copyright (c) 2011 Fabrice Bellard
+ *   The original design remains. The terminal itself
+ *   has been extended to include xterm CSI codes, among
+ *   other features.
+ */
+
+/**
+ *  Default styles for xterm.js
+ */
+
+.xterm {
+    cursor: text;
+    position: relative;
+    user-select: none;
+    -ms-user-select: none;
+    -webkit-user-select: none;
+}
+
+.xterm.focus,
+.xterm:focus {
+    outline: none;
+}
+
+.xterm .xterm-helpers {
+    position: absolute;
+    top: 0;
+    /**
+     * The z-index of the helpers must be higher than the canvases in order for
+     * IMEs to appear on top.
+     */
+    z-index: 5;
+}
+
+.xterm .xterm-helper-textarea {
+    padding: 0;
+    border: 0;
+    margin: 0;
+    /* Move textarea out of the screen to the far left, so that the cursor is not visible */
+    position: absolute;
+    opacity: 0;
+    left: -9999em;
+    top: 0;
+    width: 0;
+    height: 0;
+    z-index: -5;
+    /** Prevent wrapping so the IME appears against the textarea at the correct position */
+    white-space: nowrap;
+    overflow: hidden;
+    resize: none;
+}
+
+.xterm .composition-view {
+    /* TODO: Composition position got messed up somewhere */
+    background: #000;
+    color: #FFF;
+    display: none;
+    position: absolute;
+    white-space: nowrap;
+    z-index: 1;
+}
+
+.xterm .composition-view.active {
+    display: block;
+}
+
+.xterm .xterm-viewport {
+    /* On OS X this is required in order for the scroll bar to appear fully opaque */
+    background-color: #000;
+    overflow-y: scroll;
+    cursor: default;
+    position: absolute;
+    right: 0;
+    left: 0;
+    top: 0;
+    bottom: 0;
+}
+
+.xterm .xterm-screen {
+    position: relative;
+}
+
+.xterm .xterm-screen canvas {
+    position: absolute;
+    left: 0;
+    top: 0;
+}
+
+.xterm .xterm-scroll-area {
+    visibility: hidden;
+}
+
+.xterm-char-measure-element {
+    display: inline-block;
+    visibility: hidden;
+    position: absolute;
+    top: 0;
+    left: -9999em;
+    line-height: normal;
+}
+
+.xterm.enable-mouse-events {
+    /* When mouse events are enabled (eg. tmux), revert to the standard pointer cursor */
+    cursor: default;
+}
+
+.xterm.xterm-cursor-pointer,
+.xterm .xterm-cursor-pointer {
+    cursor: pointer;
+}
+
+.xterm.column-select.focus {
+    /* Column selection mode */
+    cursor: crosshair;
+}
+
+.xterm .xterm-accessibility:not(.debug),
+.xterm .xterm-message {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    z-index: 10;
+    color: transparent;
+    pointer-events: none;
+}
+
+.xterm .xterm-accessibility-tree:not(.debug) *::selection {
+  color: transparent;
+}
+
+.xterm .xterm-accessibility-tree {
+  user-select: text;
+  white-space: pre;
+}
+
+.xterm .live-region {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+.xterm-dim {
+    /* Dim should not apply to background, so the opacity of the foreground color is applied
+     * explicitly in the generated class and reset to 1 here */
+    opacity: 1 !important;
+}
+
+.xterm-underline-1 { text-decoration: underline; }
+.xterm-underline-2 { text-decoration: double underline; }
+.xterm-underline-3 { text-decoration: wavy underline; }
+.xterm-underline-4 { text-decoration: dotted underline; }
+.xterm-underline-5 { text-decoration: dashed underline; }
+
+.xterm-overline {
+    text-decoration: overline;
+}
+
+.xterm-overline.xterm-underline-1 { text-decoration: overline underline; }
+.xterm-overline.xterm-underline-2 { text-decoration: overline double underline; }
+.xterm-overline.xterm-underline-3 { text-decoration: overline wavy underline; }
+.xterm-overline.xterm-underline-4 { text-decoration: overline dotted underline; }
+.xterm-overline.xterm-underline-5 { text-decoration: overline dashed underline; }
+
+.xterm-strikethrough {
+    text-decoration: line-through;
+}
+
+.xterm-screen .xterm-decoration-container .xterm-decoration {
+	z-index: 6;
+	position: absolute;
+}
+
+.xterm-screen .xterm-decoration-container .xterm-decoration.xterm-decoration-top-layer {
+	z-index: 7;
+}
+
+.xterm-decoration-overview-ruler {
+    z-index: 8;
+    position: absolute;
+    top: 0;
+    right: 0;
+    pointer-events: none;
+}
+
+.xterm-decoration-top {
+    z-index: 2;
+    position: relative;
+}
+}
+@layer tokens{
+/* Design tokens — the whole palette in one place.
+ *
+ * Everything else in the app styles itself through these variables, which is
+ * what lets a theme swap (Settings → Appearance) and the 🌙 light toggle work
+ * without touching component CSS. theme.css — served separately, alongside
+ * mobile.html — overrides the same names per html[data-accent] / [data-surface].
+ *
+ * :root and .light have EQUAL specificity (0,1,0), so .light must stay after
+ * :root for the light palette to win. */
+:root {
+  --bg: #0f1117;
+  --panel: #171a23;
+  --panel-2: #1e222e;
+  --border: #2a2f3c;
+  --text: #d7dae3;
+  --muted: #8a90a2;
+  --accent: #7d56f4;
+  /* Accent companions: --accent-rgb feeds rgba() glows/tints; --accent-deep is
+     the darker text variant used on light backgrounds. All three swap together
+     per accent theme (Settings → Appearance). */
+  --accent-rgb: 125, 86, 244;
+  --accent-deep: #5b3fc0;
+  --green: #51bd73;
+  --red: #de613e;
+  --gold: #ffd700;
+  /* Terminal canvas colors — read by app.js termTheme() so xterm follows the
+     surface theme (theme.css html[data-surface=…] blocks override these). */
+  --term-bg: #0f1117;
+  --term-fg: #d7dae3;
+
+  /* --- Region tokens (what the multi-color theme sets steer) ----------------
+     A theme set used to be one palette for the whole window. The multi-color
+     sets in theme.css — Macaw, Lorikeet, Toucan… — give the top bar and the
+     sidebar a hue of their own by overriding these; styles/regions.css is what
+     turns them into pixels. Aliased to the globals here, so every single-hue
+     set renders exactly as it did before.
+
+     Declared on :root ONLY (never repeated in .light): a custom property
+     resolves its var()s against the value that won on the same element, so
+     these pick up .light's --panel/--text automatically. */
+  --topbar-bg: var(--panel);
+  --topbar-hi: var(--panel-2);
+  --topbar-border: var(--border);
+  --topbar-text: var(--text);
+  --topbar-muted: var(--muted);
+  --sidebar-bg: var(--panel);
+  --sidebar-hi: var(--panel-2);
+  --sidebar-border: var(--border);
+  --sidebar-text: var(--text);
+  --sidebar-muted: var(--muted);
+
+  /* Unshadowed copies of the app palette. A region rebinds --panel & friends on
+     itself, which shadows them for everything nested inside; popovers that are
+     app furniture rather than bar chrome read these to opt back out. */
+  --app-panel: var(--panel);
+  --app-panel-2: var(--panel-2);
+  --app-border: var(--border);
+  --app-text: var(--text);
+  --app-muted: var(--muted);
+}
+
+/* Light mode. `.light` is set on <html> early (in index.html) and toggled by
+   the header button. Swapping these variables recolors nearly the whole UI; the
+   handful of hard-coded colors that don't survive the swap are patched in
+   theme-light.css. The xterm terminal intentionally stays dark. */
+.light {
+  --bg: #f4f5f8;
+  --panel: #ffffff;
+  --panel-2: #eceef3;
+  --border: #d3d8e2;
+  --text: #1b2030;
+  --muted: #5d6577;
+  --accent: #7d56f4;
+  --accent-rgb: 125, 86, 244;
+  --accent-deep: #5b3fc0;
+  --green: #2e9e54;
+  --red: #d6451f;
+  --gold: #9a7400;
+  --term-bg: #ffffff;
+  --term-fg: #1b2030;
+}
+}
+@layer base{
+/* Reset + page skeleton. The app's outermost layout lives here and nowhere
+   else; components lay out their own insides. */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  grid-template-rows: 1fr;
+  height: 100vh;
+  /* Reserve the top-bar strip; the fixed #topbar sits in this band, so the
+     sidebar and grid start evenly beneath it. */
+  padding-top: var(--topbar-h, 40px);
+  overflow: hidden;
+}
+
+/* body is the 260px/1fr grid and #sidebar / #grid are its items, but React
+   mounts into #root — so #root has to be transparent to layout. */
+#root {
+  display: contents;
+}
+
+/* The terminal container adopted from the registry fills its pane host. */
+.term-container {
+  width: 100%;
+  height: 100%;
+}
+}
+@layer components{
+/* Defensively neutralize the LEGACY Electron title-strip injection. Older app
+   builds inject `#grid { margin-top:32px !important; height:calc(100vh-32px) }`
+   which, now that #grid lives below a real top bar, pushes it off the bottom of
+   the window (content cut off). The current shell no longer injects it, but a
+   running Electron process keeps the old main.js until it's fully quit — a
+   window reload won't drop it. Higher specificity + !important wins. */
+body #grid {
+  margin-top: 0 !important;
+  height: auto !important;
+  align-self: auto !important;
+}
+
+/* Same legacy-injection defense for the window-controls strip. The old main.js
+   stretched #mf-winctl across the whole top (left:0 / left:260px) as a drag
+   region at max z-index, so it sat ON TOP of the top-bar buttons and swallowed
+   their clicks. Force it back to a right-anchored, content-width cluster (the
+   new shell already does this) so New / Recent / Command / Settings are
+   clickable even before Electron is fully restarted. */
+body #mf-winctl {
+  left: auto !important;
+  width: auto !important;
+}
+
+/* Top bar (VSCode/Cursor-style): a fixed full-width strip. Kept OUT of the body
+   grid on purpose — collapsing the sidebar (Ctrl+B) must not re-lay-out the top
+   bar, or Electron leaves its -webkit-app-region drag map stale and the window
+   buttons stop responding until the next toggle. */
+#topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 60;
+  height: var(--topbar-h, 40px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 8px;
+  /* --panel / --border / --text are REBOUND for this whole region in
+     styles/regions.css, so every var() below already carries the top bar's own
+     hue under a multi-color theme set (Macaw &c.). Nothing to do per rule. */
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  /* Native window drag in the Electron shell; ignored in a browser. Interactive
+     controls below opt back out with -webkit-app-region: no-drag. */
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+#topbar .tb-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Wordmark in normal flow between two equal flex:1 zones (the left cluster+menu
+   on one side, the drag region on the other). Equal zones => the brand sits at
+   true window center whenever there's room. When the left zone's content is
+   wider than its share it grows past it (default min-width:auto), pushing the
+   brand toward the right while the drag zone shrinks — so it shifts instead of
+   ever overlapping the menu. pointer-events:none so it never steals a click or
+   the window-drag. */
+#topbar .tb-brand {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--topbar-h, 40px);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Left zone holds the sidebar/theme cluster + the menu; flex:1 balances the
+   drag zone so the brand lands dead-center when the window is wide enough. */
+#topbar .tb-start {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+}
+
+#topbar .tb-menu {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The flexible tail is the drag handle; Electron window buttons overlay it. */
+#topbar .tb-drag {
+  flex: 1;
+  align-self: stretch;
+}
+
+/* Everything clickable opts out of the drag region. */
+#topbar button,
+#topbar .tb-drop {
+  -webkit-app-region: no-drag;
+}
+
+/* One consistent font for every top-bar control. Native <button> does NOT
+   inherit the page font-family by default, so without this some buttons render
+   in the UA button font while the wordmark uses the app font. */
+#topbar button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* Icon/label buttons in the top bar. */
+#topbar .tb-item,
+#topbar .tb-drop-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-width: 30px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#topbar .tb-item:hover,
+#topbar .tb-drop-btn:hover {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+/* Flock mark before the sidebar toggle. The PNG is used as a pure-alpha mask
+   painted with the theme's text color, so it flips automatically between
+   light/dark mode and recolors with every surface theme. */
+#topbar #brand-logo {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  background-color: var(--text);
+  -webkit-mask: url(/logo.png) center / contain no-repeat;
+  mask: url(/logo.png) center / contain no-repeat;
+  pointer-events: none;
+}
+
+#topbar #sidebar-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  width: 32px;
+  padding: 0;
+  line-height: 0;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#topbar #sidebar-toggle:hover {
+  background: var(--panel-2);
+  color: var(--accent);
+}
+
+#topbar #sidebar-toggle svg {
+  display: block;
+}
+
+#topbar #theme-btn {
+  height: 28px;
+  padding: 0 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text);
+  cursor: pointer;
+}
+
+#topbar #theme-btn:hover {
+  background: var(--panel-2);
+}
+
+/* Kills the inline-SVG baseline gap (same as #sidebar-toggle svg). */
+#topbar #theme-btn svg {
+  display: block;
+}
+
+/* Matches the neutral .tb-item look (same as the Recent button). */
+#topbar #new-btn.tb-new {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#topbar #new-btn.tb-new:hover {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+#topbar #notif-btn {
+  position: relative;
+}
+
+/* Top-bar dropdown (combined Recent / Disk menu). */
+#topbar .tb-drop {
+  position: relative;
+}
+
+#topbar .tb-drop-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 3200;
+  display: none;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+#topbar .tb-drop.open .tb-drop-panel {
+  display: flex;
+}
+
+#topbar .tb-drop-panel button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#topbar .tb-drop-panel button:hover {
+  background: var(--panel-2);
+}
+} /* 020 */ @layer components{
+/* Sidebar */
+#sidebar {
+  /* --panel / --border / --text are REBOUND for this whole region in
+     styles/regions.css, so every var() here and in the sheets that style the
+     sidebar's insides (SidebarRow, toolbars, BulkBar…) already carries the
+     sidebar's own hue under a multi-color theme set (Macaw &c.). */
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#sidebar header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+#sidebar h1 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+#new-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#new-btn:hover {
+  filter: brightness(1.1);
+}
+
+/* The session-list section: a fixed anchor in the movable-section order that
+   the bars can be dropped above or below. It owns the flex-grow + scroll that
+   #instance-list used to have directly, so the list still fills the space and
+   scrolls regardless of where the bars sit. position:relative anchors its drop
+   cue. */
+.sessions-block {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Collapsed sidebar: drop the sidebar column entirely. The top-bar toggle stays
+   visible (no floating reopen button needed). The fixed #topbar is unaffected. */
+body.sidebar-collapsed {
+  grid-template-columns: 1fr;
+}
+
+body.sidebar-collapsed #sidebar {
+  display: none;
+}
+
+/* Tools row: session count on the left, a subtle keyboard-shortcuts link on
+   the right (status-bar-style help affordance). */
+#sidebar-footer .foot-row.foot-tools {
+  justify-content: space-between;
+}
+
+#sidebar-footer .foot-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+#sidebar-footer .foot-link:hover {
+  color: var(--text);
+}
+
+/* Footer "Customize" popover — pick which bars show in the sidebar. */
+#foot-customize {
+  position: relative;
+}
+
+#foot-customize .foot-link.open {
+  color: var(--text);
+}
+
+#foot-customize-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+  z-index: 60;
+}
+
+#foot-customize-menu .fc-title {
+  padding: 2px 8px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+#foot-customize-menu .fc-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+}
+
+#foot-customize-menu .fc-item:hover {
+  background: var(--panel-2);
+}
+
+#foot-customize-menu .fc-item input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+} /* 030 */ @layer components{
+/* Settings dialog (a modal like #recent-panel). The panel is a FIXED size —
+   width and height don't change with the selected screen; each screen's content
+   scrolls inside #settings-screens instead of resizing the dialog. (Capped to
+   the viewport so it still fits small windows.) */
+#settings-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 640px;
+  max-width: 92vw;
+  height: 82vh;
+  max-height: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+#settings-panel .ws-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#settings-panel .ws-head h2 {
+  margin: 0;
+  font-size: 16px;
+  flex: 1;
+}
+
+.set-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Getting-started block at the foot of General — set off from the settings
+   above it by a divider so it reads as its own group. */
+.onboarding-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.onboarding-block .set-section-title {
+  margin: 0;
+}
+
+/* Label + hint on the left, action button pinned right (button must not stretch
+   to full width like a default column .set-row would make it). */
+.onboarding-action {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.onboarding-action-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.onboarding-action .test-btn {
+  flex: none;
+  white-space: nowrap;
+}
+
+.set-row .set-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.set-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Standalone hint paragraphs (status lines, blurbs under a section title):
+   the screen's flex gap already provides the rhythm, so the browser's default
+   <p> margins would double it. */
+p.set-hint {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.set-row select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.set-row select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.set-switch-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+/* The row centers the label's line box on the switch, but the desktop app's
+   font (Segoe UI) sits the glyph low in that box, so the text reads as dropped
+   below the toggle. Nudge it up to sit level with the switch. Direct child
+   only: labels nested in a two-line block (.notif-rule-text) must NOT shift,
+   or they crowd the divider above the row. */
+.set-switch-row > .set-label {
+  position: relative;
+  top: -10px;
+}
+
+.ss-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ss-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.ss-row .ss-val {
+  min-width: 1.6em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.ss-row .set-hint {
+  white-space: nowrap;
+}
+
+/* Security → access-token reveal row */
+.token-reveal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.token-reveal code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+/* Notification rules list: evenly-spaced rows, each a label + description on the
+   left and its toggle on the right, hairline-separated (the container is a plain
+   div, so it needs its own rhythm — otherwise the rows crush together). */
+#notif-rules-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.notif-rule {
+  gap: 14px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.notif-rule:first-child {
+  border-top: none;
+  padding-top: 4px;
+}
+
+.notif-rule-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.notif-rule-text .set-label {
+  font-weight: 500;
+}
+
+.notif-rule-desc {
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.notif-rule .ca-switch {
+  flex: none;
+}
+} /* 040 */ @layer components{
+/* Productization settings sections + provider manager. The panel's own box —
+   including its fixed size — lives in SettingsDialog.css. */
+#settings-body {
+  display: flex;
+  gap: 16px;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+#settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: none;
+  width: 132px;
+  border-right: 1px solid var(--border);
+  padding-right: 12px;
+  /* Scroll the nav independently so the bottom items (System logs, Advanced)
+     are always reachable on a short window instead of being clipped. */
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.set-nav-item {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.set-nav-item:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.set-nav-item.active {
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+}
+
+#settings-screens {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.set-screen {
+  display: none;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.set-screen.active {
+  display: flex;
+}
+
+.set-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.set-section-title {
+  margin: 6px 0 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+/* Consistent vertical rhythm: every screen leads flush with its title; later
+   section titles within a screen get breathing room to read as a new group. */
+.set-screen>.set-section-title {
+  margin-top: 16px;
+}
+
+.set-screen>.set-section-title:first-child {
+  margin-top: 0;
+}
+
+/* Primary action button (add / create), one accent style everywhere. Secondary
+   actions (Test, Re-check) stay the outline .test-btn — same size, so a
+   primary/secondary pair lines up. */
+.btn-primary {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.08);
+}
+
+/* Narrow numeric input (e.g. refresh interval) — replaces an inline width. */
+.num-sm {
+  width: 6em;
+}
+
+.set-row input[type="text"],
+.set-row input[type="password"],
+.set-row input[type="number"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.set-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* A short paragraph of guidance that sits above a block of fields. */
+.set-block-hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 4px 0 2px;
+  line-height: 1.5;
+}
+
+/* Automated PR review status line: no on/off toggle — the repo list is the
+   switch, and this line reflects it. */
+.pr-status {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 2px 0 8px;
+}
+
+.pr-status.on {
+  color: var(--green);
+}
+
+.pr-status.paused {
+  color: var(--amber, #d9a441);
+}
+
+/* Advanced options fold (tuning fields hidden by default so "add a repo" is
+   the clear primary action). */
+.pr-advanced {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.pr-advanced>summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  list-style: revert;
+}
+
+.pr-advanced>summary:hover {
+  color: var(--text);
+}
+
+.pr-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+/* Multi-repo add/remove list (PR-review repos). */
+.repo-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.repo-empty {
+  font-size: 13px;
+  color: var(--muted);
+  width: 100%;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+
+.repo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 6px 3px 10px;
+  font-size: 13px;
+}
+
+.repo-chip-name {
+  font-family: var(--mono, monospace);
+}
+
+.repo-chip-x {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 999px;
+}
+
+.repo-chip-x:hover {
+  color: var(--text);
+  background: var(--border);
+}
+
+.repo-add-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+/* Launch-flag preset chips (New Session dialog + Coding CLI settings). Toggle
+   buttons that add/remove a common CLI flag; .active = flag present in field. */
+.flag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.flag-chip {
+  border: 1px solid var(--border);
+  background: var(--panel-2, var(--panel));
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color .12s, color .12s, background .12s;
+}
+
+.flag-chip:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.flag-chip.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.flag-chip.active::before {
+  content: "\2713\00a0";
+}
+
+/* leading checkmark */
+.repo-add-row input {
+  flex: 1 1 auto;
+}
+
+.repo-add-row button {
+  flex: none;
+  white-space: nowrap;
+  cursor: pointer;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+  border-radius: 7px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.repo-add-row button:hover {
+  filter: brightness(1.08);
+}
+
+.repo-add-row button:active {
+  filter: brightness(0.95);
+}
+
+/* Open-PR list + force review (Settings → PR review). Each row: ref+title,
+   a meta line with the auto-monitor's skip reasons, and a Begin review button. */
+.pr-open-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.pr-open-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pr-open-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pr-open-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 3px;
+  align-items: center;
+  background: var(--panel, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.pr-open-main {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.pr-open-ref {
+  font-family: var(--mono, monospace);
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.pr-open-ref:hover {
+  text-decoration: underline;
+}
+
+/* The full title is the only way to tell PRs apart — always show it whole
+   (wrap, never ellipsize), even on a narrow settings pane. */
+.pr-open-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pr-open-meta {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pr-open-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.pr-open-chip.ok {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.pr-open-chip.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.pr-review-btn {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  white-space: nowrap;
+  cursor: pointer;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+  border-radius: 7px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.pr-review-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.pr-review-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.prov-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.prov-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+.prov-item .prov-name {
+  font-weight: 600;
+}
+
+.prov-item .prov-meta {
+  color: var(--muted);
+  flex: 1;
+  font-size: 11px;
+}
+
+.prov-item .prov-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.prov-item button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.prov-item button:hover {
+  border-color: var(--accent);
+}
+
+#prov-add summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.prov-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.prov-form input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.prov-form button {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  border-radius: 7px;
+  padding: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+/* Provider connection view (installed / signed-in status + install + login). */
+.prov-conn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.prov-conn {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.prov-conn-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.prov-conn .prov-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.prov-badge,
+.prov-conn .prov-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.prov-dot {
+  margin-left: auto;
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 1px 9px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.prov-dot + .prov-dot {
+  margin-left: 6px;
+}
+.prov-dot.ok {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 45%, transparent);
+}
+.prov-dot.bad {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+}
+.prov-dot.unknown {
+  color: var(--muted);
+}
+
+.prov-install {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.prov-install code {
+  flex: 1;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 12px;
+  background: var(--panel, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.prov-install button,
+.prov-conn-actions button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.prov-install button:hover,
+.prov-conn-actions button:hover {
+  border-color: var(--accent);
+}
+
+.prov-conn-actions {
+  display: flex;
+  gap: 8px;
+}
+.prov-conn-actions .prov-login-btn {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+}
+
+/* Provider-login terminal modal. */
+.prov-login-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(860px, 92vw);
+  height: min(600px, 82vh);
+  background: var(--panel, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  gap: 8px;
+}
+.prov-login-term {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+}
+.prov-login-term .term-container {
+  width: 100%;
+  height: 100%;
+}
+
+
+/* Assigned-tickets buckets (Settings → Ticketing): one titled group per
+   workflow state, chosen via the "+ Add bucket…" dropdown / per-bucket ✕. */
+#tk-tickets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tk-bucket-add {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  max-width: 220px;
+}
+
+.tk-bucket-add:disabled {
+  opacity: 0.6;
+}
+
+.tk-bucket-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The header is the dropdown: caret + name + count toggle the bucket open. */
+.tk-bucket-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.tk-bucket-toggle:hover .tk-bucket-name {
+  color: var(--text);
+}
+
+.tk-bucket + .tk-bucket {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.tk-bucket .pr-open-list {
+  margin-top: 6px;
+}
+
+.tk-bucket-name {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.tk-bucket-count {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 7px;
+  background: var(--panel-2);
+}
+
+.tk-bucket-x {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 5px;
+}
+
+.tk-bucket-x:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+} /* 050 */ @layer components{
+/* Voice-input button — pinned top-right, styled to match the pane-header
+   buttons so it reads as header chrome (flat, no shadow) rather than a floating
+   bubble. #grid panes reserve right-padding so it sits beside the state text. */
+/* Voice-input entry point hidden for now (the live-transcription backend + JS
+   stay wired; delete this rule to bring the mic icon back). */
+#mic-btn,
+#mic-caption {
+  display: none !important;
+}
+
+#mic-btn {
+  position: fixed;
+  top: 13px;
+  right: 14px;
+  z-index: 1000;
+  height: 26px;
+  padding: 0 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#mic-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+#mic-btn.listening {
+  border-color: var(--red);
+  color: #fff;
+  background: var(--red);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+#mic-btn.unsupported {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+@keyframes mic-pulse {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(222, 97, 62, 0.5);
+  }
+
+  50% {
+    box-shadow: 0 0 0 5px rgba(222, 97, 62, 0);
+  }
+}
+
+#mic-caption {
+  position: fixed;
+  top: 46px;
+  right: 14px;
+  z-index: 1000;
+  max-width: 340px;
+  padding: 7px 11px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#mic-caption.hidden {
+  display: none;
+}
+
+/* Draggable wrapper around each customizable sidebar section (Usage, Ticket
+   Ingestion, PR Review, Assistant). The slot is a passthrough — the child bar
+   keeps its own border/padding — but it owns the drag grip and the insertion
+   cue. A slot whose bar renders nothing collapses so it leaves no gap and
+   can't be a drop target. */
+.bar-slot {
+  position: relative;
+}
+
+.bar-slot:empty {
+  display: none;
+}
+
+.bar-slot.dragging {
+  opacity: 0.5;
+}
+
+/* Drag handle — the bars are wall-to-wall buttons/toggles that would otherwise
+   swallow the drag gesture, so the grip is the reliable grab point. It's tucked
+   into the far-left edge (inside the bars' 16px left padding) so it costs the
+   bar content no horizontal room. */
+.bar-grip {
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  width: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: -1px;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  user-select: none;
+}
+
+.bar-slot:hover .bar-grip {
+  opacity: 0.85;
+}
+
+.bar-grip:active {
+  cursor: grabbing;
+}
+
+/* A bar dragged BELOW the session list would otherwise butt straight against
+   the list with no divider — give any section after the sessions anchor a top
+   line matching the separators between the other bars. */
+.sessions-block ~ .bar-slot {
+  border-top: 1px solid var(--border);
+}
+
+/* Accent insertion line — same look as the session-row / grid drop cue. Shared
+   by the bars and the fixed session-list anchor so a bar dropped above or below
+   the list shows the same cue. */
+.bar-slot.drop-above::before,
+.bar-slot.drop-below::after,
+.sessions-block.drop-above::before,
+.sessions-block.drop-below::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.55);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.bar-slot.drop-above::before,
+.sessions-block.drop-above::before {
+  top: -1.5px;
+}
+
+.bar-slot.drop-below::after,
+.sessions-block.drop-below::after {
+  bottom: -1.5px;
+}
+
+/* MindFlock automation bar + the PR-review / issue-handling bars (same dc-*
+   anatomy) */
+#mindflock-bar,
+#pr-review-bar,
+#git-issue-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#mindflock-bar .dc-dot,
+#pr-review-bar .dc-dot,
+#git-issue-bar .dc-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+#mindflock-bar .dc-dot.on,
+#pr-review-bar .dc-dot.on,
+#git-issue-bar .dc-dot.on {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+
+#mindflock-bar .dc-dot.off,
+#pr-review-bar .dc-dot.off,
+#git-issue-bar .dc-dot.off {
+  background: var(--muted);
+}
+
+/* PR review enabled but ticket ingestion isn't running — armed, not active. */
+#mindflock-bar .dc-dot.idle,
+#pr-review-bar .dc-dot.idle,
+#git-issue-bar .dc-dot.idle {
+  background: var(--gold);
+}
+
+/* Browser offline, or the ingestion log shows recent connection failures. */
+#mindflock-bar .dc-dot.error,
+#pr-review-bar .dc-dot.error,
+#git-issue-bar .dc-dot.error {
+  background: var(--red);
+  box-shadow: 0 0 6px var(--red);
+}
+
+#mindflock-bar .dc-label,
+#pr-review-bar .dc-label,
+#git-issue-bar .dc-label {
+  font-weight: 600;
+}
+
+#mindflock-bar .dc-actions,
+#pr-review-bar .dc-actions,
+#git-issue-bar .dc-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+#mindflock-bar .dc-toggle,
+#pr-review-bar .dc-toggle,
+#git-issue-bar .dc-toggle {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#mindflock-bar .dc-toggle.active,
+#pr-review-bar .dc-toggle.active,
+#git-issue-bar .dc-toggle.active {
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#mindflock-bar .dc-toggle:hover,
+#pr-review-bar .dc-toggle:hover,
+#git-issue-bar .dc-toggle:hover {
+  border-color: var(--accent);
+}
+
+#mindflock-bar .dc-toggle:disabled,
+#pr-review-bar .dc-toggle:disabled,
+#git-issue-bar .dc-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#mindflock-bar .dc-switch,
+#pr-review-bar .dc-switch,
+#git-issue-bar .dc-switch {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 20px;
+  flex: none;
+}
+
+#mindflock-bar .dc-switch input,
+#pr-review-bar .dc-switch input,
+#git-issue-bar .dc-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+}
+
+#mindflock-bar .dc-slider,
+#pr-review-bar .dc-slider,
+#git-issue-bar .dc-slider {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+#mindflock-bar .dc-slider::before,
+#pr-review-bar .dc-slider::before,
+#git-issue-bar .dc-slider::before {
+  content: "";
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 2px;
+  top: 2px;
+  background: var(--muted);
+  border-radius: 50%;
+  transition: transform 0.15s, background 0.15s;
+}
+
+#mindflock-bar .dc-switch input:checked+.dc-slider,
+#pr-review-bar .dc-switch input:checked+.dc-slider,
+#git-issue-bar .dc-switch input:checked+.dc-slider {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+#mindflock-bar .dc-switch input:checked+.dc-slider::before,
+#pr-review-bar .dc-switch input:checked+.dc-slider::before,
+#git-issue-bar .dc-switch input:checked+.dc-slider::before {
+  transform: translateX(18px);
+  background: #fff;
+}
+
+#mindflock-bar .dc-switch input:disabled+.dc-slider,
+#pr-review-bar .dc-switch input:disabled+.dc-slider,
+#git-issue-bar .dc-switch input:disabled+.dc-slider {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Personal assistant bar — mirrors #mindflock-bar's look. */
+#assistant-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#assistant-bar .as-label {
+  font-weight: 600;
+}
+
+#assistant-bar .as-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+#assistant-bar .as-toggle {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#assistant-bar .as-toggle.active {
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#assistant-bar .as-toggle:hover {
+  border-color: var(--accent);
+}
+
+/* Generic addon bars (rendered by core/slots.js for auto-surfaced addons,
+   e.g. Notifications) — mirror #mindflock-bar / #assistant-bar exactly so a
+   brand-new addon keeps the sidebar rhythm with zero bespoke CSS. */
+#addon-bars .addon-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#addon-bars .addon-label {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#addon-bars .addon-toggle {
+  flex: none;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#addon-bars .addon-toggle:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+#addon-bars .addon-toggle.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#addon-bars .addon-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+} /* 060 */ @layer components{
+/* Todo dialog (a modal like #recent-panel). */
+#todo-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  width: 460px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ws-head #todo-state {
+  flex: 1;
+  font-size: 12px;
+}
+
+.todo-add {
+  display: flex;
+  gap: 6px;
+}
+
+.todo-add input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.todo-add input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.todo-add button {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 8px 14px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.todo-add button:hover {
+  border-color: var(--accent);
+}
+
+.todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 60px;
+}
+
+.todo-empty {
+  color: var(--muted);
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+}
+
+.todo-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 13px;
+}
+
+.todo-row.dragging {
+  opacity: 0.4;
+}
+
+.todo-row.drag-over {
+  border-color: var(--accent);
+}
+
+.todo-row .drag-handle {
+  cursor: grab;
+  color: var(--muted);
+  flex: none;
+  user-select: none;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.todo-row .drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Custom accent checkbox — matches the New-menu look (a rounded outline box
+   that fills with the accent + a white checkmark when on). */
+.todo-row input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 0;
+  border: 1.5px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-2, var(--panel));
+  cursor: pointer;
+  position: relative;
+  transition: border-color .12s, background .12s;
+}
+
+.todo-row input[type="checkbox"]:hover {
+  border-color: var(--accent);
+}
+
+.todo-row input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background: var(--accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M2.5 6.3 5 8.8l4.5-5'/%3E%3C/svg%3E")
+    center / 11px 11px no-repeat;
+}
+
+.todo-row input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.todo-row .todo-text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+  cursor: text;
+}
+
+/* Inline edit input: same look as the other textboxes (.todo-add input),
+   not the browser default. */
+.todo-row .todo-edit {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-family: inherit;
+  padding: 4px 8px;
+  margin: -5px 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.todo-row .todo-edit:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.todo-row.done .todo-text {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.todo-row .todo-del {
+  flex: none;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.todo-row .todo-del:hover {
+  color: var(--red, #e55);
+}
+
+/* Prompts library dialog (a modal like #recent-panel). */
+#prompts-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  width: 560px;
+  max-width: 92vw;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ws-head #prompts-target {
+  flex: 1;
+  font-size: 12px;
+}
+
+.ws-head #prompts-target.prompts-notarget {
+  color: var(--red, #e55);
+}
+
+.prompts-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#prompts-list {
+  overflow-y: auto;
+  min-height: 60px;
+  flex: 1;
+}
+
+.prompts-group-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin: 10px 2px 6px;
+  font-weight: 600;
+}
+
+.prompts-group-label:first-child {
+  margin-top: 0;
+}
+
+.prompt-card {
+  margin-bottom: 4px;
+}
+
+.prompt-card-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.prompt-card-main {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 8px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  transition: border-color .12s ease, background .12s ease;
+}
+
+.prompt-card-main:hover {
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
+
+.prompt-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prompt-card-expand,
+.prompt-card-del {
+  flex: none;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 11px;
+  border-radius: 8px;
+}
+
+.prompt-card-expand:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.prompt-card-expand.open {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
+
+.prompt-card-del:hover {
+  color: var(--red, #e55);
+  border-color: var(--red, #e55);
+}
+
+/* Full-prompt preview overlay: fixed-positioned (coords set in JS) so opening
+   it never reflows the list or shifts rows under the cursor. */
+.prompt-pop {
+  position: fixed;
+  z-index: 60;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+.prompt-pop.hidden {
+  display: none;
+}
+
+.prompts-add {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.prompts-add input,
+.prompts-add textarea {
+  font-size: 13px;
+  padding: 8px 10px;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  resize: vertical;
+}
+
+.prompts-add input:focus,
+.prompts-add textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.prompts-add button {
+  align-self: flex-end;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 8px 16px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.prompts-add button:hover {
+  border-color: var(--accent);
+}
+
+#instance-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.inst {
+  margin-bottom: 4px;
+  border-radius: 8px;
+  position: relative;
+}
+} /* 070 */ @layer components{
+/* Sidebar drop cue: accent insertion line showing where the dragged row will
+   land (same purple as the grid's .grid-drop-preview). Sits in the 4px gap
+   between rows. */
+.inst.drop-above::before,
+.inst.drop-below::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.55);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.inst.drop-above::before {
+  top: -3.5px;
+}
+
+.inst.drop-below::after {
+  bottom: -3.5px;
+}
+
+.inst.active {
+  outline: 1px solid var(--accent);
+}
+
+.inst.active .inst-row {
+  background: var(--panel-2);
+}
+
+.inst.is-hidden {
+  opacity: 0.5;
+}
+
+.inst-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.inst-row:hover {
+  background: var(--panel-2);
+}
+
+/* Drag-to-reorder grip (sidebar) — appears on hover to keep the row clean. */
+.inst .grip {
+  flex: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: grab;
+  opacity: 0.35;
+  transition: opacity 0.12s ease;
+  user-select: none;
+  letter-spacing: -1px;
+}
+
+.inst-row:hover .grip {
+  opacity: 0.85;
+}
+
+.inst.dragging .grip {
+  cursor: grabbing;
+}
+
+/* Alt+N number badge (first 9 rows). */
+.inst .idx {
+  flex: none;
+  width: 13px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.inst.active .idx {
+  color: var(--accent);
+}
+
+.inst .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--green);
+  flex: none;
+}
+
+.inst .dot.paused {
+  background: var(--muted);
+}
+
+.inst .dot.loading {
+  background: var(--gold);
+}
+
+.inst .dot.disconnected {
+  background: var(--red);
+  box-shadow: 0 0 6px var(--red);
+}
+
+.inst .chevron {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  flex: none;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  transition: transform 0.12s ease;
+}
+
+.inst .chevron:hover {
+  color: var(--text);
+}
+
+.inst .chevron.open {
+  transform: rotate(90deg);
+}
+
+.inst .meta {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* The title shrinks with an ellipsis but never below a legible floor, so a
+   foreign-repo glyph + stage chip can't crush it out of the row. The title
+   GROWS into free width (round-3 CSS fix: previously flex 0 1 auto while the
+   branch was flex 1 1 0, so the branch won all free width and rendered as an
+   illegible sliver while the title ellipsized even when space existed); the
+   branch is capped at 40% of the row with its own ellipsis. */
+.inst .title {
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 34px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inst .branch {
+  font-size: 11px;
+  color: var(--muted);
+  flex: 0 1 auto;
+  max-width: 40%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inst .kill {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  flex: none;
+}
+
+.inst .kill:hover {
+  color: var(--red);
+  background: rgba(222, 97, 62, 0.12);
+}
+
+.inst-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 10px 6px 30px;
+}
+
+.inst-actions button {
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.inst-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inst-actions button:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.inst-actions .kbd {
+  font-size: 10px;
+  color: var(--muted);
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.inst-actions button.danger {
+  color: var(--red);
+}
+
+.inst-actions button.danger:hover {
+  background: rgba(222, 97, 62, 0.14);
+}
+
+.inst-actions .menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 8px;
+}
+
+.inst-actions .folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+}
+
+.inst-actions .folder-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inst-actions .folder-copy {
+  flex: none;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.inst-actions .folder-copy:hover {
+  border-color: var(--accent);
+}
+
+#sidebar-footer {
+  padding: 10px 16px;
+  font-size: 11px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#sidebar-footer .foot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#view-modes {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#view-modes .vm-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-right: 2px;
+}
+
+#view-modes .vm {
+  flex: 1;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 0;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#view-modes .vm:hover {
+  border-color: var(--accent);
+}
+
+#view-modes .vm.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#workspaces-btn {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#workspaces-btn:hover {
+  border-color: var(--accent);
+}
+} /* 080 */ @layer components{
+/* Overall cost/token summary, pinned just below the sidebar header. */
+.overall-usage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  padding: 8px 16px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.overall-usage:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+/* Never wrap the collapsed pill text ("Claude: 2% left · resets 700h 41m") —
+   ellipsize instead; the full detail lives in the click-to-expand popover. */
+.overall-usage .usage-head {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overall-usage .caret,
+.pane-head .tok .caret {
+  font-size: 9px;
+  opacity: 0.55;
+}
+
+.overall-usage.pop-open .caret,
+.pane-head .tok.pop-open .caret {
+  opacity: 1;
+}
+
+/* Clickable per-session cost/token chip. */
+.pane-head .tok.usage-trigger {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pane-head .tok.usage-trigger:hover {
+  color: var(--text);
+}
+
+/* Shared click-to-expand usage dropdown (body-mounted, fixed-positioned). */
+.usage-pop {
+  position: fixed;
+  z-index: 3000;
+  min-width: 210px;
+  max-width: 360px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.usage-pop.hidden {
+  display: none;
+}
+
+.usage-pop-head {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-pop-tbl {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.usage-pop-tbl td {
+  padding: 2px 0;
+  color: var(--muted);
+}
+
+.usage-pop-tbl td.num {
+  /* nowrap keeps compact values ("2:48 PM (in 700h 41m)") on one line;
+     prose rows opt into wrapping with the .wrap flag from _usageTableEl. */
+  text-align: right;
+  color: var(--text);
+  padding-left: 16px;
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-pop-tbl td.num.wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.usage-pop-note {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--muted);
+  white-space: normal;
+}
+
+/* Rolling-window period toggle (Session/Day/Week/Month/Year) in the overall pop. */
+.usage-periods {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.usage-periods .usage-period {
+  flex: 1;
+  cursor: pointer;
+  font-size: 10px;
+  padding: 3px 2px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.usage-periods .usage-period:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.usage-periods .usage-period.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Provider / Combined tabs at the top of the overall-usage pop. Same pill look
+   as the period toggle, but a bottom-border underline so they read as tabs and
+   wrap gracefully when several providers are in play. */
+.usage-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-tabs .usage-tab {
+  cursor: pointer;
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.usage-tabs .usage-tab:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.usage-tabs .usage-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+} /* 090 */ @layer components{
+/* --- Send / prompt-queue: the Queue tab (badge + inline console) --- */
+/* The tab label matches the other tabs in every state — no accent/gold tint;
+   status is conveyed by the neutral badge (count, or ⏳ when usage-limited). */
+.pane-head .tabs button.queue-tab {
+  position: relative;
+}
+
+.queue-tab-badge {
+  display: inline-block;
+  margin-left: 5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+/* On the active tab (light text on accent bg) keep the badge legible. */
+.pane-head .tabs button.queue-tab.active .queue-tab-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border-color: transparent;
+}
+
+.pane-head .tabs button.queue-tab.q-paused .queue-tab-badge {
+  opacity: 0.55;
+}
+
+.queue-tab-badge.hidden {
+  display: none;
+}
+
+/* --- Send / prompt-queue: the Queue tab body (fills the pane, scrolls) --- */
+.pane-queue {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  overflow: auto;
+  color: var(--text);
+}
+
+.pane-queue.hidden {
+  display: none;
+}
+
+.queue-loading {
+  padding: 14px 16px;
+  font-size: 13px;
+}
+
+/* Fill the pane: a centered column that uses the full height, capped at a
+   comfortable reading width so the composer/flags don't stretch absurdly wide
+   on big panes, but never a small box pinned to a corner. Base type matches
+   the settings dialog (14px fields, 13px labels/hints). */
+.queue-console {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  min-height: 100%;
+  padding: 24px 32px;
+  font-size: 14px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+}
+
+.queue-pop-head {
+  margin-bottom: 10px;
+}
+
+.queue-pop-title {
+  font-weight: 600;
+  font-size: 16px;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-pop-sub {
+  display: block;
+  font-size: 13px;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.queue-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 120px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  margin-top: 10px;
+}
+
+.queue-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.queue-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.queue-actions button {
+  flex: 1;
+  cursor: pointer;
+  border-radius: 7px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.queue-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.queue-actions button.primary:hover {
+  filter: brightness(1.08);
+}
+
+.queue-actions button:hover {
+  border-color: var(--accent);
+}
+
+.queue-flags {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 14px 0 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.queue-flags label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.queue-loop-timer {
+  margin-left: 24px;
+}
+
+.queue-loop-timer.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.queue-loop-interval {
+  width: 60px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: right;
+}
+
+.queue-loop-interval:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.queue-loop-interval:disabled {
+  opacity: 0.5;
+}
+
+/* The list takes the remaining vertical space so the queue fills the pane
+   rather than leaving a large empty gap below a short list. */
+.queue-list {
+  margin-top: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.queue-status {
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  border-radius: 7px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+.queue-status.muted {
+  color: var(--muted);
+}
+
+.queue-status.queue-limited {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+.queue-status.queue-stopped {
+  color: var(--red);
+  font-weight: 600;
+}
+
+/* Window-refresh keepalive (E): provider checkboxes in Settings → Coding CLI. */
+.wr-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.wr-prov {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.queue-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.queue-item-pos {
+  flex: 0 0 auto;
+  width: 20px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-item.queue-next .queue-item-pos {
+  color: var(--accent);
+}
+
+.queue-item.queue-next .queue-item-text {
+  color: var(--text);
+}
+
+/* Full prompt text, wrapped — the list is the point of the tab, so give each
+   item real room instead of a one-line ellipsis. Very long prompts scroll
+   within the row rather than swallowing the whole list. */
+.queue-item-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.queue-item-ctrls {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+}
+
+/* Inline item editor (✎ / double-click): textarea + Save/Cancel in the row. */
+.queue-item-edit {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-item-edit textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 70px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.queue-item-edit textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.queue-item-edit-btns {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.queue-item-edit-btns button {
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.queue-item-edit-btns .qi-save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.queue-item-edit-btns button:hover {
+  border-color: var(--accent);
+}
+
+.queue-item-ctrls button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 6px;
+  font-size: 13px;
+  padding: 3px 8px;
+  font-family: inherit;
+}
+
+.queue-item-ctrls button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.queue-item-ctrls button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.queue-clear {
+  margin-top: 12px;
+  width: 100%;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 7px;
+}
+
+.queue-clear:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+} /* 100 */ @layer components{
+/* --- Notification center: bell + badge + panel --- */
+#notif-btn {
+  position: relative;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 15px;
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+#notif-btn:hover,
+#notif-btn.has-unread {
+  color: var(--text);
+}
+
+/* Kills the inline-SVG baseline gap (same as #sidebar-toggle svg). */
+#notif-btn svg {
+  display: block;
+}
+
+/* Unread history (nothing actionable): a small neutral dot, not a number —
+   so it never nags and never needs clearing to "go away". */
+#notif-btn.has-unread::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.notif-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  font-size: 9px;
+  line-height: 15px;
+  text-align: center;
+  font-weight: 700;
+}
+
+/* Badge = "needs action now" (amber); auto-clears the instant it's resolved.
+   The hairline is in the region's text color, so an amber pill still reads on an
+   amber top bar (Goldfinch, Toucan) — --gold is a global, not a region token. */
+.notif-badge.attn {
+  background: var(--gold);
+  color: #1a1a1a;
+  box-shadow: 0 0 0 1px var(--text);
+}
+
+.notif-badge.hidden {
+  display: none;
+}
+
+.notif-pop {
+  position: fixed;
+  z-index: 3000;
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  max-height: 60vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.notif-pop.hidden {
+  display: none;
+}
+
+.notif-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.notif-head>span:first-child {
+  flex: 1 1 auto;
+}
+
+/* title left, buttons right */
+.notif-head .notif-toggle {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.notif-head .notif-toggle svg {
+  display: block;
+}
+
+.notif-head .notif-toggle:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.notif-head .notif-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.notif-head .notif-toggle:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.notif-clear {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.notif-clear:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.notif-list {
+  overflow-y: auto;
+}
+
+.notif-empty {
+  padding: 16px 10px;
+  text-align: center;
+}
+
+.notif-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-gap: 2px 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+
+.notif-item:hover {
+  background: var(--panel-2);
+}
+
+.notif-item.unread {
+  border-left-color: var(--accent);
+}
+
+.notif-sess {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notif-text {
+  grid-column: 1;
+  color: var(--muted);
+}
+
+.notif-time {
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.notif-item.n-done .notif-text {
+  color: var(--green);
+}
+
+.notif-item.n-warn .notif-text {
+  color: var(--red);
+}
+
+
+/* --- O1: needs-attention — surfaced in the notification-bell popover ------ */
+/* (Amber badge `.notif-badge.attn` is defined next to the base badge rule.) */
+#notif-btn.has-attn {
+  color: var(--gold);
+}
+
+/* Pinned live section at the top of the bell popover, above the history. */
+.notif-attn {
+  padding: 5px 6px 6px;
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 215, 0, 0.05);
+}
+
+.notif-attn-head {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin: 0 0 3px 3px;
+}
+
+.attn-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 4px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.attn-item:hover {
+  background: var(--panel);
+}
+
+.attn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.attn-item.p0 .attn-dot {
+  background: #0ea5e9;
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+.attn-item.p1 .attn-dot {
+  background: var(--red);
+}
+
+.attn-item.p2 .attn-dot {
+  background: var(--gold);
+}
+
+.attn-item.p3 .attn-dot {
+  background: var(--green);
+}
+
+.attn-title {
+  font-weight: 600;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attn-reason {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.attn-snippet {
+  flex-basis: 100%;
+  margin: 0 0 1px 13px;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attn-more {
+  font-size: 11px;
+  margin: 2px 0 0 6px;
+}
+} /* 110 + 270 */ @layer components{
+/* --- Bulk session actions: batch bar --- */
+#bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 10px;
+  margin: 0 0 2px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+#bulk-bar.hidden {
+  display: none;
+}
+
+.bulk-count {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.bulk-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.bulk-acts button {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.bulk-acts button:hover {
+  border-color: var(--accent);
+}
+
+.bulk-acts button.danger:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+} /* 110 */ @layer components{
+/* --- Sidebar session filter --- */
+#sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 2px;
+}
+
+#sidebar-search.hidden {
+  display: none;
+}
+
+#session-filter {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#session-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#session-filter-clear {
+  flex: 0 0 auto;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 4px 7px;
+}
+
+#session-filter-clear:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.filter-empty {
+  padding: 10px 12px;
+  font-size: 12px;
+  list-style: none;
+}
+
+/* A renamed session shows its custom label in italic (real title in tooltip). */
+.inst .title.aliased {
+  font-style: italic;
+}
+} /* 110 */ @layer components{
+/* --- Keyboard shortcut cheat-sheet ('?') --- */
+.shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.shortcuts-overlay.hidden {
+  display: none;
+}
+
+.shortcuts-card {
+  width: 760px;
+  max-width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+}
+
+.shortcuts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}
+
+.shortcuts-close {
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.shortcuts-close:hover {
+  color: var(--text);
+}
+
+.shortcuts-body {
+  padding: 12px 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px 32px;
+  align-items: start;
+}
+
+/* Each group is a three-column grid — key chips, descriptions in one aligned
+   column, then the edit controls — so rows never start their text at a
+   different x. The key column hugs its content but is capped so an
+   extra-wide chip cluster wraps instead of squeezing the description. Each
+   row is a real box on the SAME tracks (subgrid), so a rebindable row can
+   hover-highlight as one clickable unit. */
+.shortcuts-group {
+  display: grid;
+  grid-template-columns: fit-content(200px) 1fr auto;
+  column-gap: 12px;
+  row-gap: 2px;
+  align-content: start;
+}
+
+.shortcuts-group h4 {
+  grid-column: 1 / -1;
+  margin: 0 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 0 6px;
+}
+
+.shortcut-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: baseline;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+.shortcut-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 5px;
+  align-items: baseline;
+}
+
+.shortcut-keys .kbd-sep {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.shortcut-row kbd {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.shortcut-desc {
+  color: var(--muted);
+}
+
+/* Rebindable rows highlight on hover — that's the "you can click me" signal
+   (click: press the new combo; + adds an extra combo; Esc cancels). Static
+   rows (Ctrl+1..9, desktop-shell extras) never light up. */
+.shortcut-row.rebindable {
+  cursor: pointer;
+}
+
+.shortcut-row.rebindable:hover {
+  background: rgba(var(--accent-rgb), 0.10);
+  border-color: var(--accent);
+}
+
+.shortcut-row.rebindable:hover .shortcut-desc {
+  color: var(--text);
+}
+
+.shortcut-row.customized kbd {
+  border-color: var(--accent);
+}
+
+.shortcut-row.capturing {
+  background: rgba(var(--accent-rgb), 0.10);
+  border-color: var(--accent);
+}
+
+.shortcut-row.capturing .shortcut-keys {
+  color: var(--gold);
+  font-style: italic;
+}
+
+/* Edit controls (+ add combo, ↺ reset) live in the third column; + fades in
+   with the row hover, ↺ stays visible as the "this one is customized" mark. */
+.shortcut-controls {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.shortcut-add,
+.shortcut-reset {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 4px;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  padding: 0;
+}
+
+.shortcut-add {
+  opacity: 0;
+}
+
+.shortcut-row:hover .shortcut-add,
+.shortcut-add:focus-visible {
+  opacity: 1;
+}
+
+.shortcut-add:hover,
+.shortcut-reset:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.shortcuts-restore {
+  margin-left: auto;
+  margin-right: 10px;
+  cursor: pointer;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 3px 9px;
+  font-weight: 500;
+}
+
+.shortcuts-restore:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.shortcuts-hint {
+  margin: 10px 16px 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+} /* 120 */ @layer components{
+/* --- Budget lock overlay (typing paused until the budget is raised) ---
+   Positioned against .pane-body, which Pane.css already makes relative. */
+.budget-lock {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.budget-lock.hidden {
+  display: none;
+}
+
+.budget-lock .bl-card {
+  width: min(360px, 88%);
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--gold);
+  border-radius: 12px;
+  padding: 18px 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  text-align: center;
+}
+
+.budget-lock h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.budget-lock .bl-msg {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 0 0 14px;
+}
+
+.budget-lock .bl-limit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: stretch;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: left;
+  margin-bottom: 12px;
+}
+
+.budget-lock .bl-limit {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+}
+
+.budget-lock .bl-durations {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.budget-lock .bl-dur {
+  flex: 1 1 auto;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.budget-lock .bl-dur:hover {
+  border-color: var(--accent);
+}
+
+.budget-lock .bl-forever {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel-2));
+  border-color: var(--accent);
+}
+
+.budget-lock .bl-err {
+  min-height: 14px;
+  margin: 10px 0 0;
+  font-size: 11.5px;
+}
+
+/* --- Notifications: bell popup settings gear + rules list in Settings --- */
+.notif-head .notif-settings {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 4px;
+}
+
+.notif-head .notif-settings:hover {
+  color: var(--text);
+}
+
+.notif-rules {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  font-size: 12.5px;
+}
+
+.notif-rules li {
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.notif-rules li:last-child {
+  border-bottom: 0;
+}
+
+/* Per-rule on/off list (#notif-rules-list / .notif-rule) lives with the rest of
+   the settings dialog, in components/settings/SettingsDialog.css. */
+
+/* --- New-session dialog: "Start from a template" strip --- */
+.new-templates {
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+.new-templates .nt-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.new-templates .nt-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.new-templates .nt-chip {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-templates .nt-chip:hover {
+  border-color: var(--accent);
+}
+
+.new-templates .nt-chip.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+} /* 130 */ @layer components{
+/* Terminal grid */
+/* A vertical stack of rows; each row is a horizontal strip of windows. Drag a
+   window onto any side of another to rearrange (see placeInGrid). */
+#grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  min-height: 0;
+  overflow: auto;
+}
+
+#grid>.grid-row {
+  display: flex;
+  gap: 10px;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* All panes — sessions and the special logs/assistant panes alike — live
+   inside a .grid-row and drag/resize the same way. The direct-child rule is a
+   fallback for anything appended straight to the grid. */
+#grid>.grid-row>.pane {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+#grid>.pane {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  min-height: 0;
+  /* Trap the pane's internal overlays (running-cover, budget-lock, file-drop)
+     in their own stacking context so their z-index can never paint over
+     app-level modals (settings, command palette) — those use the .modal
+     backdrop, which is fixed with no z-index. */
+  isolation: isolate;
+}
+
+.pane.focused {
+  border-color: var(--accent);
+}
+
+.pane.dragging,
+.inst.dragging {
+  opacity: 0.45;
+}
+
+/* Live drop preview: the empty slot the dragged window will occupy once released.
+   pointer-events:none is deliberate — once the layout reflows and the cursor sits
+   over this slot, dragover stops firing so the preview holds steady (no flicker). */
+.pane.grid-drop-preview {
+  pointer-events: none;
+  border: 2px dashed var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+  border-radius: 10px;
+}
+
+.pane-head {
+  cursor: grab;
+}
+
+.pane-head:active {
+  cursor: grabbing;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.pane-head {
+  flex-wrap: nowrap;
+}
+
+/* Normal right padding. (The old 54px gutter reserved room for the floating
+   #mic-btn, which is now hidden — reclaim the space so headers fit more.) */
+.pane-head {
+  padding-right: 12px;
+}
+
+.pane-head .title {
+  font-weight: 600;
+  flex: 0 1 auto;
+  min-width: 40px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pane-head .grip {
+  flex: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: grab;
+  opacity: 0.5;
+  user-select: none;
+  letter-spacing: -1px;
+}
+
+.pane-head:hover .grip {
+  opacity: 0.9;
+}
+
+.pane-head:active .grip {
+  cursor: grabbing;
+}
+
+.pane-head .tabs,
+.pane-head .actions {
+  flex: none;
+}
+
+.pane-head .branch {
+  color: var(--muted);
+}
+
+/* Right-aligned group: per-window tokens then the connection state. */
+.pane-head .tok {
+  margin-left: auto;
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+
+/* The websocket state is pure noise while healthy ("connected"/"streaming") and
+   was the element overflowing narrow multi-window headers. It's now hidden
+   entirely on the window — connection health is self-evident from the sidebar
+   dot (which turns red via .dot.disconnected when a session's agent WS drops).
+   The socket handlers still write text/`.state-bad` here for the offscreen
+   element, but it never renders in the header. */
+.pane-head .state {
+  display: none;
+}
+
+/* Progressive disclosure as a pane narrows (multiple windows): drop the least
+   useful bits first so nothing gets clipped. Priority kept longest: title,
+   view tabs, and the status chip. Order of removal:
+     560px — diff-stats line + the per-window token/cost counter
+     420px — next-step (Commit/Push/…) button — kept longest so the primary
+             action stays reachable when several windows are tiled tight
+     360px — tighten the tabs so all four still fit */
+.pane {
+  container-type: inline-size;
+}
+
+@container (max-width: 560px) {
+  .pane-head .tok {
+    display: none;
+  }
+}
+
+/* Between the fixed breakpoints a header can still overflow (long titles,
+   wide next-step labels) and the chip would render half a word ("Claud").
+   makePane's fitTok() marks it .tok-clip whenever the header content is wider
+   than the pane; visibility (not display) keeps its width in the layout so
+   the overflow measurement doesn't oscillate. */
+.pane-head .tok.tok-clip {
+  visibility: hidden;
+}
+
+@container (max-width: 360px) {
+  .pane-head {
+    gap: 4px;
+  }
+
+  .pane-head .tabs {
+    margin-left: 4px;
+  }
+
+  .pane-head .tabs button {
+    padding: 3px 6px;
+  }
+}
+
+.pane-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.pane-term {
+  height: 100%;
+  min-height: 0;
+  padding: 6px 8px;
+  /* Anchors the connect overlay and the file-drop cue in paneOverlays.css. */
+  position: relative;
+}
+
+.pane-term .xterm {
+  height: 100%;
+}
+
+/* Hide xterm's viewport scrollbar everywhere — panes mirror tmux, so the
+   history lives server-side and the xterm scrollbar has nothing to scroll. */
+.xterm .xterm-viewport {
+  scrollbar-width: none;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* head tabs + actions */
+.pane-head .tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: 10px;
+}
+
+.pane-head .tabs button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+}
+
+.pane-head .tabs button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pane-head .tabs button.active {
+  color: #fff;
+  background: var(--accent);
+}
+
+.pane-head .actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+}
+
+.pane-head .actions .nextstep {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  flex: none;
+  font-size: 11px;
+  padding: 4px 11px;
+  border-radius: 6px;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.pane-head .actions .nextstep:hover {
+  filter: brightness(1.12);
+}
+
+/* Status-pill variant: shown in the same slot when there's no actionable next
+   step (provisioning / pre-commit running / paused / workspace gone), so the
+   action area is never an empty gap. Non-clickable, muted — clearly not the
+   primary accent button. */
+.pane-head .actions .nextstep.nextstep-status {
+  background: var(--panel-2);
+  color: var(--muted);
+  font-weight: 500;
+  cursor: default;
+  filter: none;
+}
+
+.pane-head .actions .nextstep.nextstep-status:hover {
+  filter: none;
+}
+
+/* The next-step button is the LAST header control to drop: the token/cost
+   counter (and diff-stats line) hide first at 560px, so the primary action
+   stays reachable in tight tiled layouts. Only at 420px, when even the button
+   no longer fits, does it hide too. */
+@container (max-width: 420px) {
+  .pane-head .actions .nextstep {
+    display: none !important;
+  }
+}
+
+.pane-head .act {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+}
+
+.pane-head .act:hover {
+  border-color: var(--accent);
+}
+
+.pane-head .act:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Icon-only copy-history button: center the SVG, muted like the other glyphs. */
+.pane-head .act.copyhist {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 6px;
+  color: var(--muted);
+}
+
+.pane-head .act.copyhist:hover {
+  color: var(--text);
+}
+
+.pane-head .act.copyhist svg {
+  display: block;
+}
+
+.pane-head .act.step {
+  border-color: var(--accent);
+  color: #fff;
+  background: rgba(var(--accent-rgb), 0.28);
+}
+
+.pane-head .act.step:hover {
+  background: rgba(var(--accent-rgb), 0.45);
+}
+} /* 140 */ @layer components{
+/* Workflow stage chips (sidebar + pane header) */
+.stagechip {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  flex: none;
+  background: var(--panel-2);
+  color: var(--muted);
+  white-space: nowrap;
+  /* Never overlap neighbours: long labels ellipsize inside the chip. */
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stagechip.s-provisioning {
+  color: var(--gold);
+}
+
+.stagechip.s-agent {
+  color: #b9a6ff;
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+.stagechip.s-running {
+  color: #fff;
+  background: rgba(var(--accent-rgb), 0.5);
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+.stagechip.s-idle {
+  color: var(--gold);
+  background: rgba(255, 215, 0, 0.14);
+}
+
+.stagechip.s-offline {
+  color: var(--muted);
+  background: var(--panel-2);
+  opacity: 0.75;
+}
+
+.stagechip.s-clarify {
+  color: #fff;
+  background: rgba(14, 165, 233, 0.55);
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+.stagechip.s-limit {
+  color: #fff;
+  background: rgba(239, 68, 68, 0.7);
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+.stagechip.s-paused {
+  color: var(--muted);
+  background: var(--panel-2);
+}
+
+@keyframes cs-pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.stagechip.s-precommit {
+  color: #1a1a1a;
+  background: var(--gold);
+}
+
+.stagechip.s-interrupt {
+  color: #fff;
+  background: var(--red);
+}
+
+.stagechip.s-committed {
+  color: #7fd1ff;
+  background: rgba(14, 165, 233, 0.16);
+}
+
+.stagechip.s-pushed {
+  color: var(--green);
+  background: rgba(81, 189, 115, 0.18);
+}
+
+.stagechip.s-pr {
+  color: #fff;
+  background: rgba(81, 189, 115, 0.5);
+}
+
+.stagechip.s-merged {
+  color: #fff;
+  background: var(--green);
+}
+
+/* Status chip lives on the LEFT only: the sidebar row already shows the
+   session's stage/activity (idle / running / clarify / …). Hide the duplicate
+   chip in the pane header so the window carries no status label — the update
+   code still writes to this hidden element, it just never renders. */
+.pane-head .stagechip {
+  display: none;
+}
+
+/* diff view */
+.pane-diff {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  overflow: auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  tab-size: 4;
+}
+
+.pane-diff .add {
+  color: var(--green);
+}
+
+.pane-diff .del {
+  color: var(--red);
+}
+
+.pane-diff .hunk {
+  color: #0ea5e9;
+}
+
+.pane-diff .muted {
+  color: var(--muted);
+}
+
+.pane-diff .diff-loading,
+.pane-diff .diff-empty {
+  padding: 10px 12px;
+}
+
+/* sticky toolbar: diffstat + split/unified toggle */
+.diff-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-toolbar .diffstat {
+  font-weight: 600;
+  flex: 1;
+}
+
+.diff-modes {
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+
+.diff-modes button {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 6px;
+}
+
+.diff-modes button:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.diff-modes button.active {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* unified diff body */
+.diff-unified {
+  margin: 0;
+  padding: 8px 12px;
+  white-space: pre;
+}
+
+/* Collapsible per-file sections in the all-files diff view. */
+.diff-file {
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.diff-file-head:hover {
+  background: var(--panel-2);
+}
+
+.diff-file-head .diff-file-caret {
+  cursor: pointer;
+  color: #fff;
+  font-size: 15px;
+  width: 16px;
+  flex: none;
+  margin-left: auto;
+  text-align: center;
+  transition: transform 0.1s;
+}
+
+.diff-file-head .diff-file-caret:hover {
+  color: var(--accent);
+}
+
+.diff-file.collapsed .diff-file-caret {
+  transform: rotate(-90deg);
+}
+
+.diff-file.collapsed .diff-file-body {
+  display: none;
+}
+
+.diff-file-head .sd-file {
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #c4b3ff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.diff-file-head .sd-file:hover {
+  text-decoration: underline;
+}
+
+.diff-toolbar .diff-collapse-all {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  flex: none;
+}
+
+.diff-toolbar .diff-collapse-all:hover {
+  border-color: var(--accent);
+}
+
+/* side-by-side (split) diff */
+.split-diff {
+  padding-bottom: 8px;
+}
+
+.split-diff .sd-file {
+  padding: 5px 12px;
+  font-weight: 600;
+  margin-top: 4px;
+  color: #c4b3ff;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.split-diff .sd-file.clickable {
+  cursor: pointer;
+}
+
+.split-diff .sd-file.clickable:hover {
+  background: var(--panel-2);
+  text-decoration: underline;
+}
+
+.diff-toolbar .diff-back {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  flex: none;
+}
+
+.diff-toolbar .diff-back:hover {
+  border-color: var(--accent);
+}
+
+.diff-toolbar .diffstat.file {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: #c4b3ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.split-diff .sd-hunk {
+  padding: 3px 12px;
+  color: #0ea5e9;
+  background: rgba(14, 165, 233, 0.08);
+}
+
+.split-diff .sd-note {
+  padding: 3px 12px;
+  color: var(--muted);
+}
+
+.split-diff .sd-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px 1fr;
+  align-items: stretch;
+}
+
+.split-diff .sd-ln {
+  text-align: right;
+  padding: 0 8px;
+  color: var(--muted);
+  user-select: none;
+  border-right: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.split-diff .sd-code {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.split-diff .sd-code.del {
+  background: rgba(222, 97, 62, 0.16);
+}
+
+.split-diff .sd-code.add {
+  background: rgba(81, 189, 115, 0.16);
+}
+
+.split-diff .sd-code.blank {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.split-diff .sd-row:hover .sd-code {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.split-diff .sd-row:hover .sd-code.del {
+  background-color: rgba(222, 97, 62, 0.22);
+}
+
+.split-diff .sd-row:hover .sd-code.add {
+  background-color: rgba(81, 189, 115, 0.22);
+}
+
+#empty {
+  /* #grid is a flex column — flex:1 makes the empty state fill the entire grid
+     area (not just a strip at the top) so the whole space is the click target. */
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+#empty.clickable {
+  cursor: pointer;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  margin: 10px;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+
+#empty.clickable:hover {
+  background: var(--panel);
+}
+
+#empty.clickable:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+} /* 150 */ @layer components{
+/* Boot loader: fills the grid from page open until the first /api/instances
+   snapshot arrives, so restored sessions don't flash an empty environment. */
+#boot-loading {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#boot-loading p {
+  margin: 0;
+}
+
+/* The connect overlay below covers the blank xterm until the websocket replays
+   the session's scrollback (removed on the first received bytes). It anchors to
+   .pane-term, which Pane.css already makes relative. */
+
+/* Dragging a file over a terminal: show where it will land (upload → path). */
+.file-drop {
+  border-radius: 6px;
+  position: relative;
+}
+
+/* Full-pane overlay while hovering with a file: ::before tints/blurs the
+   terminal underneath so the label reads clearly, ::after draws a download
+   arrow + text. pointer-events: none keeps dragover/drop on the host. */
+.file-drop::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  z-index: 5;
+  border: 2px dashed var(--accent);
+  background: rgba(6, 7, 14, 0.55);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.file-drop::after {
+  content: "Drag and drop to paste";
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 56px;
+  /* text sits below the arrow icon */
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a78bfa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'/%3E%3Cpolyline points='7 10 12 15 17 10'/%3E%3Cline x1='12' y1='3' x2='12' y2='15'/%3E%3C/svg%3E") center calc(50% - 32px) / 38px 38px no-repeat;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  pointer-events: none;
+}
+
+/* Reduce-motion cover (Settings → General → Reduce motion): an opaque panel over
+   a running agent terminal so its constantly-scrolling output isn't fatiguing.
+   Fully opaque — the live output must not read through. Echoes the .file-drop
+   cue (dashed accent inset) but solid. pointer-events:none lets a click / scroll
+   / keypress fall straight to the terminal, which also reveals it (RunningCover).
+   Deliberately static, no animation — this is the reduce-motion path. Sits below
+   the boot loader (3), file-drop (5/6) and budget lock (6). */
+.running-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+  background: var(--panel);
+  pointer-events: none;
+  user-select: none;
+}
+
+.running-cover::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border: 2px dashed var(--accent);
+  border-radius: 6px;
+}
+
+.running-cover .rc-badge {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.running-cover .rc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.running-cover .rc-label {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.running-cover .rc-hint {
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 280px;
+  line-height: 1.4;
+}
+
+.term-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--bg);
+}
+
+.term-loading p {
+  margin: 0;
+}
+
+/* Provisioning placeholder (loading session) */
+.provisioning {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 10px;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px;
+}
+
+.provisioning p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.provisioning .muted {
+  font-size: 11px;
+  max-width: 320px;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  animation: cs-spin 0.9s linear infinite;
+}
+
+@keyframes cs-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+} /* 160 */ @layer components{
+/* Modal */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+/* New-session header: title left, Close button pinned top-right. */
+#new-form .ws-head h2 {
+  flex: 1;
+}
+
+#new-form .ws-head #new-close {
+  margin-left: auto;
+}
+
+#new-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 22px;
+  /* One narrow column, quick-launch first: Name + Prompt up top, Folder+Agent
+     in a compact row, git/workspace options folded behind <details>. The card
+     holds a FIXED height so opening a fold scrolls the revealed fields inside
+     .nf-body rather than growing/re-centering the dialog; clamps to the
+     viewport on short windows. */
+  width: min(540px, 94vw);
+  height: min(90vh, 480px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+/* Pinned header + Create actions don't scroll; only .nf-body does. */
+#new-form>.ws-head,
+#new-form>.modal-actions {
+  flex: none;
+}
+
+/* The scroll region between header and actions: fills the leftover height and
+   scrolls internally so the card's overall height never changes. min-height:0
+   lets it shrink below its content so overflow actually scrolls in a flex col. */
+.nf-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  /* Room so the scrollbar doesn't overlap inputs/focus rings. */
+  padding-right: 4px;
+  margin-right: -4px;
+  /* Scroll-cue shadows: a soft shade fades in at whichever edge has hidden
+     content (classic background-attachment:local trick). The cover pair
+     (panel-coloured) masks the shade when scrolled to that end, so the shadow
+     only shows when there is actually more to scroll — making the region read
+     as scrollable without a permanent border. */
+  background:
+    linear-gradient(var(--panel) 40%, transparent) 0 0 / 100% 20px no-repeat,
+    linear-gradient(transparent, var(--panel) 60%) 0 100% / 100% 20px no-repeat,
+    radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.28), transparent) 0 0 / 100% 9px no-repeat,
+    radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.28), transparent) 0 100% / 100% 9px no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+
+/* Compact context row: Folder (wide) beside Agent (narrow). */
+.nf-quick {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.nf-quick .nf-folder {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.nf-quick .nf-agent {
+  flex: 0 0 158px;
+  min-width: 0;
+}
+
+.nf-quick .nf-agent select {
+  width: 100%;
+}
+
+.nf-agent-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+@media (max-width: 480px) {
+  .nf-quick {
+    flex-direction: column;
+    gap: 13px;
+  }
+
+  .nf-quick .nf-agent {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+}
+
+/* "More options" fold — git & workspace settings, collapsed by default. */
+.nf-advanced {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.nf-advanced>summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.nf-advanced>summary::-webkit-details-marker {
+  display: none;
+}
+
+.nf-advanced>summary::before {
+  content: "▸";
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.12s ease;
+}
+
+.nf-advanced[open]>summary::before {
+  transform: rotate(90deg);
+}
+
+.nf-advanced>summary:hover {
+  color: var(--text);
+}
+
+.nf-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* When a fold is open, its revealed fields sit in a lightly inset panel with an
+   accent edge — so it's unmistakable which content the summary just disclosed,
+   even when it opens near the bottom of the scroll region. */
+.nf-advanced[open] > .nf-advanced-body {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel-2, var(--panel));
+}
+
+/* Actions row: error message rides inline, left of the Create button. */
+.nf-actions {
+  align-items: center;
+}
+
+.nf-actions .error {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+#new-form h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+#new-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#new-form input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 9px 10px;
+  font-size: 14px;
+}
+
+#new-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#new-form select,
+#new-form textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 9px 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+#new-form textarea {
+  resize: vertical;
+  min-height: 52px;
+}
+
+#new-form select:focus,
+#new-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Checkbox row: the box, label text and hint flow as one wrapping paragraph
+   (block, not flex) so a long hint continues the line and wraps naturally under
+   it — no separate hint sub-column, no box floating in the vertical centre. */
+#new-form label.check {
+  display: block;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* Custom accent checkboxes — matches the New-menu look: a rounded outline box
+   that fills with the accent + a white checkmark when on (replaces the default
+   browser tick). Scoped to #new-form so the Settings toggle switches, which
+   hide their own 0×0 checkbox, are untouched. */
+#new-form label.check input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 0 9px 0 0;
+  vertical-align: -3px;
+  border: 1.5px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-2, var(--panel));
+  cursor: pointer;
+  position: relative;
+  transition: border-color .12s, background .12s;
+}
+
+#new-form label.check input[type="checkbox"]:hover {
+  border-color: var(--accent);
+}
+
+#new-form label.check input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  /* White checkmark drawn as an inline SVG so it stays centered and crisp
+     regardless of box-sizing / border width (the CSS border-triangle drifted). */
+  background: var(--accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M2.5 6.3 5 8.8l4.5-5'/%3E%3C/svg%3E")
+    center / 11px 11px no-repeat;
+}
+
+#new-form label.check input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+#new-form label.check input[type="checkbox"]:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+#new-form label.check .muted {
+  font-size: 12px;
+}
+
+#provision-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#repo-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.repo-path-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.repo-path-row input {
+  flex: 1;
+}
+
+#repo-browse-btn {
+  border-radius: 7px;
+  padding: 0 12px;
+  font-size: 12px;
+  cursor: pointer;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#repo-browse-btn:hover {
+  border-color: var(--accent);
+}
+
+#repo-browser {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+}
+
+.rb-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rb-head #rb-up {
+  border-radius: 6px;
+  padding: 2px 9px;
+  font-size: 13px;
+  cursor: pointer;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.rb-head #rb-up:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.rb-head #rb-mkdir {
+  border-radius: 6px;
+  padding: 2px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.rb-head #rb-mkdir:hover {
+  border-color: var(--accent);
+}
+
+.rb-cwd {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  flex: 1;
+}
+
+#rb-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rb-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.rb-item:hover {
+  background: var(--panel-2);
+}
+
+.rb-item.is-git {
+  color: #c4b3ff;
+}
+
+.rb-item .rb-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rb-use {
+  font-style: italic;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+}
+
+.rb-use.is-git {
+  color: #c4b3ff;
+  font-style: normal;
+}
+
+.rb-pick {
+  border-radius: 5px;
+  padding: 2px 9px;
+  font-size: 11px;
+  cursor: pointer;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.rb-pick:hover {
+  border-color: var(--accent);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* Transient confirmation toast (e.g. "Copied N chars") */
+#cs-toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  z-index: 1000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+#cs-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.modal-actions button {
+  border-radius: 7px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.modal-actions button[type=submit] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.error {
+  color: var(--red);
+  font-size: 12px;
+  min-height: 16px;
+  margin: 0;
+}
+} /* 170 */ @layer components{
+/* Commit dialog (multiline message) */
+#commit-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 480px;
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#commit-form h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+#commit-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#commit-form textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: 13px;
+  resize: vertical;
+  min-height: 140px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  line-height: 1.5;
+}
+
+#commit-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Rename dialog (single-line display name; same card style as #commit-form) */
+#rename-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 420px;
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#rename-form h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+#rename-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#rename-form #rename-real {
+  display: inline;
+  overflow-wrap: anywhere;
+}
+
+#rename-form input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+#rename-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Make-PR dialog (branch picker; same card style as #rename-form) */
+#make-pr-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 440px;
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#make-pr-form h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+#make-pr-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mpr-combo {
+  position: relative;
+}
+
+.mpr-combo input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+}
+
+.mpr-combo input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.mpr-list {
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.mpr-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mpr-opt.active {
+  background: rgba(var(--accent-rgb), 0.22);
+}
+
+.mpr-opt.disabled {
+  color: var(--muted);
+}
+
+.mpr-tag {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-family: system-ui, sans-serif;
+}
+
+#make-pr-form .modal-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Workspaces / disk manager */
+#workspaces-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  width: 580px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ws-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ws-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.ws-head #ws-total {
+  flex: 1;
+  font-size: 12px;
+}
+
+.ws-head button {
+  border-radius: 7px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.ws-head button:hover {
+  border-color: var(--accent);
+}
+
+#ws-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 60px;
+}
+
+.ws-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.ws-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ws-name {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ws-badge {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  flex: none;
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.ws-badge.active {
+  background: rgba(var(--accent-rgb), 0.22);
+  color: #c4b3ff;
+}
+
+.ws-size {
+  font-size: 12px;
+  color: var(--muted);
+  flex: none;
+  min-width: 64px;
+  text-align: right;
+}
+
+.ws-del {
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--red);
+}
+
+.ws-del:hover {
+  border-color: var(--red);
+  background: rgba(222, 97, 62, 0.12);
+}
+
+.ws-protected {
+  font-size: 11px;
+  color: var(--muted);
+  flex: none;
+  padding: 5px 8px;
+}
+
+.ws-badge.gone {
+  background: rgba(222, 97, 62, 0.18);
+  color: #f0a08a;
+}
+
+/* Recent… footer button */
+#recent-btn {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#recent-btn:hover {
+  border-color: var(--accent);
+}
+
+/* Cursor auto-adopt on/off switch (sidebar footer) */
+.ca-switch {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 20px;
+  flex: none;
+}
+
+.ca-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+}
+
+.ca-slider {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ca-slider::before {
+  content: "";
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 2px;
+  top: 2px;
+  background: var(--muted);
+  border-radius: 50%;
+  transition: transform 0.15s, background 0.15s;
+}
+
+.ca-switch input:checked+.ca-slider {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.ca-switch input:checked+.ca-slider::before {
+  transform: translateX(18px);
+  background: #fff;
+}
+
+/* Recently-closed panel (reuses .ws-head from the disk manager) */
+#recent-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  width: 860px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ws-head #recent-total {
+  flex: 1;
+  font-size: 12px;
+}
+
+#recent-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 60px;
+}
+
+.recent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.recent-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.recent-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-when {
+  font-size: 11px;
+  flex: none;
+}
+
+.recent-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.recent-actions button {
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.recent-actions .recent-reopen {
+  border-color: var(--accent);
+  color: #fff;
+  background: rgba(var(--accent-rgb), 0.28);
+}
+
+.recent-actions .recent-reopen:hover {
+  background: rgba(var(--accent-rgb), 0.45);
+}
+
+.recent-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.recent-actions .danger {
+  color: var(--red);
+}
+
+.recent-actions .danger:hover {
+  border-color: var(--red);
+  background: rgba(222, 97, 62, 0.12);
+}
+
+.recent-actions button:hover {
+  border-color: var(--accent);
+}
+} /* 180 */ @layer components{
+/* --------------------------------------------------------------------------- *
+ * E1 — connection-lost card + stale grid overlay. A compact bottom-right card
+ * (never a full-width strip: that covered the top bar and its controls) that
+ * names the actual problem — WSL down, server restarting, HTTP errors — and
+ * can offer a one-click fix in the desktop shell.
+ * --------------------------------------------------------------------------- */
+#conn-banner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 4000;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  padding: 11px 14px 10px;
+  text-align: left;
+  font-size: 12.5px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--red);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+#conn-banner .conn-head {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--red);
+}
+
+#conn-banner .conn-detail {
+  margin-top: 4px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+#conn-banner .conn-foot {
+  margin-top: 7px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+#conn-banner #conn-elapsed {
+  flex: 1;
+}
+
+#conn-banner #conn-fix {
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#conn-banner #conn-fix:hover {
+  border-color: var(--accent);
+}
+
+#conn-banner #conn-fix:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Stale indicator while disconnected: the grid dims and fades slightly. */
+body.conn-lost #grid {
+  opacity: 0.55;
+  filter: saturate(0.6);
+  transition: opacity 0.3s ease, filter 0.3s ease;
+}
+
+/* E2 — clickable notification toast (focus the session / open the PR). */
+#cs-toast.clickable {
+  pointer-events: auto;
+  cursor: pointer;
+  border-color: var(--accent);
+}
+
+#cs-toast.clickable:hover {
+  background: var(--panel);
+}
+} /* 200 */ @layer components{
+/* --------------------------------------------------------------------------- *
+ * C2 — first-run setup checklist (empty-state card + footer Setup dialog) and
+ * the shared doctor-check list (also rendered in Settings → Doctor).
+ * --------------------------------------------------------------------------- */
+#empty .setup-card {
+  max-width: 560px;
+  width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  margin: 10px auto;
+  padding: 24px 28px;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+#empty .setup-card h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+  color: var(--text);
+}
+
+#empty .setup-card>p {
+  margin: 0 0 14px;
+  font-size: 13px;
+}
+
+.setup-step {
+  margin-bottom: 18px;
+}
+
+.setup-step h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.setup-step .setup-num {
+  color: var(--accent);
+  font-size: 15px;
+}
+
+.setup-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.setup-actions button,
+.setup-acct-row button,
+.test-btn {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.setup-actions button:hover,
+.setup-acct-row button:hover,
+.test-btn:hover {
+  border-color: var(--accent);
+}
+
+.setup-actions .setup-new {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.setup-actions .setup-new:hover {
+  filter: brightness(1.1);
+}
+
+.setup-acct-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.setup-acct-row button {
+  flex: none;
+  min-width: 130px;
+  text-align: center;
+}
+
+.setup-hint {
+  font-size: 11px;
+  margin: 6px 0 0;
+}
+
+button.linklike {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+#setup-panel-dlg {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 22px;
+  width: 560px;
+  max-width: 92vw;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#setup-dialog-body {
+  overflow-y: auto;
+}
+
+/* Doctor check list (setup panel + Settings → Doctor). */
+.doctor-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.doctor-check {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.doctor-check .doctor-ico {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.doctor-check.st-ok .doctor-ico {
+  color: var(--green);
+}
+
+.doctor-check.st-info .doctor-ico {
+  color: var(--muted);
+}
+
+.doctor-check.st-warn .doctor-ico {
+  color: #e8a13c;
+}
+
+.doctor-check.st-fail .doctor-ico {
+  color: var(--red);
+}
+
+.doctor-check .doctor-label {
+  flex: none;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 84px;
+}
+
+.doctor-check .doctor-detail {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.doctor-check .doctor-fix {
+  color: #e8a13c;
+}
+
+/* E3 — inline Test buttons + ✓/✗ results in Settings. */
+.test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.test-result {
+  font-size: 12px;
+  color: var(--muted);
+  min-height: 15px;
+  word-break: break-word;
+}
+
+.test-result.ok {
+  color: var(--green);
+}
+
+.test-result.bad {
+  color: var(--red);
+}
+} /* 210 */ @layer components{
+/* F8 — dismissible doctor warning chip (failures while sessions exist). */
+#doctor-warn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 8px 12px 0;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: #e8a13c;
+  background: rgba(232, 161, 60, 0.10);
+  border: 1px solid rgba(232, 161, 60, 0.45);
+  border-radius: 6px;
+}
+
+#doctor-warn.hidden {
+  display: none;
+}
+
+#doctor-warn button.linklike {
+  color: inherit;
+  font-weight: 600;
+}
+
+#doctor-warn #doctor-warn-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  opacity: 0.7;
+}
+
+#doctor-warn #doctor-warn-dismiss:hover {
+  opacity: 1;
+}
+
+/* F8 — inline Shortcut token input in the setup checklist accounts step. */
+.setup-shortcut-row .setup-shortcut-token {
+  flex: 1 1 120px;
+  min-width: 0;
+  font-size: 12px;
+  padding: 5px 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.setup-shortcut-row .setup-shortcut-token:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------- *
+ * J2 — command palette (Ctrl+P / Cmd+P). A centered overlay reusing the .modal
+ * backdrop; panel styling mirrors #new-form / #settings-panel so it reads as
+ * part of the same dialog family in both themes.
+ * --------------------------------------------------------------------------- */
+#palette {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+#palette-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 460px;
+  max-width: 92vw;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+#palette-input {
+  background: var(--bg);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  padding: 12px 14px;
+  font-size: 14px;
+  font-family: inherit;
+  border-radius: 0;
+  outline: none;
+}
+
+#palette-input:focus {
+  border-bottom-color: var(--accent);
+}
+
+#palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  min-height: 40px;
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.palette-item.selected {
+  background: var(--accent);
+  color: #fff;
+}
+
+.palette-item .palette-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-item .palette-hint {
+  flex: none;
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.palette-item.selected .palette-hint {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.palette-empty {
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+/* Sidebar-footer hint button that surfaces the shortcut. */
+#palette-btn {
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  height: 30px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+#palette-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+} /* 220 */ @layer components{
+/* --------------------------------------------------------------------------- *
+ * J3 — session context line: a subtle one-line diff stat ("+120 −8 · 6 files")
+ * under each sidebar row title and in the pane header. Hidden when the backend
+ * doesn't send diff_stat or everything is zero.
+ * --------------------------------------------------------------------------- */
+.ctxline {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.ctxline .ctx-add {
+  color: var(--green);
+  opacity: 0.8;
+}
+
+.ctxline .ctx-del {
+  color: var(--red);
+  opacity: 0.8;
+}
+
+.ctxline .ctx-files {
+  opacity: 0.85;
+}
+
+/* In the pane header the context line yields (shrinks, then clips) rather
+   than pushing the state text out of the header. */
+.pane-head .ctxline {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* It drops out of a narrow pane header alongside the next-step button (560px),
+   before the token counter (420px); the sidebar line stays. */
+@container (max-width: 560px) {
+  .pane-head .ctxline {
+    display: none !important;
+  }
+}
+
+/* --------------------------------------------------------------------------- *
+ * J4 — prompt presets in the New-session dialog.
+ * --------------------------------------------------------------------------- */
+.preset-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.preset-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.preset-row button {
+  flex: none;
+  border-radius: 7px;
+  padding: 0 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.preset-row button:hover {
+  border-color: var(--accent);
+}
+
+.preset-row #preset-del {
+  color: var(--red);
+}
+
+.preset-row #preset-del:hover {
+  border-color: var(--red);
+  background: rgba(222, 97, 62, 0.12);
+}
+
+/* Inline "name this preset" editor (replaces the native prompt()). */
+.preset-row .preset-name-edit {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.preset-row .preset-name-edit.hidden {
+  display: none;
+}
+
+.preset-row .preset-name-edit input {
+  flex: 1;
+  min-width: 0;
+}
+} /* 230 */ @layer components{
+/* --------------------------------------------------------------------------- *
+ * L7 — missing-workspace treatment: the session's directory vanished. The row
+ * renders muted/hollow with a "missing workspace" chip (not a fake stage) and
+ * a single Clean up action; the pane becomes a placeholder with the same
+ * action. Colors ride the theme vars, so dark and light are both covered.
+ * --------------------------------------------------------------------------- */
+.inst.ws-missing .inst-row {
+  opacity: 0.62;
+}
+
+.inst.ws-missing .title {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* Hollow status dot: there is no live process state to report. */
+.inst.ws-missing .dot {
+  background: transparent;
+  border: 1px solid var(--muted);
+}
+
+.stagechip.s-missing {
+  /* Opaque background: a see-through chip renders as garbage when it ends up
+     over other text (squeezed rows, stale-CSS builds). */
+  color: var(--muted);
+  background: var(--panel-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+  font-style: italic;
+}
+
+/* Row-level Clean up button (replaces the ✕ kill on missing rows). */
+.inst .kill.cleanup {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  opacity: 1;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--red);
+  white-space: nowrap;
+}
+
+.inst .kill.cleanup:hover {
+  border-color: var(--red);
+  background: rgba(222, 97, 62, 0.12);
+}
+
+/* Pane placeholder for a missing workspace. */
+.pane.missing-pane {
+  border-style: dashed;
+}
+
+.pane.missing-pane .pane-head .state {
+  color: var(--red);
+}
+
+.missing-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 10px;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px;
+}
+
+.missing-body p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.missing-body .missing-path {
+  font-size: 11px;
+  max-width: 90%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.missing-body .missing-cleanup {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 6px 16px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--red);
+}
+
+.missing-body .missing-cleanup:hover {
+  border-color: var(--red);
+  background: rgba(222, 97, 62, 0.12);
+}
+
+/* --------------------------------------------------------------------------- *
+ * L8 — no-origin push hint: when a committed session has no origin remote the
+ * next-step button becomes a subdued, non-destructive hint (tooltip carries
+ * the `git remote add origin <url>` command; clicking copies it).
+ * --------------------------------------------------------------------------- */
+.pane-head .actions .nextstep.nextstep-hint {
+  background: var(--panel);
+  color: var(--muted);
+  font-weight: 500;
+  border: 1px dashed var(--border);
+  cursor: copy;
+}
+
+.pane-head .actions .nextstep.nextstep-hint:hover {
+  filter: none;
+  border-color: var(--accent);
+  color: var(--text);
+}
+} /* 240 */ @layer components{
+/* Ticketing sources: one card per configured source (Settings → Ticketing). */
+.tk-source {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.tk-source .tk-remove {
+  margin-left: auto;
+}
+
+/* A required field left blank (e.g. per-source Repo URL) — a soft red cue. */
+.tk-source .field-missing {
+  border-color: var(--danger, #e5534b);
+}
+
+.tk-source .test-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+/* Collapsible source card: a clickable header folds the body to a summary. */
+.tk-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 2px 0;
+  font: inherit;
+  text-align: left;
+}
+
+.tk-caret {
+  color: var(--muted);
+  width: 1em;
+  flex: none;
+  font-size: 12px;
+}
+
+.tk-summary {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tk-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* Expanded cards show the header only as a fold affordance; a collapsed card is
+   just the one-line summary. */
+.tk-source.tk-collapsed .tk-body {
+  display: none;
+}
+
+.tk-source:not(.tk-collapsed) .tk-summary {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* Settings → Connections: inline at-a-glance status list (replaces the old modal). */
+.conn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.conn-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.conn-main {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.conn-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.conn-name {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.conn-detail {
+  font-size: 12px;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.conn-pill {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 9px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+  flex: none;
+}
+
+.conn-pill.conn-connected {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+}
+
+.conn-pill.conn-attention {
+  color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 15%, transparent);
+}
+
+.conn-pill.conn-not_connected {
+  color: var(--muted);
+  background: transparent;
+}
+
+.conn-configure {
+  flex: none;
+}
+
+/* Assistant "agent file" editor (standing instructions / CLAUDE.md). */
+#assistant-agent-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  width: min(760px, 94vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  color: var(--text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#assistant-agent-panel .ws-head h2 {
+  flex: 1;
+}
+
+#assistant-agent-panel .ws-head #assistant-agent-close {
+  margin-left: auto;
+}
+
+#assistant-agent-text {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 260px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+#assistant-agent-dialog .modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+#assistant-agent-dialog #assistant-agent-status {
+  margin-right: auto;
+}
+} /* 250 */ @layer components{
+/* Settings → Mobile: white QR card + URL rows */
+#mobile-qr {
+  background: #fff;
+  border-radius: 12px;
+  padding: 12px;
+  width: max-content;
+  margin: 6px 0 16px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .3);
+}
+
+#mobile-qr svg {
+  display: block;
+  width: 200px;
+  height: 200px;
+}
+
+/* Fixed label column + flexible URL column so every row aligns and long
+   URLs wrap inside their own cell instead of shoving the label around. */
+.mobile-url-row {
+  display: grid;
+  grid-template-columns: 104px 1fr;
+  align-items: baseline;
+  gap: 4px 14px;
+  margin: 6px 0;
+}
+
+.mobile-url-row .set-label {
+  min-width: 0;
+}
+
+.mobile-url-row a {
+  color: var(--accent);
+  word-break: break-all;
+  justify-self: start;
+}
+
+/* Settings → System logs: toolbar + read-only monospace tail viewer */
+.logs-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0 10px;
+  flex-wrap: wrap;
+}
+
+.logs-toolbar select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+
+.logs-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#logs-meta {
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.logs-view {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 12px;
+  margin: 0;
+  height: 56vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* System logs pane: a grid box tailing /api/logs (toggled by the 🗒 button). */
+.syslogs-pane .pane-head .state {
+  display: inline;
+  flex: none;
+  color: var(--muted);
+}
+
+.syslogs-source {
+  margin-left: 8px;
+  max-width: 170px;
+  font-size: 11px;
+  padding: 2px 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.syslogs-view {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg);
+  color: var(--text);
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+} /* 260 */ @layer components{
+/* --- Capability gating (git / tailscale / ticketing) ------------------------
+   applyCaps() stamps body.no-git / .no-tailscale / .no-ticketing from
+   /api/config `caps`. Static HTML tagged data-caps="X" simply disappears when
+   X is absent; a settings screen tagged data-caps-need="X" swaps its content
+   for its .caps-gate ("connect X to get these features") message instead. */
+body.no-git [data-caps~="git"],
+body.no-tailscale [data-caps~="tailscale"],
+body.no-ticketing [data-caps~="ticketing"] {
+  display: none !important;
+}
+
+.caps-gate {
+  display: none;
+}
+
+body.no-git .set-screen[data-caps-need~="git"]> :not(.caps-gate):not(.set-section-title),
+body.no-tailscale .set-screen[data-caps-need~="tailscale"]> :not(.caps-gate):not(.set-section-title),
+body.no-ticketing .set-screen[data-caps-need~="ticketing"]> :not(.caps-gate):not(.set-section-title) {
+  display: none;
+}
+
+body.no-git .set-screen[data-caps-need~="git"]>.caps-gate[data-caps-gate="git"],
+body.no-tailscale .set-screen[data-caps-need~="tailscale"]>.caps-gate[data-caps-gate="tailscale"],
+body.no-ticketing .set-screen[data-caps-need~="ticketing"]>.caps-gate[data-caps-gate="ticketing"] {
+  display: block;
+}
+
+.caps-gate {
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--muted);
+  padding: 14px 16px;
+  margin: 4px 0 10px;
+  max-width: 560px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.caps-gate p {
+  margin: 0 0 8px;
+}
+
+.caps-gate p:last-child {
+  margin-bottom: 0;
+}
+
+.caps-gate strong {
+  color: var(--text);
+}
+
+.caps-gate code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+
+
+/* O3: the verification-gate chip sits after the stage chip, slightly smaller. */
+.stagechip.checkchip {
+  font-size: 9px;
+  max-width: 76px;
+}
+} /* 270 */ @layer components{
+/* --- Device tab groups (tailnet multi-device control) ---------------------
+ * Headers only render when other MindFlock devices are discovered on the
+ * tailnet; a single-device network keeps the flat, header-less list. */
+.device-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  padding: 7px 10px 5px;
+  margin-top: 4px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  border-top: 1px solid var(--panel-2);
+}
+
+.device-group:first-child {
+  border-top: 0;
+  margin-top: 0;
+}
+
+.device-group:hover {
+  color: var(--text);
+}
+
+.device-group .dev-caret {
+  width: 12px;
+  font-size: 10px;
+}
+
+.device-group .dev-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.device-group .dev-badge {
+  margin-left: auto;
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 1px 7px;
+  font-size: 10px;
+  text-transform: none;
+}
+
+.device-group .dev-badge.off {
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.device-group .dev-forget {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+}
+
+.device-group .dev-forget:hover {
+  color: var(--red, #de613e);
+}
+
+.device-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  padding: 4px 12px 6px 28px;
+  font-size: 12px;
+}
+
+.device-note .dev-connect {
+  background: var(--accent, #7d56f4);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.device-note .dev-connect:hover {
+  filter: brightness(1.1);
+}
+
+#device-dialog .device-dialog-hint {
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+
+#device-dialog .dialog-err {
+  color: var(--red, #de613e);
+  font-size: 12px;
+  margin-right: auto;
+  align-self: center;
+}
+} /* 270 */ @layer components{
+/* ---------------------------------------------------------------------------
+ * Appearance picker (Settings → Appearance). The theme palettes themselves
+ * live in theme.css (shared with the mobile page); these are just the picker
+ * widgets. .accent-swatch = accent presets; .surface-swatch = surface sets
+ * (backgrounds/panels/borders/text), previewed by a banded dot — two tones for a
+ * single-hue set, three for a multi-color one (top bar / sidebar / window).
+ * --------------------------------------------------------------------------- */
+.accent-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.accent-swatch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.accent-swatch:hover {
+  border-color: var(--muted);
+}
+
+.accent-swatch.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.accent-swatch .sw-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+}
+
+/* Surface swatches share the accent-swatch chrome; a rounded square rather than
+   a circle, so the diagonal bands of the preview read as areas of a window. */
+.surface-swatch .sw-dot {
+  border-radius: 5px;
+}
+} /* 280 */ @layer theme{
+/* ---------------------------------------------------------------------------
+ * Region hues — the one file that knows how a multi-color theme set reaches
+ * the pixels.
+ *
+ * A theme set (Settings → Appearance) used to be a single palette for the whole
+ * window. The multi-color sets in theme.css give the top bar and the sidebar a
+ * hue of their own — Macaw is a blue bar over a green sidebar over a red
+ * window — by setting the --topbar-* / --sidebar-* tokens declared in
+ * tokens.css.
+ *
+ * Rather than teach every rule inside those regions about a second palette,
+ * each region REBINDS the four generic surface tokens on itself. Everything
+ * nested below then resolves var(--panel) / var(--border) / var(--text) / …
+ * against its region's hue for free: hover fills, chips, hairlines, the masked
+ * logo, the toolbars — no per-component edits, and no drift when a new control
+ * is added to either region.
+ *
+ * Why this can't cycle: the aliases (`--topbar-bg: var(--panel)`) are declared
+ * on <html>, so they compute there against html's own --panel. The rebinds
+ * below sit on descendants and only read those already-computed values, so
+ * nothing depends on itself.
+ * --------------------------------------------------------------------------- */
+#topbar {
+  --panel: var(--topbar-bg);
+  --panel-2: var(--topbar-hi);
+  --border: var(--topbar-border);
+  --text: var(--topbar-text);
+  --muted: var(--topbar-muted);
+}
+
+#sidebar {
+  --panel: var(--sidebar-bg);
+  --panel-2: var(--sidebar-hi);
+  --border: var(--sidebar-border);
+  --text: var(--sidebar-text);
+  --muted: var(--sidebar-muted);
+}
+
+/* Popovers that open out of a recolored region are app furniture, not bar
+   chrome — a menu the size of the notifications list looks wrong wearing a loud
+   region hue, and it floats over the window anyway. Each opts back into the
+   app-wide palette through the unshadowed --app-* copies. A declaration on the
+   element itself always beats the region's inherited one, so this needs no
+   specificity or layer juggling. */
+#topbar .tb-drop-panel,
+.notif-pop,
+#foot-customize-menu {
+  --panel: var(--app-panel);
+  --panel-2: var(--app-panel-2);
+  --border: var(--app-border);
+  --text: var(--app-text);
+  --muted: var(--app-muted);
+}
+} @layer theme{
+/* Light-mode patches.
+ *
+ * The light palette itself is a variable swap in tokens.css; these are the
+ * leftovers — hard-coded colors that don't read on a light background. They
+ * live in the `theme` layer, which is declared last in styles/index.css, so
+ * they win over component rules no matter what order those load in.
+ *
+ * Adding a component rule that needs a light-mode counterpart? Put the
+ * counterpart here rather than raising specificity at the call site. */
+.light .inst-actions button:hover,
+.light .pane-head .tabs button:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.light .split-diff .sd-row:hover .sd-code {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.light .split-diff .sd-code.blank {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.light .split-diff .sd-ln {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* Light-accent text is too faint on white — use the deeper accent variant. */
+.light .stagechip.s-agent,
+.light .split-diff .sd-file,
+.light .diff-toolbar .diffstat.file,
+.light .rb-item.is-git,
+.light .rb-use.is-git,
+.light .ws-badge.active {
+  color: var(--accent-deep);
+}
+
+/* Hunk blue + a couple of tinted texts that need more contrast on light. */
+.light .pane-diff .hunk,
+.light .split-diff .sd-hunk {
+  color: #0a6aa8;
+}
+
+.light .stagechip.s-precommit {
+  color: #fff;
+}
+
+/* White chip text on 50%-alpha backgrounds washes out on light — go solid. */
+.light .stagechip.s-running {
+  background: var(--accent);
+}
+
+.light .stagechip.s-clarify {
+  background: #0e7490;
+}
+
+.light .stagechip.s-limit {
+  background: #dc2626;
+}
+
+.light .stagechip.s-pr {
+  background: var(--green);
+}
+
+.light .ws-badge.gone {
+  color: #b23a1a;
+}
+
+/* Stage-chip contrast. s-committed's pale #7fd1ff text was nearly invisible on
+   a light row — worst on the focused/active row, whose --panel-2 background is
+   exactly the chip's own background. Deepen the pale tinted text colors, and
+   give every chip a hairline inset border on focused/active rows so the pill
+   keeps its shape against a matching row background (generic fix, not just
+   `committed`). These sit after the chip rules above so the more specific
+   focused/active selectors still win. */
+.light .stagechip.s-committed {
+  color: #0a6aa8;
+  background: rgba(14, 165, 233, 0.14);
+}
+
+.light .stagechip.s-pushed {
+  color: #1f7a3d;
+}
+
+.light .inst.active .stagechip,
+.light .inst-row:hover .stagechip,
+.light .pane.focused .stagechip {
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* s-missing already carries its own inset border in both themes. */
+.light .stagechip.s-missing {
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* Setup checklist + connection banner. */
+.light .doctor-check .doctor-fix {
+  color: #9a6b00;
+}
+
+.light #conn-banner {
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+
+/* Doctor warning chip (failures while sessions exist). */
+.light #doctor-warn {
+  color: #9a6b00;
+  border-color: rgba(154, 107, 0, 0.5);
+  background: rgba(154, 107, 0, 0.08);
+}
+} /* 190 */

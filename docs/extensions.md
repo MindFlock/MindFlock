@@ -1,0 +1,288 @@
+# Extensions & hooks
+
+MindFlock has three extension seams, from zero-code to full in-process:
+
+1. **Shell hooks** — drop an executable in `~/.mindflock/hooks/<event>/`; it runs
+   on every matching session event. Any language, no MindFlock imports.
+2. **The `/api/events` WebSocket** — an external tool (script, dashboard, bot)
+   subscribes to the same event stream over a socket, with replay on reconnect.
+3. **In-process addons** — a Python `Addon` (routes + lifecycle + manifest) plus
+   an optional ES module the frontend loads generically. The **notify** addon
+   (`backend/web/addons/notify.py` + `static/addons/notify.js`) is the
+   worked example throughout this doc.
+
+All three are fed by the same server-side event bus
+(`backend/web/core/events.py`).
+
+## The event envelope
+
+Every event — on the bus, over the WebSocket, and on a shell hook's stdin — is
+one JSON envelope:
+
+```jsonc
+{
+  "seq": 42,                          // monotonically increasing per server process
+  "event": "session.status_changed",  // see vocabulary below
+  "session": "sc-19815",              // session title ("" for non-session events)
+  "old": "loading",                   // previous value (null when n/a)
+  "new": "running",                   // new value (null when n/a)
+  "ts": 1719900000.0,                 // unix seconds
+  "data": {}                          // event-specific extras
+}
+```
+
+Core vocabulary (emitted by the server):
+
+| Event | When | `old` → `new` |
+|---|---|---|
+| `session.created` | A session is created | — → initial status |
+| `session.deleted` | Killed / closed / cleaned up | `data` may carry `{"closed": true}` or `{"cleaned": true}` |
+| `session.paused` / `session.resumed` | Pause / resume lifecycle | — |
+| `session.status_changed` | `running·ready·loading·paused` flips | statuses |
+| `session.activity_changed` | `working·clarify·idle·offline` flips | activities |
+| `session.stage_changed` | `provisioning·agent·precommit·interrupt·committed·pushed·pr` flips | stages |
+| `session.budget_exceeded` | Estimated cost first crosses `general.session_budget_usd` | `data: {cost, budget}` |
+| `session.prompt_sent` | The queue drain loop auto-sends a prompt | `data: {text, remaining, loop}` |
+| `session.queue_changed` | Any prompt-queue edit | `data: {pending, enabled, loop}` |
+
+Addon-originated events (see `AppContext.emit`) live under the `addon.`
+namespace, e.g. `addon.notify.ping`. Notable transitions:
+
+- **agent needs you**: `session.activity_changed` with `new == "clarify"`
+- **PR merged/closed**: `session.stage_changed` with `old == "pr"` (an open PR
+  is stage `pr`; merging or closing it moves the stage off `pr`)
+
+The last ~100 envelopes are kept in a ring buffer for replay; `seq` survives the
+buffer rolling over (it keeps counting), but not a server restart.
+
+## 1. Shell hooks (`~/.mindflock/hooks/`)
+
+Layout — one directory per event name, plus `all/` which runs for every event:
+
+```
+~/.mindflock/hooks/
+├── session.activity_changed/
+│   └── 10-notify.sh          # executable; runs in name order
+├── session.stage_changed/
+│   └── 20-slack.sh
+└── all/
+    └── 99-log-everything.sh
+```
+
+Each executable file (`chmod +x`) runs on every matching event with:
+
+- **env vars**: `MINDFLOCK_EVENT`, `MINDFLOCK_SESSION`, `MINDFLOCK_OLD`,
+  `MINDFLOCK_NEW` (`old`/`new` of `null` become empty strings)
+- **stdin**: the full JSON envelope
+- a **10-second budget** — a hook still running after 10s is killed
+- fire-and-forget: hook failures are logged, never surfaced, never block the server
+
+Override the root with `MINDFLOCK_HOOKS_DIR` (used by the tests).
+
+### Example: desktop notification when an agent needs input
+
+`~/.mindflock/hooks/session.activity_changed/10-notify.sh`:
+
+```sh
+#!/bin/sh
+# Notify when a session flips to "clarify" (the agent is waiting on you).
+[ "$MINDFLOCK_NEW" = "clarify" ] || exit 0
+notify-send "MindFlock: $MINDFLOCK_SESSION" "The agent needs your input"
+```
+
+### Example: Slack ping when a PR opens
+
+`~/.mindflock/hooks/session.stage_changed/20-slack.sh`:
+
+```sh
+#!/bin/sh
+# Ping Slack when a session reaches the PR stage (gh just opened one).
+[ "$MINDFLOCK_NEW" = "pr" ] || exit 0
+cat > /dev/null   # drain the JSON envelope from stdin
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d "{\"text\": \"PR open for *$MINDFLOCK_SESSION* ($MINDFLOCK_OLD -> $MINDFLOCK_NEW)\"}" \
+  "https://hooks.slack.com/services/T000/B000/XXXX" > /dev/null
+```
+
+(For merged-or-closed instead, test `[ "$MINDFLOCK_OLD" = "pr" ]`.)
+
+Remember: `chmod +x` both files.
+
+## 2. `/api/events` WebSocket (external tools)
+
+`WS /api/events` streams every envelope as a JSON text frame. On connect the
+ring-buffer backlog is replayed first; pass `?since=<seq>` with the last `seq`
+you processed to skip what you already saw, then live events follow. Clients
+only listen (frames you send are ignored); a slow client silently loses events
+(bounded queue) rather than ever blocking the server.
+
+### When `*_changed` events fire
+
+`session.status/activity/stage_changed` events are **computed by diffing**, not
+watched: whenever session state is refreshed, the server compares each
+session's freshly computed state against its previous snapshot and emits one
+event per changed field. Historically that refresh only happened while a
+browser was polling `GET /api/instances` — a headless WS consumer with no UI
+open got lifecycle events (`created` / `deleted` / `paused` / `resumed`) but no
+`*_changed` transitions. The server now also ticks session state itself while
+`/api/events` has connected clients, so the guarantee is simply: **keep a WS
+connection open and you'll receive `*_changed` events — no browser needed.**
+
+One seeding note: the first time a session is sighted after a server (re)start,
+its state only *seeds* the diff snapshot — no `*_changed` event is emitted for
+that first observation; the stream picks up from the session's next actual
+transition.
+
+```python
+# pip install websockets
+import asyncio, json, websockets
+
+async def main():
+    last_seq = 0
+    while True:  # reconnect loop; ?since= makes reconnects lossless (within ~100 events)
+        try:
+            async with websockets.connect(f"ws://127.0.0.1:8765/api/events?since={last_seq}") as ws:
+                async for frame in ws:
+                    env = json.loads(frame)
+                    last_seq = env["seq"]
+                    print(env["event"], env["session"], env["old"], "->", env["new"])
+        except OSError:
+            await asyncio.sleep(2.5)
+
+asyncio.run(main())
+```
+
+## 3. In-process Python addons
+
+An addon is a self-contained feature: one backend module, an optional ES module
+for its UI, and one registry line — zero edits to the core server.
+
+### The `Addon` ABC (`backend/web/addons/base.py`)
+
+```python
+class Addon(abc.ABC):
+    id: str = ""      # stable addon id (manifest key + window.mindflockAddons key)
+    label: str = ""   # human label
+
+    @property
+    @abc.abstractmethod
+    def router(self) -> APIRouter: ...          # routes + websockets; mounted
+                                                # BEFORE the static catch-all
+    def frontend(self) -> List[FrontendDescriptor]: ...  # UI contributions (0..n)
+    async def on_startup(self, ctx: AppContext) -> None: ...
+    async def on_shutdown(self, ctx: AppContext) -> None: ...
+```
+
+Optionally implement the structural `ManagedProcess` protocol
+(`start/stop/status/is_running`) to get generic start/stop/logs treatment.
+
+Register it with one line in `build_addons()`
+(`backend/web/addons/__init__.py`). `GET /api/addons` then serves its
+manifest: `{"id", "label", "managed", "frontend": [descriptor…]}`.
+
+### `AppContext` v2 (the event-bus seam)
+
+Every lifecycle hook (and the constructor) receives the shared `AppContext`:
+
+| Member | What it is |
+|---|---|
+| `ctx.engine` | The process-wide session `Engine` singleton |
+| `ctx.register_task(coro)` | Track a background asyncio task (cancelled on shutdown) |
+| `ctx.log` | The `backend.log` module (`ErrorLog`/`InfoLog`), best-effort |
+| `ctx.subscribe(event_name, cb) -> unsubscribe` | Register `cb(envelope)` for bus events named `event_name`; `"*"` matches everything. The callback runs synchronously on whatever thread emits — keep it tiny. |
+| `ctx.emit(event, session="", old=None, new=None, data=None) -> envelope` | Publish an addon-originated event. The `session.*` namespace is **reserved** (raises `ValueError`); any other name is auto-prefixed with `addon.` — `ctx.emit("notify.ping")` publishes `addon.notify.ping`. Convention: `<addon_id>.<what>`. |
+| `ctx.sessions() -> list[dict]` | Read-only snapshot of the sessions as last computed by the `/api/instances` poll (same dicts the SPA sees: `title`, `status`, `activity`, `stage`, `tokens`, …). Empty until the first poll; the dicts are copies. |
+
+```python
+class MyAddon(Addon):
+    id, label = "mine", "Mine"
+
+    async def on_startup(self, ctx):
+        self._unsub = ctx.subscribe("session.stage_changed", self._on_stage)
+
+    def _on_stage(self, env):
+        if env["new"] == "pr":
+            ...  # react; or ctx.emit("mine.pr_seen", session=env["session"])
+
+    async def on_shutdown(self, ctx):
+        self._unsub()
+```
+
+### `FrontendDescriptor`
+
+Each `frontend()` entry is serialized verbatim into the manifest:
+
+| Field | Meaning |
+|---|---|
+| `id`, `label` | Slot id + display label |
+| `where` | `sidebar-bar` · `grid-pane` · `dialog` · `pane-tab` · `settings` |
+| `module` | URL of the ES module that renders it (e.g. `"/addons/notify.js"` — static files mount at `/`, so that is `static/addons/notify.js`). `None` when there is nothing to load. |
+| `ws_path` | WebSocket the slot's terminal pane attaches to (optional) |
+| `api_base` | The addon's REST prefix (optional) |
+| `poll_ms`, `read_only`, `order`, `available_flag` | Poll interval, read-only pane, sort order, status-flag gating |
+| `builtin_ui` | `True` = hand-wired UI in `app.js`/`index.html`; the generic slot renderer skips it. New addons leave it `False`. |
+
+### The module-loading contract (what `core/slots.js` does)
+
+For every descriptor with a `module` URL and `builtin_ui: false`:
+
+1. `sidebar-bar` descriptors get a sidebar bar rendered first
+   (`#addon-bars .addon-bar[data-addon="<id>"]`), so your module can extend it.
+2. The module is dynamically `import()`ed. A load failure is a `console.warn` +
+   skip — it can never break the SPA.
+3. If the module registered `window.mindflockAddons[<addon id>] = { init(ctx) }`
+   (or default-exports such an object), `init` is called **once** with:
+
+```js
+{
+  descriptor,   // this FrontendDescriptor, verbatim from the manifest
+  addon,        // { id, label } of the owning addon
+  events,       // window.mindflock.events (may be undefined — feature-detect)
+  sessions,     // window.mindflock.sessions (function; may be undefined)
+  toast,        // window.mindflock.toast (function; may be undefined)
+}
+```
+
+Minimal module skeleton:
+
+```js
+// static/addons/mine.js
+window.mindflockAddons = window.mindflockAddons || {};
+window.mindflockAddons.mine = {
+  init(ctx) {
+    if (!ctx.events) return;                       // bus not available: degrade
+    ctx.events.subscribe("session.stage_changed", (env) => {
+      if (env.new === "pr" && typeof ctx.toast === "function")
+        ctx.toast(`${env.session}: PR open`);
+    });
+  },
+};
+```
+
+### The worked example: notify
+
+- **Backend** `backend/web/addons/notify.py`: serves the event →
+  notification rules at `GET /api/notify/config` and declares a `sidebar-bar`
+  descriptor with `module: "/addons/notify.js"`.
+- **Frontend** `backend/web/static/addons/notify.js`: registers
+  `window.mindflockAddons.notify`; `init` adds an On/Off toggle to its sidebar
+  bar (persisted in `localStorage`), requests `Notification` permission lazily
+  on first enable, subscribes to `"*"` and applies the served rules — a desktop
+  notification (with the session title; click focuses the tab) when a session
+  hits `clarify` or its PR leaves the open stage.
+- **Registry**: one `NotifyAddon(ctx)` line in `build_addons()`.
+
+## `window.mindflock` client API reference
+
+Provided by `static/core/events.js` (loaded with the SPA); addon modules
+receive the relevant pieces via `init(ctx)` but may also feature-detect the
+global:
+
+| Member | Contract |
+|---|---|
+| `mindflock.events.subscribe(eventNameOr"*", cb) -> unsubscribe` | `cb(envelope)` gets the full envelope for matching events (`"*"` = all) |
+| `mindflock.events.lastSeq` | `seq` of the last envelope received (used for `?since=` resume) |
+| `mindflock.events.connected` | Whether the `/api/events` socket is currently up |
+| `mindflock.events.onStatus(cb)` | Called on connect/disconnect transitions |
+| `mindflock.sessions()` | The latest instances snapshot array (same shape as `GET /api/instances`) |
+| `mindflock.toast(msg, opts?)` | Show a toast. Assigned by `app.js` (F3), so it's present whenever the SPA is loaded — still feature-detect in addon modules for non-SPA pages. `opts` is optional: `{onClick, duration}` makes the toast clickable and/or overrides its lifetime (ms). |

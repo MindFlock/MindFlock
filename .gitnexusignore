@@ -1,0 +1,22 @@
+# Files the GitNexus indexer should not read.
+#
+# Binary assets have no symbols to extract, and reading them as text crashes
+# the analyzer outright ("Failed calling LOWER: Invalid UTF-8" when
+# electron/build/icon.png was added), which fails the gitnexus-index
+# pre-commit hook for everyone.
+*.png
+*.ico
+*.icns
+*.gif
+*.jpg
+*.jpeg
+*.webp
+*.woff
+*.woff2
+*.ttf
+*.otf
+*.7z
+*.zip
+*.AppImage
+*.dmg
+*.exe

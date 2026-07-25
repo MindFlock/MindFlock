@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <!-- interactive-widget=resizes-content: the soft keyboard RESIZES the layout
+       viewport instead of panning over it (Chrome 108+), so no blank band
+       appears next to the key bar while composing. iOS ignores it — the
+       visualViewport offset compensation in mobile.js covers that path. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#0f1117" />
+  <title>MindFlock — Mobile</title>
+  <!-- Apply the cached appearance before first paint; mobile.js then syncs the
+       server copy (ui.accent / ui.surface) so the phone matches the desktop. -->
+  <script>try{var _a=localStorage.getItem('cs_accent');if(_a)document.documentElement.setAttribute('data-accent',_a);var _s=localStorage.getItem('cs_surface');if(_s)document.documentElement.setAttribute('data-surface',_s);}catch(e){}</script>
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/vendor/xterm.css" />
+  <link rel="stylesheet" href="/mobile.css" />
+  <link rel="stylesheet" href="/theme.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="bar">
+      <span id="dot" class="dot offline" title="agent activity"></span>
+      <select id="picker" aria-label="Session"></select>
+      <div id="tabs">
+        <button type="button" class="tab active" data-tab="agent">Agent</button>
+        <button type="button" class="tab" data-tab="shell">Shell</button>
+      </div>
+    </header>
+
+    <!-- Git workflow bar: the same guided flow the desktop pane header offers
+         (Commit → Push → PR → Merge). The step recommended for the selected
+         session's stage is highlighted; every button stays tappable so you can
+         drive the whole flow from a phone without the desktop view. -->
+    <div id="actions">
+      <button type="button" class="act" data-act="commit">Commit</button>
+      <button type="button" class="act" data-act="push">Push</button>
+      <button type="button" class="act" data-act="pr">PR</button>
+      <button type="button" class="act" data-act="merge">Merge</button>
+    </div>
+
+    <div id="term-wrap">
+      <div id="term"></div>
+      <div id="empty" class="hidden">No sessions yet. Create one from the desktop view.</div>
+      <div id="status" class="hidden"></div>
+    </div>
+
+    <!-- Native compose box: type/paste/autocorrect like any phone text field,
+         then send the whole line to the PTY at once. The terminal itself stays
+         tappable for raw keystroke mode. Text box above the key bar (user
+         preference); both stay visible while typing because applyViewport
+         clamps + polls the app height while the keyboard settles. -->
+    <div id="composer">
+      <textarea id="compose" rows="1" placeholder="Type here — Send delivers it with Enter"
+                autocomplete="on" autocapitalize="none" spellcheck="false"
+                aria-label="Compose input"></textarea>
+      <button type="button" id="send" aria-label="Send">Send</button>
+    </div>
+
+    <!-- Keys that are awkward or impossible on a phone soft-keyboard. -->
+    <div id="keys">
+      <button type="button" class="key" data-key="esc">esc</button>
+      <button type="button" class="key sticky" id="ctrl">ctrl</button>
+      <button type="button" class="key" data-key="tab">tab</button>
+      <button type="button" class="key" data-key="up">↑</button>
+      <button type="button" class="key" data-key="down">↓</button>
+      <button type="button" class="key" data-key="left">←</button>
+      <button type="button" class="key" data-key="right">→</button>
+      <button type="button" class="key" data-key="enter">⏎</button>
+    </div>
+
+    <!-- Commit-message sheet: commit needs a message, so tapping Commit slides
+         this up instead of firing immediately. Mirrors the desktop CommitDialog
+         (multiline; first line is the summary). -->
+    <div id="commit-sheet" class="sheet hidden">
+      <div class="sheet-box">
+        <div class="sheet-title">Commit</div>
+        <textarea id="commit-text" rows="4"
+                  autocomplete="off" autocapitalize="sentences" spellcheck="true"
+                  placeholder="Short summary line&#10;&#10;Optional longer description…"
+                  aria-label="Commit message"></textarea>
+        <div class="sheet-actions">
+          <button type="button" id="commit-cancel">Cancel</button>
+          <button type="button" id="commit-ok">Commit</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/xterm-addon-fit.js"></script>
+  <script src="/mobile.js"></script>
+</body>
+</html>

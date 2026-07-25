@@ -1,0 +1,233 @@
+# Providers
+
+Package: `backend.providers`. A **provider** encapsulates everything specific to
+one coding-agent CLI: how to launch it (fresh vs resume), which exit codes mean a
+clean quit, how to recognize its trust/idle/waiting prompts in a tmux pane, and
+how to read its token usage. The engine's `Instance.Start` and the web server's
+terminal restarts both resolve a provider from the session's program string and
+drive it through this one interface, so launch behavior can't drift between them.
+
+## Resolution
+
+`providers.resolve(program)` returns the first registered provider whose
+`matches(program)` accepts it (matching on the program's basename against each
+provider's aliases). Registration order:
+
+1. **`claude`** (`ClaudeProvider` in `claude.py`) — matches `claude` and empty
+   programs. The default.
+2. **Bundled providers** — `codex`, `antigravity`, `aider`, `opencode`, `cline`,
+   `goose` (`BUILTIN_CONFIGS` in `config.py`). `codex` and `antigravity` get
+   dedicated Python subclasses (`CodexProvider`, `AntigravityProvider`) for live
+   usage/telemetry; the rest are data-only configs.
+3. **User TOML providers** — one per file in the providers dir.
+4. **`generic` fallback** — matches anything; runs the program bare.
+
+`resolve()` is hot (it runs its matcher loop several times per session per
+poll tick), so results are memoized per program string in a small bounded
+cache, invalidated whenever the registry changes (register / rebuild).
+
+## The default: `claude`
+
+The Claude provider launches plain `claude` (Claude Code). It:
+
+- resumes a crashed session with `--resume <thread-id>` when this window's
+  conversation id was recorded (via the activity hooks), else `--continue`;
+  a failed resume is retried once, then falls back to a plain unseeded launch
+  (the seed prompt is never re-sent on resume)
+- owns the workspace launcher script (see
+  [session-engine.md](session-engine.md)) for non-in-place sessions
+- recognizes Claude Code's trust prompts ("Do you trust the files in this
+  folder?" etc. — answered with Enter), its idle prompt, and its
+  "waiting for you" patterns (numbered-choice cursor, permission box,
+  AskUserQuestion) used for the `clarify` activity state
+- reports activity from `claude agents --json` first (Claude Code ≥ 2.x —
+  real-time, so it's reported with age 0 and trusted without pane
+  re-verification), falling back to the per-session hook marker (below) when
+  the live signal is unavailable — binary too old, no conversation id recorded
+  yet, or the session not listed
+- reads token usage from Claude Code transcripts (below)
+
+## Activity signal (`activity_markers.py`)
+
+The working/idle/clarify **activity** state shown in the UI comes, wherever
+possible, from the CLI's own lifecycle hooks rather than pane scraping. The
+machinery is provider-agnostic (`providers/activity_markers.py`): at every
+launch, MindFlock idempotently merges hook commands into the CLI's hooks
+config; each hook fires and writes a per-session `{state, ts}` JSON marker to
+`~/.mindflock-assistant/.activity-markers/<session>.json`
+(`MINDFLOCK_ACTIVITY_MARKER_DIR` overrides the directory), which the web layer
+trusts over pane inspection. Markers older than 6 h are ignored — an ancient
+marker belongs to a dead run and must not outvote live inspection. Every
+MindFlock-written hook command carries a `# mindflock-activity` tag so a
+re-install recognizes and replaces **only** MindFlock's own entries; user-
+authored hooks are never touched. Hook install is best-effort and can never
+break a launch. (The Claude provider re-exports these primitives — they
+historically lived in `claude.py` — so existing call-sites and tests keep
+working.)
+
+Two built-in wirings:
+
+- **Claude** installs into the worktree's `.claude/settings.local.json`; the
+  marker is Claude's fallback behind the live `claude agents --json` signal
+  (above).
+- **Codex** installs into the repo-local `.codex/hooks.json` (Codex's hooks
+  config shares Claude's schema and payload fields): `Stop → idle`,
+  `UserPromptSubmit`/`PreToolUse`/`PostToolUse → working`, and
+  `PermissionRequest → clarify`. On hook-capable codex builds this
+  authoritative signal supersedes the version-fragile pane regexes, which are
+  kept only as a fallback for older builds.
+
+User TOML providers opt in with the `[activity]` table (below).
+
+## Adding a CLI with a TOML file — no Python
+
+Drop a file in `$MINDFLOCK_PROVIDERS_DIR` (default
+`~/.mindflock-assistant/providers/`):
+
+```toml
+[provider]
+name = "mycli"
+program = ["mycli", "my-cli"]   # basenames that select this provider
+command = "mycli"                # optional; defaults to name
+
+[launch]
+args = ["--dangerously-skip-permissions"] # saved flags, appended on every start/resume
+resume_flag = "--continue"       # omit if the CLI can't resume
+skip_perms_flag = "--yolo"       # appended when the session skips permissions
+resume_fallback = true           # emit "<cmd> --continue || <cmd>"
+
+[exit]
+natural_codes = [0, 130]         # clean-quit codes (no auto-resume)
+
+[classify]
+trust_patterns = ["Do you trust"]  # pane substrings that mean a trust prompt
+trust_keystroke = "enter"          # enter | d_enter | y_enter
+idle_pattern = "What next?"        # pane substring meaning "waiting, idle"
+
+[activity]                         # opt-in: activity via the CLI's own hooks
+hooks_file = ".mycli/hooks.json"   # repo-local hooks config, merged into at launch
+[[activity.events]]                # hook event -> state it records
+event = "Stop"
+state = "idle"
+[[activity.events]]
+event = "UserPromptSubmit"
+state = "working"
+```
+
+The optional `[activity]` table opts a CLI that has its own hooks engine into
+the marker mechanism above: `hooks_file` names the repo-local hooks config
+(e.g. Codex's `.codex/hooks.json`) and each `[[activity.events]]` maps a hook
+event to the state it records (`working`/`idle`/`clarify`). An empty/omitted
+`hooks_file` means pane-inspection only (unchanged behaviour); the `[classify]`
+pane patterns remain as a fallback for CLI builds without hooks.
+
+### Launch args vs. `skip_perms_flag`
+
+`[launch] args` are **saved launch flags** — argv tokens appended to the base
+executable every time this provider starts *or* resumes a session, shell-quoted
+(`shlex.quote`) as they are interpolated into the tmux command, and validated on
+load (a list of non-empty tokens; no newlines/NULs; ≤512 chars each) so a bad
+persisted provider never reaches command construction. They are **provider-
+specific** — the same list lives on one provider's config and never leaks onto
+another CLI — and they **precede per-session flags** (see
+[session-engine.md](session-engine.md)) in the final command. This differs from
+`skip_perms_flag`, which is a *single* flag added **only when a session opts into
+skipping permissions**; `args` are unconditional. There are two further layers of
+launch flags — a global per-provider default map
+(`coding_cli.default_launch_args`, see [configuration.md](configuration.md)) and
+per-session flags — both threaded through to the same command builder.
+
+Malformed files are skipped silently, so a bad provider can never break startup.
+The bundled configs (`codex`, `antigravity`, `aider`, `opencode`, `cline`,
+`goose`) use the same mechanism; their flags are verified against pinned CLI
+versions noted in `config.py` (upstream CLIs change flags), and a user TOML with
+the same name overrides the bundled config.
+
+## Connection: install detection
+
+Settings → **Agent providers** surfaces a **connection** view for every
+registered provider (built-in and custom): whether its binary is installed
+(with the resolved path) and, when it's missing, a copy-paste install command
+(see [web-ui.md](web-ui.md)). MindFlock does **not** drive sign-in — each CLI
+prompts you to authenticate on its own the first time a session launches it, so
+MindFlock never touches your credentials. Install detection is the same
+`shutil.which` / explicit-path check the backend uses to gate the default
+provider (below).
+
+`BaseProvider.install_hint()` backs the install command, best-effort and wrapped
+so one provider can never break the list: a copy-paste command that installs
+this CLI, or `""` to fall back to a platform package-manager hint keyed on the
+program name. `ClaudeProvider` overrides it **npm-vs-native**:
+`npm install -g @anthropic-ai/claude-code` when `npm` is on `PATH`, else the
+native `curl … | sh` installer (no Node). `GenericProvider` reads it straight
+from the TOML's `[connect]` table.
+
+> **Legacy / backend-only.** Two further `BaseProvider` methods —
+> `login_command()` (the command a login terminal would run; default: the bare
+> program) and `auth_evidence()` (a human string when the CLI *looks* logged in,
+> else `""`, reported as "login status unknown" rather than "logged out" so a
+> version-fragile credential probe never false-negatives) — and the
+> `WS /api/providers/{name}/login-terminal` + `POST …/login-close` endpoints
+> (`web/core/provider_login.py`) still exist but are **no longer surfaced in the
+> UI** now that sign-in is delegated to each CLI. `GET /api/providers/status`
+> still returns their `authenticated` / `auth_detail` / `login_command` fields;
+> nothing in the frontend reads them. The `[connect]` table's `auth_files`,
+> `auth_env`, and `login_command` keys feed only these legacy paths.
+
+Custom providers configure the install hint (and the legacy connect fields) with
+an optional `[connect]` table in their TOML (all keys optional):
+
+```toml
+[connect]
+install_hint = "npm install -g @openai/codex"  # "" -> platform package hint
+auth_files = ["~/.codex/auth.json"]   # legacy: first existing file = "looks logged in"
+auth_env = ["OPENAI_API_KEY"]         # legacy: or a set API-key env var
+login_command = "codex login"         # legacy: "" -> run the CLI bare
+```
+
+## Pricing (`pricing.py`)
+
+Model prices for the UI's cost estimates, sourced from the AI Pricing Guru feed
+(`https://www.aipricing.guru/api/pricing.json`, ~120 models). Degradation chain:
+live feed (4 s timeout, 24 h TTL) → last-good disk cache
+(`~/.mindflock-assistant/pricing.json`) → a built-in Claude fallback table →
+Sonnet-class default. Cache-write price is derived as 1.25× input (the feed
+doesn't carry it). Model names are normalized (case/punctuation-insensitive
+longest-prefix match) so dated ids like `claude-opus-4-8-20260101` resolve.
+API: `price_per_token(model)`, `context_window(model)`, `estimate_cost(tok, model)`.
+**Estimates only — never billing.** Nothing in this module raises.
+
+## Usage history (`usage_history.py`)
+
+Rolling day/week/month/year token+cost totals across **all** Claude Code sessions
+(powers `GET /api/usage` and the sidebar readout). One pass over every transcript
+under `~/.claude*/projects/` (plus `$CLAUDE_CONFIG_DIR` — wrappers/alternate
+installs may use separate config roots) sums each turn's incremental usage, priced per-turn by
+its own model. Results are memoized for 60 s and folded into a durable daily
+ledger (`~/.mindflock-assistant/usage-history.json`, atomic writes) so totals
+survive Claude pruning old transcripts. The ledger self-prunes days older than
+the longest rolling window (plus 5 days' slack), so long-lived installs don't
+accumulate one entry per calendar day forever. Degrades to zeros on any error.
+
+Per-session figures (the pane popup and `tokens_*` fields on
+`GET /api/instances`) come from the provider's `session_tokens(workdir, since)`:
+for Claude, the transcripts of the workspace's project directory — cumulative
+in/out/cache tokens plus the newest turn's context-window fill and model.
+
+## Live usage & limit state
+
+Two provider methods drive the usage-limit hold on the prompt queue (see
+[web-api.md](web-api.md) and [web-ui.md](web-ui.md)):
+
+- `usage_live()` returns the current usage-meter reading (for Claude, the same
+  OAuth endpoint as the CLI's `/usage` screen) as a dict with `percent_used`
+  and an `end` reset epoch, optionally nested `weekly`. A window whose
+  `percent_used` reads spent but whose `end` (its `resets_at`) is null, absent,
+  or already in the past is treated as a **hold-worthy exhausted** state, not an
+  open window — the queue holds on a bounded fallback rather than firing a
+  prompt into a still-closed window. A window that reads open, or an
+  unavailable reading (`None`), leaves the queue free to send.
+- `usage_limit_state(pane_text, now)` parses the CLI's on-pane limit banner
+  (`{limited, reset_at}`). The hold logic consults the live meter even when this
+  reports no banner, so a rebooted session with a fresh idle prompt is still
+  held when its meter shows a window genuinely spent.

@@ -1,0 +1,109 @@
+/* Light-mode patches.
+ *
+ * The light palette itself is a variable swap in tokens.css; these are the
+ * leftovers — hard-coded colors that don't read on a light background. They
+ * live in the `theme` layer, which is declared last in styles/index.css, so
+ * they win over component rules no matter what order those load in.
+ *
+ * Adding a component rule that needs a light-mode counterpart? Put the
+ * counterpart here rather than raising specificity at the call site. */
+.light .inst-actions button:hover,
+.light .pane-head .tabs button:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.light .split-diff .sd-row:hover .sd-code {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.light .split-diff .sd-code.blank {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.light .split-diff .sd-ln {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* Light-accent text is too faint on white — use the deeper accent variant. */
+.light .stagechip.s-agent,
+.light .split-diff .sd-file,
+.light .diff-toolbar .diffstat.file,
+.light .rb-item.is-git,
+.light .rb-use.is-git,
+.light .ws-badge.active {
+  color: var(--accent-deep);
+}
+
+/* Hunk blue + a couple of tinted texts that need more contrast on light. */
+.light .pane-diff .hunk,
+.light .split-diff .sd-hunk {
+  color: #0a6aa8;
+}
+
+.light .stagechip.s-precommit {
+  color: #fff;
+}
+
+/* White chip text on 50%-alpha backgrounds washes out on light — go solid. */
+.light .stagechip.s-running {
+  background: var(--accent);
+}
+
+.light .stagechip.s-clarify {
+  background: #0e7490;
+}
+
+.light .stagechip.s-limit {
+  background: #dc2626;
+}
+
+.light .stagechip.s-pr {
+  background: var(--green);
+}
+
+.light .ws-badge.gone {
+  color: #b23a1a;
+}
+
+/* Stage-chip contrast. s-committed's pale #7fd1ff text was nearly invisible on
+   a light row — worst on the focused/active row, whose --panel-2 background is
+   exactly the chip's own background. Deepen the pale tinted text colors, and
+   give every chip a hairline inset border on focused/active rows so the pill
+   keeps its shape against a matching row background (generic fix, not just
+   `committed`). These sit after the chip rules above so the more specific
+   focused/active selectors still win. */
+.light .stagechip.s-committed {
+  color: #0a6aa8;
+  background: rgba(14, 165, 233, 0.14);
+}
+
+.light .stagechip.s-pushed {
+  color: #1f7a3d;
+}
+
+.light .inst.active .stagechip,
+.light .inst-row:hover .stagechip,
+.light .pane.focused .stagechip {
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* s-missing already carries its own inset border in both themes. */
+.light .stagechip.s-missing {
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* Setup checklist + connection banner. */
+.light .doctor-check .doctor-fix {
+  color: #9a6b00;
+}
+
+.light #conn-banner {
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+
+/* Doctor warning chip (failures while sessions exist). */
+.light #doctor-warn {
+  color: #9a6b00;
+  border-color: rgba(154, 107, 0, 0.5);
+  background: rgba(154, 107, 0, 0.08);
+}

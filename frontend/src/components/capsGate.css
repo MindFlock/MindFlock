@@ -1,0 +1,65 @@
+/* --- Capability gating (git / tailscale / ticketing) ------------------------
+   applyCaps() stamps body.no-git / .no-tailscale / .no-ticketing from
+   /api/config `caps`. Static HTML tagged data-caps="X" simply disappears when
+   X is absent; a settings screen tagged data-caps-need="X" swaps its content
+   for its .caps-gate ("connect X to get these features") message instead. */
+body.no-git [data-caps~="git"],
+body.no-tailscale [data-caps~="tailscale"],
+body.no-ticketing [data-caps~="ticketing"] {
+  display: none !important;
+}
+
+.caps-gate {
+  display: none;
+}
+
+body.no-git .set-screen[data-caps-need~="git"]> :not(.caps-gate):not(.set-section-title),
+body.no-tailscale .set-screen[data-caps-need~="tailscale"]> :not(.caps-gate):not(.set-section-title),
+body.no-ticketing .set-screen[data-caps-need~="ticketing"]> :not(.caps-gate):not(.set-section-title) {
+  display: none;
+}
+
+body.no-git .set-screen[data-caps-need~="git"]>.caps-gate[data-caps-gate="git"],
+body.no-tailscale .set-screen[data-caps-need~="tailscale"]>.caps-gate[data-caps-gate="tailscale"],
+body.no-ticketing .set-screen[data-caps-need~="ticketing"]>.caps-gate[data-caps-gate="ticketing"] {
+  display: block;
+}
+
+.caps-gate {
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--muted);
+  padding: 14px 16px;
+  margin: 4px 0 10px;
+  max-width: 560px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.caps-gate p {
+  margin: 0 0 8px;
+}
+
+.caps-gate p:last-child {
+  margin-bottom: 0;
+}
+
+.caps-gate strong {
+  color: var(--text);
+}
+
+.caps-gate code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+
+
+/* O3: the verification-gate chip sits after the stage chip, slightly smaller. */
+.stagechip.checkchip {
+  font-size: 9px;
+  max-width: 76px;
+}

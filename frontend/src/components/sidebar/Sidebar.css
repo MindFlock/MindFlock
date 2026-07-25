@@ -1,0 +1,141 @@
+/* Sidebar */
+#sidebar {
+  /* --panel / --border / --text are REBOUND for this whole region in
+     styles/regions.css, so every var() here and in the sheets that style the
+     sidebar's insides (SidebarRow, toolbars, BulkBar…) already carries the
+     sidebar's own hue under a multi-color theme set (Macaw &c.). */
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#sidebar header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+#sidebar h1 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+
+#new-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#new-btn:hover {
+  filter: brightness(1.1);
+}
+
+/* The session-list section: a fixed anchor in the movable-section order that
+   the bars can be dropped above or below. It owns the flex-grow + scroll that
+   #instance-list used to have directly, so the list still fills the space and
+   scrolls regardless of where the bars sit. position:relative anchors its drop
+   cue. */
+.sessions-block {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Collapsed sidebar: drop the sidebar column entirely. The top-bar toggle stays
+   visible (no floating reopen button needed). The fixed #topbar is unaffected. */
+body.sidebar-collapsed {
+  grid-template-columns: 1fr;
+}
+
+body.sidebar-collapsed #sidebar {
+  display: none;
+}
+
+/* Tools row: session count on the left, a subtle keyboard-shortcuts link on
+   the right (status-bar-style help affordance). */
+#sidebar-footer .foot-row.foot-tools {
+  justify-content: space-between;
+}
+
+#sidebar-footer .foot-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+}
+
+#sidebar-footer .foot-link:hover {
+  color: var(--text);
+}
+
+/* Footer "Customize" popover — pick which bars show in the sidebar. */
+#foot-customize {
+  position: relative;
+}
+
+#foot-customize .foot-link.open {
+  color: var(--text);
+}
+
+#foot-customize-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+  z-index: 60;
+}
+
+#foot-customize-menu .fc-title {
+  padding: 2px 8px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+#foot-customize-menu .fc-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+}
+
+#foot-customize-menu .fc-item:hover {
+  background: var(--panel-2);
+}
+
+#foot-customize-menu .fc-item input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+

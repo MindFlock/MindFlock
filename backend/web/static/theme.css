@@ -1,0 +1,520 @@
+/* ---------------------------------------------------------------------------
+ * Shared theme presets (Settings → Appearance) — linked by BOTH index.html and
+ * mobile.html, after each page's base stylesheet. The base sheets declare the
+ * default palette on :root (and .light on desktop); every block here only
+ * overrides variables, so a page that doesn't load this file still renders.
+ *
+ * ONE bird per look, and the palette is the bird: what a Goldfinch wears is
+ * brilliant lemon over a black cap, so that's what the set does — a brilliant
+ * lemon top bar over a near-black sidebar. Where a name exists in both
+ * dimensions the key is shared ("cardinal" is the red accent AND the red
+ * surface), so the two pickers read as one aviary rather than two lists.
+ *
+ *   red  Cardinal · orange Oriole   · yellow Goldfinch · green Quetzal
+ *   blue Bluejay  · indigo Bunting  · violet Violetear · pink Flamingo
+ *   gold Pheasant · silver Heron
+ *
+ * Most surface sets are MULTI-COLOR: a hue per region rather than one for the
+ * whole window, because that's how the birds are actually marked. Only the three
+ * deliberately quiet sets — Swallow (the default), Raven and Heron — are a single
+ * neutral throughout. See REGION TOKENS below.
+ *
+ * The defaults (no data attribute) are Violetear (violet accent) and Swallow
+ * (steel blue-gray surface); Violetear also has an explicit accent block so a
+ * stored/legacy name can resolve to it. Raven (true black) is the one surface
+ * outside the shared palette — there is no black accent to pair it with.
+ *
+ * Two independent dimensions, composable:
+ *   html[data-accent=…]  — the accent trio: --accent (main), --accent-rgb
+ *                          (feeds rgba() glows/tints), --accent-deep (darker
+ *                          text variant for light backgrounds).
+ *   html[data-surface=…] — the surface set: backgrounds, panels, borders, text,
+ *                          muted text, the terminal bg/fg, and the region tokens
+ *                          below.
+ *
+ * REGION TOKENS. --topbar-* paints the top bar and --sidebar-* the sidebar,
+ * while --bg / --panel / --panel-2 / --border / --text stay the "window" (grid,
+ * panes, dialogs). frontend/src/styles/regions.css is what turns them into
+ * pixels: each region rebinds --panel & friends on itself, so every control
+ * inside it follows that hue with no per-component CSS. The tokens are aliased
+ * to the globals in the base sheet, so a set that leaves them alone is
+ * single-hue for free.
+ *
+ * Rules of thumb these follow, so a bird stays legible rather than merely loud:
+ *   · Every region is either DARK with light --*-text or BRIGHT with dark
+ *     --*-text — never a mid-tone that fights both. Bright-with-dark-text is
+ *     where most of the pop comes from; it's the plumage.
+ *   · --border is the cheapest pop there is: a saturated hairline reads as color
+ *     everywhere at once and never has to carry text. Push it.
+ *   · A region's --*-hi (hover/selected fill) sits one step off its --*-bg, and
+ *     text must clear 4.5:1 against BOTH.
+ *   · In light mode the window and the SIDEBAR stay light. theme-light.css
+ *     patches hover fills and stage chips with black-alpha washes that assume a
+ *     light row or pane, so a dark sidebar there would quietly lose them.
+ *   · The light-mode TOP BAR is exempt and stays as loud as the dark one:
+ *     nothing in theme-light.css reaches into it, and its popovers opt out to the
+ *     app palette (regions.css).
+ *   · Top-bar icons are monochrome SVGs on currentColor for exactly this reason —
+ *     an emoji 🌙/🔔 paints its own yellow and vanishes on Goldfinch's bar.
+ *
+ * Selection is persisted server-side (ui.accent / ui.surface in
+ * ~/.mindflock/settings.json) so every device shows the same look, and cached
+ * in localStorage (cs_accent / cs_surface) so the inline <head> scripts can
+ * apply it before first paint. Renaming or retiring a preset key needs a
+ * matching entry in the LEGACY_PRESETS maps (app.js + mobile.js) so stored
+ * names keep resolving.
+ *
+ * Specificity contract (desktop light mode): html[data-surface=…] (0,1,1)
+ * outranks .light (0,1,0), and html.light[data-surface=…] (0,2,1) outranks
+ * both — so each surface set carries its own light-mode palette and the 🌙
+ * toggle keeps working inside every theme.
+ * --------------------------------------------------------------------------- */
+
+/* --- Accent presets (default: Violetear, also declared in the base sheets) -- */
+html[data-accent="cardinal"]  { --accent: #f0323f; --accent-rgb: 240, 50, 63;   --accent-deep: #b0111c; }
+html[data-accent="oriole"]    { --accent: #ff7f1f; --accent-rgb: 255, 127, 31;  --accent-deep: #c05512; }
+html[data-accent="goldfinch"] { --accent: #f5dc16; --accent-rgb: 245, 220, 22;  --accent-deep: #8a7005; }
+html[data-accent="quetzal"]   { --accent: #17c163; --accent-rgb: 23, 193, 99;   --accent-deep: #157f3d; }
+html[data-accent="bluejay"]   { --accent: #2b8cff; --accent-rgb: 43, 140, 255;  --accent-deep: #1160cc; }
+html[data-accent="bunting"]   { --accent: #5442ff; --accent-rgb: 84, 66, 255;   --accent-deep: #2f24b8; }
+html[data-accent="violetear"] { --accent: #7d56f4; --accent-rgb: 125, 86, 244;  --accent-deep: #5b3fc0; }
+html[data-accent="flamingo"]  { --accent: #ff4d9e; --accent-rgb: 255, 77, 158;  --accent-deep: #b0125f; }
+html[data-accent="pheasant"]  { --accent: #f0b90b; --accent-rgb: 240, 185, 11;  --accent-deep: #7f6210; }
+html[data-accent="heron"]     { --accent: #aab4c6; --accent-rgb: 170, 180, 198; --accent-deep: #5b6577; }
+
+/* ===========================================================================
+ * SURFACE SETS (default: Swallow steel blue-gray, in the base sheets)
+ *
+ * Dark palette first, then the light-mode counterpart for the desktop 🌙 toggle
+ * (mobile has no light mode, so only the dark block applies there — and mobile
+ * renders the window palette only, ignoring the region tokens).
+ *
+ * Ordered the way the picker shows them: the three quiet neutrals, then round
+ * the color wheel by the hue the WINDOW wears, since that's the surface you
+ * stare at all day.
+ * =========================================================================== */
+
+/* --- The quiet three ------------------------------------------------------- */
+
+/* Raven — true black, stark high contrast. For OLED fans. Surface only: there
+   is no black accent, so no matching html[data-accent] block. */
+html[data-surface="raven"] {
+  --bg: #000000; --panel: #0a0a0d; --panel-2: #141419; --border: #303039;
+  --text: #ececf2; --muted: #90909f;
+  --term-bg: #000000; --term-fg: #ececf2;
+}
+html.light[data-surface="raven"] {
+  --bg: #fcfcfd; --panel: #ffffff; --panel-2: #efeff3; --border: #c6c6d0;
+  --text: #000000; --muted: #4a4a58;
+  --term-bg: #ffffff; --term-fg: #000000;
+}
+
+/* Heron — neutral silver-graphite, no color cast at all. */
+html[data-surface="heron"] {
+  --bg: #16181b; --panel: #1f2226; --panel-2: #292d33; --border: #454b54;
+  --text: #e4e7ec; --muted: #979da7;
+  --term-bg: #16181b; --term-fg: #e4e7ec;
+}
+html.light[data-surface="heron"] {
+  --bg: #f0f1f4; --panel: #ffffff; --panel-2: #e2e4ea; --border: #c3c7d0;
+  --text: #1a1d22; --muted: #5a6069;
+  --term-bg: #ffffff; --term-fg: #1a1d22;
+}
+
+/* --- Red ------------------------------------------------------------------- */
+
+/* Cardinal — the whole bird is brilliant red behind a jet-black face mask. */
+html[data-surface="cardinal"] {
+  --bg: #2b0409; --panel: #3d060d; --panel-2: #540a13; --border: #ff3b47;
+  --text: #ffe3e5; --muted: #f0949a;
+  --term-bg: #2b0409; --term-fg: #ffe3e5;
+  --topbar-bg: #d51322; --topbar-hi: #b80f1d; --topbar-border: #ff5c66;
+  --topbar-text: #fff0f1; --topbar-muted: #ffc2c6;
+  --sidebar-bg: #16060a; --sidebar-hi: #26090f; --sidebar-border: #7a141c;
+  --sidebar-text: #ffd9dc; --sidebar-muted: #d1868c;
+}
+html.light[data-surface="cardinal"] {
+  --bg: #ffe4e5; --panel: #fff6f6; --panel-2: #ffc9cc; --border: #f0323f;
+  --text: #4a0206; --muted: #a3121c;
+  --term-bg: #fff6f6; --term-fg: #4a0206;
+  --topbar-bg: #d51322; --topbar-hi: #b80f1d; --topbar-border: #8f0713;
+  --topbar-text: #ffffff; --topbar-muted: #ffd4d7;
+  --sidebar-bg: #fff0f1; --sidebar-hi: #ffdcde; --sidebar-border: #e86b74;
+  --sidebar-text: #3d0205; --sidebar-muted: #96131d;
+}
+
+/* Scarlet Macaw — scarlet body, cobalt and emerald wings. The loudest bird in
+   the aviary, and the one the region tokens were built for. */
+html[data-surface="macaw"] {
+  --bg: #2e0406; --panel: #43060a; --panel-2: #5c090f; --border: #f5242c;
+  --text: #ffe4e0; --muted: #f09a92;
+  --term-bg: #2e0406; --term-fg: #ffe4e0;
+  --topbar-bg: #1554e0; --topbar-hi: #1a63ff; --topbar-border: #4d8bff;
+  --topbar-text: #ffffff; --topbar-muted: #d1e0ff;
+  --sidebar-bg: #06773a; --sidebar-hi: #05602f; --sidebar-border: #14c266;
+  --sidebar-text: #e0ffee; --sidebar-muted: #96e0b8;
+}
+html.light[data-surface="macaw"] {
+  --bg: #ffe3e0; --panel: #fff6f4; --panel-2: #ffc7c2; --border: #f5242c;
+  --text: #45050a; --muted: #a01019;
+  --term-bg: #fff6f4; --term-fg: #45050a;
+  --topbar-bg: #1554e0; --topbar-hi: #1147c2; --topbar-border: #0d3ba8;
+  --topbar-text: #ffffff; --topbar-muted: #d1e0ff;
+  --sidebar-bg: #d9f7e4; --sidebar-hi: #b3edc9; --sidebar-border: #2eab5e;
+  --sidebar-text: #05391c; --sidebar-muted: #0d7040;
+}
+
+/* Golden Pheasant — golden crest, scarlet body, emerald mantle. */
+html[data-surface="pheasant"] {
+  --bg: #2b0407; --panel: #3f070c; --panel-2: #560a11; --border: #e01f2b;
+  --text: #ffe4dc; --muted: #eda08e;
+  --term-bg: #2b0407; --term-fg: #ffe4dc;
+  --topbar-bg: #f5b800; --topbar-hi: #ffc814; --topbar-border: #ad8000;
+  --topbar-text: #241900; --topbar-muted: #5c4100;
+  --sidebar-bg: #05361f; --sidebar-hi: #07472a; --sidebar-border: #128f52;
+  --sidebar-text: #d9ffea; --sidebar-muted: #74d1a0;
+}
+html.light[data-surface="pheasant"] {
+  --bg: #ffe3e0; --panel: #fff6f4; --panel-2: #ffc7c2; --border: #e02532;
+  --text: #45050a; --muted: #a01019;
+  --term-bg: #fff6f4; --term-fg: #45050a;
+  --topbar-bg: #ffc411; --topbar-hi: #f0b400; --topbar-border: #ad8000;
+  --topbar-text: #241900; --topbar-muted: #5c4100;
+  --sidebar-bg: #d9f7e6; --sidebar-hi: #b8edcf; --sidebar-border: #2ea365;
+  --sidebar-text: #06381f; --sidebar-muted: #0d6b40;
+}
+
+/* --- Orange --------------------------------------------------------------- */
+
+/* Oriole — brilliant tangerine body under a jet-black hood. */
+html[data-surface="oriole"] {
+  --bg: #2e1402; --panel: #421d03; --panel-2: #5a2805; --border: #ff8c1a;
+  --text: #ffe9d3; --muted: #eaa869;
+  --term-bg: #2e1402; --term-fg: #ffe9d3;
+  --topbar-bg: #ff7a12; --topbar-hi: #ff8c2e; --topbar-border: #b35400;
+  --topbar-text: #2b1200; --topbar-muted: #6b3400;
+  --sidebar-bg: #140c03; --sidebar-hi: #241504; --sidebar-border: #7a4408;
+  --sidebar-text: #ffe6cd; --sidebar-muted: #d19a5c;
+}
+html.light[data-surface="oriole"] {
+  --bg: #ffe7cd; --panel: #fff7ef; --panel-2: #ffd0a3; --border: #f07a10;
+  --text: #421c02; --muted: #9c4d05;
+  --term-bg: #fff7ef; --term-fg: #421c02;
+  --topbar-bg: #ff8c1f; --topbar-hi: #f07d12; --topbar-border: #ad5200;
+  --topbar-text: #2b1200; --topbar-muted: #6b3400;
+  --sidebar-bg: #fff2e4; --sidebar-hi: #ffe0c2; --sidebar-border: #d1852f;
+  --sidebar-text: #3d1a02; --sidebar-muted: #8f4604;
+}
+
+/* Rainbow Lorikeet — violet-blue head, lime collar, tangerine breast. */
+html[data-surface="lorikeet"] {
+  --bg: #3a1403; --panel: #4f1c05; --panel-2: #6b2607; --border: #ff7a10;
+  --text: #ffeada; --muted: #eba873;
+  --term-bg: #3a1403; --term-fg: #ffeada;
+  --topbar-bg: #4b1fd6; --topbar-hi: #5a2bf0; --topbar-border: #8a6bff;
+  --topbar-text: #ffffff; --topbar-muted: #ded1ff;
+  --sidebar-bg: #256e0a; --sidebar-hi: #2c820c; --sidebar-border: #4fd11f;
+  --sidebar-text: #edffe0; --sidebar-muted: #b3e896;
+}
+html.light[data-surface="lorikeet"] {
+  --bg: #ffe8d1; --panel: #fff7ee; --panel-2: #ffd1a3; --border: #f07a10;
+  --text: #451c02; --muted: #a34d05;
+  --term-bg: #fff7ee; --term-fg: #451c02;
+  --topbar-bg: #4b1fd6; --topbar-hi: #3f19b8; --topbar-border: #33149c;
+  --topbar-text: #ffffff; --topbar-muted: #ded1ff;
+  --sidebar-bg: #e2fad1; --sidebar-hi: #cbf2ad; --sidebar-border: #63b833;
+  --sidebar-text: #1c3d08; --sidebar-muted: #3f7a14;
+}
+
+/* Lilac-breasted Roller — lilac breast, turquoise belly, cinnamon back. */
+html[data-surface="roller"] {
+  --bg: #2b1a0d; --panel: #3a2412; --panel-2: #4f3119; --border: #d18f4f;
+  --text: #ffeeda; --muted: #dcb488;
+  --term-bg: #2b1a0d; --term-fg: #ffeeda;
+  --topbar-bg: #9b6ef0; --topbar-hi: #ac82ff; --topbar-border: #6b3fc2;
+  --topbar-text: #1c0a3d; --topbar-muted: #43208a;
+  --sidebar-bg: #00736b; --sidebar-hi: #005c55; --sidebar-border: #14d6c4;
+  --sidebar-text: #e0fffb; --sidebar-muted: #8fd9d1;
+}
+html.light[data-surface="roller"] {
+  --bg: #ffeeda; --panel: #fff8f0; --panel-2: #f7d9b8; --border: #c2854a;
+  --text: #3d2410; --muted: #8f5a24;
+  --term-bg: #fff8f0; --term-fg: #3d2410;
+  --topbar-bg: #9b6ef0; --topbar-hi: #ad86f7; --topbar-border: #6135b3;
+  --topbar-text: #1c0a3d; --topbar-muted: #43208a;
+  --sidebar-bg: #d1f7f3; --sidebar-hi: #b3ede7; --sidebar-border: #3ba39a;
+  --sidebar-text: #00332f; --sidebar-muted: #066b63;
+}
+
+/* --- Yellow --------------------------------------------------------------- */
+
+/* Goldfinch — brilliant lemon body, jet-black cap and wings. */
+html[data-surface="goldfinch"] {
+  --bg: #23240a; --panel: #33350d; --panel-2: #464a12; --border: #e8f01c;
+  --text: #f9fdd0; --muted: #cdd673;
+  --term-bg: #23240a; --term-fg: #f9fdd0;
+  --topbar-bg: #f2e00d; --topbar-hi: #ffef1f; --topbar-border: #a89b00;
+  --topbar-text: #1f1c00; --topbar-muted: #4f4800;
+  --sidebar-bg: #131300; --sidebar-hi: #232300; --sidebar-border: #6b6800;
+  --sidebar-text: #f7fbcb; --sidebar-muted: #c9d16a;
+}
+html.light[data-surface="goldfinch"] {
+  --bg: #f8fbcf; --panel: #fefee9; --panel-2: #edf3a4; --border: #b8c400;
+  --text: #24270a; --muted: #5c6600;
+  --term-bg: #fefee9; --term-fg: #24270a;
+  --topbar-bg: #ffe921; --topbar-hi: #f0da13; --topbar-border: #a89b00;
+  --topbar-text: #1f1c00; --topbar-muted: #4f4800;
+  --sidebar-bg: #fcfde6; --sidebar-hi: #f4f7c4; --sidebar-border: #b3bb3d;
+  --sidebar-text: #22250a; --sidebar-muted: #5a6300;
+}
+
+/* Toco Toucan — jet-black bird, one enormous amber bill. */
+html[data-surface="toucan"] {
+  --bg: #101014; --panel: #181820; --panel-2: #23232e; --border: #ffb01f;
+  --text: #eceef4; --muted: #9498a6;
+  --term-bg: #101014; --term-fg: #eceef4;
+  --topbar-bg: #ffb01f; --topbar-hi: #ffc039; --topbar-border: #c28000;
+  --topbar-text: #241700; --topbar-muted: #5c3d00;
+  --sidebar-bg: #08080a; --sidebar-hi: #15151a; --sidebar-border: #33333d;
+  --sidebar-text: #f0f0f5; --sidebar-muted: #8f8f9c;
+}
+html.light[data-surface="toucan"] {
+  --bg: #f5f5f8; --panel: #ffffff; --panel-2: #e9e9ef; --border: #e09800;
+  --text: #17171c; --muted: #585866;
+  --term-bg: #ffffff; --term-fg: #17171c;
+  --topbar-bg: #ffc033; --topbar-hi: #f5b01f; --topbar-border: #c28000;
+  --topbar-text: #241700; --topbar-muted: #5c3d00;
+  --sidebar-bg: #e6e6ec; --sidebar-hi: #d6d6e0; --sidebar-border: #9c9cad;
+  --sidebar-text: #101014; --sidebar-muted: #4c4c5a;
+}
+
+/* --- Green ---------------------------------------------------------------- */
+
+/* Quetzal — iridescent emerald above a crimson breast. */
+html[data-surface="quetzal"] {
+  --bg: #02251a; --panel: #033524; --panel-2: #054a31; --border: #12d47c;
+  --text: #d4ffe9; --muted: #67d9a3;
+  --term-bg: #02251a; --term-fg: #d4ffe9;
+  --topbar-bg: #00a35c; --topbar-hi: #00b866; --topbar-border: #007a44;
+  --topbar-text: #002415; --topbar-muted: #003d21;
+  --sidebar-bg: #4a0512; --sidebar-hi: #610718; --sidebar-border: #c2142c;
+  --sidebar-text: #ffdce1; --sidebar-muted: #e5919c;
+}
+html.light[data-surface="quetzal"] {
+  --bg: #d2fbe6; --panel: #f0fff7; --panel-2: #a9f2cd; --border: #00a85e;
+  --text: #033325; --muted: #0a7a50;
+  --term-bg: #f0fff7; --term-fg: #033325;
+  --topbar-bg: #00a35c; --topbar-hi: #00b866; --topbar-border: #00663a;
+  --topbar-text: #002415; --topbar-muted: #003d21;
+  --sidebar-bg: #ffe1e5; --sidebar-hi: #ffc9d0; --sidebar-border: #d1435a;
+  --sidebar-text: #4a0512; --sidebar-muted: #a3121f;
+}
+
+/* Green Jay — cobalt crown, lime body, brilliant yellow underside. */
+html[data-surface="greenjay"] {
+  --bg: #0c2b0a; --panel: #103a0e; --panel-2: #164f13; --border: #7ad91f;
+  --text: #e2ffd9; --muted: #9ed186;
+  --term-bg: #0c2b0a; --term-fg: #e2ffd9;
+  --topbar-bg: #1440d6; --topbar-hi: #1a4ef0; --topbar-border: #5c82ff;
+  --topbar-text: #ffffff; --topbar-muted: #d1dcff;
+  --sidebar-bg: #d6b800; --sidebar-hi: #edcc00; --sidebar-border: #8f7a00;
+  --sidebar-text: #241f00; --sidebar-muted: #5c4f00;
+}
+html.light[data-surface="greenjay"] {
+  --bg: #ddf7d6; --panel: #f2fef0; --panel-2: #bdedb3; --border: #5cb814;
+  --text: #0c330a; --muted: #2b7a14;
+  --term-bg: #f2fef0; --term-fg: #0c330a;
+  --topbar-bg: #1440d6; --topbar-hi: #1136b8; --topbar-border: #0d2b9c;
+  --topbar-text: #ffffff; --topbar-muted: #d1dcff;
+  --sidebar-bg: #ffe866; --sidebar-hi: #f7dc3d; --sidebar-border: #b39b00;
+  --sidebar-text: #241f00; --sidebar-muted: #5c4f00;
+}
+
+/* Gouldian Finch — turquoise collar, purple breast, green back, lemon belly.
+   The most colors any one bird gets away with. */
+html[data-surface="gouldian"] {
+  --bg: #0a2b12; --panel: #0e3a19; --panel-2: #134f22; --border: #f2d413;
+  --text: #dcffe4; --muted: #86d199;
+  --term-bg: #0a2b12; --term-fg: #dcffe4;
+  --topbar-bg: #00c2b2; --topbar-hi: #00d6c4; --topbar-border: #008f83;
+  --topbar-text: #002b28; --topbar-muted: #005c56;
+  --sidebar-bg: #52157a; --sidebar-hi: #631a91; --sidebar-border: #a34dd1;
+  --sidebar-text: #f4e0ff; --sidebar-muted: #cd9ae8;
+}
+html.light[data-surface="gouldian"] {
+  --bg: #d9f7de; --panel: #f2fef4; --panel-2: #b3edbf; --border: #c2a800;
+  --text: #0a3314; --muted: #147a2b;
+  --term-bg: #f2fef4; --term-fg: #0a3314;
+  --topbar-bg: #00c2b2; --topbar-hi: #00a89a; --topbar-border: #008f83;
+  --topbar-text: #002b28; --topbar-muted: #005c56;
+  --sidebar-bg: #efdcff; --sidebar-hi: #e0c2f7; --sidebar-border: #9c5cc9;
+  --sidebar-text: #2e0a45; --sidebar-muted: #6b1f96;
+}
+
+/* Mallard — iridescent green head, chestnut breast, slate flanks. The subtlest
+   of the colored sets: a neutral window between two saturated edges. */
+html[data-surface="mallard"] {
+  --bg: #191c22; --panel: #22262e; --panel-2: #2e333d; --border: #0fc27a;
+  --text: #e4e8ef; --muted: #959cad;
+  --term-bg: #191c22; --term-fg: #e4e8ef;
+  --topbar-bg: #0d9c62; --topbar-hi: #10b371; --topbar-border: #087a4a;
+  --topbar-text: #002417; --topbar-muted: #003a23;
+  --sidebar-bg: #5e330f; --sidebar-hi: #723e13; --sidebar-border: #c2762e;
+  --sidebar-text: #ffeada; --sidebar-muted: #dfae82;
+}
+html.light[data-surface="mallard"] {
+  --bg: #f1f2f5; --panel: #ffffff; --panel-2: #e3e6eb; --border: #0aa869;
+  --text: #1b1f26; --muted: #5b6270;
+  --term-bg: #ffffff; --term-fg: #1b1f26;
+  --topbar-bg: #0daa6b; --topbar-hi: #12bd78; --topbar-border: #087a4a;
+  --topbar-text: #002417; --topbar-muted: #003a23;
+  --sidebar-bg: #f7e6d6; --sidebar-hi: #edd2b8; --sidebar-border: #b3773f;
+  --sidebar-text: #3d1f08; --sidebar-muted: #82501f;
+}
+
+/* --- Teal ----------------------------------------------------------------- */
+
+/* Kingfisher — electric cyan back over a rust belly. */
+html[data-surface="kingfisher"] {
+  --bg: #04222e; --panel: #06323f; --panel-2: #084456; --border: #00c2f0;
+  --text: #d9f7ff; --muted: #7cc9e0;
+  --term-bg: #04222e; --term-fg: #d9f7ff;
+  --topbar-bg: #00a8d6; --topbar-hi: #00bcec; --topbar-border: #00738f;
+  --topbar-text: #002230; --topbar-muted: #005064;
+  --sidebar-bg: #5e2404; --sidebar-hi: #752e06; --sidebar-border: #d1651a;
+  --sidebar-text: #ffe8d6; --sidebar-muted: #e0a878;
+}
+html.light[data-surface="kingfisher"] {
+  --bg: #d2f2fb; --panel: #eefcff; --panel-2: #a9e4f2; --border: #00a3cc;
+  --text: #032a36; --muted: #06718f;
+  --term-bg: #eefcff; --term-fg: #032a36;
+  --topbar-bg: #00b0e0; --topbar-hi: #009cc9; --topbar-border: #00738f;
+  --topbar-text: #002230; --topbar-muted: #005064;
+  --sidebar-bg: #ffe7d6; --sidebar-hi: #ffd2b3; --sidebar-border: #d1732b;
+  --sidebar-text: #4a1d02; --sidebar-muted: #9c440a;
+}
+
+/* Peacock — teal train, royal-blue neck, gold eye-spots. The gold is the
+   hairline on both colored regions rather than a fill. */
+html[data-surface="peacock"] {
+  --bg: #032830; --panel: #05383f; --panel-2: #074c55; --border: #f0c419;
+  --text: #d6f7f5; --muted: #7fd1cc;
+  --term-bg: #032830; --term-fg: #d6f7f5;
+  --topbar-bg: #0a9cb8; --topbar-hi: #0bb0cf; --topbar-border: #f0c419;
+  --topbar-text: #002229; --topbar-muted: #00333c;
+  --sidebar-bg: #141f8f; --sidebar-hi: #1a29ad; --sidebar-border: #f0c419;
+  --sidebar-text: #e6e9ff; --sidebar-muted: #a3aae8;
+}
+html.light[data-surface="peacock"] {
+  --bg: #d2f4f2; --panel: #eefefc; --panel-2: #a9e8e3; --border: #cca300;
+  --text: #032e33; --muted: #067078;
+  --term-bg: #eefefc; --term-fg: #032e33;
+  --topbar-bg: #0ab0cf; --topbar-hi: #0bc2e3; --topbar-border: #8a6e00;
+  --topbar-text: #002229; --topbar-muted: #00333c;
+  --sidebar-bg: #dde0ff; --sidebar-hi: #c2c7fa; --sidebar-border: #9c8000;
+  --sidebar-text: #131f6b; --sidebar-muted: #3d47a3;
+}
+
+/* --- Blue through violet -------------------------------------------------- */
+
+/* Bluejay — brilliant azure above a jet-black necklace. */
+html[data-surface="bluejay"] {
+  --bg: #04102e; --panel: #071a44; --panel-2: #0a2662; --border: #2b8cff;
+  --text: #dcebff; --muted: #7fa8ef;
+  --term-bg: #04102e; --term-fg: #dcebff;
+  --topbar-bg: #1266e6; --topbar-hi: #0f55c4; --topbar-border: #5c9dff;
+  --topbar-text: #ffffff; --topbar-muted: #cfe2ff;
+  --sidebar-bg: #0a0e1c; --sidebar-hi: #131a30; --sidebar-border: #2b3a5e;
+  --sidebar-text: #dfe9fa; --sidebar-muted: #8f9fbf;
+}
+html.light[data-surface="bluejay"] {
+  --bg: #d4e6ff; --panel: #f0f7ff; --panel-2: #aecfff; --border: #1a75e6;
+  --text: #04173d; --muted: #0a4a9c;
+  --term-bg: #f0f7ff; --term-fg: #04173d;
+  --topbar-bg: #1266e6; --topbar-hi: #0f58c9; --topbar-border: #0a4198;
+  --topbar-text: #ffffff; --topbar-muted: #cfe2ff;
+  --sidebar-bg: #eaf1fd; --sidebar-hi: #d4e2f7; --sidebar-border: #7f9cc9;
+  --sidebar-text: #0a1730; --sidebar-muted: #3d5580;
+}
+
+/* Indigo Bunting — electric indigo, head to tail. */
+html[data-surface="bunting"] {
+  --bg: #0d0a3a; --panel: #150f52; --panel-2: #1e1670; --border: #5442ff;
+  --text: #e7e4ff; --muted: #a49df5;
+  --term-bg: #0d0a3a; --term-fg: #e7e4ff;
+  --topbar-bg: #3b2ff0; --topbar-hi: #4a3eff; --topbar-border: #8578ff;
+  --topbar-text: #ffffff; --topbar-muted: #dcd8ff;
+  --sidebar-bg: #08061f; --sidebar-hi: #100c33; --sidebar-border: #2a2170;
+  --sidebar-text: #e2dfff; --sidebar-muted: #9a94e0;
+}
+html.light[data-surface="bunting"] {
+  --bg: #ddd9ff; --panel: #f3f1ff; --panel-2: #beb8ff; --border: #4a3ce8;
+  --text: #100b45; --muted: #372da8;
+  --term-bg: #f3f1ff; --term-fg: #100b45;
+  --topbar-bg: #3b2ff0; --topbar-hi: #3226d1; --topbar-border: #2318b3;
+  --topbar-text: #ffffff; --topbar-muted: #dcd8ff;
+  --sidebar-bg: #efedff; --sidebar-hi: #dcd8ff; --sidebar-border: #8f88d6;
+  --sidebar-text: #14104f; --sidebar-muted: #3f36a8;
+}
+
+/* Violetear — iridescent violet hummingbird with a violet ear-flash. */
+html[data-surface="violetear"] {
+  --bg: #16062b; --panel: #220c40; --panel-2: #301357; --border: #a355ff;
+  --text: #f3e3ff; --muted: #c08ee8;
+  --term-bg: #16062b; --term-fg: #f3e3ff;
+  --topbar-bg: #7c2ff0; --topbar-hi: #8b3fff; --topbar-border: #b382ff;
+  --topbar-text: #ffffff; --topbar-muted: #e8d6ff;
+  --sidebar-bg: #0e0420; --sidebar-hi: #190a33; --sidebar-border: #472178;
+  --sidebar-text: #efe0ff; --sidebar-muted: #b285d6;
+}
+html.light[data-surface="violetear"] {
+  --bg: #e9dcff; --panel: #f8f3ff; --panel-2: #d3bcff; --border: #8c3ff0;
+  --text: #260a4a; --muted: #5f24a8;
+  --term-bg: #f8f3ff; --term-fg: #260a4a;
+  --topbar-bg: #7c2ff0; --topbar-hi: #6b25d1; --topbar-border: #5417ad;
+  --topbar-text: #ffffff; --topbar-muted: #e8d6ff;
+  --sidebar-bg: #f4eeff; --sidebar-hi: #e6dbff; --sidebar-border: #a789d6;
+  --sidebar-text: #200840; --sidebar-muted: #5a2199;
+}
+
+/* Mandarin Duck — emerald crest, tangerine sail fins, plum breast. */
+html[data-surface="mandarin"] {
+  --bg: #2b0f33; --panel: #3a1445; --panel-2: #4f1c5c; --border: #c94fd6;
+  --text: #f7e0ff; --muted: #cf96db;
+  --term-bg: #2b0f33; --term-fg: #f7e0ff;
+  --topbar-bg: #12a85e; --topbar-hi: #15bd6a; --topbar-border: #0a7040;
+  --topbar-text: #002415; --topbar-muted: #00381f;
+  --sidebar-bg: #f2820f; --sidebar-hi: #ff8f1f; --sidebar-border: #b35c00;
+  --sidebar-text: #2b1200; --sidebar-muted: #6b3400;
+}
+html.light[data-surface="mandarin"] {
+  --bg: #f4dcff; --panel: #fcf2ff; --panel-2: #e6bdf7; --border: #a83fb8;
+  --text: #2e0f38; --muted: #6b2b7a;
+  --term-bg: #fcf2ff; --term-fg: #2e0f38;
+  --topbar-bg: #12a85e; --topbar-hi: #14b866; --topbar-border: #0a7040;
+  --topbar-text: #002415; --topbar-muted: #00381f;
+  --sidebar-bg: #ffd9b3; --sidebar-hi: #ffc48f; --sidebar-border: #c96e1f;
+  --sidebar-text: #3d1c02; --sidebar-muted: #8f4a05;
+}
+
+/* --- Pink ----------------------------------------------------------------- */
+
+/* Flamingo — brilliant hot pink, black-tipped bill. */
+html[data-surface="flamingo"] {
+  --bg: #2e021a; --panel: #420527; --panel-2: #5a0836; --border: #ff3d9e;
+  --text: #ffdcef; --muted: #f58cbf;
+  --term-bg: #2e021a; --term-fg: #ffdcef;
+  --topbar-bg: #ff2d8a; --topbar-hi: #ff4599; --topbar-border: #c2005e;
+  --topbar-text: #2e0014; --topbar-muted: #6b0031;
+  --sidebar-bg: #180110; --sidebar-hi: #28031c; --sidebar-border: #7a0a4a;
+  --sidebar-text: #ffd9ec; --sidebar-muted: #e086b5;
+}
+html.light[data-surface="flamingo"] {
+  --bg: #ffe0f0; --panel: #fff5fa; --panel-2: #ffc2dd; --border: #ff4d9e;
+  --text: #4d0024; --muted: #ad0a57;
+  --term-bg: #fff5fa; --term-fg: #4d0024;
+  --topbar-bg: #ff4d9e; --topbar-hi: #f03b8c; --topbar-border: #c2005e;
+  --topbar-text: #2e0014; --topbar-muted: #6b0031;
+  --sidebar-bg: #fff0f7; --sidebar-hi: #ffdcec; --sidebar-border: #ff70b0;
+  --sidebar-text: #40001d; --sidebar-muted: #a30a52;
+}

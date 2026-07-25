@@ -1,0 +1,81 @@
+/* Design tokens — the whole palette in one place.
+ *
+ * Everything else in the app styles itself through these variables, which is
+ * what lets a theme swap (Settings → Appearance) and the 🌙 light toggle work
+ * without touching component CSS. theme.css — served separately, alongside
+ * mobile.html — overrides the same names per html[data-accent] / [data-surface].
+ *
+ * :root and .light have EQUAL specificity (0,1,0), so .light must stay after
+ * :root for the light palette to win. */
+:root {
+  --bg: #0f1117;
+  --panel: #171a23;
+  --panel-2: #1e222e;
+  --border: #2a2f3c;
+  --text: #d7dae3;
+  --muted: #8a90a2;
+  --accent: #7d56f4;
+  /* Accent companions: --accent-rgb feeds rgba() glows/tints; --accent-deep is
+     the darker text variant used on light backgrounds. All three swap together
+     per accent theme (Settings → Appearance). */
+  --accent-rgb: 125, 86, 244;
+  --accent-deep: #5b3fc0;
+  --green: #51bd73;
+  --red: #de613e;
+  --gold: #ffd700;
+  /* Terminal canvas colors — read by app.js termTheme() so xterm follows the
+     surface theme (theme.css html[data-surface=…] blocks override these). */
+  --term-bg: #0f1117;
+  --term-fg: #d7dae3;
+
+  /* --- Region tokens (what the multi-color theme sets steer) ----------------
+     A theme set used to be one palette for the whole window. The multi-color
+     sets in theme.css — Macaw, Lorikeet, Toucan… — give the top bar and the
+     sidebar a hue of their own by overriding these; styles/regions.css is what
+     turns them into pixels. Aliased to the globals here, so every single-hue
+     set renders exactly as it did before.
+
+     Declared on :root ONLY (never repeated in .light): a custom property
+     resolves its var()s against the value that won on the same element, so
+     these pick up .light's --panel/--text automatically. */
+  --topbar-bg: var(--panel);
+  --topbar-hi: var(--panel-2);
+  --topbar-border: var(--border);
+  --topbar-text: var(--text);
+  --topbar-muted: var(--muted);
+  --sidebar-bg: var(--panel);
+  --sidebar-hi: var(--panel-2);
+  --sidebar-border: var(--border);
+  --sidebar-text: var(--text);
+  --sidebar-muted: var(--muted);
+
+  /* Unshadowed copies of the app palette. A region rebinds --panel & friends on
+     itself, which shadows them for everything nested inside; popovers that are
+     app furniture rather than bar chrome read these to opt back out. */
+  --app-panel: var(--panel);
+  --app-panel-2: var(--panel-2);
+  --app-border: var(--border);
+  --app-text: var(--text);
+  --app-muted: var(--muted);
+}
+
+/* Light mode. `.light` is set on <html> early (in index.html) and toggled by
+   the header button. Swapping these variables recolors nearly the whole UI; the
+   handful of hard-coded colors that don't survive the swap are patched in
+   theme-light.css. The xterm terminal intentionally stays dark. */
+.light {
+  --bg: #f4f5f8;
+  --panel: #ffffff;
+  --panel-2: #eceef3;
+  --border: #d3d8e2;
+  --text: #1b2030;
+  --muted: #5d6577;
+  --accent: #7d56f4;
+  --accent-rgb: 125, 86, 244;
+  --accent-deep: #5b3fc0;
+  --green: #2e9e54;
+  --red: #d6451f;
+  --gold: #9a7400;
+  --term-bg: #ffffff;
+  --term-fg: #1b2030;
+}
