@@ -1,9 +1,10 @@
 /** Settings → PR review (partial 109 + section 21's github wiring): the repo
  * list IS the switch; open-PR panel with skip-reason chips + force review. */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
 import { toast } from "../../../lib/toast";
+import { usePanelQuery } from "../../../state/queries";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -49,10 +50,35 @@ export function PrReview({ gotoScreen }: ScreenProps) {
   const [skipDraft, setSkipDraft] = useState(String(skipAuthors));
   useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
 
-  const [prs, setPrs] = useState<OpenPr[] | null>(null);
-  const [prsNote, setPrsNote] = useState("");
-  const [prsError, setPrsError] = useState("");
-  const [prsRepos, setPrsRepos] = useState<string[]>([]);
+  // Cached in the query client, not in this component: the screen unmounts
+  // whenever the dialog closes or you switch screens.
+  const prsQuery = usePanelQuery<{
+    prs?: OpenPr[];
+    repos?: string[];
+    login?: string;
+    login_error?: string;
+    stale?: boolean;
+  }>("github-prs");
+  const loadOpenPrs = prsQuery.refresh; // Refresh button: force a sweep
+  const relistPrs = prsQuery.refetch; // after a force start: cache is fine,
+  // has_session is annotated live on every response, even a cached one
+  const prs = prsQuery.data ? prsQuery.data.prs || [] : null;
+  const prsRepos = prsQuery.data?.repos || [];
+  const prsError = prsQuery.error
+    ? "Could not list PRs: " + (prsQuery.error.message || "error")
+    : "";
+  const prsNote = prsError
+    ? ""
+    : prsQuery.data?.login
+      ? "GitHub: " + prsQuery.data.login
+      : prsQuery.data?.login_error
+        ? "GitHub login unknown — force review may still work"
+        : prsQuery.isFetching
+          ? prs
+            ? "Refreshing…"
+            : "Loading…"
+          : "";
+
   const [ghTest, setGhTest] = useState<{ testing: boolean; ok?: boolean; msg?: string }>({
     testing: false,
   });
@@ -78,33 +104,6 @@ export function PrReview({ gotoScreen }: ScreenProps) {
     setRepoNew("");
     saveRepos([...repos, val], "Added " + val);
   };
-
-  const loadOpenPrs = useCallback(async () => {
-    setPrsNote("Loading…");
-    setPrsError("");
-    try {
-      const r = await api<{ prs?: OpenPr[]; repos?: string[]; login?: string; login_error?: string }>(
-        "/api/github/prs"
-      );
-      setPrs(Array.isArray(r?.prs) ? r.prs : []);
-      setPrsRepos(r?.repos || []);
-      setPrsNote(
-        r?.login
-          ? "GitHub: " + r.login
-          : r?.login_error
-            ? "GitHub login unknown — force review may still work"
-            : ""
-      );
-    } catch (err) {
-      setPrs([]);
-      setPrsError("Could not list PRs: " + ((err as Error).message || "error"));
-      setPrsNote("");
-    }
-  }, []);
-
-  useEffect(() => {
-    loadOpenPrs(); // lazy-load on opening the PR-review screen
-  }, [loadOpenPrs]);
 
   const n = repos.length;
   const statusText = !n
@@ -241,7 +240,7 @@ export function PrReview({ gotoScreen }: ScreenProps) {
           ) : !prs.length ? (
             <div className="repo-empty">No open pull requests on the watched repositories.</div>
           ) : (
-            prs.map((p) => <OpenPrRow key={(p.repo || "") + p.number} p={p} onStarted={loadOpenPrs} />)
+            prs.map((p) => <OpenPrRow key={(p.repo || "") + p.number} p={p} onStarted={relistPrs} />)
           )}
         </div>
         <span className="set-hint">

@@ -343,6 +343,11 @@ default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-
   review's), plus an open-issues panel with skip-reason chips and a **Start
   work** force-start (`/api/github/issues`, `/api/github/issues/start`). Reveal
   its sidebar bar via ⚙ Customize.
+- **Ticketing → Assigned tickets** — the tickets your configured sources have
+  assigned to you, grouped into collapsible workflow buckets (which buckets show
+  is yours to pick and is persisted), each annotated with why auto-ingest did /
+  didn't take it, plus a **Begin work** force-start (`/api/tickets`,
+  `/api/tickets/start`). The slowest of the three list panels (~3 s).
 - **General → Onboarding** — the master **getting-started hints** switch and a
   **Replay tour** button (see [First-run onboarding](#first-run-onboarding)).
 - **Agent CLI → scheduled window refresh** — a keepalive that periodically
@@ -402,6 +407,30 @@ default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-
 Theme (dark/light), sidebar visibility, view mode, pane order/layout, diff mode,
 last-used tab, and prompt presets are persisted in `localStorage` (`cs_*` /
 `mindflock.*` keys).
+
+### Panel lists are cached, not refetched per visit
+
+The three list panels — **Assigned tickets**, **PR review**'s open PRs, **Git
+issues**' open issues — each fan out to a slow upstream. They no longer live in
+per-screen React state (which the dialog threw away on close); they're held in
+the query client (`frontend/src/state/queries.ts`), so reopening the dialog or
+switching away and back shows the last list **immediately** while a refresh runs
+behind it. The panel's note area says `Loading…` on a cold panel and
+`Refreshing…` over rows already on screen. Opening Settings also **prefetches
+all three** in the background, so clicking through to one finds it loaded.
+**Refresh** — and each force-start / force-review row action — sends
+`?fresh=1`, which skips the server's cache and waits for a real sweep, so the
+click means what it says.
+
+Two consequences worth knowing:
+
+- A failed load now **keeps the previous rows** and adds an error banner instead
+  of emptying the panel, and the server keeps serving its last known list for up
+  to 5 minutes through an upstream blip (see [web-api.md](web-api.md)).
+- Because opening Settings warms all three, it costs up to three ticket/GitHub
+  fan-outs even if you only read **General** — and an integration that isn't
+  configured yet will have its `Could not list …` error ready the moment you
+  first open that screen.
 
 ## Token / cost usage
 

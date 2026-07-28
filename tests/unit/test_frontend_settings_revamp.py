@@ -306,3 +306,109 @@ def test_new_session_ctrl_enter_submits_at_dialog_level():
     assert "onKeyDown" not in prompt
     # The hint advertises the shortcut.
     assert "Ctrl+Enter creates" in js
+
+
+# --------------------------------------------------------------------------- #
+# Settings panels (tickets / open PRs / open issues) held in the query cache   #
+# --------------------------------------------------------------------------- #
+# The dialog unmounts on close and each screen unmounts on switch, so per-screen
+# useState meant every visit started from an empty panel plus a slow upstream
+# fan-out. These pin the client half of the stale-while-revalidate contract the
+# server's ``_cached_fanout`` implements (see test_server_routes).
+def test_settings_panels_read_from_the_shared_query_cache():
+    js = client.get("/app.js").text
+    # One key→path map, so no screen can drift from its endpoint.
+    assert "function usePanelQuery(key)" in js
+    assert 'tickets: "/api/tickets"' in js
+    assert '"github-prs": "/api/github/prs"' in js
+    assert '"github-issues": "/api/github/issues"' in js
+    # All three screens read through it with those keys…
+    for key in ('usePanelQuery("tickets")', 'usePanelQuery("github-prs")'):
+        assert key in js, key
+    assert 'usePanelQuery("github-issues")' in js
+    # …and none of them keeps the list in component state any more (that state
+    # is exactly what the dialog's unmount used to throw away).
+    for gone in (
+        "setPrs(",
+        "setIssues(",
+        "setTickets(",
+        "setPrsNote(",
+        "setIssuesNote(",
+    ):
+        assert gone not in js, gone
+
+
+def test_settings_panel_keeps_its_rows_while_refetching():
+    """Reopening a screen shows the last list immediately instead of blanking —
+    and a failed refetch leaves those rows up with an error banner (the old
+    handlers set the list to [] on failure)."""
+    js = client.get("/app.js").text
+    panel = js.split("function usePanelQuery(key)", 1)[1][:600]
+    assert "placeholderData: (prev) => prev" in panel
+    # The failure path is a banner, not an emptied panel.
+    assert "Could not list PRs: " in js
+    assert "Could not list issues: " in js
+    assert "Could not list tickets: " in js
+    # Each panel distinguishes "first load" from "reloading what you can see".
+    assert js.count('? "Refreshing…" : "Loading…"') == 3
+
+
+def test_settings_panel_refresh_asks_the_server_to_skip_its_cache():
+    """The Refresh button (and a force start, which re-lists afterwards) means a
+    real upstream sweep: ``?fresh=1`` with the client cache bypassed."""
+    js = client.get("/app.js").text
+    # Sliced (not a bare `in js`) to prove these belong to the hook itself.
+    panel = js.split("function usePanelQuery(key)", 1)[1][:1600]
+    assert 'PANELS[key] + "?fresh=1"' in panel
+    assert "staleTime: 0" in panel  # …and not answered from the query cache
+    assert '"gh-prs-refresh"' in js
+    # A force start does NOT force a sweep: has_session is annotated live on
+    # every response, so the cheap re-list already shows the new session.
+    assert "onStarted: relistPrs" in js
+    assert "onStarted: relistIssues" in js
+    assert "onStarted: relistTickets" in js
+
+
+def test_settings_panel_repolls_only_while_the_server_reports_stale():
+    """``stale`` in the payload is the server's "I'm already replacing this" —
+    the client comes back for the fresh copy shortly, and otherwise does not
+    poll the fan-out at all."""
+    js = client.get("/app.js").text
+    assert "PANEL_STALE_RETRY_MS = 2e3" in js
+    assert "PANEL_STALE_RETRY_MS : false" in js  # not stale → no interval
+    assert ".stale) ? PANEL_STALE_RETRY_MS" in js  # driven by the payload flag
+    # The client's freshness window matches the server's TTL: inside it, a
+    # mount is answered from the query cache instead of making a round trip to
+    # be told the same thing.
+    assert "PANEL_STALE_MS = 2e4" in js  # milliseconds, the same 20s window
+    assert server._FANOUT_TTL == 20.0, "keep PANEL_STALE_MS in step with the TTL"
+    # Panels must outlive the default 5min gcTime, or "cached across opens"
+    # quietly becomes a cold load again after a short break.
+    assert "PANEL_GC_MS = 60 * 6e4" in js
+    assert 2.0 < server._FANOUT_TTL
+
+
+def test_opening_settings_warms_all_three_panels():
+    """Clicking through to a panel shouldn't start with a spinner: the dialog
+    prefetches all three on open, once per open (not per render), and a panel
+    whose data is still fresh is skipped."""
+    js = client.get("/app.js").text
+    assert "if (open) prefetchSettingsPanels();" in js
+    dialog = js.split("if (open) prefetchSettingsPanels();", 1)[1][:80]
+    assert "[open]" in dialog  # the effect keys on `open` alone
+    prefetch = js.split("function prefetchSettingsPanels()", 1)[1][:400]
+    assert "Object.keys(PANELS)" in prefetch  # every panel, no hand-kept list
+    assert "staleTime: PANEL_STALE_MS" in prefetch  # a no-op while still fresh
+    # `void`: an unconfigured integration 502s here, and a warm-up must not
+    # surface as an unhandled rejection.
+    assert "void queryClient.prefetchQuery(" in prefetch
+
+
+def test_ticket_source_errors_outrank_the_refresh_note():
+    """A per-source failure is the useful message, so it wins over
+    "Refreshing…" — including on a stale payload, which is new: the server can
+    now hand back a cached list that carries source errors."""
+    js = client.get("/app.js").text
+    assert "error || sourceErrors ? sourceErrors" in js
+    assert 'e.source + ": " + e.error' in js
+    assert 'join(" · ")' in js

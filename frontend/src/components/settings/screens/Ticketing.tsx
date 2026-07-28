@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
-import { refreshConfig } from "../../../state/queries";
+import { refreshConfig, usePanelQuery } from "../../../state/queries";
 import { toast } from "../../../lib/toast";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -309,14 +309,39 @@ function ticketAgeText(iso?: string): string {
  * bucket dropdown + per-bucket ✕ choose which buckets this panel shows
  * (persisted); Begin work force-starts a session, bypassing auto filters. */
 function AssignedTickets() {
-  const [tickets, setTickets] = useState<AssignedTicket[] | null>(null);
-  const [buckets, setBuckets] = useState<string[]>([]);
-  const [doneBuckets, setDoneBuckets] = useState<string[]>([]);
-  const [ingestStates, setIngestStates] = useState<Record<string, string[]>>({});
+  // The slowest of the settings fan-outs (a provider search per source plus a
+  // ls-remote per repo), so it is the one worth keeping across dialog opens.
+  const ticketsQuery = usePanelQuery<{
+    tickets?: AssignedTicket[];
+    buckets?: string[];
+    done_buckets?: string[];
+    ingest_states?: Record<string, string[]>;
+    errors?: Array<{ source: string; error: string }>;
+    stale?: boolean;
+  }>("tickets");
+  const load = ticketsQuery.refresh; // Refresh button: force a sweep
+  const relistTickets = ticketsQuery.refetch; // after a force start
+  const tickets = ticketsQuery.data ? ticketsQuery.data.tickets || [] : null;
+  const buckets = ticketsQuery.data?.buckets || [];
+  const doneBuckets = ticketsQuery.data?.done_buckets || [];
+  const ingestStates = ticketsQuery.data?.ingest_states || {};
+  const error = ticketsQuery.error
+    ? "Could not list tickets: " + (ticketsQuery.error.message || "error")
+    : "";
+  const sourceErrors = (ticketsQuery.data?.errors || [])
+    .map((e) => e.source + ": " + e.error)
+    .join(" · ");
+  const note =
+    error || sourceErrors
+      ? sourceErrors
+      : ticketsQuery.isFetching
+        ? tickets
+          ? "Refreshing…"
+          : "Loading…"
+        : "";
+
   const [shown, setShown] = useState<string[] | null>(loadShownBuckets);
   const [openBuckets, setOpenBuckets] = useState<Set<string>>(loadOpenBuckets);
-  const [note, setNote] = useState("");
-  const [error, setError] = useState("");
 
   const toggleOpen = (b: string) => {
     setOpenBuckets((prev) => {
@@ -327,37 +352,6 @@ function AssignedTickets() {
       return next;
     });
   };
-
-  const load = useCallback(async () => {
-    setNote("Loading…");
-    setError("");
-    try {
-      const r = await api<{
-        tickets?: AssignedTicket[];
-        buckets?: string[];
-        done_buckets?: string[];
-        ingest_states?: Record<string, string[]>;
-        errors?: Array<{ source: string; error: string }>;
-      }>("/api/tickets");
-      setTickets(Array.isArray(r?.tickets) ? r.tickets : []);
-      setBuckets(Array.isArray(r?.buckets) ? r.buckets : []);
-      setDoneBuckets(Array.isArray(r?.done_buckets) ? r.done_buckets : []);
-      setIngestStates(r?.ingest_states || {});
-      setNote(
-        (r?.errors || [])
-          .map((e) => e.source + ": " + e.error)
-          .join(" · ")
-      );
-    } catch (err) {
-      setTickets([]);
-      setError("Could not list tickets: " + ((err as Error).message || "error"));
-      setNote("");
-    }
-  }, []);
-
-  useEffect(() => {
-    load(); // lazy-load on opening the Ticketing screen
-  }, [load]);
 
   // Nothing chosen yet: show the actionable buckets; done-type ones
   // (Completed, Won't do, …) usually dwarf them and start in the Add menu.
@@ -458,7 +452,7 @@ function AssignedTickets() {
                       <AssignedTicketRow
                         key={t.source + ":" + t.id}
                         t={t}
-                        onStarted={load}
+                        onStarted={relistTickets}
                       />
                     ))}
                     {!rows.length && (

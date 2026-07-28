@@ -21559,6 +21559,49 @@ function useUsage(enabled = true) {
 function refreshInstances() {
   return queryClient.invalidateQueries({ queryKey: ["instances"] });
 }
+const PANEL_STALE_MS = 2e4;
+const PANEL_STALE_RETRY_MS = 2e3;
+const PANEL_GC_MS = 60 * 6e4;
+const PANELS = {
+  tickets: "/api/tickets",
+  "github-prs": "/api/github/prs",
+  "github-issues": "/api/github/issues"
+};
+function usePanelQuery(key) {
+  const q = useQuery({
+    queryKey: [key],
+    queryFn: () => api(PANELS[key]),
+    staleTime: PANEL_STALE_MS,
+    gcTime: PANEL_GC_MS,
+    placeholderData: (prev) => prev,
+    // An unconfigured integration answers 502; retrying it just doubles the
+    // requests to say the same thing, and the panel has a Refresh button.
+    retry: false,
+    // Served something the server is already replacing → come back for it once.
+    refetchInterval: (query) => {
+      var _a2;
+      return ((_a2 = query.state.data) == null ? void 0 : _a2.stale) ? PANEL_STALE_RETRY_MS : false;
+    }
+  });
+  const refresh = () => queryClient.fetchQuery({
+    queryKey: [key],
+    queryFn: () => api(PANELS[key] + "?fresh=1"),
+    staleTime: 0,
+    retry: false
+  }).catch(() => void 0);
+  return { ...q, refresh };
+}
+function prefetchSettingsPanels() {
+  for (const key of Object.keys(PANELS)) {
+    void queryClient.prefetchQuery({
+      queryKey: [key],
+      queryFn: () => api(PANELS[key]),
+      staleTime: PANEL_STALE_MS,
+      gcTime: PANEL_GC_MS,
+      retry: false
+    });
+  }
+}
 let toastTimer;
 function toast(msg, opts) {
   const o = opts || {};
@@ -29815,14 +29858,19 @@ function ticketAgeText(iso) {
   return Math.round(h / 24) + "d old";
 }
 function AssignedTickets() {
-  const [tickets, setTickets] = reactExports.useState(null);
-  const [buckets, setBuckets] = reactExports.useState([]);
-  const [doneBuckets, setDoneBuckets] = reactExports.useState([]);
-  const [ingestStates, setIngestStates] = reactExports.useState({});
+  var _a2, _b2, _c2, _d2;
+  const ticketsQuery = usePanelQuery("tickets");
+  const load2 = ticketsQuery.refresh;
+  const relistTickets = ticketsQuery.refetch;
+  const tickets = ticketsQuery.data ? ticketsQuery.data.tickets || [] : null;
+  const buckets = ((_a2 = ticketsQuery.data) == null ? void 0 : _a2.buckets) || [];
+  const doneBuckets = ((_b2 = ticketsQuery.data) == null ? void 0 : _b2.done_buckets) || [];
+  const ingestStates = ((_c2 = ticketsQuery.data) == null ? void 0 : _c2.ingest_states) || {};
+  const error = ticketsQuery.error ? "Could not list tickets: " + (ticketsQuery.error.message || "error") : "";
+  const sourceErrors = (((_d2 = ticketsQuery.data) == null ? void 0 : _d2.errors) || []).map((e) => e.source + ": " + e.error).join(" · ");
+  const note = error || sourceErrors ? sourceErrors : ticketsQuery.isFetching ? tickets ? "Refreshing…" : "Loading…" : "";
   const [shown, setShown] = reactExports.useState(loadShownBuckets);
   const [openBuckets, setOpenBuckets] = reactExports.useState(loadOpenBuckets);
-  const [note, setNote] = reactExports.useState("");
-  const [error, setError] = reactExports.useState("");
   const toggleOpen = (b) => {
     setOpenBuckets((prev) => {
       const next = new Set(prev);
@@ -29832,27 +29880,6 @@ function AssignedTickets() {
       return next;
     });
   };
-  const load2 = reactExports.useCallback(async () => {
-    setNote("Loading…");
-    setError("");
-    try {
-      const r = await api("/api/tickets");
-      setTickets(Array.isArray(r == null ? void 0 : r.tickets) ? r.tickets : []);
-      setBuckets(Array.isArray(r == null ? void 0 : r.buckets) ? r.buckets : []);
-      setDoneBuckets(Array.isArray(r == null ? void 0 : r.done_buckets) ? r.done_buckets : []);
-      setIngestStates((r == null ? void 0 : r.ingest_states) || {});
-      setNote(
-        ((r == null ? void 0 : r.errors) || []).map((e) => e.source + ": " + e.error).join(" · ")
-      );
-    } catch (err) {
-      setTickets([]);
-      setError("Could not list tickets: " + (err.message || "error"));
-      setNote("");
-    }
-  }, []);
-  reactExports.useEffect(() => {
-    load2();
-  }, [load2]);
   const visible = shown === null ? buckets.filter((b) => !doneBuckets.includes(b)) : buckets.filter((b) => shown.includes(b));
   const hidden = buckets.filter((b) => !visible.includes(b));
   const byBucket = /* @__PURE__ */ new Map();
@@ -29935,7 +29962,7 @@ function AssignedTickets() {
             AssignedTicketRow,
             {
               t,
-              onStarted: load2
+              onStarted: relistTickets
             },
             t.source + ":" + t.id
           )),
@@ -30225,6 +30252,7 @@ function prAgeText(iso) {
   return Math.round(h / 24) + "d old";
 }
 function PrReview({ gotoScreen }) {
+  var _a2, _b2, _c2;
   const s = useSettings();
   const gh = s.settings.github || {};
   const enabled = gh.enabled !== false;
@@ -30233,10 +30261,13 @@ function PrReview({ gotoScreen }) {
   const [repoNew, setRepoNew] = reactExports.useState("");
   const [skipDraft, setSkipDraft] = reactExports.useState(String(skipAuthors));
   reactExports.useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
-  const [prs, setPrs] = reactExports.useState(null);
-  const [prsNote, setPrsNote] = reactExports.useState("");
-  const [prsError, setPrsError] = reactExports.useState("");
-  const [prsRepos, setPrsRepos] = reactExports.useState([]);
+  const prsQuery = usePanelQuery("github-prs");
+  const loadOpenPrs = prsQuery.refresh;
+  const relistPrs = prsQuery.refetch;
+  const prs = prsQuery.data ? prsQuery.data.prs || [] : null;
+  const prsRepos = ((_a2 = prsQuery.data) == null ? void 0 : _a2.repos) || [];
+  const prsError = prsQuery.error ? "Could not list PRs: " + (prsQuery.error.message || "error") : "";
+  const prsNote = prsError ? "" : ((_b2 = prsQuery.data) == null ? void 0 : _b2.login) ? "GitHub: " + prsQuery.data.login : ((_c2 = prsQuery.data) == null ? void 0 : _c2.login_error) ? "GitHub login unknown — force review may still work" : prsQuery.isFetching ? prs ? "Refreshing…" : "Loading…" : "";
   const [ghTest, setGhTest] = reactExports.useState({
     testing: false
   });
@@ -30257,27 +30288,6 @@ function PrReview({ gotoScreen }) {
     setRepoNew("");
     saveRepos([...repos, val], "Added " + val);
   };
-  const loadOpenPrs = reactExports.useCallback(async () => {
-    setPrsNote("Loading…");
-    setPrsError("");
-    try {
-      const r = await api(
-        "/api/github/prs"
-      );
-      setPrs(Array.isArray(r == null ? void 0 : r.prs) ? r.prs : []);
-      setPrsRepos((r == null ? void 0 : r.repos) || []);
-      setPrsNote(
-        (r == null ? void 0 : r.login) ? "GitHub: " + r.login : (r == null ? void 0 : r.login_error) ? "GitHub login unknown — force review may still work" : ""
-      );
-    } catch (err) {
-      setPrs([]);
-      setPrsError("Could not list PRs: " + (err.message || "error"));
-      setPrsNote("");
-    }
-  }, []);
-  reactExports.useEffect(() => {
-    loadOpenPrs();
-  }, [loadOpenPrs]);
   const n = repos.length;
   const statusText = !n ? "○ Add a repository below to start reviewing your PRs" : enabled ? `● Active — reviewing PRs in ${n} ${n === 1 ? "repository" : "repositories"}` : `‖ Paused — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated review on to resume`;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
@@ -30391,7 +30401,7 @@ function PrReview({ gotoScreen }) {
         /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "gh-prs-refresh", className: "test-btn", onClick: loadOpenPrs, children: "Refresh" }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: "gh-prs-note", className: "pr-open-note", children: prsNote })
       ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "gh-prs-list", className: "pr-open-list", children: prsError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: prsError }) : prs === null ? null : !prsRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open PRs." }) : !prs.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open pull requests on the watched repositories." }) : prs.map((p) => /* @__PURE__ */ jsxRuntimeExports.jsx(OpenPrRow, { p, onStarted: loadOpenPrs }, (p.repo || "") + p.number)) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "gh-prs-list", className: "pr-open-list", children: prsError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: prsError }) : prs === null ? null : !prsRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open PRs." }) : !prs.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open pull requests on the watched repositories." }) : prs.map((p) => /* @__PURE__ */ jsxRuntimeExports.jsx(OpenPrRow, { p, onStarted: relistPrs }, (p.repo || "") + p.number)) }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
         "Every non-draft open PR on the repositories above, with why auto review has or hasn't picked it up. ",
         /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Begin review" }),
@@ -30554,6 +30564,7 @@ function issueAgeText(iso) {
   return Math.round(h / 24) + "d old";
 }
 function GitIssues({ gotoScreen }) {
+  var _a2;
   const s = useSettings();
   const gh = s.settings.github || {};
   const enabled = gh.issues_enabled === true;
@@ -30562,10 +30573,13 @@ function GitIssues({ gotoScreen }) {
   const [repoNew, setRepoNew] = reactExports.useState("");
   const [skipDraft, setSkipDraft] = reactExports.useState(String(skipAuthors));
   reactExports.useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
-  const [issues, setIssues] = reactExports.useState(null);
-  const [issuesNote, setIssuesNote] = reactExports.useState("");
-  const [issuesError, setIssuesError] = reactExports.useState("");
-  const [issuesRepos, setIssuesRepos] = reactExports.useState([]);
+  const issuesQuery = usePanelQuery("github-issues");
+  const loadOpenIssues = issuesQuery.refresh;
+  const relistIssues = issuesQuery.refetch;
+  const issues = issuesQuery.data ? issuesQuery.data.issues || [] : null;
+  const issuesRepos = ((_a2 = issuesQuery.data) == null ? void 0 : _a2.repos) || [];
+  const issuesError = issuesQuery.error ? "Could not list issues: " + (issuesQuery.error.message || "error") : "";
+  const issuesNote = issuesError || !issuesQuery.isFetching ? "" : issues ? "Refreshing…" : "Loading…";
   const [ghTest, setGhTest] = reactExports.useState({
     testing: false
   });
@@ -30586,25 +30600,6 @@ function GitIssues({ gotoScreen }) {
     setRepoNew("");
     saveRepos([...repos, val], "Added " + val);
   };
-  const loadOpenIssues = reactExports.useCallback(async () => {
-    setIssuesNote("Loading…");
-    setIssuesError("");
-    try {
-      const r = await api(
-        "/api/github/issues"
-      );
-      setIssues(Array.isArray(r == null ? void 0 : r.issues) ? r.issues : []);
-      setIssuesRepos((r == null ? void 0 : r.repos) || []);
-      setIssuesNote("");
-    } catch (err) {
-      setIssues([]);
-      setIssuesError("Could not list issues: " + (err.message || "error"));
-      setIssuesNote("");
-    }
-  }, []);
-  reactExports.useEffect(() => {
-    loadOpenIssues();
-  }, [loadOpenIssues]);
   const n = repos.length;
   const statusText = !n ? "○ Add a repository below, then turn Automated handling on" : enabled ? `● Active — handling new issues in ${n} ${n === 1 ? "repository" : "repositories"}` : `‖ Off — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated handling on to start`;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
@@ -30717,7 +30712,7 @@ function GitIssues({ gotoScreen }) {
         /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "gh-issues-refresh", className: "test-btn", onClick: loadOpenIssues, children: "Refresh" }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: "gh-issues-note", className: "pr-open-note", children: issuesNote })
       ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "gh-issues-list", className: "pr-open-list", children: issuesError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: issuesError }) : issues === null ? null : !issuesRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open issues." }) : !issues.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open issues on the watched repositories." }) : issues.map((i) => /* @__PURE__ */ jsxRuntimeExports.jsx(OpenIssueRow, { i, onStarted: loadOpenIssues }, (i.repo || "") + i.number)) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "gh-issues-list", className: "pr-open-list", children: issuesError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: issuesError }) : issues === null ? null : !issuesRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open issues." }) : !issues.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open issues on the watched repositories." }) : issues.map((i) => /* @__PURE__ */ jsxRuntimeExports.jsx(OpenIssueRow, { i, onStarted: relistIssues }, (i.repo || "") + i.number)) }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
         "Every open issue on the repositories above, with why auto handling has or hasn't picked it up. ",
         /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Start work" }),
@@ -31503,6 +31498,9 @@ function SettingsDialog({ onOpenSysLogsPane }) {
     if (open) setScreen(target && SCREENS.some((s) => s.key === target) ? target : "general");
   }, [open, target]);
   reactExports.useEffect(() => {
+    if (open) prefetchSettingsPanels();
+  }, [open]);
+  reactExports.useEffect(() => {
     if (!open) return;
     const onKey = (e) => {
       if (e.key === "Escape") {
@@ -31695,12 +31693,13 @@ function MakePrDialog() {
     const onKey = (e) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        closeDialog();
+        if (showList) setShowList(false);
+        else closeDialog();
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, closeDialog]);
+  }, [open, closeDialog, showList]);
   const filtered = reactExports.useMemo(() => {
     const all = (info == null ? void 0 : info.branches) || [];
     const q = value.trim().toLowerCase();
@@ -31728,8 +31727,8 @@ function MakePrDialog() {
   function onInputKey(e) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setShowList(true);
-      setActive((a) => Math.min(a + 1, filtered.length - 1));
+      if (!showList) setShowList(true);
+      else setActive((a) => Math.min(a + 1, filtered.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActive((a) => Math.max(a - 1, 0));
@@ -31772,13 +31771,13 @@ function MakePrDialog() {
                     ref: inputRef,
                     autoComplete: "off",
                     spellCheck: false,
-                    placeholder: loading ? "Loading branches…" : "Type or pick a branch…",
+                    placeholder: loading ? "Loading branches…" : "Type a branch, or ↓ to pick…",
                     value,
                     onChange: (e) => {
                       setValue(e.target.value);
                       setShowList(true);
                     },
-                    onFocus: () => setShowList(true),
+                    onBlur: () => setShowList(false),
                     onKeyDown: onInputKey
                   }
                 ),

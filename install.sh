@@ -81,7 +81,7 @@ if [ "$OS" = "Darwin" ] && ! xcode-select -p >/dev/null 2>&1; then
 Run  xcode-select --install , finish Apple's installer, then re-run this script."
 fi
 
-command -v curl >/dev/null 2>&1 || fail "curl is required to install. On Debian/Ubuntu: sudo apt install curl"
+command -v curl >/dev/null 2>&1 || fail "curl is required to install — install it with your package manager (e.g. apt/dnf/pacman/zypper) and re-run."
 
 # --- 2. uv ------------------------------------------------------------------
 # ~/.local/bin is where both uv and the mindflock entry point land.
@@ -130,7 +130,7 @@ else
   # Resolve the branch/tag to a full commit SHA and install THAT, so the ref
   # can't move between "you read the code" and "it runs on your machine" —
   # and the printed SHA is an audit trail. A 40-hex REF is already a SHA.
-  command -v git >/dev/null 2>&1 || fail "git is required to install from $REPO. On Debian/Ubuntu: sudo apt install git"
+  command -v git >/dev/null 2>&1 || fail "git is required to install from $REPO — install it with your package manager (e.g. apt/dnf/pacman/zypper) and re-run."
   PINNED=""
   if [ "${#REF}" -eq 40 ] && [ -z "$(printf %s "$REF" | tr -d '0-9a-f')" ]; then
     PINNED="$REF"

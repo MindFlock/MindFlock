@@ -107,6 +107,22 @@ FastAPI app `backend.web.server:app`. Key pieces:
 - **`core/pr_review.py`** — the forced-PR-review path behind Settings → PR
   review: lists open PRs (with why auto-review did/didn't take them) and can
   start a review session in-process.
+- **`_cached_fanout` (in `server.py`)** — the one place stale-while-revalidate
+  caching lives, shared by the three settings-panel routes (`/api/tickets`,
+  `/api/github/prs`, `/api/github/issues`). Each is an upstream fan-out the
+  panels poll while open, so a payload is fresh for `_FANOUT_TTL` (20 s), then
+  served *stale* for up to `_FANOUT_MAX_STALE` (5 min) with `stale: true` while
+  `_schedule_fanout_refresh` sweeps in a single-flight background task — the
+  request never waits on GitHub/the ticket sources, and a failed sweep leaves
+  the last known list in place instead of emptying the panel. Two guards keep a
+  sick upstream from being hit hardest: a failure starts a
+  `_FANOUT_ERROR_BACKOFF` (30 s) during which reads still report `stale` but arm
+  no sweep — otherwise the client's re-poll would re-arm one every couple of
+  seconds for the whole stale window — and each sweep is bounded by
+  `_FANOUT_SWEEP_TIMEOUT` (60 s), so a hung `git ls-remote` can't hold the
+  single-flight slot and freeze that panel's list. Remaining sharp edge: the
+  tasks are untracked at lifespan shutdown (fire-and-forget). See
+  [web-api.md](web-api.md#assigned-tickets-pr-auto-review--issue-handling).
 - **The rest of `core/`** — `server.py` keeps only the app assembly, the
   routes, and the always-on background loops; every other helper cluster is a
   focused module: `agent_sessions` (tmux ensure/send/kill for the agent+shell
@@ -157,6 +173,16 @@ Agent/Terminal/Diff tabs per pane, guided next-step buttons, token/cost popups,
 voice input, and a settings dialog. `core/ws-xterm.js` is the shared
 xterm↔WebSocket wiring; `mobile.*` is a single-terminal phone UI at `/m`.
 See [web-ui.md](web-ui.md).
+
+`frontend/src/state/queries.ts` is the shared server-state layer (TanStack
+Query): every hook that reads the HTTP API lives there, including the
+settings-panel fan-outs (`usePanelQuery`, the `PANELS` map, and
+`prefetchSettingsPanels`, called when the dialog opens). Those live in the query
+client *precisely because* the settings dialog and each screen unmount on
+close/switch — component state meant every visit paid the full upstream sweep
+again. Those queries raise `gcTime` to an hour (`PANEL_GC_MS`): on
+TanStack's 5-minute default, "cached across dialog opens" would quietly become a
+cold load again after a short break, which is when the wait feels worst.
 
 ### Ingestion pipeline (`backend/ticket_ingestion`)
 

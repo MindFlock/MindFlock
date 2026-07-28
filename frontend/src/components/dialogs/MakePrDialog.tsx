@@ -3,7 +3,12 @@
  * A combobox: the input filters a dropdown of the repo's real branches (remote
  * heads on origin, fetched from /api/instances/{title}/branches) as you type,
  * and you can also just type a name. The last branch chosen for a repo is
- * remembered (store.prBaseByRepo, persisted) and pre-selected next time. */
+ * remembered (store.prBaseByRepo, persisted) and pre-selected next time.
+ *
+ * The list stays closed until you actually ask for it — typing, or ArrowDown.
+ * Focus alone must not open it: the pre-filled branch usually matches several
+ * others by substring, so opening on focus buried the buttons behind a list
+ * you had to dismiss on every single PR. */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { instApi } from "../../api/client";
@@ -64,18 +69,19 @@ export function MakePrDialog() {
     };
   }, [open, target, repo, prBaseByRepo]);
 
-  // Escape closes.
+  // Escape dismisses the open dropdown first, then the dialog.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        closeDialog();
+        if (showList) setShowList(false);
+        else closeDialog();
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, closeDialog]);
+  }, [open, closeDialog, showList]);
 
   const filtered = useMemo(() => {
     const all = info?.branches || [];
@@ -110,8 +116,9 @@ export function MakePrDialog() {
   function onInputKey(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setShowList(true);
-      setActive((a) => Math.min(a + 1, filtered.length - 1));
+      // First ArrowDown just reveals the list; later ones move the highlight.
+      if (!showList) setShowList(true);
+      else setActive((a) => Math.min(a + 1, filtered.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActive((a) => Math.max(a - 1, 0));
@@ -151,13 +158,13 @@ export function MakePrDialog() {
               ref={inputRef}
               autoComplete="off"
               spellCheck={false}
-              placeholder={loading ? "Loading branches…" : "Type or pick a branch…"}
+              placeholder={loading ? "Loading branches…" : "Type a branch, or ↓ to pick…"}
               value={value}
               onChange={(e) => {
                 setValue(e.target.value);
                 setShowList(true);
               }}
-              onFocus={() => setShowList(true)}
+              onBlur={() => setShowList(false)}
               onKeyDown={onInputKey}
             />
             {showList && filtered.length > 0 && (

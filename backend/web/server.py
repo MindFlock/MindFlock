@@ -3741,28 +3741,102 @@ async def instance_merge_pr(title: str) -> JSONResponse:
 _PR_REVIEWS_STARTING: set = set()
 
 
-_OPEN_PRS_CACHE: dict = {}  # "v" -> (expires_mono, payload)
+_OPEN_PRS_CACHE: dict = {}  # "v" -> (fresh_until_mono, payload); "task" -> refresh
+
+
+# How long a fan-out payload counts as fresh, and how far past that it may
+# still be SERVED (while a refresh runs behind the request). The settings
+# panels unmount on close, so every visit used to pay the full sweep —
+# measured at ~3s for the ticket fan-out. Anything older than the stale
+# window is worth waiting for instead of showing.
+_FANOUT_TTL = 20.0
+_FANOUT_MAX_STALE = 300.0
+# A sick upstream must not be hit harder than a healthy one: a client that is
+# handed a stale payload comes back for the replacement, so without a backoff
+# every one of those polls would re-arm a sweep for the whole stale window.
+_FANOUT_ERROR_BACKOFF = 30.0
+# One sweep may not wedge the panel forever. Without this a hung ls-remote
+# holds the single-flight slot indefinitely, so no later refresh can start.
+_FANOUT_SWEEP_TIMEOUT = 60.0
+
+
+def _schedule_fanout_refresh(cache: dict, loader, ttl: float) -> None:
+    """Refresh ``cache`` in the background, at most one sweep in flight.
+
+    A failure leaves the stale payload in place (and expires nothing): the
+    panel keeps showing the last known list rather than emptying itself
+    because GitHub blipped. It also starts a backoff, so the next few reads
+    serve that payload without asking the failing upstream again."""
+    task = cache.get("task")
+    if task is not None and not task.done():
+        return
+
+    async def _refresh() -> None:
+        try:
+            data = await asyncio.wait_for(loader(), _FANOUT_SWEEP_TIMEOUT)
+            cache["v"] = (time.monotonic() + ttl, data)
+            cache.pop("retry_after", None)
+        except Exception as err:  # noqa: BLE001 — token / network / timeout
+            cache["retry_after"] = time.monotonic() + _FANOUT_ERROR_BACKOFF
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf("background fan-out refresh failed: %v", err)
+        finally:
+            cache.pop("task", None)
+
+    cache["task"] = asyncio.create_task(_refresh())
+
+
+async def _cached_fanout(
+    cache: dict,
+    loader,
+    *,
+    fresh: bool = False,
+    ttl: float = _FANOUT_TTL,
+    max_stale: float = _FANOUT_MAX_STALE,
+) -> tuple[dict, bool]:
+    """A settings panel's upstream fan-out, kept off the request path.
+
+    Returns ``(payload, stale)``. Fresh hit → the cached payload. Past the TTL
+    but inside the stale window → the stale payload plus a background refresh,
+    so opening the panel does not wait on GitHub/the ticket sources. Nothing
+    usable cached (or ``fresh``, from an explicit Refresh click) → await the
+    sweep and let the loader's exception reach the 502 path.
+
+    ``stale`` rides along in the response so the client can pull the fresh
+    copy in a moment rather than sit on data it knows is being replaced."""
+    if not fresh:
+        now = time.monotonic()
+        cached = cache.get("v")
+        if cached is not None:
+            if cached[0] > now:
+                return cached[1], False
+            if cached[0] + max_stale > now:
+                # Still marked stale during a backoff — the payload really is
+                # old — but no sweep is armed until the upstream gets a rest.
+                if cache.get("retry_after", 0.0) <= now:
+                    _schedule_fanout_refresh(cache, loader, ttl)
+                return cached[1], True
+    data = await loader()
+    cache["v"] = (time.monotonic() + ttl, data)
+    return data, False
 
 
 @app.get("/api/github/prs")
-async def github_open_prs() -> JSONResponse:
+async def github_open_prs(fresh: bool = False) -> JSONResponse:
     """Open PRs on the review repos, annotated with auto-review eligibility.
 
-    The GitHub fan-out (user login + one list call per repo) is cached ~20s:
-    the PRs panel polls while open, and every poll was a fresh network sweep
-    (rate-limit fodder). ``has_session`` is annotated on a per-request copy so
-    it stays live even on cache hits."""
-    now = time.monotonic()
-    cached = _OPEN_PRS_CACHE.get("v")
-    if cached is not None and cached[0] > now:
-        data = cached[1]
-    else:
-        try:
-            data = await _pr_review.list_open_prs()
-        except Exception as err:  # noqa: BLE001 — unconfigured / token / network
-            return JSONResponse({"error": str(err)}, status_code=502)
-        _OPEN_PRS_CACHE["v"] = (now + 20.0, data)
-    data = {**data, "prs": [dict(p) for p in data.get("prs", [])]}
+    The GitHub fan-out (user login + one list call per repo) is cached and
+    served stale-while-revalidate (see ``_cached_fanout``); ``fresh=1`` is the
+    Refresh button, which means what it says and waits for a real sweep.
+    ``has_session`` is annotated on a per-request copy so it stays live even
+    on cache hits."""
+    try:
+        data, stale = await _cached_fanout(
+            _OPEN_PRS_CACHE, _pr_review.list_open_prs, fresh=fresh
+        )
+    except Exception as err:  # noqa: BLE001 — unconfigured / token / network
+        return JSONResponse({"error": str(err)}, status_code=502)
+    data = {**data, "stale": stale, "prs": [dict(p) for p in data.get("prs", [])]}
     for p in data.get("prs", []):
         p["has_session"] = (
             p.get("session") in ENGINE.instances
@@ -3870,26 +3944,23 @@ async def github_force_review(payload: dict) -> JSONResponse:
 _TICKET_STARTS: set = set()
 
 
-_ASSIGNED_TICKETS_CACHE: dict = {}  # "v" -> (expires_mono, payload)
+_ASSIGNED_TICKETS_CACHE: dict = {}  # "v" -> (fresh_until_mono, payload)
 
 
 @app.get("/api/tickets")
-async def assigned_tickets() -> JSONResponse:
+async def assigned_tickets(fresh: bool = False) -> JSONResponse:
     """Assigned tickets on the configured sources, annotated with auto-ingest
-    eligibility. The provider fan-out (one search per source + a ls-remote
-    per repo) is cached ~20s, like the open-PRs panel; ``has_session`` is
+    eligibility. The provider fan-out (one search per source + a ls-remote per
+    repo) is the slowest of the three panels — cached and served
+    stale-while-revalidate, like the open-PRs panel; ``has_session`` is
     annotated on a per-request copy so it stays live even on cache hits."""
-    now = time.monotonic()
-    cached = _ASSIGNED_TICKETS_CACHE.get("v")
-    if cached is not None and cached[0] > now:
-        data = cached[1]
-    else:
-        try:
-            data = await _ticket_start.list_assigned_tickets()
-        except Exception as err:  # noqa: BLE001 — unconfigured / network
-            return JSONResponse({"error": str(err)}, status_code=502)
-        _ASSIGNED_TICKETS_CACHE["v"] = (now + 20.0, data)
-    data = {**data, "tickets": [dict(t) for t in data.get("tickets", [])]}
+    try:
+        data, stale = await _cached_fanout(
+            _ASSIGNED_TICKETS_CACHE, _ticket_start.list_assigned_tickets, fresh=fresh
+        )
+    except Exception as err:  # noqa: BLE001 — unconfigured / network
+        return JSONResponse({"error": str(err)}, status_code=502)
+    data = {**data, "stale": stale, "tickets": [dict(t) for t in data.get("tickets", [])]}
     for t in data.get("tickets", []):
         t["has_session"] = (
             t.get("session") in ENGINE.instances or t.get("session") in _TICKET_STARTS
@@ -4004,26 +4075,22 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
 _ISSUE_STARTS: set = set()
 
 
-_OPEN_ISSUES_CACHE: dict = {}  # "v" -> (expires_mono, payload)
+_OPEN_ISSUES_CACHE: dict = {}  # "v" -> (fresh_until_mono, payload)
 
 
 @app.get("/api/github/issues")
-async def github_open_issues() -> JSONResponse:
+async def github_open_issues(fresh: bool = False) -> JSONResponse:
     """Open issues on the issue-handling repos, annotated with auto-handling
-    eligibility. The GitHub fan-out (one list call per repo) is cached ~20s,
-    like the open-PRs panel; ``has_session`` is annotated on a per-request
-    copy so it stays live even on cache hits."""
-    now = time.monotonic()
-    cached = _OPEN_ISSUES_CACHE.get("v")
-    if cached is not None and cached[0] > now:
-        data = cached[1]
-    else:
-        try:
-            data = await _issue_start.list_open_issues()
-        except Exception as err:  # noqa: BLE001 — unconfigured / token / network
-            return JSONResponse({"error": str(err)}, status_code=502)
-        _OPEN_ISSUES_CACHE["v"] = (now + 20.0, data)
-    data = {**data, "issues": [dict(i) for i in data.get("issues", [])]}
+    eligibility. The GitHub fan-out (one list call per repo) is cached and
+    served stale-while-revalidate, like the open-PRs panel; ``has_session`` is
+    annotated on a per-request copy so it stays live even on cache hits."""
+    try:
+        data, stale = await _cached_fanout(
+            _OPEN_ISSUES_CACHE, _issue_start.list_open_issues, fresh=fresh
+        )
+    except Exception as err:  # noqa: BLE001 — unconfigured / token / network
+        return JSONResponse({"error": str(err)}, status_code=502)
+    data = {**data, "stale": stale, "issues": [dict(i) for i in data.get("issues", [])]}
     for i in data.get("issues", []):
         i["has_session"] = (
             i.get("session") in ENGINE.instances or i.get("session") in _ISSUE_STARTS

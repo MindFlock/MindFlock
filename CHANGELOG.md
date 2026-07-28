@@ -97,9 +97,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attention prompt.
 - Settings → Advanced no longer suggests `Ubuntu` as the WSL distro: empty now
   means "your default distro", matching the app and the Windows installer.
+- **The settings panels no longer reload from scratch every time you open
+  them.** Assigned tickets, open PRs and open issues each fan out to a slow
+  upstream (~3s for the ticket sources), and the dialog threw that data away
+  on close, so every visit began with a spinner. The lists are now cached
+  client-side and shown immediately while a refresh runs behind them, the
+  server serves its cached copy rather than making the request wait on the
+  sweep, and opening the dialog warms all three in the background. The Refresh
+  button still forces a real sweep. For anyone calling the local API directly,
+  `GET /api/tickets`, `/api/github/prs` and `/api/github/issues` now take
+  `?fresh=1` (skip the cache, await a real sweep) and carry a `stale` boolean in
+  the response body; a cached payload is served for up to 5 minutes past its
+  20 s TTL, so those routes no longer 502 on an upstream blip once they have a
+  list to show. See [docs/web-api.md](docs/web-api.md).
 
 ### Fixed
 
+- The make-PR dialog's branch dropdown no longer opens by itself. The input is
+  pre-filled with the remembered base branch and auto-focused, so on a repo
+  with several branches sharing a name (`staging`, `staging-2`, …) the filtered
+  list covered the buttons on every single PR. It now opens only when you type
+  or press ↓.
+- The frontend could not be built: `@vitejs/plugin-react` had been bumped to a
+  major that imports `vite/internal` (vite 8 only) while the project pins
+  vite 6, so `npm ci` failed to resolve and `vite build` crashed on config
+  load. `vitest` was also missing from `devDependencies` even though the
+  config and eight test files import it, which broke `npm run build`'s
+  typecheck and left 118 frontend tests unrunnable.
 - The offline page is no longer reloaded on every failed connection retry. A
   failed `loadURL` never commits, so the page was already the current one and
   reloading it just restarted its script — harmless flicker before, but it

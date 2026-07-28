@@ -17,7 +17,9 @@ Complements (does not duplicate):
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -1297,3 +1299,529 @@ def test_reopen_recreates_running_instance(monkeypatch, tmp_path):
         assert saved_remaining["items"] == []
     finally:
         server.ENGINE.instances.pop("revived", None)
+
+
+# --------------------------------------------------------------------------- #
+# _cached_fanout — the settings panels' stale-while-revalidate cache           #
+# --------------------------------------------------------------------------- #
+# The tickets / open-PRs / open-issues panels each fan out to a slow upstream
+# (measured at ~3s for the ticket sources). They unmount when the settings
+# dialog closes, so every visit used to pay that sweep; these tests pin the
+# behaviour that keeps the wait off the request path.
+#
+# The window boundaries are driven through an explicit ``ttl`` / ``max_stale``
+# plus a hand-cranked clock rather than the module defaults, so a change to
+# _FANOUT_TTL / _FANOUT_MAX_STALE fails the constant's own test instead of
+# silently sliding every window test with it.
+_PANELS = [
+    ("/api/github/prs", "_OPEN_PRS_CACHE", "_pr_review", "list_open_prs", "prs"),
+    (
+        "/api/tickets",
+        "_ASSIGNED_TICKETS_CACHE",
+        "_ticket_start",
+        "list_assigned_tickets",
+        "tickets",
+    ),
+    (
+        "/api/github/issues",
+        "_OPEN_ISSUES_CACHE",
+        "_issue_start",
+        "list_open_issues",
+        "issues",
+    ),
+]
+
+
+@pytest.fixture(autouse=True)
+def _clear_fanout_caches():
+    """Never let one test's cached payload (or in-flight sweep) reach another.
+
+    All three panel caches are module-level dicts, and a stale entry left
+    behind changes whether the *next* test's route call sweeps at all — the
+    kind of ordering dependency that only shows up under ``-p no:randomly`` or
+    a single-file run. Also drops any leaked ``"task"``: a pending refresh
+    would otherwise keep writing into a cache a later test is reading.
+    """
+    caches = (
+        server._OPEN_PRS_CACHE,
+        server._ASSIGNED_TICKETS_CACHE,
+        server._OPEN_ISSUES_CACHE,
+    )
+
+    def _clear():
+        for cache in caches:
+            cache.pop("v", None)
+            task = cache.pop("task", None)
+            if task is not None and not task.done():
+                try:
+                    task.cancel()
+                except RuntimeError:  # its event loop is already closed
+                    pass
+
+    _clear()
+    yield
+    _clear()
+
+
+class _CapLog:
+    """A stand-in for ``log.ErrorLog`` so the failure branches are assertable."""
+
+    def __init__(self):
+        self.msgs: list = []
+
+    def Printf(self, fmt, *args):  # noqa: N802 — Go-style logger API
+        # The loggers use Go verbs (%v) that Python's % rejects; keep the args
+        # alongside the format so substring assertions still work.
+        self.msgs.append(fmt + " " + " ".join(str(a) for a in args))
+
+    def Print(self, *args):  # noqa: N802
+        self.msgs.append(" ".join(str(a) for a in args))
+
+    def Println(self, *args):  # noqa: N802
+        self.msgs.append(" ".join(str(a) for a in args))
+
+
+@pytest.fixture
+def caplog_errorlog(monkeypatch):
+    cap = _CapLog()
+    monkeypatch.setattr(server.log, "ErrorLog", cap)
+    return cap
+
+
+class _FakeClock:
+    """A hand-cranked ``time.monotonic`` for exact window boundaries."""
+
+    def __init__(self, now: float = 10_000.0):
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, secs: float) -> None:
+        self.now += secs
+
+
+@pytest.fixture
+def fanout_clock(monkeypatch):
+    """Freeze ``time.monotonic`` so "exactly at the expiry" is testable.
+
+    Relative offsets can only probe *near* a boundary; the comparisons here are
+    strict (``cached[0] > now``), so the equal case needs a stopped clock.
+    """
+    clock = _FakeClock()
+    monkeypatch.setattr(server.time, "monotonic", clock)
+    return clock
+
+
+async def test_cached_fanout_fresh_hit_skips_the_loader():
+    cache = {"v": (time.monotonic() + 10.0, {"prs": ["cached"]})}
+
+    async def _loader():
+        raise AssertionError("a fresh entry must not hit the upstream")
+
+    data, stale = await server._cached_fanout(cache, _loader)
+    assert data == {"prs": ["cached"]}
+    assert stale is False
+
+
+async def test_cached_fanout_serves_stale_then_refreshes_behind_it():
+    # Just past the TTL: still inside the stale window.
+    cache = {"v": (time.monotonic() - 1.0, {"prs": ["old"]})}
+    calls = []
+
+    async def _loader():
+        calls.append(1)
+        return {"prs": ["new"]}
+
+    data, stale = await server._cached_fanout(cache, _loader)
+    # The request returns the old list rather than waiting for the sweep.
+    assert data == {"prs": ["old"]}
+    assert stale is True
+    await cache["task"]  # let the background refresh land
+    assert cache["v"][1] == {"prs": ["new"]}
+    assert len(calls) == 1
+    # The slot is released on success, so the panel can sweep again later.
+    assert "task" not in cache
+
+
+async def test_cached_fanout_stale_read_returns_before_the_loader_finishes():
+    """The whole point: a stale hit must not be blocked by the sweep it starts."""
+    cache = {"v": (time.monotonic() - 1.0, {"prs": ["old"]})}
+    release = asyncio.Event()
+
+    async def _loader():
+        await release.wait()  # a slow ls-remote / GitHub call
+        return {"prs": ["new"]}
+
+    data, stale = await server._cached_fanout(cache, _loader)
+    assert (data, stale) == ({"prs": ["old"]}, True)
+    assert not cache["task"].done()  # returned with the sweep still running
+    release.set()
+    await cache["task"]
+    assert cache["v"][1] == {"prs": ["new"]}
+
+
+async def test_cached_fanout_waits_when_past_the_stale_window():
+    cache = {"v": (time.monotonic() - 10_000.0, {"prs": ["ancient"]})}
+
+    async def _loader():
+        return {"prs": ["new"]}
+
+    data, stale = await server._cached_fanout(cache, _loader)
+    # Too old to show: this request waits for real data instead.
+    assert data == {"prs": ["new"]}
+    assert stale is False
+    assert "task" not in cache
+
+
+async def test_cached_fanout_at_the_ttl_expiry_is_stale_not_fresh(fanout_clock):
+    """The TTL boundary itself: expiry reached = serve stale + sweep behind it."""
+
+    async def _loader():
+        return {"prs": ["new"]}
+
+    # A hair before expiry is still a fresh hit…
+    cache = {"v": (fanout_clock.now + 0.001, {"prs": ["old"]})}
+    assert await server._cached_fanout(cache, _loader, ttl=20.0, max_stale=300.0) == (
+        {"prs": ["old"]},
+        False,
+    )
+    assert "task" not in cache
+    # …and exactly at it the entry has flipped to stale-but-servable.
+    cache = {"v": (fanout_clock.now, {"prs": ["old"]})}
+    assert await server._cached_fanout(cache, _loader, ttl=20.0, max_stale=300.0) == (
+        {"prs": ["old"]},
+        True,
+    )
+    await cache["task"]
+
+
+async def test_cached_fanout_at_the_stale_window_edge_waits_for_the_loader(
+    fanout_clock,
+):
+    """The far boundary: once ``max_stale`` is used up, the payload is not shown."""
+
+    async def _loader():
+        return {"prs": ["new"]}
+
+    # One tick inside the window: the old list is still worth showing.
+    cache = {"v": (fanout_clock.now - 300.0 + 0.001, {"prs": ["old"]})}
+    assert await server._cached_fanout(cache, _loader, ttl=20.0, max_stale=300.0) == (
+        {"prs": ["old"]},
+        True,
+    )
+    await cache["task"]
+    # Exactly at the edge: wait for a real sweep rather than show it.
+    cache = {"v": (fanout_clock.now - 300.0, {"prs": ["old"]})}
+    assert await server._cached_fanout(cache, _loader, ttl=20.0, max_stale=300.0) == (
+        {"prs": ["new"]},
+        False,
+    )
+    assert "task" not in cache
+
+
+async def test_fanout_window_constants_match_the_documented_contract():
+    """The windows the client (and docs) are written against: 20s / 5min."""
+    assert server._FANOUT_TTL == 20.0
+    assert server._FANOUT_MAX_STALE == 300.0
+
+
+async def test_cached_fanout_fresh_flag_bypasses_a_valid_entry(fanout_clock):
+    cache = {"v": (fanout_clock.now + 10.0, {"prs": ["cached"]})}
+    calls = []
+
+    async def _loader():
+        calls.append(1)
+        return {"prs": ["swept"]}
+
+    data, stale = await server._cached_fanout(cache, _loader, fresh=True, ttl=20.0)
+    assert data == {"prs": ["swept"]}  # the Refresh button means what it says
+    assert stale is False
+    # The sweep repopulates the cache, so the poll right behind the Refresh
+    # click is a fresh hit instead of a second trip upstream.
+    assert cache["v"] == (fanout_clock.now + 20.0, {"prs": ["swept"]})
+    assert await server._cached_fanout(cache, _loader, ttl=20.0) == (
+        {"prs": ["swept"]},
+        False,
+    )
+    assert len(calls) == 1
+
+
+async def test_cached_fanout_keeps_stale_data_when_the_refresh_fails(caplog_errorlog):
+    cache = {"v": (time.monotonic() - 1.0, {"prs": ["old"]})}
+
+    async def _loader():
+        raise RuntimeError("github down")
+
+    data, stale = await server._cached_fanout(cache, _loader)
+    assert data == {"prs": ["old"]}
+    assert stale is True
+    task = cache["task"]
+    await task  # the failure is swallowed, not raised at the awaiting caller
+    assert task.exception() is None
+    # A failed sweep must not empty the panel or poison the cache…
+    assert cache["v"][1] == {"prs": ["old"]}
+    # …but it is not silent either, and it releases the single-flight slot so
+    # the panel isn't wedged until a restart.
+    assert any("background fan-out refresh failed" in m for m in caplog_errorlog.msgs)
+    assert any("github down" in m for m in caplog_errorlog.msgs)
+    assert "task" not in cache
+
+
+async def test_cached_fanout_refresh_is_single_flight():
+    cache = {"v": (time.monotonic() - 1.0, {"prs": ["old"]})}
+    calls = []
+    release = asyncio.Event()
+
+    async def _loader():
+        calls.append(1)
+        await release.wait()
+        return {"prs": ["new"]}
+
+    await server._cached_fanout(cache, _loader)
+    task = cache["task"]
+    # A second read while the refresh is in flight must not start another.
+    await server._cached_fanout(cache, _loader)
+    assert cache["task"] is task
+    release.set()
+    await task
+    assert len(calls) == 1
+
+
+async def test_cached_fanout_backs_off_after_a_failed_sweep(fanout_clock):
+    """A failing upstream must not be polled harder than a healthy one.
+
+    The client returns every 2s for as long as the server answers ``stale``,
+    and the entry stays stale precisely because the sweeps keep failing — so
+    without a backoff each of those polls would arm another sweep against the
+    thing that is already down, for the whole five-minute stale window.
+    """
+    cache = {"v": (fanout_clock.now - 1.0, {"prs": ["old"]})}
+    calls = []
+
+    async def _loader():
+        calls.append(1)
+        raise RuntimeError("still down")  # keeps the entry stale
+
+    await server._cached_fanout(cache, _loader)
+    await cache["task"]
+    assert len(calls) == 1
+
+    # Right after the failure: still honestly stale, but no new sweep armed.
+    data, stale = await server._cached_fanout(cache, _loader)
+    assert (data, stale) == ({"prs": ["old"]}, True)
+    assert "task" not in cache
+    assert len(calls) == 1
+
+    # Once the backoff has elapsed, exactly one more sweep is attempted.
+    fanout_clock.advance(server._FANOUT_ERROR_BACKOFF + 1.0)
+    await server._cached_fanout(cache, _loader)
+    await cache["task"]
+    assert len(calls) == 2
+
+
+async def test_cached_fanout_sweeps_again_once_a_good_one_lands(fanout_clock):
+    """Single-flight is per sweep, not per stale window: a successful refresh
+    clears the backoff so the panel keeps updating normally."""
+    cache = {"v": (fanout_clock.now - 1.0, {"prs": ["old"]})}
+    cache["retry_after"] = fanout_clock.now - 1.0  # a previous failure, expired
+
+    async def _loader():
+        return {"prs": ["new"]}
+
+    await server._cached_fanout(cache, _loader)
+    await cache["task"]
+    assert cache["v"][1] == {"prs": ["new"]}
+    assert "retry_after" not in cache
+
+
+async def test_cached_fanout_hung_sweep_frees_the_slot(monkeypatch):
+    """A sweep that never returns must not wedge the panel.
+
+    Single-flight means one stuck ls-remote would otherwise block every later
+    refresh for that panel — the list would freeze at whatever it last had.
+    """
+    monkeypatch.setattr(server, "_FANOUT_SWEEP_TIMEOUT", 0.01)
+    cache = {"v": (time.monotonic() - 1.0, {"prs": ["old"]})}
+
+    async def _loader():
+        await asyncio.sleep(30)  # never finishes within the timeout
+        return {"prs": ["never"]}
+
+    data, stale = await server._cached_fanout(cache, _loader)
+    assert (data, stale) == ({"prs": ["old"]}, True)
+    await cache["task"]
+    assert "task" not in cache  # the slot is free for the next attempt
+    assert cache["v"][1] == {"prs": ["old"]}  # and the last good list survives
+
+
+async def test_schedule_fanout_refresh_ignores_a_second_caller_in_flight():
+    """Two requests racing on the same panel share one sweep, whoever asks."""
+    cache = {"v": (time.monotonic() - 1.0, {"prs": ["old"]})}
+    release = asyncio.Event()
+    first_calls, second_calls = [], []
+
+    async def _first():
+        first_calls.append(1)
+        await release.wait()
+        return {"prs": ["first"]}
+
+    async def _second():
+        second_calls.append(1)
+        return {"prs": ["second"]}
+
+    server._schedule_fanout_refresh(cache, _first, 20.0)
+    task = cache["task"]
+    await asyncio.sleep(0)  # let the first sweep get as far as the loader
+    server._schedule_fanout_refresh(cache, _second, 20.0)
+    assert cache["task"] is task
+    release.set()
+    await task
+    assert first_calls == [1]
+    assert second_calls == []  # the second loader never ran
+    assert cache["v"][1] == {"prs": ["first"]}
+
+
+# --------------------------------------------------------------------------- #
+# the three panel routes over that cache (?fresh + the "stale" flag)           #
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "path,cache_name,mod,loader,key",
+    _PANELS,
+    ids=[p[0] for p in _PANELS],
+)
+def test_settings_panel_fresh_hit_answers_with_stale_false(
+    monkeypatch, path, cache_name, mod, loader, key
+):
+    """Every panel payload carries ``stale`` — the client's poll decision."""
+    cache = getattr(server, cache_name)
+    cache["v"] = (time.monotonic() + 60.0, {key: [{"id": "cached"}]})
+    monkeypatch.setattr(
+        getattr(server, mod),
+        loader,
+        lambda: _aval({key: [{"id": "swept"}]}),
+    )
+    r = client.get(path)
+    assert r.status_code == 200
+    assert r.json()["stale"] is False
+    assert [row["id"] for row in r.json()[key]] == ["cached"]
+
+
+@pytest.mark.parametrize(
+    "path,cache_name,mod,loader,key",
+    _PANELS,
+    ids=[p[0] for p in _PANELS],
+)
+def test_settings_panel_serves_a_stale_payload_marked_stale(
+    monkeypatch, path, cache_name, mod, loader, key
+):
+    """Past the TTL the panel answers from the stale entry and sweeps behind it."""
+    cache = getattr(server, cache_name)
+    cache["v"] = (time.monotonic() - 1.0, {key: [{"id": "old"}]})
+    calls = []
+
+    async def _load():
+        calls.append(1)
+        return {key: [{"id": "swept"}]}
+
+    monkeypatch.setattr(getattr(server, mod), loader, _load)
+    r = client.get(path)
+    assert r.status_code == 200
+    assert r.json()["stale"] is True  # tells the client to come back for more
+    assert [row["id"] for row in r.json()[key]] == ["old"]
+    assert calls == [1]  # …and the refresh did run, off the request path
+    assert cache["v"][1] == {key: [{"id": "swept"}]}
+
+
+@pytest.mark.parametrize(
+    "path,cache_name,mod,loader,key",
+    _PANELS,
+    ids=[p[0] for p in _PANELS],
+)
+def test_settings_panel_fresh_param_forces_a_sweep(
+    monkeypatch, path, cache_name, mod, loader, key
+):
+    cache = getattr(server, cache_name)
+    cache["v"] = (time.monotonic() + 60.0, {key: [{"id": "cached"}]})
+    monkeypatch.setattr(
+        getattr(server, mod), loader, lambda: _aval({key: [{"id": "swept"}]})
+    )
+    # Without ?fresh the fresh cache entry answers…
+    assert [row["id"] for row in client.get(path).json()[key]] == ["cached"]
+    # …and with it the handler goes back upstream.
+    r = client.get(path + "?fresh=1")
+    assert [row["id"] for row in r.json()[key]] == ["swept"]
+    assert r.json()["stale"] is False
+
+
+@pytest.mark.parametrize(
+    "path,cache_name,mod,loader,key",
+    _PANELS,
+    ids=[p[0] for p in _PANELS],
+)
+def test_settings_panel_serves_stale_instead_of_502_when_upstream_is_down(
+    monkeypatch, path, cache_name, mod, loader, key
+):
+    """A usable stale entry outranks an upstream outage: no 502, no empty panel."""
+    cache = getattr(server, cache_name)
+    cache["v"] = (time.monotonic() - 1.0, {key: [{"id": "old"}]})
+
+    async def _boom():
+        raise RuntimeError("upstream down")
+
+    monkeypatch.setattr(getattr(server, mod), loader, _boom)
+    r = client.get(path)
+    assert r.status_code == 200
+    assert r.json()["stale"] is True
+    assert [row["id"] for row in r.json()[key]] == ["old"]
+    # The failed sweep left the last known list in place to serve again.
+    assert cache["v"][1] == {key: [{"id": "old"}]}
+
+
+@pytest.mark.parametrize(
+    "path,cache_name,mod,loader,key",
+    _PANELS,
+    ids=[p[0] for p in _PANELS],
+)
+def test_settings_panel_fresh_sweep_502s_but_keeps_the_good_payload(
+    monkeypatch, path, cache_name, mod, loader, key
+):
+    """An explicit Refresh reports the failure — without discarding what we have."""
+    cache = getattr(server, cache_name)
+    good = {key: [{"id": "cached"}]}
+    cache["v"] = (time.monotonic() + 60.0, good)
+
+    async def _boom():
+        raise RuntimeError("no gh token")
+
+    monkeypatch.setattr(getattr(server, mod), loader, _boom)
+    r = client.get(path + "?fresh=1")
+    assert r.status_code == 502
+    assert "no gh token" in r.json()["error"]
+    assert cache["v"][1] == good  # the panel still has rows to show
+    assert client.get(path).json()[key][0]["id"] == "cached"
+
+
+def test_github_open_prs_stale_hit_annotates_without_touching_the_cache(
+    registered, monkeypatch
+):
+    """``has_session`` is per-request even off a stale entry, and the annotated
+    copy must not be written back — a cached payload carrying a stale
+    ``has_session``/``stale`` would show dead sessions as live."""
+    cached = {"prs": [{"number": 3, "session": "owner/repo#3"}]}
+    server._OPEN_PRS_CACHE["v"] = (time.monotonic() - 1.0, cached)
+    # Freeze the sweep so the served payload is unambiguously the stale one.
+    monkeypatch.setattr(server, "_schedule_fanout_refresh", lambda *a, **k: None)
+
+    first = client.get("/api/github/prs").json()
+    assert first["stale"] is True
+    assert first["prs"][0]["has_session"] is False  # no session yet
+
+    registered("owner/repo#3", wt="/tmp/x")  # session appears mid-stale-window
+    second = client.get("/api/github/prs").json()
+    assert second["prs"][0]["has_session"] is True  # re-annotated, not remembered
+    # The cached payload itself stayed clean.
+    assert server._OPEN_PRS_CACHE["v"][1] == {
+        "prs": [{"number": 3, "session": "owner/repo#3"}]
+    }
+    assert "stale" not in server._OPEN_PRS_CACHE["v"][1]

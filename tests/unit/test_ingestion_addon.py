@@ -378,8 +378,12 @@ def endpoint_client(monkeypatch):
 
 class TestEndpoints:
     def test_status_endpoint_returns_dict(self, endpoint_client, monkeypatch):
-        client, _ = endpoint_client
+        client, addon = endpoint_client
         monkeypatch.setattr(ti, "_ingestion_repo_available", lambda: False)
+        # status() falls back to the on-disk pipeline lock, so without this the
+        # assertion below reads whether the developer's own ingestion run is up
+        # — it failed on any machine that had the pipeline going.
+        monkeypatch.setattr(addon.ctrl, "_external_lock_pid", lambda: None)
         r = client.get("/api/mindflock/status")
         assert r.status_code == 200
         assert r.json()["running"] is False
