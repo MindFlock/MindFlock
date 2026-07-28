@@ -149,7 +149,12 @@ function startServerIfNeeded() {
     const redirect = ' </dev/null >>"$MF_LOG" 2>&1'
     const launch = WSL_REPO
       ? setsidPrefix + 'cd ' + shq(WSL_REPO)
-        + ' && exec $SETSID .venv/bin/python backend/web/run.py' + redirect
+        // Dev mode: bind the URL's port (from MINDFLOCK_URL, default 8765) and
+        // force `local` so a machine whose persisted serve_mode is `tailscale`
+        // doesn't silently expose the dev server on the LAN + demand an auth
+        // token. A `.bat`/env PORT can't cross the Windows->WSL boundary, so the
+        // port has to be spliced into the spawn command itself.
+        + ' && exec $SETSID .venv/bin/python backend/web/run.py local ' + PORT + redirect
       : setsidPrefix
         + 'MF="$(command -v mindflock || true)";'
         + ' [ -z "$MF" ] && [ -x "$HOME/.local/bin/mindflock" ] && MF="$HOME/.local/bin/mindflock";'
