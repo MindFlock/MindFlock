@@ -3960,7 +3960,11 @@ async def assigned_tickets(fresh: bool = False) -> JSONResponse:
         )
     except Exception as err:  # noqa: BLE001 — unconfigured / network
         return JSONResponse({"error": str(err)}, status_code=502)
-    data = {**data, "stale": stale, "tickets": [dict(t) for t in data.get("tickets", [])]}
+    data = {
+        **data,
+        "stale": stale,
+        "tickets": [dict(t) for t in data.get("tickets", [])],
+    }
     for t in data.get("tickets", []):
         t["has_session"] = (
             t.get("session") in ENGINE.instances or t.get("session") in _TICKET_STARTS

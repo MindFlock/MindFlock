@@ -15,29 +15,22 @@ on:
 
 jobs:
   format:
-    # Black on changed files only. The tree is uniformly black-formatted; this
-    # gate keeps it that way by checking the Python files touched in each PR.
-    # Mirrors the shared pre-commit config (.pre-commit-config.yaml).
-    name: format (black, changed files)
+    # Black over the whole package + suite, on every event. This used to run
+    # only on pull_request, and only over the files that PR touched — so a
+    # direct push to main was never format-checked at all, and that is exactly
+    # how unformatted files reached main. The tree is uniformly formatted and
+    # black takes seconds over it, so checking all of it removes both holes
+    # (and the dependency on github.base_ref, which a push doesn't have).
+    name: format (black)
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - name: black --check on changed files
-        run: |
-          base=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
-          files=$(git diff --name-only --diff-filter=d "$base" -- 'backend/*.py' 'backend/**/*.py' 'tests/*.py' 'tests/**/*.py')
-          if [ -n "$files" ]; then
-            echo "$files" | xargs uvx black --check --target-version py312
-          else
-            echo "No Python changes to check."
-          fi
+      - name: black --check
+        run: uvx black --check --target-version py312 backend tests
 
   versions:
     # The version lives in three manifests (pyproject.toml, electron/ and

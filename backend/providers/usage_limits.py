@@ -70,6 +70,7 @@ def is_limit_screen(text: str) -> bool:
         return False
     return any(re.search(p, text, re.I) for p in LIMIT_SCREEN_PATTERNS)
 
+
 # "resets in 2h 30m" / "try again in 45 minutes" / "resets in 2 days"
 _REL = re.compile(
     r"(?:reset\w*|try again|available again|come back)\s+in\s+"
