@@ -1,0 +1,164 @@
+/* F8 — dismissible doctor warning chip (failures while sessions exist). */
+#doctor-warn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 8px 12px 0;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: #e8a13c;
+  background: rgba(232, 161, 60, 0.10);
+  border: 1px solid rgba(232, 161, 60, 0.45);
+  border-radius: 6px;
+}
+
+#doctor-warn.hidden {
+  display: none;
+}
+
+#doctor-warn button.linklike {
+  color: inherit;
+  font-weight: 600;
+}
+
+#doctor-warn #doctor-warn-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  opacity: 0.7;
+}
+
+#doctor-warn #doctor-warn-dismiss:hover {
+  opacity: 1;
+}
+
+/* F8 — inline Shortcut token input in the setup checklist accounts step. */
+.setup-shortcut-row .setup-shortcut-token {
+  flex: 1 1 120px;
+  min-width: 0;
+  font-size: 12px;
+  padding: 5px 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.setup-shortcut-row .setup-shortcut-token:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* --------------------------------------------------------------------------- *
+ * J2 — command palette (Ctrl+P / Cmd+P). A centered overlay reusing the .modal
+ * backdrop; panel styling mirrors #new-form / #settings-panel so it reads as
+ * part of the same dialog family in both themes.
+ * --------------------------------------------------------------------------- */
+#palette {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+#palette-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 460px;
+  max-width: 92vw;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+#palette-input {
+  background: var(--bg);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  padding: 12px 14px;
+  font-size: 14px;
+  font-family: inherit;
+  border-radius: 0;
+  outline: none;
+}
+
+#palette-input:focus {
+  border-bottom-color: var(--accent);
+}
+
+#palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  min-height: 40px;
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.palette-item.selected {
+  background: var(--accent);
+  color: #fff;
+}
+
+.palette-item .palette-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette-item .palette-hint {
+  flex: none;
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.palette-item.selected .palette-hint {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.palette-empty {
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+/* Sidebar-footer hint button that surfaces the shortcut. */
+#palette-btn {
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  height: 30px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+#palette-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+

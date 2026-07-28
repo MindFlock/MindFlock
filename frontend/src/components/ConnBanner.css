@@ -1,0 +1,87 @@
+/* --------------------------------------------------------------------------- *
+ * E1 — connection-lost card + stale grid overlay. A compact bottom-right card
+ * (never a full-width strip: that covered the top bar and its controls) that
+ * names the actual problem — WSL down, server restarting, HTTP errors — and
+ * can offer a one-click fix in the desktop shell.
+ * --------------------------------------------------------------------------- */
+#conn-banner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 4000;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  padding: 11px 14px 10px;
+  text-align: left;
+  font-size: 12.5px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--red);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+#conn-banner .conn-head {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--red);
+}
+
+#conn-banner .conn-detail {
+  margin-top: 4px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+#conn-banner .conn-foot {
+  margin-top: 7px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+#conn-banner #conn-elapsed {
+  flex: 1;
+}
+
+#conn-banner #conn-fix {
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#conn-banner #conn-fix:hover {
+  border-color: var(--accent);
+}
+
+#conn-banner #conn-fix:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Stale indicator while disconnected: the grid dims and fades slightly. */
+body.conn-lost #grid {
+  opacity: 0.55;
+  filter: saturate(0.6);
+  transition: opacity 0.3s ease, filter 0.3s ease;
+}
+
+/* E2 — clickable notification toast (focus the session / open the PR). */
+#cs-toast.clickable {
+  pointer-events: auto;
+  cursor: pointer;
+  border-color: var(--accent);
+}
+
+#cs-toast.clickable:hover {
+  background: var(--panel);
+}
+

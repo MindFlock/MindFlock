@@ -1,0 +1,103 @@
+/* --- Device tab groups (tailnet multi-device control) ---------------------
+ * Headers only render when other MindFlock devices are discovered on the
+ * tailnet; a single-device network keeps the flat, header-less list. */
+.device-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  padding: 7px 10px 5px;
+  margin-top: 4px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  border-top: 1px solid var(--panel-2);
+}
+
+.device-group:first-child {
+  border-top: 0;
+  margin-top: 0;
+}
+
+.device-group:hover {
+  color: var(--text);
+}
+
+.device-group .dev-caret {
+  width: 12px;
+  font-size: 10px;
+}
+
+.device-group .dev-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.device-group .dev-badge {
+  margin-left: auto;
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 1px 7px;
+  font-size: 10px;
+  text-transform: none;
+}
+
+.device-group .dev-badge.off {
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.device-group .dev-forget {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+}
+
+.device-group .dev-forget:hover {
+  color: var(--red, #de613e);
+}
+
+.device-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  padding: 4px 12px 6px 28px;
+  font-size: 12px;
+}
+
+.device-note .dev-connect {
+  background: var(--accent, #7d56f4);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.device-note .dev-connect:hover {
+  filter: brightness(1.1);
+}
+
+#device-dialog .device-dialog-hint {
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+
+#device-dialog .dialog-err {
+  color: var(--red, #de613e);
+  font-size: 12px;
+  margin-right: auto;
+  align-self: center;
+}

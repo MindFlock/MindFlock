@@ -1,0 +1,48 @@
+/* ---------------------------------------------------------------------------
+ * Appearance picker (Settings → Appearance). The theme palettes themselves
+ * live in theme.css (shared with the mobile page); these are just the picker
+ * widgets. .accent-swatch = accent presets; .surface-swatch = surface sets
+ * (backgrounds/panels/borders/text), previewed by a banded dot — two tones for a
+ * single-hue set, three for a multi-color one (top bar / sidebar / window).
+ * --------------------------------------------------------------------------- */
+.accent-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.accent-swatch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.accent-swatch:hover {
+  border-color: var(--muted);
+}
+
+.accent-swatch.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.accent-swatch .sw-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+}
+
+/* Surface swatches share the accent-swatch chrome; a rounded square rather than
+   a circle, so the diagonal bands of the preview read as areas of a window. */
+.surface-swatch .sw-dot {
+  border-radius: 5px;
+}

@@ -1,0 +1,181 @@
+/* Overall cost/token summary, pinned just below the sidebar header. */
+.overall-usage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  padding: 8px 16px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.overall-usage:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+/* Never wrap the collapsed pill text ("Claude: 2% left · resets 700h 41m") —
+   ellipsize instead; the full detail lives in the click-to-expand popover. */
+.overall-usage .usage-head {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overall-usage .caret,
+.pane-head .tok .caret {
+  font-size: 9px;
+  opacity: 0.55;
+}
+
+.overall-usage.pop-open .caret,
+.pane-head .tok.pop-open .caret {
+  opacity: 1;
+}
+
+/* Clickable per-session cost/token chip. */
+.pane-head .tok.usage-trigger {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pane-head .tok.usage-trigger:hover {
+  color: var(--text);
+}
+
+/* Shared click-to-expand usage dropdown (body-mounted, fixed-positioned). */
+.usage-pop {
+  position: fixed;
+  z-index: 3000;
+  min-width: 210px;
+  max-width: 360px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.usage-pop.hidden {
+  display: none;
+}
+
+.usage-pop-head {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-pop-tbl {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.usage-pop-tbl td {
+  padding: 2px 0;
+  color: var(--muted);
+}
+
+.usage-pop-tbl td.num {
+  /* nowrap keeps compact values ("2:48 PM (in 700h 41m)") on one line;
+     prose rows opt into wrapping with the .wrap flag from _usageTableEl. */
+  text-align: right;
+  color: var(--text);
+  padding-left: 16px;
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-pop-tbl td.num.wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.usage-pop-note {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--muted);
+  white-space: normal;
+}
+
+/* Rolling-window period toggle (Session/Day/Week/Month/Year) in the overall pop. */
+.usage-periods {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.usage-periods .usage-period {
+  flex: 1;
+  cursor: pointer;
+  font-size: 10px;
+  padding: 3px 2px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.usage-periods .usage-period:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.usage-periods .usage-period.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Provider / Combined tabs at the top of the overall-usage pop. Same pill look
+   as the period toggle, but a bottom-border underline so they read as tabs and
+   wrap gracefully when several providers are in play. */
+.usage-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.usage-tabs .usage-tab {
+  cursor: pointer;
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.usage-tabs .usage-tab:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.usage-tabs .usage-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+

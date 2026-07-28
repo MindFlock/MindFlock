@@ -1,0 +1,294 @@
+/* Mobile single-terminal view. Defaults match the desktop dark palette; the
+   same variable names as style.css so the shared theme.css presets
+   (html[data-accent=…] / html[data-surface=…]) restyle this page too. Mobile
+   has no light mode — only the dark half of each surface set applies. */
+:root {
+  --bg: #0f1117;
+  --panel: #171a23;
+  --panel-2: #1e222e;
+  --border: #2a2f3c;
+  --text: #d7dae3;
+  --muted: #8a90a2;
+  --accent: #7d56f4;
+  --accent-rgb: 125, 86, 244;
+  --accent-deep: #5b3fc0;
+  --term-bg: #0f1117;
+  --term-fg: #d7dae3;
+}
+
+/* The multi-color surface sets (Macaw, Toucan…) also carry --topbar-* /
+   --sidebar-* region hues; this page deliberately ignores them and renders their
+   window palette only. Mobile's #bar is a single strip whose controls (#picker,
+   .tab) are painted with --bg to read as *sunk into the page* rather than raised
+   off the bar — recolor the strip and those controls stay behind, which is
+   exactly the case a bright region hue like Toucan's bill can't survive. Not
+   worth a mobile-only third token for one strip. */
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* #app is sized to the *visual* viewport in JS so the key bar stays just above
+   the soft keyboard instead of being pushed off-screen. */
+#app {
+  position: relative;   /* anchors the #vv-debug overlay inside the app frame */
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* Live viewport numbers (?debug=1) — pinned near the top so it stays readable
+   even when the bottom bars are clipped by a lying visualViewport. */
+#vv-debug {
+  position: absolute;
+  top: 54px;
+  left: 8px;
+  right: 8px;
+  z-index: 99;
+  background: rgba(0, 0, 0, 0.8);
+  color: #4ade80;
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 4px 6px;
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+/* --- top bar: activity dot + session picker + agent/shell tabs --- */
+#bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: max(8px, env(safe-area-inset-top)) 10px 8px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.dot {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #555b6e;
+}
+.dot.working { background: #4ade80; box-shadow: 0 0 6px #4ade80aa; }
+.dot.clarify { background: #0ea5e9; box-shadow: 0 0 6px #0ea5e9aa; animation: dot-pulse 1.4s ease-in-out infinite; }
+.dot.limit   { background: #ef4444; box-shadow: 0 0 6px #ef4444aa; animation: dot-pulse 1.4s ease-in-out infinite; }
+.dot.idle    { background: #fbbf24; }
+.dot.offline { background: #555b6e; }
+@keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+#picker {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 8px;
+  font-size: 15px;
+  font-family: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+#tabs {
+  flex: 0 0 auto;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.tab {
+  background: var(--bg);
+  color: var(--muted);
+  border: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.tab.active { background: var(--accent); color: #fff; }
+
+/* --- git workflow bar (Commit / Push / PR / Merge) --- */
+#actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.act {
+  flex: 1 1 0;
+  min-width: 64px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px 6px;
+  font-size: 13px;
+  font-family: inherit;
+  user-select: none;
+  white-space: nowrap;
+}
+.act:active { background: var(--border); }
+/* The step recommended for the current stage, mirroring the desktop's guided
+   "next step" button. */
+.act.is-next {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.act.is-next:active { background: rgba(var(--accent-rgb), 0.75); }
+.act[disabled] { opacity: 0.4; }
+
+/* --- commit-message sheet (bottom sheet over the whole app) --- */
+.sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(0, 0, 0, 0.55);
+}
+.sheet-box {
+  width: 100%;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  border-radius: 12px 12px 0 0;
+  padding: 14px 14px calc(14px + env(safe-area-inset-bottom)) 14px;
+}
+.sheet-title { font-size: 15px; margin-bottom: 10px; }
+#commit-text {
+  width: 100%;
+  resize: none;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px 10px;
+  /* 16px minimum: below that iOS Safari zooms the page on focus. */
+  font-size: 16px;
+  font-family: inherit;
+  line-height: 1.35;
+}
+#commit-text:focus { outline: none; border-color: var(--accent); }
+.sheet-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.sheet-actions button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-family: inherit;
+}
+#commit-ok { background: var(--accent); color: #fff; border-color: var(--accent); }
+#commit-ok:active { background: rgba(var(--accent-rgb), 0.75); }
+
+/* --- terminal fills all remaining space --- */
+#term-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--term-bg);
+}
+/* touch-action:none keeps the browser from claiming vertical drags for page
+   panning — mobile.js translates them into tmux scrollback (SGR wheel ticks). */
+#term { position: absolute; inset: 0; padding: 4px 6px; touch-action: none; }
+#term .xterm { height: 100%; }
+/* Hide xterm's viewport scrollbar — history lives on the tmux side, so the
+   xterm scrollbar has nothing to scroll. */
+.xterm .xterm-viewport { scrollbar-width: none; }
+.xterm .xterm-viewport::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+#empty, #status {
+  position: absolute;
+  left: 0; right: 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+  padding: 0 24px;
+}
+#empty { top: 50%; transform: translateY(-50%); }
+#status { bottom: 8px; font-size: 12px; color: #c08b00; }
+.hidden { display: none !important; }
+
+/* --- compose box: native text field + Send (above the key bar) --- */
+#composer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 6px 8px 0 8px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+#compose {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px 10px;
+  /* 16px minimum: below that iOS Safari zooms the page on focus. */
+  font-size: 16px;
+  font-family: inherit;
+  line-height: 1.35;
+  max-height: 120px;
+}
+#compose:focus { outline: none; border-color: var(--accent); }
+#send {
+  flex: 0 0 auto;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 7px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-family: inherit;
+  user-select: none;
+}
+#send:active { background: rgba(var(--accent-rgb), 0.75); }
+
+/* --- soft-key bar (bottommost: carries the home-bar safe-area inset) --- */
+#keys {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom)) 8px;
+  background: var(--panel);
+  overflow-x: auto;
+}
+.key {
+  flex: 1 1 0;
+  min-width: 42px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 11px 4px;
+  font-size: 14px;
+  font-family: inherit;
+  user-select: none;
+}
+.key:active { background: var(--border); }
+.key.sticky.on { background: var(--accent); color: #fff; border-color: var(--accent); }

@@ -1,0 +1,51 @@
+{
+  "name": "mindflock-desktop",
+  "productName": "MindFlock",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "private": true,
+  "description": "Native desktop shell for the MindFlock web UI (Electron).",
+  "author": "MindFlock <security@mindflock.ai>",
+  "homepage": "https://github.com/MindFlock/MindFlock",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^43.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "ai.mindflock.desktop",
+    "productName": "MindFlock",
+    "files": ["main.js", "preload.js", "logger.js", "offline.html", "icon.ico"],
+    "extraResources": [{ "from": "../install.sh", "to": "install.sh" }],
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico",
+      "artifactName": "MindFlock-Setup.exe"
+    },
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["universal"] }],
+      "category": "public.app-category.developer-tools",
+      "artifactName": "MindFlock.dmg"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Development",
+      "artifactName": "MindFlock.AppImage"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MindFlock"
+    }
+  }
+}

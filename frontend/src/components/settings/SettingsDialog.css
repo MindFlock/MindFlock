@@ -1,0 +1,205 @@
+/* Settings dialog (a modal like #recent-panel). The panel is a FIXED size —
+   width and height don't change with the selected screen; each screen's content
+   scrolls inside #settings-screens instead of resizing the dialog. (Capped to
+   the viewport so it still fits small windows.) */
+#settings-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 640px;
+  max-width: 92vw;
+  height: 82vh;
+  max-height: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+#settings-panel .ws-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#settings-panel .ws-head h2 {
+  margin: 0;
+  font-size: 16px;
+  flex: 1;
+}
+
+.set-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Getting-started block at the foot of General — set off from the settings
+   above it by a divider so it reads as its own group. */
+.onboarding-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.onboarding-block .set-section-title {
+  margin: 0;
+}
+
+/* Label + hint on the left, action button pinned right (button must not stretch
+   to full width like a default column .set-row would make it). */
+.onboarding-action {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.onboarding-action-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.onboarding-action .test-btn {
+  flex: none;
+  white-space: nowrap;
+}
+
+.set-row .set-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.set-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Standalone hint paragraphs (status lines, blurbs under a section title):
+   the screen's flex gap already provides the rhythm, so the browser's default
+   <p> margins would double it. */
+p.set-hint {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.set-row select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.set-row select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.set-switch-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+/* The row centers the label's line box on the switch, but the desktop app's
+   font (Segoe UI) sits the glyph low in that box, so the text reads as dropped
+   below the toggle. Nudge it up to sit level with the switch. Direct child
+   only: labels nested in a two-line block (.notif-rule-text) must NOT shift,
+   or they crowd the divider above the row. */
+.set-switch-row > .set-label {
+  position: relative;
+  top: -10px;
+}
+
+.ss-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ss-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.ss-row .ss-val {
+  min-width: 1.6em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.ss-row .set-hint {
+  white-space: nowrap;
+}
+
+/* Security → access-token reveal row */
+.token-reveal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.token-reveal code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+/* Notification rules list: evenly-spaced rows, each a label + description on the
+   left and its toggle on the right, hairline-separated (the container is a plain
+   div, so it needs its own rhythm — otherwise the rows crush together). */
+#notif-rules-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.notif-rule {
+  gap: 14px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.notif-rule:first-child {
+  border-top: none;
+  padding-top: 4px;
+}
+
+.notif-rule-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.notif-rule-text .set-label {
+  font-weight: 500;
+}
+
+.notif-rule-desc {
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.notif-rule .ca-switch {
+  flex: none;
+}
+

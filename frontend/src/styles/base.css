@@ -1,0 +1,37 @@
+/* Reset + page skeleton. The app's outermost layout lives here and nowhere
+   else; components lay out their own insides. */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  grid-template-rows: 1fr;
+  height: 100vh;
+  /* Reserve the top-bar strip; the fixed #topbar sits in this band, so the
+     sidebar and grid start evenly beneath it. */
+  padding-top: var(--topbar-h, 40px);
+  overflow: hidden;
+}
+
+/* body is the 260px/1fr grid and #sidebar / #grid are its items, but React
+   mounts into #root — so #root has to be transparent to layout. */
+#root {
+  display: contents;
+}
+
+/* The terminal container adopted from the registry fills its pane host. */
+.term-container {
+  width: 100%;
+  height: 100%;
+}

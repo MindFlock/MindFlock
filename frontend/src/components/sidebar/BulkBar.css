@@ -1,0 +1,48 @@
+/* --- Bulk session actions: batch bar --- */
+#bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 10px;
+  margin: 0 0 2px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+#bulk-bar.hidden {
+  display: none;
+}
+
+.bulk-count {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.bulk-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.bulk-acts button {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.bulk-acts button:hover {
+  border-color: var(--accent);
+}
+
+.bulk-acts button.danger:hover {
+  border-color: var(--red);
+  color: var(--red);
+}

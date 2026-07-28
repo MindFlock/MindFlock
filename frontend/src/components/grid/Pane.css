@@ -1,0 +1,347 @@
+/* Terminal grid */
+/* A vertical stack of rows; each row is a horizontal strip of windows. Drag a
+   window onto any side of another to rearrange (see placeInGrid). */
+#grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  min-height: 0;
+  overflow: auto;
+}
+
+#grid>.grid-row {
+  display: flex;
+  gap: 10px;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* All panes — sessions and the special logs/assistant panes alike — live
+   inside a .grid-row and drag/resize the same way. The direct-child rule is a
+   fallback for anything appended straight to the grid. */
+#grid>.grid-row>.pane {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+#grid>.pane {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  min-height: 0;
+  /* Trap the pane's internal overlays (running-cover, budget-lock, file-drop)
+     in their own stacking context so their z-index can never paint over
+     app-level modals (settings, command palette) — those use the .modal
+     backdrop, which is fixed with no z-index. */
+  isolation: isolate;
+}
+
+.pane.focused {
+  border-color: var(--accent);
+}
+
+.pane.dragging,
+.inst.dragging {
+  opacity: 0.45;
+}
+
+/* Live drop preview: the empty slot the dragged window will occupy once released.
+   pointer-events:none is deliberate — once the layout reflows and the cursor sits
+   over this slot, dragover stops firing so the preview holds steady (no flicker). */
+.pane.grid-drop-preview {
+  pointer-events: none;
+  border: 2px dashed var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+  border-radius: 10px;
+}
+
+.pane-head {
+  cursor: grab;
+}
+
+.pane-head:active {
+  cursor: grabbing;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.pane-head {
+  flex-wrap: nowrap;
+}
+
+/* Normal right padding. (The old 54px gutter reserved room for the floating
+   #mic-btn, which is now hidden — reclaim the space so headers fit more.) */
+.pane-head {
+  padding-right: 12px;
+}
+
+.pane-head .title {
+  font-weight: 600;
+  flex: 0 1 auto;
+  min-width: 40px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pane-head .grip {
+  flex: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: grab;
+  opacity: 0.5;
+  user-select: none;
+  letter-spacing: -1px;
+}
+
+.pane-head:hover .grip {
+  opacity: 0.9;
+}
+
+.pane-head:active .grip {
+  cursor: grabbing;
+}
+
+.pane-head .tabs,
+.pane-head .actions {
+  flex: none;
+}
+
+.pane-head .branch {
+  color: var(--muted);
+}
+
+/* Right-aligned group: per-window tokens then the connection state. */
+.pane-head .tok {
+  margin-left: auto;
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
+
+/* The websocket state is pure noise while healthy ("connected"/"streaming") and
+   was the element overflowing narrow multi-window headers. It's now hidden
+   entirely on the window — connection health is self-evident from the sidebar
+   dot (which turns red via .dot.disconnected when a session's agent WS drops).
+   The socket handlers still write text/`.state-bad` here for the offscreen
+   element, but it never renders in the header. */
+.pane-head .state {
+  display: none;
+}
+
+/* Progressive disclosure as a pane narrows (multiple windows): drop the least
+   useful bits first so nothing gets clipped. Priority kept longest: title,
+   view tabs, and the status chip. Order of removal:
+     560px — diff-stats line + the per-window token/cost counter
+     420px — next-step (Commit/Push/…) button — kept longest so the primary
+             action stays reachable when several windows are tiled tight
+     360px — tighten the tabs so all four still fit */
+.pane {
+  container-type: inline-size;
+}
+
+@container (max-width: 560px) {
+  .pane-head .tok {
+    display: none;
+  }
+}
+
+/* Between the fixed breakpoints a header can still overflow (long titles,
+   wide next-step labels) and the chip would render half a word ("Claud").
+   makePane's fitTok() marks it .tok-clip whenever the header content is wider
+   than the pane; visibility (not display) keeps its width in the layout so
+   the overflow measurement doesn't oscillate. */
+.pane-head .tok.tok-clip {
+  visibility: hidden;
+}
+
+@container (max-width: 360px) {
+  .pane-head {
+    gap: 4px;
+  }
+
+  .pane-head .tabs {
+    margin-left: 4px;
+  }
+
+  .pane-head .tabs button {
+    padding: 3px 6px;
+  }
+}
+
+.pane-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.pane-term {
+  height: 100%;
+  min-height: 0;
+  padding: 6px 8px;
+  /* Anchors the connect overlay and the file-drop cue in paneOverlays.css. */
+  position: relative;
+}
+
+.pane-term .xterm {
+  height: 100%;
+}
+
+/* Hide xterm's viewport scrollbar everywhere — panes mirror tmux, so the
+   history lives server-side and the xterm scrollbar has nothing to scroll. */
+.xterm .xterm-viewport {
+  scrollbar-width: none;
+}
+
+.xterm .xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* head tabs + actions */
+.pane-head .tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: 10px;
+}
+
+.pane-head .tabs button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+}
+
+.pane-head .tabs button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pane-head .tabs button.active {
+  color: #fff;
+  background: var(--accent);
+}
+
+.pane-head .actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+}
+
+.pane-head .actions .nextstep {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  flex: none;
+  font-size: 11px;
+  padding: 4px 11px;
+  border-radius: 6px;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.pane-head .actions .nextstep:hover {
+  filter: brightness(1.12);
+}
+
+/* Status-pill variant: shown in the same slot when there's no actionable next
+   step (provisioning / pre-commit running / paused / workspace gone), so the
+   action area is never an empty gap. Non-clickable, muted — clearly not the
+   primary accent button. */
+.pane-head .actions .nextstep.nextstep-status {
+  background: var(--panel-2);
+  color: var(--muted);
+  font-weight: 500;
+  cursor: default;
+  filter: none;
+}
+
+.pane-head .actions .nextstep.nextstep-status:hover {
+  filter: none;
+}
+
+/* The next-step button is the LAST header control to drop: the token/cost
+   counter (and diff-stats line) hide first at 560px, so the primary action
+   stays reachable in tight tiled layouts. Only at 420px, when even the button
+   no longer fits, does it hide too. */
+@container (max-width: 420px) {
+  .pane-head .actions .nextstep {
+    display: none !important;
+  }
+}
+
+.pane-head .act {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+}
+
+.pane-head .act:hover {
+  border-color: var(--accent);
+}
+
+.pane-head .act:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Icon-only copy-history button: center the SVG, muted like the other glyphs. */
+.pane-head .act.copyhist {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 6px;
+  color: var(--muted);
+}
+
+.pane-head .act.copyhist:hover {
+  color: var(--text);
+}
+
+.pane-head .act.copyhist svg {
+  display: block;
+}
+
+.pane-head .act.step {
+  border-color: var(--accent);
+  color: #fff;
+  background: rgba(var(--accent-rgb), 0.28);
+}
+
+.pane-head .act.step:hover {
+  background: rgba(var(--accent-rgb), 0.45);
+}
+

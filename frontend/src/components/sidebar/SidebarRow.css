@@ -1,0 +1,328 @@
+/* Sidebar drop cue: accent insertion line showing where the dragged row will
+   land (same purple as the grid's .grid-drop-preview). Sits in the 4px gap
+   between rows. */
+.inst.drop-above::before,
+.inst.drop-below::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.55);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.inst.drop-above::before {
+  top: -3.5px;
+}
+
+.inst.drop-below::after {
+  bottom: -3.5px;
+}
+
+.inst.active {
+  outline: 1px solid var(--accent);
+}
+
+.inst.active .inst-row {
+  background: var(--panel-2);
+}
+
+.inst.is-hidden {
+  opacity: 0.5;
+}
+
+.inst-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.inst-row:hover {
+  background: var(--panel-2);
+}
+
+/* Drag-to-reorder grip (sidebar) — appears on hover to keep the row clean. */
+.inst .grip {
+  flex: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: grab;
+  opacity: 0.35;
+  transition: opacity 0.12s ease;
+  user-select: none;
+  letter-spacing: -1px;
+}
+
+.inst-row:hover .grip {
+  opacity: 0.85;
+}
+
+.inst.dragging .grip {
+  cursor: grabbing;
+}
+
+/* Alt+N number badge (first 9 rows). */
+.inst .idx {
+  flex: none;
+  width: 13px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.inst.active .idx {
+  color: var(--accent);
+}
+
+.inst .dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--green);
+  flex: none;
+}
+
+.inst .dot.paused {
+  background: var(--muted);
+}
+
+.inst .dot.loading {
+  background: var(--gold);
+}
+
+.inst .dot.disconnected {
+  background: var(--red);
+  box-shadow: 0 0 6px var(--red);
+}
+
+.inst .chevron {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  flex: none;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  transition: transform 0.12s ease;
+}
+
+.inst .chevron:hover {
+  color: var(--text);
+}
+
+.inst .chevron.open {
+  transform: rotate(90deg);
+}
+
+.inst .meta {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* The title shrinks with an ellipsis but never below a legible floor, so a
+   foreign-repo glyph + stage chip can't crush it out of the row. The title
+   GROWS into free width (round-3 CSS fix: previously flex 0 1 auto while the
+   branch was flex 1 1 0, so the branch won all free width and rendered as an
+   illegible sliver while the title ellipsized even when space existed); the
+   branch is capped at 40% of the row with its own ellipsis. */
+.inst .title {
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 34px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inst .branch {
+  font-size: 11px;
+  color: var(--muted);
+  flex: 0 1 auto;
+  max-width: 40%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inst .kill {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  flex: none;
+}
+
+.inst .kill:hover {
+  color: var(--red);
+  background: rgba(222, 97, 62, 0.12);
+}
+
+.inst-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 10px 6px 30px;
+}
+
+.inst-actions button {
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.inst-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.inst-actions button:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.inst-actions .kbd {
+  font-size: 10px;
+  color: var(--muted);
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.inst-actions button.danger {
+  color: var(--red);
+}
+
+.inst-actions button.danger:hover {
+  background: rgba(222, 97, 62, 0.14);
+}
+
+.inst-actions .menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 8px;
+}
+
+.inst-actions .folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+}
+
+.inst-actions .folder-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inst-actions .folder-copy {
+  flex: none;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.inst-actions .folder-copy:hover {
+  border-color: var(--accent);
+}
+
+#sidebar-footer {
+  padding: 10px 16px;
+  font-size: 11px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#sidebar-footer .foot-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#view-modes {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#view-modes .vm-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-right: 2px;
+}
+
+#view-modes .vm {
+  flex: 1;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 0;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#view-modes .vm:hover {
+  border-color: var(--accent);
+}
+
+#view-modes .vm.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#workspaces-btn {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#workspaces-btn:hover {
+  border-color: var(--accent);
+}
+

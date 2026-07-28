@@ -1,0 +1,175 @@
+/* Boot loader: fills the grid from page open until the first /api/instances
+   snapshot arrives, so restored sessions don't flash an empty environment. */
+#boot-loading {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#boot-loading p {
+  margin: 0;
+}
+
+/* The connect overlay below covers the blank xterm until the websocket replays
+   the session's scrollback (removed on the first received bytes). It anchors to
+   .pane-term, which Pane.css already makes relative. */
+
+/* Dragging a file over a terminal: show where it will land (upload → path). */
+.file-drop {
+  border-radius: 6px;
+  position: relative;
+}
+
+/* Full-pane overlay while hovering with a file: ::before tints/blurs the
+   terminal underneath so the label reads clearly, ::after draws a download
+   arrow + text. pointer-events: none keeps dragover/drop on the host. */
+.file-drop::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  z-index: 5;
+  border: 2px dashed var(--accent);
+  background: rgba(6, 7, 14, 0.55);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.file-drop::after {
+  content: "Drag and drop to paste";
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 56px;
+  /* text sits below the arrow icon */
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a78bfa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'/%3E%3Cpolyline points='7 10 12 15 17 10'/%3E%3Cline x1='12' y1='3' x2='12' y2='15'/%3E%3C/svg%3E") center calc(50% - 32px) / 38px 38px no-repeat;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  pointer-events: none;
+}
+
+/* Reduce-motion cover (Settings → General → Reduce motion): an opaque panel over
+   a running agent terminal so its constantly-scrolling output isn't fatiguing.
+   Fully opaque — the live output must not read through. Echoes the .file-drop
+   cue (dashed accent inset) but solid. pointer-events:none lets a click / scroll
+   / keypress fall straight to the terminal, which also reveals it (RunningCover).
+   Deliberately static, no animation — this is the reduce-motion path. Sits below
+   the boot loader (3), file-drop (5/6) and budget lock (6). */
+.running-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+  background: var(--panel);
+  pointer-events: none;
+  user-select: none;
+}
+
+.running-cover::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border: 2px dashed var(--accent);
+  border-radius: 6px;
+}
+
+.running-cover .rc-badge {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.running-cover .rc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.running-cover .rc-label {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
+.running-cover .rc-hint {
+  color: var(--muted);
+  font-size: 12px;
+  max-width: 280px;
+  line-height: 1.4;
+}
+
+.term-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--bg);
+}
+
+.term-loading p {
+  margin: 0;
+}
+
+/* Provisioning placeholder (loading session) */
+.provisioning {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 10px;
+  color: var(--muted);
+  text-align: center;
+  padding: 24px;
+}
+
+.provisioning p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.provisioning .muted {
+  font-size: 11px;
+  max-width: 320px;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  animation: cs-spin 0.9s linear infinite;
+}
+
+@keyframes cs-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+

@@ -1,0 +1,500 @@
+/* Modal */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal.hidden {
+  display: none;
+}
+
+/* New-session header: title left, Close button pinned top-right. */
+#new-form .ws-head h2 {
+  flex: 1;
+}
+
+#new-form .ws-head #new-close {
+  margin-left: auto;
+}
+
+#new-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 22px;
+  /* One narrow column, quick-launch first: Name + Prompt up top, Folder+Agent
+     in a compact row, git/workspace options folded behind <details>. The card
+     holds a FIXED height so opening a fold scrolls the revealed fields inside
+     .nf-body rather than growing/re-centering the dialog; clamps to the
+     viewport on short windows. */
+  width: min(540px, 94vw);
+  height: min(90vh, 480px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+/* Pinned header + Create actions don't scroll; only .nf-body does. */
+#new-form>.ws-head,
+#new-form>.modal-actions {
+  flex: none;
+}
+
+/* The scroll region between header and actions: fills the leftover height and
+   scrolls internally so the card's overall height never changes. min-height:0
+   lets it shrink below its content so overflow actually scrolls in a flex col. */
+.nf-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  /* Room so the scrollbar doesn't overlap inputs/focus rings. */
+  padding-right: 4px;
+  margin-right: -4px;
+  /* Scroll-cue shadows: a soft shade fades in at whichever edge has hidden
+     content (classic background-attachment:local trick). The cover pair
+     (panel-coloured) masks the shade when scrolled to that end, so the shadow
+     only shows when there is actually more to scroll — making the region read
+     as scrollable without a permanent border. */
+  background:
+    linear-gradient(var(--panel) 40%, transparent) 0 0 / 100% 20px no-repeat,
+    linear-gradient(transparent, var(--panel) 60%) 0 100% / 100% 20px no-repeat,
+    radial-gradient(farthest-side at 50% 0, rgba(0, 0, 0, 0.28), transparent) 0 0 / 100% 9px no-repeat,
+    radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, 0.28), transparent) 0 100% / 100% 9px no-repeat;
+  background-attachment: local, local, scroll, scroll;
+}
+
+/* Compact context row: Folder (wide) beside Agent (narrow). */
+.nf-quick {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.nf-quick .nf-folder {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.nf-quick .nf-agent {
+  flex: 0 0 158px;
+  min-width: 0;
+}
+
+.nf-quick .nf-agent select {
+  width: 100%;
+}
+
+.nf-agent-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+@media (max-width: 480px) {
+  .nf-quick {
+    flex-direction: column;
+    gap: 13px;
+  }
+
+  .nf-quick .nf-agent {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+}
+
+/* "More options" fold — git & workspace settings, collapsed by default. */
+.nf-advanced {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.nf-advanced>summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.nf-advanced>summary::-webkit-details-marker {
+  display: none;
+}
+
+.nf-advanced>summary::before {
+  content: "▸";
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.12s ease;
+}
+
+.nf-advanced[open]>summary::before {
+  transform: rotate(90deg);
+}
+
+.nf-advanced>summary:hover {
+  color: var(--text);
+}
+
+.nf-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* When a fold is open, its revealed fields sit in a lightly inset panel with an
+   accent edge — so it's unmistakable which content the summary just disclosed,
+   even when it opens near the bottom of the scroll region. */
+.nf-advanced[open] > .nf-advanced-body {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel-2, var(--panel));
+}
+
+/* Actions row: error message rides inline, left of the Create button. */
+.nf-actions {
+  align-items: center;
+}
+
+.nf-actions .error {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+#new-form h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+#new-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#new-form input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 9px 10px;
+  font-size: 14px;
+}
+
+#new-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#new-form select,
+#new-form textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 9px 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+#new-form textarea {
+  resize: vertical;
+  min-height: 52px;
+}
+
+#new-form select:focus,
+#new-form textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Checkbox row: the box, label text and hint flow as one wrapping paragraph
+   (block, not flex) so a long hint continues the line and wraps naturally under
+   it — no separate hint sub-column, no box floating in the vertical centre. */
+#new-form label.check {
+  display: block;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* Custom accent checkboxes — matches the New-menu look: a rounded outline box
+   that fills with the accent + a white checkmark when on (replaces the default
+   browser tick). Scoped to #new-form so the Settings toggle switches, which
+   hide their own 0×0 checkbox, are untouched. */
+#new-form label.check input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 0 9px 0 0;
+  vertical-align: -3px;
+  border: 1.5px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-2, var(--panel));
+  cursor: pointer;
+  position: relative;
+  transition: border-color .12s, background .12s;
+}
+
+#new-form label.check input[type="checkbox"]:hover {
+  border-color: var(--accent);
+}
+
+#new-form label.check input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  /* White checkmark drawn as an inline SVG so it stays centered and crisp
+     regardless of box-sizing / border width (the CSS border-triangle drifted). */
+  background: var(--accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M2.5 6.3 5 8.8l4.5-5'/%3E%3C/svg%3E")
+    center / 11px 11px no-repeat;
+}
+
+#new-form label.check input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+#new-form label.check input[type="checkbox"]:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+#new-form label.check .muted {
+  font-size: 12px;
+}
+
+#provision-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#repo-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.repo-path-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.repo-path-row input {
+  flex: 1;
+}
+
+#repo-browse-btn {
+  border-radius: 7px;
+  padding: 0 12px;
+  font-size: 12px;
+  cursor: pointer;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#repo-browse-btn:hover {
+  border-color: var(--accent);
+}
+
+#repo-browser {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+}
+
+.rb-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rb-head #rb-up {
+  border-radius: 6px;
+  padding: 2px 9px;
+  font-size: 13px;
+  cursor: pointer;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.rb-head #rb-up:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.rb-head #rb-mkdir {
+  border-radius: 6px;
+  padding: 2px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.rb-head #rb-mkdir:hover {
+  border-color: var(--accent);
+}
+
+.rb-cwd {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  flex: 1;
+}
+
+#rb-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rb-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.rb-item:hover {
+  background: var(--panel-2);
+}
+
+.rb-item.is-git {
+  color: #c4b3ff;
+}
+
+.rb-item .rb-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rb-use {
+  font-style: italic;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+}
+
+.rb-use.is-git {
+  color: #c4b3ff;
+  font-style: normal;
+}
+
+.rb-pick {
+  border-radius: 5px;
+  padding: 2px 9px;
+  font-size: 11px;
+  cursor: pointer;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.rb-pick:hover {
+  border-color: var(--accent);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* Transient confirmation toast (e.g. "Copied N chars") */
+#cs-toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  z-index: 1000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+#cs-toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.modal-actions button {
+  border-radius: 7px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.modal-actions button[type=submit] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.error {
+  color: var(--red);
+  font-size: 12px;
+  min-height: 16px;
+  margin: 0;
+}
+

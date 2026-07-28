@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MindFlock</title>
+  <link rel="icon" href="/favicon.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <!-- Apply the saved theme before first paint so light mode never flashes dark. -->
+  <script>try{if(localStorage.getItem('cs_theme')==='light')document.documentElement.classList.add('light');var _a=localStorage.getItem('cs_accent');if(_a)document.documentElement.setAttribute('data-accent',_a);var _s=localStorage.getItem('cs_surface');if(_s)document.documentElement.setAttribute('data-surface',_s);}catch(e){}</script>
+  <!-- Theme palettes shared with the mobile page — a runtime link, not bundled. -->
+  <link rel="stylesheet" href="/theme.css" />
+  <script type="module" crossorigin src="/app.js"></script>
+  <link rel="stylesheet" crossorigin href="/style.css">
+</head>
+<body>
+  <div id="root"></div>
+  <!-- Client event bus (window.mindflock) — the public extension API. Loaded as
+       a plain script before the app so addons and the SPA share one bus. -->
+  <script src="/core/events.js"></script>
+  <!-- core/slots.js (addon bars + provider picker) is injected by the app
+       AFTER first paint so its mount points exist — see src/main.tsx. -->
+</body>
+</html>

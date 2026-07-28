@@ -1,0 +1,51 @@
+name: Bug report
+description: Something broke — a session, the web UI, the CLI, or the install
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: search [TROUBLESHOOTING.md](../blob/main/TROUBLESHOOTING.md)
+        for the exact error text — most predictable failures are documented
+        with their fix.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: |
+        1. ran `mindflock new . -p "…"`
+        2. expected a session to appear
+        3. got: <paste the exact error text>
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`mindflock doctor` output"
+      description: Paste the full output — it identifies your platform and dependency state in one shot.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "e.g. Ubuntu 24.04 / macOS 15 arm64 / Windows 11 + WSL2 Ubuntu"
+    validations:
+      required: true
+  - type: input
+    id: install-method
+    attributes:
+      label: How did you install?
+      placeholder: "curl installer / uv tool install / pipx / source checkout (uv sync)"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >
+        Server terminal output around the failure, and/or
+        `mindflock events --follow` output while reproducing.
+      render: text

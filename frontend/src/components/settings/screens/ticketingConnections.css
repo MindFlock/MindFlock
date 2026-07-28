@@ -1,0 +1,191 @@
+/* Ticketing sources: one card per configured source (Settings → Ticketing). */
+.tk-source {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+
+.tk-source .tk-remove {
+  margin-left: auto;
+}
+
+/* A required field left blank (e.g. per-source Repo URL) — a soft red cue. */
+.tk-source .field-missing {
+  border-color: var(--danger, #e5534b);
+}
+
+.tk-source .test-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+/* Collapsible source card: a clickable header folds the body to a summary. */
+.tk-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 2px 0;
+  font: inherit;
+  text-align: left;
+}
+
+.tk-caret {
+  color: var(--muted);
+  width: 1em;
+  flex: none;
+  font-size: 12px;
+}
+
+.tk-summary {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tk-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+/* Expanded cards show the header only as a fold affordance; a collapsed card is
+   just the one-line summary. */
+.tk-source.tk-collapsed .tk-body {
+  display: none;
+}
+
+.tk-source:not(.tk-collapsed) .tk-summary {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* Settings → Connections: inline at-a-glance status list (replaces the old modal). */
+.conn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.conn-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.conn-main {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.conn-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.conn-name {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+.conn-detail {
+  font-size: 12px;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.conn-pill {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 9px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+  flex: none;
+}
+
+.conn-pill.conn-connected {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+}
+
+.conn-pill.conn-attention {
+  color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 15%, transparent);
+}
+
+.conn-pill.conn-not_connected {
+  color: var(--muted);
+  background: transparent;
+}
+
+.conn-configure {
+  flex: none;
+}
+
+/* Assistant "agent file" editor (standing instructions / CLAUDE.md). */
+#assistant-agent-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  width: min(760px, 94vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  color: var(--text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#assistant-agent-panel .ws-head h2 {
+  flex: 1;
+}
+
+#assistant-agent-panel .ws-head #assistant-agent-close {
+  margin-left: auto;
+}
+
+#assistant-agent-text {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 260px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+#assistant-agent-dialog .modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+#assistant-agent-dialog #assistant-agent-status {
+  margin-right: auto;
+}
+

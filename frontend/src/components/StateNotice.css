@@ -1,0 +1,66 @@
+/* --------------------------------------------------------------------------- *
+ * Downgrade notice. Top-centre rather than the bottom-right corner ConnBanner
+ * uses: this explains why the grid the user is staring at is empty, so it has
+ * to be near what it is explaining, and it must not stack on top of a
+ * simultaneous connection-lost card.
+ * --------------------------------------------------------------------------- */
+#state-notice {
+  position: fixed;
+  top: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4001;
+  width: 520px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 15px 11px;
+  text-align: left;
+  font-size: 12.5px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow, #d6a53c);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+#state-notice .sn-head {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--yellow, #d6a53c);
+}
+
+#state-notice .sn-detail {
+  margin-top: 5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+#state-notice .sn-path {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  word-break: break-all;
+}
+
+#state-notice .sn-foot {
+  margin-top: 9px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+#state-notice .sn-btn {
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#state-notice .sn-btn:hover {
+  border-color: var(--accent);
+}
