@@ -3,9 +3,10 @@
  * opt-in toggle (github.issues_enabled — absent = OFF, unlike PR review);
  * open-issues panel with skip-reason chips + force start. */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
 import { toast } from "../../../lib/toast";
+import { usePanelQuery } from "../../../state/queries";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -48,10 +49,23 @@ export function GitIssues({ gotoScreen }: ScreenProps) {
   const [repoNew, setRepoNew] = useState("");
   const [skipDraft, setSkipDraft] = useState(String(skipAuthors));
   useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
-  const [issues, setIssues] = useState<OpenIssue[] | null>(null);
-  const [issuesNote, setIssuesNote] = useState("");
-  const [issuesError, setIssuesError] = useState("");
-  const [issuesRepos, setIssuesRepos] = useState<string[]>([]);
+  // Cached in the query client so reopening the screen keeps the last list.
+  const issuesQuery = usePanelQuery<{
+    issues?: OpenIssue[];
+    repos?: string[];
+    stale?: boolean;
+  }>("github-issues");
+  const loadOpenIssues = issuesQuery.refresh; // Refresh button: force a sweep
+  const relistIssues = issuesQuery.refetch; // after a force start (has_session
+  // is annotated live even on a cache hit, so no sweep is needed)
+  const issues = issuesQuery.data ? issuesQuery.data.issues || [] : null;
+  const issuesRepos = issuesQuery.data?.repos || [];
+  const issuesError = issuesQuery.error
+    ? "Could not list issues: " + (issuesQuery.error.message || "error")
+    : "";
+  const issuesNote =
+    issuesError || !issuesQuery.isFetching ? "" : issues ? "Refreshing…" : "Loading…";
+
   const [ghTest, setGhTest] = useState<{ testing: boolean; ok?: boolean; msg?: string }>({
     testing: false,
   });
@@ -77,27 +91,6 @@ export function GitIssues({ gotoScreen }: ScreenProps) {
     setRepoNew("");
     saveRepos([...repos, val], "Added " + val);
   };
-
-  const loadOpenIssues = useCallback(async () => {
-    setIssuesNote("Loading…");
-    setIssuesError("");
-    try {
-      const r = await api<{ issues?: OpenIssue[]; repos?: string[] }>(
-        "/api/github/issues"
-      );
-      setIssues(Array.isArray(r?.issues) ? r.issues : []);
-      setIssuesRepos(r?.repos || []);
-      setIssuesNote("");
-    } catch (err) {
-      setIssues([]);
-      setIssuesError("Could not list issues: " + ((err as Error).message || "error"));
-      setIssuesNote("");
-    }
-  }, []);
-
-  useEffect(() => {
-    loadOpenIssues(); // lazy-load on opening the Git-issues screen
-  }, [loadOpenIssues]);
 
   const n = repos.length;
   const statusText = !n
@@ -236,7 +229,7 @@ export function GitIssues({ gotoScreen }: ScreenProps) {
             <div className="repo-empty">No open issues on the watched repositories.</div>
           ) : (
             issues.map((i) => (
-              <OpenIssueRow key={(i.repo || "") + i.number} i={i} onStarted={loadOpenIssues} />
+              <OpenIssueRow key={(i.repo || "") + i.number} i={i} onStarted={relistIssues} />
             ))
           )}
         </div>

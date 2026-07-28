@@ -138,14 +138,40 @@ verbatim, so a default the caller toggled off is honored, not re-applied.
 | POST | `/api/instances/{title}/make-pr` | `gh pr create --base <base> --fill` → `{ok, url}` (or `note: "PR already open"`). The UI's Make-PR dialog collects `<base>` from the branch picker above (and the frontend remembers the last base per repo — `prBaseByRepo` in `localStorage`); an omitted base falls back to the session's base branch |
 | POST | `/api/instances/{title}/merge-pr` | `gh pr merge <branch> --merge` |
 
-### PR auto-review + issue handling
+### Assigned tickets, PR auto-review + issue handling
 
 | Method | Path | Behavior |
 |---|---|---|
+| GET | `/api/tickets` | Assigned tickets on the configured ticketing sources, each annotated with auto-ingest eligibility → `{tickets, buckets, done_buckets, ingest_states, errors[], stale}` (per ticket: `eligible`, `reasons`, `has_session`). The slowest of the three panel fan-outs (~3 s: one provider search per source + a `git ls-remote` per repo); per-source failures come back in `errors[]` rather than failing the call. Powers Settings → Ticketing → **Assigned tickets** |
+| POST | `/api/tickets/start` | Body `{source, id}` — force-start a coding session for one ticket, bypassing the auto-ingest filters. 400 missing `source`/`id`, 404 ticket gone, 409 a session for it already exists |
 | GET | `/api/github/prs` | Open PRs on the configured repo(s), each annotated with why auto-review did / didn't pick it up |
 | POST | `/api/github/prs/review` | Force-start a review session for a PR (Settings → PR review screen) |
-| GET | `/api/github/issues` | Open issues on the issue-handling repos (`github.issue_repos`), each annotated with auto-handling eligibility (`eligible`, `reasons`, `has_session`). Cached ~20 s; PRs filtered out. Powers the Settings → Git issues screen |
+| GET | `/api/github/issues` | Open issues on the issue-handling repos (`github.issue_repos`), each annotated with auto-handling eligibility (`eligible`, `reasons`, `has_session`). PRs filtered out. Powers the Settings → Git issues screen |
 | POST | `/api/github/issues/start` | Body `{repo, number}` — force-start a coding session for one open issue on a fresh branch, bypassing the age / already-handled filters. 400 bad `owner/name` or number, 404 issue gone, 409 a session for it already exists |
+
+The three **GET** panel routes above share one caching contract
+(`_cached_fanout` in `server.py`), because each is an upstream fan-out the
+settings panels poll while open:
+
+- **≤20 s old** → the cached payload, `stale: false`.
+- **20 s – 5 min old** → the cached payload is returned *immediately* with
+  `stale: true`, and a single-flight background refresh sweeps upstream. Clients
+  use `stale` to come back for the fresh copy in a moment (the UI re-polls every
+  2 s while it is set) instead of sitting on data they know is being replaced.
+  Those re-polls are cheap: a failed sweep backs off for 30 s, so they don't each
+  turn into another request to an upstream that is already failing.
+- **Older than 5 min, nothing cached, or `?fresh=1`** → the request awaits a real
+  sweep. `fresh=1` is what the panels' **Refresh** button sends. (Note the
+  spelling: these routes take `?fresh=1`, while `/api/doctor` and
+  `/api/connections` take `?refresh=1`.)
+
+**502** `{error}` is therefore returned only when there is no usable cached
+payload — or when `fresh=1` asked for a real sweep. Once a panel has any payload
+inside the 5-minute stale window, an upstream failure is logged and the last
+known list keeps being served, so a GitHub/provider blip can't empty the panel;
+the flip side is that a persistently failing upstream stays invisible to the
+client for up to 5 minutes. `has_session` is annotated on a per-request copy, so
+it stays live on cache hits.
 
 ### Worktree setup + verification gate (O2/O3)
 

@@ -100,3 +100,79 @@ export function useUsage(enabled = true) {
 export function refreshInstances() {
   return queryClient.invalidateQueries({ queryKey: ["instances"] });
 }
+
+/* --------------------------------------------------------------------------
+ * Settings panels: assigned tickets, open PRs, open issues.
+ *
+ * Each one is an upstream fan-out (GitHub / the ticket sources) that the
+ * server caches and serves stale-while-revalidate. Holding them here rather
+ * than in per-screen state is what removes the wait: the settings dialog
+ * unmounts on close and screens unmount when you switch, so component state
+ * meant every visit started from an empty panel and a spinner.
+ * ------------------------------------------------------------------------ */
+
+/** Matches the server's own fresh window, so a mount inside it is answered
+ * from this cache instead of making a round trip to be told the same thing. */
+const PANEL_STALE_MS = 20_000;
+/** How soon to pull the fresh copy after the server hands us a stale one. */
+const PANEL_STALE_RETRY_MS = 2_000;
+/** Keep panels well past the default 5min: "cached across dialog opens" has to
+ * survive lunch, or the wait comes back exactly when it feels worst. */
+const PANEL_GC_MS = 60 * 60_000;
+
+export const PANELS = {
+  tickets: "/api/tickets",
+  "github-prs": "/api/github/prs",
+  "github-issues": "/api/github/issues",
+} as const;
+
+export type PanelKey = keyof typeof PANELS;
+
+/** A settings panel's list, cached across dialog opens.
+ *
+ * `placeholderData` keeps the previous rows on screen while the refetch runs,
+ * so reopening a screen shows the last list immediately instead of blanking.
+ * `refresh()` is the Refresh button: `?fresh=1` tells the server to skip its
+ * cache and actually sweep, so the click means what it says. */
+export function usePanelQuery<T extends { stale?: boolean }>(key: PanelKey) {
+  const q = useQuery<T>({
+    queryKey: [key],
+    queryFn: () => api<T>(PANELS[key]),
+    staleTime: PANEL_STALE_MS,
+    gcTime: PANEL_GC_MS,
+    placeholderData: (prev) => prev,
+    // An unconfigured integration answers 502; retrying it just doubles the
+    // requests to say the same thing, and the panel has a Refresh button.
+    retry: false,
+    // Served something the server is already replacing → come back for it once.
+    refetchInterval: (query) =>
+      query.state.data?.stale ? PANEL_STALE_RETRY_MS : false,
+  });
+  /** The Refresh button: skip both caches and wait for a real upstream sweep.
+   * The rejection is swallowed because the failure is already in query state,
+   * which is what renders the error banner. */
+  const refresh = () =>
+    queryClient
+      .fetchQuery({
+        queryKey: [key],
+        queryFn: () => api<T>(PANELS[key] + "?fresh=1"),
+        staleTime: 0,
+        retry: false,
+      })
+      .catch(() => undefined);
+  return { ...q, refresh };
+}
+
+/** Warm all three panels when the settings dialog opens, so navigating to one
+ * finds it loaded. A no-op for panels whose data is still fresh. */
+export function prefetchSettingsPanels() {
+  for (const key of Object.keys(PANELS) as PanelKey[]) {
+    void queryClient.prefetchQuery({
+      queryKey: [key],
+      queryFn: () => api(PANELS[key]),
+      staleTime: PANEL_STALE_MS,
+      gcTime: PANEL_GC_MS,
+      retry: false,
+    });
+  }
+}

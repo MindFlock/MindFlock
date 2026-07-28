@@ -90,6 +90,12 @@ build, and a **tag push** additionally runs `--check --expect <tag>`, so a
 mislabelled release. `.github/workflows/release.yml` runs the same guard as
 its first step.
 
+One pin in `frontend/package.json` is load-bearing beyond the version:
+**`@vitejs/plugin-react` must stay ≤ 5.x** while the project pins vite 6. The
+plugin's v6 imports `vite/internal`, which only exists in vite 8 — bumping it
+breaks `npm ci` resolution *and* crashes `vite build` on config load, taking the
+whole frontend build with it. Bump the plugin and vite together or not at all.
+
 ### Cutting a release
 
 First, if you touched `electron/build/installer.nsh` or the electron-builder
@@ -192,10 +198,20 @@ refresher re-runs suites automatically.
 | PR flow | `test_pr_pipeline` |
 | Property (hypothesis) | backfill ordering, prompt construction, validation-with-context, assignee filter, timestamp persistence |
 | Integration | `test_claude_runner` (async ClaudeCodeRunner) |
+| Frontend (vitest) | `frontend/src/__tests__/*.test.ts` — the pure logic modules (layout, diff, keymap, ordering, stage, format, barDefs, usageModel) |
 
 The launch-parity golden files pin the workspace launcher byte-for-byte
 (backend rolling, markers, resume loop) — update them deliberately when changing
 launch behavior.
+
+The frontend tests are **not** part of `uv run pytest`. `vitest` is a
+`frontend/` devDependency and its config is `frontend/vitest.config.ts`
+(`environment: "node"`, separate from `vite.config.ts` on purpose so the
+production build is untouched by test settings). Nothing in CI runs them today:
+
+```bash
+cd frontend && npm test           # 8 files, 118 tests
+```
 
 ## Conventions
 

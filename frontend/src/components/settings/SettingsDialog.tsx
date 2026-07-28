@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { useUi } from "../../state/store";
+import { prefetchSettingsPanels } from "../../state/queries";
 import { SettingsCtx, useSettingsModel } from "./useSettings";
 import { General } from "./screens/General";
 import { Appearance } from "./screens/Appearance";
@@ -56,6 +57,12 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
   useEffect(() => {
     if (open) setScreen(target && SCREENS.some((s) => s.key === target) ? target : "general");
   }, [open, target]);
+
+  // Warm the slow panels (tickets / PRs / issues) while the first screen is
+  // being read, so clicking through to one doesn't start with a spinner.
+  useEffect(() => {
+    if (open) prefetchSettingsPanels();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
