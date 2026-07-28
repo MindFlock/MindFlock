@@ -36,14 +36,34 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
     // Only the Electron shell bridge can open the file manager on the machine
     // the USER is at. A server-side open would run wherever the server lives
     // (e.g. WSL while the user is on Windows in a browser) — the wrong machine —
-    // so everywhere else we just copy the path, which is always useful.
+    // so everywhere else we copy the path, which is always useful.
     const show = shellShowItem();
     if (show) {
-      const r = await show(path).catch(() => null);
-      if (r && r.ok !== false) return;
+      try {
+        const r = await show(path);
+        if (r && r.ok !== false) return;
+      } catch {
+        /* fall through to copy */
+      }
     }
-    const ok = await copyText(path);
-    toast(ok ? "Log path copied to clipboard" : path);
+    // Select the visible path too: it's unmistakable feedback that the click
+    // registered, and lets the user Ctrl+C manually if the clipboard API is
+    // blocked in their context (some browsers over plain http).
+    const el = document.getElementById("logs-path");
+    if (el) {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+    let ok = false;
+    try {
+      ok = await copyText(path);
+    } catch {
+      /* clipboard blocked — the selection above is the fallback */
+    }
+    toast(ok ? "Log path copied — paste it anywhere" : "Path selected — press Ctrl+C to copy");
   }, [path]);
 
   const copyLog = useCallback(async () => {

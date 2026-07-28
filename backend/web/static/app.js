@@ -31338,11 +31338,26 @@ function SystemLogs({ onOpenSysLogsPane }) {
     if (!path) return;
     const show = shellShowItem();
     if (show) {
-      const r = await show(path).catch(() => null);
-      if (r && r.ok !== false) return;
+      try {
+        const r = await show(path);
+        if (r && r.ok !== false) return;
+      } catch {
+      }
     }
-    const ok = await copyText(path);
-    toast(ok ? "Log path copied to clipboard" : path);
+    const el = document.getElementById("logs-path");
+    if (el) {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      sel == null ? void 0 : sel.removeAllRanges();
+      sel == null ? void 0 : sel.addRange(range);
+    }
+    let ok = false;
+    try {
+      ok = await copyText(path);
+    } catch {
+    }
+    toast(ok ? "Log path copied — paste it anywhere" : "Path selected — press Ctrl+C to copy");
   }, [path]);
   const copyLog = reactExports.useCallback(async () => {
     if (!text) return;
