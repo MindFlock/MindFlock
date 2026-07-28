@@ -65,7 +65,7 @@ jobs:
 
       - name: Open PR
         if: steps.bump.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           branch: bot/bump-uv-pin
           title: "Bump pinned uv ${{ steps.bump.outputs.current }} → ${{ steps.bump.outputs.latest }}"
