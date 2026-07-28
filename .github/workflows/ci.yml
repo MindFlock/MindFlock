@@ -57,6 +57,43 @@ jobs:
             python3 scripts/bump-version.py --check
           fi
 
+  frontend:
+    # The committed bundle IS what ships: `uv build` puts
+    # backend/web/static/app.js in the wheel verbatim and electron-builder
+    # packages the same tree — neither ever runs vite. So a frontend/src edit
+    # without `npm run build` releases a UI that silently lags its own source,
+    # and nothing else in this pipeline would notice. Rebuild and demand the
+    # tree come back identical.
+    name: frontend bundle is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      # `npm ci` (not install) so a lockfile that can't resolve — e.g. a plugin
+      # major that outgrew the pinned vite — fails here instead of at release.
+      - name: Install dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Unit tests
+        run: npm test
+        working-directory: frontend
+      # Runs tsc --noEmit first, so a type error is a CI failure too.
+      - name: Rebuild the bundle
+        run: npm run build
+        working-directory: frontend
+      - name: Bundle matches frontend/src
+        run: |
+          if ! git diff --quiet -- backend/web/static/; then
+            echo "::error::backend/web/static/ is stale — run 'cd frontend && npm run build' and commit the result."
+            git diff --stat -- backend/web/static/
+            exit 1
+          fi
+          echo "Bundle is current."
+
   test:
     name: test (${{ matrix.os }})
     strategy:
