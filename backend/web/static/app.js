@@ -29665,6 +29665,58 @@ function WindowRefresh() {
     ] })
   ] });
 }
+function IngestionToggle() {
+  const [busy, setBusy] = reactExports.useState(false);
+  const [optimistic, setOptimistic] = reactExports.useState(null);
+  const { data: status, refetch } = useQuery({
+    queryKey: ["mindflock-status"],
+    queryFn: () => api("/api/mindflock/status"),
+    refetchInterval: 1e4,
+    retry: false
+  });
+  if (!status || !status.available) return null;
+  const running = !!status.running;
+  const desired = optimistic ?? (status.desired ?? running);
+  const toggle = async (start) => {
+    if (busy) return;
+    setBusy(true);
+    setOptimistic(start);
+    try {
+      await api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
+      toast(start ? "Ticket ingestion on" : "Ticket ingestion paused");
+    } catch (err) {
+      toast(`Ticket ingestion ${start ? "start" : "stop"} failed: ` + (err.message || ""));
+    } finally {
+      setBusy(false);
+      setOptimistic(null);
+      refetch();
+    }
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      className: "set-row set-switch-row",
+      id: "tk-ingestion-toggle-row",
+      title: "Run or stop ticket ingestion — polls your connected sources and auto-creates a coding session for each assigned ticket. Stays in this state across restarts.",
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Automated ingestion" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              type: "checkbox",
+              id: "tk-ingestion-enabled",
+              checked: desired,
+              disabled: busy,
+              onChange: (e) => toggle(e.target.checked)
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
+        ] })
+      ]
+    }
+  );
+}
 function Ticketing(_) {
   const [catalog, setCatalog] = reactExports.useState([]);
   const [sources, setSources] = reactExports.useState(null);
@@ -29743,6 +29795,7 @@ function Ticketing(_) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Ticketing" }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint set-block-hint", children: "Connect one or more ticketing platforms and MindFlock auto-creates a coding session for each ticket assigned to you. Add several sources — even two of the same provider (e.g. two Jira sites) — each with its own credentials. Stored in ~/.mindflock/settings.json (never committed)." }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(IngestionToggle, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "ticketing-sources", children: sources.map((src) => /* @__PURE__ */ jsxRuntimeExports.jsx(
       SourceCard,
       {
@@ -30316,14 +30369,14 @@ function PrReview({ gotoScreen }) {
       " open pull requests on the repositories below and automatically spins up a coding session to address review comments. It runs while ingestion is active."
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "label",
+      "div",
       {
         className: "set-row set-switch-row",
         id: "gh-pr-toggle-row",
         title: "Turn automated PR review on or off — your repositories are kept either way",
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Automated review" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {
@@ -30627,14 +30680,14 @@ function GitIssues({ gotoScreen }) {
       " on the repositories below, grabs each issue and all its comments, and automatically spins up a coding session that starts work on a fresh branch for it. Separate from PR review — the repository lists are independent."
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "label",
+      "div",
       {
         className: "set-row set-switch-row",
         id: "gh-issues-toggle-row",
         title: "Turn automated issue handling on or off — your repositories are kept either way",
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Automated handling" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {

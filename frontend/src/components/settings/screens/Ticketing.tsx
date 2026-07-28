@@ -5,6 +5,7 @@
  * omitted so the server keeps stored values (matched by source id). */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "../../../api/client";
 import { refreshConfig, usePanelQuery } from "../../../state/queries";
 import { toast } from "../../../lib/toast";
@@ -26,6 +27,65 @@ interface CatalogEntry {
 }
 
 type Source = Record<string, string> & { id: string; provider: string };
+
+/** Master ticket-ingestion switch — the settings-screen twin of the sidebar's
+ * AutomationBar. Same server contract (GET /api/mindflock/status for the
+ * desired state, POST /api/mindflock/{start,stop} to flip it) and the same
+ * ["mindflock-status"] query key, so the two switches stay in lock-step.
+ * Clicking the row text does nothing — only the switch itself flips it. */
+function IngestionToggle() {
+  const [busy, setBusy] = useState(false);
+  const [optimistic, setOptimistic] = useState<boolean | null>(null);
+  const { data: status, refetch } = useQuery({
+    queryKey: ["mindflock-status"],
+    queryFn: () =>
+      api<{ available: boolean; running: boolean; desired?: boolean }>("/api/mindflock/status"),
+    refetchInterval: 10_000,
+    retry: false,
+  });
+
+  // No engine installed / reachable — nothing to toggle (matches the sidebar).
+  if (!status || !status.available) return null;
+  const running = !!status.running;
+  const desired = optimistic ?? (status.desired ?? running);
+
+  const toggle = async (start: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    setOptimistic(start);
+    try {
+      await api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
+      toast(start ? "Ticket ingestion on" : "Ticket ingestion paused");
+    } catch (err) {
+      toast(`Ticket ingestion ${start ? "start" : "stop"} failed: ` + ((err as Error).message || ""));
+    } finally {
+      setBusy(false);
+      setOptimistic(null);
+      refetch();
+    }
+  };
+
+  return (
+    <div
+      className="set-row set-switch-row"
+      id="tk-ingestion-toggle-row"
+      title="Run or stop ticket ingestion — polls your connected sources and auto-creates a coding session for each assigned ticket. Stays in this state across restarts."
+    >
+      <span className="set-label">Automated ingestion</span>
+      {/* label wraps only the switch, so clicking the row text no longer flips it */}
+      <label className="ca-switch">
+        <input
+          type="checkbox"
+          id="tk-ingestion-enabled"
+          checked={desired}
+          disabled={busy}
+          onChange={(e) => toggle(e.target.checked)}
+        />
+        <span className="ca-slider" />
+      </label>
+    </div>
+  );
+}
 
 export function Ticketing(_: ScreenProps) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
@@ -125,6 +185,7 @@ export function Ticketing(_: ScreenProps) {
         two Jira sites) — each with its own credentials. Stored in ~/.mindflock/settings.json
         (never committed).
       </p>
+      <IngestionToggle />
       <div id="ticketing-sources">
         {sources.map((src) => (
           <SourceCard

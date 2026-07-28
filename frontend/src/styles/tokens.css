@@ -8,6 +8,10 @@
  * :root and .light have EQUAL specificity (0,1,0), so .light must stay after
  * :root for the light palette to win. */
 :root {
+  /* Tell the browser to render native control internals (time-picker clock
+     icon, number spinners, checkboxes, scrollbars) dark; .light flips it.
+     Without this the native clock glyph sat near-invisible on the dark bg. */
+  color-scheme: dark;
   --bg: #0f1117;
   --panel: #171a23;
   --panel-2: #1e222e;
@@ -64,6 +68,7 @@
    handful of hard-coded colors that don't survive the swap are patched in
    theme-light.css. The xterm terminal intentionally stays dark. */
 .light {
+  color-scheme: light;
   --bg: #f4f5f8;
   --panel: #ffffff;
   --panel-2: #eceef3;
