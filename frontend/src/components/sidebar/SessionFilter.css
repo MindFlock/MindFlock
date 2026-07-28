@@ -1,0 +1,54 @@
+/* --- Sidebar session filter --- */
+#sidebar-search {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 2px;
+}
+
+#sidebar-search.hidden {
+  display: none;
+}
+
+#session-filter {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#session-filter:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#session-filter-clear {
+  flex: 0 0 auto;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 4px 7px;
+}
+
+#session-filter-clear:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.filter-empty {
+  padding: 10px 12px;
+  font-size: 12px;
+  list-style: none;
+}
+
+/* A renamed session shows its custom label in italic (real title in tooltip). */
+.inst .title.aliased {
+  font-style: italic;
+}

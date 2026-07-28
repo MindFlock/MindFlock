@@ -1,0 +1,345 @@
+# Configuration
+
+MindFlock reads configuration from four places:
+
+1. **`config.toml`** (repo root, gitignored) — the ingestion pipeline and workspace-
+   mode. Contains secrets; never commit it.
+2. **`.mindflock.toml`** (in each *managed* repo, **committed**) — per-repo
+   worktree setup + verification gate. No secrets; shared with the team.
+3. **`~/.mindflock/`** — engine config and session state (JSON).
+4. **`~/.mindflock-assistant/`** — provider definitions and small persisted UI/agent
+   settings.
+
+Plus a handful of environment variables.
+
+## `.mindflock.toml` — per-repo workspace config
+
+Commit this file to the root of a repo you run sessions on. It is read from
+the source repo at session-create time and from the worktree afterwards
+(re-run / check endpoints). Everything is opt-in — a repo without the file
+behaves exactly as before.
+
+```toml
+[workspace]
+# O2: run in every fresh worktree, in order, before queued prompts are
+# delivered (a failed setup HOLDS the prompts instead of losing them; the
+# session chip shows "setting up" / "setup ✗" with a re-run action).
+# Output: .mindflock_setup.log in the worktree (git-excluded).
+setup_commands = ["npm install"]
+
+# O2: untracked files/dirs copied from the source repo into each new
+# worktree before setup runs (never overwrites, skips missing).
+copy_untracked = [".env", ".env.local"]
+
+# O3: the verification gate. Auto-runs after each commit (when the session
+# reaches the committed stage); its ✓/✗ chip shows on the session card and
+# Push is soft-gated (409 + "push anyway" override) until it passes for the
+# current HEAD. Output: .mindflock_check.log.
+check_command = "npm test"
+```
+
+Each session also gets a **port block** (O4): 10 consecutive ports starting
+at a deterministic base (persisted in `~/.mindflock/ports.json`), exported
+as `PORT` / `MINDFLOCK_PORT_BASE` / `MINDFLOCK_PORT_COUNT` into both the
+agent's tmux session and the environment `setup_commands` / `check_command`
+run in. Point your dev server at `$PORT` and the sidebar's "Open preview ↗"
+action opens it.
+
+## `config.toml`
+
+Search order (used by provisioned mode and the web UI): `$MINDFLOCK_CONFIG` →
+`./config.toml` → the MindFlock repo root. The pipeline itself always reads
+`./config.toml` from its working directory.
+
+```toml
+# --- Ticketing (generic) --------------------------------------------------- #
+# The preferred, provider-agnostic schema. `provider` selects the source; the
+# other keys are the credentials/scope that provider needs (see the per-provider
+# table below).
+[ticketing]
+provider = "jira"               # shortcut | jira | linear | github_issues | asana
+api_token = "…"                 # secret — the provider's token/API key/PAT
+base_url = "https://you.atlassian.net"   # Jira only — your site URL
+email = "you@company.com"       # Jira only — account email (basic auth with api_token)
+member_id = "…"                 # "assigned to me" identity; auto-filled by Test in the UI
+project = "owner/repo"          # scope: GitHub owner/repo, Asana workspace gid, ...
+poll_interval_seconds = 20      # optional, default 20 — poll cadence
+workflow_state_id = 500000007   # Shortcut only — restrict the story search to one state
+
+# --- Multiple ticketing sources -------------------------------------------- #
+# Connect several sources at once — different providers AND several of the same
+# provider with different credentials — with an array of [[ticketing.source]].
+# Each source is polled independently on its own cadence. `id` is an optional
+# stable discriminator (also the branch/slug prefix + poll checkpoint key); it's
+# auto-assigned when omitted (jira, jira-2, …). Use EITHER the single [ticketing]
+# above OR this array, not both.
+# [[ticketing.source]]
+# id = "shortcut"
+# provider = "shortcut"
+# api_token = "…"
+# member_id = "…"
+#
+# [[ticketing.source]]
+# id = "jira-eu"
+# label = "Jira – EU"           # optional display name in the UI / Connections
+# provider = "jira"
+# base_url = "https://eu.atlassian.net"
+# email = "you@company.com"
+# api_token = "…"
+#
+# [[ticketing.source]]
+# id = "jira-us"                 # a SECOND Jira site, distinct id => no collisions
+# provider = "jira"
+# base_url = "https://us.atlassian.net"
+# email = "you@company.com"
+# api_token = "…"
+
+[repository]
+# OPTIONAL fallback repo. There is no global "default repo" in the UI anymore:
+# each ticketing source names its own repo (`[[ticketing.source]].repo_url` /
+# the Repo URL field per source). `url` here is only used when a source omits
+# its own repo_url. Ingestion refuses to start unless SOME repo is resolvable.
+# url = "git@github.com:Org/repo.git"
+workspace_dir = "./workspaces"        # REQUIRED — where story/PR workspaces live
+
+[validation]
+min_description_length = 20     # REQUIRED — shorter descriptions trigger a clarification session
+
+[logging]
+log_file = "./logs/pipeline.log"  # REQUIRED
+log_level = "INFO"                # REQUIRED
+
+[workspace]                      # all optional — generic workspace setup
+# Shell commands run (in order) in every freshly provisioned workspace. When
+# UNSET they are auto-detected: a uv/Python project gets `uv sync --all-groups`
+# (plus `uv run pre-commit install` when .pre-commit-config.yaml exists); other
+# project types get none. An explicit empty list disables setup entirely.
+# setup_commands = ["npm ci", "npm run build"]
+
+# Warm cache seeds: host-side artifacts copied into each fresh workspace so
+# work starts warm (a testmon DB, a build cache, a compiled-deps tarball, ...).
+# Seeding NEVER overwrites a file already present in the workspace. With a
+# refresh_command, a background refresher rebuilds the artifact against
+# refresh_branch every refresh_interval_seconds and publishes it back to
+# seed_path.
+# [[workspace.cache]]
+# name = "testmon"
+# seed_path = "./.cache/testmondata"       # host-side warm copy
+# workspace_path = ".testmondata"          # where it lands in the workspace
+# refresh_enabled = true                   # default true
+# refresh_branch = "main"                  # default "main"
+# refresh_interval_seconds = 3600          # default 3600
+# refresh_command = "uv run pytest --testmon -q"
+# env = { TESTMON_ENV = "shared" }         # exported for the cache's tooling
+
+[github]                         # whole section optional; PR flow runs only if present
+repos = ["Org/repo"]             # repos scanned by the PR flow (empty — PR flow off)
+base_branch = "main"             # default "main" — PRs into this base are scanned
+min_age_minutes = 15             # default 15 — ignore PRs younger than this
+poll_interval_seconds = 60       # default 60
+enabled = true                   # default true
+skip_authors = []                # review comments by these authors are ignored
+token = ""                       # secret; empty → $GH_TOKEN / $GITHUB_TOKEN / `gh auth token`
+# Automated issue handling (opt-in, OFF by default): new issues in issue_repos
+# each get a coding session on a fresh branch. issue_repos is separate from the
+# PR-review `repos`; these knobs are independent of the PR ones above.
+issues_enabled = false           # default false
+issue_repos = []                 # ["owner/name", ...] to watch for new issues
+issue_min_age_minutes = 15       # default 15
+issue_poll_interval_seconds = 60 # default 60
+issue_skip_authors = []          # issue authors to ignore
+
+[mindflock]                        # engine routing — see WARNING below
+enabled = true                   # default false — route pipeline sessions through the engine
+mode = "worktree"                # "worktree" (default) or "clone"
+open_cursor = true               # default false — open each provisioned workspace in Cursor
+skip_permissions = true          # default true — launch claude with --dangerously-skip-permissions
+```
+
+> **WARNING — section must be named `[mindflock]`.** Both the pipeline
+> (`ticket_ingestion/config.py`) and the engine (`session/provisioned.py`) read the
+> engine-routing section as `raw.get("mindflock")`. A leftover section from an
+> earlier project name is **silently ignored** — the pipeline then falls back to
+> the standalone clone + Windows Terminal path and `open_cursor`/`skip_permissions`
+> revert to their defaults. If you migrated an old config, rename the section.
+
+### Ticketing providers
+
+`[ticketing].provider` selects the source; each provider reads the subset of
+`[ticketing]` keys it needs. The web Settings → **Ticketing** screen renders
+exactly these fields and a "Test connection" button that auto-fills `member_id`.
+
+| Provider | Required keys | Notes |
+|---|---|---|
+| `shortcut` | `api_token`, `member_id` | `workflow_state` optional (workflow-state id; integer `workflow_state_id` also works). |
+| `jira` | `base_url`, `email`, `api_token` | Jira Cloud, `assignee = currentUser()`. `member_id` (accountId) optional. `workflow_state` optional (status id → `status = <id>`). |
+| `linear` | `api_token` | GraphQL `viewer.assignedIssues`. `workflow_state` optional (state id). |
+| `github_issues` | `project` (`owner/repo`) | `api_token` optional — falls back to the GitHub connection (`[github].token` / `$GH_TOKEN` / `gh auth token`). No workflow states. |
+| `asana` | `api_token`, `project` (workspace gid) | Tasks with `assignee = me`. No workflow states. |
+
+Every source also takes an OPTIONAL-in-TOML-but-required-in-the-UI `repo_url`
+(the repo that source's tickets clone into) — set it per source; there is no
+global default repo. `workflow_state` gates ingestion so a ticket only gets a
+session once it reaches the chosen state (blank = any state). The Settings →
+**Ticketing** screen loads the live state list per source (Shortcut/Jira/Linear).
+
+Every ticket becomes a branch `feature/<slug>/<name>` and a session titled
+`<slug>`, where `<slug>` is source-scoped (`sc-123`, `jira-PROJ-1`,
+`lin-ENG-5`, `gh-42`, `asana-<gid>`) so workspaces never collide. With multiple
+sources the slug prefix is the source `id`, so two of the same provider stay
+distinct (`jira-PROJ-1` vs `jira-us-PROJ-1`). Dedup state in `state.json` keys on
+the slug and each source keeps its own poll checkpoint under
+`last_run_timestamps`, and processed tickets are recorded under their
+provider-scoped slugs (`sc-<id>`, `jira-PROJ-1`, …).
+
+Layered/env resolution (productization path, no `config.toml` needed):
+`MINDFLOCK_TICKET_PROVIDER`, `MINDFLOCK_TICKET_TOKEN`, `MINDFLOCK_TICKET_BASE_URL`,
+`MINDFLOCK_TICKET_EMAIL`, `MINDFLOCK_TICKET_MEMBER_ID`, `MINDFLOCK_TICKET_PROJECT`
+override the settings store, which overrides `[ticketing]`.
+
+Notes on individual keys:
+
+- `workflow_state` (per source) — the state a ticket must be in to be ingested.
+  In the web UI this is a live dropdown (Settings → Ticketing) populated from the
+  provider, so you rarely need the raw id. For Shortcut you can also list ids with
+  `uv run python scripts/list_workflows.py`. The integer `workflow_state_id`
+  (integer) is still honoured when `workflow_state` is empty.
+- `repository.workspace_dir` — resolved relative to the config file's directory.
+- `github.base_branch` — also used by provisioned mode as the base branch
+  worktrees fork from (default `main`).
+- `[mindflock].mode` — `worktree`: sessions are git worktrees off a single canonical
+  blobless clone at `<workspace_dir>/_base_<repo-slug>` (fast, disk-cheap, native
+  to pause/resume). `clone`: a full standalone clone per session (strongest
+  isolation; preserved across pause). Anything else is a `ConfigError`.
+- `[mindflock].skip_permissions` — suppresses Claude's per-folder trust prompt
+  (each worktree is a new path, which would otherwise prompt every time).
+
+## `~/.mindflock/` — engine config and state
+
+Created on first use. All JSON is written 2-space-indented, byte-compatible with
+the original Go engine.
+
+### `config.json`
+
+| Field | Default | Meaning |
+|---|---|---|
+| `default_program` | auto-detected `claude` command | Program new sessions run. Detection sources `~/.zshrc`/`~/.bashrc` and resolves aliases via `which claude`, falling back to a plain `$PATH` lookup — including if the rc-sourcing shell hangs past a 15 s timeout (`_CLAUDE_LOOKUP_TIMEOUT_SECONDS` in `config/config.py`). (At startup the server also **enriches `PATH`** from the login shell so GUI-launched backends see the same CLIs the terminal does — see the `MINDFLOCK_NO_PATH_ENRICH` env var below and [architecture.md](architecture.md).) |
+| `auto_yes` | `false` | Reserved; currently forced off for all instances. |
+| `daemon_poll_interval` | `1000` | Reserved (TUI daemon heritage). |
+| `branch_prefix` | `<username>/` (or `session/`) | Prefix for default session branches. |
+| `profiles` | omitted | Optional named `{name, program}` presets. |
+
+### `state.json`
+
+`{"help_screens_seen": <bitmask>, "instances": [...]}` — sessions are embedded
+here (there is no separate `instances.json`). Managed by the engine; the web
+server merges on save so multiple processes can share it.
+
+### Other files
+
+- `worktrees/` — worktree-mode session directories,
+  `<sanitized-branch>_<hex-timestamp>`.
+- `recently_closed.json` — closed-but-reopenable sessions (cap 50).
+
+## `~/.mindflock-assistant/` — providers and small settings
+
+Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
+
+| File | Purpose |
+|---|---|
+| `CLAUDE.md`, `todos.json` | The Assistant addon's instructions and todo list |
+| `providers/*.toml` | User-defined coding-agent providers, including their launch/classify/activity and `[connect]` install-and-login hints ([providers.md](providers.md)) |
+| `pricing.json` | Cached model-pricing feed (24 h TTL) |
+| `usage-history.json` | Durable daily token/cost ledger |
+| `scroll-speed` | Terminal wheel speed, 1–20 (also settable in the UI) |
+| `.exit-markers/<session>.code` | Last exit code per session (clean-quit vs crash detection) |
+| `prompts/` | Generated ticket prompts (pruned after 1 h) |
+
+## Environment variables
+
+| Variable | Default | Used by |
+|---|---|---|
+| `MINDFLOCK_CONFIG` | — | Overrides the `config.toml` search path (engine/web) |
+| `MINDFLOCK_REPO_ROOT` | — | Where the web server resolves the pipeline's repo root (`config.toml`, `state.json`); unset → nearest ancestor with `config.toml` → cwd. Set it for installed (uv-tool/pipx) copies — a wrong root splits the processed-story ledger |
+| `MINDFLOCK_REPO_URL` | — | Overrides `[repository].url` — the repo provisioning clones/worktrees from (engine + pipeline) |
+| `MINDFLOCK_WORKSPACE_DIR` | `./workspaces` | Overrides `[repository].workspace_dir` — where per-session workspaces are created |
+| `MINDFLOCK_BASE_BRANCH` | `main` | Overrides `[github].base_branch` — the fork point for new branches |
+| `MINDFLOCK_GITHUB_REPO` | — | Single-repo override for `[github].repos` (the PR monitor's `owner/name`) |
+| `SHORTCUT_API_TOKEN` | — | Fallback Shortcut API token when the Settings/ticketing store has none — used by the Settings connection test and Shortcut ingestion |
+| `MINDFLOCK_IDE` | `cursor` | Editor CLI that opens workspaces (`code`, `windsurf`, …); also settable in Settings → Advanced |
+| `MINDFLOCK_ASSISTANT_DIR` | `~/.mindflock-assistant` | Providers, assistant, settings files |
+| `MINDFLOCK_PROVIDERS_DIR` | `$MINDFLOCK_ASSISTANT_DIR/providers` | User provider TOMLs |
+| `MINDFLOCK_SCROLL_SPEED_FILE` | `$MINDFLOCK_ASSISTANT_DIR/scroll-speed` | Terminal bridge |
+| `MINDFLOCK_EXIT_MARKER_DIR` | `$MINDFLOCK_ASSISTANT_DIR/.exit-markers` | Exit markers |
+| `MINDFLOCK_NO_PATH_ENRICH` | unset | Set (any non-empty value) to **disable** the startup `PATH` enrichment (`backend.pathenv`) — the login-shell probe + well-known-bin-dir union that lets a GUI-launched backend find user CLIs. Left unset, enrichment runs once before serving; it only *adds* directories, so a tool already on `PATH` resolves exactly as before. See [architecture.md](architecture.md) |
+| `MINDFLOCK_PATH_PROBE` | — | **Internal** reentrancy sentinel set on the shell subprocess the `PATH` probe spawns, so the probed shell doesn't recursively re-enrich. Not meant to be set by hand |
+| `CS_WEB_MODE` | `local` | `run.py` — `local` binds 127.0.0.1 (and refuses non-loopback `Host` headers), `tailscale` binds 0.0.0.0 and auto-enables the auth-token gate |
+| `PORT` / `UVICORN_PORT` | `8765` | Web server port |
+| `CS_CURSOR_AUTOADOPT` | on | `0` starts the Cursor auto-adopt loop disabled |
+| `CLAUDE_CONFIG_DIR` | — | Extra Claude config root — scanned for token usage, and probed for login evidence (`.claude.json` / `.credentials.json`) by the provider auth probe (legacy/backend-only; see [providers.md](providers.md)) |
+| `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub auth fallback for the PR flow |
+| `SHELL` | — | Shell used by each session's Terminal tab |
+| `MINDFLOCK_AUTH` | unset | Web auth gate override — `1` forces it on, `0` off (wins over settings) |
+| `MINDFLOCK_AUTH_TOKEN` | — | Web auth token; setting it enables the auth gate |
+| `MINDFLOCK_HOST` / `MINDFLOCK_PORT` | `127.0.0.1` / `8765` | CLI client — where to find the running server (after `--host`/`--port` flags) |
+| `MINDFLOCK_WSL_DISTRO` | — (your default distro) | Pins the WSL distro used for terminal/server launches. Unset, `wsl.exe` picks the default one — which is where the Windows installer puts the CLI. `wsl -l -v` lists them |
+| `MINDFLOCK_WT_COMMAND` | `wt.exe` | Windows Terminal executable used to open session terminals |
+| `MINDFLOCK_TERMINAL` | — | Preferred Linux terminal emulator (else gnome-terminal/konsole/… autodetect) |
+| `MINDFLOCK_REPO` | — | Electron desktop shell only (nothing in `backend/` reads it) — **developer mode**: path of a MindFlock *source checkout* (inside WSL on Windows); the shell then launches `.venv/bin/python backend/web/run.py` from it. Unset (the default), the shell launches the installed CLI instead: `mindflock serve` from the login PATH, falling back to `~/.local/bin/mindflock` |
+| `MINDFLOCK_URL` | `http://localhost:8765` | Electron desktop shell — server URL the window loads (also the only origin the window may navigate to) |
+| `MINDFLOCK_WSL_LOG` | `~/.mindflock/desktop-server.log` | Electron desktop shell only (nothing in `backend/` reads it) — file the auto-started server's stdout+stderr append to (inside WSL on Windows; 2 MB cap) |
+| `MINDFLOCK_LOG_MAX_BYTES` | `5242880` (5 MB) | Engine/web log (`$TMPDIR/mindflock.log`, Settings → System logs) rotation cap — past it the file rotates to `<file>.1` (one backup kept); `0` disables rotation |
+| `MINDFLOCK_LOG_QUIET` | unset | Web server request log — by default **every** request is logged; set `1` to drop the UI's high-frequency poll endpoints (`/api/instances`, `/api/events`, `/static/…`, `/vendor/…`, favicon), which are still logged when they error or take ≥ 1.5 s |
+| `MINDFLOCK_PIPELINE_LOG_MAX_BYTES` | `51200` (50 KB) | Ingestion pipeline log (`[logging].log_file`) rotation cap — current file ≤ this plus one rollover backup |
+| `MINDFLOCK_SETTINGS_FILE` | `~/.mindflock/settings.json` | Path of the web settings store (tests point it at a tmp file) |
+| `MINDFLOCK_TEMPLATES_FILE` | `~/.mindflock/session_templates.json` | Path of the session-template store |
+| `MINDFLOCK_PROMPT_QUEUE_FILE` | `~/.mindflock/prompt_queues.json` | Path of the per-session prompt-queue store (queued prompts, loop/enabled flags) |
+| `MINDFLOCK_PORTS_FILE` | `~/.mindflock/ports.json` | Path of the session port-block allocation store (the O4 `PORT`/`MINDFLOCK_PORT_BASE` blocks) |
+| `MINDFLOCK_WINDOW_REFRESH_FILE` | `~/.mindflock/window_refresh.json` | Path of the scheduled window-refresh keepalive's config + per-provider `last_fired` state |
+| `MINDFLOCK_SESSION_NAME` | — | Read by the injected CLI hook commands at fire time to attribute activity/thread markers to a MindFlock window; unset, the hooks fall back to the live tmux `#{session_name}` |
+| `MINDFLOCK_PROVIDER_BIN_<NAME>` | — | Per-provider binary override (provider name uppercased, non-alphanumerics → `_`; e.g. `MINDFLOCK_PROVIDER_BIN_CLAUDE=/opt/claude`). Wins over Settings → `coding_cli.binary_paths` and the provider TOML's `binary_path` |
+| `MINDFLOCK_ACTIVITY_MARKER_DIR` | `~/.mindflock-assistant/.activity-markers` | Per-session `{state, ts}` markers the CLI activity hooks write (working/idle/clarify detection — Claude, Codex, and opt-in TOML providers; see [providers.md](providers.md)). Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
+| `MINDFLOCK_THREAD_MARKER_DIR` | `~/.mindflock-assistant/.thread-markers` | Per-window conversation-id markers so sessions sharing a directory each resume their *own* thread. Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
+| `CODEX_HOME` | `~/.codex` | Codex CLI data dir; usage is read from `$CODEX_HOME/sessions` |
+| `ANTIGRAVITY_CLI_DIR` | `~/.gemini/antigravity-cli` | Antigravity CLI state dir (conversation DBs, usage) |
+| `MINDFLOCK_CLAUDE_JSON` | `~/.claude.json` | Path of the `.claude.json` used for pre-trust seeding of workspaces |
+| `MINDFLOCK_SEED_PROMPT_DIR` | `~/.mindflock-assistant/.seed-prompts` | Where generated seed prompts are written |
+| `MINDFLOCK_UV_VERSION` | pinned in `install.sh` | `install.sh` only — uv version to install; overriding the pin **skips the sha256 verification** (a warning is printed) |
+| `MINDFLOCK_NONINTERACTIVE` | — | `install.sh` only — set to `1` to force the read-only `mindflock doctor` report instead of the guided `--fix` prompts. The desktop app sets it for its in-window install (a GUI process has no terminal to answer prompts on) |
+| `MINDFLOCK_INSTALL_SCRIPT` | bundled `install.sh` | Desktop app only — path to the installer the **Install the engine** button runs. Point it at a stub to exercise that flow without reinstalling anything |
+
+> Naming note: launcher variables kept their historical `CS_` prefix
+
+## Web-exposed settings
+
+Settable from the UI settings dialog (⚙) and persisted server-side:
+
+- **IDE** (`platform.ide_command`, Settings → Advanced) — the editor CLI used to
+  open workspaces (default `cursor`; e.g. `code`, `windsurf`, `zed`, or a full
+  command like `flatpak run com.visualstudio.code`). Window focus/close and
+  auto-adopt work best with VS Code-family editors; resolved by
+  `backend/config/ide.py`.
+- **IDE auto-adopt** (`/api/cursor/autoadopt`) — automatically adopt workspaces
+  opened in the linked IDE as sessions (requires a VS Code-family editor).
+- **Scroll speed** (`/api/scroll-speed`) — tmux wheel lines per notch, 1–20,
+  applied live to all sessions.
+- **Default provider** (`coding_cli.default_provider`, Settings → Agent CLI) —
+  the provider new sessions launch by default. It **must reference an installed
+  CLI**: the Settings picker lists only installed providers and a `POST
+  /api/settings` that names an absent CLI is rejected (see
+  [web-api.md](web-api.md)). If the stored default goes missing (its CLI is
+  uninstalled), the Settings screen falls back to the first installed CLI and
+  **persists the correction**, so the default is never a CLI that isn't there.
+- **Default launch flags** (`coding_cli.default_launch_args`, Settings → Agent
+  CLI / provider management) — a **provider-name-keyed map** of default flag
+  strings applied to every new session of that provider (e.g.
+  `{"claude": "--dangerously-skip-permissions"}`). Each value is a raw flag
+  string; at session-creation time it is split into argv tokens (shell rules) and
+  validated with the same guard as provider `[launch] args`. Flags are
+  provider-specific — a default set for `claude` never applies to a `codex`
+  session. The New-session dialog pre-fills its launch-flags field from this map
+  (see [web-ui.md](web-ui.md)); an explicit per-session value (even empty) is used
+  verbatim rather than re-applying the default. Persisted shapes: normally a dict
+  (empty entries dropped); a **bare string** left by an older build is coerced to
+  the current `default_provider` key on load (dropped if no default provider is
+  set).

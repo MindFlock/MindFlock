@@ -1,0 +1,212 @@
+/* --- Keyboard shortcut cheat-sheet ('?') --- */
+.shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.shortcuts-overlay.hidden {
+  display: none;
+}
+
+.shortcuts-card {
+  width: 760px;
+  max-width: 100%;
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+}
+
+.shortcuts-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}
+
+.shortcuts-close {
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.shortcuts-close:hover {
+  color: var(--text);
+}
+
+.shortcuts-body {
+  padding: 12px 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px 32px;
+  align-items: start;
+}
+
+/* Each group is a three-column grid — key chips, descriptions in one aligned
+   column, then the edit controls — so rows never start their text at a
+   different x. The key column hugs its content but is capped so an
+   extra-wide chip cluster wraps instead of squeezing the description. Each
+   row is a real box on the SAME tracks (subgrid), so a rebindable row can
+   hover-highlight as one clickable unit. */
+.shortcuts-group {
+  display: grid;
+  grid-template-columns: fit-content(200px) 1fr auto;
+  column-gap: 12px;
+  row-gap: 2px;
+  align-content: start;
+}
+
+.shortcuts-group h4 {
+  grid-column: 1 / -1;
+  margin: 0 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 0 6px;
+}
+
+.shortcut-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: baseline;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+.shortcut-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 5px;
+  align-items: baseline;
+}
+
+.shortcut-keys .kbd-sep {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.shortcut-row kbd {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+.shortcut-desc {
+  color: var(--muted);
+}
+
+/* Rebindable rows highlight on hover — that's the "you can click me" signal
+   (click: press the new combo; + adds an extra combo; Esc cancels). Static
+   rows (Ctrl+1..9, desktop-shell extras) never light up. */
+.shortcut-row.rebindable {
+  cursor: pointer;
+}
+
+.shortcut-row.rebindable:hover {
+  background: rgba(var(--accent-rgb), 0.10);
+  border-color: var(--accent);
+}
+
+.shortcut-row.rebindable:hover .shortcut-desc {
+  color: var(--text);
+}
+
+.shortcut-row.customized kbd {
+  border-color: var(--accent);
+}
+
+.shortcut-row.capturing {
+  background: rgba(var(--accent-rgb), 0.10);
+  border-color: var(--accent);
+}
+
+.shortcut-row.capturing .shortcut-keys {
+  color: var(--gold);
+  font-style: italic;
+}
+
+/* Edit controls (+ add combo, ↺ reset) live in the third column; + fades in
+   with the row hover, ↺ stays visible as the "this one is customized" mark. */
+.shortcut-controls {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.shortcut-add,
+.shortcut-reset {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  border-radius: 4px;
+  width: 18px;
+  height: 18px;
+  line-height: 1;
+  padding: 0;
+}
+
+.shortcut-add {
+  opacity: 0;
+}
+
+.shortcut-row:hover .shortcut-add,
+.shortcut-add:focus-visible {
+  opacity: 1;
+}
+
+.shortcut-add:hover,
+.shortcut-reset:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.shortcuts-restore {
+  margin-left: auto;
+  margin-right: 10px;
+  cursor: pointer;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 3px 9px;
+  font-weight: 500;
+}
+
+.shortcuts-restore:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.shortcuts-hint {
+  margin: 10px 16px 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+

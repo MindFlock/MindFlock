@@ -1,0 +1,53 @@
+/* ---------------------------------------------------------------------------
+ * Region hues — the one file that knows how a multi-color theme set reaches
+ * the pixels.
+ *
+ * A theme set (Settings → Appearance) used to be a single palette for the whole
+ * window. The multi-color sets in theme.css give the top bar and the sidebar a
+ * hue of their own — Macaw is a blue bar over a green sidebar over a red
+ * window — by setting the --topbar-* / --sidebar-* tokens declared in
+ * tokens.css.
+ *
+ * Rather than teach every rule inside those regions about a second palette,
+ * each region REBINDS the four generic surface tokens on itself. Everything
+ * nested below then resolves var(--panel) / var(--border) / var(--text) / …
+ * against its region's hue for free: hover fills, chips, hairlines, the masked
+ * logo, the toolbars — no per-component edits, and no drift when a new control
+ * is added to either region.
+ *
+ * Why this can't cycle: the aliases (`--topbar-bg: var(--panel)`) are declared
+ * on <html>, so they compute there against html's own --panel. The rebinds
+ * below sit on descendants and only read those already-computed values, so
+ * nothing depends on itself.
+ * --------------------------------------------------------------------------- */
+#topbar {
+  --panel: var(--topbar-bg);
+  --panel-2: var(--topbar-hi);
+  --border: var(--topbar-border);
+  --text: var(--topbar-text);
+  --muted: var(--topbar-muted);
+}
+
+#sidebar {
+  --panel: var(--sidebar-bg);
+  --panel-2: var(--sidebar-hi);
+  --border: var(--sidebar-border);
+  --text: var(--sidebar-text);
+  --muted: var(--sidebar-muted);
+}
+
+/* Popovers that open out of a recolored region are app furniture, not bar
+   chrome — a menu the size of the notifications list looks wrong wearing a loud
+   region hue, and it floats over the window anyway. Each opts back into the
+   app-wide palette through the unshadowed --app-* copies. A declaration on the
+   element itself always beats the region's inherited one, so this needs no
+   specificity or layer juggling. */
+#topbar .tb-drop-panel,
+.notif-pop,
+#foot-customize-menu {
+  --panel: var(--app-panel);
+  --panel-2: var(--app-panel-2);
+  --border: var(--app-border);
+  --text: var(--app-text);
+  --muted: var(--app-muted);
+}

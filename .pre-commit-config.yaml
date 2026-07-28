@@ -1,0 +1,30 @@
+# Shared pre-commit hooks — deterministic lint/format/secret checks only.
+# Opt in once per clone:
+#
+#   uvx pre-commit install
+#
+# Hooks that modify files (black) fail the commit so you can
+# review and re-stage; retrying the commit then passes. CI enforces the same
+# checks on changed files, so installing the hooks is recommended but not
+# required.
+#
+# All hooks run via uvx (uv is already a project prerequisite), so there is
+# nothing else to install.
+repos:
+-   repo: local
+    hooks:
+    -   id: black
+        name: Black format
+        # --target-version matches the project's py312 floor and avoids
+        # black's "formatted for a newer Python than the running interpreter"
+        # safety warning.
+        entry: uvx black --target-version py312
+        language: system
+        types: [python]
+        files: ^(backend|tests)/.*\.py$
+
+    -   id: detect-secrets
+        name: Secret scan
+        entry: uvx --from detect-secrets detect-secrets-hook --baseline .secrets.baseline
+        language: system
+        exclude: ^(uv\.lock|\.gitnexus/|.*\.lock)$

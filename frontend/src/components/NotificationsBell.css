@@ -1,0 +1,294 @@
+/* --- Notification center: bell + badge + panel --- */
+#notif-btn {
+  position: relative;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 15px;
+  padding: 2px 4px;
+  line-height: 1;
+}
+
+#notif-btn:hover,
+#notif-btn.has-unread {
+  color: var(--text);
+}
+
+/* Kills the inline-SVG baseline gap (same as #sidebar-toggle svg). */
+#notif-btn svg {
+  display: block;
+}
+
+/* Unread history (nothing actionable): a small neutral dot, not a number —
+   so it never nags and never needs clearing to "go away". */
+#notif-btn.has-unread::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.notif-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  font-size: 9px;
+  line-height: 15px;
+  text-align: center;
+  font-weight: 700;
+}
+
+/* Badge = "needs action now" (amber); auto-clears the instant it's resolved.
+   The hairline is in the region's text color, so an amber pill still reads on an
+   amber top bar (Goldfinch, Toucan) — --gold is a global, not a region token. */
+.notif-badge.attn {
+  background: var(--gold);
+  color: #1a1a1a;
+  box-shadow: 0 0 0 1px var(--text);
+}
+
+.notif-badge.hidden {
+  display: none;
+}
+
+.notif-pop {
+  position: fixed;
+  z-index: 3000;
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  max-height: 60vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.notif-pop.hidden {
+  display: none;
+}
+
+.notif-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.notif-head>span:first-child {
+  flex: 1 1 auto;
+}
+
+/* title left, buttons right */
+.notif-head .notif-toggle {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.notif-head .notif-toggle svg {
+  display: block;
+}
+
+.notif-head .notif-toggle:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.notif-head .notif-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.notif-head .notif-toggle:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.notif-clear {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.notif-clear:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.notif-list {
+  overflow-y: auto;
+}
+
+.notif-empty {
+  padding: 16px 10px;
+  text-align: center;
+}
+
+.notif-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-gap: 2px 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+
+.notif-item:hover {
+  background: var(--panel-2);
+}
+
+.notif-item.unread {
+  border-left-color: var(--accent);
+}
+
+.notif-sess {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notif-text {
+  grid-column: 1;
+  color: var(--muted);
+}
+
+.notif-time {
+  grid-column: 2;
+  grid-row: 1;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.notif-item.n-done .notif-text {
+  color: var(--green);
+}
+
+.notif-item.n-warn .notif-text {
+  color: var(--red);
+}
+
+
+/* --- O1: needs-attention — surfaced in the notification-bell popover ------ */
+/* (Amber badge `.notif-badge.attn` is defined next to the base badge rule.) */
+#notif-btn.has-attn {
+  color: var(--gold);
+}
+
+/* Pinned live section at the top of the bell popover, above the history. */
+.notif-attn {
+  padding: 5px 6px 6px;
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 215, 0, 0.05);
+}
+
+.notif-attn-head {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin: 0 0 3px 3px;
+}
+
+.attn-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 4px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.attn-item:hover {
+  background: var(--panel);
+}
+
+.attn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.attn-item.p0 .attn-dot {
+  background: #0ea5e9;
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+.attn-item.p1 .attn-dot {
+  background: var(--red);
+}
+
+.attn-item.p2 .attn-dot {
+  background: var(--gold);
+}
+
+.attn-item.p3 .attn-dot {
+  background: var(--green);
+}
+
+.attn-title {
+  font-weight: 600;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attn-reason {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.attn-snippet {
+  flex-basis: 100%;
+  margin: 0 0 1px 13px;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attn-more {
+  font-size: 11px;
+  margin: 2px 0 0 6px;
+}
+

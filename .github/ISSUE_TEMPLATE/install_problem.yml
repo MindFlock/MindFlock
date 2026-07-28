@@ -1,0 +1,38 @@
+name: Install problem
+description: The installer or first launch failed on your machine
+labels: [install]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The goal is install-to-first-session in under 10 minutes on a clean
+        machine — if that failed for you, that's a bug in the install story,
+        and this report is exactly what fixes it.
+  - type: textarea
+    id: command
+    attributes:
+      label: What did you run?
+      placeholder: "curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh | sh"
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Full installer output
+      description: Everything from the command to the failure, verbatim.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`mindflock doctor` output (if the command exists)"
+      description: If `mindflock` isn't on PATH, say so — that's useful data too.
+      render: text
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "e.g. fresh Fedora 41 / macOS 14 Intel / Windows 11 + WSL2 Debian"
+    validations:
+      required: true

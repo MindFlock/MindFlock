@@ -1,0 +1,215 @@
+"""GitHub Issues provider.
+
+Ingests issues assigned to you in a single repository (``project`` =
+``owner/repo``). Reuses the shared GitHub auth chain — an explicit
+``ticketing.api_token``, else ``github.token`` in settings, else
+``$GH_TOKEN``/``$GITHUB_TOKEN``, else ``gh auth token`` — so a user who already
+connected GitHub for PR ingestion needs no extra credential.
+
+Issue bodies are markdown, so the shared acceptance-criteria miner works
+directly. Pull requests (which the issues endpoint also returns) are filtered out.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Any
+
+import aiohttp
+
+from backend.config.secrets import resolve_secret
+from backend.ticket_ingestion.models import Ticket
+from backend.ticket_ingestion.providers.base import (
+    HTTP_TIMEOUT,
+    ProviderError,
+    TicketProvider,
+    parse_acceptance_criteria,
+    parse_iso8601,
+)
+
+_logger = logging.getLogger(__name__)
+# Shared request budget (defined once in providers/base.py).
+_HTTP_TIMEOUT = HTTP_TIMEOUT
+_API = "https://api.github.com"
+_MAX_ISSUES = 50
+
+
+async def _gh_auth_token() -> str | None:
+    import asyncio
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "gh",
+            "auth",
+            "token",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        return None
+    stdout, _ = await proc.communicate()
+    if proc.returncode != 0:
+        return None
+    return (stdout.decode(errors="replace").strip()) or None
+
+
+class GithubIssuesProvider(TicketProvider):
+    name = "github_issues"
+    label = "GitHub"
+    slug_prefix = "gh"
+
+    def __init__(self, cfg) -> None:
+        super().__init__(cfg)
+        self._token: str | None = None
+
+    async def _resolve_token(self) -> str:
+        if self._token:
+            return self._token
+        token = await resolve_secret(
+            explicit=self.cfg.api_token,
+            settings_getter=lambda s: s.github.token,
+            env_vars=("GH_TOKEN", "GITHUB_TOKEN"),
+            cli_fallback=_gh_auth_token,
+        )
+        if not token:
+            raise ProviderError(
+                "No GitHub token available — set ticketing.api_token, connect "
+                "GitHub in Settings, export GH_TOKEN, or run `gh auth login`."
+            )
+        self._token = token
+        return token
+
+    async def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {await self._resolve_token()}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+    def _repo(self) -> tuple[str, str]:
+        parts = (self.cfg.project or "").strip().split("/")
+        if len(parts) != 2 or not all(parts):
+            raise ProviderError(
+                f"github_issues requires ticketing.project = 'owner/repo' (got {self.cfg.project!r})"
+            )
+        return parts[0], parts[1]
+
+    async def _login(self, session: aiohttp.ClientSession, headers: dict) -> str:
+        if self.cfg.member_id:
+            return self.cfg.member_id
+        async with session.get(f"{_API}/user", headers=headers) as resp:
+            if resp.status != 200:
+                raise ProviderError(f"GitHub /user returned HTTP {resp.status}")
+            me = await resp.json()
+        return str(me.get("login") or "")
+
+    async def _fetch_comments(
+        self, session: aiohttp.ClientSession, headers: dict, url: str
+    ) -> list[str]:
+        if not url:
+            return []
+        try:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status != 200:
+                    return []
+                items = await resp.json()
+        except aiohttp.ClientError:
+            return []
+        out = []
+        for c in items or []:
+            body = (c.get("body") or "").strip()
+            if not body:
+                continue
+            author = (c.get("user") or {}).get("login") or "unknown"
+            out.append(f"[{c.get('created_at') or ''} by {author}] {body}")
+        return out
+
+    async def _issue_to_ticket(
+        self, session: aiohttp.ClientSession, headers: dict, issue: dict[str, Any]
+    ) -> Ticket:
+        number = issue.get("number")
+        body = issue.get("body") or ""
+        comments = []
+        if issue.get("comments"):
+            comments = await self._fetch_comments(
+                session, headers, issue.get("comments_url")
+            )
+        assignees = [
+            a.get("login") for a in (issue.get("assignees") or []) if a.get("login")
+        ]
+        return Ticket(
+            id=number,
+            name=str(issue.get("title") or ""),
+            description=body,
+            acceptance_criteria=parse_acceptance_criteria(body),
+            owner_ids=[str(a) for a in assignees],
+            app_url=issue.get("html_url") or "",
+            created_at=parse_iso8601(issue.get("created_at")),
+            comments=comments,
+            attachments=[],  # GitHub inlines images as markdown links in the body
+            provider="github_issues",
+            slug=self.make_slug(number),
+            source_label=self.label,
+        )
+
+    async def search_assigned(self, since: datetime) -> list[Ticket]:
+        owner, repo = self._repo()
+        headers = await self._headers()
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            login = await self._login(session, headers)
+            params = {
+                "assignee": login or "*",
+                "state": "open",
+                "sort": "updated",
+                "direction": "desc",
+                "since": since.isoformat(),
+                "per_page": str(_MAX_ISSUES),
+            }
+            async with session.get(
+                f"{_API}/repos/{owner}/{repo}/issues", params=params, headers=headers
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise aiohttp.ClientError(
+                        f"GitHub API returned {resp.status}: {text[:200]}"
+                    )
+                issues = await resp.json()
+            tickets = []
+            for issue in issues or []:
+                if issue.get("pull_request"):
+                    continue  # the issues endpoint also lists PRs
+                tickets.append(await self._issue_to_ticket(session, headers, issue))
+        return tickets
+
+    async def fetch(self, ticket_id: str) -> Ticket:
+        owner, repo = self._repo()
+        headers = await self._headers()
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.get(
+                f"{_API}/repos/{owner}/{repo}/issues/{ticket_id}", headers=headers
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"GitHub API returned {resp.status} for issue {ticket_id}: {text[:200]}"
+                    )
+                issue = await resp.json()
+            return await self._issue_to_ticket(session, headers, issue)
+
+    async def test_connection(self) -> tuple[dict | None, str]:
+        try:
+            headers = await self._headers()
+            self._repo()  # validate scope shape early
+            async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+                async with session.get(f"{_API}/user", headers=headers) as resp:
+                    if resp.status in (401, 403):
+                        return None, f"GitHub rejected the token (HTTP {resp.status})"
+                    if resp.status != 200:
+                        return None, f"GitHub API returned HTTP {resp.status}"
+                    me = await resp.json()
+        except ProviderError as e:
+            return None, str(e)
+        except aiohttp.ClientError as e:
+            return None, f"network error reaching GitHub: {e}"
+        return {"member_id": str(me.get("login", "")), "name": me.get("name")}, ""

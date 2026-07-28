@@ -1,0 +1,114 @@
+# MindFlock configuration (ADVANCED / OPTIONAL).
+#
+# You usually do NOT need this file. The recommended way to configure MindFlock is
+# the web Settings dialog (the ⚙ button), which writes secrets and settings to
+# ~/.mindflock/settings.json (mode 0600, never committed).
+#
+# Every value below can instead be set in the Settings UI or via an environment
+# variable. Resolution order for each field is:
+#
+#     environment variable  →  ~/.mindflock/settings.json  →  this config.toml  →  built-in default
+#
+# So this file is only an "advanced override": handy for headless / scripted
+# runs where editing a file is easier than clicking the UI. To use it, copy this
+# to `config.toml` (already gitignored) and fill in your values.
+
+# Ticketing sources — one [[ticketing.source]] block per connected tracker.
+# provider ∈ shortcut | jira | linear | github_issues | asana. Each provider
+# reads the credential subset it needs (see docs/configuration.md). PREFER the
+# Settings UI (Ticketing) or $MINDFLOCK_TICKET_* env vars over committing
+# secrets here.
+[[ticketing.source]]
+provider = "shortcut"
+# Shortcut API token — create one at
+# https://app.shortcut.com/settings/account/api-tokens
+api_token = ""
+# Your Shortcut member UUID — tickets owned by this member are the ones the
+# pipeline processes. Settings UI field: Ticketing → Member ID.
+member_id = ""
+poll_interval_seconds = 20
+# Optional: only ingest stories in this workflow state.
+# workflow_state_id = 500000007
+# Optional: clone URL this source's tickets provision into (defaults to
+# [repository].url).
+# repo_url = ""
+
+[repository]
+# The repo MindFlock provisions worktrees/clones from. Env: $MINDFLOCK_REPO_URL
+url = ""
+# Where per-session workspaces are created (relative to this file). Env: $MINDFLOCK_WORKSPACE_DIR
+workspace_dir = "./workspaces"
+
+[validation]
+min_description_length = 20
+
+[logging]
+log_file = "./logs/pipeline.log"
+log_level = "INFO"
+
+[workspace]
+# Shell commands run (in order) in every freshly provisioned workspace. When
+# unset, they are auto-detected from the workspace contents: a uv/Python
+# project gets `uv sync --all-groups` (plus `uv run pre-commit install` when a
+# .pre-commit-config.yaml is present); other project types get none. Set an
+# explicit list to override, or [] to disable setup entirely.
+# setup_commands = ["npm ci", "npm run build"]
+
+# Warm cache seeds: host-side artifacts copied into each fresh workspace so
+# work starts warm instead of cold — a testmon DB, a Go build cache, a
+# compiled-deps tarball, anything file-shaped. Seeding never overwrites a file
+# already present in the workspace. Give a cache a refresh_command and a
+# background refresher keeps the seed fresh: it tracks refresh_branch in a
+# long-lived workspace, runs the setup commands + refresh_command every
+# refresh_interval_seconds, and publishes the artifact back to seed_path.
+# [[workspace.cache]]
+# name = "testmon"
+# seed_path = "./.cache/testmondata"      # host-side warm copy
+# workspace_path = ".testmondata"         # where it lands inside a workspace
+# refresh_enabled = true
+# refresh_branch = "main"
+# refresh_interval_seconds = 3600
+# refresh_command = "uv run --group test pytest --testmon -q"
+# env = { TESTMON_ENV = "shared" }        # env the cache's tooling needs pinned
+
+[github]
+# Repos the PR-monitor watches, each as "owner/name". Env (single repo):
+# $MINDFLOCK_GITHUB_REPO
+repos = []
+# Base branch PRs are compared against. Env: $MINDFLOCK_BASE_BRANCH
+base_branch = "main"
+min_age_minutes = 15
+poll_interval_seconds = 60
+enabled = true
+skip_authors = []
+# GitHub token. Leave blank to fall back to $GH_TOKEN / $GITHUB_TOKEN /
+# `gh auth token`. PREFER those over committing a PAT here.
+token = ""
+# --- Automated issue handling (opt-in, OFF by default) ----------------------
+# Newly opened issues in issue_repos each get their own coding session on a
+# fresh branch. issue_repos is a separate list from the PR-review `repos`
+# above, and these knobs are independent of the PR-review ones.
+# issues_enabled = false
+# issue_repos = []                 # ["owner/name", ...] to watch for new issues
+# issue_min_age_minutes = 15       # ignore issues younger than this
+# issue_poll_interval_seconds = 60
+# issue_skip_authors = []          # ["login", ...] issue authors to ignore
+
+[mindflock]
+# Engine integration: run story sessions via the MindFlock engine (provisioned mode)
+# instead of a standalone tmux + Windows Terminal tab.
+enabled = false
+# "worktree" (fast worktree off a canonical clone) or "clone" (full standalone).
+mode = "worktree"
+# Open the workspace in Cursor once provisioned (best-effort; no-op without `cursor`).
+open_cursor = true
+# Launch the agent with --dangerously-skip-permissions so a fresh worktree path
+# doesn't re-prompt the per-folder trust gate.
+skip_permissions = true
+
+# --- Platform (Windows / WSL only) ------------------------------------------
+# These have no effect on native Linux/macOS. NOTE: unlike the sections above,
+# platform settings are NOT read from this config.toml — set them in the
+# Settings UI (Platform section) or via the environment variables below:
+#   wsl_distro : name for `wsl.exe -d <distro>`   Env $MINDFLOCK_WSL_DISTRO  (default "Ubuntu")
+#   wt_command : Windows Terminal executable       Env $MINDFLOCK_WT_COMMAND  (default "wt.exe")

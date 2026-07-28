@@ -1,0 +1,153 @@
+# Tagged releases build the wheel + sdist and publish them, with SHA-256
+# checksums, as GitHub release assets. Install from a tag with:
+#   uv tool install "mindflock[web] @ git+https://github.com/MindFlock/MindFlock@vX.Y.Z"
+# or download the wheel and: uv tool install "mindflock[web] @ ./mindflock-X.Y.Z-py3-none-any.whl"
+#
+# The desktop installers are named WITHOUT a version (MindFlock-Setup.exe,
+# MindFlock.dmg, MindFlock.AppImage — see electron/package.json artifactName)
+# so the README's download buttons can point at permanent URLs:
+#   https://github.com/MindFlock/MindFlock/releases/latest/download/<name>
+# GitHub resolves /latest/download/ only for an exact asset filename, so those
+# names are load-bearing: renaming one breaks the front-page buttons.
+#
+# Run this by hand (workflow_dispatch) for a DRY RUN: the installers are built
+# on all three OSes and attached to the workflow run, and nothing is published.
+# That is the only way to prove the Windows NSIS script and the macOS universal
+# build still compile before a tag makes the result public — do it after
+# touching electron/build/installer.nsh or the electron-builder config.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Nothing to publish on a dry run; the desktop matrix still runs.
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The tag is the release's name, and three manifests carry the version
+      # (pyproject.toml, electron/ and frontend/package.json). Refuse to ship a
+      # mismatched set — a wrong wheel version is worse than no release. Same
+      # guard CI runs on every push; here it also pins the tag.
+      - name: Verify tag matches project version
+        run: python3 scripts/bump-version.py --check --expect "$GITHUB_REF_NAME"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel + sdist
+        run: uv build
+
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+
+      - name: Smoke-test the built wheel
+        run: |
+          uv tool install --python 3.12 "mindflock[web] @ $(ls dist/*.whl)"
+          export PATH="$HOME/.local/bin:$PATH"
+          mindflock doctor || true   # deps may be absent on the runner; the command must run
+          mindflock --help >/dev/null
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --generate-notes dist/* \
+            || gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+
+  # Desktop shell (Electron) — one unsigned installer per OS, attached to the
+  # same tag release. Depends on `release` both for the tag/version check
+  # (which runs there) and because `gh release upload` needs the release to
+  # exist already.
+  # TODO: code signing — these artifacts are UNSIGNED. macOS needs a
+  # Developer ID cert + notarization (CSC_LINK / CSC_KEY_PASSWORD /
+  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD secrets) before Gatekeeper trusts
+  # the dmg, and Windows needs an Authenticode cert before SmartScreen
+  # trusts the nsis installer.
+  desktop:
+    # On a tag: wait for `release`, which creates the release these artifacts
+    # attach to (and runs the version guard). On a dry run `release` is
+    # skipped, so run anyway — `always()` is what lets a skipped need through.
+    needs: release
+    if: always() && (needs.release.result == 'success' || github.event_name == 'workflow_dispatch')
+    continue-on-error: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest      # AppImage
+            artifacts: dist/*.AppImage
+          - os: windows-latest     # nsis installer
+            artifacts: dist/*.exe
+          - os: macos-latest       # dmg
+            artifacts: dist/*.dmg
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: electron
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (unsigned)
+        env:
+          # Don't look for a signing identity on the macOS runner keychain —
+          # build unsigned instead of failing (see the code-signing TODO).
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --publish never
+
+      # One .sha256 next to each installer. Unsigned binaries downloaded from a
+      # front-page button deserve at least a published digest to check against.
+      - name: Checksum
+        shell: bash
+        run: |
+          for f in ${{ matrix.artifacts }}; do
+            # Hash from inside dist/ so the digest file names the installer,
+            # not a build-machine path (keeps `sha256sum -c` usable as-is).
+            name=$(basename "$f")
+            if command -v sha256sum >/dev/null 2>&1; then
+              (cd dist && sha256sum "$name" > "$name.sha256")
+            else
+              (cd dist && shasum -a 256 "$name" > "$name.sha256")
+            fi
+            cat "$f.sha256"
+          done
+
+      - name: Upload desktop artifacts to the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release upload "$GITHUB_REF_NAME" \
+            ${{ matrix.artifacts }} ${{ matrix.artifacts }}.sha256 --clobber
+
+      # Dry run: keep the installers on the run so they can be downloaded and
+      # actually opened, instead of only proving the build didn't error.
+      - name: Attach desktop artifacts to the run (dry run)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MindFlock-${{ matrix.os }}
+          path: |
+            electron/${{ matrix.artifacts }}
+            electron/${{ matrix.artifacts }}.sha256
+          if-no-files-found: error

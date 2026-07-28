@@ -1,0 +1,210 @@
+/* The welcome walkthrough card. Rides the shared .modal overlay. */
+
+#welcome-tour {
+  z-index: 200;
+}
+
+.wt-card {
+  position: relative;
+  width: min(460px, calc(100vw - 40px));
+  /* Constant size across every slide — the body flexes to absorb length
+     differences so the card never resizes as you page through. */
+  height: 440px;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 28px 26px 20px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  text-align: center;
+  animation: wt-in 180ms ease-out;
+}
+
+@keyframes wt-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.wt-skip {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wt-skip:hover {
+  color: var(--text);
+}
+
+/* Centered content region — holds the head, body and (optional) setup button as
+   one group and vertically centers them, so the card looks balanced at its fixed
+   height regardless of how much text a slide has. Scrolls if a slide overflows. */
+.wt-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.wt-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.wt-icon {
+  font-size: 38px;
+  line-height: 1;
+}
+
+/* MindFlock mark, recolored with the accent via CSS mask (same technique as the
+   top-bar logo) so it flips cleanly across themes. */
+.wt-logo {
+  width: 44px;
+  height: 44px;
+  background-color: var(--accent);
+  -webkit-mask: url(/logo.png) center / contain no-repeat;
+  mask: url(/logo.png) center / contain no-repeat;
+}
+
+.wt-title {
+  margin: 0;
+  font-size: 19px;
+  color: var(--text);
+}
+
+.wt-body {
+  margin: 0;
+  max-width: 42ch;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.wt-body b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.wt-body code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/* Secondary CTA on setup slides — jumps straight to the relevant Settings
+   screen. Sits between the body and the progress dots. */
+.wt-setup {
+  align-self: center;
+  margin-top: 16px;
+  padding: 6px 14px;
+  background: color-mix(in srgb, var(--accent) 15%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wt-setup:hover {
+  background: color-mix(in srgb, var(--accent) 25%, var(--panel));
+}
+
+/* Footer group — dots + nav, pinned at the bottom of the fixed-height card. */
+.wt-foot {
+  flex: none;
+  padding-top: 16px;
+}
+
+.wt-dots {
+  display: flex;
+  justify-content: center;
+  gap: 7px;
+  margin-bottom: 16px;
+}
+
+.wt-dot {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--border);
+  cursor: pointer;
+  transition: background 120ms, transform 120ms;
+}
+
+.wt-dot:hover {
+  background: var(--muted);
+}
+
+.wt-dot.active {
+  background: var(--accent);
+  transform: scale(1.25);
+}
+
+.wt-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.wt-nav-end {
+  display: flex;
+  gap: 8px;
+}
+
+.wt-btn {
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.wt-btn.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.wt-btn.primary:hover {
+  filter: brightness(1.08);
+}
+
+.wt-btn.ghost {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.wt-btn.ghost:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+
+.wt-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

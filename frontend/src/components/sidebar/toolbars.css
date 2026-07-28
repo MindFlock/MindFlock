@@ -1,0 +1,411 @@
+/* Voice-input button — pinned top-right, styled to match the pane-header
+   buttons so it reads as header chrome (flat, no shadow) rather than a floating
+   bubble. #grid panes reserve right-padding so it sits beside the state text. */
+/* Voice-input entry point hidden for now (the live-transcription backend + JS
+   stay wired; delete this rule to bring the mic icon back). */
+#mic-btn,
+#mic-caption {
+  display: none !important;
+}
+
+#mic-btn {
+  position: fixed;
+  top: 13px;
+  right: 14px;
+  z-index: 1000;
+  height: 26px;
+  padding: 0 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#mic-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+#mic-btn.listening {
+  border-color: var(--red);
+  color: #fff;
+  background: var(--red);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+#mic-btn.unsupported {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+@keyframes mic-pulse {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(222, 97, 62, 0.5);
+  }
+
+  50% {
+    box-shadow: 0 0 0 5px rgba(222, 97, 62, 0);
+  }
+}
+
+#mic-caption {
+  position: fixed;
+  top: 46px;
+  right: 14px;
+  z-index: 1000;
+  max-width: 340px;
+  padding: 7px 11px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#mic-caption.hidden {
+  display: none;
+}
+
+/* Draggable wrapper around each customizable sidebar section (Usage, Ticket
+   Ingestion, PR Review, Assistant). The slot is a passthrough — the child bar
+   keeps its own border/padding — but it owns the drag grip and the insertion
+   cue. A slot whose bar renders nothing collapses so it leaves no gap and
+   can't be a drop target. */
+.bar-slot {
+  position: relative;
+}
+
+.bar-slot:empty {
+  display: none;
+}
+
+.bar-slot.dragging {
+  opacity: 0.5;
+}
+
+/* Drag handle — the bars are wall-to-wall buttons/toggles that would otherwise
+   swallow the drag gesture, so the grip is the reliable grab point. It's tucked
+   into the far-left edge (inside the bars' 16px left padding) so it costs the
+   bar content no horizontal room. */
+.bar-grip {
+  position: absolute;
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  width: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  letter-spacing: -1px;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  user-select: none;
+}
+
+.bar-slot:hover .bar-grip {
+  opacity: 0.85;
+}
+
+.bar-grip:active {
+  cursor: grabbing;
+}
+
+/* A bar dragged BELOW the session list would otherwise butt straight against
+   the list with no divider — give any section after the sessions anchor a top
+   line matching the separators between the other bars. */
+.sessions-block ~ .bar-slot {
+  border-top: 1px solid var(--border);
+}
+
+/* Accent insertion line — same look as the session-row / grid drop cue. Shared
+   by the bars and the fixed session-list anchor so a bar dropped above or below
+   the list shows the same cue. */
+.bar-slot.drop-above::before,
+.bar-slot.drop-below::after,
+.sessions-block.drop-above::before,
+.sessions-block.drop-below::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.55);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.bar-slot.drop-above::before,
+.sessions-block.drop-above::before {
+  top: -1.5px;
+}
+
+.bar-slot.drop-below::after,
+.sessions-block.drop-below::after {
+  bottom: -1.5px;
+}
+
+/* MindFlock automation bar + the PR-review / issue-handling bars (same dc-*
+   anatomy) */
+#mindflock-bar,
+#pr-review-bar,
+#git-issue-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#mindflock-bar .dc-dot,
+#pr-review-bar .dc-dot,
+#git-issue-bar .dc-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+#mindflock-bar .dc-dot.on,
+#pr-review-bar .dc-dot.on,
+#git-issue-bar .dc-dot.on {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+
+#mindflock-bar .dc-dot.off,
+#pr-review-bar .dc-dot.off,
+#git-issue-bar .dc-dot.off {
+  background: var(--muted);
+}
+
+/* PR review enabled but ticket ingestion isn't running — armed, not active. */
+#mindflock-bar .dc-dot.idle,
+#pr-review-bar .dc-dot.idle,
+#git-issue-bar .dc-dot.idle {
+  background: var(--gold);
+}
+
+/* Browser offline, or the ingestion log shows recent connection failures. */
+#mindflock-bar .dc-dot.error,
+#pr-review-bar .dc-dot.error,
+#git-issue-bar .dc-dot.error {
+  background: var(--red);
+  box-shadow: 0 0 6px var(--red);
+}
+
+#mindflock-bar .dc-label,
+#pr-review-bar .dc-label,
+#git-issue-bar .dc-label {
+  font-weight: 600;
+}
+
+#mindflock-bar .dc-actions,
+#pr-review-bar .dc-actions,
+#git-issue-bar .dc-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+#mindflock-bar .dc-toggle,
+#pr-review-bar .dc-toggle,
+#git-issue-bar .dc-toggle {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#mindflock-bar .dc-toggle.active,
+#pr-review-bar .dc-toggle.active,
+#git-issue-bar .dc-toggle.active {
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#mindflock-bar .dc-toggle:hover,
+#pr-review-bar .dc-toggle:hover,
+#git-issue-bar .dc-toggle:hover {
+  border-color: var(--accent);
+}
+
+#mindflock-bar .dc-toggle:disabled,
+#pr-review-bar .dc-toggle:disabled,
+#git-issue-bar .dc-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#mindflock-bar .dc-switch,
+#pr-review-bar .dc-switch,
+#git-issue-bar .dc-switch {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 20px;
+  flex: none;
+}
+
+#mindflock-bar .dc-switch input,
+#pr-review-bar .dc-switch input,
+#git-issue-bar .dc-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+}
+
+#mindflock-bar .dc-slider,
+#pr-review-bar .dc-slider,
+#git-issue-bar .dc-slider {
+  position: absolute;
+  inset: 0;
+  cursor: pointer;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+#mindflock-bar .dc-slider::before,
+#pr-review-bar .dc-slider::before,
+#git-issue-bar .dc-slider::before {
+  content: "";
+  position: absolute;
+  height: 14px;
+  width: 14px;
+  left: 2px;
+  top: 2px;
+  background: var(--muted);
+  border-radius: 50%;
+  transition: transform 0.15s, background 0.15s;
+}
+
+#mindflock-bar .dc-switch input:checked+.dc-slider,
+#pr-review-bar .dc-switch input:checked+.dc-slider,
+#git-issue-bar .dc-switch input:checked+.dc-slider {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+#mindflock-bar .dc-switch input:checked+.dc-slider::before,
+#pr-review-bar .dc-switch input:checked+.dc-slider::before,
+#git-issue-bar .dc-switch input:checked+.dc-slider::before {
+  transform: translateX(18px);
+  background: #fff;
+}
+
+#mindflock-bar .dc-switch input:disabled+.dc-slider,
+#pr-review-bar .dc-switch input:disabled+.dc-slider,
+#git-issue-bar .dc-switch input:disabled+.dc-slider {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Personal assistant bar — mirrors #mindflock-bar's look. */
+#assistant-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#assistant-bar .as-label {
+  font-weight: 600;
+}
+
+#assistant-bar .as-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+#assistant-bar .as-toggle {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#assistant-bar .as-toggle.active {
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#assistant-bar .as-toggle:hover {
+  border-color: var(--accent);
+}
+
+/* Generic addon bars (rendered by core/slots.js for auto-surfaced addons,
+   e.g. Notifications) — mirror #mindflock-bar / #assistant-bar exactly so a
+   brand-new addon keeps the sidebar rhythm with zero bespoke CSS. */
+#addon-bars .addon-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#addon-bars .addon-label {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#addon-bars .addon-toggle {
+  flex: none;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#addon-bars .addon-toggle:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+#addon-bars .addon-toggle.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#addon-bars .addon-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+

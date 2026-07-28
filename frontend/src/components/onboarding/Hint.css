@@ -1,0 +1,84 @@
+/* Getting-started hint callout. Uses the accent tint so it reads as a friendly
+   nudge, not a warning. Inline in the layout flow — see Hint.tsx. */
+
+.hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px;
+  padding: 8px 9px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
+  animation: hint-in 160ms ease-out;
+}
+
+@keyframes hint-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.hint-icon {
+  flex: none;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.hint-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.hint-text {
+  color: var(--text);
+}
+
+.hint-text b,
+.hint-text strong {
+  font-weight: 600;
+}
+
+.hint-action {
+  margin-top: 6px;
+  padding: 3px 10px;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hint-action:hover {
+  filter: brightness(1.08);
+}
+
+.hint-dismiss {
+  flex: none;
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hint-dismiss:hover {
+  color: var(--text);
+}
+
+/* In the sidebar footer the surrounding padding already spaces things out. */
+.hint.hint-footer {
+  margin: 0 0 8px;
+}

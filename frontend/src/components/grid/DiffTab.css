@@ -1,0 +1,408 @@
+/* Workflow stage chips (sidebar + pane header) */
+.stagechip {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  flex: none;
+  background: var(--panel-2);
+  color: var(--muted);
+  white-space: nowrap;
+  /* Never overlap neighbours: long labels ellipsize inside the chip. */
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stagechip.s-provisioning {
+  color: var(--gold);
+}
+
+.stagechip.s-agent {
+  color: #b9a6ff;
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+.stagechip.s-running {
+  color: #fff;
+  background: rgba(var(--accent-rgb), 0.5);
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+.stagechip.s-idle {
+  color: var(--gold);
+  background: rgba(255, 215, 0, 0.14);
+}
+
+.stagechip.s-offline {
+  color: var(--muted);
+  background: var(--panel-2);
+  opacity: 0.75;
+}
+
+.stagechip.s-clarify {
+  color: #fff;
+  background: rgba(14, 165, 233, 0.55);
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+.stagechip.s-limit {
+  color: #fff;
+  background: rgba(239, 68, 68, 0.7);
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+.stagechip.s-paused {
+  color: var(--muted);
+  background: var(--panel-2);
+}
+
+@keyframes cs-pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.stagechip.s-precommit {
+  color: #1a1a1a;
+  background: var(--gold);
+}
+
+.stagechip.s-interrupt {
+  color: #fff;
+  background: var(--red);
+}
+
+.stagechip.s-committed {
+  color: #7fd1ff;
+  background: rgba(14, 165, 233, 0.16);
+}
+
+.stagechip.s-pushed {
+  color: var(--green);
+  background: rgba(81, 189, 115, 0.18);
+}
+
+.stagechip.s-pr {
+  color: #fff;
+  background: rgba(81, 189, 115, 0.5);
+}
+
+.stagechip.s-merged {
+  color: #fff;
+  background: var(--green);
+}
+
+/* Status chip lives on the LEFT only: the sidebar row already shows the
+   session's stage/activity (idle / running / clarify / …). Hide the duplicate
+   chip in the pane header so the window carries no status label — the update
+   code still writes to this hidden element, it just never renders. */
+.pane-head .stagechip {
+  display: none;
+}
+
+/* diff view */
+.pane-diff {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  overflow: auto;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  tab-size: 4;
+}
+
+.pane-diff .add {
+  color: var(--green);
+}
+
+.pane-diff .del {
+  color: var(--red);
+}
+
+.pane-diff .hunk {
+  color: #0ea5e9;
+}
+
+.pane-diff .muted {
+  color: var(--muted);
+}
+
+.pane-diff .diff-loading,
+.pane-diff .diff-empty {
+  padding: 10px 12px;
+}
+
+/* sticky toolbar: diffstat + split/unified toggle */
+.diff-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-toolbar .diffstat {
+  font-weight: 600;
+  flex: 1;
+}
+
+.diff-modes {
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+
+.diff-modes button {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 6px;
+}
+
+.diff-modes button:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.diff-modes button.active {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* unified diff body */
+.diff-unified {
+  margin: 0;
+  padding: 8px 12px;
+  white-space: pre;
+}
+
+/* Collapsible per-file sections in the all-files diff view. */
+.diff-file {
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  cursor: pointer;
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.diff-file-head:hover {
+  background: var(--panel-2);
+}
+
+.diff-file-head .diff-file-caret {
+  cursor: pointer;
+  color: #fff;
+  font-size: 15px;
+  width: 16px;
+  flex: none;
+  margin-left: auto;
+  text-align: center;
+  transition: transform 0.1s;
+}
+
+.diff-file-head .diff-file-caret:hover {
+  color: var(--accent);
+}
+
+.diff-file.collapsed .diff-file-caret {
+  transform: rotate(-90deg);
+}
+
+.diff-file.collapsed .diff-file-body {
+  display: none;
+}
+
+.diff-file-head .sd-file {
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #c4b3ff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.diff-file-head .sd-file:hover {
+  text-decoration: underline;
+}
+
+.diff-toolbar .diff-collapse-all {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  flex: none;
+}
+
+.diff-toolbar .diff-collapse-all:hover {
+  border-color: var(--accent);
+}
+
+/* side-by-side (split) diff */
+.split-diff {
+  padding-bottom: 8px;
+}
+
+.split-diff .sd-file {
+  padding: 5px 12px;
+  font-weight: 600;
+  margin-top: 4px;
+  color: #c4b3ff;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.split-diff .sd-file.clickable {
+  cursor: pointer;
+}
+
+.split-diff .sd-file.clickable:hover {
+  background: var(--panel-2);
+  text-decoration: underline;
+}
+
+.diff-toolbar .diff-back {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  flex: none;
+}
+
+.diff-toolbar .diff-back:hover {
+  border-color: var(--accent);
+}
+
+.diff-toolbar .diffstat.file {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: #c4b3ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.split-diff .sd-hunk {
+  padding: 3px 12px;
+  color: #0ea5e9;
+  background: rgba(14, 165, 233, 0.08);
+}
+
+.split-diff .sd-note {
+  padding: 3px 12px;
+  color: var(--muted);
+}
+
+.split-diff .sd-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px 1fr;
+  align-items: stretch;
+}
+
+.split-diff .sd-ln {
+  text-align: right;
+  padding: 0 8px;
+  color: var(--muted);
+  user-select: none;
+  border-right: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.split-diff .sd-code {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.split-diff .sd-code.del {
+  background: rgba(222, 97, 62, 0.16);
+}
+
+.split-diff .sd-code.add {
+  background: rgba(81, 189, 115, 0.16);
+}
+
+.split-diff .sd-code.blank {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.split-diff .sd-row:hover .sd-code {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.split-diff .sd-row:hover .sd-code.del {
+  background-color: rgba(222, 97, 62, 0.22);
+}
+
+.split-diff .sd-row:hover .sd-code.add {
+  background-color: rgba(81, 189, 115, 0.22);
+}
+
+#empty {
+  /* #grid is a flex column — flex:1 makes the empty state fill the entire grid
+     area (not just a strip at the top) so the whole space is the click target. */
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+
+#empty.clickable {
+  cursor: pointer;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  margin: 10px;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+
+#empty.clickable:hover {
+  background: var(--panel);
+}
+
+#empty.clickable:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+

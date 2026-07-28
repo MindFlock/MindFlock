@@ -1,0 +1,81 @@
+[project]
+name = "mindflock"
+version = "0.1.0"
+description = "MindFlock — a web platform for managing AI coding-agent sessions, with a multi-provider ticket-ingestion pipeline"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "MindFlock", email = "info@mindflock.ai" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp",
+    "tomli",
+]
+
+[project.urls]
+Homepage = "https://github.com/MindFlock/MindFlock"
+Repository = "https://github.com/MindFlock/MindFlock"
+
+[project.scripts]
+mindflock = "backend.cli:main"
+
+# Install-time extras — the same sets as the dependency groups below, exposed
+# as extras so a no-clone install works:  uv tool install "mindflock[web] @ git+…"
+# (dependency-groups are a dev/workspace concept; `uv tool install` and pipx
+# only see extras).
+[project.optional-dependencies]
+engine = [
+    "pyperclip",
+    "ptyprocess",
+]
+web = [
+    "mindflock[engine]",
+    "fastapi",
+    "uvicorn[standard]",
+    "segno",
+]
+
+[dependency-groups]
+dev = [
+    "hypothesis",
+    "pytest",
+    "pytest-asyncio",
+    # Shared git hooks (.pre-commit-config.yaml): workspace auto-setup runs
+    # `uv run --all-groups pre-commit install`, so it must be a real dependency.
+    "pre-commit",
+    # Starlette's TestClient (web-UI contract + route-precedence tests) needs
+    # httpx at import time.
+    "httpx",
+]
+# Engine deps — needed to run sessions (the session manager / provisioned mode).
+#   uv sync --group engine
+engine = [
+    "pyperclip",
+    "ptyprocess",
+]
+# Everything needed to run the web UI (backend.web): engine deps + FastAPI.
+#   uv sync --group web
+web = [
+    "pyperclip",
+    "ptyprocess",
+    "fastapi",
+    "uvicorn[standard]",
+    "segno",  # pure-python QR codes for the startup mobile-URL banner
+]
+[build-system]
+requires = ["uv_build>=0.11.6,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "backend"
+module-root = ""
+# Keep dev-only files out of the installed wheel: the shell launcher (a source-
+# checkout convenience that resolves paths relative to the repo root), the
+# per-package orientation READMEs, and any stray logs.
+source-exclude = ["**/*.log"]
+wheel-exclude = ["**/run.sh", "**/README.md", "**/*.log"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,241 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body {
+    margin: 0; height: 100%; display: flex; align-items: center; justify-content: center;
+    background: #0f1117; color: #d7dae3;
+    font-family: system-ui, 'Segoe UI', sans-serif; text-align: center;
+  }
+  .box { max-width: 560px; padding: 24px; }
+  h1 { font-size: 18px; margin: 0 0 10px; font-weight: 600; }
+  p { color: #8a90a2; line-height: 1.55; margin: 6px 0; }
+  code { background: #1e222e; padding: 2px 7px; border-radius: 6px; color: #d7dae3; font-size: 12.5px; }
+  .spin { margin-top: 18px; color: #7d56f4; }
+  .hint { margin-top: 22px; font-size: 12px; color: #5c6272; }
+  .detail { margin-top: 12px; font-size: 11.5px; color: #5c6272; word-break: break-word; }
+  section[hidden] { display: none; }
+  button.action {
+    margin-top: 18px; padding: 10px 22px; border: 0; border-radius: 8px;
+    background: #7d56f4; color: #fff; cursor: pointer;
+    font: 600 13px system-ui, 'Segoe UI', sans-serif;
+    transition: background .12s ease;
+  }
+  button.action:hover { background: #8f6cf6; }
+  button.action:disabled { opacity: .6; cursor: default; }
+  /* Installer transcript. Left-aligned and monospaced: it's command output,
+     and centring it would make a multi-minute install unreadable. */
+  .log {
+    margin: 18px 0 0; padding: 10px 12px; max-height: 220px; overflow-y: auto;
+    background: #14171f; border: 1px solid #232734; border-radius: 8px;
+    text-align: left; white-space: pre-wrap; word-break: break-word;
+    font: 11.5px/1.5 ui-monospace, 'Cascadia Mono', Menlo, Consolas, monospace;
+    color: #8a90a2;
+  }
+  .log:empty { display: none; }
+</style>
+</head>
+<body>
+  <div class="box">
+
+    <!-- Probe hasn't answered yet (or mfdiag unavailable: shows briefly, then starting) -->
+    <section id="s-checking">
+      <h1>Connecting to MindFlock…</h1>
+      <p>Checking that everything is in place.</p>
+      <p class="spin">One moment…</p>
+    </section>
+
+    <!-- Environment is fine; the server is booting. Nothing for the user to do. -->
+    <section id="s-starting" hidden>
+      <h1>Starting the MindFlock server…</h1>
+      <p>Everything looks good — the app is starting the server for you.
+         This usually takes a few seconds (a little longer right after a reboot).</p>
+      <p class="spin">Connecting automatically…</p>
+      <p class="hint" id="starting-hint" hidden>Taking longer than usual?
+        Press <code>Ctrl+Shift+L</code> for app logs.<br>
+        Server startup log: <code>~/.mindflock/desktop-server.log</code></p>
+    </section>
+
+    <!-- wsl.exe errored or hung: offer the fix, don't make them type anything. -->
+    <section id="s-wsl-down" hidden>
+      <h1>WSL isn’t responding</h1>
+      <p>MindFlock runs inside WSL (<span class="distro">Ubuntu</span>), and Windows
+         can’t reach it right now. Restarting WSL usually fixes this.</p>
+      <button class="action" id="restart-wsl">Restart WSL</button>
+      <p class="hint">Restarting closes anything else running in WSL.<br>
+         If it doesn’t help, restart your computer and reopen MindFlock — or, if
+         WSL was only just set up, check <code>wsl -l -v</code> lists a distro.</p>
+      <p class="detail" id="wsl-detail"></p>
+    </section>
+
+    <!-- wsl.exe runs but has no usable distro: WSL is only partially set up.
+         Restarting can't fix that, so guide the user through finishing setup. -->
+    <section id="s-wsl-setup" hidden>
+      <h1>Finish setting up WSL</h1>
+      <p>Windows Subsystem for Linux is present, but it doesn’t have a working
+         Linux distribution yet — so MindFlock’s engine has nowhere to run.</p>
+      <p>Open <b>PowerShell</b> and:</p>
+      <p>run <code>wsl --install</code> &nbsp;→&nbsp; <b>restart your computer</b>
+         &nbsp;→&nbsp; run <code>wsl</code> once to finish creating your Linux user.</p>
+      <p>When <code>wsl</code> drops you into a Linux shell, reopen MindFlock.</p>
+      <p class="hint">Already have a distro? Make sure <code>wsl -l -v</code> lists
+         it (state Running or Stopped), then reopen MindFlock.</p>
+    </section>
+
+    <!-- wsl.exe itself is missing: one-time OS-level setup we can't do for them. -->
+    <section id="s-wsl-missing" hidden>
+      <h1>WSL isn’t installed</h1>
+      <p>MindFlock’s engine runs inside WSL (Windows Subsystem for Linux),
+         which isn’t set up on this computer yet.</p>
+      <p>Open PowerShell, run <code>wsl --install</code>, restart your computer,
+         then reopen MindFlock.</p>
+    </section>
+
+    <!-- The machine answers, but the engine isn't there. One button, no typing. -->
+    <section id="s-not-installed" hidden>
+      <h1>One more step</h1>
+      <p id="ni-where">MindFlock’s engine isn’t installed in WSL
+         (<span class="distro">Ubuntu</span>) yet.</p>
+      <p>Setting it up takes a few minutes and needs no admin rights: it
+         installs a private Python toolchain and the MindFlock engine under
+         your home folder.</p>
+      <button class="action" id="do-install">Install the engine</button>
+      <p class="hint">A one-time setup. MindFlock opens by itself when it finishes.</p>
+    </section>
+
+    <!-- Install in flight, or finished badly. Same section: the transcript is
+         the useful thing in both cases. -->
+    <section id="s-installing" hidden>
+      <h1 id="inst-title">Installing the MindFlock engine…</h1>
+      <p id="inst-sub">This takes a few minutes. You can leave this window open —
+         MindFlock starts on its own when it’s done.</p>
+      <pre class="log" id="inst-log"></pre>
+      <button class="action" id="do-retry" hidden>Try again</button>
+      <p class="hint" id="inst-manual" hidden></p>
+    </section>
+
+  </div>
+<script>
+(function () {
+  var sections = ['checking', 'starting', 'wsl-down', 'wsl-setup', 'wsl-missing', 'not-installed', 'installing']
+  var startingSince = 0
+
+  function show(state, diag) {
+    sections.forEach(function (s) {
+      document.getElementById('s-' + s).hidden = (s !== state)
+    })
+    if (diag && diag.distro) {
+      Array.prototype.forEach.call(document.querySelectorAll('.distro'), function (el) {
+        el.textContent = diag.distro
+      })
+    }
+    if (state === 'wsl-down') {
+      document.getElementById('wsl-detail').textContent = (diag && diag.detail) || ''
+    }
+    if (state === 'not-installed' && diag && diag.platform !== 'win32') {
+      document.getElementById('ni-where').textContent =
+        'MindFlock’s engine isn’t installed on this machine yet.'
+    }
+    // Booting normally takes seconds; only surface log spelunking once it's
+    // clearly stuck, so the happy path never shows troubleshooting noise.
+    if (state === 'starting') {
+      if (!startingSince) startingSince = Date.now()
+      document.getElementById('starting-hint').hidden = (Date.now() - startingSince < 45000)
+    } else {
+      startingSince = 0
+    }
+  }
+
+  // Render the installer transcript, keeping the view pinned to the newest
+  // line unless the user has scrolled up to read something.
+  var logEl = document.getElementById('inst-log')
+  function renderLog(lines) {
+    var text = (lines || []).join('\n')
+    if (logEl.textContent === text) return
+    var atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 24
+    logEl.textContent = text
+    if (atBottom) logEl.scrollTop = logEl.scrollHeight
+  }
+
+  function showInstall(inst) {
+    show('installing', null)
+    var failed = inst.state === 'failed'
+    document.getElementById('inst-title').textContent =
+      failed ? 'The install didn’t finish' : 'Installing the MindFlock engine…'
+    document.getElementById('inst-sub').textContent = failed
+      ? 'Nothing was left half-configured — it’s safe to run it again.'
+      : 'This takes a few minutes. You can leave this window open — MindFlock starts on its own when it’s done.'
+    renderLog(inst.lines)
+    document.getElementById('do-retry').hidden = !failed
+    var manual = document.getElementById('inst-manual')
+    manual.hidden = !failed
+    if (failed) {
+      manual.textContent = 'Still stuck? Run this in a terminal: ' + (inst.command || '')
+    }
+  }
+
+  var busy = false
+  function wire(id, fn) {
+    document.getElementById(id).addEventListener('click', function () {
+      if (busy || !window.mfdiag) return
+      busy = true
+      // Switch to the transcript view synchronously. install() resolves as
+      // soon as the installer is *spawned*, and the poll below only runs every
+      // couple of seconds — without this the button sits there looking dead at
+      // the very moment the user is deciding whether it worked.
+      showInstall({ state: 'running', lines: ['starting the installer…'] })
+      Promise.resolve(fn()).catch(function () {}).then(function () {
+        busy = false
+        tick()
+      })
+    })
+  }
+  wire('do-install', function () { return window.mfdiag.install() })
+  wire('do-retry', function () { return window.mfdiag.install() })
+
+  var restarting = false
+  var armed = false
+  var btn = document.getElementById('restart-wsl')
+  btn.addEventListener('click', function () {
+    if (restarting) return
+    if (!armed) {   // two-step confirm: --shutdown closes other WSL work
+      armed = true
+      btn.textContent = 'Restart WSL now? (closes other WSL apps)'
+      return
+    }
+    restarting = true
+    btn.disabled = true
+    btn.textContent = 'Restarting WSL…'
+    Promise.resolve(window.mfdiag && window.mfdiag.restartWsl())
+      .catch(function () {})
+      .then(function () {
+        restarting = false; armed = false
+        btn.disabled = false; btn.textContent = 'Restart WSL'
+      })
+  })
+
+  function tick() {
+    if (!window.mfdiag) { show('starting', null); return }
+    Promise.all([window.mfdiag.get(), window.mfdiag.installState()])
+      .then(function (r) {
+        var diag = r[0], inst = r[1] || { state: 'idle' }
+        // An install in flight (or one that just failed) outranks the probe:
+        // while it runs the probe still reports not-installed, and replacing
+        // the transcript with "press Install" would be both wrong and a way
+        // to start a second install on top of the first.
+        if (inst.state === 'running' || inst.state === 'failed') return showInstall(inst)
+        var state = diag && sections.indexOf(diag.state) >= 0 ? diag.state : 'checking'
+        // Freshly installed but the probe hasn't caught up yet — don't blink
+        // back to the install prompt for one poll.
+        if (inst.state === 'done' && state === 'not-installed') state = 'starting'
+        if (!restarting) show(state, diag)
+      })
+      .catch(function () { show('starting', null) })
+  }
+  tick()
+  setInterval(tick, 2000)
+})()
+</script>
+</body>
+</html>

@@ -1,0 +1,102 @@
+/* --------------------------------------------------------------------------- *
+ * J3 — session context line: a subtle one-line diff stat ("+120 −8 · 6 files")
+ * under each sidebar row title and in the pane header. Hidden when the backend
+ * doesn't send diff_stat or everything is zero.
+ * --------------------------------------------------------------------------- */
+.ctxline {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.ctxline .ctx-add {
+  color: var(--green);
+  opacity: 0.8;
+}
+
+.ctxline .ctx-del {
+  color: var(--red);
+  opacity: 0.8;
+}
+
+.ctxline .ctx-files {
+  opacity: 0.85;
+}
+
+/* In the pane header the context line yields (shrinks, then clips) rather
+   than pushing the state text out of the header. */
+.pane-head .ctxline {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* It drops out of a narrow pane header alongside the next-step button (560px),
+   before the token counter (420px); the sidebar line stays. */
+@container (max-width: 560px) {
+  .pane-head .ctxline {
+    display: none !important;
+  }
+}
+
+/* --------------------------------------------------------------------------- *
+ * J4 — prompt presets in the New-session dialog.
+ * --------------------------------------------------------------------------- */
+.preset-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.preset-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.preset-row button {
+  flex: none;
+  border-radius: 7px;
+  padding: 0 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.preset-row button:hover {
+  border-color: var(--accent);
+}
+
+.preset-row #preset-del {
+  color: var(--red);
+}
+
+.preset-row #preset-del:hover {
+  border-color: var(--red);
+  background: rgba(222, 97, 62, 0.12);
+}
+
+/* Inline "name this preset" editor (replaces the native prompt()). */
+.preset-row .preset-name-edit {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.preset-row .preset-name-edit.hidden {
+  display: none;
+}
+
+.preset-row .preset-name-edit input {
+  flex: 1;
+  min-width: 0;
+}
+

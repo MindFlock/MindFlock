@@ -1,0 +1,26 @@
+# Line-ending policy.
+#
+# The MindFlock engine runs on Linux / inside WSL, so shell scripts MUST be
+# checked out with LF on every platform. Without this, git on Windows
+# (core.autocrlf=true) rewrites *.sh to CRLF on checkout, and the Windows
+# Electron build then packages an install.sh that dash/bash inside WSL refuses
+# to run — failing on the very first command with:
+#
+#     install.sh: 38: set: Illegal option -
+#
+*.sh            text eol=lf
+install.sh      text eol=lf
+*.bash          text eol=lf
+
+# Windows-only helper scripts stay CRLF.
+*.ps1           text eol=crlf
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# Binary assets — never touch line endings or try to diff them as text.
+*.png           binary
+*.gif           binary
+*.ico           binary
+*.icns          binary
+*.mp4           binary
+*.whl           binary

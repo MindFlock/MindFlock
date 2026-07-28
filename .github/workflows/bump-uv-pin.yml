@@ -1,0 +1,82 @@
+# Keeps the uv installer pin in install.sh fresh: weekly, check Astral's
+# latest uv release; if it's newer than UV_PINNED_VERSION, download that
+# version's installer, compute its sha256, rewrite the pin + checksum pair
+# (the two lines install.sh says to bump together), and open a PR.
+#
+# The PR is opened with the default GITHUB_TOKEN, so CI does not run on it
+# automatically (GitHub's anti-recursion rule). Close/reopen the PR or push
+# to its branch to trigger CI, or swap `token` for a PAT/GitHub-App token
+# if hands-off CI matters more than the extra credential.
+name: Bump uv pin
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC — off the top of the hour
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check latest uv release and update pin
+        id: bump
+        run: |
+          set -eu
+          current=$(sed -n 's/^UV_PINNED_VERSION="\([^"]*\)".*/\1/p' install.sh)
+          [ -n "$current" ] || { echo "::error::UV_PINNED_VERSION not found in install.sh"; exit 1; }
+
+          latest=$(curl -LsSf https://api.github.com/repos/astral-sh/uv/releases/latest \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['tag_name'])")
+          echo "current=$current latest=$latest"
+
+          if [ "$latest" = "$current" ]; then
+            echo "Pin is already at the latest release."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          curl -LsSf -o /tmp/uv-install.sh "https://astral.sh/uv/$latest/install.sh"
+          # Sanity check: the cargo-dist installer embeds its own version.
+          grep -q "$latest" /tmp/uv-install.sh \
+            || { echo "::error::downloaded installer does not mention $latest — refusing to pin it"; exit 1; }
+          sha=$(sha256sum /tmp/uv-install.sh | awk '{print $1}')
+
+          # Rewrite only the quoted values so the surrounding comments
+          # (including the detect-secrets pragma on the sha line) survive.
+          sed -i "s|^UV_PINNED_VERSION=\"$current\"|UV_PINNED_VERSION=\"$latest\"|" install.sh
+          sed -i "s|^\(UV_INSTALLER_SHA256=\"\)[0-9a-f]\{64\}\"|\1$sha\"|" install.sh
+          grep -q "^UV_PINNED_VERSION=\"$latest\"" install.sh
+          grep -q "^UV_INSTALLER_SHA256=\"$sha\"" install.sh
+          grep -q "pragma: allowlist secret" install.sh
+
+          # Prove the updated pin actually installs before proposing it.
+          sh /tmp/uv-install.sh
+          ~/.local/bin/uv --version
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+
+      - name: Open PR
+        if: steps.bump.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: bot/bump-uv-pin
+          title: "Bump pinned uv ${{ steps.bump.outputs.current }} → ${{ steps.bump.outputs.latest }}"
+          commit-message: "Bump pinned uv ${{ steps.bump.outputs.current }} → ${{ steps.bump.outputs.latest }}"
+          body: |
+            Automated bump of the uv installer pin in `install.sh`.
+
+            - `UV_PINNED_VERSION`: `${{ steps.bump.outputs.current }}` → `${{ steps.bump.outputs.latest }}`
+            - `UV_INSTALLER_SHA256`: recomputed from `https://astral.sh/uv/${{ steps.bump.outputs.latest }}/install.sh`
+
+            The workflow verified the new installer runs and `uv --version`
+            works before opening this PR. Release notes:
+            https://github.com/astral-sh/uv/releases/tag/${{ steps.bump.outputs.latest }}
+          delete-branch: true

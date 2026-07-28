@@ -1,0 +1,379 @@
+/* --- Send / prompt-queue: the Queue tab (badge + inline console) --- */
+/* The tab label matches the other tabs in every state — no accent/gold tint;
+   status is conveyed by the neutral badge (count, or ⏳ when usage-limited). */
+.pane-head .tabs button.queue-tab {
+  position: relative;
+}
+
+.queue-tab-badge {
+  display: inline-block;
+  margin-left: 5px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+/* On the active tab (light text on accent bg) keep the badge legible. */
+.pane-head .tabs button.queue-tab.active .queue-tab-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border-color: transparent;
+}
+
+.pane-head .tabs button.queue-tab.q-paused .queue-tab-badge {
+  opacity: 0.55;
+}
+
+.queue-tab-badge.hidden {
+  display: none;
+}
+
+/* --- Send / prompt-queue: the Queue tab body (fills the pane, scrolls) --- */
+.pane-queue {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  overflow: auto;
+  color: var(--text);
+}
+
+.pane-queue.hidden {
+  display: none;
+}
+
+.queue-loading {
+  padding: 14px 16px;
+  font-size: 13px;
+}
+
+/* Fill the pane: a centered column that uses the full height, capped at a
+   comfortable reading width so the composer/flags don't stretch absurdly wide
+   on big panes, but never a small box pinned to a corner. Base type matches
+   the settings dialog (14px fields, 13px labels/hints). */
+.queue-console {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  min-height: 100%;
+  padding: 24px 32px;
+  font-size: 14px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+}
+
+.queue-pop-head {
+  margin-bottom: 10px;
+}
+
+.queue-pop-title {
+  font-weight: 600;
+  font-size: 16px;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-pop-sub {
+  display: block;
+  font-size: 13px;
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.queue-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 120px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  margin-top: 10px;
+}
+
+.queue-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.queue-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.queue-actions button {
+  flex: 1;
+  cursor: pointer;
+  border-radius: 7px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.queue-actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.queue-actions button.primary:hover {
+  filter: brightness(1.08);
+}
+
+.queue-actions button:hover {
+  border-color: var(--accent);
+}
+
+.queue-flags {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 14px 0 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.queue-flags label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.queue-loop-timer {
+  margin-left: 24px;
+}
+
+.queue-loop-timer.disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.queue-loop-interval {
+  width: 60px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 13px;
+  text-align: right;
+}
+
+.queue-loop-interval:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.queue-loop-interval:disabled {
+  opacity: 0.5;
+}
+
+/* The list takes the remaining vertical space so the queue fills the pane
+   rather than leaving a large empty gap below a short list. */
+.queue-list {
+  margin-top: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.queue-status {
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  border-radius: 7px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+.queue-status.muted {
+  color: var(--muted);
+}
+
+.queue-status.queue-limited {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+.queue-status.queue-stopped {
+  color: var(--red);
+  font-weight: 600;
+}
+
+/* Window-refresh keepalive (E): provider checkboxes in Settings → Coding CLI. */
+.wr-providers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.wr-prov {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.queue-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.queue-item-pos {
+  flex: 0 0 auto;
+  width: 20px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-item.queue-next .queue-item-pos {
+  color: var(--accent);
+}
+
+.queue-item.queue-next .queue-item-text {
+  color: var(--text);
+}
+
+/* Full prompt text, wrapped — the list is the point of the tab, so give each
+   item real room instead of a one-line ellipsis. Very long prompts scroll
+   within the row rather than swallowing the whole list. */
+.queue-item-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.queue-item-ctrls {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+}
+
+/* Inline item editor (✎ / double-click): textarea + Save/Cancel in the row. */
+.queue-item-edit {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-item-edit textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 70px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.queue-item-edit textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.queue-item-edit-btns {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.queue-item-edit-btns button {
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.queue-item-edit-btns .qi-save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.queue-item-edit-btns button:hover {
+  border-color: var(--accent);
+}
+
+.queue-item-ctrls button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 6px;
+  font-size: 13px;
+  padding: 3px 8px;
+  font-family: inherit;
+}
+
+.queue-item-ctrls button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.queue-item-ctrls button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.queue-clear {
+  margin-top: 12px;
+  width: 100%;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 8px;
+  font-family: inherit;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 7px;
+}
+
+.queue-clear:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+

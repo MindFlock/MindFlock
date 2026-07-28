@@ -1,0 +1,16 @@
+MindFlock
+Copyright 2026 Ethan Mandel (d/b/a MindFlock)
+
+This product is licensed under the Apache License, Version 2.0 (the "License");
+you may not use this software except in compliance with the License. A copy of
+the License is provided in the LICENSE file, and may also be obtained at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+"MindFlock" and the MindFlock logo are trademarks of Ethan Mandel (d/b/a
+MindFlock). The Apache-2.0 license grants no trademark rights; see TRADEMARKS.md
+for the trademark policy that forks must follow.
+
+This software depends on third-party open-source packages, each distributed
+under its own license. Those licenses are retrieved with the dependencies at
+install time and are not reproduced here.

@@ -1,0 +1,720 @@
+/* Productization settings sections + provider manager. The panel's own box —
+   including its fixed size — lives in SettingsDialog.css. */
+#settings-body {
+  display: flex;
+  gap: 16px;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+#settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: none;
+  width: 132px;
+  border-right: 1px solid var(--border);
+  padding-right: 12px;
+  /* Scroll the nav independently so the bottom items (System logs, Advanced)
+     are always reachable on a short window instead of being clipped. */
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.set-nav-item {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.set-nav-item:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.set-nav-item.active {
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+}
+
+#settings-screens {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.set-screen {
+  display: none;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.set-screen.active {
+  display: flex;
+}
+
+.set-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.set-section-title {
+  margin: 6px 0 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+/* Consistent vertical rhythm: every screen leads flush with its title; later
+   section titles within a screen get breathing room to read as a new group. */
+.set-screen>.set-section-title {
+  margin-top: 16px;
+}
+
+.set-screen>.set-section-title:first-child {
+  margin-top: 0;
+}
+
+/* Primary action button (add / create), one accent style everywhere. Secondary
+   actions (Test, Re-check) stay the outline .test-btn — same size, so a
+   primary/secondary pair lines up. */
+.btn-primary {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.08);
+}
+
+/* Narrow numeric input (e.g. refresh interval) — replaces an inline width. */
+.num-sm {
+  width: 6em;
+}
+
+.set-row input[type="text"],
+.set-row input[type="password"],
+.set-row input[type="number"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.set-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* A short paragraph of guidance that sits above a block of fields. */
+.set-block-hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 4px 0 2px;
+  line-height: 1.5;
+}
+
+/* Automated PR review status line: no on/off toggle — the repo list is the
+   switch, and this line reflects it. */
+.pr-status {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 2px 0 8px;
+}
+
+.pr-status.on {
+  color: var(--green);
+}
+
+.pr-status.paused {
+  color: var(--amber, #d9a441);
+}
+
+/* Advanced options fold (tuning fields hidden by default so "add a repo" is
+   the clear primary action). */
+.pr-advanced {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.pr-advanced>summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  list-style: revert;
+}
+
+.pr-advanced>summary:hover {
+  color: var(--text);
+}
+
+.pr-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+/* Multi-repo add/remove list (PR-review repos). */
+.repo-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.repo-empty {
+  font-size: 13px;
+  color: var(--muted);
+  width: 100%;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  text-align: center;
+}
+
+.repo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 6px 3px 10px;
+  font-size: 13px;
+}
+
+.repo-chip-name {
+  font-family: var(--mono, monospace);
+}
+
+.repo-chip-x {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 999px;
+}
+
+.repo-chip-x:hover {
+  color: var(--text);
+  background: var(--border);
+}
+
+.repo-add-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+/* Launch-flag preset chips (New Session dialog + Coding CLI settings). Toggle
+   buttons that add/remove a common CLI flag; .active = flag present in field. */
+.flag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.flag-chip {
+  border: 1px solid var(--border);
+  background: var(--panel-2, var(--panel));
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color .12s, color .12s, background .12s;
+}
+
+.flag-chip:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.flag-chip.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.flag-chip.active::before {
+  content: "\2713\00a0";
+}
+
+/* leading checkmark */
+.repo-add-row input {
+  flex: 1 1 auto;
+}
+
+.repo-add-row button {
+  flex: none;
+  white-space: nowrap;
+  cursor: pointer;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+  border-radius: 7px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.repo-add-row button:hover {
+  filter: brightness(1.08);
+}
+
+.repo-add-row button:active {
+  filter: brightness(0.95);
+}
+
+/* Open-PR list + force review (Settings → PR review). Each row: ref+title,
+   a meta line with the auto-monitor's skip reasons, and a Begin review button. */
+.pr-open-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.pr-open-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pr-open-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pr-open-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 3px;
+  align-items: center;
+  background: var(--panel, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.pr-open-main {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.pr-open-ref {
+  font-family: var(--mono, monospace);
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.pr-open-ref:hover {
+  text-decoration: underline;
+}
+
+/* The full title is the only way to tell PRs apart — always show it whole
+   (wrap, never ellipsize), even on a narrow settings pane. */
+.pr-open-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pr-open-meta {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pr-open-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.pr-open-chip.ok {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.pr-open-chip.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.pr-review-btn {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  white-space: nowrap;
+  cursor: pointer;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+  border-radius: 7px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.pr-review-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.pr-review-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.prov-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.prov-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+.prov-item .prov-name {
+  font-weight: 600;
+}
+
+.prov-item .prov-meta {
+  color: var(--muted);
+  flex: 1;
+  font-size: 11px;
+}
+
+.prov-item .prov-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.prov-item button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.prov-item button:hover {
+  border-color: var(--accent);
+}
+
+#prov-add summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.prov-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.prov-form input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.prov-form button {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+  border-radius: 7px;
+  padding: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+/* Provider connection view (installed / signed-in status + install + login). */
+.prov-conn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.prov-conn {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.prov-conn-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.prov-conn .prov-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.prov-badge,
+.prov-conn .prov-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.prov-dot {
+  margin-left: auto;
+  font-size: 11px;
+  border-radius: 999px;
+  padding: 1px 9px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.prov-dot + .prov-dot {
+  margin-left: 6px;
+}
+.prov-dot.ok {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 45%, transparent);
+}
+.prov-dot.bad {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, transparent);
+}
+.prov-dot.unknown {
+  color: var(--muted);
+}
+
+.prov-install {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.prov-install code {
+  flex: 1;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 12px;
+  background: var(--panel, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.prov-install button,
+.prov-conn-actions button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.prov-install button:hover,
+.prov-conn-actions button:hover {
+  border-color: var(--accent);
+}
+
+.prov-conn-actions {
+  display: flex;
+  gap: 8px;
+}
+.prov-conn-actions .prov-login-btn {
+  background: var(--accent);
+  border: none;
+  color: #fff;
+}
+
+/* Provider-login terminal modal. */
+.prov-login-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(860px, 92vw);
+  height: min(600px, 82vh);
+  background: var(--panel, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  gap: 8px;
+}
+.prov-login-term {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+}
+.prov-login-term .term-container {
+  width: 100%;
+  height: 100%;
+}
+
+
+/* Assigned-tickets buckets (Settings → Ticketing): one titled group per
+   workflow state, chosen via the "+ Add bucket…" dropdown / per-bucket ✕. */
+#tk-tickets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tk-bucket-add {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  max-width: 220px;
+}
+
+.tk-bucket-add:disabled {
+  opacity: 0.6;
+}
+
+.tk-bucket-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The header is the dropdown: caret + name + count toggle the bucket open. */
+.tk-bucket-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.tk-bucket-toggle:hover .tk-bucket-name {
+  color: var(--text);
+}
+
+.tk-bucket + .tk-bucket {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.tk-bucket .pr-open-list {
+  margin-top: 6px;
+}
+
+.tk-bucket-name {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.tk-bucket-count {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 7px;
+  background: var(--panel-2);
+}
+
+.tk-bucket-x {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 5px;
+}
+
+.tk-bucket-x:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}

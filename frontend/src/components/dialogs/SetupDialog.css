@@ -1,0 +1,210 @@
+/* --------------------------------------------------------------------------- *
+ * C2 — first-run setup checklist (empty-state card + footer Setup dialog) and
+ * the shared doctor-check list (also rendered in Settings → Doctor).
+ * --------------------------------------------------------------------------- */
+#empty .setup-card {
+  max-width: 560px;
+  width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  margin: 10px auto;
+  padding: 24px 28px;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+#empty .setup-card h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+  color: var(--text);
+}
+
+#empty .setup-card>p {
+  margin: 0 0 14px;
+  font-size: 13px;
+}
+
+.setup-step {
+  margin-bottom: 18px;
+}
+
+.setup-step h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.setup-step .setup-num {
+  color: var(--accent);
+  font-size: 15px;
+}
+
+.setup-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.setup-actions button,
+.setup-acct-row button,
+.test-btn {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.setup-actions button:hover,
+.setup-acct-row button:hover,
+.test-btn:hover {
+  border-color: var(--accent);
+}
+
+.setup-actions .setup-new {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.setup-actions .setup-new:hover {
+  filter: brightness(1.1);
+}
+
+.setup-acct-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.setup-acct-row button {
+  flex: none;
+  min-width: 130px;
+  text-align: center;
+}
+
+.setup-hint {
+  font-size: 11px;
+  margin: 6px 0 0;
+}
+
+button.linklike {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+#setup-panel-dlg {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 22px;
+  width: 560px;
+  max-width: 92vw;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#setup-dialog-body {
+  overflow-y: auto;
+}
+
+/* Doctor check list (setup panel + Settings → Doctor). */
+.doctor-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.doctor-check {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.doctor-check .doctor-ico {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.doctor-check.st-ok .doctor-ico {
+  color: var(--green);
+}
+
+.doctor-check.st-info .doctor-ico {
+  color: var(--muted);
+}
+
+.doctor-check.st-warn .doctor-ico {
+  color: #e8a13c;
+}
+
+.doctor-check.st-fail .doctor-ico {
+  color: var(--red);
+}
+
+.doctor-check .doctor-label {
+  flex: none;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 84px;
+}
+
+.doctor-check .doctor-detail {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  word-break: break-word;
+}
+
+.doctor-check .doctor-fix {
+  color: #e8a13c;
+}
+
+/* E3 — inline Test buttons + ✓/✗ results in Settings. */
+.test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.test-result {
+  font-size: 12px;
+  color: var(--muted);
+  min-height: 15px;
+  word-break: break-word;
+}
+
+.test-result.ok {
+  color: var(--green);
+}
+
+.test-result.bad {
+  color: var(--red);
+}
