@@ -31,11 +31,49 @@ uv run mindflock serve            # localhost:8765, from a repo you want to mana
 Runtime deps: `git`, `tmux`, and at least one agent CLI (`claude` by
 default). `mindflock doctor --fix` offers to install what's missing.
 
+Optional but recommended — the repo's hooks, both stages:
+
+```bash
+uvx pre-commit install --hook-type pre-commit --hook-type pre-push
+```
+
+`pre-commit`: black + a secret scan. `pre-push`: the version manifests agree
+(the version lives in **four** places — `pyproject.toml`, `electron/` and
+`frontend/package.json`, and `uv.lock`) and the frontend bundle is current
+(below). Both mirror CI, so you find out before the push rather than after.
+
+## Frontend changes
+
+The web UI is React + TypeScript under `frontend/`, but **the built bundle is
+committed and is what ships**: `uv build` copies `backend/web/static/app.js`
+into the wheel and electron-builder packages the same tree — neither ever runs
+vite. So a change under `frontend/src/` is only half a change until its build
+is committed with it:
+
+```bash
+cd frontend
+npm ci                     # not `npm install` — the lockfile is the contract
+npm test                   # vitest, node env
+npm run build              # typechecks, then writes backend/web/static/
+cd .. && git add backend/web/static
+```
+
+CI's `frontend bundle is current` job rebuilds and fails when the committed
+tree differs, so a forgotten build is a red build rather than a shipped UI that
+silently lags its own source. `scripts/check-bundle-fresh.sh` is the same check,
+and what the pre-push hook runs.
+
+One pin is load-bearing beyond its version: **`@vitejs/plugin-react` must stay
+≤ 5.x** while the project pins vite 6 — the plugin's v6 imports `vite/internal`,
+which only exists in vite 8, and bumping it breaks both `npm ci` resolution and
+`vite build`. Bump the plugin and vite together or not at all.
+
 ## Tests
 
 ```bash
 uv run pytest              # full suite (unit + property + integration)
 uv run pytest tests/unit   # fast path while iterating
+cd frontend && npm test    # the frontend suite is NOT part of pytest
 ```
 
 - Add tests for what you change. The suite runs with the auth gate off and a

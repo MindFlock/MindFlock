@@ -1,0 +1,30 @@
+# Review routing. Deliberately NOT a global owner — most of the tree reviews
+# fine on its own. These paths decide what ships, how it is built, or what runs
+# on a stranger's machine, so they should never land without a maintainer
+# looking, however small the diff:
+#
+#   .github/workflows/    CI and release. A workflow edit is the supply-chain
+#                         surface: it can publish assets, and on a fork PR it
+#                         runs attacker-authored steps (read-only token, but
+#                         still execution).
+#   install.sh            what `curl … | sh` executes, as root-adjacent as this
+#                         project gets.
+#   scripts/              the single writer of the version across four
+#                         manifests, and the bundle-freshness gate.
+#   electron/             the unsigned installers behind the front-page buttons,
+#                         whose version-less filenames those buttons depend on.
+#   backend/web/static/   the committed bundle that ships inside the wheel.
+#
+# GitHub auto-requests review from the owner listed here. It only *blocks* a
+# merge if "Require review from Code Owners" is enabled on the branch ruleset —
+# worth turning on when there is more than one committer.
+
+/.github/workflows/   @emandel2630
+/.github/CODEOWNERS   @emandel2630
+/install.sh           @emandel2630
+/scripts/             @emandel2630
+/electron/            @emandel2630
+/backend/web/static/  @emandel2630
+/pyproject.toml       @emandel2630
+/CLA.md               @emandel2630
+/SECURITY.md          @emandel2630
