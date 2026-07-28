@@ -131,14 +131,32 @@ function startServerIfNeeded() {
       : WSL_DISTRO
         ? 'in this WSL distro (' + WSL_DISTRO + ')'
         : 'in your default WSL distro'
+    // Detach the server into its OWN session via `setsid`, so it outlives THIS
+    // bootstrap's wsl.exe session. Without it, a bootstrap that LOSES the flock
+    // keepalive race below -- because a *previous*, now-serverless keepalive
+    // still holds the lock -- exec-fails straight out of `flock -n`, tearing
+    // its session down and SIGHUP-killing the serve it just backgrounded. An
+    // orphaned keepalive then wedges auto-start permanently: the distro stays
+    // up (the stale keepalive holds it) but every new serve dies before it can
+    // bind, so the app sits on "Connecting…" forever (2026-07-27 WSL incident).
+    // setsid puts serve in a new session immune to that teardown; the stale
+    // keepalive now merely keeps the distro alive long enough for it to bind.
+    // `command -v setsid` guards it: setsid ships with util-linux (present
+    // wherever the flock keepalive is) but NOT on macOS, whose native path has
+    // no keepalive and already detaches via spawn({detached}) -- there $SETSID
+    // is empty and this collapses back to the original bare exec.
+    const setsidPrefix = 'SETSID="$(command -v setsid || true)"; '
+    const redirect = ' </dev/null >>"$MF_LOG" 2>&1'
     const launch = WSL_REPO
-      ? 'cd ' + shq(WSL_REPO) + ' && exec .venv/bin/python backend/web/run.py'
-      : 'MF="$(command -v mindflock || true)";'
+      ? setsidPrefix + 'cd ' + shq(WSL_REPO)
+        + ' && exec $SETSID .venv/bin/python backend/web/run.py' + redirect
+      : setsidPrefix
+        + 'MF="$(command -v mindflock || true)";'
         + ' [ -z "$MF" ] && [ -x "$HOME/.local/bin/mindflock" ] && MF="$HOME/.local/bin/mindflock";'
         // cd "$HOME" first: wsl.exe starts the shell in the Windows cwd of the
         // app (C:\Program Files\MindFlock -> /mnt/c/...), and `mindflock serve`
         // manages whatever repo it is started from.
-        + ' if [ -n "$MF" ]; then cd "$HOME"; exec "$MF" serve;'
+        + ' if [ -n "$MF" ]; then cd "$HOME"; exec $SETSID "$MF" serve' + redirect + ';'
         + ' else echo "mindflock is not installed ' + where + '."'
         + ' && echo "Install it:  curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh | sh";'
         + ' fi'
