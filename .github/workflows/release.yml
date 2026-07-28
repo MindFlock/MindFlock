@@ -41,7 +41,7 @@ jobs:
         run: python3 scripts/bump-version.py --check --expect "$GITHUB_REF_NAME"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
 
