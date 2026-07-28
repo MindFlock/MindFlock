@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-07-28
+
+### Fixed
+
+- **Settings → System logs: clicking the log path did nothing on Windows.**
+  When the engine runs inside WSL while the desktop app runs on Windows, the
+  path it reports (`/tmp/mindflock.log`) is a Linux path Explorer can't reach.
+  `showItemInFolder` failed silently there (nothing opened, no error), so the
+  click had no effect at all. The shell now only claims success when the file
+  is actually reachable from the machine the app is on, and otherwise the UI
+  falls back to copying the path to the clipboard.
+- **Update toast was confusing when only the desktop app was behind.** The
+  wordmark shows the *engine* version, which updates on its own, so a user
+  whose engine already read the latest version saw "MindFlock X is available"
+  and thought it was nagging about the version they were already running. The
+  toast now spells out that it's the *desktop app* that's behind and which
+  version it's on.
+
 ## [0.1.2] - 2026-07-28
 
 ## [0.1.1] - 2026-07-28
@@ -210,7 +228,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.3
 [0.1.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.2
 [0.1.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.1
 [0.1.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.0

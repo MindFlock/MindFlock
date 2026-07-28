@@ -343,8 +343,18 @@ ipcMain.handle('diag:get', () => {
 ipcMain.handle('shell:show-item', (_e, p) => {
   const target = String(p || '').trim()
   if (!target) return { ok: false, error: 'no path' }
+  // The engine can live on a different host than this shell — the common case
+  // is the server running inside WSL while the app runs on Windows, so the log
+  // path it reports ("/tmp/mindflock.log") is a Linux path Explorer can't reach.
+  // showItemInFolder fails SILENTLY there (path.resolve turns it into a bogus
+  // C:\tmp\… , nothing opens, and it never throws), which left the click doing
+  // nothing at all. Guard on the file actually being reachable from THIS machine
+  // and otherwise report failure so the renderer falls back to copying the path.
+  let resolved
+  try { resolved = path.resolve(target) } catch (e) { return { ok: false, error: 'bad path' } }
+  if (!fs.existsSync(resolved)) return { ok: false, error: 'not on this machine' }
   try {
-    shell.showItemInFolder(path.resolve(target))
+    shell.showItemInFolder(resolved)
     return { ok: true }
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) }
@@ -875,6 +885,7 @@ async function checkForUpdates() {
   if (cmpVersion(latest, app.getVersion()) <= 0) { updateAvailable = null; return }
   updateAvailable = {
     version: latest,
+    current: app.getVersion(),
     url: rel.html_url || UPDATE_RELEASES_URL,
     notes: String(rel.name || rel.body || '').slice(0, 280),
   }
@@ -1098,7 +1109,15 @@ const UPDATE_JS = `
     skip.addEventListener('click', function () { window.mfupdate.skip(info.version); drop(c); });
     c.appendChild(closeBtn(c));
     c.appendChild(el('div', 'mf-up-title', 'Update available'));
-    c.appendChild(el('div', 'mf-up-body', 'MindFlock ' + info.version + ' is available.'));
+    // Show what they’re on: the wordmark carries the ENGINE version (which
+    // updates on its own), so without this a user whose engine already reads
+    // 0.1.2 sees "0.1.2 is available" and thinks it’s nagging about the
+    // version they’re already running — it’s the desktop app that’s behind.
+    c.appendChild(el('div', 'mf-up-body',
+      'MindFlock ' + info.version + ' is available'
+      + (info.current && info.current !== info.version
+          ? ' \\u2014 the desktop app you\\u2019re running is ' + info.current : '')
+      + '.'));
     c.appendChild(row); c.appendChild(skip);
   }
 
