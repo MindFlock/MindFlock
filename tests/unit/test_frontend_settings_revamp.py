@@ -99,6 +99,17 @@ def test_system_logs_screen_present_and_wired():
     assert "Open as pane" in js  # wired into nav switch
 
 
+def test_system_logs_path_is_clickable_to_reveal_or_copy():
+    """The selected log's full path renders as a clickable control — reveal in
+    Finder inside the desktop shell (window.mfshell.showItem), copy otherwise —
+    so users can jump to or grab the file when filing a bug."""
+    js = client.get("/app.js").text
+    assert '"logs-path"' in js
+    assert "showItem" in js  # the desktop reveal bridge
+    css = client.get("/style.css").text
+    assert ".logs-path" in css
+
+
 def test_settings_nav_scrolls_so_all_items_reachable():
     """The settings nav column must scroll independently, else the bottom items
     (System logs, Advanced) get clipped on a short window."""

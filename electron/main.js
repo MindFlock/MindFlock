@@ -338,6 +338,19 @@ ipcMain.handle('diag:get', () => {
   return diag
 })
 
+// Reveal a file in Finder/Explorer (Settings → System logs "open in Finder").
+// showItemInFolder opens the containing folder with the file selected.
+ipcMain.handle('shell:show-item', (_e, p) => {
+  const target = String(p || '').trim()
+  if (!target) return { ok: false, error: 'no path' }
+  try {
+    shell.showItemInFolder(path.resolve(target))
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) }
+  }
+})
+
 // One-click recovery for a wedged WSL: `wsl --shutdown` stops the utility VM
 // (the offline page warns that this closes anything else running in WSL),
 // then the normal launcher cold-boots the distro and the server again.

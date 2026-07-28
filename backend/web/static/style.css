@@ -7381,6 +7381,25 @@ button.linklike {
   word-break: break-all;
 }
 
+/* Full log-file path — click to reveal in Finder (desktop) or copy (browser). */
+.logs-path {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  color: var(--accent);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+  cursor: pointer;
+}
+
+.logs-path:hover {
+  text-decoration: underline;
+}
+
 .logs-view {
   background: var(--bg);
   border: 1px solid var(--border);

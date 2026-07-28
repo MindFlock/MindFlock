@@ -3,7 +3,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
+import { copyText } from "../../../lib/clipboard";
+import { toast } from "../../../lib/toast";
 import type { ScreenProps } from "../SettingsDialog";
+
+/** Reveal-in-file-manager bridge — present only inside the desktop shell. */
+function shellShowItem(): ((p: string) => Promise<{ ok?: boolean }>) | undefined {
+  return (window as unknown as { mfshell?: { showItem?: (p: string) => Promise<{ ok?: boolean }> } })
+    .mfshell?.showItem;
+}
 
 interface LogsPayload {
   sources?: Array<{ name: string; label: string; path?: string }>;
@@ -19,8 +27,21 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
   const [selected, setSelected] = useState("server");
   const [text, setText] = useState("Loading…");
   const [meta, setMeta] = useState("");
+  const [path, setPath] = useState("");
   const [follow, setFollow] = useState(false);
   const viewRef = useRef<HTMLPreElement | null>(null);
+
+  const revealPath = useCallback(async () => {
+    if (!path) return;
+    const show = shellShowItem();
+    if (show) {
+      const r = await show(path).catch(() => null);
+      if (r && r.ok !== false) return;
+      // Couldn't open it (deleted, sandbox) — fall back to copying the path.
+    }
+    const ok = await copyText(path);
+    toast(ok ? "Log path copied to clipboard" : path);
+  }, [path]);
 
   const load = useCallback(async () => {
     let d: LogsPayload;
@@ -37,7 +58,8 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
     if (atBottom && view) requestAnimationFrame(() => (view.scrollTop = view.scrollHeight));
     const src = (d.sources || []).find((s) => s.name === d.selected);
     const kb = Math.round((d.size || 0) / 1024);
-    setMeta((src?.path ? src.path + "  ·  " : "") + kb + " KB" + (d.truncated ? " (showing last 256 KB)" : ""));
+    setPath(src?.path || "");
+    setMeta(kb + " KB" + (d.truncated ? " (showing last 256 KB)" : ""));
   }, [selected]);
 
   useEffect(() => {
@@ -56,8 +78,10 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
     <>
       <h3 className="set-section-title">System logs</h3>
       <p className="set-hint">
-        The server's own log — every request plus errors and background activity, newest last
-        (up to 256 KB). Handy when something misbehaves; copy the tail when reporting an issue.
+        The server's log plus the ingestion pipeline's, newest last (up to 256 KB each). Handy
+        when something misbehaves — <strong>please paste the relevant tail into a GitHub issue
+        when reporting a bug</strong> (Ingestion pipeline is the one to grab for PR-review or
+        ticket problems).
       </p>
       <div className="logs-toolbar">
         <select
@@ -90,6 +114,21 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
         </label>
         <span id="logs-meta" className="muted">{meta}</span>
       </div>
+      {path && (
+        <button
+          type="button"
+          id="logs-path"
+          className="logs-path"
+          title={
+            shellShowItem()
+              ? "Reveal this log file in Finder / your file manager"
+              : "Copy this log file's full path"
+          }
+          onClick={revealPath}
+        >
+          {path}
+        </button>
+      )}
       <pre id="logs-view" className="logs-view" ref={viewRef}>
         {text}
       </pre>

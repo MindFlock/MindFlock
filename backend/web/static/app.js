@@ -31322,13 +31322,28 @@ function Doctor(_) {
     ] })
   ] });
 }
+function shellShowItem() {
+  var _a2;
+  return (_a2 = window.mfshell) == null ? void 0 : _a2.showItem;
+}
 function SystemLogs({ onOpenSysLogsPane }) {
   const [sources, setSources] = reactExports.useState([]);
   const [selected, setSelected] = reactExports.useState("server");
   const [text, setText] = reactExports.useState("Loading…");
   const [meta, setMeta] = reactExports.useState("");
+  const [path, setPath] = reactExports.useState("");
   const [follow, setFollow] = reactExports.useState(false);
   const viewRef = reactExports.useRef(null);
+  const revealPath = reactExports.useCallback(async () => {
+    if (!path) return;
+    const show = shellShowItem();
+    if (show) {
+      const r = await show(path).catch(() => null);
+      if (r && r.ok !== false) return;
+    }
+    const ok = await copyText(path);
+    toast(ok ? "Log path copied to clipboard" : path);
+  }, [path]);
   const load2 = reactExports.useCallback(async () => {
     let d;
     try {
@@ -31344,7 +31359,8 @@ function SystemLogs({ onOpenSysLogsPane }) {
     if (atBottom && view) requestAnimationFrame(() => view.scrollTop = view.scrollHeight);
     const src = (d.sources || []).find((s) => s.name === d.selected);
     const kb = Math.round((d.size || 0) / 1024);
-    setMeta(((src == null ? void 0 : src.path) ? src.path + "  ·  " : "") + kb + " KB" + (d.truncated ? " (showing last 256 KB)" : ""));
+    setPath((src == null ? void 0 : src.path) || "");
+    setMeta(kb + " KB" + (d.truncated ? " (showing last 256 KB)" : ""));
   }, [selected]);
   reactExports.useEffect(() => {
     load2();
@@ -31358,7 +31374,11 @@ function SystemLogs({ onOpenSysLogsPane }) {
   }, [follow, load2]);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "System logs" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "The server's own log — every request plus errors and background activity, newest last (up to 256 KB). Handy when something misbehaves; copy the tail when reporting an issue." }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint", children: [
+      "The server's log plus the ingestion pipeline's, newest last (up to 256 KB each). Handy when something misbehaves — ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "please paste the relevant tail into a GitHub issue when reporting a bug" }),
+      " (Ingestion pipeline is the one to grab for PR-review or ticket problems)."
+    ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "logs-toolbar", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "select",
@@ -31389,6 +31409,17 @@ function SystemLogs({ onOpenSysLogsPane }) {
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: "logs-meta", className: "muted", children: meta })
     ] }),
+    path && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "button",
+      {
+        type: "button",
+        id: "logs-path",
+        className: "logs-path",
+        title: shellShowItem() ? "Reveal this log file in Finder / your file manager" : "Copy this log file's full path",
+        onClick: revealPath,
+        children: path
+      }
+    ),
     /* @__PURE__ */ jsxRuntimeExports.jsx("pre", { id: "logs-view", className: "logs-view", ref: viewRef, children: text })
   ] });
 }
