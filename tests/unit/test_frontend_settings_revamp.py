@@ -166,6 +166,24 @@ def test_api_logs_returns_server_tail():
     assert client.get("/api/logs?name=bogus").json()["selected"] == "server"
 
 
+def test_ingestion_logs_surface_from_repo_root_not_cwd(tmp_path, monkeypatch):
+    """The pipeline runs as a subprocess from the repo root, so its logs live at
+    ``<repo root>/logs/`` — not the server's cwd. ``_log_sources`` must resolve
+    them via that root (the same anchor the ingestion addon launches from), or
+    the ingestion log goes missing and only 'server' shows in System logs."""
+    from backend.web.core import system_logs
+
+    (tmp_path / "config.toml").write_text("")
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "ticket-ingestion.log").write_text("hello ingestion\n")
+    (logs / "pipeline.log").write_text("structured line\n")
+    monkeypatch.setenv("MINDFLOCK_REPO_ROOT", str(tmp_path))
+
+    names = {s["name"] for s in system_logs._log_sources()}
+    assert {"server", "ingestion", "pipeline"} <= names
+
+
 def test_activity_log_records_requests_and_redacts_token(monkeypatch):
     """The HTTP activity-log middleware logs every request as
     ``METHOD path -> status ms client`` with the access token redacted."""

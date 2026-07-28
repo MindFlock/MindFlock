@@ -10,6 +10,7 @@ Split out of ``backend.web.server`` (which re-imports these names — the
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from backend import log
@@ -17,22 +18,41 @@ from backend import log
 _LOG_TAIL_MAX = 256 * 1024  # only ever read/return the last 256 KB of a log
 
 
+def _resolve_repo_root() -> Path:
+    """The directory the ingestion pipeline runs in — where ``config.toml`` and
+    its ``logs/`` live. Same resolution the ingestion addon uses to launch the
+    subprocess (``MINDFLOCK_REPO_ROOT`` env → nearest ancestor with
+    ``config.toml`` → cwd), because THIS server's cwd is not guaranteed to
+    match the pipeline's — which is exactly why a hard-coded relative
+    ``logs/pipeline.log`` never resolved and the ingestion log went missing."""
+    env = (os.environ.get("MINDFLOCK_REPO_ROOT") or "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "config.toml").is_file():
+            return parent
+    return Path.cwd()
+
+
 def _log_sources() -> list:
-    """Log files worth surfacing: the server's own log always, plus the
-    ingestion pipeline log when it exists (default ``./logs/pipeline.log``)."""
+    """Log files worth surfacing in Settings → System logs: the server's own
+    log always, plus the ingestion pipeline's logs when they exist. The pipeline
+    runs as a subprocess from the repo root, so its logs live under
+    ``<repo root>/logs/`` — resolved here rather than relative to this server's
+    cwd. Both the raw stdout/stderr capture (what the sidebar tails) and the
+    structured pipeline log are offered so nothing about a run is hidden."""
     sources = [{"name": "server", "label": "Server", "path": str(log.logFileName)}]
-    ing = Path("logs/pipeline.log")
-    try:
-        if ing.exists():
-            sources.append(
-                {
-                    "name": "ingestion",
-                    "label": "Ingestion pipeline",
-                    "path": str(ing.resolve()),
-                }
-            )
-    except OSError:
-        pass
+    root = _resolve_repo_root()
+    candidates = [
+        ("ingestion", "Ingestion pipeline", root / "logs" / "ticket-ingestion.log"),
+        ("pipeline", "Ingestion (structured)", root / "logs" / "pipeline.log"),
+    ]
+    for name, label, path in candidates:
+        try:
+            if path.is_file():
+                sources.append({"name": name, "label": label, "path": str(path)})
+        except OSError:
+            pass
     return sources
 
 

@@ -14,12 +14,14 @@ _DATE_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 def _log_max_bytes() -> int:
     """Rolling-window size for the pipeline log so it can't grow unbounded.
-    Keeps the last ~50 KB (current file ≤ this, plus one rollover backup).
-    Override with MINDFLOCK_PIPELINE_LOG_MAX_BYTES."""
+    Keeps the last ~2 MB (current file ≤ this, plus one rollover backup) — big
+    enough that DEBUG-level ingestion history survives long enough to read in
+    Settings → System logs (whose tail reads the last 256 KB). Override with
+    MINDFLOCK_PIPELINE_LOG_MAX_BYTES."""
     try:
-        return int(os.environ.get("MINDFLOCK_PIPELINE_LOG_MAX_BYTES", 50 * 1024))
+        return int(os.environ.get("MINDFLOCK_PIPELINE_LOG_MAX_BYTES", 2 * 1024 * 1024))
     except (TypeError, ValueError):
-        return 50 * 1024
+        return 2 * 1024 * 1024
 
 
 def setup_logging(config: PipelineConfig) -> None:

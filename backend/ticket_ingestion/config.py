@@ -133,7 +133,10 @@ class PipelineConfig:
     workspace_dir: Path = Path("./workspaces")
     min_description_length: int = 20
     log_file: Path = Path("./logs/pipeline.log")
-    log_level: str = "INFO"
+    # DEBUG by default so Settings → System logs shows detailed ingestion
+    # activity (only the backend.ticket_ingestion loggers — propagation is off,
+    # so third-party libs don't flood it). Override with logging.log_level.
+    log_level: str = "DEBUG"
     poll_interval_seconds: int = 20
     # Generic workspace setup: shell commands run in each fresh workspace
     # (None = auto-detect from workspace contents) and warm cache seeds.
@@ -272,7 +275,7 @@ def _merge_layers(raw: dict) -> dict:
         "log_file",
         logging_section.get("log_file") or "./logs/pipeline.log",
     )
-    _put(logging_section, "log_level", logging_section.get("log_level") or "INFO")
+    _put(logging_section, "log_level", logging_section.get("log_level") or "DEBUG")
 
     # --- github block (only materialize when something is set) --------------
     _put(
@@ -569,7 +572,7 @@ def _parse_generic_config(
     ):
         type_errors.append("validation.min_description_length must be an integer")
     log_file = logging_section.get("log_file") or "./logs/pipeline.log"
-    log_level = logging_section.get("log_level") or "INFO"
+    log_level = logging_section.get("log_level") or "DEBUG"
 
     problems = missing + type_errors
     if problems:
