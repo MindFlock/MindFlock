@@ -22,17 +22,26 @@ def test_every_settings_screen_leads_with_a_heading():
     assert js.count("set-section-title") >= 15, "screens are missing headings"
 
 
-def test_all_switch_rows_are_labels_not_divs():
-    """Cohesion + correctness: a .ca-switch only toggles on click when wrapped in
-    a <label>, so no switch row may be a <div>."""
-    html = client.get("/").text
+def test_switch_flips_only_on_the_switch_not_the_whole_row():
+    """Correctness: clicking a switch row's label text must NOT flip the toggle —
+    only the switch itself. So the row is a <div> and the .ca-switch is its own
+    <label> (which still gives the slider its click-to-toggle). The inverse of
+    the original layout, where the whole row was one <label>."""
     js = client.get("/app.js").text
     assert "set-switch-row" in js
-    # Every switch row renders as a <label> (a .ca-switch only toggles on
-    # click when an ancestor label wraps it) — no jsx("div", ...) may carry it.
+    # The switch keeps its click target: every .ca-switch renders as a <label>…
+    assert re.search(
+        r'jsxs?\("label",\s*\{\s*className:\s*"ca-switch"', js
+    ), "the .ca-switch is no longer a <label> — the slider won't toggle on click"
+    # …and none renders as a bare span/div (which wouldn't toggle at all).
     assert not re.search(
-        r'jsxs?\("div",\s*\{[^}]*set-switch-row', js
-    ), "a set-switch-row is a <div> — its toggle won't flip on click"
+        r'jsxs?\("(?:span|div)",\s*\{\s*className:\s*"ca-switch"', js
+    ), "a .ca-switch is a span/div — the slider won't toggle on click"
+    # No switch row is a <label> any more: a row-wide label flips the toggle
+    # from anywhere on the row, which is exactly the behaviour being removed.
+    assert not re.search(
+        r'jsxs?\("label",\s*\{[^}]*set-switch-row', js
+    ), "a set-switch-row is a <label> — clicking the row text flips the toggle"
 
 
 def test_settings_has_new_screens():

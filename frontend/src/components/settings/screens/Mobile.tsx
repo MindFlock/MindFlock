@@ -86,12 +86,13 @@ export function Mobile(_: ScreenProps) {
           <p className="set-hint">Loading…</p>
         ) : (
           <>
-            <label
+            <div
               className="set-row set-switch-row"
               title="Bind the server to all interfaces so phones on your tailnet can reach it"
             >
               <span className="set-label">Tailscale mode</span>
-              <span className="ca-switch">
+              {/* label wraps only the switch, so clicking the row text no longer flips it */}
+              <label className="ca-switch">
                 <input
                   type="checkbox"
                   checked={data.serve_mode === "tailscale"}
@@ -99,8 +100,8 @@ export function Mobile(_: ScreenProps) {
                   onChange={(e) => setMode(e.target.checked)}
                 />
                 <span className="ca-slider" />
-              </span>
-            </label>
+              </label>
+            </div>
             {pending && (
               <button type="button" className="test-btn" disabled={restarting} onClick={onRestart}>
                 {restarting ? "Restarting…" : "Restart server to apply"}

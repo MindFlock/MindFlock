@@ -85,13 +85,14 @@ export function Notifications(_: ScreenProps) {
   return (
     <>
       <h3 className="set-section-title">Browser notifications</h3>
-      <label
+      <div
         className="set-row set-switch-row"
         id="notif-browser-row"
         title="Show a desktop/Chrome notification when an agent needs you, a PR merges, or a budget is exceeded"
       >
         <span className="set-label" id="notif-browser-label">Desktop / Chrome notifications</span>
-        <span className="ca-switch">
+        {/* label wraps only the switch, so clicking the row text no longer flips it */}
+        <label className="ca-switch">
           <input
             type="checkbox"
             id="notif-browser-toggle"
@@ -109,8 +110,8 @@ export function Notifications(_: ScreenProps) {
             }}
           />
           <span className="ca-slider" />
-        </span>
-      </label>
+        </label>
+      </div>
       <p className="set-hint" id="notif-browser-status">{status}</p>
       <h3 className="set-section-title">What triggers a notification</h3>
       <p className="set-hint">Pick exactly which events notify you — turn off any you don't want.</p>
@@ -136,12 +137,13 @@ function RuleRow({ rule }: { rule: Rule }) {
   const [on, setOn] = useState(rule.enabled !== false);
   const label = rule.label || rule.title || rule.event || "event";
   return (
-    <label className="set-row set-switch-row notif-rule">
+    <div className="set-row set-switch-row notif-rule">
       <span className="notif-rule-text">
         <span className="set-label">{label}</span>
         {rule.body && <span className="set-hint notif-rule-desc">{rule.body}</span>}
       </span>
-      <span className="ca-switch">
+      {/* label wraps only the switch, so clicking the row text no longer flips it */}
+      <label className="ca-switch">
         <input
           type="checkbox"
           checked={on}
@@ -161,7 +163,7 @@ function RuleRow({ rule }: { rule: Rule }) {
           }}
         />
         <span className="ca-slider" />
-      </span>
-    </label>
+      </label>
+    </div>
   );
 }

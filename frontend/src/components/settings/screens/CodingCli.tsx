@@ -245,12 +245,13 @@ function WindowRefresh() {
   return (
     <>
       <h3 className="set-section-title">Keep usage windows warm</h3>
-      <label
+      <div
         className="set-row set-switch-row"
         title="Send a tiny, connection-free ping on a schedule so a provider's rolling usage window anchors when you want it to."
       >
         <span className="set-label">Scheduled refresh</span>
-        <span className="ca-switch">
+        {/* label wraps only the switch, so clicking the row text no longer flips it */}
+        <label className="ca-switch">
           <input
             type="checkbox"
             id="wr-enabled"
@@ -258,8 +259,8 @@ function WindowRefresh() {
             onChange={(e) => save({ enabled: e.target.checked })}
           />
           <span className="ca-slider" />
-        </span>
-      </label>
+        </label>
+      </div>
       <p className="set-hint">
         Sends a 1-token message (no MCPs/connections attached) to anchor the rolling usage
         window. Pick the time you want a totally fresh window to begin — usually the start of

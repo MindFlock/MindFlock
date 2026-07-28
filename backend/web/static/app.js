@@ -28966,13 +28966,13 @@ function GettingStarted() {
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Getting started" }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Tips and a guided tour to help you set up MindFlock's features." }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "label",
+      "div",
       {
         className: "set-row set-switch-row",
         title: "Small inline 💡 tips that point out features around the app. Turn them back on any time to see the ones you dismissed again.",
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Show getting-started hints" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {
@@ -29012,12 +29012,12 @@ function GettingStarted() {
 function ReduceMotionRow() {
   const reduceMotion = useUi((s) => s.reduceMotion);
   const setReduceMotion = useUi((s) => s.setReduceMotion);
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row set-switch-row", children: [
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row set-switch-row", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "notif-rule-text", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Reduce motion" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint notif-rule-desc", children: `While an agent is running, the Agent tab's live terminal scrolls constantly, which some people find tiring to look at. With this on, a running agent's terminal is hidden behind a still "running" panel instead. Clicking, scrolling, or typing anywhere in that window brings the live output back; it returns to the panel after 10 seconds with no input. Only the Agent tab is affected — Terminal, Diff, and Queue are never covered. Off by default.` })
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "input",
         {
@@ -29183,13 +29183,13 @@ function Mobile(_) {
     /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Open MindFlock on your phone. Scan the QR from a device on your Tailscale network, or use one of the URLs below." }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "mobile-body", children: !tailscale ? null : error ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "error", children: error }) : !data ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Loading…" }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs(
-        "label",
+        "div",
         {
           className: "set-row set-switch-row",
           title: "Bind the server to all interfaces so phones on your tailnet can reach it",
           children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Tailscale mode" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "input",
                 {
@@ -29312,14 +29312,14 @@ function Notifications(_) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Browser notifications" }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "label",
+      "div",
       {
         className: "set-row set-switch-row",
         id: "notif-browser-row",
         title: "Show a desktop/Chrome notification when an agent needs you, a PR merges, or a budget is exceeded",
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", id: "notif-browser-label", children: "Desktop / Chrome notifications" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {
@@ -29355,12 +29355,12 @@ function Notifications(_) {
 function RuleRow({ rule }) {
   const [on, setOn] = reactExports.useState(rule.enabled !== false);
   const label = rule.label || rule.title || rule.event || "event";
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row set-switch-row notif-rule", children: [
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row set-switch-row notif-rule", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "notif-rule-text", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: label }),
       rule.body && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint notif-rule-desc", children: rule.body })
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "input",
         {
@@ -29573,13 +29573,13 @@ function WindowRefresh() {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Keep usage windows warm" }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "label",
+      "div",
       {
         className: "set-row set-switch-row",
         title: "Send a tiny, connection-free ping on a schedule so a provider's rolling usage window anchors when you want it to.",
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Scheduled refresh" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {
@@ -30981,14 +30981,14 @@ function Ide(_) {
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Editor CLI used to open workspaces — e.g. cursor, code, windsurf, zed." })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "label",
+      "div",
       {
         className: "set-row set-switch-row",
         id: "ide-auto-row",
         title: "Continuously adopt folders into MindFlock as you open them in your IDE",
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", id: "ide-auto-label", children: "IDE auto-adopt" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {
