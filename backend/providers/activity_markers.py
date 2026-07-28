@@ -15,7 +15,8 @@ This module holds the shared primitives:
 * the hook command a CLI runs to write the marker (:func:`hook_command`,
   :func:`notification_hook_command`)
 * the settings-file merge that installs those hooks
-  (:func:`merge_activity_hooks`)
+  (:func:`merge_activity_hooks`) and its inverse
+  (:func:`remove_activity_hooks`, used by ``mindflock uninstall``)
 
 Each provider supplies its own file path + event map; the Claude provider
 re-exports these names for backwards compatibility with its long-standing
@@ -228,6 +229,107 @@ def is_mindflock_hook_entry(entry) -> bool:
             for h in entry.get("hooks", [])
             if isinstance(h, dict)
         )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def remove_activity_hooks(settings_path) -> bool:
+    """Strip MindFlock's hook entries from ``settings_path`` — the inverse of
+    :func:`merge_activity_hooks`.
+
+    Only entries carrying :data:`_HOOK_TAG` are dropped, so a user's own hooks
+    (and every non-hook key in the file) survive untouched. An event whose list
+    empties out is dropped, and if that leaves the file with nothing but an
+    empty ``hooks`` map the file itself is deleted — a settings file MindFlock
+    created solely to hold these hooks should not outlive them.
+
+    Returns True when something was actually removed. Never raises: uninstall
+    walks directories that may be read-only, deleted, or not JSON at all.
+
+    Motivation: the hook body is self-contained inline ``python3`` with no
+    dependency on the ``mindflock`` binary, so hooks left behind in a user's
+    repo keep firing (and keep re-creating ``~/.mindflock-assistant``) long
+    after the engine is gone. Uninstall has to remove them explicitly.
+    """
+    import json
+    from pathlib import Path
+
+    settings_path = Path(settings_path)
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+
+    changed = False
+    for event in list(hooks.keys()):
+        entries = hooks.get(event)
+        if not isinstance(entries, list):
+            continue
+        kept = [e for e in entries if not is_mindflock_hook_entry(e)]
+        if len(kept) == len(entries):
+            continue
+        changed = True
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
+    if not changed:
+        return False
+
+    # The file existed only to carry our hooks -> remove it entirely rather
+    # than leaving an inert `{"hooks": {}}` behind in the user's repo.
+    if not hooks and list(data.keys()) == ["hooks"]:
+        try:
+            settings_path.unlink()
+        except OSError:
+            return False
+        return True
+
+    try:
+        settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def remove_git_exclude(workdir: str, rel: str) -> bool:
+    """Drop ``rel`` from the repo's ``.git/info/exclude`` — the inverse of
+    :func:`ensure_git_excluded`. Returns True when a line was removed.
+
+    Only an exact whole-line match is removed, so a user's own pattern that
+    merely contains ``rel`` as a substring is never touched. Best-effort: any
+    failure (not a repo, unreadable exclude file) is a silent no-op.
+    """
+    import os
+    import subprocess
+
+    try:
+        cp = subprocess.run(
+            ["git", "-C", workdir, "rev-parse", "--git-path", "info/exclude"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+        )
+        if cp.returncode != 0:
+            return False
+        path = cp.stdout.decode("utf-8", "replace").strip()
+        if not path:
+            return False
+        if not os.path.isabs(path):
+            path = os.path.join(workdir, path)
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        kept = [ln for ln in lines if ln.strip() != rel]
+        if len(kept) == len(lines):
+            return False
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(kept) + ("\n" if kept else ""))
+        return True
     except Exception:  # noqa: BLE001
         return False
 

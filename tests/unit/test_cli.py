@@ -1076,3 +1076,128 @@ class TestVersionFlag:
         pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
         data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
         assert backend.__version__ == data["project"]["version"]
+
+
+class TestUninstallCommand:
+    """`mindflock uninstall` — the guards, not the filesystem work (that's
+    covered end-to-end in test_uninstall.py)."""
+
+    @pytest.fixture(autouse=True)
+    def _no_server(self, monkeypatch):
+        from backend import uninstall
+
+        monkeypatch.setattr(uninstall, "server_is_running", lambda *a, **k: False)
+
+    @pytest.fixture
+    def empty_plan(self, monkeypatch):
+        from backend import uninstall
+
+        plan = uninstall.Plan()
+        monkeypatch.setattr(uninstall, "build_plan", lambda: plan)
+        return plan
+
+    def test_refuses_while_a_server_is_running(self, monkeypatch, capsys):
+        from backend import uninstall
+
+        monkeypatch.setattr(uninstall, "server_is_running", lambda *a, **k: True)
+        called = []
+        monkeypatch.setattr(uninstall, "execute", lambda *a, **k: called.append(1))
+
+        assert cli.main(["uninstall", "--yes"]) == 1
+        assert not called, "must not touch anything while a server is up"
+        assert "stop it first" in capsys.readouterr().err
+
+    def test_dry_run_is_allowed_while_a_server_is_running(self, monkeypatch, capsys):
+        """Previewing changes nothing, and is exactly when you'd want to look."""
+        from backend import uninstall
+
+        monkeypatch.setattr(uninstall, "server_is_running", lambda *a, **k: True)
+        monkeypatch.setattr(uninstall, "build_plan", lambda: uninstall.Plan())
+
+        assert cli.main(["uninstall", "--dry-run"]) == 0
+        out = capsys.readouterr().out
+        assert "a server is running" in out
+        assert "nothing was changed" in out
+
+    def test_prompt_declined_aborts(self, monkeypatch, capsys, empty_plan):
+        from backend import uninstall
+
+        monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+        called = []
+        monkeypatch.setattr(uninstall, "execute", lambda *a, **k: called.append(1))
+
+        assert cli.main(["uninstall"]) == 0
+        assert not called
+        assert "aborted" in capsys.readouterr().out
+
+    def test_purge_prompt_names_the_stakes(self, monkeypatch, empty_plan):
+        from backend import uninstall
+
+        seen = []
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": seen.append(prompt) or "n"
+        )
+        monkeypatch.setattr(uninstall, "execute", lambda *a, **k: uninstall.Report())
+
+        cli.main(["uninstall", "--purge"])
+
+        assert "usage history" in seen[0]
+
+    def test_yes_skips_the_prompt_and_passes_flags(
+        self, monkeypatch, capsys, empty_plan
+    ):
+        from backend import uninstall
+
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": pytest.fail("should not prompt")
+        )
+        got = {}
+
+        def fake_execute(plan, purge=False, dry_run=False, keep_worktrees=False):
+            got.update(purge=purge, dry_run=dry_run, keep_worktrees=keep_worktrees)
+            return uninstall.Report()
+
+        monkeypatch.setattr(uninstall, "execute", fake_execute)
+
+        assert cli.main(["uninstall", "--yes", "--purge", "--keep-worktrees"]) == 0
+        assert got == {"purge": True, "dry_run": False, "keep_worktrees": True}
+
+    def test_prints_the_final_uv_step(self, monkeypatch, capsys, empty_plan):
+        from backend import uninstall
+
+        monkeypatch.setattr(uninstall, "execute", lambda *a, **k: uninstall.Report())
+
+        cli.main(["uninstall", "--yes"])
+
+        assert "uv tool uninstall mindflock" in capsys.readouterr().out
+
+    def test_dry_run_does_not_print_the_uv_step(self, monkeypatch, capsys, empty_plan):
+        from backend import uninstall
+
+        monkeypatch.setattr(uninstall, "execute", lambda *a, **k: uninstall.Report())
+
+        cli.main(["uninstall", "--dry-run"])
+
+        assert "uv tool uninstall" not in capsys.readouterr().out
+
+    def test_errors_produce_a_nonzero_exit(self, monkeypatch, capsys, empty_plan):
+        from backend import uninstall
+
+        report = uninstall.Report()
+        report.failed("could not delete /x")
+        monkeypatch.setattr(uninstall, "execute", lambda *a, **k: report)
+
+        assert cli.main(["uninstall", "--yes"]) == 1
+        assert "could not delete /x" in capsys.readouterr().err
+
+    def test_plan_warnings_go_to_stderr(self, monkeypatch, capsys):
+        from backend import uninstall
+
+        plan = uninstall.Plan()
+        plan.warnings.append("could not read state.json")
+        monkeypatch.setattr(uninstall, "build_plan", lambda: plan)
+        monkeypatch.setattr(uninstall, "execute", lambda *a, **k: uninstall.Report())
+
+        cli.main(["uninstall", "--yes"])
+
+        assert "could not read state.json" in capsys.readouterr().err

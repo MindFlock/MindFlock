@@ -10,6 +10,7 @@ import { installKeymap, type KeymapHost } from "./lib/keymap";
 import { selectSession, instances as instancesSnapshot } from "./lib/sessionActions";
 import { TopBar } from "./components/TopBar";
 import { ConnBanner } from "./components/ConnBanner";
+import { StateNotice } from "./components/StateNotice";
 import { VoiceInput } from "./components/VoiceInput";
 import { EventToasts } from "./components/EventToasts";
 import { Sidebar } from "./components/sidebar/Sidebar";
@@ -126,6 +127,7 @@ export default function App() {
   return (
     <>
       <ConnBanner />
+      <StateNotice />
       <TopBar />
       <Sidebar
         onOpenChat={() => toggleSpecial("chat")}

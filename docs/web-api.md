@@ -266,7 +266,8 @@ the owning device.
 | POST | `/api/paste-image?name=` | Save a pasted/dropped file for a session (transient retention) → its path |
 | GET | `/api/logs` | Tail of the server log (the UI's System-logs pane, 3 s poll) |
 | GET | `/api/addons` | Addon manifests `{addons: [{id, label, managed, frontend}]}` |
-| GET | `/api/doctor` | Dependency preflight: git/tmux/gh/agent-CLI/uv checks with per-platform fixes; cached ~30 s, `?refresh=1` re-probes |
+| GET | `/api/doctor` | Dependency preflight: git/tmux/gh/agent-CLI/uv checks with per-platform fixes; cached ~30 s, `?refresh=1` re-probes. Also carries `version` (the running engine's version) and `state_notice` |
+| POST | `/api/doctor/ack-state-notice` | Dismiss the downgrade notice; clears it and the cached payload |
 | GET | `/api/mobile` | Mobile URLs + QR payload (Settings → Mobile) |
 | GET | `/m` | The mobile UI page |
 
@@ -353,7 +354,30 @@ off), the account-attach "Test" validations (C5):
 | WS | `/api/providers/{name}/login-terminal` | **Deprecated / unused by the UI.** PTY↔websocket bridge to a throwaway tmux session running the provider's login flow in `$HOME`. Still served, but no frontend surfaces the one-click login any more (each CLI prompts for sign-in itself). Closes 4500 with an `{type:"error"}` frame for an unknown provider or a spawn failure. |
 | POST | `/api/providers/{name}/login-close` | **Deprecated / unused by the UI.** Best-effort teardown of a login session. Always `200 {ok: true}`. |
 
-**Doctor** (addon id `doctor`) — `GET /api/doctor` (listed above).
+**Doctor** (addon id `doctor`) — `GET /api/doctor` (listed above). Beyond
+`checks` and `ok`, the payload carries two fields that ride along because this
+is the endpoint every client already talks to:
+
+```jsonc
+{
+  "checks": [...], "ok": true,
+  "version": "0.1.0",            // the running ENGINE's version
+  "state_notice": null           // or {file_version, supported_version, backup_path}
+}
+```
+
+`version` lets the desktop shell detect app/engine drift — it pins the engine
+to its own version at install time but only installs when the engine is
+*absent*, so an app-only update would otherwise leave an old engine running
+indefinitely. Serving it over HTTP keeps one code path across macOS, Linux and
+Windows/WSL.
+
+`state_notice` is non-null only after this build refused to read a `state.json`
+written by a **newer** MindFlock: `LoadState` preserves that file as
+`state.json.newer-<ts>` and starts with an empty session list, so the UI needs
+to explain why every session disappeared and where the file went. `POST
+/api/doctor/ack-state-notice` dismisses it (server-side, so it stays dismissed
+across reloads).
 
 **Connections** (addon id `connections`) — `GET /api/connections?refresh=1`:
 one-call status of every external integration (GitHub, active ticketing

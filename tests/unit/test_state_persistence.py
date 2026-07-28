@@ -223,6 +223,98 @@ class TestStateSchemaVersion:
         ]
 
 
+class TestDowngradeNotice:
+    """The downgrade is non-destructive, but it empties the session list — so
+    it has to be visible somewhere the user actually looks, not only in a log.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear(self):
+        # Process-global and deliberately sticky, so isolate it per test.
+        state_mod.clear_downgrade_notice()
+        yield
+        state_mod.clear_downgrade_notice()
+
+    def _write_newer(self, home):
+        config_dir = cfg.GetConfigDir()
+        os.makedirs(config_dir, exist_ok=True)
+        path = os.path.join(config_dir, state_mod.StateFileName)
+        with open(path, "w") as f:
+            f.write('{"schema_version": 99, "help_screens_seen": 0, "instances": []}')
+        return path
+
+    def test_no_notice_on_a_normal_load(self, home):
+        state_mod.LoadState()
+        assert state_mod.downgrade_notice() is None
+
+    def test_notice_records_versions_and_backup(self, home):
+        self._write_newer(home)
+
+        state_mod.LoadState()
+
+        notice = state_mod.downgrade_notice()
+        assert notice is not None
+        assert notice["file_version"] == 99
+        assert notice["supported_version"] == state_mod.CURRENT_SCHEMA_VERSION
+        # The path is real and holds the preserved bytes.
+        assert ".newer-" in notice["backup_path"]
+        assert os.path.exists(notice["backup_path"])
+
+    def test_notice_is_a_copy(self, home):
+        self._write_newer(home)
+        state_mod.LoadState()
+
+        state_mod.downgrade_notice()["file_version"] = 1
+
+        assert state_mod.downgrade_notice()["file_version"] == 99
+
+    def test_clear_drops_it(self, home):
+        self._write_newer(home)
+        state_mod.LoadState()
+
+        state_mod.clear_downgrade_notice()
+
+        assert state_mod.downgrade_notice() is None
+
+    def test_a_corrupt_file_raises_no_downgrade_notice(self, home):
+        """Corruption already has its own .corrupt- path and message."""
+        config_dir = cfg.GetConfigDir()
+        os.makedirs(config_dir, exist_ok=True)
+        with open(os.path.join(config_dir, state_mod.StateFileName), "w") as f:
+            f.write("{ not json")
+
+        state_mod.LoadState()
+
+        assert state_mod.downgrade_notice() is None
+
+    def test_doctor_surfaces_it(self, home):
+        from backend import doctor
+
+        assert doctor.check_state_schema().status == "ok"
+
+        self._write_newer(home)
+        state_mod.LoadState()
+
+        check = doctor.check_state_schema()
+        assert check.status == "warn"
+        assert "newer MindFlock" in check.detail
+        assert ".newer-" in check.detail
+        # A warn must not make `mindflock doctor` exit 1 — install.sh runs it.
+        assert doctor.to_payload([check])["ok"] is True
+
+    def test_doctor_payload_carries_the_notice_and_version(self, home):
+        from backend import __version__, doctor
+
+        payload = doctor.to_payload([])
+        assert payload["version"] == __version__
+        assert payload["state_notice"] is None
+
+        self._write_newer(home)
+        state_mod.LoadState()
+
+        assert doctor.to_payload([])["state_notice"]["file_version"] == 99
+
+
 class TestIngestionLedgerUpdate:
     """update_processed_story: the in-flight -> terminal status handshake."""
 

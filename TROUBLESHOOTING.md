@@ -26,6 +26,11 @@ The usual causes:
 
 - **No WSL.** Run `wsl --install` in PowerShell, reboot, then re-run the
   MindFlock installer (re-running is a safe in-place upgrade).
+- **WSL only half-set-up.** `wsl --install` needs a **reboot** to finish, and a
+  distro must actually be installed and launched once. Run `wsl -l -v`: if it
+  lists no distro, run `wsl --install -d Ubuntu`, reboot if asked, then open the
+  distro once (it creates your Linux user) before re-running. A partially set-up
+  WSL is the most common Windows install failure.
 - **No `curl` in the distro.** `sudo apt install curl`, then re-run.
 - **It installed into the wrong distro.** The installer uses your *default*
   distro, and so does the app — but only if `MINDFLOCK_WSL_DISTRO` is unset.
@@ -241,10 +246,15 @@ The app connects to the server at `http://localhost:8765` and auto-starts the
 inside WSL on Windows). The offline page diagnoses itself and tells you which
 case you're in:
 
-- **"WSL isn't responding"** (Windows) — WSL is hung or down. Click the
-  **Restart WSL** button on the page (it runs `wsl --shutdown` and relaunches
-  the server; anything else running in WSL is closed). If that doesn't help,
-  restart the computer.
+- **"WSL isn't responding"** (Windows) — WSL is hung (a genuinely wedged VM).
+  Click the **Restart WSL** button on the page (it runs `wsl --shutdown` and
+  relaunches the server; anything else running in WSL is closed). If that
+  doesn't help, restart the computer.
+- **"Finish setting up WSL"** (Windows) — WSL is present but has no working
+  distro (only partially set up — a reboot after `wsl --install` may still be
+  pending). Run `wsl --install`, reboot, then run `wsl` once to create your
+  Linux user; reopen MindFlock when it opens a shell. Restarting WSL can't fix
+  this, which is why this is its own screen rather than "WSL isn't responding".
 - **"WSL isn't installed"** (Windows) — run `wsl --install` in PowerShell,
   reboot, reopen MindFlock.
 - **"One more step" / the engine isn't installed** — click **Install the

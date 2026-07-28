@@ -64,8 +64,23 @@
          can’t reach it right now. Restarting WSL usually fixes this.</p>
       <button class="action" id="restart-wsl">Restart WSL</button>
       <p class="hint">Restarting closes anything else running in WSL.<br>
-         If it doesn’t help, restart your computer and reopen MindFlock.</p>
+         If it doesn’t help, restart your computer and reopen MindFlock — or, if
+         WSL was only just set up, check <code>wsl -l -v</code> lists a distro.</p>
       <p class="detail" id="wsl-detail"></p>
+    </section>
+
+    <!-- wsl.exe runs but has no usable distro: WSL is only partially set up.
+         Restarting can't fix that, so guide the user through finishing setup. -->
+    <section id="s-wsl-setup" hidden>
+      <h1>Finish setting up WSL</h1>
+      <p>Windows Subsystem for Linux is present, but it doesn’t have a working
+         Linux distribution yet — so MindFlock’s engine has nowhere to run.</p>
+      <p>Open <b>PowerShell</b> and:</p>
+      <p>run <code>wsl --install</code> &nbsp;→&nbsp; <b>restart your computer</b>
+         &nbsp;→&nbsp; run <code>wsl</code> once to finish creating your Linux user.</p>
+      <p>When <code>wsl</code> drops you into a Linux shell, reopen MindFlock.</p>
+      <p class="hint">Already have a distro? Make sure <code>wsl -l -v</code> lists
+         it (state Running or Stopped), then reopen MindFlock.</p>
     </section>
 
     <!-- wsl.exe itself is missing: one-time OS-level setup we can't do for them. -->
@@ -103,7 +118,7 @@
   </div>
 <script>
 (function () {
-  var sections = ['checking', 'starting', 'wsl-down', 'wsl-missing', 'not-installed', 'installing']
+  var sections = ['checking', 'starting', 'wsl-down', 'wsl-setup', 'wsl-missing', 'not-installed', 'installing']
   var startingSince = 0
 
   function show(state, diag) {

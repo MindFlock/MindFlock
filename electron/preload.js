@@ -47,6 +47,19 @@ contextBridge.exposeInMainWorld('mfupdate', {
   skip: (version) => ipcRenderer.send('update:skip', version),
 })
 
+// Engine-drift bridge: the shell pins the engine to its own version at install
+// time but only installs when the engine is missing, so app-only updates leave
+// an old engine running (and `curl install.sh | sh` can leave a newer one).
+// `install()` re-runs the pinned installer; `installState()` is polled for its
+// output, for the same reason mfdiag polls — the install outlives the page.
+contextBridge.exposeInMainWorld('mfengine', {
+  get: () => ipcRenderer.invoke('engine:get'),
+  onNotice: (cb) => ipcRenderer.on('engine:notice', (_e, info) => cb(info)),
+  install: () => ipcRenderer.invoke('engine:install'),
+  installState: () => ipcRenderer.invoke('engine:install-state'),
+  dismiss: () => ipcRenderer.send('engine:dismiss'),
+})
+
 // Native clipboard bridge. Electron blocks navigator.clipboard.readText() in
 // the renderer by default, so terminal right-click paste reads/writes through
 // this instead (the web build falls back to navigator.clipboard).

@@ -13,6 +13,7 @@
 const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron')
 const path = require('path')
 const net = require('net')
+const http = require('http')
 const https = require('https')
 const fs = require('fs')
 const { spawn, spawnSync } = require('child_process')
@@ -216,7 +217,11 @@ function startServerIfNeeded() {
 //   checking       probe in flight (or never run)
 //   starting       environment is fine -- the server is just booting
 //   not-installed  WSL / this machine answers but mindflock isn't installed
-//   wsl-down       wsl.exe errored or hung -- offer a one-click WSL restart
+//   wsl-down       wsl.exe hung (a genuinely wedged WSL) -- offer a WSL restart
+//   wsl-setup      wsl.exe runs but has no usable distro -- WSL is only
+//                  partially set up (`wsl --install` done but no distro, or a
+//                  reboot still pending); guide the user to FINISH WSL setup
+//                  rather than uselessly restarting it
 //   wsl-missing    wsl.exe itself is absent (WSL was never installed)
 // The probe runs a tiny script that exits 0 (ready) or 42 (not installed).
 // On Windows it rides the same hidden wscript + base64 transport as the
@@ -292,7 +297,13 @@ function refreshDiag() {
       if (code === 42) return done('not-installed')
       if (!win32) return done('starting')       // odd login shell; let the retry loop work
       if (code === 43) return done('wsl-missing')
-      done('wsl-down', 'wsl.exe exited with code ' + code + '.')
+      // wsl.exe ran but our bash never did (nonzero, and not our 42). That
+      // almost always means WSL has no usable distro -- it's only partially
+      // set up (no distribution installed, or a reboot after `wsl --install`
+      // still pending). A genuinely wedged WSL HANGS and is caught by the
+      // timeout above (-> wsl-down). So send the user to finish WSL setup,
+      // not to the "Restart WSL" button, which can't conjure a distro.
+      done('wsl-setup', 'wsl.exe exited with code ' + code + '.')
     })
   } catch (e) {
     done(win32 ? 'wsl-down' : 'starting', e && e.message)
@@ -392,6 +403,11 @@ function installFinish(code) {
   // cooldown window after a successful install.
   diagAt = 0
   lastSpawnAt = 0
+  // The engine on disk just changed, so the drift verdict is stale. Re-probe
+  // on the next successful load; until the server is restarted it still
+  // reports the OLD version, which is what the toast tells the user.
+  engineResolved = false
+  engineNotice = null
   if (code === 0) startServerIfNeeded()
 }
 
@@ -468,11 +484,17 @@ function startInstall() {
   // tail that file below.
   const winLog = path.join(app.getPath('userData'), 'engine-install.log')
   try { fs.writeFileSync(winLog, '') } catch (e) {}
+  // A Windows-built bundle can ship install.sh with CRLF line endings, which
+  // dash/bash inside WSL refuse to run ("set: Illegal option -" on `set -eu`).
+  // Copy it to a temp file with the CRs stripped and run that, so the engine
+  // install works even if a build slipped through without LF normalization.
   const script =
     'L="$(wslpath -a ' + shq(winLog) + ')";'
     + ' S="$(wslpath -a ' + shq(INSTALL_SCRIPT) + ')";'
-    + ' { MINDFLOCK_INSTALL_REF=' + shq(INSTALL_REF) + ' MINDFLOCK_NONINTERACTIVE=1 sh "$S";'
-    + ' echo "' + INSTALL_SENTINEL + '$?"; } > "$L" 2>&1'
+    + ' T="$(mktemp)"; tr -d "\\r" < "$S" > "$T";'
+    + ' { MINDFLOCK_INSTALL_REF=' + shq(INSTALL_REF) + ' MINDFLOCK_NONINTERACTIVE=1 sh "$T";'
+    + ' echo "' + INSTALL_SENTINEL + '$?"; } > "$L" 2>&1;'
+    + ' rm -f "$T"'
   try {
     const b64 = Buffer.from(script, 'utf8').toString('base64')
     const cmd = 'echo ' + b64 + ' | base64 -d | bash'
@@ -700,12 +722,101 @@ ipcMain.on('update:skip', (_e, version) => {
   writeUpdateStore({ skippedVersion })
 })
 
+// ---------------------------------------------------------------------------
+// Engine / app version drift.
+//
+// The shell pins the engine to its own version at install time (INSTALL_REF),
+// but it only ever RUNS that install when the engine is ABSENT -- the offline
+// page's 'not-installed' state. So updating the app alone leaves the old
+// engine in place indefinitely, and `curl install.sh | sh` (which defaults to
+// main) can push the engine AHEAD of the app instead. Nothing checked either
+// direction, and the engine-ahead case can trip the backend's state.json
+// downgrade path, where the session list comes up empty until the versions
+// line up again.
+//
+// The engine reports its version through GET /api/doctor, which every client
+// already talks to -- so one HTTP code path covers macOS, Linux and
+// Windows/WSL identically (no wsl.exe transport, no stdout parsing).
+let engineNotice = null      // { engineVersion, appVersion, direction } | null
+let engineResolved = false   // a definitive answer was obtained this run
+
+// GET a JSON document from the local server, or null on ANY failure. Never
+// throws: an engine check must never be able to break app startup.
+function fetchLocalJSON(pathname, timeoutMs) {
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (v) => { if (!done) { done = true; resolve(v) } }
+    let req
+    try {
+      req = http.get(
+        { host: '127.0.0.1', port: PORT, path: pathname, timeout: timeoutMs || 4000 },
+        (res) => {
+          if (res.statusCode !== 200) { res.resume(); return finish(null) }
+          let body = ''
+          res.setEncoding('utf8')
+          res.on('data', (c) => { body += c; if (body.length > 1_000_000) req.destroy() })
+          res.on('end', () => { try { finish(JSON.parse(body)) } catch (e) { finish(null) } })
+        }
+      )
+    } catch (e) { return finish(null) }
+    req.on('error', () => finish(null))
+    req.on('timeout', () => { req.destroy(); finish(null) })
+  })
+}
+
+async function checkEngineVersion() {
+  // An unpackaged dev run has no meaningful app version (Electron's own), so
+  // every comparison would be noise.
+  if (!app.isPackaged || engineResolved) return
+  const doc = await fetchLocalJSON('/api/doctor')
+  const engineVersion = doc && typeof doc.version === 'string' ? doc.version.trim() : ''
+  if (!engineVersion) return          // old engine without the field, or server down
+  engineResolved = true
+  const appVersion = app.getVersion()
+  const d = cmpVersion(engineVersion, appVersion)
+  if (d === 0) { engineNotice = null; return }
+  engineNotice = {
+    engineVersion,
+    appVersion,
+    direction: d > 0 ? 'ahead' : 'behind',
+  }
+  console.log('[mindflock] engine', engineVersion, 'vs app', appVersion, '->', engineNotice.direction)
+  pushEngineNotice()
+}
+
+function pushEngineNotice() {
+  if (engineNotice && win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+    win.webContents.send('engine:notice', engineNotice)
+  }
+}
+
+ipcMain.handle('engine:get', () => engineNotice)
+ipcMain.handle('engine:install', () => {
+  // Reuses the offline page's installer: it pins MINDFLOCK_INSTALL_REF to this
+  // app's version, which is exactly the fix for drift in EITHER direction.
+  const r = startInstall()
+  return r
+})
+ipcMain.handle('engine:install-state', () => ({
+  state: install.state, code: install.code, lines: install.lines,
+}))
+ipcMain.on('engine:dismiss', () => { engineNotice = null })
+
 // Bottom-right "update available" toast. Injected into whatever page is loaded
 // (same mechanism as the title-bar buttons), styled to match the app's dark
 // chrome. It talks to the main process through the preload `mfupdate` bridge.
 const UPDATE_CSS = `
-#mf-update-toast {
+/* Both notices (a new app release, and engine/shell version drift) live in one
+   bottom-right column so a machine showing both doesn't stack them on top of
+   each other. */
+#mf-toast-stack {
   position: fixed; right: 18px; bottom: 18px; z-index: 2147483646;
+  display: flex; flex-direction: column-reverse; gap: 10px;
+  align-items: flex-end; pointer-events: none;
+}
+#mf-toast-stack > * { pointer-events: auto; }
+#mf-update-toast, #mf-engine-toast {
+  position: relative;
   width: 300px; max-width: calc(100vw - 36px);
   background: #171b24; color: #d7dae3;
   border: 1px solid #2a3140; border-radius: 12px;
@@ -713,68 +824,160 @@ const UPDATE_CSS = `
   padding: 14px 16px 12px; font: 13px system-ui, 'Segoe UI', sans-serif;
   animation: mf-up-in .18s ease-out;
 }
+/* Drift is a "your install is inconsistent" state, not a new-release nudge. */
+#mf-engine-toast { border-left: 3px solid #d6a53c; }
+#mf-engine-toast .mf-up-title { color: #e2b658; }
+#mf-engine-toast .mf-up-log {
+  margin: 0 0 10px; padding: 8px 10px; max-height: 120px; overflow-y: auto;
+  background: #10131a; border: 1px solid #232a37; border-radius: 8px;
+  font: 11px ui-monospace, Menlo, Consolas, monospace; color: #97a0b5;
+  white-space: pre-wrap; word-break: break-word;
+}
 @keyframes mf-up-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-#mf-update-toast .mf-up-close {
+#mf-update-toast .mf-up-close, #mf-engine-toast .mf-up-close {
   position: absolute; top: 8px; right: 8px; width: 24px; height: 24px;
   border: 0; background: transparent; color: #8a90a2; cursor: pointer;
   border-radius: 6px; font-size: 11px; line-height: 1;
 }
-#mf-update-toast .mf-up-close:hover { background: rgba(255,255,255,.08); color: #d7dae3; }
-#mf-update-toast .mf-up-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; padding-right: 20px; }
-#mf-update-toast .mf-up-body { color: #b6bccb; margin-bottom: 12px; line-height: 1.4; }
-#mf-update-toast .mf-up-row { display: flex; gap: 8px; }
-#mf-update-toast .mf-up-btn {
+#mf-toast-stack .mf-up-close:hover { background: rgba(255,255,255,.08); color: #d7dae3; }
+#mf-toast-stack .mf-up-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; padding-right: 20px; }
+#mf-toast-stack .mf-up-body { color: #b6bccb; margin-bottom: 12px; line-height: 1.4; }
+#mf-toast-stack .mf-up-row { display: flex; gap: 8px; }
+#mf-toast-stack .mf-up-btn {
   flex: 1; padding: 7px 10px; border-radius: 8px; cursor: pointer;
   border: 1px solid #333c4d; background: #232a37; color: #d7dae3;
   font: 500 13px system-ui, 'Segoe UI', sans-serif; transition: background .12s ease;
 }
-#mf-update-toast .mf-up-btn:hover { background: #2c3444; }
-#mf-update-toast .mf-up-primary { background: #7d56f4; border-color: #7d56f4; color: #fff; }
-#mf-update-toast .mf-up-primary:hover { background: #6b45e0; }
-#mf-update-toast .mf-up-skip {
+#mf-toast-stack .mf-up-btn:hover { background: #2c3444; }
+#mf-toast-stack .mf-up-btn:disabled { opacity: .6; cursor: default; }
+#mf-toast-stack .mf-up-primary { background: #7d56f4; border-color: #7d56f4; color: #fff; }
+#mf-toast-stack .mf-up-primary:hover { background: #6b45e0; }
+#mf-toast-stack .mf-up-skip {
   display: block; margin: 10px 0 0; padding: 0; border: 0; background: transparent;
   color: #8a90a2; font-size: 11px; cursor: pointer; text-decoration: underline;
 }
-#mf-update-toast .mf-up-skip:hover { color: #b6bccb; }
+#mf-toast-stack .mf-up-skip:hover { color: #b6bccb; }
 `
 
 const UPDATE_JS = `
 (function () {
   if (window.__mfUpdateInit) return; window.__mfUpdateInit = true;
-  if (!window.mfupdate) return;
+  if (!window.mfupdate && !window.mfengine) return;
   function drop(el) { if (el && el.parentNode) el.parentNode.removeChild(el); }
+  function stack() {
+    var s = document.getElementById('mf-toast-stack');
+    if (!s) {
+      s = document.createElement('div');
+      s.id = 'mf-toast-stack';
+      document.body.appendChild(s);
+    }
+    return s;
+  }
+  function card(id) {
+    drop(document.getElementById(id));
+    var c = document.createElement('div');
+    c.id = id;
+    stack().appendChild(c);
+    return c;
+  }
+  function closeBtn(c, onClose) {
+    var b = document.createElement('button');
+    b.className = 'mf-up-close'; b.title = 'Dismiss'; b.innerHTML = '&#10005;';
+    b.addEventListener('click', function () { drop(c); if (onClose) onClose(); });
+    return b;
+  }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  // --- new app release ---------------------------------------------------
   function show(info) {
     if (!info || !info.version) return;
-    drop(document.getElementById('mf-update-toast'));
-    var card = document.createElement('div');
-    card.id = 'mf-update-toast';
-    var close = document.createElement('button');
-    close.className = 'mf-up-close'; close.title = 'Dismiss'; close.innerHTML = '&#10005;';
-    close.addEventListener('click', function () { drop(card); });
-    var title = document.createElement('div');
-    title.className = 'mf-up-title'; title.textContent = 'Update available';
-    var body = document.createElement('div');
-    body.className = 'mf-up-body';
-    body.textContent = 'MindFlock ' + info.version + ' is available.';
-    var row = document.createElement('div'); row.className = 'mf-up-row';
-    var upd = document.createElement('button');
-    upd.className = 'mf-up-btn mf-up-primary'; upd.textContent = 'Update';
+    var c = card('mf-update-toast');
+    var row = el('div', 'mf-up-row');
+    var upd = el('button', 'mf-up-btn mf-up-primary', 'Update');
     upd.addEventListener('click', function () { window.mfupdate.openDownload(info.url); });
-    var later = document.createElement('button');
-    later.className = 'mf-up-btn'; later.textContent = 'Later';
-    later.addEventListener('click', function () { drop(card); });
+    var later = el('button', 'mf-up-btn', 'Later');
+    later.addEventListener('click', function () { drop(c); });
     row.appendChild(upd); row.appendChild(later);
-    var skip = document.createElement('button');
-    skip.className = 'mf-up-skip'; skip.textContent = 'Skip this version';
-    skip.addEventListener('click', function () { window.mfupdate.skip(info.version); drop(card); });
-    card.appendChild(close); card.appendChild(title); card.appendChild(body);
-    card.appendChild(row); card.appendChild(skip);
-    document.body.appendChild(card);
+    var skip = el('button', 'mf-up-skip', 'Skip this version');
+    skip.addEventListener('click', function () { window.mfupdate.skip(info.version); drop(c); });
+    c.appendChild(closeBtn(c));
+    c.appendChild(el('div', 'mf-up-title', 'Update available'));
+    c.appendChild(el('div', 'mf-up-body', 'MindFlock ' + info.version + ' is available.'));
+    c.appendChild(row); c.appendChild(skip);
   }
-  window.mfupdate.onAvailable(show);
-  // Cover the case where the main process already found an update before this
+
+  // --- engine / shell version drift --------------------------------------
+  // Both directions are worth saying out loud: an engine BEHIND the app is the
+  // silent case (the app only installs when the engine is missing), and one
+  // AHEAD can leave the session list empty until the app catches up.
+  function showEngine(info) {
+    if (!info || !info.engineVersion) return;
+    var behind = info.direction === 'behind';
+    var c = card('mf-engine-toast');
+    var body = el('div', 'mf-up-body',
+      behind
+        ? 'The MindFlock engine is still ' + info.engineVersion + ', but this app is '
+          + info.appVersion + '. Updating the app doesn\\u2019t update the engine \\u2014 '
+          + 'reinstall it to match.'
+        : 'The MindFlock engine (' + info.engineVersion + ') is newer than this app ('
+          + info.appVersion + '). Sessions may not appear until the two match. '
+          + 'Update the app, or reinstall the engine at the app\\u2019s version.');
+    var log = el('pre', 'mf-up-log');
+    log.hidden = true;
+    var row = el('div', 'mf-up-row');
+    var fix = el('button', 'mf-up-btn mf-up-primary',
+      behind ? 'Update engine' : 'Reinstall engine');
+    var later = el('button', 'mf-up-btn', 'Later');
+    later.addEventListener('click', function () { drop(c); window.mfengine.dismiss(); });
+
+    var polling = null;
+    function stopPolling() { if (polling) { clearInterval(polling); polling = null; } }
+    fix.addEventListener('click', function () {
+      if (fix.disabled) return;
+      fix.disabled = true; fix.textContent = 'Installing\\u2026';
+      log.hidden = false;
+      window.mfengine.install().catch(function () {});
+      polling = setInterval(function () {
+        window.mfengine.installState().then(function (st) {
+          if (!st) return;
+          log.textContent = (st.lines || []).slice(-40).join('\\n');
+          log.scrollTop = log.scrollHeight;
+          if (st.state === 'done') {
+            stopPolling();
+            fix.textContent = 'Restart MindFlock to finish';
+            body.textContent = 'The engine was updated. The running server is still the '
+              + 'old version \\u2014 quit and reopen MindFlock to pick up the new one.';
+          } else if (st.state === 'failed') {
+            stopPolling();
+            fix.disabled = false;
+            fix.textContent = 'Retry';
+            body.textContent = 'The engine install didn\\u2019t finish (exit ' + st.code + '). '
+              + 'The log above has the details.';
+          }
+        }).catch(function () {});
+      }, 1000);
+    });
+    row.appendChild(fix); row.appendChild(later);
+    c.appendChild(closeBtn(c, function () { stopPolling(); window.mfengine.dismiss(); }));
+    c.appendChild(el('div', 'mf-up-title', behind ? 'Engine is out of date' : 'Engine is newer than the app'));
+    c.appendChild(body); c.appendChild(log); c.appendChild(row);
+  }
+
+  // Cover the case where the main process reached its verdict before this
   // page's listener existed (initial load, or a reload after the check fired).
-  window.mfupdate.get().then(function (info) { if (info) show(info); }).catch(function () {});
+  if (window.mfupdate) {
+    window.mfupdate.onAvailable(show);
+    window.mfupdate.get().then(function (info) { if (info) show(info); }).catch(function () {});
+  }
+  if (window.mfengine) {
+    window.mfengine.onNotice(showEngine);
+    window.mfengine.get().then(function (info) { if (info) showEngine(info); }).catch(function () {});
+  }
 })();
 `
 
@@ -861,7 +1064,15 @@ function createWindow() {
   win.webContents.on('did-finish-load', () => {
     // Real app loaded (not the bundled offline page) -> the server answered;
     // reset the cold-start backoff so the next outage probes fast again.
-    if (win.webContents.getURL().startsWith(APP_URL)) retryDelay = RETRY_MIN_MS
+    if (win.webContents.getURL().startsWith(APP_URL)) {
+      retryDelay = RETRY_MIN_MS
+      // The app page loading IS the proof the server is up, so this is the
+      // cheapest reliable moment to compare engine and shell versions.
+      checkEngineVersion().catch(() => {})
+      // Re-push a verdict reached before this page's listener existed (a
+      // reload, or the check winning the race against the renderer).
+      pushEngineNotice()
+    }
     console.log('[mindflock] loaded:', win.webContents.getURL())
   })
   win.webContents.on('before-input-event', (_e, input) => {

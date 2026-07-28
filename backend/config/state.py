@@ -97,6 +97,34 @@ class StateSchemaTooNew(Exception):
 
 
 # ---------------------------------------------------------------------------
+# Downgrade notice
+# ---------------------------------------------------------------------------
+# When LoadState hits a newer-schema file it moves it aside and starts empty —
+# non-destructive, but from the user's chair every session just vanished. A log
+# line is not enough for that; record what happened so the doctor endpoint can
+# surface it in the UI with the path to the preserved file. Process-global (the
+# server loads state once at startup) and deliberately sticky: it is cleared
+# only by an explicit :func:`clear_downgrade_notice`, so a later successful load
+# doesn't silently retract a notice the user hasn't seen yet.
+_downgrade_notice: Optional[dict] = None
+
+
+def downgrade_notice() -> Optional[dict]:
+    """The pending downgrade notice, or None.
+
+    Shape: ``{"file_version": int, "supported_version": int, "backup_path": str}``.
+    ``backup_path`` is empty when the file could not be moved aside.
+    """
+    return dict(_downgrade_notice) if _downgrade_notice else None
+
+
+def clear_downgrade_notice() -> None:
+    """Drop the pending notice (the user acknowledged it)."""
+    global _downgrade_notice
+    _downgrade_notice = None
+
+
+# ---------------------------------------------------------------------------
 # Cross-process state-file lock
 # ---------------------------------------------------------------------------
 # The lock lives on a sidecar file (state.json.lock), NOT on state.json
@@ -428,6 +456,14 @@ def LoadState() -> State:
                 os.replace(state_path, backup_path)
         except OSError:
             backup_path = "(could not be backed up)"
+        # Surface it in the UI too (doctor payload -> banner). A log line is
+        # invisible to someone who just watched every session disappear.
+        global _downgrade_notice
+        _downgrade_notice = {
+            "file_version": err.version,
+            "supported_version": CURRENT_SCHEMA_VERSION,
+            "backup_path": backup_path if backup_path.startswith(state_path) else "",
+        }
         if log.ErrorLog is not None:
             log.ErrorLog.Printf(
                 "state file has schema v%v but this build supports v"

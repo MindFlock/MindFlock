@@ -40,6 +40,7 @@
 @import "../components/dialogs/NewSessionDialog.css" layer(components); /* 170 */
 @import "../components/dialogs/smallDialogs.css" layer(components); /* 180 */
 @import "../components/ConnBanner.css" layer(components); /* 200 */
+@import "../components/StateNotice.css" layer(components); /* 200 */
 @import "../components/dialogs/SetupDialog.css" layer(components); /* 210 */
 @import "../components/palette/CommandPalette.css" layer(components); /* 220 */
 @import "../components/grid/contextPresets.css" layer(components); /* 230 */

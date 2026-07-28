@@ -15,6 +15,9 @@ Installed via ``[project.scripts]``::
     mindflock open TITLE          # open the session workspace in the IDE
     mindflock events [--follow]   # print the /api/events stream
 
+    mindflock uninstall           # undo MindFlock's writes to your repos
+    mindflock uninstall --purge   # …and delete ~/.mindflock[-assistant] too
+
 ``serve`` delegates to :func:`backend.web.run.main` (the same code path as
 ``./backend/web/run.sh``); ``doctor`` runs the same checks as
 ``GET /api/doctor`` and prints them with per-platform fixes. The session
@@ -171,6 +174,44 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     events.add_argument(
         "--follow", "-f", action="store_true", help="keep streaming new events"
+    )
+
+    uninstall = sub.add_parser(
+        "uninstall",
+        parents=[server_opts],
+        help="remove MindFlock's worktrees, hooks and scratch files from your repos",
+        description=(
+            "Undo what MindFlock wrote outside its own venv: session worktrees "
+            "(removed through git so your repos stay consistent), the activity "
+            "hooks merged into your repos' .claude/.codex settings, the "
+            ".mindflock_* scratch files and their .git/info/exclude lines. "
+            "Add --purge to also delete ~/.mindflock and ~/.mindflock-assistant. "
+            "Finish by running the `uv tool uninstall mindflock` line this "
+            "prints — it can't be run from inside the venv it deletes."
+        ),
+    )
+    uninstall.add_argument(
+        "--purge",
+        action="store_true",
+        help="also delete ~/.mindflock and ~/.mindflock-assistant (settings, state, usage history)",
+    )
+    uninstall.add_argument(
+        "--keep-worktrees",
+        action="store_true",
+        help="leave session worktrees and branches in place (only clean hooks/scratch files)",
+    )
+    uninstall.add_argument(
+        "--dry-run",
+        "-n",
+        action="store_true",
+        dest="dry_run",
+        help="print what would be removed and exit without changing anything",
+    )
+    uninstall.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="skip the confirmation prompt (for scripts)",
     )
 
     return parser
@@ -531,6 +572,93 @@ def _format_event(env: dict) -> str:
     return "  ".join(parts)
 
 
+def _cmd_uninstall(args: argparse.Namespace) -> int:
+    """Remove MindFlock's footprint outside its venv (see :mod:`backend.uninstall`).
+
+    Runs offline against ``state.json`` — no server needed, and in fact refused
+    while one is up, since tearing down worktrees under live sessions would
+    leave the engine writing into deleted directories.
+    """
+    from backend import uninstall as uninstall_mod
+
+    # A dry run changes nothing, so it stays allowed while a server is up —
+    # that's exactly when someone wants to preview what uninstalling would do.
+    if uninstall_mod.server_is_running(args.host, args.port):
+        if not args.dry_run:
+            print(
+                "a MindFlock server is running — stop it first (close the desktop app,\n"
+                "or Ctrl-C `mindflock serve`) so sessions aren't torn down underneath it.\n"
+                "To preview without changing anything: mindflock uninstall --dry-run",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            "note: a server is running — this preview is a snapshot, not a plan to apply as-is."
+        )
+
+    plan = uninstall_mod.build_plan()
+    for warning in plan.warnings:
+        print("warning: %s" % warning, file=sys.stderr)
+
+    removable = [s for s in plan.sessions if s.removable_worktree]
+    print("MindFlock uninstall")
+    print()
+    print("  sessions recorded:    %d" % len(plan.sessions))
+    if not args.keep_worktrees:
+        print("  worktrees to remove:  %d" % len(removable))
+        print("  orphaned worktrees:   %d" % len(plan.orphan_worktrees))
+    print("  repos to clean:       %d" % len(plan.workdirs))
+    if args.purge:
+        for path in plan.purge_dirs:
+            print("  purge:                %s" % path)
+    else:
+        print(
+            "  keeping:              %s" % (", ".join(uninstall_mod.home_dirs()) or "—")
+        )
+    print()
+
+    if not args.dry_run and not args.yes:
+        what = "Remove the items above"
+        if args.purge:
+            what += " AND delete your settings, state and usage history"
+        try:
+            answer = input("%s? [y/N] " % what)
+        except (EOFError, KeyboardInterrupt):
+            print("aborted", file=sys.stderr)
+            return 1
+        if answer.strip().lower() not in ("y", "yes"):
+            print("aborted")
+            return 0
+
+    report = uninstall_mod.execute(
+        plan,
+        purge=args.purge,
+        dry_run=args.dry_run,
+        keep_worktrees=args.keep_worktrees,
+    )
+    for line in report.actions:
+        print("  %s" % line)
+    if not report.actions:
+        print("  nothing to do")
+    for line in report.errors:
+        print("  ! %s" % line, file=sys.stderr)
+
+    print()
+    if args.dry_run:
+        print("Dry run — nothing was changed. Re-run without --dry-run to apply.")
+        return 0
+    print("Done. Final step (can't run from inside the venv it deletes):")
+    print("  uv tool uninstall mindflock")
+    if not args.purge:
+        print()
+        print(
+            "Your settings and history are still in %s."
+            % (" and ".join(uninstall_mod.home_dirs()) or "no MindFlock home directory")
+        )
+        print("Re-run with --purge to delete those too.")
+    return 1 if report.errors else 0
+
+
 _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "new": _cmd_new,
     "ls": _cmd_ls,
@@ -553,6 +681,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(sys.argv[1:] if argv is None else argv)
     if args.command == "doctor":
         return _cmd_doctor(fix=args.fix)
+    if args.command == "uninstall":
+        # Not a session command: it works offline against state.json (and
+        # refuses to run while a server is up), so it must never be wrapped in
+        # the ServerNotFound handler below.
+        return _cmd_uninstall(args)
     handler: Optional[Callable[[argparse.Namespace], int]] = _SESSION_COMMANDS.get(
         args.command or ""
     )

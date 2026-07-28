@@ -51,9 +51,23 @@ session — supervised from one desktop app.**
 
 | | What you get | Anything else? |
 |---|---|---|
-| **Windows** | `MindFlock-Setup.exe` — the app **and** the engine: the installer runs the WSL2 setup for you. | Nothing, if you already have WSL2. Without it, run `wsl --install` in PowerShell, reboot, then re-run the installer. |
+| **Windows** | `MindFlock-Setup.exe` — the app **and** the engine (which runs inside WSL2). | **Set up WSL2 first — see the note below.** With a working WSL2 distro in place, the installer does the rest. |
 | **macOS** | `MindFlock.dmg` (universal — Apple silicon & Intel). Drag to Applications. | Nothing. First launch offers **Install the engine** — one click, no terminal. |
 | **Linux** | `MindFlock.AppImage`. `chmod +x` it and run. | Same — first launch installs the engine for you. |
+
+> **⚠️ Windows: finish setting up WSL2 *before* you run the installer.** The
+> engine runs inside WSL2, so a Linux distribution must be **fully installed and
+> launchable first** — not just `wsl --install` half-run. In PowerShell:
+>
+> ```powershell
+> wsl --install     # if WSL isn't set up yet — then REBOOT your PC
+> wsl -l -v         # verify a distro (e.g. Ubuntu) is listed
+> wsl               # verify this drops you into a Linux shell (first run asks you to create a user), then type: exit
+> ```
+>
+> Only once `wsl` opens a Linux shell should you run `MindFlock-Setup.exe`. A
+> **partially set-up WSL** — installed but with no distro, or with a reboot still
+> pending — is the single most common Windows install failure.
 
 The app auto-starts the engine every time after that — no terminal, no manual
 steps. If the engine is missing, the app's waiting page says so and shows the
@@ -318,6 +332,26 @@ See [docs/extensions.md](docs/extensions.md) for the full guide.
 
 See [docs/configuration.md](docs/configuration.md) for the full reference.
 
+### Uninstalling
+
+`uv tool uninstall mindflock` removes the venv and the `mindflock` shim, but
+not the worktrees MindFlock registered *inside your repositories*, nor the
+activity hooks it merged into their `.claude`/`.codex` settings — which keep
+firing (and keep re-creating `~/.mindflock-assistant`) after the engine is
+gone. Undo those first:
+
+```bash
+mindflock uninstall --dry-run   # see exactly what would be removed
+mindflock uninstall             # worktrees, hooks, scratch files (keeps settings + history)
+mindflock uninstall --purge     # …and delete ~/.mindflock + ~/.mindflock-assistant
+uv tool uninstall mindflock     # finally, the engine itself
+```
+
+On macOS the desktop app additionally leaves `/Applications/MindFlock.app`,
+`~/Library/Application Support/MindFlock`, `~/Library/Logs/MindFlock` and
+`~/Library/Preferences/ai.mindflock.desktop.plist`. Full details in
+[docs/cli.md](docs/cli.md#mindflock-uninstall---purge---keep-worktrees---dry-run---yes).
+
 ## Documentation
 
 | Doc | Contents |
@@ -326,7 +360,7 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 | [docs/extensions.md](docs/extensions.md) | Extension guide: shell hooks, `/api/events` WebSocket, in-process addons, `window.mindflock` client API |
 | [docs/configuration.md](docs/configuration.md) | `config.toml` reference, `~/.mindflock/` + `~/.mindflock-assistant/`, environment variables |
 | [docs/session-engine.md](docs/session-engine.md) | Instance lifecycle, git worktrees, tmux/PTY, provisioned mode |
-| [docs/cli.md](docs/cli.md) | `mindflock` CLI: serve, doctor, and terminal session control (new/ls/attach/rm/open/events) |
+| [docs/cli.md](docs/cli.md) | `mindflock` CLI: serve, doctor, uninstall, and terminal session control (new/ls/attach/rm/open/events) |
 | [docs/web-api.md](docs/web-api.md) | Complete HTTP + WebSocket API reference |
 | [docs/web-ui.md](docs/web-ui.md) | Frontend guide: grid, tabs, stages, shortcuts, mobile, addons |
 | [docs/providers.md](docs/providers.md) | Provider framework, adding a CLI via TOML, pricing & usage tracking |

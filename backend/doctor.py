@@ -415,6 +415,33 @@ def check_tailscale() -> Check:
 # Runner
 # --------------------------------------------------------------------------- #
 #: Check id → probe, so `doctor --fix` can re-run a single check after its fix.
+def check_state_schema() -> Check:
+    """Report a state file this build refused to read (a downgrade).
+
+    ``LoadState`` moves a newer-schema ``state.json`` aside and starts empty —
+    nothing is lost, but every session disappears from the UI, which looks
+    exactly like data loss unless we say otherwise. ``warn``, not ``fail``: it
+    is not a missing dependency and must not make ``doctor`` exit 1 (the
+    installer runs it) — but it is loud everywhere the doctor is shown.
+    """
+    from backend.config import state as state_mod
+
+    notice = state_mod.downgrade_notice()
+    if not notice:
+        return Check("state-schema", "session state", "ok", "readable")
+    where = notice.get("backup_path") or "(it could not be backed up)"
+    return Check(
+        "state-schema",
+        "session state",
+        "warn",
+        "your state file was written by a newer MindFlock (v%s > v%s), so this "
+        "build started with an empty session list. Nothing was deleted — the "
+        "file is preserved at %s."
+        % (notice.get("file_version"), notice.get("supported_version"), where),
+        fix="upgrade MindFlock, then rename that file back to state.json to recover your sessions",
+    )
+
+
 CHECKS_BY_ID: dict[str, Callable[[], Check]] = {
     "git": check_git,
     "tmux": check_tmux,
@@ -424,6 +451,7 @@ CHECKS_BY_ID: dict[str, Callable[[], Check]] = {
     "uv": check_uv,
     "clipboard": check_clipboard,
     "tailscale": check_tailscale,
+    "state-schema": check_state_schema,
 }
 
 _ALL_CHECKS: List[Callable[[], Check]] = list(CHECKS_BY_ID.values())
@@ -443,8 +471,28 @@ def run_checks() -> List[Check]:
 
 
 def to_payload(checks: List[Check]) -> dict:
-    """The wire shape served by ``GET /api/doctor``."""
+    """The wire shape served by ``GET /api/doctor``.
+
+    Two fields ride along with the checks because this endpoint is the one
+    thing every client already talks to:
+
+    ``version``
+        The running engine's version. The desktop shell compares it against its
+        own to catch app/engine drift — the app only installs the engine when
+        it is *absent*, so updating the app alone silently leaves an old engine
+        in place. Serving it over HTTP works identically on macOS, Linux and
+        Windows/WSL, unlike shelling out to ``mindflock --version``.
+    ``state_notice``
+        Present only after a downgrade left the session list empty
+        (see :func:`backend.config.state.downgrade_notice`); drives the UI
+        banner that explains where the preserved file went.
+    """
+    from backend import __version__
+    from backend.config import state as state_mod
+
     return {
         "checks": [c.to_dict() for c in checks],
         "ok": all(c.status != "fail" for c in checks),
+        "version": __version__,
+        "state_notice": state_mod.downgrade_notice(),
     }

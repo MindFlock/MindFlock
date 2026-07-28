@@ -1,7 +1,7 @@
 # The `mindflock` CLI
 
 The console entry point (`backend/cli.py`) has two kinds of commands:
-host commands that run things locally (`serve`, `doctor`) and **session
+host commands that run things locally (`serve`, `doctor`, `uninstall`) and **session
 commands** (`new`, `ls`, `attach`, `rm`, `open`, `events`) that are thin clients over
 a *running* server's HTTP API (`backend/client.py`). Session commands
 never spawn an engine of their own — the terminal and the web UI drive the same
@@ -15,6 +15,7 @@ mindflock serve tailscale   # bind 0.0.0.0 for phone/tailnet access (URL + QR + 
 mindflock serve --port 9000 # custom port
 mindflock doctor            # dependency preflight; exit 1 if a required dep is missing
 mindflock doctor --fix      # offer to install/repair missing dependencies interactively
+mindflock uninstall         # undo MindFlock's writes to your repos (see below)
 mindflock --version         # print the installed version
 ```
 
@@ -22,6 +23,53 @@ mindflock --version         # print the installed version
 your LAN as well as your tailnet — and auto-enables the access-token gate:
 unauthenticated clients get 401, and the token + QR code are printed in the
 startup banner. The default `serve` (local) binds 127.0.0.1 only.
+
+### `mindflock uninstall [--purge] [--keep-worktrees] [--dry-run] [--yes]`
+
+Reverses what MindFlock wrote **outside its own venv**. `uv tool uninstall
+mindflock` removes the venv and the `~/.local/bin/mindflock` shim, but two
+things survive it and cause real problems:
+
+* **Session worktrees.** `~/.mindflock/worktrees/…` are live git worktrees
+  *registered inside your repositories*. Deleting them with `rm -rf` leaves
+  every affected repo with `git worktree list` entries pointing at paths that
+  no longer exist. This command removes them through git (`worktree remove` →
+  `branch -D` → `worktree prune`) so the repos stay consistent.
+* **Activity hooks.** In-place sessions merge hook entries into your repo's
+  `.claude/settings.local.json` / `.codex/hooks.json`. The hook body is
+  self-contained inline `python3` with no dependency on the `mindflock`
+  binary, so it keeps firing after the engine is gone — and re-creates
+  `~/.mindflock-assistant/.activity-markers`, silently regrowing a directory
+  you just deleted.
+
+It also removes the `.mindflock_*` scratch files and the `.git/info/exclude`
+lines that named them.
+
+```bash
+mindflock uninstall --dry-run   # print everything that would be removed, change nothing
+mindflock uninstall             # worktrees, hooks, scratch files (keeps settings + history)
+mindflock uninstall --purge     # …and delete ~/.mindflock and ~/.mindflock-assistant
+```
+
+What it deliberately will **not** do:
+
+* delete any directory of yours — only MindFlock's own files inside one;
+* touch a worktree outside `~/.mindflock/worktrees` (MindFlock didn't create
+  it, so it's reported and left alone);
+* remove hook entries you wrote — only ones carrying MindFlock's tag, even
+  when they share a file;
+* delete a branch that already existed before its session;
+* run while a server is up (that would tear down worktrees under live
+  sessions). `--dry-run` is still allowed then.
+
+`--purge` is opt-in because `~/.mindflock` and `~/.mindflock-assistant` hold
+your settings, session state and usage history — without it, a reinstall picks
+up where you left off. The final step is *printed rather than run*, since this
+process is executing out of the venv it deletes:
+
+```bash
+uv tool uninstall mindflock
+```
 
 ## Session commands
 

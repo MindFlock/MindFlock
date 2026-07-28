@@ -9,6 +9,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`mindflock uninstall`** — undoes what MindFlock wrote *outside* its own
+  venv, which `uv tool uninstall mindflock` leaves entirely behind. Two of
+  those leftovers were actively harmful: session worktrees under
+  `~/.mindflock/worktrees` are live git worktrees **registered inside the
+  user's repositories** (deleting the directory strands both the worktree and
+  its branch, leaving `git worktree list` pointing at nothing), and the
+  activity hooks merged into a repo's `.claude/settings.local.json` /
+  `.codex/hooks.json` are self-contained inline `python3` with no dependency
+  on the `mindflock` binary — so they kept firing after the engine was gone
+  and **re-created `~/.mindflock-assistant` after the user deleted it**. The
+  command removes worktrees through git (`worktree remove` → `branch -D` →
+  `worktree prune`), strips only MindFlock-tagged hook entries, deletes the
+  `.mindflock_*` scratch files and their `.git/info/exclude` lines, and sweeps
+  orphaned worktree directories. `--dry-run` previews, `--purge` additionally
+  deletes `~/.mindflock` + `~/.mindflock-assistant`, `--keep-worktrees` limits
+  it to hooks/scratch. It refuses to run while a server is up, never deletes a
+  user directory, never touches a worktree outside `~/.mindflock/worktrees`,
+  never removes a user's own hooks or a pre-existing branch, and *prints*
+  rather than runs the final `uv tool uninstall` (it executes from the venv
+  that command deletes).
+
+- **Engine/app version drift detection** — the desktop shell pins the engine
+  to its own version at install time but only ran that install when the engine
+  was **absent**, so updating the app alone left the old engine running
+  indefinitely; `curl install.sh | sh` (which defaults to `main`) could
+  likewise push the engine *ahead* of the app, which can trip the `state.json`
+  downgrade path. Nothing checked either direction. The engine now reports its
+  version in `GET /api/doctor`, the shell compares it on every successful app
+  load, and a mismatch raises a toast that reinstalls the engine at the app's
+  version with live installer output — over HTTP, so one code path covers
+  macOS, Linux and Windows/WSL. Both toasts now share a stacking container so
+  a release notice and a drift notice can't overlap.
+
+- **Visible downgrade notice** — when a `state.json` written by a newer
+  MindFlock is refused, `LoadState` preserves it as `state.json.newer-<ts>`
+  and starts empty. That's non-destructive but looks exactly like data loss,
+  and it was only ever reported to a log. The event is now recorded and
+  surfaced two ways: a `state-schema` doctor check (`warn`, so it never makes
+  `doctor` exit 1 — the installer runs it) and a UI banner naming the
+  preserved file and how to recover it, dismissible via
+  `POST /api/doctor/ack-state-notice`.
+
 - **In-app update notifications** — the desktop app checks GitHub Releases
   shortly after launch and every 6 hours, and when a newer version exists it
   shows a small toast in the bottom-right with **Update** (opens the release

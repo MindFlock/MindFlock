@@ -61,6 +61,20 @@ class DoctorAddon(Addon):
             # subprocess probes never block the event loop.
             return JSONResponse(self._payload(refresh=refresh))
 
+        @router.post("/doctor/ack-state-notice")
+        def ack_state_notice() -> JSONResponse:
+            """Dismiss the downgrade notice (the user read the banner).
+
+            Clears the cache too: the notice is embedded in the cached payload,
+            so without this the banner would come back on reload for up to the
+            cache TTL and look like the dismiss did nothing.
+            """
+            from backend.config import state as state_mod
+
+            state_mod.clear_downgrade_notice()
+            self._cached_payload = None
+            return JSONResponse({"ok": True})
+
         return router
 
     @property

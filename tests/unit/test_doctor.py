@@ -413,6 +413,45 @@ class TestDoctorApi:
         assert "doctor" in addons
         assert addons["doctor"]["frontend"][0]["where"] == "settings"
 
+    def test_payload_reports_the_engine_version(self, monkeypatch):
+        """The desktop shell reads this to detect app/engine drift."""
+        from backend import __version__
+        from backend.web import server
+
+        monkeypatch.setattr(doctor, "run_checks", lambda: [])
+        client = TestClient(server.app)
+
+        data = client.get("/api/doctor", params={"refresh": 1}).json()
+
+        assert data["version"] == __version__
+
+    def test_ack_clears_the_state_notice_and_the_cache(self, monkeypatch):
+        from backend.config import state as state_mod
+        from backend.web import server
+
+        monkeypatch.setattr(doctor, "run_checks", lambda: [])
+        monkeypatch.setattr(
+            state_mod,
+            "downgrade_notice",
+            lambda: {"file_version": 9, "supported_version": 1, "backup_path": "/x"},
+        )
+        client = TestClient(server.app)
+        assert client.get("/api/doctor", params={"refresh": 1}).json()["state_notice"]
+
+        # Acknowledging must survive a reload, so the cached payload holding the
+        # notice has to be dropped along with the notice itself.
+        cleared = {"done": False}
+        monkeypatch.setattr(
+            state_mod,
+            "clear_downgrade_notice",
+            lambda: cleared.__setitem__("done", True),
+        )
+        monkeypatch.setattr(state_mod, "downgrade_notice", lambda: None)
+
+        assert client.post("/api/doctor/ack-state-notice").json() == {"ok": True}
+        assert cleared["done"] is True
+        assert client.get("/api/doctor").json()["state_notice"] is None
+
 
 class TestDoctorAddonStartup:
     """The best-effort startup print of failed checks (interactive launch only)."""
