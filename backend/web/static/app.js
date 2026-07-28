@@ -31344,6 +31344,11 @@ function SystemLogs({ onOpenSysLogsPane }) {
     const ok = await copyText(path);
     toast(ok ? "Log path copied to clipboard" : path);
   }, [path]);
+  const copyLog = reactExports.useCallback(async () => {
+    if (!text) return;
+    const ok = await copyText(text);
+    toast(ok ? "Log copied to clipboard" : "Copy failed");
+  }, [text]);
   const load2 = reactExports.useCallback(async () => {
     let d;
     try {
@@ -31391,6 +31396,17 @@ function SystemLogs({ onOpenSysLogsPane }) {
         }
       ),
       /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "logs-refresh", className: "test-btn", onClick: load2, children: "Refresh" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          id: "logs-copy",
+          className: "test-btn",
+          title: "Copy everything shown here (the last 256 KB) to the clipboard",
+          onClick: copyLog,
+          children: "Copy log"
+        }
+      ),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {

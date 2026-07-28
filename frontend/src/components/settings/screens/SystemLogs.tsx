@@ -33,15 +33,24 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
 
   const revealPath = useCallback(async () => {
     if (!path) return;
+    // Only the Electron shell bridge can open the file manager on the machine
+    // the USER is at. A server-side open would run wherever the server lives
+    // (e.g. WSL while the user is on Windows in a browser) — the wrong machine —
+    // so everywhere else we just copy the path, which is always useful.
     const show = shellShowItem();
     if (show) {
       const r = await show(path).catch(() => null);
       if (r && r.ok !== false) return;
-      // Couldn't open it (deleted, sandbox) — fall back to copying the path.
     }
     const ok = await copyText(path);
     toast(ok ? "Log path copied to clipboard" : path);
   }, [path]);
+
+  const copyLog = useCallback(async () => {
+    if (!text) return;
+    const ok = await copyText(text);
+    toast(ok ? "Log copied to clipboard" : "Copy failed");
+  }, [text]);
 
   const load = useCallback(async () => {
     let d: LogsPayload;
@@ -98,6 +107,15 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
         </select>
         <button type="button" id="logs-refresh" className="test-btn" onClick={load}>
           Refresh
+        </button>
+        <button
+          type="button"
+          id="logs-copy"
+          className="test-btn"
+          title="Copy everything shown here (the last 256 KB) to the clipboard"
+          onClick={copyLog}
+        >
+          Copy log
         </button>
         <button
           type="button"

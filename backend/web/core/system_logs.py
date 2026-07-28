@@ -36,23 +36,26 @@ def _resolve_repo_root() -> Path:
 
 def _log_sources() -> list:
     """Log files worth surfacing in Settings → System logs: the server's own
-    log always, plus the ingestion pipeline's logs when they exist. The pipeline
-    runs as a subprocess from the repo root, so its logs live under
+    log always, plus the ingestion pipeline's log when it exists. The pipeline
+    runs as a subprocess from the repo root, so its log lives under
     ``<repo root>/logs/`` — resolved here rather than relative to this server's
-    cwd. Both the raw stdout/stderr capture (what the sidebar tails) and the
-    structured pipeline log are offered so nothing about a run is hidden."""
+    cwd. We surface the raw stdout/stderr capture (the same file the sidebar
+    tails); the pipeline writes the exact same lines to a second structured file
+    (pipeline.log), so offering both only confused people — one source is it."""
     sources = [{"name": "server", "label": "Server", "path": str(log.logFileName)}]
     root = _resolve_repo_root()
-    candidates = [
-        ("ingestion", "Ingestion pipeline", root / "logs" / "ticket-ingestion.log"),
-        ("pipeline", "Ingestion (structured)", root / "logs" / "pipeline.log"),
-    ]
-    for name, label, path in candidates:
-        try:
-            if path.is_file():
-                sources.append({"name": name, "label": label, "path": str(path)})
-        except OSError:
-            pass
+    ingestion = root / "logs" / "ticket-ingestion.log"
+    try:
+        if ingestion.is_file():
+            sources.append(
+                {
+                    "name": "ingestion",
+                    "label": "Ingestion pipeline",
+                    "path": str(ingestion),
+                }
+            )
+    except OSError:
+        pass
     return sources
 
 

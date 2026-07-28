@@ -188,11 +188,20 @@ def test_ingestion_logs_surface_from_repo_root_not_cwd(tmp_path, monkeypatch):
     logs = tmp_path / "logs"
     logs.mkdir()
     (logs / "ticket-ingestion.log").write_text("hello ingestion\n")
-    (logs / "pipeline.log").write_text("structured line\n")
     monkeypatch.setenv("MINDFLOCK_REPO_ROOT", str(tmp_path))
 
-    names = {s["name"] for s in system_logs._log_sources()}
-    assert {"server", "ingestion", "pipeline"} <= names
+    srcs = {s["name"]: s["path"] for s in system_logs._log_sources()}
+    assert {"server", "ingestion"} <= set(srcs)
+    # One ingestion source — the raw capture the sidebar tails, not a confusing
+    # second "structured" duplicate of the same lines.
+    assert srcs["ingestion"].endswith("ticket-ingestion.log")
+    assert "pipeline" not in srcs
+
+
+def test_system_logs_has_copy_button():
+    """A Copy-log button copies the shown tail to the clipboard."""
+    js = client.get("/app.js").text
+    assert '"logs-copy"' in js
 
 
 def test_activity_log_records_requests_and_redacts_token(monkeypatch):
