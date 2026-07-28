@@ -18,10 +18,15 @@ server, reached by scanning the startup QR over your tailnet.)
 ## Deployment (the intended experience)
 
 1. **Once**: install the desktop app. Every tagged release attaches one
-   unsigned build per OS (the README's download buttons point at them), or
+   build per OS (the README's download buttons point at them), or
    `npm run dist` in this folder produces the one for the OS you run it on
    (NSIS `.exe` on Windows, universal `.dmg` on macOS, AppImage on Linux;
-   `dist:win` / `dist:mac` / `dist:linux` force a target).
+   `dist:win` / `dist:mac` / `dist:linux` force a target). None are notarized,
+   so first launch shows an "unverified developer" warning (the top-level
+   README walks through clearing it). The macOS build is self-signed only —
+   enough for macOS to remember folder-access grants, not enough for
+   Gatekeeper; see [Versioning & releases](../docs/development.md#versioning--releases)
+   for the cert setup.
 2. **Once**: install the server/CLI where the engine runs.
    - **Windows** — nothing to do: the NSIS installer runs the step below for
      you inside your default WSL distro (see

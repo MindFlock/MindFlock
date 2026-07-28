@@ -32,7 +32,11 @@
     "mac": {
       "target": [{ "target": "dmg", "arch": ["universal"] }],
       "category": "public.app-category.developer-tools",
-      "artifactName": "MindFlock.dmg"
+      "artifactName": "MindFlock.dmg",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "linux": {
       "target": "AppImage",

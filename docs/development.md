@@ -133,10 +133,26 @@ which GitHub resolves only for an exact filename. They're set by
 `artifactName` in `electron/package.json` — renaming one silently breaks the
 front-page buttons, so change the README in the same commit.
 
-Desktop builds are **unsigned** (no Developer ID / Authenticode cert yet), so
-the desktop matrix sets `CSC_IDENTITY_AUTO_DISCOVERY=false` to build rather
-than fail, and `fail-fast: false` keeps one OS's failure from cancelling the
-others — a release missing one installer beats a release missing all three.
+Desktop builds have **no paid signing cert** (no Developer ID / Authenticode),
+so Gatekeeper and SmartScreen still warn on first launch. `fail-fast: false`
+keeps one OS's failure from cancelling the others — a release missing one
+installer beats a release missing all three.
+
+The macOS build *is* signed, but with a **free self-signed certificate**. That
+does nothing for Gatekeeper; its job is to give the app a stable code identity
+so macOS TCC remembers folder-access grants instead of re-prompting on every
+launch (an unsigned app has no identity to attach the grant to). Mint the cert
+once with [`scripts/make-mac-selfsigned-cert.sh`](../scripts/make-mac-selfsigned-cert.sh)
+and store its output as the `MAC_CSC_LINK` / `MAC_CSC_KEY_PASSWORD` repository
+secrets; `release.yml` passes them to electron-builder as `CSC_LINK` /
+`CSC_KEY_PASSWORD`. **Keep the same cert across releases** — regenerating it
+changes the identity and resets every user's remembered grant. When the secrets
+are absent (forks, or before they're set) the matrix falls back to
+`CSC_IDENTITY_AUTO_DISCOVERY=false` and builds unsigned rather than failing.
+
+A Gatekeeper-clean, notarized dmg still needs a paid Developer ID; that remains
+a TODO. Signing config lives in `electron/package.json` (`mac`) and
+`electron/build/entitlements.mac.plist`.
 
 ## Project layout
 

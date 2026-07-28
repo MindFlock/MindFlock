@@ -105,6 +105,10 @@ Thumbs.db
 !.env.example
 *.pem
 *.key
+# Self-signed macOS code-signing key (scripts/make-mac-selfsigned-cert.sh).
+# The private key must never be committed — it lives only in the CI secret.
+*.p12
+mindflock-selfsigned.p12.base64
 secrets.*
 # secrets.py is a source module (the secret *resolver*), not secret data — keep it tracked
 !secrets.py

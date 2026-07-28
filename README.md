@@ -74,16 +74,41 @@ steps. If the engine is missing, the app's waiting page says so and shows the
 exact command.
 
 <details>
-<summary>These builds are unsigned — what you'll see on first launch</summary>
+<summary>These builds aren't from a paid developer account — what you'll see on first launch</summary>
 
-Code-signing certificates are on the roadmap, not in this release. Until then:
+MindFlock has no Apple Developer ID or Windows Authenticode certificate (both
+are paid, per-year subscriptions). The macOS build *is* signed, but with a
+free self-signed certificate — enough to keep macOS from re-asking for folder
+permission on every launch, not enough to satisfy Gatekeeper. So on first
+launch:
 
-- **macOS** — *"Apple could not verify MindFlock is free of malware."* That
-  dialog has no **Open** button, and the old Control-click → **Open** bypass
-  was removed in macOS Sequoia. Dismiss it, then go to **System Settings →
-  Privacy & Security**, scroll to Security, and click **Open Anyway** next to
-  MindFlock. From a terminal the equivalent is
-  `xattr -dr com.apple.quarantine /Applications/MindFlock.app`.
+**macOS — "Apple could not verify MindFlock is free of malware."**
+
+That dialog has no **Open** button, and the old Control-click → **Open**
+shortcut was removed in macOS Sequoia. To open it anyway (you only do this
+once):
+
+1. Drag **MindFlock** into your **Applications** folder and try to open it. The
+   warning appears — click **Done** to dismiss it.
+2. Open the  menu → **System Settings…** → **Privacy & Security**.
+3. Scroll down to the **Security** section. You'll see a line like
+   *"MindFlock was blocked to protect your Mac."* with an **Open Anyway**
+   button next to it. Click it.
+4. Confirm with **Open Anyway** again and authenticate with Touch ID or your
+   password. MindFlock launches, and macOS remembers the choice — you won't be
+   asked again.
+
+Prefer the terminal? This does the same thing in one line:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/MindFlock.app
+```
+
+The **first time** MindFlock reads a folder under Documents, Desktop,
+Downloads, or an external drive, macOS asks *"MindFlock would like to access
+files…"* — click **Allow**. Because the app is signed, that grant sticks; it
+won't ask again for that folder.
+
 - **Windows** — SmartScreen's "Windows protected your PC". Click **More
   info** → **Run anyway**.
 - **Linux** — no prompt; AppImages aren't signed by convention.
