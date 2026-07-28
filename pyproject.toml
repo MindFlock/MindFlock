@@ -1,6 +1,6 @@
 [project]
 name = "mindflock"
-version = "0.1.1"
+version = "0.1.2"
 description = "MindFlock — a web platform for managing AI coding-agent sessions, with a multi-provider ticket-ingestion pipeline"
 readme = "README.md"
 license = { file = "LICENSE" }
