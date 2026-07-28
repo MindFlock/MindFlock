@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Install uv
@@ -48,7 +48,7 @@ jobs:
     name: version consistency
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Manifests agree (and match tag on tagged builds)
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
@@ -65,7 +65,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -112,7 +112,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends gh
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Run the installer from the checkout under test
         run: MINDFLOCK_INSTALL_LOCAL="$PWD" sh install.sh

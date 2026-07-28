@@ -31,7 +31,7 @@ jobs:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The tag is the release's name, and three manifests carry the version
       # (pyproject.toml, electron/ and frontend/package.json). Refuse to ship a
@@ -96,7 +96,7 @@ jobs:
       run:
         working-directory: electron
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
