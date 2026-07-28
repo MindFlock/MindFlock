@@ -44,6 +44,16 @@ def test_switch_flips_only_on_the_switch_not_the_whole_row():
     ), "a set-switch-row is a <label> — clicking the row text flips the toggle"
 
 
+def test_forced_start_failure_is_surfaced_in_notifications():
+    """A forced PR review / ticket start that dies during background provisioning
+    (clone, comment fetch) only emits session.create_failed. The bell must map it
+    to a visible notification — without a case it was dropped, so the user saw an
+    optimistic 'starting…' toast and then nothing (the coworker's silent review)."""
+    js = client.get("/app.js").text
+    assert "session.create_failed" in js
+    assert "couldn't start" in js
+
+
 def test_settings_has_new_screens():
     html = client.get("/").text
     js = client.get("/app.js").text

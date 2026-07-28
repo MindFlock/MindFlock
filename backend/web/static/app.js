@@ -23535,6 +23535,8 @@ function notifFromEvent(env) {
   switch (env.event) {
     case "session.created":
       return { text: "created", cls: "n-info" };
+    case "session.create_failed":
+      return { text: "couldn't start — " + (d.error || "failed"), cls: "n-warn" };
     case "session.deleted":
       return { text: "deleted", cls: "n-muted" };
     case "session.activity_changed":
