@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld('mfshell', {
   // wording differs per OS (Windows routes to Add/Remove Programs), so surface
   // the platform. Undefined in a plain browser → the UI hides the control.
   platform: process.platform,
+  // Reveal a file in the OS file manager (Finder / Explorer), highlighted.
+  // Settings → System logs uses this to jump straight to a log file. Resolves
+  // { ok } so the UI can fall back to copying the path if it can't open.
+  showItem: (p) => ipcRenderer.invoke('shell:show-item', String(p == null ? '' : p)),
 })
 
 // App lifecycle from the UI: the in-app "Uninstall MindFlock" control

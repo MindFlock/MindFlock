@@ -107,14 +107,18 @@
   filter: brightness(1.08);
 }
 
-/* Narrow numeric input (e.g. refresh interval) — replaces an inline width. */
+/* Narrow numeric/time input (e.g. refresh interval, fresh-window time) —
+   replaces an inline width. accent-color tints the number spinner + the
+   time-picker clock glyph to match the rest of MindFlock. */
 .num-sm {
   width: 6em;
+  accent-color: var(--accent);
 }
 
 .set-row input[type="text"],
 .set-row input[type="password"],
-.set-row input[type="number"] {
+.set-row input[type="number"],
+.set-row input[type="time"] {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);

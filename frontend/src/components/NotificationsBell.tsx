@@ -41,6 +41,12 @@ function notifFromEvent(env: EventEnvelope): { text: string; cls: string } | nul
   switch (env.event) {
     case "session.created":
       return { text: "created", cls: "n-info" };
+    case "session.create_failed":
+      // A forced PR review / ticket start that dies during background
+      // provisioning (clone, comment fetch) only emits this — without a case
+      // here it was dropped, so the user saw an optimistic "starting…" toast
+      // and then nothing. Surface the error so the failure is visible.
+      return { text: "couldn't start — " + (d.error || "failed"), cls: "n-warn" };
     case "session.deleted":
       return { text: "deleted", cls: "n-muted" };
     case "session.activity_changed":

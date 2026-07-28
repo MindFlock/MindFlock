@@ -106,7 +106,9 @@ p.set-hint {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  cursor: pointer;
+  /* No row-wide cursor: only the switch toggles now (the row is a <div>, not a
+     <label>), so the whole row must not look clickable. The .ca-slider keeps
+     its own pointer cursor. */
 }
 
 /* The row centers the label's line box on the switch, but the desktop app's

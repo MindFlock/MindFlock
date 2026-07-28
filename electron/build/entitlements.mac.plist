@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    MindFlock is signed with a self-signed certificate (see
+    scripts/make-mac-selfsigned-cert.sh), NOT an Apple Developer ID. The point
+    of signing is a STABLE code identity so macOS TCC remembers folder-access
+    grants instead of re-prompting on every launch — it does nothing for
+    Gatekeeper. Hardened Runtime is off (package.json: hardenedRuntime=false)
+    because it is only meaningful for notarized apps, so these entitlements are
+    inert today. They are declared anyway so that turning Hardened Runtime on
+    later (if a Developer ID ever lands) does not stop Electron launching:
+    Electron needs a JIT and unsigned executable memory, and loads unsigned
+    helper binaries the engine spawns.
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

@@ -46,6 +46,12 @@ body:
     attributes:
       label: Relevant logs
       description: >
-        Server terminal output around the failure, and/or
-        `mindflock events --follow` output while reproducing.
+        **Please include logs — they're usually what makes a bug fixable.**
+        Open **Settings → System logs** in the app and paste the tail of the
+        relevant source: **Server** for UI/CLI/API issues, **Ingestion
+        pipeline** for PR-review or ticket-ingestion issues (that's the raw
+        capture; the structured one is there too). Click the file path shown
+        under the toolbar to reveal it in Finder / your file manager if you'd
+        rather attach the whole file. `mindflock events --follow` output while
+        reproducing helps too.
       render: text

@@ -22,17 +22,36 @@ def test_every_settings_screen_leads_with_a_heading():
     assert js.count("set-section-title") >= 15, "screens are missing headings"
 
 
-def test_all_switch_rows_are_labels_not_divs():
-    """Cohesion + correctness: a .ca-switch only toggles on click when wrapped in
-    a <label>, so no switch row may be a <div>."""
-    html = client.get("/").text
+def test_switch_flips_only_on_the_switch_not_the_whole_row():
+    """Correctness: clicking a switch row's label text must NOT flip the toggle —
+    only the switch itself. So the row is a <div> and the .ca-switch is its own
+    <label> (which still gives the slider its click-to-toggle). The inverse of
+    the original layout, where the whole row was one <label>."""
     js = client.get("/app.js").text
     assert "set-switch-row" in js
-    # Every switch row renders as a <label> (a .ca-switch only toggles on
-    # click when an ancestor label wraps it) — no jsx("div", ...) may carry it.
+    # The switch keeps its click target: every .ca-switch renders as a <label>…
+    assert re.search(
+        r'jsxs?\("label",\s*\{\s*className:\s*"ca-switch"', js
+    ), "the .ca-switch is no longer a <label> — the slider won't toggle on click"
+    # …and none renders as a bare span/div (which wouldn't toggle at all).
     assert not re.search(
-        r'jsxs?\("div",\s*\{[^}]*set-switch-row', js
-    ), "a set-switch-row is a <div> — its toggle won't flip on click"
+        r'jsxs?\("(?:span|div)",\s*\{\s*className:\s*"ca-switch"', js
+    ), "a .ca-switch is a span/div — the slider won't toggle on click"
+    # No switch row is a <label> any more: a row-wide label flips the toggle
+    # from anywhere on the row, which is exactly the behaviour being removed.
+    assert not re.search(
+        r'jsxs?\("label",\s*\{[^}]*set-switch-row', js
+    ), "a set-switch-row is a <label> — clicking the row text flips the toggle"
+
+
+def test_forced_start_failure_is_surfaced_in_notifications():
+    """A forced PR review / ticket start that dies during background provisioning
+    (clone, comment fetch) only emits session.create_failed. The bell must map it
+    to a visible notification — without a case it was dropped, so the user saw an
+    optimistic 'starting…' toast and then nothing (the coworker's silent review)."""
+    js = client.get("/app.js").text
+    assert "session.create_failed" in js
+    assert "couldn't start" in js
 
 
 def test_settings_has_new_screens():
@@ -78,6 +97,17 @@ def test_system_logs_screen_present_and_wired():
     assert "/api/logs?name=" in js
     assert '"/api/logs' in js
     assert "Open as pane" in js  # wired into nav switch
+
+
+def test_system_logs_path_is_clickable_to_reveal_or_copy():
+    """The selected log's full path renders as a clickable control — reveal in
+    Finder inside the desktop shell (window.mfshell.showItem), copy otherwise —
+    so users can jump to or grab the file when filing a bug."""
+    js = client.get("/app.js").text
+    assert '"logs-path"' in js
+    assert "showItem" in js  # the desktop reveal bridge
+    css = client.get("/style.css").text
+    assert ".logs-path" in css
 
 
 def test_settings_nav_scrolls_so_all_items_reachable():
@@ -145,6 +175,33 @@ def test_api_logs_returns_server_tail():
     assert d["selected"] == "server"
     # Unknown source name is coerced to the first available source.
     assert client.get("/api/logs?name=bogus").json()["selected"] == "server"
+
+
+def test_ingestion_logs_surface_from_repo_root_not_cwd(tmp_path, monkeypatch):
+    """The pipeline runs as a subprocess from the repo root, so its logs live at
+    ``<repo root>/logs/`` — not the server's cwd. ``_log_sources`` must resolve
+    them via that root (the same anchor the ingestion addon launches from), or
+    the ingestion log goes missing and only 'server' shows in System logs."""
+    from backend.web.core import system_logs
+
+    (tmp_path / "config.toml").write_text("")
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "ticket-ingestion.log").write_text("hello ingestion\n")
+    monkeypatch.setenv("MINDFLOCK_REPO_ROOT", str(tmp_path))
+
+    srcs = {s["name"]: s["path"] for s in system_logs._log_sources()}
+    assert {"server", "ingestion"} <= set(srcs)
+    # One ingestion source — the raw capture the sidebar tails, not a confusing
+    # second "structured" duplicate of the same lines.
+    assert srcs["ingestion"].endswith("ticket-ingestion.log")
+    assert "pipeline" not in srcs
+
+
+def test_system_logs_has_copy_button():
+    """A Copy-log button copies the shown tail to the clipboard."""
+    js = client.get("/app.js").text
+    assert '"logs-copy"' in js
 
 
 def test_activity_log_records_requests_and_redacts_token(monkeypatch):

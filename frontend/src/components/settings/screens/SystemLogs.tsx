@@ -3,7 +3,15 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
+import { copyText } from "../../../lib/clipboard";
+import { toast } from "../../../lib/toast";
 import type { ScreenProps } from "../SettingsDialog";
+
+/** Reveal-in-file-manager bridge — present only inside the desktop shell. */
+function shellShowItem(): ((p: string) => Promise<{ ok?: boolean }>) | undefined {
+  return (window as unknown as { mfshell?: { showItem?: (p: string) => Promise<{ ok?: boolean }> } })
+    .mfshell?.showItem;
+}
 
 interface LogsPayload {
   sources?: Array<{ name: string; label: string; path?: string }>;
@@ -19,8 +27,50 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
   const [selected, setSelected] = useState("server");
   const [text, setText] = useState("Loading…");
   const [meta, setMeta] = useState("");
+  const [path, setPath] = useState("");
   const [follow, setFollow] = useState(false);
   const viewRef = useRef<HTMLPreElement | null>(null);
+
+  const revealPath = useCallback(async () => {
+    if (!path) return;
+    // Only the Electron shell bridge can open the file manager on the machine
+    // the USER is at. A server-side open would run wherever the server lives
+    // (e.g. WSL while the user is on Windows in a browser) — the wrong machine —
+    // so everywhere else we copy the path, which is always useful.
+    const show = shellShowItem();
+    if (show) {
+      try {
+        const r = await show(path);
+        if (r && r.ok !== false) return;
+      } catch {
+        /* fall through to copy */
+      }
+    }
+    // Select the visible path too: it's unmistakable feedback that the click
+    // registered, and lets the user Ctrl+C manually if the clipboard API is
+    // blocked in their context (some browsers over plain http).
+    const el = document.getElementById("logs-path");
+    if (el) {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    }
+    let ok = false;
+    try {
+      ok = await copyText(path);
+    } catch {
+      /* clipboard blocked — the selection above is the fallback */
+    }
+    toast(ok ? "Log path copied — paste it anywhere" : "Path selected — press Ctrl+C to copy");
+  }, [path]);
+
+  const copyLog = useCallback(async () => {
+    if (!text) return;
+    const ok = await copyText(text);
+    toast(ok ? "Log copied to clipboard" : "Copy failed");
+  }, [text]);
 
   const load = useCallback(async () => {
     let d: LogsPayload;
@@ -37,7 +87,8 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
     if (atBottom && view) requestAnimationFrame(() => (view.scrollTop = view.scrollHeight));
     const src = (d.sources || []).find((s) => s.name === d.selected);
     const kb = Math.round((d.size || 0) / 1024);
-    setMeta((src?.path ? src.path + "  ·  " : "") + kb + " KB" + (d.truncated ? " (showing last 256 KB)" : ""));
+    setPath(src?.path || "");
+    setMeta(kb + " KB" + (d.truncated ? " (showing last 256 KB)" : ""));
   }, [selected]);
 
   useEffect(() => {
@@ -56,8 +107,10 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
     <>
       <h3 className="set-section-title">System logs</h3>
       <p className="set-hint">
-        The server's own log — every request plus errors and background activity, newest last
-        (up to 256 KB). Handy when something misbehaves; copy the tail when reporting an issue.
+        The server's log plus the ingestion pipeline's, newest last (up to 256 KB each). Handy
+        when something misbehaves — <strong>please paste the relevant tail into a GitHub issue
+        when reporting a bug</strong> (Ingestion pipeline is the one to grab for PR-review or
+        ticket problems).
       </p>
       <div className="logs-toolbar">
         <select
@@ -77,6 +130,15 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
         </button>
         <button
           type="button"
+          id="logs-copy"
+          className="test-btn"
+          title="Copy everything shown here (the last 256 KB) to the clipboard"
+          onClick={copyLog}
+        >
+          Copy log
+        </button>
+        <button
+          type="button"
           id="logs-open-pane"
           className="test-btn"
           title="Open the log as a live pane on the main window"
@@ -90,6 +152,21 @@ export function SystemLogs({ onOpenSysLogsPane }: ScreenProps) {
         </label>
         <span id="logs-meta" className="muted">{meta}</span>
       </div>
+      {path && (
+        <button
+          type="button"
+          id="logs-path"
+          className="logs-path"
+          title={
+            shellShowItem()
+              ? "Reveal this log file in Finder / your file manager"
+              : "Copy this log file's full path"
+          }
+          onClick={revealPath}
+        >
+          {path}
+        </button>
+      )}
       <pre id="logs-view" className="logs-view" ref={viewRef}>
         {text}
       </pre>

@@ -23535,6 +23535,8 @@ function notifFromEvent(env) {
   switch (env.event) {
     case "session.created":
       return { text: "created", cls: "n-info" };
+    case "session.create_failed":
+      return { text: "couldn't start — " + (d.error || "failed"), cls: "n-warn" };
     case "session.deleted":
       return { text: "deleted", cls: "n-muted" };
     case "session.activity_changed":
@@ -28966,13 +28968,13 @@ function GettingStarted() {
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Getting started" }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Tips and a guided tour to help you set up MindFlock's features." }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "label",
+      "div",
       {
         className: "set-row set-switch-row",
         title: "Small inline 💡 tips that point out features around the app. Turn them back on any time to see the ones you dismissed again.",
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Show getting-started hints" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {
@@ -29012,12 +29014,12 @@ function GettingStarted() {
 function ReduceMotionRow() {
   const reduceMotion = useUi((s) => s.reduceMotion);
   const setReduceMotion = useUi((s) => s.setReduceMotion);
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row set-switch-row", children: [
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row set-switch-row", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "notif-rule-text", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Reduce motion" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint notif-rule-desc", children: `While an agent is running, the Agent tab's live terminal scrolls constantly, which some people find tiring to look at. With this on, a running agent's terminal is hidden behind a still "running" panel instead. Clicking, scrolling, or typing anywhere in that window brings the live output back; it returns to the panel after 10 seconds with no input. Only the Agent tab is affected — Terminal, Diff, and Queue are never covered. Off by default.` })
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "input",
         {
@@ -29183,13 +29185,13 @@ function Mobile(_) {
     /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Open MindFlock on your phone. Scan the QR from a device on your Tailscale network, or use one of the URLs below." }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "mobile-body", children: !tailscale ? null : error ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "error", children: error }) : !data ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Loading…" }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs(
-        "label",
+        "div",
         {
           className: "set-row set-switch-row",
           title: "Bind the server to all interfaces so phones on your tailnet can reach it",
           children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Tailscale mode" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "input",
                 {
@@ -29312,14 +29314,14 @@ function Notifications(_) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Browser notifications" }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "label",
+      "div",
       {
         className: "set-row set-switch-row",
         id: "notif-browser-row",
         title: "Show a desktop/Chrome notification when an agent needs you, a PR merges, or a budget is exceeded",
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", id: "notif-browser-label", children: "Desktop / Chrome notifications" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {
@@ -29355,12 +29357,12 @@ function Notifications(_) {
 function RuleRow({ rule }) {
   const [on, setOn] = reactExports.useState(rule.enabled !== false);
   const label = rule.label || rule.title || rule.event || "event";
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row set-switch-row notif-rule", children: [
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row set-switch-row notif-rule", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "notif-rule-text", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: label }),
       rule.body && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint notif-rule-desc", children: rule.body })
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "input",
         {
@@ -29573,13 +29575,13 @@ function WindowRefresh() {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Keep usage windows warm" }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "label",
+      "div",
       {
         className: "set-row set-switch-row",
         title: "Send a tiny, connection-free ping on a schedule so a provider's rolling usage window anchors when you want it to.",
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Scheduled refresh" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {
@@ -29665,6 +29667,58 @@ function WindowRefresh() {
     ] })
   ] });
 }
+function IngestionToggle() {
+  const [busy, setBusy] = reactExports.useState(false);
+  const [optimistic, setOptimistic] = reactExports.useState(null);
+  const { data: status, refetch } = useQuery({
+    queryKey: ["mindflock-status"],
+    queryFn: () => api("/api/mindflock/status"),
+    refetchInterval: 1e4,
+    retry: false
+  });
+  if (!status || !status.available) return null;
+  const running = !!status.running;
+  const desired = optimistic ?? (status.desired ?? running);
+  const toggle = async (start) => {
+    if (busy) return;
+    setBusy(true);
+    setOptimistic(start);
+    try {
+      await api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
+      toast(start ? "Ticket ingestion on" : "Ticket ingestion paused");
+    } catch (err) {
+      toast(`Ticket ingestion ${start ? "start" : "stop"} failed: ` + (err.message || ""));
+    } finally {
+      setBusy(false);
+      setOptimistic(null);
+      refetch();
+    }
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      className: "set-row set-switch-row",
+      id: "tk-ingestion-toggle-row",
+      title: "Run or stop ticket ingestion — polls your connected sources and auto-creates a coding session for each assigned ticket. Stays in this state across restarts.",
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Automated ingestion" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              type: "checkbox",
+              id: "tk-ingestion-enabled",
+              checked: desired,
+              disabled: busy,
+              onChange: (e) => toggle(e.target.checked)
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
+        ] })
+      ]
+    }
+  );
+}
 function Ticketing(_) {
   const [catalog, setCatalog] = reactExports.useState([]);
   const [sources, setSources] = reactExports.useState(null);
@@ -29743,6 +29797,7 @@ function Ticketing(_) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Ticketing" }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint set-block-hint", children: "Connect one or more ticketing platforms and MindFlock auto-creates a coding session for each ticket assigned to you. Add several sources — even two of the same provider (e.g. two Jira sites) — each with its own credentials. Stored in ~/.mindflock/settings.json (never committed)." }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(IngestionToggle, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "ticketing-sources", children: sources.map((src) => /* @__PURE__ */ jsxRuntimeExports.jsx(
       SourceCard,
       {
@@ -30316,14 +30371,14 @@ function PrReview({ gotoScreen }) {
       " open pull requests on the repositories below and automatically spins up a coding session to address review comments. It runs while ingestion is active."
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "label",
+      "div",
       {
         className: "set-row set-switch-row",
         id: "gh-pr-toggle-row",
         title: "Turn automated PR review on or off — your repositories are kept either way",
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Automated review" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {
@@ -30627,14 +30682,14 @@ function GitIssues({ gotoScreen }) {
       " on the repositories below, grabs each issue and all its comments, and automatically spins up a coding session that starts work on a fresh branch for it. Separate from PR review — the repository lists are independent."
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "label",
+      "div",
       {
         className: "set-row set-switch-row",
         id: "gh-issues-toggle-row",
         title: "Turn automated issue handling on or off — your repositories are kept either way",
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Automated handling" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {
@@ -30928,14 +30983,14 @@ function Ide(_) {
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Editor CLI used to open workspaces — e.g. cursor, code, windsurf, zed." })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "label",
+      "div",
       {
         className: "set-row set-switch-row",
         id: "ide-auto-row",
         title: "Continuously adopt folders into MindFlock as you open them in your IDE",
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", id: "ide-auto-label", children: "IDE auto-adopt" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ca-switch", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {
@@ -31267,13 +31322,48 @@ function Doctor(_) {
     ] })
   ] });
 }
+function shellShowItem() {
+  var _a2;
+  return (_a2 = window.mfshell) == null ? void 0 : _a2.showItem;
+}
 function SystemLogs({ onOpenSysLogsPane }) {
   const [sources, setSources] = reactExports.useState([]);
   const [selected, setSelected] = reactExports.useState("server");
   const [text, setText] = reactExports.useState("Loading…");
   const [meta, setMeta] = reactExports.useState("");
+  const [path, setPath] = reactExports.useState("");
   const [follow, setFollow] = reactExports.useState(false);
   const viewRef = reactExports.useRef(null);
+  const revealPath = reactExports.useCallback(async () => {
+    if (!path) return;
+    const show = shellShowItem();
+    if (show) {
+      try {
+        const r = await show(path);
+        if (r && r.ok !== false) return;
+      } catch {
+      }
+    }
+    const el = document.getElementById("logs-path");
+    if (el) {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      sel == null ? void 0 : sel.removeAllRanges();
+      sel == null ? void 0 : sel.addRange(range);
+    }
+    let ok = false;
+    try {
+      ok = await copyText(path);
+    } catch {
+    }
+    toast(ok ? "Log path copied — paste it anywhere" : "Path selected — press Ctrl+C to copy");
+  }, [path]);
+  const copyLog = reactExports.useCallback(async () => {
+    if (!text) return;
+    const ok = await copyText(text);
+    toast(ok ? "Log copied to clipboard" : "Copy failed");
+  }, [text]);
   const load2 = reactExports.useCallback(async () => {
     let d;
     try {
@@ -31289,7 +31379,8 @@ function SystemLogs({ onOpenSysLogsPane }) {
     if (atBottom && view) requestAnimationFrame(() => view.scrollTop = view.scrollHeight);
     const src = (d.sources || []).find((s) => s.name === d.selected);
     const kb = Math.round((d.size || 0) / 1024);
-    setMeta(((src == null ? void 0 : src.path) ? src.path + "  ·  " : "") + kb + " KB" + (d.truncated ? " (showing last 256 KB)" : ""));
+    setPath((src == null ? void 0 : src.path) || "");
+    setMeta(kb + " KB" + (d.truncated ? " (showing last 256 KB)" : ""));
   }, [selected]);
   reactExports.useEffect(() => {
     load2();
@@ -31303,7 +31394,11 @@ function SystemLogs({ onOpenSysLogsPane }) {
   }, [follow, load2]);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "System logs" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "The server's own log — every request plus errors and background activity, newest last (up to 256 KB). Handy when something misbehaves; copy the tail when reporting an issue." }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint", children: [
+      "The server's log plus the ingestion pipeline's, newest last (up to 256 KB each). Handy when something misbehaves — ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "please paste the relevant tail into a GitHub issue when reporting a bug" }),
+      " (Ingestion pipeline is the one to grab for PR-review or ticket problems)."
+    ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "logs-toolbar", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "select",
@@ -31316,6 +31411,17 @@ function SystemLogs({ onOpenSysLogsPane }) {
         }
       ),
       /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "logs-refresh", className: "test-btn", onClick: load2, children: "Refresh" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          id: "logs-copy",
+          className: "test-btn",
+          title: "Copy everything shown here (the last 256 KB) to the clipboard",
+          onClick: copyLog,
+          children: "Copy log"
+        }
+      ),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
@@ -31334,6 +31440,17 @@ function SystemLogs({ onOpenSysLogsPane }) {
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: "logs-meta", className: "muted", children: meta })
     ] }),
+    path && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "button",
+      {
+        type: "button",
+        id: "logs-path",
+        className: "logs-path",
+        title: shellShowItem() ? "Reveal this log file in Finder / your file manager" : "Copy this log file's full path",
+        onClick: revealPath,
+        children: path
+      }
+    ),
     /* @__PURE__ */ jsxRuntimeExports.jsx("pre", { id: "logs-view", className: "logs-view", ref: viewRef, children: text })
   ] });
 }

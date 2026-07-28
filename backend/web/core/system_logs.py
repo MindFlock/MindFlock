@@ -10,6 +10,7 @@ Split out of ``backend.web.server`` (which re-imports these names — the
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from backend import log
@@ -17,18 +18,40 @@ from backend import log
 _LOG_TAIL_MAX = 256 * 1024  # only ever read/return the last 256 KB of a log
 
 
+def _resolve_repo_root() -> Path:
+    """The directory the ingestion pipeline runs in — where ``config.toml`` and
+    its ``logs/`` live. Same resolution the ingestion addon uses to launch the
+    subprocess (``MINDFLOCK_REPO_ROOT`` env → nearest ancestor with
+    ``config.toml`` → cwd), because THIS server's cwd is not guaranteed to
+    match the pipeline's — which is exactly why a hard-coded relative
+    ``logs/pipeline.log`` never resolved and the ingestion log went missing."""
+    env = (os.environ.get("MINDFLOCK_REPO_ROOT") or "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "config.toml").is_file():
+            return parent
+    return Path.cwd()
+
+
 def _log_sources() -> list:
-    """Log files worth surfacing: the server's own log always, plus the
-    ingestion pipeline log when it exists (default ``./logs/pipeline.log``)."""
+    """Log files worth surfacing in Settings → System logs: the server's own
+    log always, plus the ingestion pipeline's log when it exists. The pipeline
+    runs as a subprocess from the repo root, so its log lives under
+    ``<repo root>/logs/`` — resolved here rather than relative to this server's
+    cwd. We surface the raw stdout/stderr capture (the same file the sidebar
+    tails); the pipeline writes the exact same lines to a second structured file
+    (pipeline.log), so offering both only confused people — one source is it."""
     sources = [{"name": "server", "label": "Server", "path": str(log.logFileName)}]
-    ing = Path("logs/pipeline.log")
+    root = _resolve_repo_root()
+    ingestion = root / "logs" / "ticket-ingestion.log"
     try:
-        if ing.exists():
+        if ingestion.is_file():
             sources.append(
                 {
                     "name": "ingestion",
                     "label": "Ingestion pipeline",
-                    "path": str(ing.resolve()),
+                    "path": str(ingestion),
                 }
             )
     except OSError:

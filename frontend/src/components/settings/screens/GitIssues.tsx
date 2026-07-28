@@ -129,13 +129,14 @@ export function GitIssues({ gotoScreen }: ScreenProps) {
         are independent.
       </p>
 
-      <label
+      <div
         className="set-row set-switch-row"
         id="gh-issues-toggle-row"
         title="Turn automated issue handling on or off — your repositories are kept either way"
       >
         <span className="set-label">Automated handling</span>
-        <span className="ca-switch">
+        {/* label wraps only the switch, so clicking the row text no longer flips it */}
+        <label className="ca-switch">
           <input
             type="checkbox"
             id="gh-issues-enabled"
@@ -148,8 +149,8 @@ export function GitIssues({ gotoScreen }: ScreenProps) {
             }
           />
           <span className="ca-slider" />
-        </span>
-      </label>
+        </label>
+      </div>
       <div
         id="gh-issues-status"
         className={"pr-status" + (n > 0 && enabled ? " on" : n > 0 ? " paused" : "")}

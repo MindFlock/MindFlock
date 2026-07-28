@@ -239,6 +239,13 @@
   cursor: pointer;
 }
 
+/* Themed checkbox — the check fills with the MindFlock accent instead of the
+   browser-default blue. */
+.wr-prov input[type="checkbox"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .queue-item {
   display: flex;
   align-items: flex-start;

@@ -540,6 +540,10 @@
  * :root and .light have EQUAL specificity (0,1,0), so .light must stay after
  * :root for the light palette to win. */
 :root {
+  /* Tell the browser to render native control internals (time-picker clock
+     icon, number spinners, checkboxes, scrollbars) dark; .light flips it.
+     Without this the native clock glyph sat near-invisible on the dark bg. */
+  color-scheme: dark;
   --bg: #0f1117;
   --panel: #171a23;
   --panel-2: #1e222e;
@@ -596,6 +600,7 @@
    handful of hard-coded colors that don't survive the swap are patched in
    theme-light.css. The xterm terminal intentionally stays dark. */
 .light {
+  color-scheme: light;
   --bg: #f4f5f8;
   --panel: #ffffff;
   --panel-2: #eceef3;
@@ -1170,7 +1175,9 @@ p.set-hint {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  cursor: pointer;
+  /* No row-wide cursor: only the switch toggles now (the row is a <div>, not a
+     <label>), so the whole row must not look clickable. The .ca-slider keeps
+     its own pointer cursor. */
 }
 
 /* The row centers the label's line box on the switch, but the desktop app's
@@ -1376,14 +1383,18 @@ p.set-hint {
   filter: brightness(1.08);
 }
 
-/* Narrow numeric input (e.g. refresh interval) — replaces an inline width. */
+/* Narrow numeric/time input (e.g. refresh interval, fresh-window time) —
+   replaces an inline width. accent-color tints the number spinner + the
+   time-picker clock glyph to match the rest of MindFlock. */
 .num-sm {
   width: 6em;
+  accent-color: var(--accent);
 }
 
 .set-row input[type="text"],
 .set-row input[type="password"],
-.set-row input[type="number"] {
+.set-row input[type="number"],
+.set-row input[type="time"] {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
@@ -3523,6 +3534,13 @@ p.set-hint {
   align-items: center;
   gap: 5px;
   font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* Themed checkbox — the check fills with the MindFlock accent instead of the
+   browser-default blue. */
+.wr-prov input[type="checkbox"] {
+  accent-color: var(--accent);
   cursor: pointer;
 }
 
@@ -7363,6 +7381,25 @@ button.linklike {
 #logs-meta {
   font-size: 11px;
   word-break: break-all;
+}
+
+/* Full log-file path — click to reveal in Finder (desktop) or copy (browser). */
+.logs-path {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  color: var(--accent);
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-all;
+  cursor: pointer;
+}
+
+.logs-path:hover {
+  text-decoration: underline;
 }
 
 .logs-view {

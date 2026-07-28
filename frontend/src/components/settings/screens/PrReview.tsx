@@ -141,13 +141,14 @@ export function PrReview({ gotoScreen }: ScreenProps) {
         ingestion is active.
       </p>
 
-      <label
+      <div
         className="set-row set-switch-row"
         id="gh-pr-toggle-row"
         title="Turn automated PR review on or off — your repositories are kept either way"
       >
         <span className="set-label">Automated review</span>
-        <span className="ca-switch">
+        {/* label wraps only the switch, so clicking the row text no longer flips it */}
+        <label className="ca-switch">
           <input
             type="checkbox"
             id="gh-pr-enabled"
@@ -160,8 +161,8 @@ export function PrReview({ gotoScreen }: ScreenProps) {
             }
           />
           <span className="ca-slider" />
-        </span>
-      </label>
+        </label>
+      </div>
       <div
         id="gh-pr-status"
         className={"pr-status" + (n > 0 && enabled ? " on" : n > 0 ? " paused" : "")}

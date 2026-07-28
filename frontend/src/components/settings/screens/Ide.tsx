@@ -95,13 +95,14 @@ export function Ide(_: ScreenProps) {
           Editor CLI used to open workspaces — e.g. cursor, code, windsurf, zed.
         </span>
       </label>
-      <label
+      <div
         className="set-row set-switch-row"
         id="ide-auto-row"
         title="Continuously adopt folders into MindFlock as you open them in your IDE"
       >
         <span className="set-label" id="ide-auto-label">IDE auto-adopt</span>
-        <span className="ca-switch">
+        {/* label wraps only the switch, so clicking the row text no longer flips it */}
+        <label className="ca-switch">
           <input
             type="checkbox"
             id="cursor-auto"
@@ -122,8 +123,8 @@ export function Ide(_: ScreenProps) {
             }}
           />
           <span className="ca-slider" />
-        </span>
-      </label>
+        </label>
+      </div>
     </>
   );
 }

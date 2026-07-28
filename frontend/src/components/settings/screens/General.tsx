@@ -55,12 +55,13 @@ function GettingStarted() {
       <p className="set-hint">
         Tips and a guided tour to help you set up MindFlock's features.
       </p>
-      <label
+      <div
         className="set-row set-switch-row"
         title="Small inline 💡 tips that point out features around the app. Turn them back on any time to see the ones you dismissed again."
       >
         <span className="set-label">Show getting-started hints</span>
-        <span className="ca-switch">
+        {/* label wraps only the switch, so clicking the row text no longer flips it */}
+        <label className="ca-switch">
           <input
             type="checkbox"
             checked={enabled}
@@ -70,8 +71,8 @@ function GettingStarted() {
             }}
           />
           <span className="ca-slider" />
-        </span>
-      </label>
+        </label>
+      </div>
       <div className="set-row onboarding-action">
         <div className="onboarding-action-text">
           <span className="set-label">Welcome walkthrough</span>
@@ -101,7 +102,7 @@ function ReduceMotionRow() {
   const reduceMotion = useUi((s) => s.reduceMotion);
   const setReduceMotion = useUi((s) => s.setReduceMotion);
   return (
-    <label className="set-row set-switch-row">
+    <div className="set-row set-switch-row">
       <span className="notif-rule-text">
         <span className="set-label">Reduce motion</span>
         <span className="set-hint notif-rule-desc">
@@ -114,7 +115,8 @@ function ReduceMotionRow() {
           never covered. Off by default.
         </span>
       </span>
-      <span className="ca-switch">
+      {/* label wraps only the switch, so clicking the row text no longer flips it */}
+      <label className="ca-switch">
         <input
           type="checkbox"
           checked={reduceMotion}
@@ -124,8 +126,8 @@ function ReduceMotionRow() {
           }}
         />
         <span className="ca-slider" />
-      </span>
-    </label>
+      </label>
+    </div>
   );
 }
 

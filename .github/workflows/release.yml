@@ -69,11 +69,18 @@ jobs:
   # same tag release. Depends on `release` both for the tag/version check
   # (which runs there) and because `gh release upload` needs the release to
   # exist already.
-  # TODO: code signing — these artifacts are UNSIGNED. macOS needs a
-  # Developer ID cert + notarization (CSC_LINK / CSC_KEY_PASSWORD /
-  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD secrets) before Gatekeeper trusts
-  # the dmg, and Windows needs an Authenticode cert before SmartScreen
-  # trusts the nsis installer.
+  # Signing status:
+  #  - macOS: signed with a SELF-SIGNED cert when the MAC_CSC_LINK /
+  #    MAC_CSC_KEY_PASSWORD secrets are set (scripts/make-mac-selfsigned-cert.sh
+  #    mints them). That is NOT a Developer ID and does NOT satisfy Gatekeeper —
+  #    users still clear the "unverified developer" prompt once — but it gives
+  #    the app a stable code identity so macOS TCC remembers folder-access
+  #    grants instead of re-prompting every launch. Without the secrets (forks,
+  #    or before they're configured) the build falls back to unsigned.
+  #  - Windows still needs an Authenticode cert before SmartScreen trusts the
+  #    nsis installer.
+  # A true Gatekeeper-clean dmg needs a Developer ID + notarization (CSC_LINK /
+  # CSC_KEY_PASSWORD / APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD), still a TODO.
   desktop:
     # On a tag: wait for `release`, which creates the release these artifacts
     # attach to (and runs the version guard). On a dry run `release` is
@@ -107,11 +114,62 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build (unsigned)
+      # macOS only: import the self-signed cert into a throwaway keychain AND
+      # mark it trusted for code signing. electron-builder's identity search
+      # (`security find-identity -v -p codesigning`) lists *trusted* identities
+      # only; a p12 imported without a trust setting shows as
+      # CSSMERR_TP_NOT_TRUSTED and gets skipped — which silently leaves the app
+      # unsigned and TCC re-prompting. Trusting it here (only on this ephemeral
+      # runner — end users never trust it, and don't need to: TCC keys folder
+      # grants on the signature, Gatekeeper is the only thing that wants trust)
+      # is what makes electron-builder actually sign. No-op when the secret is
+      # absent, so forks fall back to an unsigned build below.
+      - name: Prepare self-signed signing keychain (macOS)
+        if: matrix.os == 'macos-latest'
         env:
-          # Don't look for a signing identity on the macOS runner keychain —
-          # build unsigned instead of failing (see the code-signing TODO).
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MAC_CSC_LINK:-}" ]; then
+            echo "No MAC_CSC_LINK secret — will build unsigned."
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/mindflock-signing.keychain-db"
+          KPASS="$(openssl rand -hex 16)"
+          P12="$RUNNER_TEMP/mindflock.p12"
+          CER="$RUNNER_TEMP/mindflock.pem"
+          printf '%s' "$MAC_CSC_LINK" | base64 --decode > "$P12"
+          security create-keychain -p "$KPASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KPASS" "$KEYCHAIN"
+          security import "$P12" -k "$KEYCHAIN" -P "$MAC_CSC_KEY_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productbuild
+          # Let codesign use the key headlessly (no keychain-access GUI prompt).
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KPASS" "$KEYCHAIN" >/dev/null
+          # Prepend our keychain to the search list, keeping the existing ones.
+          security list-keychains -d user -s "$KEYCHAIN" \
+            $(security list-keychains -d user | sed 's/"//g')
+          # Trust the self-signed root for the code-signing policy so
+          # find-identity -v accepts it. System domain needs sudo, which is
+          # passwordless on GitHub runners.
+          openssl pkcs12 -in "$P12" -passin "pass:$MAC_CSC_KEY_PASSWORD" -legacy \
+            -nokeys -clcerts -out "$CER"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$CER"
+          echo "Signing identities now visible:"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+          # Hand electron-builder the keychain + identity name to sign with.
+          echo "CSC_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          echo "CSC_NAME=MindFlock Self-Signed" >> "$GITHUB_ENV"
+
+      - name: Build
+        env:
+          # Sign on macOS only when the step above found the identity (CSC_NAME
+          # lands in GITHUB_ENV then, and CSC_KEYCHAIN with it). Otherwise —
+          # forks, Windows, Linux — disable identity discovery so the build is
+          # unsigned rather than failing.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ env.CSC_NAME != '' && 'true' || 'false' }}
         run: npx electron-builder --publish never
 
       # One .sha256 next to each installer. Unsigned binaries downloaded from a
