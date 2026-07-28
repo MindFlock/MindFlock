@@ -74,18 +74,11 @@ jobs:
       - name: Unit tests
         run: npm test
         working-directory: frontend
-      # Runs tsc --noEmit first, so a type error is a CI failure too.
-      - name: Rebuild the bundle
-        run: npm run build
-        working-directory: frontend
+      # The same script the pre-push hooks run, so a green push and a green CI
+      # cannot mean different things. It rebuilds (tsc --noEmit included, so a
+      # type error fails here too) and diffs the result.
       - name: Bundle matches frontend/src
-        run: |
-          if ! git diff --quiet -- backend/web/static/; then
-            echo "::error::backend/web/static/ is stale — run 'cd frontend && npm run build' and commit the result."
-            git diff --stat -- backend/web/static/
-            exit 1
-          fi
-          echo "Bundle is current."
+        run: ./scripts/check-bundle-fresh.sh
 
   test:
     name: test (${{ matrix.os }})

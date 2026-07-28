@@ -1,7 +1,8 @@
 # Shared pre-commit hooks — deterministic lint/format/secret checks only.
-# Opt in once per clone:
+# Opt in once per clone (both stages; the pre-push ones are cheap, but not
+# per-commit cheap):
 #
-#   uvx pre-commit install
+#   uvx pre-commit install --hook-type pre-commit --hook-type pre-push
 #
 # Hooks that modify files (black) fail the commit so you can
 # review and re-stage; retrying the commit then passes. CI enforces the same
@@ -28,3 +29,29 @@ repos:
         entry: uvx --from detect-secrets detect-secrets-hook --baseline .secrets.baseline
         language: system
         exclude: ^(uv\.lock|\.gitnexus/|.*\.lock)$
+
+    # --- pre-push -----------------------------------------------------------
+    # Nothing on GitHub gates a push to main (the `Safe-main` ruleset only
+    # blocks deletion and non-fast-forward; there are no required status
+    # checks), and install.sh installs from `main` by default — so these two
+    # run before the push instead of three minutes later, in CI.
+    -   id: versions-agree
+        name: Version manifests agree
+        # pyproject.toml / electron / frontend package.json / uv.lock all carry
+        # the version. Stdlib-only, so this costs milliseconds.
+        entry: python3 scripts/bump-version.py --check
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true
+
+    -   id: bundle-fresh
+        name: Committed frontend bundle is current
+        # The committed bundle is what ships (see the script's header). Scoped
+        # to frontend changes, so a Python-only push never pays for a node
+        # install.
+        entry: scripts/check-bundle-fresh.sh
+        language: system
+        stages: [pre-push]
+        files: ^(frontend/|backend/web/static/)
+        pass_filenames: false
