@@ -144,7 +144,7 @@ jobs:
       # actually opened, instead of only proving the build didn't error.
       - name: Attach desktop artifacts to the run (dry run)
         if: github.ref_type != 'tag'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MindFlock-${{ matrix.os }}
           path: |
