@@ -49,6 +49,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = ROOT / "pyproject.toml"
 ELECTRON = ROOT / "electron" / "package.json"
 FRONTEND = ROOT / "frontend" / "package.json"
+UVLOCK = ROOT / "uv.lock"
 CHANGELOG = ROOT / "CHANGELOG.md"
 
 # (path, human label, compiled pattern). The pattern must have exactly one
@@ -68,6 +69,18 @@ MANIFESTS = [
         FRONTEND,
         "frontend/package.json",
         re.compile(r'(?m)^(\s*"version"\s*:\s*")([^"]+)(",?)'),
+    ),
+    # uv.lock pins the project's OWN version alongside its dependencies, so a
+    # bump leaves it disagreeing until something re-locks — and `uv lock` then
+    # rewrites it at the least convenient moment (mid-commit, in a hook). It is
+    # a manifest like the others; anchored on the [[package]] block for
+    # `mindflock` so no dependency's version can match.
+    (
+        UVLOCK,
+        "uv.lock",
+        re.compile(
+            r'(?ms)(^\[\[package\]\]\nname = "mindflock"\nversion = ")([^"]+)(")'
+        ),
     ),
 ]
 
