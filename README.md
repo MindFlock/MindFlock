@@ -55,15 +55,16 @@ good. Here's an honest read on where MindFlock actually differs.
 | | **MindFlock** | **Claude Squad** | **Conductor** | **Claude Code Agent Teams** |
 |---|---|---|---|---|
 | Interface | Cross-platform desktop app **+ phone UI** | Terminal TUI | Native macOS app | Built into the CLI |
-| Platforms | Linux, macOS, Windows (WSL2) | Linux, macOS, WSL | macOS only | Anywhere Claude Code runs |
-| Agent CLI | **Any — declared in a TOML file** | Several bundled (Claude Code, Codex, Gemini, aider, OpenCode) | Claude Code | Claude only |
+| Platforms | Linux, macOS, Windows (WSL2) | macOS, Linux | macOS only | Anywhere Claude Code runs |
+| Agent CLIs | **Any — declared in a TOML file** | Several, bundled (Claude Code, Codex, Gemini, aider, OpenCode) | Claude Code, Codex, Cursor, OpenCode | Claude only |
 | Session isolation | git worktree + tmux | git worktree + tmux | git worktree | git worktree |
-| Guided git workflow | **one-click commit → push → PR → merge** | — | — | — |
+| Git workflow | **one-click commit → push → PR → merge** (`gh`) | commit + push branch | per-task diff + review | manual (agent runs git) |
+| Agent-state detection | **deterministic — provider-defined hooks** (working / idle / needs-input) | inferred from the tmux pane | built-in, per supported agent | Claude-native |
 | Ticket → session ingestion | **Shortcut · Jira · Linear · GitHub Issues · Asana** | — | — | — |
 | PR-review → session ingestion | **reviewed PRs become sessions** | — | — | — |
-| Hook-based session state | **provider hooks: working / idle / needs-input** | — | — | — |
-| Token & cost tracking | **per provider, for every CLI** | — | — | per Claude session |
 | Remote / phone control | **tailnet + QR, full action bar** | — | — | — |
+
+<sub>Comparison as of July 2026; these tools move fast. If a cell is out of date, please [open an issue or PR](CONTRIBUTING.md) and we'll correct it.</sub>
 
 MindFlock is a ground-up parallel-agent workspace. A few things set it apart:
 
@@ -304,8 +305,8 @@ It finds — and auto-starts — the server by itself.
 ## How It Works
 
 ```
- Shortcut stories ─┐                            ┌─ desktop app (Electron)
- GitHub PR reviews ┴─► ingestion pipeline ─┐    ├─ phone UI at /m (tailnet QR)
+ ticketing service ─┐                           ┌─ desktop app (Electron)
+ GitHub PR reviews  ┴─► ingestion pipeline ─┐   ├─ phone UI at /m (tailnet QR)
                                            ▼    ▼
                                     ┌──────────────────┐
                                     │  session engine  │  git worktrees + tmux
@@ -318,8 +319,8 @@ It finds — and auto-starts — the server by itself.
 | Component | Package | What it does |
 |---|---|---|
 | **Session engine** | `backend.session`, `backend.config`, `backend.cmd`, `backend.log` | Instance lifecycle (start/pause/resume/kill), git worktree management, tmux/PTY plumbing, persisted state in `~/.mindflock/`. |
-| **Server + UI** | `backend.web` | FastAPI server + the UI the desktop app renders: draggable terminal grid, Agent/Terminal/Diff tabs per session, workflow-stage badges with guided next-step buttons, token/cost usage, Cursor integration, phone UI at `/m`, addon framework. |
-| **Ingestion pipeline** | `backend.ticket_ingestion` | Polls Shortcut for assigned stories and GitHub for reviewed PRs; validates, provisions a workspace, and launches a seeded Claude session per story / per PR. |
+| **Server + UI** | `backend.web` | FastAPI server + the UI the desktop app renders: draggable terminal grid, Agent/Terminal/Diff/Queue tabs per session, workflow-stage badges with guided next-step buttons, token/cost usage, IDE integration, phone UI at `/m`, addon framework. |
+| **Ingestion pipeline** | `backend.ticket_ingestion` | Polls your ticketing service (Shortcut, Jira, Linear, GitHub Issues, Asana) for assigned work and GitHub for reviewed PRs; validates, provisions a workspace, and launches a seeded agent session per ticket / per PR. |
 | **Provider framework** | `backend.providers` | Pluggable coding-agent CLIs (Claude built in; aider/codex and others bundled; add your own via TOML). Shared hooks-based activity detection, model pricing, and rolling token/cost usage history. |
 
 Something not working? Run `mindflock doctor` and check
