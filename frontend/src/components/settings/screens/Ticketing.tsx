@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../../api/client";
-import { refreshConfig, usePanelQuery } from "../../../state/queries";
+import { refreshConfig, refreshInstances, usePanelQuery } from "../../../state/queries";
 import { toast } from "../../../lib/toast";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -600,11 +600,11 @@ function AssignedTicketRow({ t, onStarted }: { t: AssignedTicket; onStarted(): v
               const r = await api<{ title?: string }>("/api/tickets/start", {
                 json: { source: t.source, id: t.id },
               });
-              toast(
-                "Session " + (r?.title || t.slug) +
-                  " starting — it will appear in the sidebar shortly"
-              );
+              toast("Session " + (r?.title || t.slug) + " — provisioning, see the sidebar");
               setState("started");
+              // The server already has a provisioning row for it: pull it now
+              // instead of leaving the sidebar blank until the next poll.
+              refreshInstances();
               setTimeout(onStarted, 5000);
             } catch (err) {
               toast("Begin work failed: " + ((err as Error).message || "error"));

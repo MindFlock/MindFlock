@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from backend import log
 from backend.session import provisioned as provisioning
 
+from backend.web.core import pending as _pending
 from backend.web.core.terminal import pump_pty, spawn_tail
 
 from .base import Addon, AppContext, FrontendDescriptor
@@ -399,6 +400,12 @@ class TicketIngestionController:
         act = self._activity() if running else {}
         if act and pid and act.get("pid") not in (None, pid):
             act = {}
+        # Work this server is bringing in itself (forced starts + sessions still
+        # provisioning) — independent of whether the pipeline runs at all.
+        try:
+            local = _pending.provisioning_kinds()
+        except Exception:  # noqa: BLE001 — status must never fail on this
+            local = set()
         return {
             "running": running,
             "pid": pid,
@@ -422,11 +429,14 @@ class TicketIngestionController:
             "pr_enabled": _pr_review_enabled(),
             # Whether issue handling is switched on (github.issues_enabled+repos).
             "issues_enabled": _issue_handling_enabled(),
-            # Live activity from the pipeline's beacon: True while a ticket /
-            # a PR batch / an issue is actually being handled (vs idle-waiting).
-            "tickets_active": bool(act.get("ticket_busy")),
-            "pr_active": bool(act.get("pr_busy")),
-            "issues_active": bool(act.get("issue_busy")),
+            # Live activity: True while a ticket / a PR batch / an issue is
+            # actually being brought in (vs idle-waiting). The pipeline's beacon
+            # only knows about the PIPELINE's queue, so a start forced from the
+            # UI (Settings → Ticketing / PR review / Git issues) used to leave
+            # the dot gold through its whole provisioning; `local` covers those.
+            "tickets_active": bool(act.get("ticket_busy")) or "tix" in local,
+            "pr_active": bool(act.get("pr_busy")) or "pr" in local,
+            "issues_active": bool(act.get("issue_busy")) or "iss" in local,
         }
 
 

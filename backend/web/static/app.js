@@ -24450,6 +24450,46 @@ function VoiceInput() {
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "mic-caption", className: caption == null ? "hidden" : "", children: caption || "" })
   ] });
 }
+const MAX_NAME = 20;
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function featureBranchName(branch, slug) {
+  const m = new RegExp(`^feature/${escapeRe(slug)}/(.+)$`).exec(branch);
+  return m ? m[1] : "";
+}
+function branchTail(branch) {
+  const parts = branch.split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "";
+}
+function clip(name) {
+  return name.length > MAX_NAME ? name.slice(0, MAX_NAME - 1) + "…" : name;
+}
+function splitKind(title) {
+  if (title.startsWith("pr-")) return { kind: "pr", slug: title.slice(3) };
+  if (title.startsWith("issue-")) return { kind: "iss", slug: title.slice(6) };
+  return null;
+}
+function sessionLabel(title, branch) {
+  const plain = { text: title, full: title, kind: "", name: "", slug: title };
+  if (!title) return plain;
+  const split = splitKind(title);
+  const ticketName = split ? "" : featureBranchName(branch, title);
+  if (!split && !ticketName) return plain;
+  const kind = split ? split.kind : "tix";
+  const slug = split ? split.slug : title;
+  if (!slug) return plain;
+  const name = split ? featureBranchName(branch, title) || branchTail(branch) : ticketName;
+  const useName = name && name !== slug && name !== title ? name : "";
+  return {
+    text: useName ? `(${kind}) ${clip(useName)}/${slug}` : `(${kind}) ${slug}`,
+    full: useName ? `(${kind}) ${useName}/${slug}` : `(${kind}) ${slug}`,
+    kind,
+    name: useName,
+    slug
+  };
+}
+const DBLCLICK_MS = 300;
 function displayTitle(inst) {
   return inst.display_title || inst.title || "";
 }
@@ -24464,20 +24504,27 @@ const SidebarRow = reactExports.memo(function SidebarRow2({
 }) {
   var _a2, _b2;
   const [expanded, setExpanded] = reactExports.useState(false);
+  const [editing, setEditing] = reactExports.useState(false);
+  const cancelled = reactExports.useRef(false);
+  const renameTimer = reactExports.useRef(null);
+  const editEndedAt = reactExports.useRef(0);
   const { data: config } = useConfig();
   const focused = useUi((s) => s.focused);
   const hidden = useUi((s) => s.hidden.has(inst.title));
   const alias = useUi((s) => s.aliases[inst.title]);
   const openDialogFor = useUi((s) => s.openDialogFor);
+  const setAlias = useUi((s) => s.setAlias);
   const title = inst.title;
   const missing = !!inst.workspace_missing;
   const paused = inst.status === "paused";
+  const pending = !!inst.pending;
   const caps2 = (config == null ? void 0 : config.caps) ?? { git: true };
   const ideName2 = (config == null ? void 0 : config.ide_name) || "Cursor";
   const chip = chipState(inst);
   const check = checkChip(inst);
   const num = idx < 9 ? String(idx + 1) : "";
-  const shown = alias || displayTitle(inst);
+  const label = sessionLabel(displayTitle(inst), inst.branch || "");
+  const shown = alias || label.text;
   const folder = inst.folder || inst.path || "";
   const agentWs = reactExports.useSyncExternalStore(
     subscribeTermStates,
@@ -24491,13 +24538,41 @@ const SidebarRow = reactExports.memo(function SidebarRow2({
     e == null ? void 0 : e.stopPropagation();
     await fn();
   };
-  const rowCls = "inst" + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (dropCue ? ` drop-${dropCue}` : "");
+  const clearRenameTimer = () => {
+    if (renameTimer.current !== null) {
+      clearTimeout(renameTimer.current);
+      renameTimer.current = null;
+    }
+  };
+  reactExports.useEffect(() => clearRenameTimer, []);
+  const armRename = () => {
+    clearRenameTimer();
+    renameTimer.current = window.setTimeout(() => {
+      renameTimer.current = null;
+      cancelled.current = false;
+      setEditing(true);
+    }, DBLCLICK_MS);
+  };
+  const commitRename = (raw) => {
+    setEditing(false);
+    editEndedAt.current = Date.now();
+    if (cancelled.current) {
+      cancelled.current = false;
+      return;
+    }
+    const next = raw.trim();
+    const nextAlias = !next || next === label.text || next === displayTitle(inst) ? "" : next;
+    if (nextAlias === (alias || "")) return;
+    setAlias(title, nextAlias);
+    toast(nextAlias ? `Renamed to “${nextAlias}”` : "Reset to real title");
+  };
+  const rowCls = "inst" + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (dropCue ? ` drop-${dropCue}` : "");
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(
     "li",
     {
       className: rowCls,
       "data-title": title,
-      draggable: true,
+      draggable: !editing,
       onDragStart: (ev) => {
         ev.dataTransfer.setData("text/plain", title);
         ev.dataTransfer.effectAllowed = "move";
@@ -24533,15 +24608,23 @@ const SidebarRow = reactExports.memo(function SidebarRow2({
           "div",
           {
             className: "inst-row",
-            onClick: () => selectSession(title),
+            onClick: () => {
+              if (editing || Date.now() - editEndedAt.current < DBLCLICK_MS + 100) return;
+              if (focused !== title) {
+                selectSession(title);
+                return;
+              }
+              if (!pending) armRename();
+            },
             onDoubleClick: () => {
-              if (!missing) ideSession(title, true);
+              clearRenameTimer();
+              if (!missing && !pending) ideSession(title, true);
             },
             children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "grip", title: "Drag to reorder", children: "⠿" }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "idx", title: num ? `Ctrl+${num} / Alt+${num} to focus` : "", children: num }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "dot " + inst.status + (disconnected ? " disconnected" : "") }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
+              !pending && /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "button",
                 {
                   className: "chevron" + (expanded ? " open" : ""),
@@ -24550,17 +24633,50 @@ const SidebarRow = reactExports.memo(function SidebarRow2({
                   children: "›"
                 }
               ),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "meta", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "meta", children: editing ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "input",
+                {
+                  className: "title title-edit",
+                  type: "text",
+                  defaultValue: shown,
+                  autoFocus: true,
+                  autoComplete: "off",
+                  spellCheck: false,
+                  onFocus: (e) => e.currentTarget.select(),
+                  onMouseDown: (e) => e.stopPropagation(),
+                  onClick: (e) => e.stopPropagation(),
+                  onDoubleClick: (e) => e.stopPropagation(),
+                  onBlur: (e) => commitRename(e.currentTarget.value),
+                  onKeyDown: (e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitRename(e.currentTarget.value);
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      cancelled.current = true;
+                      editEndedAt.current = Date.now();
+                      setEditing(false);
+                    }
+                  }
+                }
+              ) : /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "span",
                 {
                   className: "title" + (alias ? " aliased" : ""),
-                  title: alias ? `${alias}  ·  ${displayTitle(inst)}` : displayTitle(inst),
+                  title: [
+                    alias ? `${alias}  ·  ${label.full}` : label.full,
+                    // The real title is the identity behind a reformatted label —
+                    // it's what every API path and `tmux attach` is keyed by.
+                    label.kind ? `session: ${displayTitle(inst)}` : "",
+                    inst.branch ? `branch: ${inst.branch}` : "",
+                    focused === title ? "Click again to rename" : ""
+                  ].filter(Boolean).join("\n"),
                   children: shown
                 }
               ) }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "stagechip " + chip.cls, title: chip.title, children: chip.label }),
               check && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "stagechip checkchip " + check.cls, title: check.title, children: check.label }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
+              !pending && /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "button",
                 {
                   className: "kill" + (missing ? " cleanup" : ""),
@@ -24572,7 +24688,7 @@ const SidebarRow = reactExports.memo(function SidebarRow2({
             ]
           }
         ),
-        expanded && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "inst-actions", children: [
+        expanded && !pending && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "inst-actions", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "folder-row", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "folder-path", title: folder, children: inst.folder_label || folder || "—" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -25269,7 +25385,10 @@ function AutomationBar() {
   const { data: status, refetch } = useQuery({
     queryKey: ["mindflock-status"],
     queryFn: () => api("/api/mindflock/status"),
-    refetchInterval: 1e4,
+    // Matches the sessions poll: the green window can be as short as one
+    // provisioning, and a 10s poll missed those often enough that the light
+    // looked like it never turned green at all.
+    refetchInterval: 4e3,
     retry: false
   });
   const online = reactExports.useSyncExternalStore(subscribeOnline, () => navigator.onLine);
@@ -25277,7 +25396,7 @@ function AutomationBar() {
   if (!status || !status.available) return null;
   const running = !!status.running;
   const desired = optimistic ?? (status.desired ?? running);
-  const active = running && !!status.tickets_active;
+  const active = !!status.tickets_active;
   const starting = desired && !running;
   const netIssue = !online || !!status.net_error;
   const toggle = async (start) => {
@@ -25305,8 +25424,13 @@ function AutomationBar() {
           "span",
           {
             id: "mindflock-dot",
-            className: "dc-dot " + (netIssue ? "error" : !desired ? "off" : active ? "on" : "idle"),
-            title: netIssue ? online ? "Connection issues in the ingestion log — see Settings → System logs" : "No network connection" : starting ? "Set to on but not running yet — starting, or the pipeline exited (flip the switch off and on to restart it)" : active ? "A ticket is being handled right now" : desired ? "Waiting for an assigned ticket — turns green while one is being handled" : void 0
+            className: (
+              // `active` outranks the switch: a ticket forced from Settings is
+              // genuinely being brought in even with auto ingestion switched off,
+              // and "off" would be a lie about the work in flight.
+              "dc-dot " + (netIssue ? "error" : active ? "on" : !desired ? "off" : "idle")
+            ),
+            title: active ? "A ticket is being brought in right now (auto ingestion or a forced start)" : netIssue ? online ? "Connection issues in the ingestion log — see Settings → System logs" : "No network connection" : starting ? "Set to on but not running yet — starting, or the pipeline exited (flip the switch off and on to restart it)" : desired ? "Waiting for an assigned ticket — turns green while one is being brought in" : void 0
           }
         ),
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "dc-label", children: "Ticket Ingestion" }),
@@ -25359,7 +25483,7 @@ function useGithubToggleBar(opts) {
   const { data: ingestion } = useQuery({
     queryKey: ["mindflock-status"],
     queryFn: () => api("/api/mindflock/status"),
-    refetchInterval: 1e4,
+    refetchInterval: 4e3,
     retry: false
   });
   reactExports.useEffect(() => {
@@ -25411,8 +25535,8 @@ function GitIssueBar() {
           "span",
           {
             id: "git-issue-dot",
-            className: "dc-dot " + (!on ? "off" : active ? "on" : "idle"),
-            title: on ? starting ? "Switched on — the pipeline is starting" : active ? "An issue is being worked on right now" : "Waiting for a newly opened issue — turns green while one is being handled" : void 0
+            className: "dc-dot " + (active ? "on" : !on ? "off" : "idle"),
+            title: active ? "An issue is being brought in right now (automated or a forced start)" : on ? starting ? "Switched on — the pipeline is starting" : "Waiting for a newly opened issue — turns green while one is being handled" : void 0
           }
         ),
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "dc-label", children: "Issue Handling" }),
@@ -25472,8 +25596,8 @@ function PrReviewBar() {
           "span",
           {
             id: "pr-review-dot",
-            className: "dc-dot " + (!on ? "off" : active ? "on" : "idle"),
-            title: on ? starting ? "Switched on — the review pipeline is starting" : active ? "A pull request is being reviewed right now" : "Waiting for an open PR with actionable review comments — turns green while one is being handled" : void 0
+            className: "dc-dot " + (active ? "on" : !on ? "off" : "idle"),
+            title: active ? "A pull request is being brought in for review right now (automated or a forced start)" : on ? starting ? "Switched on — the review pipeline is starting" : "Waiting for an open PR with actionable review comments — turns green while one is being handled" : void 0
           }
         ),
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "dc-label", children: "PR Review" }),
@@ -30086,10 +30210,9 @@ function AssignedTicketRow({ t, onStarted }) {
                 const r = await api("/api/tickets/start", {
                   json: { source: t.source, id: t.id }
                 });
-                toast(
-                  "Session " + ((r == null ? void 0 : r.title) || t.slug) + " starting — it will appear in the sidebar shortly"
-                );
+                toast("Session " + ((r == null ? void 0 : r.title) || t.slug) + " — provisioning, see the sidebar");
                 setState("started");
+                refreshInstances();
                 setTimeout(onStarted, 5e3);
               } catch (err) {
                 toast("Begin work failed: " + (err.message || "error"));
@@ -30592,10 +30715,9 @@ function OpenPrRow({ p, onStarted }) {
                 const r = await api("/api/github/prs/review", {
                   json: { repo: p.repo, number: p.number }
                 });
-                toast(
-                  "Review session " + ((r == null ? void 0 : r.title) || "") + " starting — it will appear in the sidebar shortly"
-                );
+                toast("Review session " + ((r == null ? void 0 : r.title) || "") + " — provisioning, see the sidebar");
                 setState("started");
+                refreshInstances();
                 setTimeout(onStarted, 5e3);
               } catch (err) {
                 toast("Begin review failed: " + (err.message || "error"));
@@ -30897,10 +31019,9 @@ function OpenIssueRow({ i, onStarted }) {
                 const r = await api("/api/github/issues/start", {
                   json: { repo: i.repo, number: i.number }
                 });
-                toast(
-                  "Issue session " + ((r == null ? void 0 : r.title) || "") + " starting — it will appear in the sidebar shortly"
-                );
+                toast("Issue session " + ((r == null ? void 0 : r.title) || "") + " — provisioning, see the sidebar");
                 setState("started");
+                refreshInstances();
                 setTimeout(onStarted, 5e3);
               } catch (err) {
                 toast("Start work failed: " + (err.message || "error"));

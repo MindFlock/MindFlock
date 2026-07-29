@@ -40,7 +40,10 @@ export function AutomationBar() {
   const { data: status, refetch } = useQuery({
     queryKey: ["mindflock-status"],
     queryFn: () => api<MfStatus>("/api/mindflock/status"),
-    refetchInterval: 10_000,
+    // Matches the sessions poll: the green window can be as short as one
+    // provisioning, and a 10s poll missed those often enough that the light
+    // looked like it never turned green at all.
+    refetchInterval: 4_000,
     retry: false,
   });
 
@@ -51,9 +54,11 @@ export function AutomationBar() {
   const running = !!status.running;
   // Old servers don't send `desired` — fall back to the live state.
   const desired = optimistic ?? (status.desired ?? running);
-  // Green only while a ticket is actually being handled; a running-but-idle
-  // pipeline "waits" (gold) for the next ticket to come in.
-  const active = running && !!status.tickets_active;
+  // Green while a ticket is actually being brought in — by the pipeline OR by a
+  // start forced from Settings → Ticketing (the server folds both into
+  // tickets_active). NOT gated on `running`: a forced ticket provisions with
+  // the pipeline stopped, and gold would be a lie about it.
+  const active = !!status.tickets_active;
   const starting = desired && !running;
   const netIssue = !online || !!status.net_error;
 
@@ -81,20 +86,23 @@ export function AutomationBar() {
       <span
         id="mindflock-dot"
         className={
+          // `active` outranks the switch: a ticket forced from Settings is
+          // genuinely being brought in even with auto ingestion switched off,
+          // and "off" would be a lie about the work in flight.
           "dc-dot " +
-          (netIssue ? "error" : !desired ? "off" : active ? "on" : "idle")
+          (netIssue ? "error" : active ? "on" : !desired ? "off" : "idle")
         }
         title={
-          netIssue
-            ? online
-              ? "Connection issues in the ingestion log — see Settings → System logs"
-              : "No network connection"
-            : starting
-              ? "Set to on but not running yet — starting, or the pipeline exited (flip the switch off and on to restart it)"
-              : active
-                ? "A ticket is being handled right now"
+          active
+            ? "A ticket is being brought in right now (auto ingestion or a forced start)"
+            : netIssue
+              ? online
+                ? "Connection issues in the ingestion log — see Settings → System logs"
+                : "No network connection"
+              : starting
+                ? "Set to on but not running yet — starting, or the pipeline exited (flip the switch off and on to restart it)"
                 : desired
-                  ? "Waiting for an assigned ticket — turns green while one is being handled"
+                  ? "Waiting for an assigned ticket — turns green while one is being brought in"
                   : undefined
         }
       />

@@ -83,6 +83,10 @@ export interface Instance {
   /** Present on rows proxied from another tailnet device (title is
    * "<device>::<title>"). */
   device?: string;
+  /** True for a force-started PR/issue/ticket the server has accepted but
+   * whose session does not exist yet (it is still cloning). The row shows as
+   * provisioning; there is nothing to act on until it becomes real. */
+  pending?: boolean;
 }
 
 export interface Caps {

@@ -152,6 +152,19 @@ async def find_issue(repo: str, number: int):
     )
 
 
+def branch_for(issue) -> str:
+    """The branch a forced start will create for ``issue``.
+
+    Pure and network-free (it only needs the issue's number/title), unlike
+    :func:`prepare_start` — so the request path can hand it to the sidebar's
+    provisioning row before the comments fetch has happened.
+    """
+    from backend.ticket_ingestion.issue_monitor import issue_to_ticket
+    from backend.ticket_ingestion.provisioner import _branch_name_for
+
+    return _branch_name_for(issue_to_ticket(issue, []))
+
+
 async def prepare_start(issue) -> tuple:
     """Fetch the issue's comments and build its ticket + session prompt.
 

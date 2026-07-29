@@ -103,6 +103,7 @@ from backend.web.core import issue_start as _issue_start
 from backend.web.core import pr_review as _pr_review
 from backend.web.core import ticket_start as _ticket_start
 from backend.web.core import remote as _remote
+from backend.web.core import pending as _pending
 from backend.web.core import prompt_queue as _prompt_queue
 from backend.web.core import window_refresh as _window_refresh
 from backend.web.core import worktree_setup as _wt_setup
@@ -1476,6 +1477,18 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     return d
 
 
+# ---- Force-starts that have not registered a session yet ------------------- #
+# The registry lives in core.pending: the ingestion addon reads it too (its
+# provisioning_kinds() is what greens the sidebar bars for UI-started work), so
+# it can't live in this module without an import cycle. These aliases keep the
+# call sites below (and the tests) reading the same as before.
+_pending_add = _pending.add
+_pending_drop = _pending.drop
+_pending_rows = _pending.rows
+_pending_has = _pending.has
+_cached_session_title = _pending.cached_session_title
+
+
 def _build_instances_snapshot() -> list:
     """The full sessions snapshot — READ-ONLY (the tick's producer path).
 
@@ -1526,14 +1539,14 @@ def list_instances() -> JSONResponse:
     cached = _events.sessions_snapshot()
     if time.time() - _SNAPSHOT_AT <= _INSTANCES_TICK_INTERVAL * 2.5:
         if {d.get("title") for d in cached} == set(ENGINE.instances.keys()):
-            return JSONResponse(cached + _remote.merged_instances())
+            return JSONResponse(cached + _remote.merged_instances() + _pending_rows())
     queues = _prompt_queue.snapshot()
     by_title = {d.get("title"): d for d in cached}
     snap = [
         _session_snapshot_cheap(i, queues, by_title.get(i.Title))
         for i in list(ENGINE.instances.values())
     ]
-    return JSONResponse(snap + _remote.merged_instances())
+    return JSONResponse(snap + _remote.merged_instances() + _pending_rows())
 
 
 # ---- Tailnet multi-device control (backend.web.core.remote) -------------- #
@@ -3736,9 +3749,10 @@ async def instance_merge_pr(title: str) -> JSONResponse:
 # every open PR with the skip reason and force-start a review session for one,
 # bypassing those filters (see backend.web.core.pr_review).
 
-# PRs with a force-review currently provisioning: guards a double-click from
-# provisioning the same workspace twice before the session registers.
-_PR_REVIEWS_STARTING: set = set()
+# PRs/issues/tickets with a force-start currently provisioning live in
+# core.pending, which guards a double-click from provisioning the same
+# workspace twice, renders the sidebar's provisioning row, and greens the
+# sidebar bar's dot while the work is being brought in.
 
 
 _OPEN_PRS_CACHE: dict = {}  # "v" -> (fresh_until_mono, payload); "task" -> refresh
@@ -3838,9 +3852,8 @@ async def github_open_prs(fresh: bool = False) -> JSONResponse:
         return JSONResponse({"error": str(err)}, status_code=502)
     data = {**data, "stale": stale, "prs": [dict(p) for p in data.get("prs", [])]}
     for p in data.get("prs", []):
-        p["has_session"] = (
-            p.get("session") in ENGINE.instances
-            or p.get("session") in _PR_REVIEWS_STARTING
+        p["has_session"] = p.get("session") in ENGINE.instances or _pending_has(
+            p.get("session")
         )
     return JSONResponse(data)
 
@@ -3859,23 +3872,51 @@ async def github_force_review(payload: dict) -> JSONResponse:
     except (TypeError, ValueError):
         return JSONResponse({"error": "number must be an integer"}, status_code=400)
 
+    # The provisioning row goes up BEFORE the GitHub lookup below, which is the
+    # last thing standing between the click and the sidebar showing anything.
+    # The panel's cached list already carries the title this PR maps to, so no
+    # slug re-derivation is involved; a cold cache just falls back to the
+    # post-lookup registration further down.
+    early = _cached_session_title(
+        _OPEN_PRS_CACHE,
+        "prs",
+        lambda p: p.get("repo") == repo and p.get("number") == number,
+    )
+    if early:
+        if early in ENGINE.instances or _pending_has(early):
+            return JSONResponse(
+                {
+                    "error": "session %s already exists — close it to re-review"
+                    % early,
+                    "title": early,
+                },
+                status_code=409,
+            )
+        _pending_add(early, "pr", repo=repo)
+
     try:
         pr = await _pr_review.find_pr(repo, number)
     except LookupError as err:
+        _pending_drop(early)
         return JSONResponse({"error": str(err)}, status_code=404)
     except Exception as err:  # noqa: BLE001
+        _pending_drop(early)
         return JSONResponse({"error": str(err)}, status_code=502)
 
     title = _pr_review.session_title(pr)
-    if title in ENGINE.instances or title in _PR_REVIEWS_STARTING:
-        return JSONResponse(
-            {
-                "error": "session %s already exists — close it to re-review" % title,
-                "title": title,
-            },
-            status_code=409,
-        )
-    _PR_REVIEWS_STARTING.add(title)
+    if title != early:
+        _pending_drop(early)  # stale cache entry — keep only the real title
+        if title in ENGINE.instances or _pending_has(title):
+            return JSONResponse(
+                {
+                    "error": "session %s already exists — close it to re-review"
+                    % title,
+                    "title": title,
+                },
+                status_code=409,
+            )
+    # Re-registered with the branch now that it's known (add() keeps `since`).
+    _pending_add(title, "pr", branch=pr.head_ref, repo=repo)
 
     async def _bg_review() -> None:
         # Provision first (slow: clone/fetch of the PR head), then register the
@@ -3927,7 +3968,7 @@ async def github_force_review(payload: dict) -> JSONResponse:
                 "session.create_failed", session=title, data={"error": str(err)}
             )
         finally:
-            _PR_REVIEWS_STARTING.discard(title)
+            _pending_drop(title)
 
     _register_task(_bg_review())
     return JSONResponse({"started": True, "title": title}, status_code=202)
@@ -3938,11 +3979,6 @@ async def github_force_review(payload: dict) -> JSONResponse:
 # assigned to you on the configured sources with the reason auto ingestion has
 # or hasn't picked it up, and force-start a session for one, bypassing those
 # filters (see backend.web.core.ticket_start).
-
-# Tickets with a force-start currently provisioning: guards a double-click
-# from provisioning the same workspace twice before the session registers.
-_TICKET_STARTS: set = set()
-
 
 _ASSIGNED_TICKETS_CACHE: dict = {}  # "v" -> (fresh_until_mono, payload)
 
@@ -3966,8 +4002,8 @@ async def assigned_tickets(fresh: bool = False) -> JSONResponse:
         "tickets": [dict(t) for t in data.get("tickets", [])],
     }
     for t in data.get("tickets", []):
-        t["has_session"] = (
-            t.get("session") in ENGINE.instances or t.get("session") in _TICKET_STARTS
+        t["has_session"] = t.get("session") in ENGINE.instances or _pending_has(
+            t.get("session")
         )
     return JSONResponse(data)
 
@@ -3983,23 +4019,54 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
     if not source or not ticket_id:
         return JSONResponse({"error": "source and id are required"}, status_code=400)
 
+    # Row first, provider fetch second (see the PR endpoint above). The panel's
+    # cached list is the title's source: ticket slugs are provider-defined
+    # (Shortcut hardcodes sc-<id>), so deriving one here would be a second
+    # implementation waiting to drift.
+    early = _cached_session_title(
+        _ASSIGNED_TICKETS_CACHE,
+        "tickets",
+        lambda t: t.get("source") == source and str(t.get("id")) == ticket_id,
+    )
+    if early:
+        if early in ENGINE.instances or _pending_has(early):
+            return JSONResponse(
+                {
+                    "error": "session %s already exists — close it to re-run" % early,
+                    "title": early,
+                },
+                status_code=409,
+            )
+        _pending_add(early, "tix")
+
     try:
         story = await _ticket_start.find_ticket(source, ticket_id)
     except LookupError as err:
+        _pending_drop(early)
         return JSONResponse({"error": str(err)}, status_code=404)
     except Exception as err:  # noqa: BLE001
+        _pending_drop(early)
         return JSONResponse({"error": str(err)}, status_code=502)
 
     title = _ticket_start.session_title(story)
-    if title in ENGINE.instances or title in _TICKET_STARTS:
-        return JSONResponse(
-            {
-                "error": "session %s already exists — close it to re-run" % title,
-                "title": title,
-            },
-            status_code=409,
-        )
-    _TICKET_STARTS.add(title)
+    if title != early:
+        _pending_drop(early)  # stale cache entry — keep only the real title
+        if title in ENGINE.instances or _pending_has(title):
+            return JSONResponse(
+                {
+                    "error": "session %s already exists — close it to re-run" % title,
+                    "title": title,
+                },
+                status_code=409,
+            )
+    # The branch is known now, so the row can read as the ticket it is rather
+    # than a bare slug (add() keeps the original `since`).
+    _pending_add(
+        title,
+        "tix",
+        branch=_ticket_start.branch_for(story),
+        workspace_strategy=_ticket_start.workspace_mode(),
+    )
 
     async def _bg_start() -> None:
         # Same shape as the pipeline's SessionRunner.run, but against THIS
@@ -4062,7 +4129,7 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
                 "session.create_failed", session=title, data={"error": str(err)}
             )
         finally:
-            _TICKET_STARTS.discard(title)
+            _pending_drop(title)
 
     _register_task(_bg_start())
     return JSONResponse({"started": True, "title": title}, status_code=202)
@@ -4073,11 +4140,6 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
 # on the issue-handling repos with the reason auto handling has or hasn't
 # picked it up, and force-start a session for one, bypassing those filters
 # (see backend.web.core.issue_start).
-
-# Issues with a force-start currently provisioning: guards a double-click from
-# provisioning the same workspace twice before the session registers.
-_ISSUE_STARTS: set = set()
-
 
 _OPEN_ISSUES_CACHE: dict = {}  # "v" -> (fresh_until_mono, payload)
 
@@ -4096,8 +4158,8 @@ async def github_open_issues(fresh: bool = False) -> JSONResponse:
         return JSONResponse({"error": str(err)}, status_code=502)
     data = {**data, "stale": stale, "issues": [dict(i) for i in data.get("issues", [])]}
     for i in data.get("issues", []):
-        i["has_session"] = (
-            i.get("session") in ENGINE.instances or i.get("session") in _ISSUE_STARTS
+        i["has_session"] = i.get("session") in ENGINE.instances or _pending_has(
+            i.get("session")
         )
     return JSONResponse(data)
 
@@ -4116,23 +4178,50 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
     except (TypeError, ValueError):
         return JSONResponse({"error": "number must be an integer"}, status_code=400)
 
+    # Row first, GitHub lookup second (see the PR endpoint above).
+    early = _cached_session_title(
+        _OPEN_ISSUES_CACHE,
+        "issues",
+        lambda i: i.get("repo") == repo and i.get("number") == number,
+    )
+    if early:
+        if early in ENGINE.instances or _pending_has(early):
+            return JSONResponse(
+                {
+                    "error": "session %s already exists — close it to re-run" % early,
+                    "title": early,
+                },
+                status_code=409,
+            )
+        _pending_add(early, "iss", repo=repo)
+
     try:
         issue = await _issue_start.find_issue(repo, number)
     except LookupError as err:
+        _pending_drop(early)
         return JSONResponse({"error": str(err)}, status_code=404)
     except Exception as err:  # noqa: BLE001
+        _pending_drop(early)
         return JSONResponse({"error": str(err)}, status_code=502)
 
     title = _issue_start.session_title(issue)
-    if title in ENGINE.instances or title in _ISSUE_STARTS:
-        return JSONResponse(
-            {
-                "error": "session %s already exists — close it to re-run" % title,
-                "title": title,
-            },
-            status_code=409,
-        )
-    _ISSUE_STARTS.add(title)
+    if title != early:
+        _pending_drop(early)  # stale cache entry — keep only the real title
+        if title in ENGINE.instances or _pending_has(title):
+            return JSONResponse(
+                {
+                    "error": "session %s already exists — close it to re-run" % title,
+                    "title": title,
+                },
+                status_code=409,
+            )
+    _pending_add(
+        title,
+        "iss",
+        branch=_issue_start.branch_for(issue),
+        repo=repo,
+        workspace_strategy=_issue_start.workspace_mode(),
+    )
 
     async def _bg_start() -> None:
         # Same shape as the pipeline's issue loop (issue → Ticket → engine
@@ -4182,7 +4271,7 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
                 "session.create_failed", session=title, data={"error": str(err)}
             )
         finally:
-            _ISSUE_STARTS.discard(title)
+            _pending_drop(title)
 
     _register_task(_bg_start())
     return JSONResponse({"started": True, "title": title}, status_code=202)

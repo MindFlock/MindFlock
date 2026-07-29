@@ -148,6 +148,30 @@
   text-overflow: ellipsis;
 }
 
+/* A force-start the server accepted but hasn't turned into a session yet: it
+   carries the provisioning chip like any loading row, dimmed a touch because
+   there is nothing to act on until the clone finishes. */
+.inst.is-pending .title {
+  color: var(--muted);
+}
+
+/* Inline rename (click the selected row): sits exactly where the title text was
+   so the row height never shifts. */
+.inst input.title-edit {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 2px;
+  margin: -1px 0;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  outline: none;
+}
+
 .inst .branch {
   font-size: 11px;
   color: var(--muted);

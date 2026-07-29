@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
 import { toast } from "../../../lib/toast";
-import { usePanelQuery } from "../../../state/queries";
+import { refreshInstances, usePanelQuery } from "../../../state/queries";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -399,10 +399,11 @@ function OpenPrRow({ p, onStarted }: { p: OpenPr; onStarted(): void }) {
               const r = await api<{ title?: string }>("/api/github/prs/review", {
                 json: { repo: p.repo, number: p.number },
               });
-              toast(
-                "Review session " + (r?.title || "") + " starting — it will appear in the sidebar shortly"
-              );
+              toast("Review session " + (r?.title || "") + " — provisioning, see the sidebar");
               setState("started");
+              // The server already has a provisioning row for it: pull it now
+              // instead of leaving the sidebar blank through the PR clone.
+              refreshInstances();
               setTimeout(onStarted, 5000);
             } catch (err) {
               toast("Begin review failed: " + ((err as Error).message || "error"));
