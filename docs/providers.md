@@ -26,6 +26,37 @@ provider's aliases). Registration order:
 poll tick), so results are memoized per program string in a small bounded
 cache, invalidated whenever the registry changes (register / rebuild).
 
+### `normalize_program(program)`
+
+Canonicalizes a *stored or displayed* program string to a provider **name** where
+one applies — `/opt/homebrew/bin/claude` → `claude`. Detection reports an
+absolute path (it shells out to `which`), and storing that verbatim leaks an
+install detail into everything that shows or matches a program, most visibly the
+New Session dialog, which renders any program it doesn't recognize as an extra
+agent-dropdown entry. The rules:
+
+- empty, or already a registry key → returned unchanged (whitespace stripped)
+- more than one whitespace-separated token → unchanged; it's a command line, not
+  a binary to identify
+- already a bare basename → unchanged
+- otherwise the basename is matched against each provider's aliases in
+  registration order, **skipping `generic`** (the catch-all claims everything, so
+  it identifies nothing), and the first match's name is returned
+- a path no provider claims → unchanged, because for a custom agent the exact
+  string *is* the launch command
+
+Unlike `resolve()` it is **not memoized** and it **is registry-state dependent**:
+a user TOML provider whose aliases claim a basename starts folding paths that
+previously passed through, and results can change after `rebuild_registry()`.
+Matcher exceptions are swallowed (one broken provider can't break normalization),
+so a `matches()` implementation must stay cheap and side-effect free.
+
+Two call sites: `config.DefaultConfig()` at write time (so a first run stores
+`claude`, not the `which` output) and `GET /api/config` at read time (so an older
+`config.toml` holding an absolute path is *displayed* as the provider name). The
+read-time pass does not rewrite the file, so the stored launch value and the
+displayed/preselected one can differ — see [web-api.md](web-api.md).
+
 ## The default: `claude`
 
 The Claude provider launches plain `claude` (Claude Code). It:
@@ -149,8 +180,10 @@ Settings → **Agent providers** surfaces a **connection** view for every
 registered provider (built-in and custom): whether its binary is installed
 (with the resolved path) and, when it's missing, a copy-paste install command
 (see [web-ui.md](web-ui.md)). MindFlock does **not** drive sign-in — each CLI
-prompts you to authenticate on its own the first time a session launches it, so
-MindFlock never touches your credentials. Install detection is the same
+prompts you to authenticate on its own the first time a session launches it —
+MindFlock never drives sign-in and never stores credentials. It does read Claude
+Code's *existing* OAuth token read-only, solely to display live plan usage (see
+**Live usage & limit state** below). Install detection is the same
 `shutil.which` / explicit-path check the backend uses to gate the default
 provider (below).
 
@@ -231,3 +264,27 @@ Two provider methods drive the usage-limit hold on the prompt queue (see
   (`{limited, reset_at}`). The hold logic consults the live meter even when this
   reports no banner, so a rebooted session with a fresh idle prompt is still
   held when its meter shows a window genuinely spent.
+
+### Credential sources for `usage_live()`
+
+Claude's live reading needs the OAuth access token the Claude CLI already holds.
+MindFlock reads it — read-only, never written, never logged — from, in order:
+
+1. `$CLAUDE_CONFIG_DIR/.credentials.json`, else `~/.claude/.credentials.json`
+   (Linux/WSL, and any install that keeps a file).
+2. **macOS only:** the login Keychain item `Claude Code-credentials`, via
+   `security find-generic-password -s "Claude Code-credentials" -w`. macOS Claude
+   Code keeps its credentials here instead of in a file, so before this fallback
+   live plan usage was permanently dark on every Mac (the UI fell back to the
+   transcript estimate). This adds a macOS-only runtime dependency on the
+   `security` binary.
+
+Because the Keychain item was created by the Claude CLI and not by MindFlock, the
+lookup can raise a one-time *"MindFlock wants to use your Keychain"* prompt from
+the MindFlock (Python/Electron) binary. The call is bounded at **5 s** so an
+unanswered prompt can't wedge `GET /api/usage`, and a denial — like a headless
+session, a missing `security`, or a non-JSON item — simply yields no live reading,
+which is exactly the pre-existing behavior. The result is **not cached**, so a
+denial can re-prompt on later usage fetches. Failures are reported only as a
+reason string on the `_creds_diag` debug channel; the token itself is never
+logged.

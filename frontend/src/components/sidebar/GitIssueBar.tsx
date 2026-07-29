@@ -36,15 +36,17 @@ export function GitIssueBar() {
     >
       <span
         id="git-issue-dot"
-        className={"dc-dot " + (!on ? "off" : active ? "on" : "idle")}
+        // `active` outranks the switch: an issue forced from Settings is
+        // genuinely in flight even with automated handling switched off.
+        className={"dc-dot " + (active ? "on" : !on ? "off" : "idle")}
         title={
-          on
-            ? starting
-              ? "Switched on — the pipeline is starting"
-              : active
-                ? "An issue is being worked on right now"
+          active
+            ? "An issue is being brought in right now (automated or a forced start)"
+            : on
+              ? starting
+                ? "Switched on — the pipeline is starting"
                 : "Waiting for a newly opened issue — turns green while one is being handled"
-            : undefined
+              : undefined
         }
       />
       <span className="dc-label">Issue Handling</span>

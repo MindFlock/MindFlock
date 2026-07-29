@@ -283,3 +283,76 @@ def test_live_usage_fetch_runs_without_holding_lock(monkeypatch):
 
     monkeypatch.setattr(api, "_fetch", _f)
     assert api.live_usage() == {"percent_used": 1.0}
+
+
+# --- macOS credentials (Keychain) ------------------------------------------- #
+# Claude Code stores its OAuth credentials in the login Keychain on macOS, not
+# in ~/.claude/.credentials.json. Without the fallback below, live plan usage
+# was permanently dark on every Mac: no token -> no live reading -> the UI fell
+# back to the transcript estimate, which shows a reset countdown but no
+# percentage unless a window budget happens to be configured.
+
+
+def _no_creds_file(monkeypatch, tmp_path):
+    """Point the file path at an empty dir so only the keychain can answer."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+
+
+def test_token_falls_back_to_the_macos_keychain(monkeypatch, tmp_path):
+    _no_creds_file(monkeypatch, tmp_path)
+    monkeypatch.setattr(api.sys, "platform", "darwin")
+    blob = json.dumps({"claudeAiOauth": {"accessToken": "kc-tok"}}).encode()
+
+    def _run(argv, **kw):
+        assert argv[:2] == ["security", "find-generic-password"]
+        assert api._KEYCHAIN_SERVICE in argv
+        assert kw.get("timeout") == api._KEYCHAIN_TIMEOUT  # can't hang on a prompt
+        return api.subprocess.CompletedProcess(argv, 0, stdout=blob)
+
+    monkeypatch.setattr(api.subprocess, "run", _run)
+    assert api._token() == "kc-tok"
+
+
+def test_keychain_is_not_consulted_off_macos(monkeypatch, tmp_path):
+    _no_creds_file(monkeypatch, tmp_path)
+    monkeypatch.setattr(api.sys, "platform", "linux")
+
+    def _boom(*a, **k):
+        raise AssertionError("must not shell out to `security` off macOS")
+
+    monkeypatch.setattr(api.subprocess, "run", _boom)
+    assert api._token() is None
+
+
+def test_keychain_denial_is_not_an_error(monkeypatch, tmp_path):
+    """A denied prompt / missing item / no `security` binary means "no live
+    data", exactly as before — never a raise."""
+    _no_creds_file(monkeypatch, tmp_path)
+    monkeypatch.setattr(api.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        api.subprocess,
+        "run",
+        lambda argv, **kw: api.subprocess.CompletedProcess(argv, 1, stdout=b""),
+    )
+    assert api._token() is None
+
+    def _timeout(*a, **k):
+        raise api.subprocess.TimeoutExpired("security", 5)
+
+    monkeypatch.setattr(api.subprocess, "run", _timeout)
+    assert api._token() is None
+
+
+def test_credentials_file_wins_when_present(monkeypatch, tmp_path):
+    """The file is authoritative where it exists — no keychain prompt at all."""
+    (tmp_path / ".credentials.json").write_text(
+        json.dumps({"claudeAiOauth": {"accessToken": "file-tok"}})
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(api.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        api.subprocess,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("keychain consulted")),
+    )
+    assert api._token() == "file-tok"

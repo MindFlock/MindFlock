@@ -217,7 +217,13 @@ See [cli.md](cli.md).
 
 An Electron shell that auto-starts the server (through WSL on Windows) and
 loads the web UI in a native window, with an offline/diagnostics page while the
-server boots. See `electron/README.md`.
+server boots. Window chrome is platform-conditional — frameless with injected
+– □ ✕ on Windows/Linux, `titleBarStyle: 'hidden'` with the OS traffic lights on
+macOS — and the UI adapts to it through **capability flags on the preload
+bridge** (`mfshell.nativeTitleBar`, read via `frontend/src/lib/shell.ts`) rather
+than platform sniffing: the shell and the engine that serves the UI ship on
+independent cadences, so each side has to tolerate the other being older. See
+`electron/README.md`.
 
 ## Data flow: one story, end to end
 

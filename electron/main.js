@@ -768,6 +768,9 @@ const TITLEBAR_CSS = `
 
 const TITLEBAR_JS = `
 (function () {
+  // macOS draws the real traffic lights (titleBarStyle:'hidden' above), so
+  // adding ours would give the window two sets of controls.
+  if (${process.platform === 'darwin'}) return;
   if (document.getElementById('mf-winctl')) return;
   var bar = document.createElement('div');
   bar.id = 'mf-winctl';
@@ -1239,7 +1242,16 @@ function createWindow() {
     height: 820,
     minWidth: 900,
     minHeight: 600,
-    frame: false,             // custom title strip; native drag/resize still work
+    // Custom title strip on every platform; native drag/resize still work.
+    // macOS is the exception: `frame:false` there ALSO removes the traffic
+    // lights, so the shell drew its own – □ ✕ on the right — the Windows
+    // position, which is exactly backwards for a Mac user. `titleBarStyle:
+    // 'hidden'` keeps the frame hidden but leaves the REAL red/yellow/green
+    // buttons top-left, where they belong; TITLEBAR_JS then skips ours, and the
+    // top bar reserves room for them (see TopBar.css `#topbar[data-mac]`).
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hidden', trafficLightPosition: { x: 13, y: 13 } }
+      : { frame: false }),
     backgroundColor: '#0f1117',
     title: DEV ? 'MindFlock (dev)' : 'MindFlock',
     icon: DEV_ICON || path.join(__dirname, 'icon.ico'),
@@ -1422,6 +1434,18 @@ function createWindow() {
   }
   win.on('maximize', sendMax)
   win.on('unmaximize', sendMax)
+
+  // macOS hides the traffic lights in fullscreen, so the top bar has to give
+  // back the room it reserves for them (see TopBar's `data-mac-lights`) or the
+  // menu sits behind a 78px hole.
+  const sendFullScreen = () => {
+    if (win && !win.webContents.isDestroyed()) {
+      win.webContents.send('fullscreen-changed', win.isFullScreen())
+    }
+  }
+  win.on('enter-full-screen', sendFullScreen)
+  win.on('leave-full-screen', sendFullScreen)
+
   win.on('closed', () => { win = null })
 
   // The page sets document.title (with unread-badge counts), which otherwise
@@ -1443,6 +1467,13 @@ ipcMain.on('win:toggle-maximize', () => {
   win.isMaximized() ? win.unmaximize() : win.maximize()
 })
 ipcMain.on('win:close', () => { if (win) win.close() })
+// Current fullscreen state, pulled once when the top bar mounts. The
+// 'fullscreen-changed' push above only carries TRANSITIONS, and a window that is
+// already fullscreen when the page loads (or reloads — the offline-recovery path
+// reloads on its own) never sees one, so it would hold the traffic-light gap
+// open until the user toggled fullscreen. A pull can't race the renderer's
+// listener registration the way a push at did-finish-load would.
+ipcMain.handle('win:is-fullscreen', () => !!(win && win.isFullScreen()))
 
 app.whenReady().then(() => {
   // Drop Electron's default application menu: it carries devtools

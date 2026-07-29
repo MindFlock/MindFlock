@@ -183,3 +183,46 @@ def test_seed_prompt_expr_unwritable_dir_returns_blank(tmp_path, monkeypatch):
     blocker.write_text("file, not a dir")
     monkeypatch.setenv("MINDFLOCK_SEED_PROMPT_DIR", str(blocker / "seed"))
     assert seed_prompt_expr("mindflock_s", "do a thing") == ""
+
+
+# --------------------------------------------------------------------------- #
+# normalize_program — a resolved binary path folds back to the provider name
+# --------------------------------------------------------------------------- #
+# GetClaudeCommand reports `which` output, so a first run stored an absolute
+# path as the default program. Every consumer that shows or matches a program
+# then had to cope with an install detail; the New Session dialog didn't, and
+# rendered it as a spurious extra agent entry.
+def test_normalize_program_folds_a_known_binary_path():
+    from backend import providers
+
+    assert providers.normalize_program("/opt/homebrew/bin/claude") == "claude"
+    assert providers.normalize_program("/usr/local/bin/codex") == "codex"
+
+
+def test_normalize_program_passes_through_bare_names_and_customs():
+    from backend import providers
+
+    assert providers.normalize_program("claude") == "claude"
+    assert providers.normalize_program("codex") == "codex"
+    # No provider claims it -> it IS the launch command, keep it exactly.
+    assert providers.normalize_program("/opt/bin/my-agent") == "/opt/bin/my-agent"
+    # Arguments mean a command line, not a binary to identify.
+    assert providers.normalize_program("/opt/homebrew/bin/claude --foo") == (
+        "/opt/homebrew/bin/claude --foo"
+    )
+
+
+def test_normalize_program_handles_empty_and_none():
+    from backend import providers
+
+    assert providers.normalize_program("") == ""
+    assert providers.normalize_program(None) == ""
+    assert providers.normalize_program("   ") == ""
+
+
+def test_normalize_program_never_returns_the_catch_all():
+    """The generic fallback claims every program, so it must not be allowed to
+    rename an unrecognised path to "generic"."""
+    from backend import providers
+
+    assert providers.normalize_program("/opt/bin/whatever") == "/opt/bin/whatever"

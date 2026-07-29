@@ -1197,7 +1197,7 @@ def test_github_open_prs_502_on_error(monkeypatch):
 
 def test_assigned_tickets_annotates_has_session(monkeypatch):
     server._ASSIGNED_TICKETS_CACHE.pop("v", None)
-    server._TICKET_STARTS.add("sc-99")  # a start already in flight
+    server._pending_add("sc-99", "tix")  # a start already in flight
     monkeypatch.setattr(
         server._ticket_start,
         "list_assigned_tickets",
@@ -1206,11 +1206,161 @@ def test_assigned_tickets_annotates_has_session(monkeypatch):
     try:
         r = client.get("/api/tickets")
         assert r.status_code == 200
-        # a ticket whose start is in-flight (in _TICKET_STARTS) reads as claimed
+        # a ticket whose start is in-flight (in core.pending) reads as claimed
         assert r.json()["tickets"][0]["has_session"] is True
     finally:
         server._ASSIGNED_TICKETS_CACHE.pop("v", None)
-        server._TICKET_STARTS.discard("sc-99")
+        server._pending_drop("sc-99")
+
+
+def test_config_reports_the_default_program_as_a_provider_name(monkeypatch):
+    """A config.toml written by an older first run stores `which claude` output.
+    Served verbatim, the New Session dialog didn't recognise it and listed it as
+    an extra agent-dropdown entry — a mystery "/opt/homebrew/bin/claude" above
+    the real agents on a Homebrew Mac. Normalized on the way out, so an existing
+    install is fixed without editing any file."""
+    monkeypatch.setattr(
+        server.ENGINE, "default_program", lambda: "/opt/homebrew/bin/claude"
+    )
+    assert client.get("/api/config").json()["default_program"] == "claude"
+
+
+def test_config_keeps_a_custom_program_verbatim(monkeypatch):
+    """A program no provider claims is the launch command itself — untouched."""
+    monkeypatch.setattr(
+        server.ENGINE, "default_program", lambda: "/opt/bin/my-own-agent"
+    )
+    assert (
+        client.get("/api/config").json()["default_program"] == "/opt/bin/my-own-agent"
+    )
+
+
+def test_pending_start_shows_as_a_provisioning_row():
+    """An accepted force-start is visible in the sidebar before its session
+    exists — the whole point of core.pending (a PR clone runs far longer than
+    the instances poll, and an empty sidebar reads as a failed start)."""
+    server._pending_add("pr-app-42", "pr", branch="fix/login-crash", repo="o/app")
+    try:
+        rows = client.get("/api/instances").json()
+        row = next(r for r in rows if r["title"] == "pr-app-42")
+        assert row["pending"] is True
+        assert row["status"] == "loading"
+        assert row["stage"] == "provisioning"
+        # The branch rides along so the row can name the work, not just the slug.
+        assert row["branch"] == "fix/login-crash"
+    finally:
+        server._pending_drop("pr-app-42")
+    assert not [
+        r for r in client.get("/api/instances").json() if r["title"] == "pr-app-42"
+    ]
+
+
+def test_pending_row_yields_to_the_real_session(monkeypatch):
+    """Once the instance registers, the real entry is the only one — a stale
+    pending marker must not double the row."""
+    monkeypatch.setitem(server.ENGINE.instances, "sc-77", _FakeInst("sc-77"))
+    server._pending_add("sc-77", "tix", branch="feature/sc-77/x")
+    try:
+        titles = [r["title"] for r in client.get("/api/instances").json()]
+        assert titles.count("sc-77") == 1
+    finally:
+        server._pending_drop("sc-77")
+
+
+def test_force_review_row_appears_before_the_github_lookup(monkeypatch):
+    """The provisioning row must not wait on find_pr: the panel's cached list
+    already carries the session title, so the row goes up first and the lookup
+    (a GitHub round trip — the last click-to-row delay) happens after."""
+    server._OPEN_PRS_CACHE["v"] = (
+        time.monotonic() + 60,
+        {"prs": [{"repo": "o/app", "number": 42, "session": "pr-app-42"}]},
+    )
+    seen: list = []
+
+    async def _slow_find(repo, number):
+        # Whatever the row state is at lookup time is what the user sees while
+        # waiting on GitHub.
+        seen.append(
+            [
+                r["title"]
+                for r in client.get("/api/instances").json()
+                if r.get("pending")
+            ]
+        )
+        raise LookupError("no such PR")
+
+    monkeypatch.setattr(server._pr_review, "find_pr", _slow_find)
+    monkeypatch.setattr(server, "git_available", lambda: True)
+    try:
+        r = client.post("/api/github/prs/review", json={"repo": "o/app", "number": 42})
+        assert r.status_code == 404  # the lookup failed, as staged
+        assert seen == [["pr-app-42"]]  # ...but the row was already up
+        # A failed lookup takes its row back down again.
+        assert not [x for x in client.get("/api/instances").json() if x.get("pending")]
+    finally:
+        server._OPEN_PRS_CACHE.pop("v", None)
+        server._pending_drop("pr-app-42")
+
+
+def test_force_review_409s_from_the_cached_title(monkeypatch):
+    """The double-click guard works off the early title too — otherwise the
+    second click would sail past it and provision the same workspace twice."""
+    server._OPEN_PRS_CACHE["v"] = (
+        time.monotonic() + 60,
+        {"prs": [{"repo": "o/app", "number": 7, "session": "pr-app-7"}]},
+    )
+    server._pending_add("pr-app-7", "pr")
+    monkeypatch.setattr(server, "git_available", lambda: True)
+    try:
+        r = client.post("/api/github/prs/review", json={"repo": "o/app", "number": 7})
+        assert r.status_code == 409
+        assert r.json()["title"] == "pr-app-7"
+    finally:
+        server._OPEN_PRS_CACHE.pop("v", None)
+        server._pending_drop("pr-app-7")
+
+
+def test_ingestion_status_greens_for_a_locally_forced_start():
+    """The pipeline's beacon only knows the pipeline's own queue, so a ticket
+    forced from the UI has to green the dot through core.pending — otherwise the
+    light reads idle for the whole provisioning (what it did before)."""
+    r = client.get("/api/mindflock/status")
+    assert r.status_code == 200
+    assert r.json()["tickets_active"] is False
+    server._pending_add("sc-5", "tix")
+    try:
+        assert client.get("/api/mindflock/status").json()["tickets_active"] is True
+        # The other two dots are unaffected by a ticket start.
+        assert client.get("/api/mindflock/status").json()["pr_active"] is False
+    finally:
+        server._pending_drop("sc-5")
+    assert client.get("/api/mindflock/status").json()["tickets_active"] is False
+
+
+def test_provisioning_kinds_classifies_a_loading_session(monkeypatch):
+    """A session that exists but is still cloning counts as active work too —
+    the pending marker is dropped the moment the instance registers, so without
+    this the light would flick back to gold mid-provisioning."""
+    from backend.web.core import pending
+
+    inst = _FakeInst("sc-9", started=False, status=Loading)
+    inst.Branch = "feature/sc-9/add-thing"
+    monkeypatch.setitem(server.ENGINE.instances, "sc-9", inst)
+    assert "tix" in pending.provisioning_kinds()
+    # A running session is not "being brought in" — that's the idle state.
+    inst._started = True
+    assert "tix" not in pending.provisioning_kinds()
+
+
+def test_session_kind_matches_the_sidebar_label():
+    """Backend kind classification and the frontend's sessionLabel must agree
+    on what a PR / issue / ticket session looks like."""
+    from backend.web.core import pending
+
+    assert pending.session_kind("pr-app-42", "fix/x") == "pr"
+    assert pending.session_kind("issue-app-77", "feature/issue-app-77/x") == "iss"
+    assert pending.session_kind("sc-12345", "feature/sc-12345/add-dark-mode") == "tix"
+    assert pending.session_kind("my-refactor", "feature/my-refactor") == ""
 
 
 def test_github_open_issues_502_on_error(monkeypatch):

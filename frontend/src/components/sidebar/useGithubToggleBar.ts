@@ -65,11 +65,12 @@ export function useGithubToggleBar(opts: {
     refetchInterval: 30_000,
     retry: false,
   });
-  // Same key as AutomationBar's poll — TanStack dedupes it into one request.
+  // Same key AND interval as AutomationBar's poll — TanStack dedupes it into
+  // one request, and a mismatched interval would make which one wins matter.
   const { data: ingestion } = useQuery({
     queryKey: ["mindflock-status"],
     queryFn: () => api<MfStatus>("/api/mindflock/status"),
-    refetchInterval: 10_000,
+    refetchInterval: 4_000,
     retry: false,
   });
 

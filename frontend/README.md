@@ -28,7 +28,16 @@ changes.
   live OUTSIDE React and are adopted into panes via refs, so re-renders never
   remount a PTY; all the tmux mouse/copy/wheel workarounds live here),
   `keymap.ts` (bindings + Ctrl+K chords + rebind store), `sessionActions.ts`,
-  `stage.ts`, `diff.ts`, `presets.ts`, `clipboard.ts`, `toast.ts`, `format.ts`.
+  `stage.ts`, `diff.ts`, `presets.ts`, `clipboard.ts`, `toast.ts`, `format.ts`,
+  `shell.ts` (what the surrounding desktop shell is: `inShell`, `isMacShell`,
+  `hasNativeWindowControls`, `onFullScreenChanged`).
+- **`lib/shell.ts` is the only place allowed to touch `window.mfshell` /
+  `window.winctl`.** Two rules go with it: never branch on
+  `navigator.userAgent`/`platform` for shell behavior (a Mac user in Safari has
+  no traffic lights to dodge, and must keep the standard layout), and when a
+  capability flag exists, gate on the flag rather than on `isMacShell()` — the
+  shell and the engine-served frontend update independently, so an older shell
+  has to be able to keep the layout it was built for.
 - `src/components/` — the UI: `sidebar/`, `grid/` (panes, diff/queue tabs,
   special panes), `settings/` (one file per screen), `dialogs/`, `palette/`,
   plus TopBar / NotificationsBell / EventToasts / ConnBanner / VoiceInput.

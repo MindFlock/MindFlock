@@ -37,6 +37,17 @@ def _provider_label(name: str) -> str:
     return _PROVIDER_LABELS.get(name) or (name[:1].upper() + name[1:] if name else "")
 
 
+def _estimate_percent(win: Optional[dict]) -> Optional[float]:
+    """Percent of the configured window budget the transcript estimate has
+    spent, or None when there is no window or no budget to measure against."""
+    if not win or win.get("cost") is None:
+        return None
+    budget = _server()._window_budget_usd()
+    if budget <= 0:
+        return None
+    return min(100.0, round(100.0 * win["cost"] / budget, 1))
+
+
 def _usage_window_for(p) -> Optional[dict]:
     """The active usage window for provider ``p`` (or None) — the same
     computation the default provider has always used, factored out so it can run
@@ -79,6 +90,17 @@ def _usage_window_for(p) -> Optional[dict]:
             if live.get("end"):
                 win["end"] = live["end"]
             win["percent_used"] = live.get("percent_used")
+            # A live reading can carry a reset time but no utilization (an
+            # endpoint shape without it, or a window the provider reports only a
+            # deadline for). Taking it verbatim then blanked a percentage the
+            # transcript estimate could still supply — the UI showed a reset
+            # countdown with no "% used" row at all. Fall back to the estimate
+            # and say so, rather than showing nothing.
+            if win["percent_used"] is None and not live.get("groups"):
+                estimate_pct = _estimate_percent(win)
+                if estimate_pct is not None:
+                    win["percent_used"] = estimate_pct
+                    win["source"] = "estimate"
             win.setdefault("budget", 0.0)
             if live.get("weekly"):
                 win["weekly"] = live["weekly"]
@@ -91,13 +113,8 @@ def _usage_window_for(p) -> Optional[dict]:
             return win
         if win:
             win["source"] = "estimate"
-            budget = _server()._window_budget_usd()
-            win["budget"] = budget
-            win["percent_used"] = (
-                min(100.0, round(100.0 * win["cost"] / budget, 1))
-                if budget > 0
-                else None
-            )
+            win["budget"] = _server()._window_budget_usd()
+            win["percent_used"] = _estimate_percent(win)
             return win
         return None
     if kind == "daily":

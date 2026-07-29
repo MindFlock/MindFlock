@@ -1,7 +1,13 @@
 /** Top bar (port of the 030 partial + section 17's chrome wiring):
  * sidebar/theme cluster, notifications bell, the main menu (New / Recent
  * dropdown / Prompts / Command / Settings), centered wordmark, and the
- * Electron drag region. */
+ * Electron drag region.
+ *
+ * On macOS the whole thing mirrors: the window shows the native traffic lights
+ * top-left (electron/main.js `titleBarStyle: 'hidden'`), so the bar leaves room
+ * for them and moves the logo / theme / bell cluster to the right — where a Mac
+ * has nothing else, since our own – □ ✕ aren't drawn there. Same elements, same
+ * behaviour, mirrored placement. */
 
 import { useEffect, useRef, useState } from "react";
 import { useUi } from "../state/store";
@@ -9,6 +15,7 @@ import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { redrawFavicon } from "./EventToasts";
 import { api } from "../api/client";
+import { hasNativeWindowControls, isFullScreen, onFullScreenChanged } from "../lib/shell";
 
 function applyTheme(light: boolean) {
   document.documentElement.classList.toggle("light", light);
@@ -29,6 +36,25 @@ export function TopBar() {
   const [recentOpen, setRecentOpen] = useState(false);
   const [version, setVersion] = useState(engineVersion);
   const dropRef = useRef<HTMLDivElement | null>(null);
+  // Evaluated once: the shell can't grow or lose its title bar mid-run.
+  const [mac] = useState(hasNativeWindowControls);
+  // macOS hides the traffic lights in fullscreen — stop reserving their room.
+  const [fullScreen, setFullScreen] = useState(false);
+
+  useEffect(() => {
+    if (!mac) return;
+    // Ask for the current state (a window already fullscreen at load never gets
+    // a transition), then follow changes.
+    let live = true;
+    void isFullScreen().then((f) => {
+      if (live) setFullScreen(f);
+    });
+    const off = onFullScreenChanged(setFullScreen);
+    return () => {
+      live = false;
+      off();
+    };
+  }, [mac]);
 
   useEffect(() => {
     if (engineVersion) return; // already known this page load
@@ -78,11 +104,42 @@ export function TopBar() {
     redrawFavicon(); // the tab favicon inverts with the theme
   };
 
+  // The cluster that swaps sides on macOS. Defined once and rendered in exactly
+  // one place, so the two layouts can't drift apart.
+  const logo = <span id="brand-logo" aria-hidden="true" />;
+  const themeToggle = (
+    <button
+      id="theme-btn"
+      type="button"
+      title={light ? "Switch to dark mode" : "Switch to light mode"}
+      aria-label="Toggle light / dark mode"
+      onClick={toggleTheme}
+    >
+      {/* Monochrome, not ☀️/🌙: an emoji glyph paints its own colors, and a
+          yellow moon on a yellow top bar (Goldfinch, Toucan) vanishes.
+          currentColor follows --text, which regions.css rebinds per region,
+          so these stay legible on a bar of any hue. */}
+      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+        {light ? (
+          <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <circle cx="12" cy="12" r="4.2" />
+            <path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.3 5.3l1.7 1.7M17 17l1.7 1.7M18.7 5.3L17 7M7 17l-1.7 1.7" />
+          </g>
+        ) : (
+          <path
+            fill="currentColor"
+            d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8z"
+          />
+        )}
+      </svg>
+    </button>
+  );
+
   return (
-    <div id="topbar">
+    <div id="topbar" data-mac={mac ? "" : undefined} data-mac-lights={mac && !fullScreen ? "" : undefined}>
       <div className="tb-start">
         <div className="tb-left">
-          <span id="brand-logo" aria-hidden="true" />
+          {!mac && logo}
           <button
             id="sidebar-toggle"
             type="button"
@@ -103,32 +160,8 @@ export function TopBar() {
               <line x1="9" y1="4" x2="9" y2="20" />
             </svg>
           </button>
-          <button
-            id="theme-btn"
-            type="button"
-            title={light ? "Switch to dark mode" : "Switch to light mode"}
-            aria-label="Toggle light / dark mode"
-            onClick={toggleTheme}
-          >
-            {/* Monochrome, not ☀️/🌙: an emoji glyph paints its own colors, and a
-                yellow moon on a yellow top bar (Goldfinch, Toucan) vanishes.
-                currentColor follows --text, which regions.css rebinds per region,
-                so these stay legible on a bar of any hue. */}
-            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-              {light ? (
-                <g fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <circle cx="12" cy="12" r="4.2" />
-                  <path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.3 5.3l1.7 1.7M17 17l1.7 1.7M18.7 5.3L17 7M7 17l-1.7 1.7" />
-                </g>
-              ) : (
-                <path
-                  fill="currentColor"
-                  d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8z"
-                />
-              )}
-            </svg>
-          </button>
-          <NotificationsBell />
+          {!mac && themeToggle}
+          {!mac && <NotificationsBell />}
         </div>
         <nav className="tb-menu" aria-label="Main actions">
           <button
@@ -223,6 +256,15 @@ export function TopBar() {
         {version && <span className="tb-version">v{version}</span>}
       </span>
       <div className="tb-drag" />
+      {/* macOS: the mirror of .tb-left. Ordered so the logo anchors the far
+          corner, the way it does on the left everywhere else. */}
+      {mac && (
+        <div className="tb-end">
+          <NotificationsBell />
+          {themeToggle}
+          {logo}
+        </div>
+      )}
     </div>
   );
 }

@@ -109,7 +109,8 @@ MindFlock is a ground-up parallel-agent workspace. A few things set it apart:
   tracking apply to all of them.
 - 🖥️ **Desktop app** (Electron) — a draggable terminal grid with Agent /
   Terminal / Diff / Queue tabs per session, workflow-stage badges, and guided
-  next-step buttons.
+  next-step buttons, in a window that follows each OS's own chrome conventions
+  (native traffic lights on macOS, frameless with our own – □ ✕ elsewhere).
 - 📱 **Phone UI** — `mindflock serve tailscale` prints a QR code; the mobile
   UI at `/m` carries the same guided git action bar, so the full flow drives
   from a phone. Auth-token protected — never open to the LAN unauthenticated.

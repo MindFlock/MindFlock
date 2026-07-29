@@ -268,9 +268,13 @@ def GetClaudeCommand() -> str:
 def DefaultConfig() -> Config:
     """Return the default configuration.
 
-    ``default_program`` is the result of :func:`GetClaudeCommand`, or the
-    literal ``"claude"`` on failure. ``branch_prefix`` is ``"{lower(user)}/"``,
-    or ``"session/"`` if the current user cannot be determined.
+    ``default_program`` is :func:`GetClaudeCommand`'s find folded back to the
+    provider name (it reports an absolute path — ``which`` output — and storing
+    that verbatim put a bare ``/opt/homebrew/bin/claude`` in the New Session
+    dialog's agent list on a first run), or the literal ``"claude"`` on failure.
+    A path no provider recognises is still stored as-is: for a custom agent the
+    exact string IS the launch command. ``branch_prefix`` is
+    ``"{lower(user)}/"``, or ``"session/"`` if the user cannot be determined.
     """
     try:
         program = GetClaudeCommand()
@@ -278,6 +282,12 @@ def DefaultConfig() -> Config:
         if log.ErrorLog is not None:
             log.ErrorLog.Printf("failed to get claude command: %v", err)
         program = DEFAULT_PROGRAM
+    try:
+        from backend import providers
+
+        program = providers.normalize_program(program) or program
+    except Exception:  # noqa: BLE001 — config must load without the registry
+        pass
 
     return Config(
         default_program=program,

@@ -712,6 +712,34 @@ body #mf-winctl {
   gap: 6px;
 }
 
+/* --- macOS layout ---------------------------------------------------------- */
+/* The desktop shell keeps the NATIVE traffic lights top-left there
+   (electron/main.js `titleBarStyle: 'hidden'`), because a Mac user reads
+   red/yellow/green in that corner as "the window controls" — ours on the right
+   was the Windows arrangement on the wrong OS. Two consequences here:
+
+     1. leave room for them, so the menu doesn't start underneath;
+     2. mirror our own cluster (logo / theme / bell) to the right, which on a Mac
+        is otherwise empty — the shell draws no – □ ✕ there.
+
+   The gap is keyed on `data-mac-lights`, not `data-mac`: macOS hides the lights
+   in fullscreen, and the shell tells the UI so (electron `fullscreen-changed`)
+   rather than leaving a hole no window button occupies. Browser tabs on macOS
+   get NEITHER attribute — they have their own chrome and no lights to dodge. */
+#topbar[data-mac-lights] {
+  /* 13px light origin + 3 x 12px buttons + 2 x 8px gaps + breathing room. */
+  padding-left: 78px;
+}
+
+#topbar[data-mac] .tb-end {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Sits after the drag handle, so it hugs the right edge; the handle keeps all
+     the flexible width and the brand stays centred between the two zones. */
+  flex: 0 0 auto;
+}
+
 /* Wordmark in normal flow between two equal flex:1 zones (the left cluster+menu
    on one side, the drag region on the other). Equal zones => the brand sits at
    true window center whenever there's room. When the left zone's content is
@@ -2935,6 +2963,30 @@ p.set-hint {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* A force-start the server accepted but hasn't turned into a session yet: it
+   carries the provisioning chip like any loading row, dimmed a touch because
+   there is nothing to act on until the clone finishes. */
+.inst.is-pending .title {
+  color: var(--muted);
+}
+
+/* Inline rename (click the selected row): sits exactly where the title text was
+   so the row height never shifts. */
+.inst input.title-edit {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 0 2px;
+  margin: -1px 0;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  outline: none;
 }
 
 .inst .branch {

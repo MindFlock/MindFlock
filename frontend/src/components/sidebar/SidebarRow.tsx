@@ -4,6 +4,8 @@
 import {
   memo,
   useCallback,
+  useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
   type DragEvent,
@@ -16,6 +18,7 @@ import { useUi } from "../../state/store";
 import { copyText } from "../../lib/clipboard";
 import { errMsg } from "../../lib/format";
 import { chipState, checkChip } from "../../lib/stage";
+import { sessionLabel } from "../../lib/sessionLabel";
 import {
   cleanupMissing,
   commitSession,
@@ -31,6 +34,11 @@ import {
 } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
 import { peekTerm, subscribeTermStates } from "../../lib/terminals";
+
+/** How long a click on the selected row waits for a second click before it
+ * turns into an inline rename. Under the browser's ~500ms dblclick ceiling,
+ * but long enough that an unhurried double-click still opens the IDE. */
+const DBLCLICK_MS = 300;
 
 function displayTitle(inst: Instance): string {
   return (inst as unknown as { display_title?: string }).display_title || inst.title || "";
@@ -56,21 +64,36 @@ export const SidebarRow = memo(function SidebarRow({
   onDropRow,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  // Escape must abandon the edit; unmounting the focused input can still run
+  // the blur handler, so the cancel is flagged rather than inferred.
+  const cancelled = useRef(false);
+  const renameTimer = useRef<number | null>(null);
+  // When a click ends an edit, that same click also reaches the row — without
+  // this the dismiss would immediately re-arm the rename.
+  const editEndedAt = useRef(0);
   const { data: config } = useConfig();
   const focused = useUi((s) => s.focused);
   const hidden = useUi((s) => s.hidden.has(inst.title));
   const alias = useUi((s) => s.aliases[inst.title]);
   const openDialogFor = useUi((s) => s.openDialogFor);
+  const setAlias = useUi((s) => s.setAlias);
 
   const title = inst.title;
   const missing = !!inst.workspace_missing;
   const paused = inst.status === "paused";
+  // A force-start the server has accepted but not yet turned into a session:
+  // it exists only as this row, so nothing on it is actionable yet.
+  const pending = !!inst.pending;
   const caps = config?.caps ?? { git: true, tailscale: true, ticketing: true };
   const ideName = config?.ide_name || "Cursor";
   const chip = chipState(inst);
   const check = checkChip(inst);
   const num = idx < 9 ? String(idx + 1) : "";
-  const shown = alias || displayTitle(inst);
+  // Ticket/PR/issue sessions read as "(tix) add-dark-mode/sc-12345" instead of
+  // the bare slug; a hand-made session's title is passed through unchanged.
+  const label = sessionLabel(displayTitle(inst), inst.branch || "");
+  const shown = alias || label.text;
   const folder = inst.folder || inst.path || "";
   // Subscribed (not a render-time snapshot): the row must clear its red dot
   // the moment the agent socket connects, not on the next instances poll.
@@ -85,18 +108,57 @@ export const SidebarRow = memo(function SidebarRow({
     await fn();
   };
 
+  const clearRenameTimer = () => {
+    if (renameTimer.current !== null) {
+      clearTimeout(renameTimer.current);
+      renameTimer.current = null;
+    }
+  };
+  useEffect(() => clearRenameTimer, []);
+
+  /** Click on the row that's ALREADY selected → edit the name in place. The
+   * second click of a double-click also lands here, so the edit is held for
+   * the double-click window and cancelled by onDoubleClick (open in IDE). */
+  const armRename = () => {
+    clearRenameTimer();
+    renameTimer.current = window.setTimeout(() => {
+      renameTimer.current = null;
+      cancelled.current = false;
+      setEditing(true);
+    }, DBLCLICK_MS);
+  };
+
+  const commitRename = (raw: string) => {
+    setEditing(false);
+    editEndedAt.current = Date.now();
+    if (cancelled.current) {
+      cancelled.current = false;
+      return;
+    }
+    const next = raw.trim();
+    // Blank, or typed back to what the row shows by itself, means "drop the
+    // alias" — that's the default label as well as the raw title.
+    const nextAlias =
+      !next || next === label.text || next === displayTitle(inst) ? "" : next;
+    if (nextAlias === (alias || "")) return;
+    setAlias(title, nextAlias);
+    toast(nextAlias ? `Renamed to “${nextAlias}”` : "Reset to real title");
+  };
+
   const rowCls =
     "inst" +
     (focused === title ? " active" : "") +
     (hidden ? " is-hidden" : "") +
     (missing ? " ws-missing" : "") +
+    (pending ? " is-pending" : "") +
     (dropCue ? ` drop-${dropCue}` : "");
 
   return (
     <li
       className={rowCls}
       data-title={title}
-      draggable
+      // Row drag would hijack text selection inside the rename input.
+      draggable={!editing}
       onDragStart={(ev: DragEvent) => {
         ev.dataTransfer.setData("text/plain", title);
         ev.dataTransfer.effectAllowed = "move";
@@ -133,28 +195,74 @@ export const SidebarRow = memo(function SidebarRow({
     >
       <div
         className="inst-row"
-        onClick={() => selectSession(title)}
+        onClick={() => {
+          if (editing || Date.now() - editEndedAt.current < DBLCLICK_MS + 100) return;
+          if (focused !== title) {
+            selectSession(title);
+            return;
+          }
+          if (!pending) armRename();
+        }}
         onDoubleClick={() => {
-          if (!missing) ideSession(title, true);
+          clearRenameTimer();
+          if (!missing && !pending) ideSession(title, true);
         }}
       >
         <span className="grip" title="Drag to reorder">⠿</span>
         <span className="idx" title={num ? `Ctrl+${num} / Alt+${num} to focus` : ""}>{num}</span>
         <span className={"dot " + inst.status + (disconnected ? " disconnected" : "")} />
-        <button
-          className={"chevron" + (expanded ? " open" : "")}
-          title="Actions"
-          onClick={(e) => act(() => setExpanded((v) => !v), e)}
-        >
-          ›
-        </button>
-        <span className="meta">
-          <span
-            className={"title" + (alias ? " aliased" : "")}
-            title={alias ? `${alias}  ·  ${displayTitle(inst)}` : displayTitle(inst)}
+        {!pending && (
+          <button
+            className={"chevron" + (expanded ? " open" : "")}
+            title="Actions"
+            onClick={(e) => act(() => setExpanded((v) => !v), e)}
           >
-            {shown}
-          </span>
+            ›
+          </button>
+        )}
+        <span className="meta">
+          {editing ? (
+            <input
+              className="title title-edit"
+              type="text"
+              defaultValue={shown}
+              autoFocus
+              autoComplete="off"
+              spellCheck={false}
+              onFocus={(e) => e.currentTarget.select()}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onBlur={(e) => commitRename(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitRename(e.currentTarget.value);
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancelled.current = true;
+                  editEndedAt.current = Date.now();
+                  setEditing(false);
+                }
+              }}
+            />
+          ) : (
+            <span
+              className={"title" + (alias ? " aliased" : "")}
+              title={[
+                alias ? `${alias}  ·  ${label.full}` : label.full,
+                // The real title is the identity behind a reformatted label —
+                // it's what every API path and `tmux attach` is keyed by.
+                label.kind ? `session: ${displayTitle(inst)}` : "",
+                inst.branch ? `branch: ${inst.branch}` : "",
+                focused === title ? "Click again to rename" : "",
+              ]
+                .filter(Boolean)
+                .join("\n")}
+            >
+              {shown}
+            </span>
+          )}
         </span>
         <span className={"stagechip " + chip.cls} title={chip.title}>{chip.label}</span>
         {check && (
@@ -162,19 +270,21 @@ export const SidebarRow = memo(function SidebarRow({
             {check.label}
           </span>
         )}
-        <button
-          className={"kill" + (missing ? " cleanup" : "")}
-          title={
-            missing
-              ? "Clean up — workspace is gone; remove this session"
-              : "End session — keeps worktree (Ctrl+W / Del; undo with Ctrl+Shift+T)"
-          }
-          onClick={(e) => act(() => (missing ? cleanupMissing(title) : killSession(title)), e)}
-        >
-          {missing ? "Clean up" : "✕"}
-        </button>
+        {!pending && (
+          <button
+            className={"kill" + (missing ? " cleanup" : "")}
+            title={
+              missing
+                ? "Clean up — workspace is gone; remove this session"
+                : "End session — keeps worktree (Ctrl+W / Del; undo with Ctrl+Shift+T)"
+            }
+            onClick={(e) => act(() => (missing ? cleanupMissing(title) : killSession(title)), e)}
+          >
+            {missing ? "Clean up" : "✕"}
+          </button>
+        )}
       </div>
-      {expanded && (
+      {expanded && !pending && (
         <div className="inst-actions">
           <div className="folder-row">
             <span className="folder-path" title={folder}>{inst.folder_label || folder || "—"}</span>

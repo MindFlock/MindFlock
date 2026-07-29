@@ -35,6 +35,33 @@ It is a no-op in the packaged prod build. Full per-OS instructions, the
 fully-isolated (separate-server) variant, and how to pin the dev icon to the
 Windows taskbar are in [`electron/README.md`](../electron/README.md).
 
+### Shell ↔ engine skew
+
+The packaged app freezes only four files — `main.js`, `preload.js`, `logger.js`,
+`offline.html` — and loads everything else (the whole frontend) from whatever
+`mindflock serve` is installed. So the shell and the UI are **separately
+versioned at runtime**, in both directions, and anything new on the preload
+bridge has to be optional on both sides:
+
+- **New frontend, old shell** — the flag is simply absent. Gate on the
+  capability (`mfshell.nativeTitleBar`), never on `platform`/`navigator`, and the
+  old shell keeps the layout it was built for.
+- **New shell, old frontend** — the common case, since the app updates on its
+  own cadence. This one has a **known rough edge**: a new macOS shell hands its
+  native traffic lights to an older top bar that reserves no room for them, so
+  they paint over that bar's logo / sidebar toggle / theme button until the
+  engine is updated (re-running `install.sh` upgrades it in place). No mitigation
+  is in the shell today; the fix, if it becomes a real complaint, is a defensive
+  `insertCSS` of `#topbar { padding-left: 78px }` on darwin.
+
+### Rebuild the bundle in the same commit
+
+`backend/web/static/app.js` and `style.css` are **committed build output**. Any
+change under `frontend/src` — including CSS-only tweaks, which are the easiest to
+forget — needs `npm run build` in `frontend/` so the regenerated pair lands in
+the same commit as the source. The backend tests assert on literals inside those
+files, so a stale bundle shows up as a confusing Python test failure.
+
 ## Pre-commit hooks
 
 Shared, deterministic hooks live in `.pre-commit-config.yaml` (black,
@@ -214,7 +241,7 @@ refresher re-runs suites automatically.
 | PR flow | `test_pr_pipeline` |
 | Property (hypothesis) | backfill ordering, prompt construction, validation-with-context, assignee filter, timestamp persistence |
 | Integration | `test_claude_runner` (async ClaudeCodeRunner) |
-| Frontend (vitest) | `frontend/src/__tests__/*.test.ts` — the pure logic modules (layout, diff, keymap, ordering, stage, format, barDefs, usageModel) |
+| Frontend (vitest) | `frontend/src/__tests__/*.test.ts` — the pure logic modules (layout, diff, keymap, ordering, stage, format, barDefs, usageModel, sessionLabel, shell) |
 
 The launch-parity golden files pin the workspace launcher byte-for-byte
 (backend rolling, markers, resume loop) — update them deliberately when changing
@@ -226,7 +253,7 @@ The frontend tests are **not** part of `uv run pytest`. `vitest` is a
 production build is untouched by test settings). Nothing in CI runs them today:
 
 ```bash
-cd frontend && npm test           # 8 files, 118 tests
+cd frontend && npm test           # 10 files, 137 tests
 ```
 
 ## Conventions

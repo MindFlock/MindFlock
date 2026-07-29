@@ -31,6 +31,7 @@ __all__ = [
     "TrustSpec",
     "register",
     "resolve",
+    "normalize_program",
     "get",
     "all_providers",
     "rebuild_registry",
@@ -113,6 +114,44 @@ def resolve(program_or_kind: Optional[str]) -> CodingProvider:
     if len(_RESOLVE_CACHE) < 256:  # program strings are user input — stay bounded
         _RESOLVE_CACHE[key] = result
     return result
+
+
+def normalize_program(program: Optional[str]) -> str:
+    """Canonical form of a program string: a provider NAME where one applies.
+
+    ``"/opt/homebrew/bin/claude"`` -> ``"claude"``. A resolved absolute path is
+    how :func:`backend.config.config.GetClaudeCommand` reports the CLI it found
+    (it shells out to ``which``), and storing that verbatim leaks an install
+    detail into every place a program is shown or matched — most visibly the New
+    Session dialog, which lists any program it doesn't recognise as an extra
+    dropdown entry, so a Homebrew Mac grew a mystery "/opt/homebrew/bin/claude"
+    item above the real agents.
+
+    Only a bare basename that a named provider claims is folded to that
+    provider's name. Anything else — a custom script, a program with arguments,
+    a path no provider recognises — is returned unchanged (stripped), because
+    for those the exact string IS the launch command.
+    """
+    key = (program or "").strip()
+    if not key or key in _REGISTRY:
+        return key
+    import os
+
+    # Arguments mean the string is a command line, not a binary to identify.
+    if len(key.split()) > 1:
+        return key
+    base = os.path.basename(key)
+    if base == key:  # already a bare name
+        return key
+    for name in _ORDER:
+        if name == "generic":
+            continue  # the catch-all claims everything; it identifies nothing
+        try:
+            if _REGISTRY[name].matches(base):
+                return name
+        except Exception:  # noqa: BLE001 — a matcher must never break this
+            continue
+    return key
 
 
 # --- built-in providers ----------------------------------------------------- #

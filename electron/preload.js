@@ -16,6 +16,16 @@ contextBridge.exposeInMainWorld('mfshell', {
   // wording differs per OS (Windows routes to Add/Remove Programs), so surface
   // the platform. Undefined in a plain browser → the UI hides the control.
   platform: process.platform,
+  // True when the OS draws this window's controls itself and they sit TOP-LEFT
+  // (macOS traffic lights, via titleBarStyle:'hidden' in main.js) — so the top
+  // bar must leave room for them and mirror its own cluster to the right.
+  //
+  // A capability flag rather than a platform check on purpose: the frontend
+  // ships in the engine, the shell ships as the desktop app, and they update
+  // independently. An older shell still injects its own – □ ✕ top-RIGHT, where
+  // a platform-keyed UI would have moved the logo/theme/bell on top of them.
+  // Undefined there, so that build keeps the layout it was built for.
+  nativeTitleBar: process.platform === 'darwin',
   // Reveal a file in the OS file manager (Finder / Explorer), highlighted.
   // Settings → System logs uses this to jump straight to a log file. Resolves
   // { ok } so the UI can fall back to copying the path if it can't open.
@@ -36,6 +46,18 @@ contextBridge.exposeInMainWorld('winctl', {
   close: () => ipcRenderer.send('win:close'),
   onMaximizedChanged: (cb) =>
     ipcRenderer.on('maximized-changed', (_e, isMax) => cb(isMax)),
+  // Current fullscreen state, for the initial paint — the event below only
+  // carries transitions, and a window launched/reloaded already fullscreen sees
+  // none of them.
+  isFullScreen: () => ipcRenderer.invoke('win:is-fullscreen'),
+  // macOS only in practice: the traffic lights disappear in fullscreen, so the
+  // top bar stops reserving space for them. Returns an unsubscribe so a React
+  // effect can clean up.
+  onFullScreenChanged: (cb) => {
+    const h = (_e, isFull) => cb(isFull)
+    ipcRenderer.on('fullscreen-changed', h)
+    return () => ipcRenderer.removeListener('fullscreen-changed', h)
+  },
 })
 
 // Offline-page diagnostics: lets offline.html explain WHY the UI can't load

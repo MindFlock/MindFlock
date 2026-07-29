@@ -34,15 +34,17 @@ export function PrReviewBar() {
     >
       <span
         id="pr-review-dot"
-        className={"dc-dot " + (!on ? "off" : active ? "on" : "idle")}
+        // `active` outranks the switch: a review forced from Settings is
+        // genuinely in flight even with automated review switched off.
+        className={"dc-dot " + (active ? "on" : !on ? "off" : "idle")}
         title={
-          on
-            ? starting
-              ? "Switched on — the review pipeline is starting"
-              : active
-                ? "A pull request is being reviewed right now"
+          active
+            ? "A pull request is being brought in for review right now (automated or a forced start)"
+            : on
+              ? starting
+                ? "Switched on — the review pipeline is starting"
                 : "Waiting for an open PR with actionable review comments — turns green while one is being handled"
-            : undefined
+              : undefined
         }
       />
       <span className="dc-label">PR Review</span>
