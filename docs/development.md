@@ -134,15 +134,36 @@ gh workflow run release.yml        # builds all three, publishes nothing
 gh run watch                       # installers land as run artifacts
 ```
 
-Then:
+Then, on a branch — `main` requires a pull request (the **Safe-main** ruleset),
+and a release commit is not an exception to that:
 
 ```bash
+git switch -c release/<version>
 python3 scripts/bump-version.py <version>   # manifests + CHANGELOG
 $EDITOR CHANGELOG.md                        # fill in the new section
-git commit -am "Release <version>"
+git commit -sam "Release <version>"         # -s: every commit needs a DCO sign-off
+git push -u origin release/<version>
+gh pr create --base main --title "Release <version>"
+# merge it once CI is green, then tag the merged commit:
+git switch main && git pull --ff-only
 git tag -a v<version> -m "Release <version>"
-git push origin main --follow-tags
+git push origin v<version>
 ```
+
+Two things that reject a direct push here, both by design:
+
+* **Safe-main** (`main`) requires a pull request. Owner/admin bypass exists, so a
+  direct push *succeeds silently* — which is exactly why the flow above is
+  written out: a release commit gets the same CI-on-a-PR treatment as any other.
+* **Safe-release-tags** (`refs/tags/v*`) restricts *creation*, so the tag push
+  also lands on bypass. Push the tag only after the PR is merged, so the tag
+  names a commit that actually passed review.
+
+The local **leak-guard** (`.git/hooks/pre-push`, untracked) is happy with both:
+it passes any ref whose history is rooted in the squashed `main` and blocks
+anything else, so a release branch and its tag need no `--no-verify`. If it
+refuses something you believe is fine, check the roots it prints rather than
+reaching for the override.
 
 The tag push runs `release.yml`, which publishes to one GitHub release:
 
