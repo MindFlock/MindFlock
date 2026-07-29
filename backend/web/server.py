@@ -1852,7 +1852,14 @@ def get_config() -> JSONResponse:
     capabilities, home dir, linked IDE name, first-run + auth-gate state."""
     return JSONResponse(
         {
-            "default_program": ENGINE.default_program(),
+            # Folded to the provider name when the stored value is a resolved
+            # path to a known CLI: an existing config.toml carrying
+            # "/opt/homebrew/bin/claude" (what a first run used to write) would
+            # otherwise seed the New Session dialog with a program it doesn't
+            # recognise, which it renders as an extra agent-dropdown entry.
+            # Launch paths keep using the stored value — this is what the UI
+            # shows and preselects.
+            "default_program": providers.normalize_program(ENGINE.default_program()),
             "provisioning_available": provisioning.provisioning_available(),
             # Optional-integration availability (git / tailscale / ticketing):
             # the UI hides absent features and shows "connect X" guidance on

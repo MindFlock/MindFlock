@@ -1213,6 +1213,28 @@ def test_assigned_tickets_annotates_has_session(monkeypatch):
         server._pending_drop("sc-99")
 
 
+def test_config_reports_the_default_program_as_a_provider_name(monkeypatch):
+    """A config.toml written by an older first run stores `which claude` output.
+    Served verbatim, the New Session dialog didn't recognise it and listed it as
+    an extra agent-dropdown entry — a mystery "/opt/homebrew/bin/claude" above
+    the real agents on a Homebrew Mac. Normalized on the way out, so an existing
+    install is fixed without editing any file."""
+    monkeypatch.setattr(
+        server.ENGINE, "default_program", lambda: "/opt/homebrew/bin/claude"
+    )
+    assert client.get("/api/config").json()["default_program"] == "claude"
+
+
+def test_config_keeps_a_custom_program_verbatim(monkeypatch):
+    """A program no provider claims is the launch command itself — untouched."""
+    monkeypatch.setattr(
+        server.ENGINE, "default_program", lambda: "/opt/bin/my-own-agent"
+    )
+    assert (
+        client.get("/api/config").json()["default_program"] == "/opt/bin/my-own-agent"
+    )
+
+
 def test_pending_start_shows_as_a_provisioning_row():
     """An accepted force-start is visible in the sidebar before its session
     exists — the whole point of core.pending (a PR clone runs far longer than

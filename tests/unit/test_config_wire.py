@@ -133,10 +133,20 @@ class TestDefaultConfig:
         assert cfg.auto_yes is False
         assert cfg.daemon_poll_interval == 1000
 
-    def test_uses_resolved_claude_command(self, monkeypatch):
-        monkeypatch.setattr(C, "GetClaudeCommand", lambda: "/usr/local/bin/claude")
-        cfg = C.DefaultConfig()
-        assert cfg.default_program == "/usr/local/bin/claude"
+    def test_resolved_claude_path_is_stored_as_the_provider_name(self, monkeypatch):
+        """GetClaudeCommand reports `which` output (an absolute path). Storing
+        that verbatim leaked the install location into the New Session dialog,
+        which lists any program it doesn't recognise as an extra agent entry —
+        a Homebrew Mac grew a "/opt/homebrew/bin/claude" item above the real
+        agents on its first run."""
+        monkeypatch.setattr(C, "GetClaudeCommand", lambda: "/opt/homebrew/bin/claude")
+        assert C.DefaultConfig().default_program == "claude"
+
+    def test_a_path_no_provider_claims_is_kept_verbatim(self, monkeypatch):
+        """For a custom agent the exact string IS the launch command, so it must
+        survive untouched."""
+        monkeypatch.setattr(C, "GetClaudeCommand", lambda: "/opt/bin/my-own-agent")
+        assert C.DefaultConfig().default_program == "/opt/bin/my-own-agent"
 
 
 class TestDefaultBranchPrefix:

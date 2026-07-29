@@ -16,6 +16,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
+import sys
 import threading
 import time
 import urllib.request
@@ -50,16 +52,67 @@ def _creds_diag(reason: str) -> None:
         _logger.debug("claude live usage unavailable: %s", reason)
 
 
+#: Keychain service name Claude Code stores its credentials under on macOS.
+_KEYCHAIN_SERVICE = "Claude Code-credentials"
+_KEYCHAIN_TIMEOUT = 5  # seconds; a denied/prompting lookup must not wedge /api/usage
+
+
+def _keychain_doc() -> Optional[dict]:
+    """The credentials document from the macOS login Keychain, or None.
+
+    On macOS Claude Code keeps its OAuth credentials in the Keychain rather than
+    in ``~/.claude/.credentials.json``, so the file read below finds nothing and
+    live plan usage was permanently dark on every Mac — the UI fell back to the
+    transcript estimate, which yields a reset countdown but no percentage unless
+    a window budget is configured. The stored blob is the same JSON as the file.
+
+    ``security`` may raise a one-time "MindFlock wants to use your Keychain"
+    prompt, since the item was created by a different binary; a denial (or a
+    headless session, where no prompt can be answered) just returns None and
+    behaviour is exactly as before. Timeout-bounded so an unanswered prompt
+    can't hold the usage request open.
+    """
+    if sys.platform != "darwin":
+        return None
+    try:
+        proc = subprocess.run(
+            ["security", "find-generic-password", "-s", _KEYCHAIN_SERVICE, "-w"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=_KEYCHAIN_TIMEOUT,
+        )
+    except Exception as e:  # noqa: BLE001 — no `security`, timeout, denial
+        _creds_diag("keychain lookup failed (%s)" % type(e).__name__)
+        return None
+    if proc.returncode != 0 or not proc.stdout:
+        _creds_diag("keychain has no %s item" % _KEYCHAIN_SERVICE)
+        return None
+    try:
+        doc = json.loads(proc.stdout.decode("utf-8", "replace"))
+    except ValueError:
+        _creds_diag("keychain item is not JSON")
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
 def _token() -> Optional[str]:
-    """The Claude Code OAuth access token, or None. Never logged."""
+    """The Claude Code OAuth access token, or None. Never logged.
+
+    Read from ``.credentials.json`` (Linux/WSL, and any install that keeps a
+    file) with the macOS Keychain as the fallback — see :func:`_keychain_doc`.
+    """
     root = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(
         os.path.expanduser("~"), ".claude"
     )
+    doc: Optional[dict] = None
     try:
         with open(os.path.join(root, ".credentials.json")) as f:
             doc = json.load(f)
-    except Exception as e:  # noqa: BLE001 — missing/corrupt creds: no live data
+    except Exception as e:  # noqa: BLE001 — missing/corrupt creds: try the keychain
         _creds_diag("cannot read .credentials.json (%s)" % type(e).__name__)
+    if not isinstance(doc, dict):
+        doc = _keychain_doc()
+    if not isinstance(doc, dict):
         return None
     tok = (doc.get("claudeAiOauth") or {}).get("accessToken") or None
     if not tok:

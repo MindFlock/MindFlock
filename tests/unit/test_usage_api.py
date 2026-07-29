@@ -304,3 +304,71 @@ def test_provider_usage_entry_swallows_usage_errors(monkeypatch):
     assert entry["window"] is None
     assert entry["window_note"] == ""
     assert entry["periods"] is None
+
+
+# --------------------------------------------------------------------------- #
+# _usage_window_for: a live reading with a reset time but NO utilization
+# --------------------------------------------------------------------------- #
+# Reported from a Mac: the plan window showed its reset countdown but no
+# "% used" row at all. Taking live's percent verbatim discarded a percentage the
+# transcript estimate could still supply, so an end-only live reading blanked it.
+class _ClaudeLive(_Claude):
+    def __init__(self, live):
+        self._live = live
+
+    def usage_live(self):
+        return self._live
+
+
+def test_live_end_without_percent_falls_back_to_the_estimate(monkeypatch):
+    _patch_estimate(
+        monkeypatch,
+        {"anchor": 0.0, "end": 5.0, "cost": 3.0, "tokens": 100},
+        budget=10.0,
+    )
+    win = usage_api._usage_window_for(_ClaudeLive({"end": 4242.0}))
+    assert win["end"] == 4242.0  # the live reset time is still the accurate one
+    assert win["percent_used"] == 30.0  # 100 * 3 / 10, from the estimate
+    # Marked as an estimate so the UI keeps its "(est.)" qualifier honest.
+    assert win["source"] == "estimate"
+
+
+def test_live_end_without_percent_stays_blank_with_no_budget(monkeypatch):
+    """No budget means there is genuinely no percentage to compute — the window
+    still reports its reset time, as before."""
+    _patch_estimate(
+        monkeypatch,
+        {"anchor": 0.0, "end": 5.0, "cost": 3.0, "tokens": 100},
+        budget=0.0,
+    )
+    win = usage_api._usage_window_for(_ClaudeLive({"end": 4242.0}))
+    assert win["end"] == 4242.0
+    assert win["percent_used"] is None
+    assert win["source"] == "live"
+
+
+def test_live_percent_is_never_overridden_by_the_estimate(monkeypatch):
+    """The provider's own meter wins whenever it reports one."""
+    _patch_estimate(
+        monkeypatch,
+        {"anchor": 0.0, "end": 5.0, "cost": 9.0, "tokens": 100},
+        budget=10.0,
+    )
+    win = usage_api._usage_window_for(_ClaudeLive({"end": 1.0, "percent_used": 7.0}))
+    assert win["percent_used"] == 7.0
+    assert win["source"] == "live"
+
+
+def test_group_quotas_are_left_alone(monkeypatch):
+    """Per-group quotas are their own presentation — no headline percent is
+    invented for them from an unrelated transcript estimate."""
+    _patch_estimate(
+        monkeypatch,
+        {"anchor": 0.0, "end": 5.0, "cost": 9.0, "tokens": 100},
+        budget=10.0,
+    )
+    win = usage_api._usage_window_for(
+        _ClaudeLive({"end": 1.0, "groups": [{"label": "g", "percent_used": 5.0}]})
+    )
+    assert win["percent_used"] is None
+    assert win["source"] == "live"
