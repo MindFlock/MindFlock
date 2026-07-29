@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-07-29
+
+### Added
+
+- **Rename a session from the sidebar without a dialog.** Clicking the row that
+  is *already* selected turns its name into an input with the text
+  pre-selected — renaming no longer means finding "Rename…" in the row's
+  actions menu (which still works, as does the command palette). The edit is
+  held for the double-click window and cancelled by one, so double-click still
+  opens the IDE and never flashes an editor. Enter or clicking away commits,
+  Escape cancels, and typing the real title back clears the alias.
+
+- **Ticket / PR / issue sessions read as what they are.** Those sessions are
+  titled by their machine slug — `sc-12345`, `pr-app-42` — which says nothing
+  about the work. The feature name is already in the branch, so the sidebar now
+  shows `(tix) add-dark-mode/sc-12345`, `(pr) login-crash/app-42`,
+  `(iss) cant-open/app-77`, with the full name, the real session title and the
+  branch on hover. Hand-made session names are untouched, and the title itself
+  is unchanged — every API path, tmux name and workspace dir is still keyed by
+  it.
+
+- **macOS windows use the OS's own controls.** The top bar drew its own
+  – □ ✕ top-*right* on every platform, which is the Windows arrangement; on a
+  Mac the red/yellow/green buttons belong top-left. The window now keeps the
+  real traffic lights there (`titleBarStyle: 'hidden'`), draws none of its own,
+  and the bar mirrors to match — the logo, theme toggle and notification bell
+  move to the right, where a Mac has nothing else. The sidebar toggle stays
+  left, pointing at the sidebar it controls. Every other platform is unchanged,
+  as is a browser tab on macOS. The layout follows a shell *capability* flag
+  rather than the platform, so an engine updated ahead of the desktop app keeps
+  the layout the installed app actually draws instead of stacking its cluster
+  on top of that app's own buttons.
+
+### Fixed
+
+- **A force-started PR review / issue / ticket showed nothing in the sidebar
+  for as long as it took to clone.** The request was accepted and then spent
+  tens of seconds provisioning before it could register a session, so the
+  sidebar stayed empty and the start looked like it had failed. Every accepted
+  start is now recorded on arrival — before the upstream lookup, not after it —
+  and appears immediately as a provisioning row. It also greens the Ticket
+  Ingestion / PR Review / Issue Handling dots: those read the *pipeline's*
+  activity beacon, which knows nothing about work started from the UI, so a
+  forced ticket used to provision for minutes with the light showing idle.
+  Their status poll now matches the sessions poll (4s), since the green window
+  can be a single provisioning.
+
+- **A mystery `/opt/homebrew/bin/claude` entry above the agents in the New
+  Session dialog** (macOS/Homebrew, and any first run where the CLI was found
+  on `PATH`). Detection resolves the binary by shelling out to `which`, so it
+  reports an absolute path, and that was stored verbatim as the default
+  program; the dialog lists any program it doesn't recognise as an extra
+  option, which is right for a custom agent and wrong for a path that *is*
+  Claude. A resolved path to a known CLI is now folded back to the provider
+  name — both when written and when served, so an existing config is fixed
+  without editing it — while a genuinely custom program is left exactly as it
+  is, because for those the string is the launch command.
+
+- **No plan-usage percentage on macOS — only the reset countdown.** The live
+  reader looked for the Claude OAuth token in
+  `~/.claude/.credentials.json` only, but on macOS Claude Code keeps those
+  credentials in the login Keychain. The token was never found, live usage was
+  permanently dark, and the fallback estimate reports a reset time but no
+  percentage unless a window budget is configured. The Keychain is now the
+  fallback source (macOS only, timeout-bounded, and any failure means "no live
+  data" exactly as before — expect a one-time Keychain permission prompt).
+  Separately, a live reading that carried a reset time but *no* utilization was
+  taken verbatim and blanked a percentage the estimate could still supply; it
+  now falls back and says the number is an estimate.
+
 ## [0.1.3] - 2026-07-28
 
 ### Fixed
@@ -228,7 +298,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.4
 [0.1.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.3
 [0.1.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.2
 [0.1.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.1
