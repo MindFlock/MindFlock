@@ -23959,6 +23959,32 @@ function EventToasts() {
   }, []);
   return null;
 }
+function winctl() {
+  if (typeof window === "undefined") return void 0;
+  return window.winctl;
+}
+async function isFullScreen() {
+  var _a2, _b2;
+  try {
+    return await ((_b2 = (_a2 = winctl()) == null ? void 0 : _a2.isFullScreen) == null ? void 0 : _b2.call(_a2)) === true;
+  } catch {
+    return false;
+  }
+}
+function bridge() {
+  if (typeof window === "undefined") return void 0;
+  return window.mfshell;
+}
+function hasNativeWindowControls() {
+  var _a2;
+  return ((_a2 = bridge()) == null ? void 0 : _a2.nativeTitleBar) === true;
+}
+function onFullScreenChanged(cb) {
+  var _a2, _b2;
+  const off = (_b2 = (_a2 = winctl()) == null ? void 0 : _a2.onFullScreenChanged) == null ? void 0 : _b2.call(_a2, cb);
+  return typeof off === "function" ? off : () => {
+  };
+}
 function applyTheme(light) {
   document.documentElement.classList.toggle("light", light);
 }
@@ -23970,6 +23996,20 @@ function TopBar() {
   const [recentOpen, setRecentOpen] = reactExports.useState(false);
   const [version, setVersion] = reactExports.useState(engineVersion);
   const dropRef = reactExports.useRef(null);
+  const [mac] = reactExports.useState(hasNativeWindowControls);
+  const [fullScreen, setFullScreen] = reactExports.useState(false);
+  reactExports.useEffect(() => {
+    if (!mac) return;
+    let live = true;
+    void isFullScreen().then((f) => {
+      if (live) setFullScreen(f);
+    });
+    const off = onFullScreenChanged(setFullScreen);
+    return () => {
+      live = false;
+      off();
+    };
+  }, [mac]);
   reactExports.useEffect(() => {
     if (engineVersion) return;
     let live = true;
@@ -24011,10 +24051,31 @@ function TopBar() {
     rethemeAll();
     redrawFavicon();
   };
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "topbar", children: [
+  const logo = /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: "brand-logo", "aria-hidden": "true" });
+  const themeToggle = /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "button",
+    {
+      id: "theme-btn",
+      type: "button",
+      title: light ? "Switch to dark mode" : "Switch to light mode",
+      "aria-label": "Toggle light / dark mode",
+      onClick: toggleTheme,
+      children: /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { viewBox: "0 0 24 24", width: "15", height: "15", "aria-hidden": "true", children: light ? /* @__PURE__ */ jsxRuntimeExports.jsxs("g", { fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("circle", { cx: "12", cy: "12", r: "4.2" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.3 5.3l1.7 1.7M17 17l1.7 1.7M18.7 5.3L17 7M7 17l-1.7 1.7" })
+      ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "path",
+        {
+          fill: "currentColor",
+          d: "M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8z"
+        }
+      ) })
+    }
+  );
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "topbar", "data-mac": mac ? "" : void 0, "data-mac-lights": mac && !fullScreen ? "" : void 0, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tb-start", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tb-left", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: "brand-logo", "aria-hidden": "true" }),
+        !mac && logo,
         /* @__PURE__ */ jsxRuntimeExports.jsx(
           "button",
           {
@@ -24041,27 +24102,8 @@ function TopBar() {
             )
           }
         ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "button",
-          {
-            id: "theme-btn",
-            type: "button",
-            title: light ? "Switch to dark mode" : "Switch to light mode",
-            "aria-label": "Toggle light / dark mode",
-            onClick: toggleTheme,
-            children: /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { viewBox: "0 0 24 24", width: "15", height: "15", "aria-hidden": "true", children: light ? /* @__PURE__ */ jsxRuntimeExports.jsxs("g", { fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("circle", { cx: "12", cy: "12", r: "4.2" }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5.3 5.3l1.7 1.7M17 17l1.7 1.7M18.7 5.3L17 7M7 17l-1.7 1.7" })
-            ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "path",
-              {
-                fill: "currentColor",
-                d: "M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8z"
-              }
-            ) })
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(NotificationsBell, {})
+        !mac && themeToggle,
+        !mac && /* @__PURE__ */ jsxRuntimeExports.jsx(NotificationsBell, {})
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("nav", { className: "tb-menu", "aria-label": "Main actions", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -24167,7 +24209,12 @@ function TopBar() {
         version
       ] })
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "tb-drag" })
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "tb-drag" }),
+    mac && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tb-end", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(NotificationsBell, {}),
+      themeToggle,
+      logo
+    ] })
   ] });
 }
 function ConnBanner() {

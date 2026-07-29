@@ -11,6 +11,34 @@ and the contracts to preserve.
 
 ## Layout
 
+**Top bar** — on the left: the brand logo, the sidebar toggle (`Ctrl+B` / `⌘B`),
+the theme toggle 🌙 and the notifications 🔔 bell. Then the menu — **New**,
+**Recent ▾** (Recently closed… / Workspaces on disk…), **Prompts**, **Command**,
+**Settings**. The **MindFlock** wordmark (carrying the *running engine's*
+version, plus a red `-DEV` badge under a dev shell) sits centered, and the empty
+strip beside it is the drag region that moves the desktop shell's window.
+
+In the desktop shell **on macOS** the bar mirrors. The window keeps the OS
+traffic lights top-left (`titleBarStyle: 'hidden'` — the shell draws no – □ ✕
+there), so the bar reserves ~78px in that corner and moves the logo / theme /
+bell cluster to the right, where a Mac has nothing else; the sidebar toggle and
+the menu stay where they are. It is the same elements with the same behaviour,
+mirrored — the one difference is DOM order: the mirrored cluster sits after the
+drag region, so `Tab` reaches the theme toggle and bell last there instead of
+first. The reserved gap collapses in fullscreen, because macOS hides the lights then:
+the shell pushes transitions over a `fullscreen-changed` IPC event, and the bar
+also *pulls* the current state (`win:is-fullscreen`) when it mounts — a window
+that is already fullscreen when the UI loads or reloads never sees a transition,
+so without the pull it would hold the gap open until you toggled fullscreen.
+
+The **same** UI in Safari or Chrome on macOS keeps the standard left-hand
+layout: the decision reads the preload bridge's `nativeTitleBar` capability flag
+(`frontend/src/lib/shell.ts`), never the user agent, so the layout only shifts
+where something really draws native controls. Two DOM hooks come with it, for
+theme and addon authors styling against the bar: `#topbar[data-mac]` (native
+title bar) and `#topbar[data-mac-lights]` (…and the lights are visible right
+now).
+
 **Sidebar** — session list with drag-to-reorder, status dots, stage chips, and a
 kill ✕ per row (ends the session, keeps the worktree). Long titles ellipsize
 (full name on hover); a session cut from a different repo than the one the
@@ -27,12 +55,11 @@ bar (pipeline on/off switch, state dot, Logs pane), the **PR Review** and
 **Issue Handling** bars, and one auto-rendered bar per generic addon — e.g.
 **Notifications** with its On/Off toggle (disabled with an explanatory tooltip
 on plain-http origins, "Blocked" when the browser denies permission).
-Below: view-mode buttons (Auto/1/2/4/9), **Recent…** (reopen closed sessions),
-**Disk…** (workspace manager), session count, a **Command** button (opens the
-command palette), a **⚙ Customize** button (sidebar bars — see below), settings
-⚙, and the theme toggle 🌙. The workspace manager
-lists each managed workspace with its size and a per-row delete, plus a **Clear**
-button that bulk-removes every unprotected, idle workspace in one sweep
+Below: view-mode buttons (Auto/1/2/4/9), the session count, a **⚙ Customize**
+button (sidebar bars — see below) and **⌨ Shortcuts**. (Recently closed, the
+workspace manager, the command palette and settings live in the top bar's menu,
+not down here.) The workspace manager lists each managed workspace with its size
+and a per-row delete, plus a **Clear** button that bulk-removes every unprotected, idle workspace in one sweep
 (`POST /api/workspaces/clear`) — protected base clones / cache refreshers and any
 dir a live session is using are left alone.
 
@@ -46,8 +73,8 @@ or below, but which never itself moves). Order and the hidden set persist per
 browser (`localStorage`). Turning a feature's bar on is how you reveal PR
 review, ticket ingestion, and issue handling once you've connected them.
 
-**Command palette** — `Ctrl+P` or `Ctrl+Shift+P` (`Cmd` on Mac, or the footer
-Command button) opens a fuzzy-filtered palette over everything: jump to
+**Command palette** — `Ctrl+P` or `Ctrl+Shift+P` (`Cmd` on Mac, or the top bar's
+**Command** button) opens a fuzzy-filtered palette over everything: jump to
 ("Focus:") any session, New session, Commit / Push / Create PR / Open in IDE on
 the focused session, Open Settings / Doctor / Setup checklist, Toggle sidebar,
 and New from Recently closed. Type to filter (subsequence match), `↑`/`↓` to

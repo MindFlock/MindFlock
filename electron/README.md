@@ -1,8 +1,12 @@
 # MindFlock — the desktop app (Electron)
 
 **This is the MindFlock client** — the one supported way to use MindFlock on a
-desktop, on every platform. A single frameless window renders the UI served by
-the local FastAPI server, auto-starting that server when it isn't running:
+desktop, on every platform. A single window renders the UI served by the local
+FastAPI server, auto-starting that server when it isn't running. The chrome is
+platform-conditional: **frameless** (`frame: false`) on Windows/Linux with our
+own injected – □ ✕, and on **macOS** `titleBarStyle: 'hidden'` with
+`trafficLightPosition: { x: 13, y: 13 }`, keeping the OS traffic lights
+top-left (see [Window chrome](#window-chrome-and-the-preload-bridge)).
 
 - **Linux / macOS** — the server runs natively; the app spawns the installed
   `mindflock serve` directly (login PATH, falling back to
@@ -111,9 +115,47 @@ Substitute `<Distro>`, `<user>`, and `path\to\MindFlock`. If `npm install`
 misbehaves over the UNC path, copy this `electron/` folder to a Windows-local
 dir (e.g. `C:\mindflock-desktop`) and run it there instead.
 
-The window opens frameless with our title bar; **drag** the bar to move,
-**drag any edge** to resize (native), and the **□ / ❐** button toggles maximize.
-If the server isn't up yet you'll see a "waiting…" page that auto-reconnects.
+The window opens with our own title bar in place of the OS one; **drag** the bar
+to move, **drag any edge** to resize (native), and the **□ / ❐** button toggles
+maximize. On **macOS** there is no injected – □ ✕ at all: minimize / zoom / close
+are the native red-yellow-green buttons top-left, so the glyph swap is a
+Windows/Linux detail; drag and edge-resize behave the same. If the server isn't
+up yet you'll see a "waiting…" page that auto-reconnects.
+
+## Window chrome and the preload bridge
+
+`main.js` branches on `process.platform` when it creates the window:
+
+| | Windows / Linux | macOS |
+|---|---|---|
+| Frame | `frame: false` | `titleBarStyle: 'hidden'`, `trafficLightPosition: {x:13,y:13}` |
+| Controls | injected `#mf-winctl` – □ ✕ (top-right) | the OS traffic lights (top-left) |
+| `TITLEBAR_JS` | injects the buttons | returns early — two sets of controls otherwise |
+
+The UI has to know, because it draws its own top bar in that same strip: on
+macOS it reserves ~78px top-left and mirrors its logo/theme/bell cluster to the
+right (`docs/web-ui.md` → Layout → Top bar). It learns this from the bridge, not
+from the platform — `preload.js` exposes:
+
+| Member | Meaning | Undefined in a browser (or an older shell) |
+|---|---|---|
+| `mfshell.platform` | `process.platform` | UI hides platform-specific controls |
+| `mfshell.nativeTitleBar` | **capability**: the OS draws this window's controls, top-left | falsy → the UI keeps the injected-controls layout |
+| `mfshell.dev` | dev build (red `-DEV` wordmark) | no badge |
+| `mfshell.showItem(p)` | reveal a path in Finder/Explorer → `{ ok }` | UI falls back to copying the path |
+| `winctl.minimize/maximize/close` | window commands for the injected bar | no-op; the browser has its own chrome |
+| `winctl.onMaximizedChanged(cb)` | `maximized-changed` pushes; returns nothing | never fires |
+| `winctl.onFullScreenChanged(cb)` | `fullscreen-changed` on enter/leave-full-screen; **returns an unsubscribe** | returns a no-op unsubscribe |
+| `winctl.isFullScreen()` | current state via `win:is-fullscreen` — the event above only carries transitions, so a window already fullscreen at load needs this | resolves false |
+| `mfdiag.*` | offline-page diagnostics | offline page isn't reachable |
+
+`nativeTitleBar` is deliberately a *capability* flag and not `platform ===
+'darwin'`: the shell and the engine-served frontend ship on independent
+cadences, so a Mac shell built before this change still injects its own controls
+top-right, and a platform-keyed layout would stack the frontend's cluster on top
+of them. The flag is absent there, so that build keeps the layout it was built
+for. New bridge members must stay optional the same way — see
+[shell ↔ engine skew](../docs/development.md#shell--engine-skew).
 
 ## Dev loop (no rebuilds)
 
@@ -244,13 +286,21 @@ no console to watch when something breaks. Two logs capture everything:
 
 ## Files
 
-- `main.js` — single frameless `BrowserWindow` loading the UI + injected chrome
+- `main.js` — the single `BrowserWindow` loading the UI + injected chrome
   (scrollbar/title-strip CSS, `#mf-winctl` buttons), window-control IPC,
-  auto-start of the hidden WSL server, offline/retry, log wiring.
+  auto-start of the hidden WSL server, offline/retry, log wiring. Window chrome
+  is platform-branched (`frame: false` vs. darwin's `titleBarStyle: 'hidden'` +
+  `trafficLightPosition`), `TITLEBAR_JS` returns early on darwin so the OS keeps
+  the only set of controls, `enter-full-screen` / `leave-full-screen` push a
+  `fullscreen-changed` event to the renderer (guarded like `sendMax`), and
+  `win:is-fullscreen` answers the state query the top bar makes on mount.
 - `logger.js` — file logging for the main process (rotation + crash/renderer
   capture); `init(app)` / `attachWindow(win)` / `paths()`.
-- `preload.js` — `contextBridge` exposing `window.winctl` to the injected bar
-  and `window.mfdiag` to the offline page.
+- `preload.js` — `contextBridge` exposing `window.mfshell` (`dev`, `platform`,
+  `nativeTitleBar`, `showItem`, …) to the UI, `window.winctl` to the injected bar
+  (plus `onFullScreenChanged`, which unlike `onMaximizedChanged` returns an
+  unsubscribe), and `window.mfdiag` to the offline page. See
+  [the bridge contract](#window-chrome-and-the-preload-bridge).
 - `offline.html` — shown until the server answers. Polls `diag:get` (a hidden
   `wsl.exe` probe on Windows) to say *why* nothing is answering: server
   booting, MindFlock not installed, or WSL down — with a one-click
