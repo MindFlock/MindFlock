@@ -40,10 +40,12 @@ glance: **which agent needs me right now?**
 
 MindFlock turns one repository into a fleet of parallel, isolated AI coding
 sessions. Each session is a **git worktree** (or clone) plus a **tmux session**
-running a coding agent (Claude Code by default), surfaced in the desktop app
-as a live terminal with a guided **commit → push → PR → merge** workflow. An
-optional ticket-ingestion pipeline watches Shortcut stories and GitHub PR
-reviews and spins up sessions for them automatically.
+running the coding-agent CLI of your choice — **any agent, declared in a TOML
+file** — surfaced in the desktop app as a live terminal with a guided
+**commit → push → PR → merge** workflow. An optional ingestion pipeline can
+watch your issue tracker (Shortcut, Jira, Linear, GitHub Issues, Asana) and
+reviewed pull requests, and spin up a ready-to-work session for each —
+automatically.
 
 ## How is this different?
 
@@ -54,53 +56,58 @@ good. Here's an honest read on where MindFlock actually differs.
 |---|---|---|---|---|
 | Interface | Cross-platform desktop app **+ phone UI** | Terminal TUI | Native macOS app | Built into the CLI |
 | Platforms | Linux, macOS, Windows (WSL2) | Linux, macOS, WSL | macOS only | Anywhere Claude Code runs |
-| Agent CLIs | Any, **declared in TOML** | Several supported (Claude Code, Codex, Gemini, aider, OpenCode) | Claude Code | Claude only |
-| Isolation | git worktree + tmux | git worktree + tmux | git worktree | git worktree |
-| **Sessions from tickets** | **Shortcut stories + GitHub PR reviews** | — | — | — |
+| Agent CLI | **Any — declared in a TOML file** | Several bundled (Claude Code, Codex, Gemini, aider, OpenCode) | Claude Code | Claude only |
+| Session isolation | git worktree + tmux | git worktree + tmux | git worktree | git worktree |
+| Guided git workflow | **one-click commit → push → PR → merge** | — | — | — |
+| Ticket → session ingestion | **Shortcut · Jira · Linear · GitHub Issues · Asana** | — | — | — |
+| PR-review → session ingestion | **reviewed PRs become sessions** | — | — | — |
+| Hook-based session state | **provider hooks: working / idle / needs-input** | — | — | — |
+| Token & cost tracking | **per provider, for every CLI** | — | — | per Claude session |
+| Remote / phone control | **tailnet + QR, full action bar** | — | — | — |
 
-**What's genuinely ours:**
+MindFlock is a ground-up parallel-agent workspace. A few things set it apart:
 
-- **Ticket ingestion.** MindFlock is the only one of these that creates
-  sessions from work you didn't type in — it polls Shortcut for stories
-  assigned to you and GitHub for PRs that came back with review comments, then
-  provisions a workspace and launches a seeded agent per story / per PR. This
-  is the most novel thing in the project.
-- **Providers are data, not code.** The other tools support a fixed list of
-  agent CLIs. In MindFlock a provider is a TOML file — binary, launch args,
-  prompt seeding, activity-detection hooks, model pricing — so adding a CLI
-  nobody has heard of is a config change, not a patch, and every provider gets
-  the same working / idle / needs-input detection and token+cost tracking.
-- **Supervise from your phone.** `mindflock serve tailscale` prints a QR code;
-  the mobile UI carries the same guided git action bar, so you can unblock an
-  agent from the couch.
+- **Provider-agnostic by design.** A coding agent in MindFlock is just a TOML
+  file — binary, launch args, prompt seeding, activity-detection hooks, model
+  pricing — so it drives *any* CLI (Claude Code, Codex, Gemini, aider,
+  OpenCode, or one nobody's heard of) with the same working / idle /
+  needs-input detection and token + cost tracking. Adding an agent is a config
+  change, not a patch.
+- **Work comes to the agents.** MindFlock can turn tickets and code review into
+  sessions on its own: it watches your issue tracker (Shortcut, Jira, Linear,
+  GitHub Issues, Asana) for work assigned to you, and GitHub for PRs that came
+  back with review comments, then provisions a worktree and launches a seeded
+  agent for each — nothing typed.
+- **The whole git loop is guided.** Every session carries a one-click
+  commit → push → PR → merge action bar (via `gh`) and live workflow-stage
+  badges, so you drive the change home without leaving the app.
+- **Supervise from anywhere.** `mindflock serve tailscale` prints a QR code;
+  the mobile UI carries the same guided action bar, so you can unblock an agent
+  from your phone.
 
-**Where the others are the better call:**
+**When another tool may fit better:**
 
-- **[Conductor](https://www.conductor.build/)** is native SwiftUI and more
-  polished on macOS than an Electron app is going to be. If you're Mac-only and
-  want the nicest-feeling client, use it.
-- **Claude Code's built-in Agent Teams + worktrees** are free, native, and
-  already installed. If you're Claude-only and happy in the terminal, you may
-  not need any of this.
+- **[Conductor](https://www.conductor.build/)** is a native macOS (SwiftUI)
+  app — if you're Mac-only and specifically want a native client, it's a solid
+  pick.
+- **Claude Code's built-in Agent Teams + worktrees** are free and already
+  installed. If you only ever use Claude and live in the terminal, you may not
+  need a separate app.
 - **[Claude Squad](https://github.com/smtg-ai/claude-squad)** is a mature
   multi-agent TUI that also drives several CLIs. If you'd rather stay in the
   terminal than run a desktop app, it's the closer fit.
 
-MindFlock is worth it if you want a GUI on Linux or Windows, want to drive
-agents from a phone, or want tickets to become agent sessions without you in
-the loop.
-
 ## Features
 
-- 🎫 **Ticket ingestion** — polls Shortcut for assigned stories and GitHub for
-  reviewed PRs, then provisions a workspace and launches a seeded agent
-  session per story / per PR.
-- 🔌 **Pluggable providers** — Claude Code built in; aider/codex and others
-  bundled; add any coding-agent CLI via a TOML file. Shared hooks-based
-  activity detection (working / idle / needs-input) plus token & cost
-  tracking.
+- 🎫 **Ticket & PR-review ingestion** — watches your issue tracker (Shortcut,
+  Jira, Linear, GitHub Issues, Asana) for assigned work and GitHub for reviewed
+  PRs, then provisions a workspace and launches a seeded agent session for each.
+- 🔌 **Provider-agnostic** — every coding-agent CLI is just a TOML file (Claude
+  Code, Codex, Gemini, aider, OpenCode bundled; add your own). Shared
+  hook-based activity detection (working / idle / needs-input) and token & cost
+  tracking apply to all of them.
 - 🖥️ **Desktop app** (Electron) — a draggable terminal grid with Agent /
-  Terminal / Diff tabs per session, workflow-stage badges, and guided
+  Terminal / Diff / Queue tabs per session, workflow-stage badges, and guided
   next-step buttons.
 - 📱 **Phone UI** — `mindflock serve tailscale` prints a QR code; the mobile
   UI at `/m` carries the same guided git action bar, so the full flow drives
