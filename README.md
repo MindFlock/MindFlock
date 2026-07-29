@@ -12,30 +12,131 @@ session — supervised from one desktop app.**
 [![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows%20(WSL2)-lightgrey)](#requirements)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
-[Download](#download) •
-[Installation](#installation) •
+[What is it?](#what-is-mindflock) •
+[How is this different?](#how-is-this-different) •
 [Quick Start](#quick-start) •
+[Download](#download) •
 [How It Works](#how-it-works) •
-[Documentation](#documentation) •
-[Contributing](#contributing)
+[Documentation](#documentation)
 
 </div>
 
 <div align="center">
 
-![MindFlock demo — creating a session, a flock of agents working in parallel, the Diff view, a one-click commit, and the provider list](docs/demo.gif)
+![MindFlock demo — four coding agents running in parallel, each in its own git worktree and a different state: one working, one waiting for your answer, one running commit hooks, one reviewed and ready to push](docs/demo.gif)
 
-<sub>Spawn a session → watch the agent work → run a flock in parallel → review the Diff → commit in one click → pick your provider.</sub>
+<sub>Four agents · four git worktrees, side by side — one working, one waiting for your input, one running commit hooks, one reviewed with checks green.</sub>
 
 </div>
 
-> **Project status — solo maintainer.** MindFlock is built and maintained by one
-> person in evenings and weekends. It is offered as-is under Apache-2.0; issues
-> and pull requests are read and reviewed on a best-effort basis, and there is no
-> support SLA. Bug reports (with `mindflock doctor` output) and PRs are very
-> welcome — just expect a hobby-project response time.
+## Why
 
----
+Staring at a terminal waiting for an AI agent to finish is mind-numbingly
+boring — so you run several at once, and then you have six terminal windows and
+no idea which one needs you. MindFlock exists to answer one question at a
+glance: **which agent needs me right now?**
+
+## What is MindFlock?
+
+MindFlock turns one repository into a fleet of parallel, isolated AI coding
+sessions. Each session is a **git worktree** (or clone) plus a **tmux session**
+running a coding agent (Claude Code by default), surfaced in the desktop app
+as a live terminal with a guided **commit → push → PR → merge** workflow. An
+optional ticket-ingestion pipeline watches Shortcut stories and GitHub PR
+reviews and spins up sessions for them automatically.
+
+## How is this different?
+
+Parallel-agent orchestrators are a crowded category, and several of them are
+good. Here's an honest read on where MindFlock actually differs.
+
+| | **MindFlock** | **Claude Squad** | **Conductor** | **Claude Code Agent Teams** |
+|---|---|---|---|---|
+| Interface | Cross-platform desktop app **+ phone UI** | Terminal TUI | Native macOS app | Built into the CLI |
+| Platforms | Linux, macOS, Windows (WSL2) | Linux, macOS, WSL | macOS only | Anywhere Claude Code runs |
+| Agent CLIs | Any, **declared in TOML** | Several supported (Claude Code, Codex, Gemini, aider, OpenCode) | Claude Code | Claude only |
+| Isolation | git worktree + tmux | git worktree + tmux | git worktree | git worktree |
+| **Sessions from tickets** | **Shortcut stories + GitHub PR reviews** | — | — | — |
+
+**What's genuinely ours:**
+
+- **Ticket ingestion.** MindFlock is the only one of these that creates
+  sessions from work you didn't type in — it polls Shortcut for stories
+  assigned to you and GitHub for PRs that came back with review comments, then
+  provisions a workspace and launches a seeded agent per story / per PR. This
+  is the most novel thing in the project.
+- **Providers are data, not code.** The other tools support a fixed list of
+  agent CLIs. In MindFlock a provider is a TOML file — binary, launch args,
+  prompt seeding, activity-detection hooks, model pricing — so adding a CLI
+  nobody has heard of is a config change, not a patch, and every provider gets
+  the same working / idle / needs-input detection and token+cost tracking.
+- **Supervise from your phone.** `mindflock serve tailscale` prints a QR code;
+  the mobile UI carries the same guided git action bar, so you can unblock an
+  agent from the couch.
+
+**Where the others are the better call:**
+
+- **[Conductor](https://www.conductor.build/)** is native SwiftUI and more
+  polished on macOS than an Electron app is going to be. If you're Mac-only and
+  want the nicest-feeling client, use it.
+- **Claude Code's built-in Agent Teams + worktrees** are free, native, and
+  already installed. If you're Claude-only and happy in the terminal, you may
+  not need any of this.
+- **[Claude Squad](https://github.com/smtg-ai/claude-squad)** is a mature
+  multi-agent TUI that also drives several CLIs. If you'd rather stay in the
+  terminal than run a desktop app, it's the closer fit.
+
+MindFlock is worth it if you want a GUI on Linux or Windows, want to drive
+agents from a phone, or want tickets to become agent sessions without you in
+the loop.
+
+## Features
+
+- 🎫 **Ticket ingestion** — polls Shortcut for assigned stories and GitHub for
+  reviewed PRs, then provisions a workspace and launches a seeded agent
+  session per story / per PR.
+- 🔌 **Pluggable providers** — Claude Code built in; aider/codex and others
+  bundled; add any coding-agent CLI via a TOML file. Shared hooks-based
+  activity detection (working / idle / needs-input) plus token & cost
+  tracking.
+- 🖥️ **Desktop app** (Electron) — a draggable terminal grid with Agent /
+  Terminal / Diff tabs per session, workflow-stage badges, and guided
+  next-step buttons.
+- 📱 **Phone UI** — `mindflock serve tailscale` prints a QR code; the mobile
+  UI at `/m` carries the same guided git action bar, so the full flow drives
+  from a phone. Auth-token protected — never open to the LAN unauthenticated.
+- 🌳 **Isolated workspaces** — every session gets its own git worktree, so
+  agents never step on each other (or on you).
+- 🔀 **Guided git workflow** — one-click commit → push → PR → merge, driven by
+  the `gh` CLI.
+- ⚡ **Terminal-first, too** — the `mindflock` CLI drives the same sessions as
+  the app (`new`, `ls`, `attach`, `rm`, `open`, `events`), so terminal and UI
+  stay one system.
+- 🧩 **Extensible** — shell hooks on every session event, a `WS /api/events`
+  stream, and in-process Python + ES-module addons.
+
+## Quick Start
+
+[Install first](#download) — one command — then, from zero to a supervised
+agent session (this CLI flow is verified in CI on every push by
+[`scripts/quickstart-verify.sh`](scripts/quickstart-verify.sh)):
+
+```bash
+mindflock doctor                       # 1. everything installed + authenticated?
+cd ~/code/your-repo                    # 2. the repo you want the agents to work on
+mindflock serve                        # 3. start the server (the app can also do this for you)
+mindflock new . -p "fix the failing tests"   # 4. (new terminal) spawn a session
+mindflock ls                           # 5. watch it: TITLE REPO STATUS ACTIVITY STAGE DIFF COST
+```
+
+Open the **MindFlock desktop app** — the session is a live terminal; each one
+is an isolated git worktree, with Diff view and guided
+commit → push → PR → merge buttons. `mindflock attach <title>` drops your
+terminal into the same tmux session.
+
+`mindflock serve` binds localhost only; run `mindflock serve tailscale` to opt
+into phone/tailnet access — an auth token + QR code are printed, and scanning
+the QR opens the phone UI at `/m`.
 
 ## Download
 
@@ -55,23 +156,27 @@ session — supervised from one desktop app.**
 | **macOS** | `MindFlock.dmg` (universal — Apple silicon & Intel). Drag to Applications. | Nothing. First launch offers **Install the engine** — one click, no terminal. |
 | **Linux** | `MindFlock.AppImage`. `chmod +x` it and run. | Same — first launch installs the engine for you. |
 
-> **⚠️ Windows: finish setting up WSL2 *before* you run the installer.** The
-> engine runs inside WSL2, so a Linux distribution must be **fully installed and
-> launchable first** — not just `wsl --install` half-run. In PowerShell:
->
-> ```powershell
-> wsl --install     # if WSL isn't set up yet — then REBOOT your PC
-> wsl -l -v         # verify a distro (e.g. Ubuntu) is listed
-> wsl               # verify this drops you into a Linux shell (first run asks you to create a user), then type: exit
-> ```
->
-> Only once `wsl` opens a Linux shell should you run `MindFlock-Setup.exe`. A
-> **partially set-up WSL** — installed but with no distro, or with a reboot still
-> pending — is the single most common Windows install failure.
-
 The app auto-starts the engine every time after that — no terminal, no manual
 steps. If the engine is missing, the app's waiting page says so and shows the
 exact command.
+
+<details>
+<summary><b>⚠️ Windows: finish setting up WSL2 <i>before</i> you run the installer</b></summary>
+
+The engine runs inside WSL2, so a Linux distribution must be **fully installed
+and launchable first** — not just `wsl --install` half-run. In PowerShell:
+
+```powershell
+wsl --install     # if WSL isn't set up yet — then REBOOT your PC
+wsl -l -v         # verify a distro (e.g. Ubuntu) is listed
+wsl               # verify this drops you into a Linux shell (first run asks you to create a user), then type: exit
+```
+
+Only once `wsl` opens a Linux shell should you run `MindFlock-Setup.exe`. A
+**partially set-up WSL** — installed but with no distro, or with a reboot still
+pending — is the single most common Windows install failure.
+
+</details>
 
 <details>
 <summary>These builds aren't from a paid developer account — what you'll see on first launch</summary>
@@ -119,40 +224,6 @@ the Python artifacts), and the builds are produced in public by
 so you can check both the bytes and what produced them.
 
 </details>
-
-## What is MindFlock?
-
-MindFlock turns one repository into a fleet of parallel, isolated AI coding
-sessions. Each session is a **git worktree** (or clone) plus a **tmux session**
-running a coding agent (Claude Code by default), surfaced in the desktop app
-as a live terminal with a guided **commit → push → PR → merge** workflow. An
-optional ticket-ingestion pipeline watches Shortcut stories and GitHub PR
-reviews and spins up sessions for them automatically.
-
-## Features
-
-- 🖥️ **Desktop app** (Electron) — a draggable terminal grid with Agent /
-  Terminal / Diff tabs per session, workflow-stage badges, and guided
-  next-step buttons.
-- 🌳 **Isolated workspaces** — every session gets its own git worktree, so
-  agents never step on each other (or on you).
-- 🔀 **Guided git workflow** — one-click commit → push → PR → merge, driven by
-  the `gh` CLI.
-- 📱 **Phone UI** — `mindflock serve tailscale` prints a QR code; the mobile
-  UI at `/m` carries the same guided git action bar, so the full flow drives
-  from a phone. Auth-token protected — never open to the LAN unauthenticated.
-- 🎫 **Ticket ingestion** — polls Shortcut for assigned stories and GitHub for
-  reviewed PRs, then provisions a workspace and launches a seeded agent
-  session per story / per PR.
-- 🔌 **Pluggable providers** — Claude Code built in; aider/codex and others
-  bundled; add any coding-agent CLI via a TOML file. Shared hooks-based
-  activity detection (working / idle / needs-input) plus token & cost
-  tracking.
-- ⚡ **Terminal-first, too** — the `mindflock` CLI drives the same sessions as
-  the app (`new`, `ls`, `attach`, `rm`, `open`, `events`), so terminal and UI
-  stay one system.
-- 🧩 **Extensible** — shell hooks on every session event, a `WS /api/events`
-  stream, and in-process Python + ES-module addons.
 
 ## Installation
 
@@ -222,28 +293,6 @@ It finds — and auto-starts — the server by itself.
 | A coding-agent CLI | `claude` (Claude Code) by default |
 | `gh` (GitHub CLI) | For the push/PR/merge workflow |
 | Optional | `cursor` (IDE integration), `tailscale` (phone access) |
-
-## Quick Start
-
-From zero to a supervised agent session (the CLI flow is verified in CI on
-every push by [`scripts/quickstart-verify.sh`](scripts/quickstart-verify.sh)):
-
-```bash
-mindflock doctor                       # 1. everything installed + authenticated?
-cd ~/code/your-repo                    # 2. the repo you want the agents to work on
-mindflock serve                        # 3. start the server (the app can also do this for you)
-mindflock new . -p "fix the failing tests"   # 4. (new terminal) spawn a session
-mindflock ls                           # 5. watch it: TITLE REPO STATUS ACTIVITY STAGE DIFF COST
-```
-
-Open the **MindFlock desktop app** — the session is a live terminal; each one
-is an isolated git worktree, with Diff view and guided
-commit → push → PR → merge buttons. `mindflock attach <title>` drops your
-terminal into the same tmux session.
-
-`mindflock serve` binds localhost only; run `mindflock serve tailscale` to opt
-into phone/tailnet access — an auth token + QR code are printed, and scanning
-the QR opens the phone UI at `/m`.
 
 ## How It Works
 
@@ -414,12 +463,22 @@ project layout.
 ## Contributing
 
 Contributions are welcome — bug reports, docs fixes, and code alike. Please
-read [CONTRIBUTING.md](CONTRIBUTING.md) first; a one-time
-[CLA](CLA.md) signature is requested automatically on your first PR.
+read [CONTRIBUTING.md](CONTRIBUTING.md) first. There's no CLA to sign: just
+add a `Signed-off-by` line to your commits with `git commit -s`, certifying
+you wrote the patch under the
+[Developer Certificate of Origin](https://developercertificate.org/).
+
+> **Project status — solo maintainer.** MindFlock is built and maintained by one
+> person in evenings and weekends. It is offered as-is under Apache-2.0; issues
+> and pull requests are read and reviewed on a best-effort basis, and there is no
+> support SLA. Bug reports (with `mindflock doctor` output) and PRs are very
+> welcome — just expect a hobby-project response time.
 
 - 🐛 [Report a bug](https://github.com/MindFlock/MindFlock/issues)
 - 💡 [Request a feature](https://github.com/MindFlock/MindFlock/issues)
 - 🔒 [Report a security issue](SECURITY.md)
+
+If MindFlock is useful to you, a ⭐ helps other people find it.
 
 ## License
 
