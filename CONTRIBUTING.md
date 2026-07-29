@@ -3,20 +3,32 @@
 Thanks for wanting to make MindFlock better! Bug reports, docs fixes, and
 code contributions are all welcome.
 
-## Before your first PR: sign the CLA
+## Sign off your commits (no CLA)
 
-MindFlock's code is licensed under [Apache-2.0](LICENSE), and some MindFlock
-services are commercial. So that the project can keep that model legally clean
-— and so the maintainer can dual-license or relicense future versions — every
-contributor signs a one-time [Contributor License Agreement](CLA.md).
+There's no Contributor License Agreement to sign. MindFlock is
+[Apache-2.0](LICENSE), and your contribution arrives under the same license —
+inbound equals outbound, so nothing needs assigning. You keep the copyright to
+your work.
 
-It's automated: open your PR, and the CLA bot will ask you to post
+All we need is provenance: certify that you wrote the patch and are allowed to
+submit it, per the [Developer Certificate of
+Origin](https://developercertificate.org/). Add the `-s` flag when you commit:
 
-> I have read the CLA Document and I hereby sign the CLA
+```bash
+git commit -s -m "your message"
+```
 
-as a comment. That's it — the signature covers all your future contributions
-too. You keep full rights to use your own contributions elsewhere for any
-purpose.
+That appends a `Signed-off-by: Your Name <you@example.com>` line. The **DCO**
+workflow checks every commit in a PR and tells you the exact fix-up command if
+one is missing:
+
+```bash
+git commit --amend -s --no-edit                  # just the last commit
+git rebase --signoff origin/main                 # every commit on the branch
+git push --force-with-lease
+```
+
+Tip: `git config format.signoff true` makes it automatic in this repo.
 
 ## Development setup
 

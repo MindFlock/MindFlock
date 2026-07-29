@@ -10,8 +10,8 @@ uv sync --group dev --group web   # tests + everything the web UI needs
 ```
 
 Contributing from outside the team? Read [CONTRIBUTING.md](../CONTRIBUTING.md)
-first — outside PRs are gated on the CLA ([CLA.md](../CLA.md), checked
-automatically by the CLA-assistant workflow).
+first — there's no CLA, but every commit in a PR needs a `Signed-off-by` line
+(`git commit -s`), checked automatically by the DCO workflow.
 
 Dependency groups (`pyproject.toml`): base (`aiohttp`, `tomli`), `dev` (pytest,
 pytest-asyncio, hypothesis, httpx), `engine` (pyperclip, ptyprocess), `web`

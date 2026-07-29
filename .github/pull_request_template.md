@@ -6,7 +6,7 @@
 
 ## Checklist
 
-- [ ] I have read and agree to the [Contributor License Agreement](../blob/main/CLA.md). On my first PR the CLA bot will ask me to sign by comment — signing is a one-time step that covers all my future contributions.
+- [ ] My commits are signed off (`git commit -s`) per the [DCO](https://developercertificate.org/) — I wrote this patch and can submit it under Apache-2.0.
 - [ ] PR is focused; refactors are separated from behavior changes.
 - [ ] Tests added/updated for the change (`uv run pytest`).
 - [ ] Docs updated if a CLI flag, endpoint, or config field changed.
