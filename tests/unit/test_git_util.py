@@ -16,6 +16,7 @@ from backend.session.git import util
 from backend.session.git.util import (
     check_gh_cli,
     find_git_repo_root,
+    gh_available,
     is_git_repo,
     sanitize_branch_name,
 )
@@ -58,7 +59,67 @@ def test_sanitize_go_aliases_are_same_function():
 
 
 # ---------------------------------------------------------------------------
+# gh_available — a value to branch on, never an exception
+#
+# gh is optional: every caller has a plain-git path to take when it is absent,
+# so each failure mode must report the same plain False rather than raise.
+# ---------------------------------------------------------------------------
+def test_gh_available_false_when_not_installed(monkeypatch):
+    monkeypatch.setattr(util.shutil, "which", lambda _: None)
+
+    def _never(*a, **k):
+        raise AssertionError("must not run gh when it is not installed")
+
+    monkeypatch.setattr(util.subprocess, "run", _never)
+    assert gh_available() is False
+
+
+def test_gh_available_false_when_not_authenticated(monkeypatch):
+    monkeypatch.setattr(util.shutil, "which", lambda _: "/usr/bin/gh")
+
+    class _R:
+        returncode = 1  # `gh auth status` -> logged out
+
+    monkeypatch.setattr(util.subprocess, "run", lambda *a, **k: _R())
+    assert gh_available() is False
+
+
+def test_gh_available_false_on_timeout(monkeypatch):
+    monkeypatch.setattr(util.shutil, "which", lambda _: "/usr/bin/gh")
+
+    def _boom(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="gh auth status", timeout=30)
+
+    monkeypatch.setattr(util.subprocess, "run", _boom)
+    assert gh_available() is False
+
+
+def test_gh_available_false_on_oserror(monkeypatch):
+    # e.g. the binary on PATH is not executable — still just "can't use gh".
+    monkeypatch.setattr(util.shutil, "which", lambda _: "/usr/bin/gh")
+
+    def _boom(*a, **k):
+        raise OSError("exec format error")
+
+    monkeypatch.setattr(util.subprocess, "run", _boom)
+    assert gh_available() is False
+
+
+def test_gh_available_true_when_installed_and_authenticated(monkeypatch):
+    monkeypatch.setattr(util.shutil, "which", lambda _: "/usr/bin/gh")
+
+    class _R:
+        returncode = 0
+
+    monkeypatch.setattr(util.subprocess, "run", lambda *a, **k: _R())
+    assert gh_available() is True
+
+
+# ---------------------------------------------------------------------------
 # check_gh_cli — exact Go error strings
+#
+# Still raises, and still public API for Go parity — but nothing in MindFlock
+# gates on it any more; new callers want gh_available() above.
 # ---------------------------------------------------------------------------
 def test_check_gh_cli_not_installed_raises(monkeypatch):
     monkeypatch.setattr(util.shutil, "which", lambda _: None)

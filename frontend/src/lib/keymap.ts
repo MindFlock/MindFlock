@@ -247,7 +247,12 @@ export interface ChordEntry {
 
 export const CHORDS: Record<string, ChordEntry> = {
   c: { desc: "Commit…", run: (t) => commitSession(t) },
+  // Plain `git push` over the user's own remote — SSH or HTTPS, whatever they
+  // configured. Never gated on the GitHub CLI.
   p: { desc: "Push", run: (t) => pushSession(t) },
+  // Stays bound whether or not gh/a token is present: makePrSession degrades to
+  // GitHub's prefilled compare page, so the chord never dead-ends. Gating it on
+  // a capability would just make the shortcut silently stop working.
   r: { desc: "Make PR", run: (t) => makePrSession(t) },
   o: { desc: "Open / focus IDE", run: (t) => ideSession(t) },
   d: { desc: "Duplicate session", run: (t) => copySession(t) },

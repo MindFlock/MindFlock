@@ -75,10 +75,26 @@ every stored tmux session as a side effect of changing one field.
 - **Diff** — `git add -N .` (so untracked files count) then
   `git --no-pager diff <baseCommitSHA>`; numstat variant for cheap +/- counts.
   Errors are returned in `DiffStats.error`, not raised.
-- **Push** — `PushChanges` commits dirty changes (`--no-verify`) and pushes via
-  `gh repo sync` with a plain `git push -u origin <branch>` fallback. (The web
-  UI's guided flow uses its own commit/push endpoints instead — see
-  [web-api.md](web-api.md).)
+- **Push** — `PushChanges` commits dirty changes (`--no-verify`) and pushes with
+  a bare `git push -u origin <branch>` (cwd = the worktree, no `-C`). No `gh`,
+  ever: the push goes over whatever remote the repo already has — SSH or
+  HTTPS — used verbatim, with your own git credentials. MindFlock never rewrites
+  a remote URL, so `url.<base>.insteadOf` and friends still apply as you
+  configured them. (The Go original pushed through `gh repo sync`, which made
+  the GitHub CLI mandatory; that is the one deliberate divergence from Go's
+  argv. The web UI's guided flow uses its own commit/push endpoints instead —
+  see [web-api.md](web-api.md).)
+- **Remote URLs** (`session/git/remote_url.py`) — one transport-independent
+  parser for every spelling git accepts: `https://`, `ssh://`,
+  `ssh://host:22/…`, scp-style `git@host:owner/repo(.git)` and `git://`.
+  `parse_remote()` yields a `RemoteRef(host, owner, repo)` with `.slug`
+  (`owner/repo`, the form the GitHub API and `gh -R` take) and `.web_url`;
+  `same_repo(a, b)` compares two remotes regardless of transport, so an SSH
+  remote and an HTTPS config URL for the same repo match. `is_local_path()`
+  recognises the path-style remotes provisioning itself creates (a base clone
+  is cloned from your own checkout), and `branch_url` / `compare_url` /
+  `pr_list_url` build the browser fallbacks the PR flow uses when there is no
+  `gh` and no token. Parsing is read-only: nothing here writes a remote back.
 - Existing branches (`isExistingBranch`) are never deleted on cleanup.
 
 ## tmux + PTY (`session/tmux/`)

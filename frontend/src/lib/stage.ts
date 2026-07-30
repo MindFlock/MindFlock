@@ -7,7 +7,9 @@ import type { Config } from "../api/types";
 import { copyText } from "./clipboard";
 import { toast } from "./toast";
 import {
+  PR_FALLBACK_HINT,
   commitSession,
+  hasPrSupport,
   makePrSession,
   mergeSession,
   pushSession,
@@ -203,7 +205,14 @@ export function checkChip(
 
 // --- Guided next step ---------------------------------------------------------
 
-export const NO_ORIGIN_CMD = "git remote add origin <url>";
+// A *runnable* example, not a `<url>` placeholder: the copied line only needs
+// owner/repo swapped. SSH is spelled out first because MindFlock never touches
+// your remote — it pushes with plain `git push` over whatever you configure —
+// and an SSH-only contributor should see her own setup treated as normal.
+export const NO_ORIGIN_CMD = "git remote add origin git@github.com:owner/repo.git";
+/** HTTPS is exactly as good; shown in the tooltip so neither reads as "the
+ * supported one". */
+export const NO_ORIGIN_ALT = "git remote add origin https://github.com/owner/repo.git";
 
 export interface NextStep {
   label: string;
@@ -233,7 +242,9 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
           title:
             "This repo has no origin remote, so there is nowhere to push.\n" +
             "Run this in the workspace (click to copy):\n" +
-            NO_ORIGIN_CMD,
+            NO_ORIGIN_CMD +
+            "\nHTTPS works just as well:\n" +
+            NO_ORIGIN_ALT,
           run: () =>
             copyText(NO_ORIGIN_CMD).then((ok) => {
               toast(ok ? "command copied" : "copy failed — " + NO_ORIGIN_CMD);
@@ -242,8 +253,29 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
       }
       return { label: "Push", run: () => pushSession(title) };
     case "pushed":
-      return { label: "Make PR", run: () => makePrSession(title) };
+      // The branch is already on the remote — plain git got it there. Only
+      // *filing* the PR may need credentials we don't have, and that degrades
+      // to GitHub's compare page, so the step stays clickable either way; it
+      // just renders as a hint that says where the click will land.
+      return hasPrSupport(caps)
+        ? { label: "Make PR", run: () => makePrSession(title) }
+        : {
+            label: "Make PR ↗",
+            hint: true,
+            title: PR_FALLBACK_HINT,
+            run: () => makePrSession(title),
+          };
     case "pr":
+      if (!hasPrSupport(caps))
+        // Merging is the one thing a browser does better than we can here.
+        return inst.pr_url
+          ? {
+              label: "Merge on GitHub ↗",
+              hint: true,
+              title: PR_FALLBACK_HINT,
+              run: () => window.open(inst.pr_url!, "_blank"),
+            }
+          : { label: "Merge ↗", hint: true, title: PR_FALLBACK_HINT, run: () => mergeSession(title) };
       return { label: "Merge", run: () => mergeSession(title) };
     case "merged":
       return inst.pr_url

@@ -33,6 +33,7 @@ from backend.session import provisioned
 from backend.session.storage import InstanceData, Status
 from backend.web import server
 from backend.web.core import events as events_mod
+from backend.web.core import github_pr
 from starlette.testclient import TestClient
 
 
@@ -693,57 +694,94 @@ def test_budget_event_in_vocabulary():
 # make-pr route decision logic: the self-PR guard and the "PR already open"
 # bounce vs. real-error path. These exercise the endpoint directly (previously
 # only _pr_info / base-branch resolution had coverage).
+#
+# The decisions must not depend on WHICH rung of the PR ladder ran, so each is
+# driven both with gh available (the CLI rung) and without it (the REST rung).
+# The REST client itself is covered in test_server_routes; here it is stubbed
+# down to its outcome so only the route's own branching is under test.
 # --------------------------------------------------------------------------- #
 _MKPR_CLIENT = TestClient(server.app)
 
 
 def _fake_cp(returncode: int, out: str):
+    """A finished subprocess with ``out`` on stdout (argv is never inspected)."""
     return subprocess.CompletedProcess(
-        ["gh"], returncode, stdout=out.encode("utf-8"), stderr=b""
+        [], returncode, stdout=out.encode("utf-8"), stderr=b""
     )
 
 
-def _prime_make_pr(monkeypatch, tmp_path, *, branch, base, title):
+def _prime_make_pr(monkeypatch, tmp_path, *, branch, base, title, with_gh=True):
     """Register a fake session and stub the make-pr environment (git present,
-    gh present, resolved base/branch) so only the endpoint's own branching runs.
-    Returns the title. Caller pops it from ENGINE.instances in a finally."""
+    the chosen PR rung, resolved base/branch) so only the endpoint's own
+    branching runs. Returns the title. Caller pops it from ENGINE.instances in
+    a finally."""
     inst = _FakeInst(str(tmp_path), branch=branch, title=title)
     server.ENGINE.instances[title] = inst
     monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(server, "gh_available", lambda: with_gh)
     monkeypatch.setattr(server, "_configured_pr_base", lambda: base)
     monkeypatch.setattr(server, "_current_branch", lambda wt: branch)
     return title
 
 
-def test_make_pr_rejects_pr_into_base_branch(tmp_path, monkeypatch):
+def _stub_create(monkeypatch, result, *, calls=None):
+    """Stub the REST rung's create_pr with a canned PRResult."""
+
+    async def _create(wt, base, head):
+        if calls is not None:
+            calls.append((wt, base, head))
+        return result
+
+    monkeypatch.setattr(github_pr, "create_pr", _create)
+
+
+@pytest.mark.parametrize("with_gh", [True, False])
+def test_make_pr_rejects_pr_into_base_branch(tmp_path, monkeypatch, with_gh):
     # Session sits ON the base branch -> a branch can't be PR'd into itself.
+    # The guard runs before any transport is chosen, so gh's presence is moot.
     title = _prime_make_pr(
-        monkeypatch, tmp_path, branch="main", base="main", title="mkpr-self"
+        monkeypatch,
+        tmp_path,
+        branch="main",
+        base="main",
+        title=f"mkpr-self-{with_gh}",
+        with_gh=with_gh,
     )
-    called = []
+    called: list = []
+    rest_called: list = []
     monkeypatch.setattr(
         server, "_run_capped", lambda *a, **k: called.append(a) or _fake_cp(0, "")
     )
+    _stub_create(monkeypatch, github_pr.PRResult(ok=True), calls=rest_called)
     try:
         r = _MKPR_CLIENT.post(f"/api/instances/{title}/make-pr", json={})
         assert r.status_code == 409
         assert "base branch" in r.json()["error"]
-        # gh was never invoked — the guard short-circuits before _do().
-        assert called == []
+        # Neither rung was invoked — the guard short-circuits before both.
+        assert called == [] and rest_called == []
     finally:
         server.ENGINE.instances.pop(title, None)
 
 
-def test_make_pr_open_pr_bounce_returns_ok(tmp_path, monkeypatch):
-    # gh create fails, but an OPEN PR already exists -> surface its URL, ok:True.
+@pytest.mark.parametrize("with_gh", [True, False])
+def test_make_pr_open_pr_bounce_returns_ok(tmp_path, monkeypatch, with_gh):
+    # Creation fails, but an OPEN PR already exists -> surface its URL, ok:True.
     title = _prime_make_pr(
-        monkeypatch, tmp_path, branch="feat/x", base="main", title="mkpr-open"
+        monkeypatch,
+        tmp_path,
+        branch="feat/x",
+        base="main",
+        title=f"mkpr-open-{with_gh}",
+        with_gh=with_gh,
     )
     monkeypatch.setattr(
         server,
         "_run_capped",
         lambda *a, **k: _fake_cp(1, "a pull request already exists"),
+    )
+    _stub_create(
+        monkeypatch,
+        github_pr.PRResult(error="A pull request already exists for o:feat/x."),
     )
     monkeypatch.setattr(
         server,
@@ -761,20 +799,57 @@ def test_make_pr_open_pr_bounce_returns_ok(tmp_path, monkeypatch):
         server.ENGINE.instances.pop(title, None)
 
 
-def test_make_pr_no_commits_is_400(tmp_path, monkeypatch):
-    # gh reports no commits and no OPEN PR exists -> 400 "nothing to PR".
+@pytest.mark.parametrize("with_gh", [True, False])
+def test_make_pr_no_commits_is_400(tmp_path, monkeypatch, with_gh):
+    # "no commits" and no OPEN PR exists -> 400 "nothing to PR". gh lower-cases
+    # the phrase and the API capitalises it; both must land on the same message.
     title = _prime_make_pr(
-        monkeypatch, tmp_path, branch="feat/x", base="main", title="mkpr-empty"
+        monkeypatch,
+        tmp_path,
+        branch="feat/x",
+        base="main",
+        title=f"mkpr-empty-{with_gh}",
+        with_gh=with_gh,
     )
     monkeypatch.setattr(
         server,
         "_run_capped",
         lambda *a, **k: _fake_cp(1, "no commits between main and feat/x"),
     )
+    _stub_create(
+        monkeypatch,
+        github_pr.PRResult(error="No commits between main and feat/x"),
+    )
     monkeypatch.setattr(server, "_pr_info", lambda *a, **k: None)
     try:
         r = _MKPR_CLIENT.post(f"/api/instances/{title}/make-pr", json={})
         assert r.status_code == 400
         assert "nothing to PR" in r.json()["error"]
+    finally:
+        server.ENGINE.instances.pop(title, None)
+
+
+def test_make_pr_without_gh_or_token_hands_over_the_compare_url(tmp_path, monkeypatch):
+    # Neither rung usable -> 200 with the prefilled compare page, never a 400
+    # blaming a missing gh. This is the wall an SSH-remote contributor hit.
+    title = _prime_make_pr(
+        monkeypatch,
+        tmp_path,
+        branch="feat/x",
+        base="main",
+        title="mkpr-nogh-notoken",
+        with_gh=False,
+    )
+    _stub_create(monkeypatch, github_pr.PRResult(unavailable=True))
+    monkeypatch.setattr(github_pr, "origin_url", lambda wt: "git@github.com:o/r.git")
+    try:
+        r = _MKPR_CLIENT.post(f"/api/instances/{title}/make-pr", json={})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is False
+        assert body["compare_url"] == (
+            "https://github.com/o/r/compare/main...feat/x?expand=1"
+        )
+        assert "token" in body["message"] and "GitHub CLI" in body["message"]
     finally:
         server.ENGINE.instances.pop(title, None)

@@ -19,6 +19,7 @@ __all__ = [
     "sanitizeBranchName",
     "check_gh_cli",
     "checkGHCLI",
+    "gh_available",
     "IsGitRepo",
     "is_git_repo",
     "find_git_repo_root",
@@ -60,6 +61,29 @@ def sanitize_branch_name(s: str) -> str:
     return s
 
 
+def gh_available() -> bool:
+    """Whether ``gh`` is installed *and* authenticated — never raises.
+
+    ``gh`` is optional in MindFlock: it makes "Make PR" and "Merge" one click,
+    but nothing requires it. Callers therefore need a value to branch on rather
+    than an exception to catch, so every failure mode (missing binary, logged
+    out, a hung ``gh auth status``) reports the same thing: gh can't be used
+    right now, take the plain-git path.
+    """
+    if shutil.which("gh") is None:
+        return False
+    try:
+        cmd = subprocess.run(
+            ["gh", "auth", "status"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return cmd.returncode == 0
+
+
 def check_gh_cli() -> None:
     """Check that the GitHub CLI is installed and configured.
 
@@ -68,6 +92,10 @@ def check_gh_cli() -> None:
       * ``GitHub CLI is not configured. Please run 'gh auth login' first``
 
     Returns ``None`` on success (Go returns ``nil`` error).
+
+    Kept for Go parity and as public package API, but **nothing in MindFlock
+    gates on it any more** — a missing gh must degrade, not abort. New callers
+    want :func:`gh_available`.
     """
     # Check if gh is installed (exec.LookPath equivalent).
     if shutil.which("gh") is None:

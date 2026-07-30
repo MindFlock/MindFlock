@@ -27,5 +27,8 @@ Quick pointers:
 - Pipeline: `python -m backend.ticket_ingestion` from the repo root.
 - Engine/session state: `~/.mindflock/`. Provider + assistant state:
   `~/.mindflock-assistant/`.
-- Requires `git`, `tmux`, and `gh` on PATH; sessions are tmux sessions
-  (`mindflock_<title>`) with their own git worktrees.
+- Requires `git` and `tmux` on PATH; sessions are tmux sessions
+  (`mindflock_<title>`) with their own git worktrees. `gh` is optional — pushes
+  are plain `git push` over the repo's own remote (SSH or HTTPS, used verbatim);
+  only PR create/merge prefer `gh`, falling back to the GitHub REST API with a
+  token and then to a browser URL.

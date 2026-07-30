@@ -23,7 +23,10 @@ export function Doctor(_: ScreenProps) {
             Re-check
           </button>
         </span>
-        <span className="set-hint">Probes git, tmux, gh, the agent CLI, uv and tailscale.</span>
+        <span className="set-hint">
+          Probes git, tmux, the agent CLI, uv and tailscale — plus gh, which is
+          optional (pushing uses plain git over your own remote).
+        </span>
       </div>
     </>
   );

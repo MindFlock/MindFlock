@@ -78,7 +78,8 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=None, help="port (default 8765)")
 
     doctor_p = sub.add_parser(
-        "doctor", help="check git/tmux/gh/agent-CLI and print fixes"
+        "doctor",
+        help="check git/tmux/agent-CLI (plus optional gh, uv, tailscale) and print fixes",
     )
     doctor_p.add_argument(
         "--fix",

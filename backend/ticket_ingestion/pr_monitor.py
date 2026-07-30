@@ -11,6 +11,11 @@ from pathlib import Path
 
 import aiohttp
 
+from backend.ticket_ingestion.clone_transport import (
+    configured_repo_url,
+    resolve_clone_url,
+    resolve_transport,
+)
 from backend.ticket_ingestion.config import GithubConfig
 from backend.ticket_ingestion.github_auth import resolve_token
 from backend.ticket_ingestion.models import PullRequest
@@ -103,6 +108,12 @@ class PRMonitor:
                     return []
                 raw = await resp.json()
 
+        # The base repo's payload carries BOTH spellings (clone_url + ssh_url);
+        # which one we clone with is the user's choice, not GitHub's. "auto"
+        # keeps their own [repository].url spelling when it names this repo, so
+        # an SSH-only checkout is never handed an HTTPS URL it can't authenticate.
+        transport = resolve_transport(self.config)
+        configured = configured_repo_url(self.config)
         out: list[PullRequest] = []
         for item in raw:
             try:
@@ -113,8 +124,12 @@ class PRMonitor:
                 if str(item.get("state", "")).lower() != "open":
                     continue
                 base_repo = (item.get("base") or {}).get("repo") or {}
-                clone_url = str(
-                    base_repo.get("clone_url") or f"https://github.com/{repo}.git"
+                clone_url = resolve_clone_url(
+                    repo,
+                    api_https=base_repo.get("clone_url"),
+                    api_ssh=base_repo.get("ssh_url"),
+                    configured_url=configured,
+                    transport=transport,
                 )
                 out.append(
                     PullRequest(

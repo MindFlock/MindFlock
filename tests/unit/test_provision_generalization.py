@@ -62,6 +62,37 @@ def test_base_repo_dirname_is_per_repo():
     ) != provisioned.base_repo_dirname("x/beta.git")
 
 
+def test_base_repo_dirname_is_transport_independent():
+    """One repo, one base clone — whatever spelling the user's git config uses.
+
+    An SSH checkout and an HTTPS ``[repository].url`` name the same repo, so
+    they must not each drag in their own multi-hundred-megabyte base clone.
+    """
+    for url in (
+        "git@github.com:Org/app.git",
+        "https://github.com/Org/app",
+        "https://github.com/Org/app.git",
+        "ssh://git@github.com:22/Org/app.git",
+        "git://github.com/Org/app.git",
+    ):
+        assert provisioned.base_repo_dirname(url) == "_base_app", url
+
+
+def test_base_repo_dirname_scp_style_is_not_the_host():
+    """``git@host:repo.git`` (one-segment scp path) contains no "/" at all, so
+    the old tail split named the base clone after ``user@host:repo``."""
+    assert provisioned.base_repo_dirname("git@github.com:repo.git") == "_base_repo"
+    assert provisioned.repo_display_name("git@github.com:repo.git") == "repo"
+    # Windows paths keep their drive letter: the ":" split is remote-only.
+    assert provisioned.repo_display_name(r"C:\src\app") == r"C:\src\app"
+
+
+def test_repo_display_name_keeps_local_tail():
+    assert provisioned.repo_display_name("/home/me/app") == "app"
+    assert provisioned.repo_display_name("/home/me/app.git") == "app"
+    assert provisioned.repo_display_name("") == ""
+
+
 def test_is_base_repo_dirname():
     assert provisioned.is_base_repo_dirname("_base_example-repo")
     assert not provisioned.is_base_repo_dirname("pr-12")
@@ -74,6 +105,154 @@ def test_resolve_base_repo_dir_is_per_repo(tmp_path):
         repo_url="git@github.com:org/some-repo.git", workspace_dir=ws
     )
     assert provisioned.resolve_base_repo_dir(settings) == ws / "_base_some-repo"
+
+
+# --------------------------------------------------------------------------- #
+# repo identity is independent of transport (ssh vs https)
+# --------------------------------------------------------------------------- #
+def test_same_repo_url_matches_across_transports():
+    """The contributor-reported case: an SSH checkout whose configured
+    ``[repository].url`` is spelled HTTPS. A literal compare called these two
+    different repos, so ``settings_for_workspace`` dropped the user's settings
+    and the server fell back to a guessed base branch."""
+    ssh = "git@github.com:Org/app.git"
+    for other in (
+        "https://github.com/Org/app",
+        "https://github.com/Org/app.git",
+        "ssh://git@github.com:22/Org/app.git",
+        "git://github.com/Org/app",
+    ):
+        assert provisioned._same_repo_url(ssh, other), other
+        assert provisioned._same_repo_url(other, ssh), other
+    # Only the transport may differ — a different repo or host is still a miss.
+    assert not provisioned._same_repo_url(ssh, "git@github.com:Org/other.git")
+    assert not provisioned._same_repo_url(ssh, "git@gitlab.com:Org/app.git")
+
+
+def test_same_repo_url_still_matches_local_paths():
+    """Local clone sources have no forge behind them, so the transport-aware
+    compare abstains on them — the literal fallback must still match two
+    spellings of one path (and must not match two different paths)."""
+    assert provisioned._same_repo_url("/home/me/app", "/home/me/app/")
+    assert provisioned._same_repo_url("/home/me/app.git", "/home/me/app")
+    assert not provisioned._same_repo_url("/home/me/app", "/home/me/other")
+    assert not provisioned._same_repo_url("", "/home/me/app")
+
+
+def test_settings_for_workspace_keeps_config_across_transports(tmp_path, monkeypatch):
+    """End to end: a workspace whose ``origin`` is the SSH spelling still
+    resolves the configured (HTTPS-spelled) settings, base branch included."""
+    repo = _init_repo(tmp_path / "wt")
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "remote",
+            "add",
+            "origin",
+            "git@github.com:Org/app.git",
+        ],
+        check=True,
+    )
+    configured = provisioned.ProvisionSettings(
+        repo_url="https://github.com/Org/app",
+        workspace_dir=tmp_path / "workspaces",
+        base_branch="release",
+    )
+    monkeypatch.setattr(provisioned, "load_provision_settings", lambda: configured)
+
+    resolved = provisioned.settings_for_workspace(str(repo))
+    assert resolved is configured
+    assert resolved.base_branch == "release"
+
+
+def test_sidebar_repo_label_is_the_repo_not_the_host(monkeypatch):
+    """The sidebar label comes from the same parser, so a one-segment scp
+    remote no longer renders as ``git@github.com:app`` (the URL's "/"-tail)."""
+    from backend.web.core import snapshot
+
+    class _Wt:
+        def GetRepoPath(self):  # noqa: N802
+            return "/ws/_base_app"
+
+    class _Inst:
+        Provisioned = True
+
+        def GetGitWorktree(self):  # noqa: N802
+            return _Wt()
+
+    for url, label in (
+        ("git@github.com:Org/app.git", "app"),
+        ("https://github.com/Org/app", "app"),
+        ("git@github.com:app.git", "app"),
+        ("/home/me/app", "app"),
+    ):
+        monkeypatch.setattr(
+            snapshot.provisioning,
+            "settings_for_workspace",
+            lambda _p, u=url: provisioned.ProvisionSettings(
+                repo_url=u, workspace_dir="/ws"
+            ),
+        )
+        assert snapshot._repo_name(_Inst()) == label, url
+
+
+# --------------------------------------------------------------------------- #
+# headless git: no prompt may ever block a provisioning subprocess
+# --------------------------------------------------------------------------- #
+def _capture_run(monkeypatch) -> dict:
+    """Swap the subprocess call under ``provisioned._run`` for a recorder."""
+    captured: dict = {}
+
+    def fake_run(args, **kwargs):
+        captured["args"] = list(args)
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(list(args), 0, stdout=b"")
+
+    monkeypatch.setattr(provisioned.subprocess, "run", fake_run)
+    return captured
+
+
+def test_run_is_non_interactive(monkeypatch):
+    """A clone/fetch that needs a credential must fail fast instead of parking
+    on a prompt against the inherited stdin until the 600s network timeout."""
+    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+    monkeypatch.delenv("GIT_SSH", raising=False)
+    captured = _capture_run(monkeypatch)
+
+    assert provisioned._run("git", "clone", "url", "dir").returncode == 0
+    assert captured["stdin"] is subprocess.DEVNULL
+    env = captured["env"]
+    assert env["GIT_TERMINAL_PROMPT"] == "0"  # HTTPS: no username/password prompt
+    assert env["GIT_SSH_COMMAND"] == "ssh -o BatchMode=yes"  # SSH: no passphrase
+    # The inherited environment is EXTENDED, not replaced — PATH/HOME still
+    # reach git (and its credential helpers).
+    assert env.get("PATH") == os.environ.get("PATH")
+
+
+@pytest.mark.parametrize("var", ["GIT_SSH_COMMAND", "GIT_SSH"])
+def test_run_keeps_user_ssh_command(monkeypatch, var):
+    """A user who configured their own ssh command (custom key, jump host)
+    keeps it verbatim — batch mode is a default, not an override."""
+    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+    monkeypatch.delenv("GIT_SSH", raising=False)
+    monkeypatch.setenv(var, "ssh -i /keys/work")
+    captured = _capture_run(monkeypatch)
+
+    provisioned._run("git", "fetch", "origin")
+    assert captured["env"].get(var) == "ssh -i /keys/work"
+    if var == "GIT_SSH":
+        assert "GIT_SSH_COMMAND" not in captured["env"]
+
+
+def test_run_hardens_an_explicitly_passed_env(monkeypatch):
+    """``env=`` callers get the same treatment (their own keys survive)."""
+    captured = _capture_run(monkeypatch)
+    provisioned._run("git", "status", env={"HOME": "/tmp/h"})
+    assert captured["env"]["HOME"] == "/tmp/h"
+    assert captured["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    assert captured["env"]["GIT_SSH_COMMAND"] == "ssh -o BatchMode=yes"
 
 
 def test_classify_workspace_marks_base_layout():
@@ -760,3 +939,221 @@ def test_slugify_truncates_and_strips_trailing_dash():
     assert len(s) <= 31
     assert not s.endswith("-")
     assert s == "a" * 30
+
+
+# --------------------------------------------------------------------------- #
+# origin points at the forge, not at the user's own checkout
+# --------------------------------------------------------------------------- #
+def _git(path, *args, **kw):
+    return subprocess.run(
+        ["git", "-C", str(path), *args], capture_output=True, text=True, **kw
+    )
+
+
+def _origin_of(path) -> str:
+    return _git(path, "remote", "get-url", "origin").stdout.strip()
+
+
+def _local_clone_of(forge, dest, url=None):
+    """A user's own checkout of ``forge`` — the clone source in the universal flow."""
+    subprocess.run(["git", "clone", "-q", str(url or forge), str(dest)], check=True)
+    return dest
+
+
+def test_local_settings_for_carries_the_source_repos_origin(tmp_path):
+    """The universal flow records the checkout's OWN origin, so provisioning
+    knows where the forge is even though it clones from a local path."""
+    forge = _init_origin_on(tmp_path / "forge", "main")
+    checkout = _local_clone_of(forge, tmp_path / "checkout")
+
+    settings = provisioned.local_settings_for(checkout)
+
+    assert settings is not None
+    # repo_url stays the LOCAL path (fast, offline-capable clone source)...
+    assert settings.repo_url == str(checkout.resolve())
+    # ...while origin_url is where pushes must actually land.
+    assert settings.origin_url == str(forge)
+    assert provisioned.forge_origin(settings) == ""  # a local forge is not a forge URL
+
+
+def test_local_settings_for_leaves_origin_url_empty_without_a_remote(tmp_path):
+    """A repo with no origin at all still provisions — nothing to re-point to."""
+    solo = _init_origin_on(tmp_path / "solo", "main")
+    settings = provisioned.local_settings_for(solo)
+    assert settings is not None
+    assert settings.origin_url == ""
+    assert provisioned.forge_origin(settings) == ""
+
+
+def test_forge_origin_prefers_origin_url_and_keeps_ssh_verbatim():
+    """An SSH remote is used exactly as the user spelled it — never rewritten."""
+    ssh = "git@github.com:Org/app.git"
+    s = provisioned.ProvisionSettings(
+        repo_url="/home/me/app", origin_url=ssh, workspace_dir="/ws"
+    )
+    assert provisioned.forge_origin(s) == ssh
+
+    # No origin_url: repo_url is itself the forge (configured / ingestion flows).
+    s2 = provisioned.ProvisionSettings(repo_url=ssh, workspace_dir="/ws")
+    assert provisioned.forge_origin(s2) == ssh
+
+    # Neither names a forge -> nothing to re-point to.
+    s3 = provisioned.ProvisionSettings(
+        repo_url="/home/me/app", origin_url="/home/me/other", workspace_dir="/ws"
+    )
+    assert provisioned.forge_origin(s3) == ""
+
+
+def test_base_clone_pushes_to_the_forge_not_the_local_checkout(tmp_path):
+    """THE BUG: cloning from the user's checkout left origin pointing at their
+    laptop, so a session's push landed locally, reported success, and no branch
+    ever reached the forge."""
+    forge = _init_origin_on(tmp_path / "forge", "main")
+    checkout = _local_clone_of(forge, tmp_path / "checkout")
+    settings = provisioned.ProvisionSettings(
+        repo_url=str(checkout.resolve()),
+        origin_url="git@github.com:Org/app.git",
+        workspace_dir=tmp_path / "workspaces",
+        base_branch="main",
+    )
+
+    base = Path(provisioned.ensure_base_repo(settings))
+
+    assert (base / ".git").is_dir()  # still cloned from the fast local source
+    assert _origin_of(base) == "git@github.com:Org/app.git"
+    assert str(checkout) not in _origin_of(base)
+
+
+def test_refresh_heals_a_base_clone_created_before_the_split(tmp_path):
+    """A base clone left over from the old behaviour is re-pointed on next use
+    rather than needing a manual reset."""
+    forge = _init_origin_on(tmp_path / "forge", "main")
+    checkout = _local_clone_of(forge, tmp_path / "checkout")
+    ws = tmp_path / "workspaces"
+
+    # Old behaviour: origin_url absent, so origin ends up as the local path.
+    legacy = provisioned.ProvisionSettings(
+        repo_url=str(checkout.resolve()), workspace_dir=ws, base_branch="main"
+    )
+    base = Path(provisioned.ensure_base_repo(legacy))
+    assert _origin_of(base) == str(checkout.resolve())
+
+    # Next provision knows the forge: the SAME base dir is healed in place.
+    fixed = provisioned.ProvisionSettings(
+        repo_url=str(checkout.resolve()),
+        origin_url="git@github.com:Org/app.git",
+        workspace_dir=ws,
+        base_branch="main",
+    )
+    healed = Path(provisioned.ensure_base_repo(fixed))
+    assert healed == base
+    assert _origin_of(base) == "git@github.com:Org/app.git"
+
+
+def test_repointing_origin_is_idempotent_and_never_raises(tmp_path):
+    """Called on every ensure/refresh, so it must be a no-op when already right,
+    and tolerate a directory that is not a git repo at all."""
+    forge = _init_origin_on(tmp_path / "forge", "main")
+    checkout = _local_clone_of(forge, tmp_path / "checkout")
+    settings = provisioned.ProvisionSettings(
+        repo_url=str(checkout.resolve()),
+        origin_url="https://github.com/Org/app.git",
+        workspace_dir=tmp_path / "workspaces",
+        base_branch="main",
+    )
+    base = Path(provisioned.ensure_base_repo(settings))
+    provisioned.point_origin_at_forge(base, settings)
+    provisioned.point_origin_at_forge(base, settings)
+    assert _origin_of(base) == "https://github.com/Org/app.git"
+
+    # Not a git repo: logged and tolerated, never raised.
+    provisioned.point_origin_at_forge(tmp_path / "nope", settings)
+
+
+def test_offline_repo_with_no_forge_keeps_its_local_origin(tmp_path):
+    """No forge anywhere -> origin is left exactly as the clone produced it, so
+    a purely local/offline repo behaves as it always did."""
+    solo = _init_origin_on(tmp_path / "solo", "main")
+    settings = provisioned.ProvisionSettings(
+        repo_url=str(solo.resolve()),
+        workspace_dir=tmp_path / "workspaces",
+        base_branch="main",
+    )
+    base = Path(provisioned.ensure_base_repo(settings))
+    assert _origin_of(base) == str(solo.resolve())
+
+
+def test_settings_for_workspace_matches_a_workspace_by_its_forge_origin(
+    tmp_path, monkeypatch
+):
+    """Now that a workspace's origin is the FORGE while its clone source was a
+    local path, matching on the clone source alone would stop recognising the
+    workspace as the configured repo."""
+    forge = _init_origin_on(tmp_path / "forge", "main")
+    checkout = _local_clone_of(forge, tmp_path / "checkout")
+    settings = provisioned.ProvisionSettings(
+        repo_url=str(checkout.resolve()),
+        origin_url="git@github.com:Org/app.git",
+        workspace_dir=tmp_path / "workspaces",
+        base_branch="main",
+    )
+    base = Path(provisioned.ensure_base_repo(settings))
+    monkeypatch.setattr(provisioned, "load_provision_settings", lambda: settings)
+
+    # The workspace's origin is now the forge, not settings.repo_url.
+    assert provisioned.settings_for_workspace(str(base)) is settings
+
+
+def test_ssh_checkout_end_to_end_provisions_a_workspace_that_pushes_to_github(tmp_path):
+    """The reported scenario, end to end: an SSH-configured checkout, provisioned
+    with no gh anywhere. The workspace must push to github.com over SSH, in the
+    user's own spelling."""
+    forge = _init_origin_on(tmp_path / "forge", "main")
+    checkout = _local_clone_of(forge, tmp_path / "checkout")
+    # The user's git config uses SSH, not HTTPS.
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(checkout),
+            "remote",
+            "set-url",
+            "origin",
+            "git@github.com:Org/app.git",
+        ],
+        check=True,
+    )
+
+    settings = provisioned.local_settings_for(checkout)
+    assert settings is not None
+    assert settings.origin_url == "git@github.com:Org/app.git"
+
+    settings.workspace_dir = tmp_path / "workspaces"
+    settings.base_branch = "main"
+    base = Path(provisioned.ensure_base_repo(settings))
+
+    # Cloned locally (fast), pushes to GitHub over SSH, spelled exactly as the
+    # user spelled it — no https:// rewrite anywhere.
+    assert _origin_of(base) == "git@github.com:Org/app.git"
+
+
+def test_local_clone_source_leaves_no_promisor_remote(tmp_path):
+    """A blobless clone defers blobs to its source as a PROMISOR remote. Since a
+    local source is then replaced as origin by the forge, those blobs would only
+    be reachable over the network — so local sources are cloned in full (which
+    git hardlinks, making it faster and smaller anyway)."""
+    forge = _init_origin_on(tmp_path / "forge", "main")
+    checkout = _local_clone_of(forge, tmp_path / "checkout")
+    settings = provisioned.ProvisionSettings(
+        repo_url=str(checkout.resolve()),
+        origin_url="git@github.com:Org/app.git",
+        workspace_dir=tmp_path / "workspaces",
+        base_branch="main",
+    )
+    base = Path(provisioned.ensure_base_repo(settings))
+
+    cfg = _git(base, "config", "--local", "--list").stdout
+    assert "promisor" not in cfg
+    assert "partialclonefilter" not in cfg
+    # ...and origin is still the forge.
+    assert _origin_of(base) == "git@github.com:Org/app.git"

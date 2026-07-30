@@ -36,12 +36,15 @@ Tip: `git config format.signoff true` makes it automatic in this repo.
 git clone https://github.com/MindFlock/MindFlock
 cd MindFlock
 uv sync --group web --group dev   # web = FastAPI server deps, dev = pytest
-uv run mindflock doctor           # checks git/tmux/gh/agent CLI
+uv run mindflock doctor           # checks git/tmux/agent CLI (+ gh, optional)
 uv run mindflock serve            # localhost:8765, from a repo you want to manage
 ```
 
 Runtime deps: `git`, `tmux`, and at least one agent CLI (`claude` by
-default). `mindflock doctor --fix` offers to install what's missing.
+default). `mindflock doctor --fix` offers to install what's missing. `gh` is
+**optional** — pushing is plain `git push` over your own remote (SSH or HTTPS);
+`gh` only shortcuts opening and merging PRs, and a GitHub token or your browser
+covers that when it's absent.
 
 Optional but recommended — the repo's hooks, both stages:
 

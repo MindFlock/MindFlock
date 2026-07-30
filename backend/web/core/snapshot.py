@@ -60,9 +60,12 @@ def _repo_name(inst: session.Instance) -> str:
             s = provisioning.settings_for_workspace(repo_path)
             url = getattr(s, "repo_url", "") if s else ""
             if url:
-                base = url.rstrip("/").split("/")[-1]
-                if base.endswith(".git"):
-                    base = base[:-4]
+                # The repo COMPONENT of the remote, not its "/"-tail: an
+                # scp-style remote with a one-segment path
+                # (``git@github.com:app.git``) contains no "/" at all, so the
+                # tail split labelled the sidebar ``git@github.com:app``. Local
+                # clone sources have no forge and still use the tail.
+                base = provisioning.repo_display_name(url)
                 if base:
                     return base
         except Exception:  # noqa: BLE001

@@ -11,6 +11,7 @@ import type { KeymapHost } from "../../lib/keymap";
 import {
   commitSession,
   copySession,
+  hasPrSupport,
   hideSession,
   ideSession,
   instances,
@@ -87,7 +88,10 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
   const actions = useMemo<PaletteAction[]>(() => {
     if (!open) return [];
     const ui = useUi.getState();
-    const caps = config?.caps ?? { git: true, tailscale: true, ticketing: true };
+    const caps = config?.caps ?? { git: true, tailscale: true, ticketing: true, github: true };
+    // PR entries are never withheld: without gh/token they still work, they
+    // just end in the browser. The hint column says so instead of the label.
+    const prHint = hasPrSupport(caps) ? "" : " · opens GitHub";
     const ideName = config?.ide_name || "Cursor";
     const acts: PaletteAction[] = [];
     acts.push({ label: "New session…", hint: "Ctrl+N", run: () => ui.openDialogFor("new-session") });
@@ -104,14 +108,19 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       if (caps.git) {
         acts.push({ label: `Commit… — ${t}`, hint: "Ctrl+K C", run: () => commitSession(t) });
         acts.push({ label: `Push — ${t}`, hint: "Ctrl+K P", run: () => pushSession(t) });
-        acts.push({ label: `Create PR — ${t}`, hint: "Ctrl+K R", run: () => makePrSession(t) });
+        acts.push({ label: `Create PR — ${t}`, hint: "Ctrl+K R" + prHint, run: () => makePrSession(t) });
       }
       acts.push({ label: `Open in ${ideName} — ${t}`, hint: "Ctrl+K O", run: () => ideSession(t) });
       acts.push({ label: `Duplicate session — ${t}`, hint: "Ctrl+K D", run: () => copySession(t) });
       acts.push({ label: `Hide window — ${t}`, hint: "Ctrl+K H", run: () => hideSession(t) });
       // Merge is deliberately unbound (most consequential action) — palette or
       // sidebar menu only, and mergeSession() itself confirms.
-      if (caps.git) acts.push({ label: `Merge PR to staging — ${t}`, run: () => mergeSession(t) });
+      if (caps.git)
+        acts.push({
+          label: `Merge PR to staging — ${t}`,
+          hint: prHint ? prHint.replace(" · ", "") : undefined,
+          run: () => mergeSession(t),
+        });
     }
     acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host.toggleShortcuts() });
     acts.push({ label: "Open Settings", run: () => ui.openDialogFor("settings") });

@@ -117,6 +117,13 @@ jobs:
     runs-on: ubuntu-latest
     # A bare Debian container: no dev setup, no Python tooling — the installer
     # must bring everything except the OS packages a stranger is told to have.
+    #
+    # Deliberately WITHOUT `gh`. gh is optional (pushing is plain `git push`
+    # over the user's own remote; only PR create/merge prefer it, and they fall
+    # back to the REST API and then to a browser URL), so this job is the only
+    # place that proves it: if anything on the path to a first session starts
+    # requiring gh again, cold-install is the check that fails. Do not install
+    # gh here to make something pass — fix the thing that needs it.
     container: debian:bookworm-slim
     steps:
       - name: Install the OS-level prerequisites (what the README tells users to install)
@@ -124,16 +131,6 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             curl ca-certificates git tmux procps python3
-          # gh is a required dep per the README; it isn't in Debian's default
-          # repos, so add GitHub's official apt source (mirrors the doctor fix).
-          install -d -m 0755 /etc/apt/keyrings
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-            | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null
-          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-            > /etc/apt/sources.list.d/github-cli.list
-          apt-get update
-          apt-get install -y --no-install-recommends gh
 
       - uses: actions/checkout@v4
 

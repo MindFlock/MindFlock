@@ -91,6 +91,8 @@ from backend.providers.claude import remove_trust_entry as _remove_trust_entry
 from backend.config import ide as ide_cfg
 from backend.session import provisioned as provisioning
 from backend.session import tmux
+from backend.session.git import gh_available
+from backend.session.git import remote_url as _remote_url
 from backend.session.storage import Loading
 from backend.workspace_setup import exclude_artifacts as _exclude_artifacts
 from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirname
@@ -100,6 +102,7 @@ from backend.web.core import auth as _auth
 from backend.web.core import events as _events
 from backend.web.core import ports as _ports
 from backend.web.core import issue_start as _issue_start
+from backend.web.core import github_pr as _github_pr
 from backend.web.core import pr_review as _pr_review
 from backend.web.core import ticket_start as _ticket_start
 from backend.web.core import remote as _remote
@@ -1375,8 +1378,9 @@ def _queue_summary(title: str, queues: dict) -> dict:
 
 
 def _session_snapshot(i, queues: dict) -> dict:
-    """One session's full /api/instances entry — runs every probe (git/tmux/gh
-    shell-outs, transcript scans), each behind its ~2.5s memo."""
+    """One session's full /api/instances entry — runs every probe (git/tmux
+    shell-outs plus a PR lookup when GitHub is reachable, transcript scans),
+    each behind its ~2.5s memo."""
     d = _instance_json(i)
     d.update(_session_stage_cached(i))
     d["queue"] = _queue_summary(i.Title, queues)
@@ -1443,7 +1447,8 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     """One session's /api/instances entry WITHOUT the expensive probes.
 
     Same key set as :func:`_session_snapshot`, but nothing here shells out to
-    git/tmux/gh or scans transcripts: identity/status/queue/ports fields are
+    git/tmux (plus a PR lookup when GitHub is reachable) or scans transcripts:
+    identity/status/queue/ports fields are
     computed fresh, and every probe-derived field is carried over from
     ``prev`` (this title's entry in the last published tick snapshot) when
     available — otherwise a null/zero placeholder the UI already renders (a
@@ -1499,7 +1504,8 @@ def _build_instances_snapshot() -> list:
     pollers cost one probe run (values may be ≤ ~2.5s stale — by design).
 
     Sessions are probed in PARALLEL (small thread pool): each probe shells out
-    to git/tmux/gh, so the sequential cost was the SUM over sessions (seconds
+    to git/tmux (plus a PR lookup when GitHub is reachable), so the sequential
+    cost was the SUM over sessions (seconds
     on big worktrees); now it's the slowest single session. Concurrent probing
     was already the steady state (N pollers + the tick race the same memo), so
     the pool introduces no new concurrency class."""
@@ -1818,13 +1824,44 @@ def _ticketing_connected() -> bool:
     return False
 
 
+_GITHUB_CAP_CACHE: list = [0.0, False]  # [fresh_until_epoch, value]
+_GITHUB_CAP_TTL = 60.0
+
+
+def _github_pr_available() -> bool:
+    """Whether MindFlock can open/merge a PR itself right now (cached 60s).
+
+    True when EITHER rung of the PR ladder is usable: an authenticated ``gh``,
+    or a resolvable GitHub token for the REST path. False only means the user
+    would land on the browser fallback (a prefilled compare page) — pushing is
+    unaffected either way, since that is always plain ``git push``.
+
+    Cached because the sibling probes are a PATH stat and this one is not:
+    ``gh auth status`` is a subprocess, and /api/config is hit on every page
+    load. 60s is short enough that installing gh or pasting a token shows up
+    almost immediately, without a restart.
+    """
+    now = time.time()
+    if _GITHUB_CAP_CACHE[0] > now:
+        return bool(_GITHUB_CAP_CACHE[1])
+    try:
+        val = gh_available() or _github_pr.has_token_sync()
+    except Exception:  # noqa: BLE001 — capability probes must never 500
+        val = False
+    _GITHUB_CAP_CACHE[0] = now + _GITHUB_CAP_TTL
+    _GITHUB_CAP_CACHE[1] = val
+    return val
+
+
 def _capabilities() -> dict:
     """Which optional integrations are usable right now.
 
     Only the coding agent is required to run MindFlock; everything else is
     progressive: no git -> sessions run in-place and diff/commit/PR surfaces
     hide; no tailscale -> the Mobile screen explains how to get phone access;
-    no ticketing source -> ingestion surfaces point at Settings → Ticketing.
+    no ticketing source -> ingestion surfaces point at Settings → Ticketing;
+    no github -> Make PR / Merge hand the user a prefilled compare page
+    instead of opening the PR themselves (they never fail outright).
     Probed per-request (cheap) so installing/connecting takes effect on the
     next page load without a server restart.
     """
@@ -1832,6 +1869,7 @@ def _capabilities() -> dict:
         "git": git_available(),
         "tailscale": shutil.which("tailscale") is not None,
         "ticketing": _ticketing_connected(),
+        "github": _github_pr_available(),
     }
 
 
@@ -3013,14 +3051,30 @@ def _pr_info(wt: str, branch: str, force: bool = False):
     the lookup by a guessed base misses the real PR and wedges the stage chip
     on "pushed". A branch's most recent PR is the one this workflow cares
     about, whatever it merges into. (The cache is already keyed by branch, so
-    this matches the cache's granularity too.)"""
-    if not branch or shutil.which("gh") is None:
+    this matches the cache's granularity too.)
+
+    ``gh`` is preferred but optional: without it the same question is asked
+    over the REST API instead. That matters more here than anywhere else —
+    this is the ONLY PR signal the stage machine has, so a gh-less user whose
+    lookup returned None used to be stuck on "pushed" forever, still being
+    offered "Make PR" for a PR they had already opened by hand."""
+    if not branch:
         return None
     now = time.time()
     cached = _PR_CACHE.get(branch)
     if not force and cached and cached[0] > now:
         return cached[1]
-    info = None
+    info = (
+        _gh_pr_info(wt, branch)
+        if gh_available()
+        else _github_pr.find_pr_sync(wt, branch)
+    )
+    _PR_CACHE[branch] = (now + 60, info)
+    return info
+
+
+def _gh_pr_info(wt: str, branch: str):
+    """The ``gh`` rung of :func:`_pr_info` — ``{url, state}`` or None."""
     cp = _run_capped(
         [
             "gh",
@@ -3040,15 +3094,15 @@ def _pr_info(wt: str, branch: str, force: bool = False):
         stderr=subprocess.DEVNULL,
         timeout=120,
     )
-    if cp.returncode == 0:
-        try:
-            arr = json.loads(cp.stdout.decode("utf-8", "replace") or "[]")
-            if arr:
-                info = {"url": arr[0].get("url"), "state": arr[0].get("state")}
-        except (ValueError, KeyError, IndexError):
-            info = None
-    _PR_CACHE[branch] = (now + 60, info)
-    return info
+    if cp.returncode != 0:
+        return None
+    try:
+        arr = json.loads(cp.stdout.decode("utf-8", "replace") or "[]")
+    except (ValueError, KeyError, IndexError):
+        return None
+    if not arr:
+        return None
+    return {"url": arr[0].get("url"), "state": arr[0].get("state")}
 
 
 # _TOKENS_CACHE / _created_epoch / _session_tokens moved to core.session_stats
@@ -3618,9 +3672,43 @@ async def instance_branches(title: str) -> JSONResponse:
     return JSONResponse({"branches": branches, "current": current, "default": default})
 
 
+# The one remedy sentence every "MindFlock can't do the GitHub half itself"
+# message ends with. Kept in one place because it is asserted verbatim in the
+# tests and quoted in the docs: both rungs are optional and either one fixes it.
+_PR_REMEDY = "add a GitHub token in Settings → PR review, or install the GitHub CLI"
+
+
+def _pr_browser_fallback(wt: str, base: str, branch: str) -> JSONResponse:
+    """200 + a prefilled compare page when neither gh nor a token is around.
+
+    Deliberately NOT an error status. The user's push already worked (pushing
+    is always plain ``git push``), and the PR is one click away on the compare
+    page GitHub prefills from the branch — so this is a handoff, not a failure,
+    and the UI renders it as a link rather than a red toast."""
+    return JSONResponse(
+        {
+            "ok": False,
+            "compare_url": _remote_url.compare_url(
+                _github_pr.origin_url(wt), base, branch
+            ),
+            "message": "MindFlock could not open the pull request for you — "
+            + _PR_REMEDY
+            + ". The compare link opens a pull request prefilled from this "
+            "branch.",
+        }
+    )
+
+
 @app.post("/api/instances/{title}/make-pr")
 async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONResponse:
-    """Open a PR into the base branch via gh (auto title/body from commits).
+    """Open a PR into the base branch (auto title/body from the branch's commits).
+
+    Three rungs, in order: ``gh`` when it is installed and authenticated, then
+    the GitHub REST API with a resolved token, then the browser (a prefilled
+    compare URL). gh stays first because it carries the user's own credentials
+    and needs nothing configured — but its ABSENCE is never an error, which is
+    the whole point: an SSH-remote user who never installed it can still open
+    PRs from here.
 
     ``payload.base`` (the branch chosen in the Make-PR dialog) wins over every
     other source; blank/absent falls through to the configured default and then
@@ -3633,10 +3721,6 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
     wt = inst.GetWorktreePath()
     if not wt:
         return JSONResponse({"error": "workspace not ready"}, status_code=409)
-    if shutil.which("gh") is None:
-        return JSONResponse(
-            {"error": "GitHub CLI (gh) is not installed"}, status_code=400
-        )
     # An explicit base from the dialog wins; then a configured default PR base
     # (Settings → "Default PR base branch"), so plain worktree sessions can PR
     # into a fixed branch (e.g. staging) instead of whatever they were cut from;
@@ -3656,7 +3740,7 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
             status_code=409,
         )
 
-    def _do():
+    def _do_gh():
         cp = _run_capped(
             ["gh", "pr", "create", "--base", base, "--head", branch, "--fill"],
             cwd=wt,
@@ -3667,33 +3751,80 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
         out = cp.stdout.decode("utf-8", "replace").strip()
         return cp.returncode, out
 
-    rc, out = await asyncio.to_thread(_do)
+    # (a) gh, (b) REST, (c) the browser — first rung that can run, wins.
+    url, rc, out, handoff = None, 0, "", None
+    if gh_available():
+        rc, out = await asyncio.to_thread(_do_gh)
+        if rc == 0 and out:
+            url = out.splitlines()[-1]
+    else:
+        res = await _github_pr.create_pr(wt, base, branch)
+        if res.unavailable:
+            # No gh AND no token: hand the browser the prefilled compare page
+            # rather than telling the user to go install something.
+            handoff = _pr_browser_fallback(wt, base, branch)
+        else:
+            rc, out, url = (0 if res.ok else 1), res.error, res.url
+
     _PR_CACHE.pop(branch, None)  # force a fresh stage read next poll
     _forget_probes(title)
+    if handoff is not None:
+        return handoff
     if rc != 0:
         # A currently-open PR is the expected bounce — surface its URL. A
-        # merged/closed PR is *not* a bounce: gh refuses for another reason
+        # merged/closed PR is *not* a bounce: the refusal has another reason
         # (usually no new commits), so fall through to the error message.
         existing = await asyncio.to_thread(_pr_info, wt, branch, True)
         if existing and existing.get("state") == "OPEN" and existing.get("url"):
             return JSONResponse(
                 {"ok": True, "url": existing["url"], "note": "PR already open"}
             )
-        msg = out or "gh pr create failed"
-        if "could not find any commits" in out or "no commits between" in out:
+        # gh says "no commits between", the API says "No commits between" —
+        # match either, so the friendly message doesn't depend on which rung ran.
+        low = out.lower()
+        if "could not find any commits" in low or "no commits between" in low:
             msg = (
                 "nothing to PR: no commits between %s and %s — this branch's "
                 "work may already be merged." % (base, branch)
             )
+        else:
+            # Transport-agnostic lead-in, then whatever the tool actually said.
+            msg = "failed to open a pull request"
+            if out:
+                msg += ": " + out
         return JSONResponse({"error": msg}, status_code=400)
-    url = out.splitlines()[-1] if out else None
     return JSONResponse({"ok": True, "url": url})
+
+
+def _merge_browser_fallback(
+    wt: str, branch: str, pr_url: Optional[str]
+) -> JSONResponse:
+    """200 + a link to the PR when neither gh nor a token can merge it.
+
+    Same handoff shape as :func:`_pr_browser_fallback`: merging is one click on
+    the PR page, so the UI links out instead of reporting a failure. When the
+    PR itself couldn't be looked up either, the repo's PR list filtered to this
+    branch is the closest thing we can point at."""
+    return JSONResponse(
+        {
+            "ok": False,
+            "pr_url": pr_url
+            or _remote_url.pr_list_url(_github_pr.origin_url(wt), branch),
+            "message": "MindFlock could not merge the pull request for you — "
+            + _PR_REMEDY
+            + ". The link opens the pull request on GitHub.",
+        }
+    )
 
 
 @app.post("/api/instances/{title}/merge-pr")
 async def instance_merge_pr(title: str) -> JSONResponse:
     """Merge the branch's PR into the base (a true merge commit). Confirmed in
-    the UI; surfaces gh's error (e.g. if the repo requires squash/review)."""
+    the UI; surfaces the underlying refusal (e.g. if the repo requires
+    squash/review).
+
+    Same three rungs as :func:`instance_make_pr` — ``gh``, then REST with a
+    resolved token, then a link to the PR so the user can press Merge there."""
     if not git_available():
         return _no_git_response()
     inst, err = _inst_or_404(title)
@@ -3702,16 +3833,12 @@ async def instance_merge_pr(title: str) -> JSONResponse:
     wt = inst.GetWorktreePath()
     if not wt:
         return JSONResponse({"error": "workspace not ready"}, status_code=409)
-    if shutil.which("gh") is None:
-        return JSONResponse(
-            {"error": "GitHub CLI (gh) is not installed"}, status_code=400
-        )
     # Merge the PR of the branch the worktree is *actually* on — the stored
     # inst.Branch can drift when the user switches branches in the workspace,
     # which would merge the wrong branch's PR.
     branch = await asyncio.to_thread(_current_branch, wt) or inst.Branch or ""
 
-    def _do():
+    def _do_gh():
         cp = _run_capped(
             ["gh", "pr", "merge", branch, "--merge"],
             cwd=wt,
@@ -3721,10 +3848,29 @@ async def instance_merge_pr(title: str) -> JSONResponse:
         )
         return cp.returncode, cp.stdout.decode("utf-8", "replace").strip()
 
-    rc, out = await asyncio.to_thread(_do)
+    if gh_available():
+        rc, out = await asyncio.to_thread(_do_gh)
+    else:
+        # REST merges by PR NUMBER, so the branch has to be resolved to its PR
+        # first — the same lookup the stage chip already uses.
+        found = await _github_pr.find_pr(wt, branch)
+        number = (found or {}).get("number")
+        res = (
+            await _github_pr.merge_pr(wt, number)
+            if number
+            else _github_pr.PRResult(unavailable=True)
+        )
+        if res.unavailable:
+            _PR_CACHE.pop(branch, None)
+            return _merge_browser_fallback(wt, branch, (found or {}).get("url"))
+        rc, out = (0 if res.ok else 1), res.error
+
     _PR_CACHE.pop(branch, None)
     if rc != 0:
-        return JSONResponse({"error": out or "gh pr merge failed"}, status_code=400)
+        msg = "failed to merge the pull request"
+        return JSONResponse(
+            {"error": (msg + ": " + out) if out else msg}, status_code=400
+        )
 
     def _post_merge():
         # The flow for this branch is done — reset it to the top. Clear any

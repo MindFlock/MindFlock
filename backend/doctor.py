@@ -2,9 +2,11 @@
 
 One pure-Python module (no web deps) shared by the ``/api/doctor`` addon
 (:mod:`backend.web.addons.doctor`) and the ``mindflock doctor`` CLI
-(:mod:`backend.cli`), so a missing tmux/claude/gh surfaces as an actionable
-checklist instead of a cryptic ``FileNotFoundError`` at session-create or push
-time.
+(:mod:`backend.cli`), so a missing tmux/claude surfaces as an actionable
+checklist instead of a cryptic ``FileNotFoundError`` at session-create time.
+Optional tools (``gh``, ``uv``, ``tailscale``, ``git`` itself) are reported the
+same way but can never fail the run — notably ``gh``, whose absence costs only
+the PR create/merge shortcut, never a push.
 
 Each check is independent, fast (subprocesses capped at ~5s), and never raises:
 a broken probe degrades to a ``warn`` result. Remediation hints are picked per
@@ -198,15 +200,19 @@ def check_tmux() -> Check:
 def check_gh() -> Check:
     path = shutil.which("gh")
     if not path:
-        # Optional: MindFlock runs fine without it — only the GitHub features
-        # (push/open PRs and the automated PR-review loop) need gh. Absent gh is
-        # ``info`` (optional dep absent), not ``fail``, so it never trips the
-        # "required dependency missing" exit; those features simply stay off.
+        # Optional: MindFlock runs fine without it — only the GitHub PR features
+        # (opening/merging PRs and the automated PR-review loop) need gh, and
+        # even those fall back to the REST API or a prefilled browser URL.
+        # Pushing never touches gh: it is plain `git push` over whatever remote
+        # (SSH or HTTPS) the user already configured. Absent gh is ``info``
+        # (optional dep absent), not ``fail``, so it never trips the "required
+        # dependency missing" exit.
         return Check(
             "gh",
             "GitHub CLI (gh)",
             "info",
-            "not found (optional — only GitHub push/PR and PR review need it)",
+            "not found (optional — only PR create/merge and PR review need it; "
+            "pushing uses plain git)",
             _pkg_fix("gh"),
             docs=_DOCS["gh"],
             cmd=_pkg_fix("gh"),

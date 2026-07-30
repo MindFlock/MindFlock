@@ -34,8 +34,12 @@ List all sessions. Each item:
 }
 ```
 
-Stage is inferred from git/`gh` (upstream, origin SHA, commit lock files), so
-work done outside MindFlock (e.g. in Cursor) moves the badge too. The origin
+Stage is inferred from git (upstream, origin SHA, commit lock files) plus a
+GitHub lookup for the PR stages — `gh` when it is installed and authenticated,
+otherwise the REST API with a resolved token. With neither credential the badge
+still advances all the way to **pushed** (that part is pure git) but cannot see
+an open PR, so it stops there. Because stage comes from git, work done outside
+MindFlock (e.g. in Cursor) moves the badge too. The origin
 branch SHA is a network `git ls-remote`, cached ~45 s — a push made outside
 MindFlock can take up to ~45 s to advance the badge and enable **Make PR**
 (MindFlock-initiated pushes bypass the cache via a pending window). The base
@@ -130,13 +134,22 @@ verbatim, so a default the caller toggled off is honored, not re-applied.
 
 ### Guided workflow (commit → push → PR → merge)
 
+Commit and push are pure git: they run in the session's own shell against the
+remote the repo already has, **SSH or HTTPS, used verbatim**, with the user's
+own git credentials. The GitHub CLI is not involved and no remote URL is ever
+rewritten. Only the two PR endpoints need to reach the GitHub API, and each
+resolves a credential in the same order — `gh` (when installed *and*
+authenticated) → the REST API with a token
+(`backend.ticket_ingestion.github_auth.resolve_token`) → a browser URL. There is
+no response whose only content is "gh is not installed".
+
 | Method | Path | Behavior |
 |---|---|---|
 | POST | `/api/instances/{title}/commit` | Body `{message}`. Runs `git add -A` + `git commit` **in the session's shell tmux** (watch pre-commit hooks in the Terminal tab), retrying up to 5× when hooks auto-fix files. Works for every session type (plain, in-place, provisioned). Writes `.mindflock_commit_status` (exit code) and `.mindflock_commit_msg` (reused on empty re-commit). |
 | POST | `/api/instances/{title}/push-branch` | `git push --no-verify -u origin HEAD` in the shell (hooks already ran on commit). **O3 soft gate:** when the repo's `.mindflock.toml` declares `check_command` and no check run passed against the current HEAD, returns `409 {error, check_required: true, check}`; re-POST with body `{"force": true}` to push anyway. |
 | GET | `/api/instances/{title}/branches` | `{branches, current, default}` — the branch list backing the **Make PR** dialog's base picker. `branches` are `origin`'s remote heads (falling back to local heads when origin is unreachable, so it's never blank); `current` is the session's own branch (never a valid PR target); `default` is the pre-selected base (`repository.pr_base_branch` → the session's fork base). 404 unknown title, 409 workspace not ready |
-| POST | `/api/instances/{title}/make-pr` | `gh pr create --base <base> --fill` → `{ok, url}` (or `note: "PR already open"`). The UI's Make-PR dialog collects `<base>` from the branch picker above (and the frontend remembers the last base per repo — `prBaseByRepo` in `localStorage`); an omitted base falls back to the session's base branch |
-| POST | `/api/instances/{title}/merge-pr` | `gh pr merge <branch> --merge` |
+| POST | `/api/instances/{title}/make-pr` | Opens a PR → `{ok: true, url}` (or `note: "PR already open"`). Three tiers, in order: `gh pr create --base <base> --fill` when `gh` is installed **and** authenticated; else the GitHub REST API with a token from the usual resolution chain; else **`200 {ok: false, compare_url}`** — a prefilled compare URL the UI opens in the browser, plus the remedy sentence "add a GitHub token in Settings → PR review, or install the GitHub CLI". A missing `gh` is never an error status. The UI's Make-PR dialog collects `<base>` from the branch picker above (and the frontend remembers the last base per repo — `prBaseByRepo` in `localStorage`); an omitted base falls back to the session's base branch |
+| POST | `/api/instances/{title}/merge-pr` | Merges the branch's PR, same three tiers: `gh pr merge <branch> --merge`; else the REST API with a token; else **`200 {ok: false, pr_url}`** so the UI can send you to the PR page to merge it yourself |
 
 ### Assigned tickets, PR auto-review + issue handling
 
@@ -282,7 +295,7 @@ the owning device.
 
 | Method | Path | Returns / accepts |
 |---|---|---|
-| GET | `/api/config` | `{default_program, provisioning_available, caps: {git, tailscale, ticketing}, home, repo_root, ide_name, onboarded, auth_mode, auth_enabled}` — `caps` reports which optional integrations are usable right now; the UI hides absent features and shows "connect X" guidance on their settings screens |
+| GET | `/api/config` | `{default_program, provisioning_available, caps: {git, tailscale, ticketing, github}, home, repo_root, ide_name, onboarded, auth_mode, auth_enabled}` — `caps` reports which optional integrations are usable right now; the UI hides absent features and shows "connect X" guidance on their settings screens. `caps.github` is true when **either** credential exists (`gh` authenticated **or** a token resolves) and is cached ~60 s (unlike its PATH-stat siblings it shells out to `gh auth status`, and this endpoint is hit on every page load); it gates one-click **Make PR** / **Merge**, and when false those buttons take the browser-URL path rather than disappearing — pushing is unaffected either way |
 | GET | `/api/providers` | `{providers: [{name, aliases, profiles: [{id, label}], default_selector}], default}` |
 | GET | `/api/usage` | Rolling day/week/month/year token+cost totals per provider (Claude, Codex, …) |
 | GET/POST | `/api/scroll-speed` | `{speed}` 1–20, applied live to tmux |
@@ -292,7 +305,7 @@ the owning device.
 | POST | `/api/paste-image?name=` | Save a pasted/dropped file for a session (transient retention) → its path |
 | GET | `/api/logs` | Tail of the server log (the UI's System-logs pane, 3 s poll) |
 | GET | `/api/addons` | Addon manifests `{addons: [{id, label, managed, frontend}]}` |
-| GET | `/api/doctor` | Dependency preflight: git/tmux/gh/agent-CLI/uv checks with per-platform fixes; cached ~30 s, `?refresh=1` re-probes. Also carries `version` (the running engine's version) and `state_notice` |
+| GET | `/api/doctor` | Dependency preflight: git/tmux/agent-CLI/uv checks with per-platform fixes, plus `gh` reported as **optional** (status `info`, detail "not found (optional — only PR create/merge and PR review need it; pushing uses plain git)" — never `fail`, so it can't trip the required-dependency exit); cached ~30 s, `?refresh=1` re-probes. Also carries `version` (the running engine's version) and `state_notice` |
 | POST | `/api/doctor/ack-state-notice` | Dismiss the downgrade notice; clears it and the cached payload |
 | GET | `/api/mobile` | Mobile URLs + QR payload (Settings → Mobile) |
 | GET | `/m` | The mobile UI page |

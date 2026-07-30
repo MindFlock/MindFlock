@@ -7,6 +7,12 @@ import shutil
 from pathlib import Path
 
 from backend.ticket_ingestion._subprocess import run_capture
+from backend.ticket_ingestion.clone_transport import (
+    apply_transport,
+    clone_failure_hint,
+    resolve_transport,
+    run_network_git,
+)
 from backend.ticket_ingestion.config import PipelineConfig
 from backend.ticket_ingestion.models import ProvisionedEnvironment, Ticket
 from backend.workspace_setup import (
@@ -103,10 +109,16 @@ class EnvironmentProvisioner:
             shutil.rmtree(tmp_dir)
         directory.parent.mkdir(parents=True, exist_ok=True)
         # Multi-repo ingestion: clone the ticket's own source repo when set,
-        # else the global default.
-        clone_url = getattr(story, "repo_url", "") or self.config.repo_url
+        # else the global default. The URL is used as configured — apply_transport
+        # only respells it when the user explicitly asked for ssh/https.
+        clone_url = apply_transport(
+            getattr(story, "repo_url", "") or self.config.repo_url,
+            resolve_transport(self.config),
+        )
         _logger.info("Cloning %s for story %s into %s", clone_url, story.id, directory)
-        rc, _, stderr = await self._run(
+        # run_network_git, not self._run: a clone with nobody at the keyboard
+        # must fail fast on a missing credential instead of blocking on a prompt.
+        rc, _, stderr = await run_network_git(
             "git",
             "clone",
             "--depth=1",
@@ -117,7 +129,10 @@ class EnvironmentProvisioner:
         if rc != 0:
             msg = stderr.decode(errors="replace").strip()
             shutil.rmtree(tmp_dir, ignore_errors=True)
-            raise ProvisioningError(f"Git clone failed for story {story.id}: {msg}")
+            raise ProvisioningError(
+                f"Git clone failed for story {story.id}: {msg} "
+                f"[{clone_failure_hint(clone_url)}]"
+            )
         if directory.exists():
             shutil.rmtree(directory)
         tmp_dir.rename(directory)

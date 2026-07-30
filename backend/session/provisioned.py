@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from backend import workspace_setup
+from backend.session.git import remote_url
 from backend.session.git.worktree import (
     GitWorktree,
     resolve_worktree_paths,
@@ -66,9 +67,12 @@ __all__ = [
     "provisioning_available",
     "local_settings_for",
     "settings_for_workspace",
+    "forge_origin",
+    "point_origin_at_forge",
     "default_workspace_dir",
     "slugify",
     "branch_name_for",
+    "repo_display_name",
     "base_repo_dirname",
     "is_base_repo_dirname",
     "resolve_base_repo_dir",
@@ -125,11 +129,21 @@ class ProvisionSettings:
     and the per-session clones (clone strategy). ``base_branch`` is the fork
     point for new branches and the branch any cache seed is built against.
     ``repo_url`` may be a remote URL *or* an absolute local repo path
-    (:func:`local_settings_for`).
+    (:func:`local_settings_for`) — it is the CLONE SOURCE.
+
+    ``origin_url`` is the forge URL the provisioned workspace's ``origin`` must
+    end up pointing at, which is NOT always the clone source. Cloning from the
+    user's own checkout is fast and works offline, but it left ``origin`` set to
+    a path on their laptop: pushes went to the local repo, reported success, and
+    no branch ever reached the forge. So the local path stays the clone source
+    and ``origin`` is re-pointed at this URL afterwards. Empty means "leave
+    origin alone" — an offline repo with no forge remote keeps working exactly
+    as before.
     """
 
     repo_url: str
     workspace_dir: Path
+    origin_url: str = ""
     base_branch: str = "staging"
     open_cursor: bool = False
     skip_permissions: bool = True
@@ -357,6 +371,12 @@ def local_settings_for(repo_path: str | Path) -> Optional[ProvisionSettings]:
     configured cache seeds are NOT applied — they are built against the
     configured repo and would be wrong for any other one. Returns ``None`` when
     ``repo_path`` is not a git repo.
+
+    ``origin_url`` carries the source repo's OWN origin so provisioned
+    workspaces push to the forge rather than back into this checkout (see
+    :func:`point_origin_at_forge`). It is copied verbatim — an SSH remote stays
+    SSH — and is left empty for a repo with no origin, which keeps a purely
+    local repo working offline exactly as it did.
     """
     repo = Path(repo_path).expanduser()
     if not (repo / ".git").exists():
@@ -364,6 +384,7 @@ def local_settings_for(repo_path: str | Path) -> Optional[ProvisionSettings]:
     branch = _git_current_branch(repo) or "main"
     return ProvisionSettings(
         repo_url=str(repo.resolve()),
+        origin_url=_git_origin_url(repo),
         workspace_dir=default_workspace_dir(),
         base_branch=branch,
         open_cursor=False,
@@ -374,7 +395,24 @@ def local_settings_for(repo_path: str | Path) -> Optional[ProvisionSettings]:
 
 
 def _same_repo_url(a: str, b: str) -> bool:
-    """Loose equality for repo URLs/paths (ignores a trailing ``.git`` / ``/``)."""
+    """Whether two repo URLs/paths name the same repo.
+
+    Transport-independent first: ``git@github.com:Org/app.git`` and
+    ``https://github.com/Org/app`` are one repo, and a literal compare says
+    otherwise — which is how a user whose checkout is SSH and whose
+    ``[repository].url`` is the HTTPS spelling (or the reverse) silently lost
+    their configured settings, base branch included.
+
+    The old normalize-and-compare stays as the FALLBACK rather than being
+    replaced: :func:`remote_url.same_repo` answers False whenever either side is
+    a LOCAL PATH (there is no forge behind one), and MindFlock legitimately
+    provisions from local paths — matching two spellings of the same local path
+    is still this function's job.
+    """
+    if not a:
+        return False
+    if remote_url.same_repo(a, b):
+        return True
 
     def norm(u: str) -> str:
         u = (u or "").strip().rstrip("/")
@@ -382,7 +420,63 @@ def _same_repo_url(a: str, b: str) -> bool:
             u = u[: -len(".git")]
         return u
 
-    return bool(a) and norm(a) == norm(b)
+    return norm(a) == norm(b)
+
+
+def forge_origin(settings: ProvisionSettings) -> str:
+    """The forge URL a workspace provisioned from ``settings`` should push to.
+
+    ``origin_url`` wins (the universal flow sets it from the source repo's own
+    origin); otherwise ``repo_url`` itself, which IS a forge URL whenever the
+    clone source is remote — the configured and ingestion flows. Returns ``""``
+    when neither names a forge, i.e. a purely local repo with no upstream, where
+    there is nothing better to point origin at than the clone source.
+    """
+    for candidate in (settings.origin_url, settings.repo_url):
+        u = (candidate or "").strip()
+        if u and remote_url.parse_remote(u) is not None:
+            return u
+    return ""
+
+
+def point_origin_at_forge(repo_dir: str | Path, settings: ProvisionSettings) -> None:
+    """Re-point ``repo_dir``'s ``origin`` at the forge. Idempotent, best-effort.
+
+    Provisioning clones from the user's own checkout because it is fast and
+    works offline, but that leaves ``origin`` pointing at a directory on their
+    laptop. Pushes then "succeed" into the local repo: the branch never reaches
+    the forge, the stage chip still flips to ``pushed``, and Make PR fails
+    against a remote that is not a GitHub repo. Cloning locally and pushing
+    remotely is the point of splitting clone-source from origin.
+
+    Called on both create and refresh, so a base clone left over from before
+    this fix is healed on its next use rather than needing a manual reset. A
+    failure here is logged and tolerated: a workspace with the old origin is
+    exactly as broken as it was before, and never worse.
+    """
+    forge = forge_origin(settings)
+    if not forge:
+        return
+    current = _git_origin_url(repo_dir)
+    if current == forge:
+        return
+    cp = _run("git", "-C", str(repo_dir), "remote", "set-url", "origin", forge)
+    if cp.returncode != 0:
+        _logger.warning(
+            "provision: could not re-point origin of %s at %s — pushes from this "
+            "workspace may go to %s instead of the forge",
+            repo_dir,
+            forge,
+            current or "(unset)",
+        )
+        return
+    if current:
+        _logger.info(
+            "provision: origin of %s re-pointed from %s to %s",
+            repo_dir,
+            current,
+            forge,
+        )
 
 
 def settings_for_workspace(repo_path: str) -> Optional[ProvisionSettings]:
@@ -392,11 +486,18 @@ def settings_for_workspace(repo_path: str) -> Optional[ProvisionSettings]:
     Prefers the configured settings when the workspace's ``origin`` matches the
     configured repo (or can't be read); otherwise falls back to local-repo
     settings derived from the origin (a local path) or the workspace itself.
+
+    ``origin`` is matched against the configured ``origin_url`` as well as
+    ``repo_url``: since a provisioned workspace's origin is now the FORGE and
+    its clone source may have been a local path, comparing against the clone
+    source alone would stop recognising the workspace as the configured repo.
     """
     settings = load_provision_settings()
     origin = _git_origin_url(repo_path) if repo_path else ""
     if settings is not None and (
-        not origin or _same_repo_url(origin, settings.repo_url)
+        not origin
+        or _same_repo_url(origin, settings.repo_url)
+        or (settings.origin_url and _same_repo_url(origin, settings.origin_url))
     ):
         return settings
     if origin and os.path.isdir(origin):
@@ -452,6 +553,35 @@ _RUN_TIMEOUT: float = 60.0
 _NET_TIMEOUT: float = 600.0
 
 
+def _noninteractive_env(env: Optional[dict] = None) -> dict:
+    """``env`` (or the inherited environment) plus git's fail-fast settings.
+
+    Provisioning shells out to git from a server with no terminal attached.
+    Without this, a clone/fetch that needs a credential parks on a prompt
+    against whatever stdin we inherited and sits there until ``_NET_TIMEOUT``
+    (ten minutes) kills it — the user sees an opaque timeout instead of an
+    authentication error. Both transports are pinned so they fail immediately
+    and say why:
+
+      * ``GIT_TERMINAL_PROMPT=0`` — HTTPS asks for username/password on the
+        terminal. Credential HELPERS (osxkeychain, libsecret, gh's) are
+        untouched, so a configured helper still authenticates silently. Forced,
+        not defaulted: there is no terminal here to prompt on, so an inherited
+        ``=1`` can only produce the hang.
+      * ``GIT_SSH_COMMAND=ssh -o BatchMode=yes`` — SSH asks for a key
+        passphrase or a host-key confirmation, and ssh reads those from
+        ``/dev/tty`` directly, so redirecting stdin alone does not stop it.
+        Only DEFAULTED: a user who set ``GIT_SSH_COMMAND`` (or the older
+        ``GIT_SSH``) for a custom key or jump host keeps their own command
+        verbatim.
+    """
+    out = dict(os.environ if env is None else env)
+    out["GIT_TERMINAL_PROMPT"] = "0"
+    if not out.get("GIT_SSH_COMMAND") and not out.get("GIT_SSH"):
+        out["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+    return out
+
+
 def _run(
     *args: str,
     cwd: Optional[str] = None,
@@ -463,7 +593,11 @@ def _run(
         cp = subprocess.run(
             list(args),
             cwd=cwd,
-            env=env,
+            env=_noninteractive_env(env),
+            # No stdin for any provisioning command: nothing here is
+            # interactive, and an inherited stdin is what lets a credential
+            # prompt block instead of failing.
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=timeout,
@@ -544,12 +678,50 @@ def _check_branch_not_checked_out(base_repo: str, branch_name: str) -> None:
             )
 
 
-def base_repo_dirname(repo_url: str) -> str:
-    """Per-repo base-clone dirname under the workspace dir: ``_base_<slug>``."""
-    tail = (repo_url or "").rstrip("/").split("/")[-1]
+def repo_display_name(repo_url: str) -> str:
+    """The bare repo name behind ``repo_url`` — no owner, no host, no ``.git``.
+
+    Transport-independent: every spelling of one repo yields one name, so
+    ``git@github.com:Org/app.git``, ``https://github.com/Org/app`` and
+    ``ssh://git@github.com:22/Org/app.git`` all give ``app``. That is what makes
+    two spellings share ONE base clone (:func:`base_repo_dirname`) and show ONE
+    label in the sidebar.
+
+    Local clone sources have no forge behind them (``parse_remote`` returns
+    ``None``), so they keep the historical tail-split: ``/home/me/app`` -> ``app``.
+    """
+    u = (repo_url or "").strip()
+    ref = remote_url.parse_remote(u)
+    if ref is not None:
+        return ref.repo
+    tail = u.rstrip("/").split("/")[-1]
+    if not remote_url.is_local_path(u):
+        # An scp-style remote whose path is a single segment
+        # (``git@host:repo.git``) has no "/" in it at all, so the "/"-tail is
+        # the WHOLE url — base clones and sidebar labels came out as
+        # ``git@host:repo``. Everything up to the last ":" is ``user@host``.
+        # Local paths are exempt: a Windows ``C:\repo`` would lose its drive
+        # letter, and a POSIX path may legitimately contain ":".
+        tail = tail.rsplit(":", 1)[-1]
     if tail.endswith(".git"):
         tail = tail[: -len(".git")]
-    return BASE_REPO_PREFIX + slugify(tail or "repo")
+    return tail
+
+
+def base_repo_dirname(repo_url: str) -> str:
+    """Per-repo base-clone dirname under the workspace dir: ``_base_<slug>``.
+
+    Back-compat: the only spelling whose dirname CHANGES here is the
+    single-segment scp remote (``git@host:repo.git``, formerly
+    ``_base_git-host-repo``); the ``owner/repo`` spellings already agreed on
+    their tail across transports.
+    An affected base clone left over from the old naming is not migrated or
+    deleted — the next provision simply clones a fresh ``_base_<repo>`` beside
+    it. The orphan still matches :func:`is_base_repo_dirname`, so the workspace
+    UI keeps classifying it as a base clone (not a stray session) and it can be
+    removed by hand.
+    """
+    return BASE_REPO_PREFIX + slugify(repo_display_name(repo_url) or "repo")
 
 
 def is_base_repo_dirname(name: str) -> bool:
@@ -597,6 +769,11 @@ def _refresh_base_repo(base: Path, settings: ProvisionSettings) -> None:
     # run in a work tree"). If something flipped `core.bare` true out from
     # under us, restore it so provisioning doesn't wedge. Idempotent.
     _run("git", "-C", str(base), "config", "core.bare", "false")
+    # Heal a base clone created before origin was split from the clone source:
+    # its origin is still the user's local checkout, so it would fetch (and
+    # push) there forever. Done BEFORE the fetch so this refresh already tracks
+    # the forge.
+    point_origin_at_forge(base, settings)
     # Refresh best-effort.
     _run(
         "git",
@@ -639,18 +816,31 @@ def _clone_base_repo(base: Path, settings: ProvisionSettings) -> None:
     falls back to a plain full clone (then a best-effort checkout) when the fast
     clone can't be used — e.g. ``base_branch`` isn't found or the server doesn't
     support partial clone.
+
+    The blobless filter is applied ONLY to remote sources. A blobless clone
+    records its source as a promisor remote and fetches missing blobs from it on
+    demand — but a local clone source is about to be replaced as ``origin`` by
+    the forge (:func:`point_origin_at_forge`), which would leave every deferred
+    blob reachable only over the network, breaking history-dependent work
+    offline. Cloning a local path in full costs nothing anyway: git hardlinks
+    the object store, so the "full" clone is both faster and smaller on disk
+    than the filtered one.
     """
     base.parent.mkdir(parents=True, exist_ok=True)
     _logger.info(
         "provision: cloning canonical base repo into %s (one-time setup)", base
     )
-    # Fast path: a blobless, single-branch, tag-less clone. Worktrees still work
-    # and blobs are fetched on demand — dramatically faster than a full clone of
-    # a large repo, which is what made the first worktree session feel stuck.
+    # Fast path: a (for remote sources, blobless) single-branch, tag-less clone.
+    # Worktrees still work and blobs are fetched on demand — dramatically faster
+    # than a full clone of a large repo, which is what made the first worktree
+    # session feel stuck.
+    filter_args = (
+        [] if remote_url.is_local_path(settings.repo_url) else ["--filter=blob:none"]
+    )
     fast = _run(
         "git",
         "clone",
-        "--filter=blob:none",
+        *filter_args,
         "--no-tags",
         "--single-branch",
         "--branch",
@@ -678,6 +868,9 @@ def _clone_base_repo(base: Path, settings: ProvisionSettings) -> None:
                 "provision: base_branch %s not found; base repo stays on default branch",
                 settings.base_branch,
             )
+    # The clone source may have been a local path; origin must be the forge, or
+    # every session cut from this base pushes into the user's own checkout.
+    point_origin_at_forge(base, settings)
 
 
 # ---------------------------------------------------------------------------
@@ -1042,6 +1235,9 @@ class ProvisionedCloneWorktree(GitWorktree):
         if d.exists():
             shutil.rmtree(d, ignore_errors=True)
         tmp.rename(d)
+        # Same split as the worktree strategy: clone from wherever is fastest,
+        # then push to the forge.
+        point_origin_at_forge(d, settings)
         # Record the base commit so the diff view has a comparison point.
         head = _run("git", "-C", str(d), "rev-parse", "HEAD")
         if head.returncode == 0:

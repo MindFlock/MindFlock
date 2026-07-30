@@ -22729,7 +22729,8 @@ function caps() {
   return ((_a2 = queryClient.getQueryData(["config"])) == null ? void 0 : _a2.caps) ?? {
     git: true,
     tailscale: true,
-    ticketing: true
+    ticketing: true,
+    github: true
   };
 }
 function ideName() {
@@ -22765,6 +22766,22 @@ function requireGit() {
   if (caps().git) return true;
   toast("git is not installed — install git to use diffs, commits and PRs");
   return false;
+}
+const PR_REMEDY = "add a GitHub token in Settings → PR review, or install the GitHub CLI";
+const PR_FALLBACK_HINT = "MindFlock can’t open or merge the PR for you yet — " + PR_REMEDY + ".\nThis still works: it opens GitHub’s prefilled page in your browser instead.";
+function hasPrSupport(c) {
+  return (c ?? caps()).github !== false;
+}
+function offerUrl(url, msg) {
+  const win = window.open(url, "_blank");
+  if (win) {
+    toast(msg, { duration: 6e3 });
+    return;
+  }
+  toast(msg + " — click to open", {
+    onClick: () => window.open(url, "_blank"),
+    duration: 9e3
+  });
 }
 const closeUndo = [];
 async function killSession(title) {
@@ -22929,10 +22946,16 @@ async function submitMakePr(title, base) {
     const r = await instApi(title, "/make-pr", {
       json: base ? { base } : {}
     });
-    if (r == null ? void 0 : r.url) window.open(r.url, "_blank");
-    markLoopReset(title);
+    if (r && r.ok === false) {
+      const msg = r.message || PR_REMEDY;
+      if (r.compare_url) offerUrl(r.compare_url, "Opened GitHub’s compare page — " + msg);
+      else toast(msg, { duration: 9e3 });
+    } else {
+      if (r == null ? void 0 : r.url) window.open(r.url, "_blank");
+      markLoopReset(title);
+    }
   } catch (err) {
-    alert("Make PR failed: " + errMsg(err));
+    toast("Make PR failed: " + errMsg(err), { duration: 6e3 });
   }
   await refreshInstances();
 }
@@ -22940,9 +22963,14 @@ async function mergeSession(title) {
   if (!title || !requireGit()) return;
   if (!confirm("Merge this branch's PR into staging?")) return;
   try {
-    await instApi(title, "/merge-pr", { method: "POST" });
+    const r = await instApi(title, "/merge-pr", { method: "POST" });
+    if (r && r.ok === false) {
+      const msg = r.message || PR_REMEDY;
+      if (r.pr_url) offerUrl(r.pr_url, "Opened the PR on GitHub to merge there — " + msg);
+      else toast(msg, { duration: 9e3 });
+    }
   } catch (err) {
-    alert("Merge failed: " + errMsg(err));
+    toast("Merge failed: " + errMsg(err), { duration: 6e3 });
   }
   await refreshInstances();
 }
@@ -23111,7 +23139,8 @@ function checkChip(inst) {
   }
   return null;
 }
-const NO_ORIGIN_CMD = "git remote add origin <url>";
+const NO_ORIGIN_CMD = "git remote add origin git@github.com:owner/repo.git";
+const NO_ORIGIN_ALT = "git remote add origin https://github.com/owner/repo.git";
 function nextStep(inst) {
   var _a2;
   const title = inst.title;
@@ -23129,7 +23158,7 @@ function nextStep(inst) {
         return {
           label: "No remote — add origin…",
           hint: true,
-          title: "This repo has no origin remote, so there is nowhere to push.\nRun this in the workspace (click to copy):\n" + NO_ORIGIN_CMD,
+          title: "This repo has no origin remote, so there is nowhere to push.\nRun this in the workspace (click to copy):\n" + NO_ORIGIN_CMD + "\nHTTPS works just as well:\n" + NO_ORIGIN_ALT,
           run: () => copyText(NO_ORIGIN_CMD).then((ok) => {
             toast(ok ? "command copied" : "copy failed — " + NO_ORIGIN_CMD);
           })
@@ -23137,8 +23166,20 @@ function nextStep(inst) {
       }
       return { label: "Push", run: () => pushSession(title) };
     case "pushed":
-      return { label: "Make PR", run: () => makePrSession(title) };
+      return hasPrSupport(caps2) ? { label: "Make PR", run: () => makePrSession(title) } : {
+        label: "Make PR ↗",
+        hint: true,
+        title: PR_FALLBACK_HINT,
+        run: () => makePrSession(title)
+      };
     case "pr":
+      if (!hasPrSupport(caps2))
+        return inst.pr_url ? {
+          label: "Merge on GitHub ↗",
+          hint: true,
+          title: PR_FALLBACK_HINT,
+          run: () => window.open(inst.pr_url, "_blank")
+        } : { label: "Merge ↗", hint: true, title: PR_FALLBACK_HINT, run: () => mergeSession(title) };
       return { label: "Merge", run: () => mergeSession(title) };
     case "merged":
       return inst.pr_url ? { label: "Open PR ↗", run: () => window.open(inst.pr_url, "_blank") } : null;
@@ -23254,7 +23295,12 @@ function setRebindCapturing(on) {
 }
 const CHORDS = {
   c: { desc: "Commit…", run: (t) => commitSession(t) },
+  // Plain `git push` over the user's own remote — SSH or HTTPS, whatever they
+  // configured. Never gated on the GitHub CLI.
   p: { desc: "Push", run: (t) => pushSession(t) },
+  // Stays bound whether or not gh/a token is present: makePrSession degrades to
+  // GitHub's prefilled compare page, so the chord never dead-ends. Gating it on
+  // a capability would just make the shortcut silently stop working.
   r: { desc: "Make PR", run: (t) => makePrSession(t) },
   o: { desc: "Open / focus IDE", run: (t) => ideSession(t) },
   d: { desc: "Duplicate session", run: (t) => copySession(t) },
@@ -24565,7 +24611,8 @@ const SidebarRow = reactExports.memo(function SidebarRow2({
   const missing = !!inst.workspace_missing;
   const paused = inst.status === "paused";
   const pending = !!inst.pending;
-  const caps2 = (config == null ? void 0 : config.caps) ?? { git: true };
+  const caps2 = (config == null ? void 0 : config.caps) ?? { git: true, github: true };
+  const prSupport = hasPrSupport(caps2);
   const ideName2 = (config == null ? void 0 : config.ide_name) || "Cursor";
   const chip = chipState(inst);
   const check = checkChip(inst);
@@ -24762,23 +24809,30 @@ const SidebarRow = reactExports.memo(function SidebarRow2({
                 "Push",
                 /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "kbd", children: "Ctrl+K P" })
               ] }),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("button", { onClick: () => makePrSession(title), children: [
-                "Make PR",
-                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "kbd", children: "Ctrl+K R" })
-              ] }),
-              inst.stage === "pr" && /* @__PURE__ */ jsxRuntimeExports.jsx(
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(
                 "button",
                 {
-                  onClick: () => act(async () => {
-                    if (!confirm("Merge this branch's PR into staging?")) return;
-                    try {
-                      await instApi(title, "/merge-pr", { method: "POST" });
-                    } catch (err) {
-                      alert("Merge failed: " + errMsg(err));
-                    }
-                    await refreshInstances();
-                  }),
-                  children: "Merge to staging"
+                  onClick: () => makePrSession(title),
+                  title: prSupport ? void 0 : PR_FALLBACK_HINT,
+                  children: [
+                    "Make PR",
+                    prSupport ? "" : " ↗",
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "kbd", children: "Ctrl+K R" })
+                  ]
+                }
+              ),
+              inst.stage === "pr" && // Shares mergeSession() with the pill, the palette and the
+              // pane header so the confirm text and the
+              // can't-merge-from-here fallback exist in exactly one place.
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "button",
+                {
+                  onClick: () => act(() => mergeSession(title)),
+                  title: prSupport ? void 0 : PR_FALLBACK_HINT,
+                  children: [
+                    "Merge to staging",
+                    prSupport ? "" : " ↗"
+                  ]
                 }
               ),
               inst.pr_url && /* @__PURE__ */ jsxRuntimeExports.jsx("button", { onClick: () => window.open(inst.pr_url, "_blank"), children: "Open PR ↗" }),
@@ -25943,6 +25997,23 @@ function TestResult({ state }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "test-result " + (state.ok ? "ok" : "bad"), children: (state.ok ? "✓ " : "✗ ") + state.msg });
 }
 const idleTest = { testing: false };
+function describeGithubTest(r) {
+  const source = String((r == null ? void 0 : r.token_source) || "none");
+  const haveToken = !!(r == null ? void 0 : r.ok) || source !== "" && source !== "none";
+  const bits = ["token: " + source];
+  if (r == null ? void 0 : r.gh_installed) bits.push(r.gh_authenticated ? "gh authenticated" : "gh not authenticated");
+  else bits.push("gh not installed (optional)");
+  if (r == null ? void 0 : r.detail) bits.push(String(r.detail));
+  return { testing: false, ok: haveToken, msg: bits.join(" · ") };
+}
+async function runGithubTest() {
+  try {
+    const r = await api("/api/settings/test/github", { method: "POST" });
+    return describeGithubTest(r);
+  } catch (e) {
+    return { testing: false, ok: false, msg: e.message };
+  }
+}
 function SetupChecklist({ standalone }) {
   const [reprobeKey, setReprobeKey] = reactExports.useState(0);
   const [gh, setGh] = reactExports.useState(idleTest);
@@ -25954,16 +26025,7 @@ function SetupChecklist({ standalone }) {
   };
   const testGithub = reactExports.useCallback(async () => {
     setGh({ testing: true });
-    try {
-      const r = await api("/api/settings/test/github", { method: "POST" });
-      const bits = ["token: " + ((r == null ? void 0 : r.token_source) || "none")];
-      if (r == null ? void 0 : r.gh_installed) bits.push(r.gh_authenticated ? "gh authenticated" : "gh not authenticated");
-      else bits.push("gh not installed");
-      if (r == null ? void 0 : r.detail) bits.push(String(r.detail));
-      setGh({ testing: false, ok: !!(r == null ? void 0 : r.ok), msg: bits.join(" · ") });
-    } catch (e) {
-      setGh({ testing: false, ok: false, msg: e.message });
-    }
+    setGh(await runGithubTest());
   }, []);
   const testShortcut = reactExports.useCallback(async () => {
     setSc({ testing: true });
@@ -27176,7 +27238,9 @@ function Pane({
   const lastTab = useUi((s) => s.lastTab[title]);
   const setLastTab = useUi((s) => s.setLastTab);
   const reduceMotion = useUi((s) => s.reduceMotion);
-  const caps2 = (config == null ? void 0 : config.caps) ?? { git: true };
+  const caps2 = (config == null ? void 0 : config.caps) ?? {
+    git: true
+  };
   const missing = !!inst.workspace_missing;
   const loading = inst.status === "loading";
   const savedTab = lastTab || "agent";
@@ -27984,7 +28048,8 @@ function CommandPalette({ host }) {
   const actions = reactExports.useMemo(() => {
     if (!open) return [];
     const ui = useUi.getState();
-    const caps2 = (config == null ? void 0 : config.caps) ?? { git: true };
+    const caps2 = (config == null ? void 0 : config.caps) ?? { git: true, github: true };
+    const prHint = hasPrSupport(caps2) ? "" : " · opens GitHub";
     const ideName2 = (config == null ? void 0 : config.ide_name) || "Cursor";
     const acts = [];
     acts.push({ label: "New session…", hint: "Ctrl+N", run: () => ui.openDialogFor("new-session") });
@@ -28001,12 +28066,17 @@ function CommandPalette({ host }) {
       if (caps2.git) {
         acts.push({ label: `Commit… — ${t}`, hint: "Ctrl+K C", run: () => commitSession(t) });
         acts.push({ label: `Push — ${t}`, hint: "Ctrl+K P", run: () => pushSession(t) });
-        acts.push({ label: `Create PR — ${t}`, hint: "Ctrl+K R", run: () => makePrSession(t) });
+        acts.push({ label: `Create PR — ${t}`, hint: "Ctrl+K R" + prHint, run: () => makePrSession(t) });
       }
       acts.push({ label: `Open in ${ideName2} — ${t}`, hint: "Ctrl+K O", run: () => ideSession(t) });
       acts.push({ label: `Duplicate session — ${t}`, hint: "Ctrl+K D", run: () => copySession(t) });
       acts.push({ label: `Hide window — ${t}`, hint: "Ctrl+K H", run: () => hideSession(t) });
-      if (caps2.git) acts.push({ label: `Merge PR to staging — ${t}`, run: () => mergeSession(t) });
+      if (caps2.git)
+        acts.push({
+          label: `Merge PR to staging — ${t}`,
+          hint: prHint ? prHint.replace(" · ", "") : void 0,
+          run: () => mergeSession(t)
+        });
     }
     acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host.toggleShortcuts() });
     acts.push({ label: "Open Settings", run: () => ui.openDialogFor("settings") });
@@ -30673,7 +30743,7 @@ function PrReview({ gotoScreen }) {
         /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Token" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "token", type: "password", placeholder: "optional — else $GH_TOKEN / gh auth" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Falls back to $GH_TOKEN / $GITHUB_TOKEN / `gh auth token`." })
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Also what lets MindFlock open and merge PRs for you without the gh CLI. Falls back to $GH_TOKEN / $GITHUB_TOKEN / `gh auth token`. Pushing never needs it — that is plain git over your own remote." })
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "test-row", children: [
@@ -30685,19 +30755,7 @@ function PrReview({ gotoScreen }) {
                 className: "test-btn",
                 onClick: async () => {
                   setGhTest({ testing: true });
-                  try {
-                    const r = await api("/api/settings/test/github", {
-                      method: "POST"
-                    });
-                    const bits = ["token: " + ((r == null ? void 0 : r.token_source) || "none")];
-                    if (r == null ? void 0 : r.gh_installed)
-                      bits.push(r.gh_authenticated ? "gh authenticated" : "gh not authenticated");
-                    else bits.push("gh not installed");
-                    if (r == null ? void 0 : r.detail) bits.push(String(r.detail));
-                    setGhTest({ testing: false, ok: !!(r == null ? void 0 : r.ok), msg: bits.join(" · ") });
-                  } catch (e) {
-                    setGhTest({ testing: false, ok: false, msg: e.message });
-                  }
+                  setGhTest(await runGithubTest());
                 },
                 children: "Test GitHub"
               }
@@ -30711,7 +30769,7 @@ function PrReview({ gotoScreen }) {
               }
             )
           ] }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Shows where a token would come from and whether gh is authenticated." })
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Shows where a token would come from. A token is all this needs — gh is reported too, but it is optional." })
         ] })
       ] })
     ] })
@@ -30986,19 +31044,7 @@ function GitIssues({ gotoScreen }) {
                 className: "test-btn",
                 onClick: async () => {
                   setGhTest({ testing: true });
-                  try {
-                    const r = await api("/api/settings/test/github", {
-                      method: "POST"
-                    });
-                    const bits = ["token: " + ((r == null ? void 0 : r.token_source) || "none")];
-                    if (r == null ? void 0 : r.gh_installed)
-                      bits.push(r.gh_authenticated ? "gh authenticated" : "gh not authenticated");
-                    else bits.push("gh not installed");
-                    if (r == null ? void 0 : r.detail) bits.push(String(r.detail));
-                    setGhTest({ testing: false, ok: !!(r == null ? void 0 : r.ok), msg: bits.join(" · ") });
-                  } catch (e) {
-                    setGhTest({ testing: false, ok: false, msg: e.message });
-                  }
+                  setGhTest(await runGithubTest());
                 },
                 children: "Test GitHub"
               }
@@ -31486,7 +31532,7 @@ function Doctor(_) {
           children: "Re-check"
         }
       ) }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Probes git, tmux, gh, the agent CLI, uv and tailscale." })
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Probes git, tmux, the agent CLI, uv and tailscale — plus gh, which is optional (pushing uses plain git over your own remote)." })
     ] })
   ] });
 }
@@ -33116,24 +33162,30 @@ const SLIDES = [
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "owner/name" }),
       " (e.g. ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "mindflockai/MindFlock" }),
-      "). No token field? That's fine — it falls back to ",
+      "), then paste a ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "GitHub token" }),
+      ". That token is the whole setup: it also lets MindFlock open and merge PRs for you. It falls back to",
+      " ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "$GH_TOKEN" }),
-      " /",
-      " ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "$GITHUB_TOKEN" }),
       " / ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "$GITHUB_TOKEN" }),
+      ", and to",
+      " ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "gh auth token" }),
-      ", so a local",
+      " if you happen to have the GitHub CLI — which is optional, not required. ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "Pushing" }),
+      " is always plain ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "git push" }),
       " ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "gh auth login" }),
-      " is enough. Tune ",
+      "over the remote you already use, so an SSH remote needs nothing extra. Tune",
+      " ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "base branch" }),
-      ",",
-      " ",
+      ", ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "min PR age" }),
       ", ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "poll interval" }),
-      ", and ",
+      ", and",
+      " ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "skip authors" }),
       " (e.g. dependabot) to control what gets reviewed."
     ] }),

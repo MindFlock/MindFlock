@@ -165,8 +165,42 @@ function TestResult({ state }: { state: { testing: boolean; ok?: boolean; msg?: 
   );
 }
 
-type TestState = { testing: boolean; ok?: boolean; msg?: string };
+export type TestState = { testing: boolean; ok?: boolean; msg?: string };
 const idleTest: TestState = { testing: false };
+
+// --- The one GitHub credential test ------------------------------------------
+// The setup checklist, Settings → PR review and Settings → Git issues all show
+// POST /api/settings/test/github. They used to each build their own summary
+// line, which is how "gh not installed" ended up reading like a failure in
+// three places at once. One helper now, so the wording cannot drift again.
+
+/** Render the /settings/test/github payload.
+ *
+ * The ✓/✗ verdict is driven purely by whether a TOKEN resolves. gh is reported
+ * because it is genuinely useful — but it is optional, so a contributor who
+ * pushes over SSH and has a token in Settings is fully configured and must not
+ * be shown a red ✗ for a CLI she does not need. */
+export function describeGithubTest(r: Record<string, unknown> | null): TestState {
+  const source = String(r?.token_source || "none");
+  // Trust the server's own verdict (it is already token-derived) but re-derive
+  // it defensively so an older/leaner payload still can't blame gh.
+  const haveToken = !!r?.ok || (source !== "" && source !== "none");
+  const bits = ["token: " + source];
+  if (r?.gh_installed) bits.push(r.gh_authenticated ? "gh authenticated" : "gh not authenticated");
+  else bits.push("gh not installed (optional)");
+  if (r?.detail) bits.push(String(r.detail));
+  return { testing: false, ok: haveToken, msg: bits.join(" · ") };
+}
+
+/** Run the test and return a ready-to-render TestState. Never throws. */
+export async function runGithubTest(): Promise<TestState> {
+  try {
+    const r = await api<Record<string, unknown>>("/api/settings/test/github", { method: "POST" });
+    return describeGithubTest(r);
+  } catch (e) {
+    return { testing: false, ok: false, msg: (e as Error).message };
+  }
+}
 
 /** The ①②③ checklist (empty-state card + the Setup dialog). */
 export function SetupChecklist({ standalone }: { standalone?: boolean }) {
@@ -182,16 +216,7 @@ export function SetupChecklist({ standalone }: { standalone?: boolean }) {
 
   const testGithub = useCallback(async () => {
     setGh({ testing: true });
-    try {
-      const r = await api<Record<string, unknown>>("/api/settings/test/github", { method: "POST" });
-      const bits = ["token: " + (r?.token_source || "none")];
-      if (r?.gh_installed) bits.push(r.gh_authenticated ? "gh authenticated" : "gh not authenticated");
-      else bits.push("gh not installed");
-      if (r?.detail) bits.push(String(r.detail));
-      setGh({ testing: false, ok: !!r?.ok, msg: bits.join(" · ") });
-    } catch (e) {
-      setGh({ testing: false, ok: false, msg: (e as Error).message });
-    }
+    setGh(await runGithubTest());
   }, []);
 
   const testShortcut = useCallback(async () => {

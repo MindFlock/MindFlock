@@ -6,6 +6,7 @@ import { api } from "../../../api/client";
 import { toast } from "../../../lib/toast";
 import { refreshInstances, usePanelQuery } from "../../../state/queries";
 import { SettingField, useSettings } from "../useSettings";
+import { runGithubTest } from "../../dialogs/SetupDialog";
 import type { ScreenProps } from "../SettingsDialog";
 
 interface OpenPr {
@@ -293,7 +294,11 @@ export function PrReview({ gotoScreen }: ScreenProps) {
           <label className="set-row">
             <span className="set-label">Token</span>
             <SettingField group="github" field="token" type="password" placeholder="optional — else $GH_TOKEN / gh auth" />
-            <span className="set-hint">Falls back to $GH_TOKEN / $GITHUB_TOKEN / `gh auth token`.</span>
+            <span className="set-hint">
+              Also what lets MindFlock open and merge PRs for you without the gh CLI.
+              Falls back to $GH_TOKEN / $GITHUB_TOKEN / `gh auth token`. Pushing never
+              needs it — that is plain git over your own remote.
+            </span>
           </label>
           <div className="set-row">
             <span className="test-row">
@@ -303,19 +308,7 @@ export function PrReview({ gotoScreen }: ScreenProps) {
                 className="test-btn"
                 onClick={async () => {
                   setGhTest({ testing: true });
-                  try {
-                    const r = await api<Record<string, unknown>>("/api/settings/test/github", {
-                      method: "POST",
-                    });
-                    const bits = ["token: " + (r?.token_source || "none")];
-                    if (r?.gh_installed)
-                      bits.push(r.gh_authenticated ? "gh authenticated" : "gh not authenticated");
-                    else bits.push("gh not installed");
-                    if (r?.detail) bits.push(String(r.detail));
-                    setGhTest({ testing: false, ok: !!r?.ok, msg: bits.join(" · ") });
-                  } catch (e) {
-                    setGhTest({ testing: false, ok: false, msg: (e as Error).message });
-                  }
+                  setGhTest(await runGithubTest());
                 }}
               >
                 Test GitHub
@@ -328,7 +321,8 @@ export function PrReview({ gotoScreen }: ScreenProps) {
               </span>
             </span>
             <span className="set-hint">
-              Shows where a token would come from and whether gh is authenticated.
+              Shows where a token would come from. A token is all this needs — gh is
+              reported too, but it is optional.
             </span>
           </div>
         </div>

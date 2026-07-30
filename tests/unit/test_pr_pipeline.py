@@ -118,6 +118,10 @@ def _reset_token_cache():
 def _clear_gh_env(monkeypatch):
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    # Clone URLs now resolve through the repository settings layer; a developer
+    # shell that exports either of these must not steer the assertions.
+    monkeypatch.delenv("MINDFLOCK_REPO_URL", raising=False)
+    monkeypatch.delenv("MINDFLOCK_GIT_TRANSPORT", raising=False)
 
 
 # --------------------------------------------------------------------------
@@ -583,6 +587,38 @@ class TestPRMonitorListPrs:
             out = await monitor._list_prs("org/example-bot")
         assert out == []
 
+    async def test_clone_url_defaults_to_the_api_https_url(self):
+        item = _pr_item(5, "alice", "2025-01-15T10:00:00Z")
+        item["base"]["repo"] = {
+            "clone_url": "https://github.com/org/example-bot.git",
+            "ssh_url": "git@github.com:org/example-bot.git",
+        }
+        out, _ = await self._list([item])
+        assert out[0].clone_url == "https://github.com/org/example-bot.git"
+
+    async def test_ssh_transport_uses_the_payloads_ssh_url(self, monkeypatch):
+        monkeypatch.setenv("MINDFLOCK_GIT_TRANSPORT", "ssh")
+        item = _pr_item(5, "alice", "2025-01-15T10:00:00Z")
+        item["base"]["repo"] = {
+            "clone_url": "https://github.com/org/example-bot.git",
+            "ssh_url": "git@github.com:org/example-bot.git",
+        }
+        out, _ = await self._list([item])
+        assert out[0].clone_url == "git@github.com:org/example-bot.git"
+
+    async def test_ssh_transport_without_a_payload_synthesizes_ssh(self, monkeypatch):
+        # No base.repo at all (the shape the old fallback covered).
+        monkeypatch.setenv("MINDFLOCK_GIT_TRANSPORT", "ssh")
+        out, _ = await self._list([_pr_item(5, "alice", "2025-01-15T10:00:00Z")])
+        assert out[0].clone_url == "git@github.com:org/example-bot.git"
+
+    async def test_auto_transport_keeps_the_users_own_ssh_spelling(self, monkeypatch):
+        monkeypatch.setenv("MINDFLOCK_REPO_URL", "git@github.com:org/example-bot.git")
+        item = _pr_item(5, "alice", "2025-01-15T10:00:00Z")
+        item["base"]["repo"] = {"clone_url": "https://github.com/org/example-bot.git"}
+        out, _ = await self._list([item])
+        assert out[0].clone_url == "git@github.com:org/example-bot.git"
+
 
 class TestPRMonitorAuthenticatedUser:
     async def test_returns_login_and_caches(self):
@@ -787,9 +823,9 @@ class TestStripMedia:
 
 
 class _ScriptedRun:
-    """Stand-in for pr_provisioner._run: records the git argv of each call and
-    returns scripted ``(rc, stdout, stderr)`` tuples (stderr non-empty on
-    failure so callers' ``.decode()`` handling runs)."""
+    """Stand-in for pr_provisioner._run / _run_network: records the git argv of
+    each call and returns scripted ``(rc, stdout, stderr)`` tuples (stderr
+    non-empty on failure so callers' ``.decode()`` handling runs)."""
 
     def __init__(self, rcs):
         self._rcs = list(rcs)
@@ -801,8 +837,24 @@ class _ScriptedRun:
         return rc, b"", (b"" if rc == 0 else b"boom")
 
 
+def _patch_git(monkeypatch, pr_provisioner, scripted):
+    """Route both git runners through one script.
+
+    Network git (clone/fetch) goes through ``_run_network`` and local git
+    (checkout/reset) through ``_run``; sharing the instance keeps a single
+    ordered call log across the whole flow.
+    """
+    monkeypatch.setattr(pr_provisioner, "_run", scripted)
+    monkeypatch.setattr(pr_provisioner, "_run_network", scripted)
+
+
+# Both remote spellings the provisioner must clone VERBATIM under the default
+# "auto" transport — the SSH case is the contributor bug report.
+_CLONE_URLS = ["https://github.com/org/repo.git", "git@github.com:org/repo.git"]
+
+
 class TestPRProvisionerGitFlow:
-    def _pr(self):
+    def _pr(self, clone_url="https://github.com/org/repo.git"):
         return PullRequest(
             number=9,
             head_ref="feat",
@@ -813,7 +865,7 @@ class TestPRProvisionerGitFlow:
             author="a",
             created_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
             repo="org/repo",
-            clone_url="https://github.com/org/repo.git",
+            clone_url=clone_url,
         )
 
     def _provisioner(self, tmp_path):
@@ -826,7 +878,10 @@ class TestPRProvisionerGitFlow:
         )
         return PRProvisioner(cfg)
 
-    async def test_blobless_clone_falls_back_to_full_clone(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("clone_url", _CLONE_URLS)
+    async def test_blobless_clone_falls_back_to_full_clone(
+        self, tmp_path, monkeypatch, clone_url
+    ):
         from backend.ticket_ingestion import pr_provisioner
 
         prov = self._provisioner(tmp_path)
@@ -834,19 +889,21 @@ class TestPRProvisionerGitFlow:
         # blobless clone fails; full clone ok; fetch ok; checkout ok; reset ok.
         scripted = _ScriptedRun([1, 0, 0, 0, 0])
         rmtreed = []
-        monkeypatch.setattr(pr_provisioner, "_run", scripted)
+        _patch_git(monkeypatch, pr_provisioner, scripted)
         monkeypatch.setattr(
             pr_provisioner.shutil, "rmtree", lambda p, **k: rmtreed.append(str(p))
         )
-        await prov._clone(self._pr(), directory)
+        await prov._clone(self._pr(clone_url), directory)
 
         argvs = scripted.calls
+        # Both attempts clone the PR's URL exactly as recorded — the SSH
+        # spelling is never rewritten into an HTTPS one.
         assert argvs[0] == (
             "git",
             "clone",
             "--filter=blob:none",
             "--no-tags",
-            "https://github.com/org/repo.git",
+            clone_url,
             str(directory),
         )
         # Full-clone retry taken after the partial-clone directory was wiped.
@@ -854,31 +911,67 @@ class TestPRProvisionerGitFlow:
         assert argvs[1] == (
             "git",
             "clone",
-            "https://github.com/org/repo.git",
+            clone_url,
             str(directory),
         )
         assert argvs[2] == ("git", "fetch", "origin", "pull/9/head")
         assert argvs[3] == ("git", "checkout", "-B", "feat", _FAKE_SHA)
         assert argvs[4] == ("git", "reset", "--hard", _FAKE_SHA)
 
+    @pytest.mark.parametrize(
+        "transport,clone_url,expected",
+        [
+            # Explicit transports respell the recorded URL; "auto" never does.
+            ("ssh", "https://github.com/org/repo.git", "git@github.com:org/repo.git"),
+            ("https", "git@github.com:org/repo.git", "https://github.com/org/repo.git"),
+            ("auto", "git@github.com:org/repo.git", "git@github.com:org/repo.git"),
+        ],
+    )
+    async def test_transport_setting_selects_clone_spelling(
+        self, tmp_path, monkeypatch, transport, clone_url, expected
+    ):
+        from backend.ticket_ingestion import pr_provisioner
+
+        monkeypatch.setenv("MINDFLOCK_GIT_TRANSPORT", transport)
+        prov = self._provisioner(tmp_path)
+        scripted = _ScriptedRun([0, 0, 0, 0])
+        _patch_git(monkeypatch, pr_provisioner, scripted)
+        await prov._clone(self._pr(clone_url), tmp_path / "pr-ws")
+        assert scripted.calls[0][4] == expected
+
     async def test_clone_total_failure_raises(self, tmp_path, monkeypatch):
         from backend.ticket_ingestion import pr_provisioner
 
         prov = self._provisioner(tmp_path)
         scripted = _ScriptedRun([1, 1])  # both blobless and full clone fail
-        monkeypatch.setattr(pr_provisioner, "_run", scripted)
+        _patch_git(monkeypatch, pr_provisioner, scripted)
         monkeypatch.setattr(pr_provisioner.shutil, "rmtree", lambda p, **k: None)
         with pytest.raises(pr_provisioner.PRProvisioningError, match="git clone"):
             await prov._clone(self._pr(), tmp_path / "pr-ws")
         # Never reached checkout: only the two clone attempts ran.
         assert len(scripted.calls) == 2
 
+    async def test_clone_failure_names_the_transport_attempted(
+        self, tmp_path, monkeypatch
+    ):
+        """A failed SSH clone says so, instead of leaving the user guessing."""
+        from backend.ticket_ingestion import pr_provisioner
+
+        prov = self._provisioner(tmp_path)
+        scripted = _ScriptedRun([1, 1])
+        _patch_git(monkeypatch, pr_provisioner, scripted)
+        monkeypatch.setattr(pr_provisioner.shutil, "rmtree", lambda p, **k: None)
+        with pytest.raises(pr_provisioner.PRProvisioningError, match="over SSH"):
+            await prov._clone(
+                self._pr("git@github.com:org/repo.git"), tmp_path / "pr-ws"
+            )
+
     async def test_fetch_failure_raises(self, tmp_path, monkeypatch):
         from backend.ticket_ingestion import pr_provisioner
 
         prov = self._provisioner(tmp_path)
         scripted = _ScriptedRun([1])  # git fetch fails immediately
-        monkeypatch.setattr(pr_provisioner, "_run", scripted)
+        _patch_git(monkeypatch, pr_provisioner, scripted)
         with pytest.raises(pr_provisioner.PRProvisioningError, match="git fetch"):
             await prov._checkout_pr_head(self._pr(), tmp_path / "pr-ws")
 
@@ -891,7 +984,7 @@ class TestPRProvisionerGitFlow:
         directory = tmp_path / "pr-ws"
         # fetch ok; checkout head_sha fails; checkout FETCH_HEAD ok; reset ok.
         scripted = _ScriptedRun([0, 1, 0, 0])
-        monkeypatch.setattr(pr_provisioner, "_run", scripted)
+        _patch_git(monkeypatch, pr_provisioner, scripted)
         await prov._checkout_pr_head(self._pr(), directory)
 
         argvs = scripted.calls
@@ -907,7 +1000,7 @@ class TestPRProvisionerGitFlow:
         prov = self._provisioner(tmp_path)
         # fetch ok; checkout head_sha fails; checkout FETCH_HEAD also fails.
         scripted = _ScriptedRun([0, 1, 1])
-        monkeypatch.setattr(pr_provisioner, "_run", scripted)
+        _patch_git(monkeypatch, pr_provisioner, scripted)
         with pytest.raises(pr_provisioner.PRProvisioningError, match="git checkout"):
             await prov._checkout_pr_head(self._pr(), tmp_path / "pr-ws")
 
@@ -917,7 +1010,7 @@ class TestPRProvisionerGitFlow:
         prov = self._provisioner(tmp_path)
         # fetch ok; checkout head_sha ok; reset --hard fails.
         scripted = _ScriptedRun([0, 0, 1])
-        monkeypatch.setattr(pr_provisioner, "_run", scripted)
+        _patch_git(monkeypatch, pr_provisioner, scripted)
         with pytest.raises(pr_provisioner.PRProvisioningError, match="git reset"):
             await prov._checkout_pr_head(self._pr(), tmp_path / "pr-ws")
 
@@ -929,7 +1022,7 @@ class TestPRProvisionerGitFlow:
         # blobless clone ok; fetch ok; checkout ok; reset ok — no full-clone retry.
         scripted = _ScriptedRun([0, 0, 0, 0])
         rmtreed = []
-        monkeypatch.setattr(pr_provisioner, "_run", scripted)
+        _patch_git(monkeypatch, pr_provisioner, scripted)
         monkeypatch.setattr(
             pr_provisioner.shutil, "rmtree", lambda p, **k: rmtreed.append(str(p))
         )

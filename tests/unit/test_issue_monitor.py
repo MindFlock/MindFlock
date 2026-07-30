@@ -84,6 +84,14 @@ def _patch_session(session):
 
 
 @pytest.fixture(autouse=True)
+def _clean_transport_env(monkeypatch):
+    """The clone URL now resolves through the repository settings layer, so a
+    developer shell that exports either of these must not steer the assertions."""
+    monkeypatch.delenv("MINDFLOCK_REPO_URL", raising=False)
+    monkeypatch.delenv("MINDFLOCK_GIT_TRANSPORT", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _headers_no_network(monkeypatch):
     """_headers awaits resolve_token (which may shell to gh). Stub it so no
     test ever touches the auth chain."""
@@ -145,10 +153,48 @@ class TestListIssues:
         assert issue.number == 5
         assert issue.author == "alice"
         assert issue.repo == "org/repo"
+        # Nothing configured -> HTTPS, the historic synthesized URL.
         assert issue.clone_url == "https://github.com/org/repo.git"
         assert issue.created_at == datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc)
         params = session.get_calls[0][1]["params"]
         assert params["state"] == "open"
+
+    @pytest.mark.parametrize(
+        "transport,expected",
+        [
+            ("ssh", "git@github.com:org/repo.git"),
+            ("https", "https://github.com/org/repo.git"),
+        ],
+    )
+    async def test_clone_url_follows_configured_transport(
+        self, monkeypatch, transport, expected
+    ):
+        monkeypatch.setenv("MINDFLOCK_GIT_TRANSPORT", transport)
+        out, _ = await self._list([_issue_item(5, "alice", "2025-01-15T10:00:00Z")])
+        assert out[0].clone_url == expected
+
+    async def test_auto_transport_keeps_the_users_own_ssh_spelling(self, monkeypatch):
+        """The contributor bug: an SSH-only checkout must not be handed HTTPS."""
+        monkeypatch.setenv("MINDFLOCK_REPO_URL", "git@github.com:org/repo.git")
+        out, _ = await self._list([_issue_item(5, "alice", "2025-01-15T10:00:00Z")])
+        assert out[0].clone_url == "git@github.com:org/repo.git"
+
+    async def test_auto_transport_ignores_a_url_for_another_repo(self, monkeypatch):
+        # The global repo URL names a DIFFERENT repo, so it must not be cloned
+        # in place of the one the issue actually lives in.
+        monkeypatch.setenv("MINDFLOCK_REPO_URL", "git@github.com:org/other.git")
+        out, _ = await self._list([_issue_item(5, "alice", "2025-01-15T10:00:00Z")])
+        assert out[0].clone_url == "https://github.com/org/repo.git"
+
+    async def test_repository_payload_ssh_url_is_used_when_present(self, monkeypatch):
+        monkeypatch.setenv("MINDFLOCK_GIT_TRANSPORT", "ssh")
+        item = _issue_item(5, "alice", "2025-01-15T10:00:00Z")
+        item["repository"] = {
+            "clone_url": "https://ghe.corp/org/repo.git",
+            "ssh_url": "git@ghe.corp:org/repo.git",
+        }
+        out, _ = await self._list([item])
+        assert out[0].clone_url == "git@ghe.corp:org/repo.git"
 
     async def test_pull_requests_skipped(self):
         raw = [_issue_item(5, "a", "2025-01-15T10:00:00Z", pull_request=True)]

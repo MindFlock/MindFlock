@@ -175,13 +175,33 @@ class TestTmux:
 
 class TestGh:
     def test_missing_is_info_optional(self, monkeypatch):
-        # gh is optional (only GitHub push/PR + PR review need it), so an absent
+        # gh is optional (only PR create/merge + PR review need it), so an absent
         # gh is `info` — never `fail`, which would trip the "required dep
         # missing" exit and make gh a de-facto requirement.
         monkeypatch.setattr(doctor.shutil, "which", _which({}))
         c = doctor.check_gh()
         assert c.status == "info"
         assert c.docs  # C6: docs hint for installing gh
+
+    def test_missing_detail_does_not_claim_push_needs_gh(self, monkeypatch):
+        # The exact printed wording, asserted here because TROUBLESHOOTING.md is
+        # indexed against it — and because the old copy said "GitHub push/PR",
+        # which is what made contributors on SSH remotes think gh was mandatory.
+        # Pushing is plain `git push`; gh is never in that path.
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        assert doctor.check_gh().detail == (
+            "not found (optional — only PR create/merge and PR review need it; "
+            "pushing uses plain git)"
+        )
+
+    def test_missing_gh_never_fails_the_payload_ok_flag(self, monkeypatch):
+        # Belt-and-braces at the payload level: `ok` is "no fails", and an absent
+        # gh must never be one of them. Anything else makes gh a hard requirement
+        # in practice — the installer runs `mindflock doctor` and honours exit 1.
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        gh = doctor.CHECKS_BY_ID["gh"]()
+        assert gh.status == "info"
+        assert doctor.to_payload([gh])["ok"] is True
 
     def test_unauthenticated_is_warn_not_fail(self, monkeypatch):
         monkeypatch.setattr(doctor.shutil, "which", _which({"gh": "/usr/bin/gh"}))

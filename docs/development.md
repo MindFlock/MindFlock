@@ -17,8 +17,9 @@ Dependency groups (`pyproject.toml`): base (`aiohttp`, `tomli`), `dev` (pytest,
 pytest-asyncio, hypothesis, httpx), `engine` (pyperclip, ptyprocess), `web`
 (engine + fastapi, uvicorn, segno).
 
-External tools the code shells out to: `git`, `tmux`, `gh`, `uv`, plus the agent
-CLI (`claude`) and optionally `cursor`, `tailscale`, `wt.exe`.
+External tools the code shells out to: `git`, `tmux`, `uv`, plus the agent
+CLI (`claude`) and optionally `gh` (PR create/merge only — pushing is plain
+`git push`), `cursor`, `tailscale`, `wt.exe`.
 
 ## Dev build alongside the installed app
 
@@ -149,6 +150,13 @@ git switch main && git pull --ff-only
 git tag -a v<version> -m "Release <version>"
 git push origin v<version>
 ```
+
+`gh` is the convenience path, not a requirement — every step above is either
+plain git or a button on github.com. Without `gh`, open the PR in the browser
+(the push prints a "create a pull request" URL, or use
+`https://github.com/MindFlock/MindFlock/compare/main...release/<version>?expand=1`)
+and, for the dry run, hit **Run workflow** on release.yml in the Actions tab.
+The tag itself is `git push origin v<version>` either way.
 
 Two things that reject a direct push here, both by design:
 
