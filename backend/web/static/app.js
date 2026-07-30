@@ -22350,7 +22350,7 @@ const SIDEBAR_BARS = [
   { key: "issue-handling", label: "Issue Handling" },
   { key: "assistant", label: "Assistant" }
 ];
-const DEFAULT_VISIBLE_BARS = ["usage", "assistant"];
+const DEFAULT_VISIBLE_BARS = ["usage", "ingestion", "assistant"];
 function defaultHiddenBars() {
   const visible = new Set(DEFAULT_VISIBLE_BARS);
   return SIDEBAR_BARS.map((b) => b.key).filter((k) => !visible.has(k));
@@ -22413,9 +22413,9 @@ const useUi = create((set, get) => ({
   bulkSelected: /* @__PURE__ */ new Set(),
   aliases: load("mf_aliases", {}),
   collapsedDevices: new Set(load("cs_devcollapse", [])),
-  // Fresh users start with only the essentials (Usage + Assistant) so a first
-  // run isn't overwhelming; the rest are one click away in Customize. Once the
-  // user touches Customize the saved set wins, empty included.
+  // Fresh users start with the essentials (Usage + Ticket Ingestion + Assistant)
+  // so a first run isn't overwhelming; the rest are one click away in Customize.
+  // Once the user touches Customize the saved set wins, empty included.
   hiddenBars: new Set(
     firstRun("mf_hiddenbars") ? defaultHiddenBars() : load("mf_hiddenbars", [])
   ),
@@ -26457,7 +26457,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
         "Showing just the essentials. Add ",
         /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "PR review" }),
         ", ",
-        /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "ticket ingestion" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "issue handling" }),
         " and more anytime from ",
         /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "⚙ Customize" }),
         " below."
@@ -31625,9 +31625,32 @@ function SystemLogs({ onOpenSysLogsPane }) {
 function Advanced(_) {
   const s = useSettings();
   const mode = String(s.get("engine", "mode") ?? "");
+  const engineSessions = s.get("engine", "enabled") !== false;
   const { restarting, timedOut, restart } = useServerRestart();
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Engine" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "div",
+      {
+        className: "set-row set-switch-row",
+        title: "On: each ingested ticket becomes a MindFlock session — worktree, branch, seeded agent, and the guided commit → push → PR bar. Off: a detached tmux session plus an OS terminal tab, with no session in the app.",
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Ticket sessions in MindFlock" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                type: "checkbox",
+                checked: engineSessions,
+                onChange: (e) => s.saveField("engine", "enabled", e.target.checked)
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
+          ] })
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Leave this on to get the flow in the screenshots: tickets assigned to you become MindFlock sessions you can watch, commit, and open a PR from. Turning it off sends ingested tickets to a bare tmux session and an OS terminal tab instead. Takes effect the next time the ingestion pipeline starts." }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Worktree mode" }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs(

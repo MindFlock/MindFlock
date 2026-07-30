@@ -12,7 +12,9 @@ import {
 describe("defaultHiddenBars", () => {
   it("hides every bar that is not one of the essentials", () => {
     const hidden = defaultHiddenBars();
-    expect(hidden).toEqual(["ingestion", "pr-review", "issue-handling"]);
+    expect(hidden).toEqual(["pr-review", "issue-handling"]);
+    // The headline feature's bar is visible out of the box.
+    expect(DEFAULT_VISIBLE_BARS).toContain("ingestion");
     // The essentials are never hidden.
     for (const key of DEFAULT_VISIBLE_BARS) expect(hidden).not.toContain(key);
     // Every bar is accounted for as either visible or hidden.

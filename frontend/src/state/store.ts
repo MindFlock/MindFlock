@@ -147,9 +147,9 @@ export const useUi = create<UiState>((set, get) => ({
   bulkSelected: new Set<string>(),
   aliases: load<Record<string, string>>("mf_aliases", {}),
   collapsedDevices: new Set(load<string[]>("cs_devcollapse", [])),
-  // Fresh users start with only the essentials (Usage + Assistant) so a first
-  // run isn't overwhelming; the rest are one click away in Customize. Once the
-  // user touches Customize the saved set wins, empty included.
+  // Fresh users start with the essentials (Usage + Ticket Ingestion + Assistant)
+  // so a first run isn't overwhelming; the rest are one click away in Customize.
+  // Once the user touches Customize the saved set wins, empty included.
   hiddenBars: new Set(
     firstRun("mf_hiddenbars") ? defaultHiddenBars() : load<string[]>("mf_hiddenbars", [])
   ),

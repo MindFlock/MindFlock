@@ -184,3 +184,65 @@ log_level = "INFO"
 """)
         with pytest.raises(ConfigError, match="must be an integer"):
             load_config(config_file)
+
+
+class TestEngineDefault:
+    """The flagship launch path (engine mode) must be on for a fresh install.
+
+    A ``config.toml`` with no ``[mindflock]`` section — the shape produced by
+    configuring everything from the Settings UI — used to parse to
+    ``engine=None``, which the orchestrator reads as "standalone launcher": OS
+    terminal tabs instead of MindFlock sessions.
+    """
+
+    def test_engine_enabled_without_a_mindflock_section(
+        self, valid_config_toml: Path
+    ) -> None:
+        config = load_config(valid_config_toml)
+
+        assert config.engine is not None
+        assert config.engine.enabled is True
+        assert config.engine.mode == "worktree"
+
+    def test_mode_only_section_still_leaves_engine_enabled(
+        self, tmp_path: Path
+    ) -> None:
+        """A section written by the Settings UI's mode dropdown alone (no
+        ``enabled`` key) must not read as disabled."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[[ticketing.source]]
+provider = "shortcut"
+api_token = "sc_test"
+member_id = "abc-123"
+
+[repository]
+url = "git@github.com:org/repo.git"
+
+[mindflock]
+mode = "clone"
+""")
+        config = load_config(config_file)
+
+        assert config.engine is not None
+        assert config.engine.enabled is True
+        assert config.engine.mode == "clone"
+
+    def test_explicit_false_is_still_honoured(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.toml"
+        config_file.write_text("""\
+[[ticketing.source]]
+provider = "shortcut"
+api_token = "sc_test"
+member_id = "abc-123"
+
+[repository]
+url = "git@github.com:org/repo.git"
+
+[mindflock]
+enabled = false
+""")
+        config = load_config(config_file)
+
+        assert config.engine is not None
+        assert config.engine.enabled is False

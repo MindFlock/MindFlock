@@ -341,7 +341,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
           ))}
         </div>
         <Hint id="customize" className="hint-footer">
-          Showing just the essentials. Add <b>PR review</b>, <b>ticket ingestion</b> and
+          Showing just the essentials. Add <b>PR review</b>, <b>issue handling</b> and
           more anytime from <b>⚙ Customize</b> below.
         </Hint>
         <div className="foot-row foot-tools">

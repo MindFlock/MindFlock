@@ -95,9 +95,13 @@ token = ""
 # issue_skip_authors = []          # ["login", ...] issue authors to ignore
 
 [mindflock]
-# Engine integration: run story sessions via the MindFlock engine (provisioned mode)
-# instead of a standalone tmux + Windows Terminal tab.
-enabled = false
+# Engine integration (DEFAULT ON, including when this whole section is absent):
+# each ticket becomes a real MindFlock session — worktree + branch + seeded agent,
+# shown in the app grid with the stage badge and the commit -> push -> PR bar.
+# The bridge is in-process, so this needs no running server and works headless.
+# Set false to revert to the standalone path: a detached tmux session plus an OS
+# terminal tab, with no app session.
+enabled = true
 # "worktree" (fast worktree off a canonical clone) or "clone" (full standalone).
 mode = "worktree"
 # Open the workspace in Cursor once provisioned (best-effort; no-op without `cursor`).

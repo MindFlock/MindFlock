@@ -293,9 +293,10 @@ cd frontend && npm test           # 10 files, 137 tests
 Verified against the codebase 2026-07-15; useful when touching these areas:
 
 1. **Old config section names are not aliased.** All code reads `[mindflock]`; a
-   local `config.toml` still carrying a section under an earlier project name
-   silently disables engine routing and the `open_cursor`/`skip_permissions`
-   overrides.
+   local `config.toml` still carrying a section under an earlier project name is
+   ignored wholesale, so every key in it — `enabled`, `mode`, `open_cursor`,
+   `skip_permissions` — silently reverts to its default (engine routing is
+   default-**on**, so a legacy `enabled = false` does not take effect).
 2. Ingestion is polling-only — there is no webhook listener.
 3. The clarification handler has no `skip` path — it always returns
    `provide_context`.
