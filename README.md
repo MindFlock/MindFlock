@@ -2,7 +2,7 @@
 
 # 🐦‍⬛ MindFlock
 
-**MindFlock turns your ticket queue into a queue of pull requests.**
+**Run a flock of AI coding agents — started by your ticket queue, merged by you.**
 
 [![CI](https://github.com/MindFlock/MindFlock/actions/workflows/ci.yml/badge.svg)](https://github.com/MindFlock/MindFlock/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/MindFlock/MindFlock?include_prereleases)](https://github.com/MindFlock/MindFlock/releases)

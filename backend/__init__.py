@@ -1,4 +1,4 @@
-"""MindFlock — turn your ticket queue into a queue of pull requests.
+"""MindFlock — run a flock of AI coding agents, started by your ticket queue.
 
 The version is single-sourced from ``pyproject.toml`` (the uv_build backend
 does not support dynamic metadata, so the static ``[project] version`` there
