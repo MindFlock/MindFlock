@@ -255,7 +255,10 @@ class TicketProvider(abc.ABC):
         Backs the web UI's assigned-tickets panel (grouped by bucket), not
         the pipeline. Default: an epoch-anchored :meth:`search_assigned`
         (which may still apply the source's workflow-state filter);
-        providers override to drop that filter and annotate the state.
+        Shortcut/Jira/Linear override to drop that filter and annotate the
+        state. GitHub Issues and Asana keep the default — they expose no
+        workflow-state model at all (:meth:`list_states` is ``[]``), so their
+        listings stay open-only / not-completed-only.
         """
         return await self.search_assigned(datetime(1970, 1, 1, tzinfo=timezone.utc))
 

@@ -15,10 +15,14 @@ Because the workspace provisioning lives inside MindFlock's
 runs its own ``EnvironmentProvisioner`` for these stories — there is a single
 provisioning path, owned by MindFlock.
 
-Visibility caveat: created instances are persisted to ``~/.mindflock/
-state.json`` (best-effort) so they appear in the MindFlock TUI and on the
-*next* web-UI load. A web UI that is already running keeps its own in-memory
-view and will not show them until it is reloaded.
+No server required: this bridge is in-process only — it imports
+``backend.session`` and calls ``Instance.Start`` directly, so there is no HTTP
+call, no host/port, and nothing to be "unreachable". Created instances are
+persisted to ``~/.mindflock/state.json`` (best-effort) and a running web server
+adopts them into its grid within ~4s via ``backend.web.core.engine.
+_sync_external_instances``; a server started later picks them up on boot. With
+no UI running at all the session still exists as a worktree + branch + tmux
+session, so a headless/CI pipeline behaves identically minus the GUI.
 """
 
 from __future__ import annotations
@@ -58,6 +62,28 @@ def _ensure_engine_on_path() -> None:
     p = str(src_root)
     if src_root.is_dir() and p not in sys.path:
         sys.path.insert(0, p)
+
+
+def engine_bridge_error() -> str | None:
+    """Why the in-process engine bridge is unusable here, or ``None`` if it works.
+
+    Engine mode is the shipped default, so the orchestrator needs a cheap way to
+    check it up front instead of discovering the problem one failed ticket at a
+    time (a launch failure marks the story terminally ``failed``, which needs a
+    manual ledger edit to retry). The only thing that can genuinely be missing is
+    the engine half of the package: ``backend.ticket_ingestion`` can be installed
+    and importable in an environment where ``backend.session`` /
+    ``backend.config`` are not (a partial install, or a venv synced with only the
+    ingestion dependency group). Importing is the whole check — there is no
+    server to reach.
+    """
+    _ensure_engine_on_path()
+    try:
+        from backend import config as _cs_config  # noqa: F401
+        from backend import session as _cs_session  # noqa: F401
+    except Exception as e:  # noqa: BLE001 — any import-time failure disqualifies it
+        return f"{type(e).__name__}: {e}"
+    return None
 
 
 def _resolve_program() -> str:

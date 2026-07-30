@@ -142,6 +142,34 @@ def test_flatten_adf_preserves_bullets_and_paragraphs():
     assert "- one" in text and "- two" in text
 
 
+def test_flatten_adf_emits_markdown_heading_markers():
+    # ADF headings must come out as real markdown headings: parse_acceptance_criteria
+    # only recognizes an AC section from a "^#+ acceptance criteria$" LINE, so a
+    # heading flattened to bare text silently disables the AC branch.
+    def _heading(level, text):
+        node = {"type": "heading", "content": [{"type": "text", "text": text}]}
+        if level is not None:
+            node["attrs"] = {"level": level}
+        return node
+
+    assert flatten_adf(_heading(1, "Background")) == "# Background\n"
+    assert (
+        flatten_adf(_heading(3, "Acceptance Criteria")) == "### Acceptance Criteria\n"
+    )
+    # Missing / out-of-range / non-numeric level still yields markers (degrading
+    # to a marker-less line would break the miner, not just the rendering).
+    assert flatten_adf(_heading(None, "No attrs")) == "# No attrs\n"
+    assert flatten_adf(_heading(99, "Clamped")) == "###### Clamped\n"
+    assert flatten_adf(_heading("2", "Stringy")) == "## Stringy\n"
+    # The miner's pattern is end-anchored, so no trailing whitespace may leak in.
+    assert flatten_adf(_heading(2, "  Acceptance Criteria  ")) == (
+        "## Acceptance Criteria\n"
+    )
+    assert parse_acceptance_criteria(
+        flatten_adf(_heading(2, "Acceptance Criteria")) + "- a\n"
+    ) == ["a"]
+
+
 def test_jira_issue_to_ticket():
     cfg = TicketProviderConfig(
         provider="jira",
@@ -150,32 +178,49 @@ def test_jira_issue_to_ticket():
         api_token="tok",
     )
     prov = JiraProvider(cfg)
+
+    def _bullets(*texts):
+        return {
+            "type": "bulletList",
+            "content": [
+                {
+                    "type": "listItem",
+                    "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": t}]}
+                    ],
+                }
+                for t in texts
+            ],
+        }
+
     issue = {
         "key": "PROJ-42",
         "fields": {
             "summary": "Fix the thing",
+            # Two bullet lists under two headings: only the ones under
+            # "Acceptance Criteria" are criteria. This is what distinguishes the
+            # miner's AC-section branch from its "every top-level bullet in the
+            # description" fallback — a single-bullet description cannot.
             "description": {
                 "type": "doc",
                 "content": [
                     {
                         "type": "heading",
+                        "attrs": {"level": 2},
+                        "content": [{"type": "text", "text": "Background"}],
+                    },
+                    _bullets("legacy importer is slow", "reported by two customers"),
+                    {
+                        "type": "heading",
+                        "attrs": {"level": 2},
                         "content": [{"type": "text", "text": "Acceptance Criteria"}],
                     },
-                    {
-                        "type": "bulletList",
-                        "content": [
-                            {
-                                "type": "listItem",
-                                "content": [
-                                    {
-                                        "type": "paragraph",
-                                        "content": [{"type": "text", "text": "works"}],
-                                    }
-                                ],
-                            }
-                        ],
-                    },
+                    _bullets("works", "no regressions"),
                 ],
+            },
+            "status": {
+                "name": "In Progress",
+                "statusCategory": {"key": "indeterminate"},
             },
             "assignee": {"accountId": "acc-1"},
             "created": "2025-02-03T10:00:00.000+0000",
@@ -209,7 +254,10 @@ def test_jira_issue_to_ticket():
     assert t.id == "PROJ-42" and t.slug == "jira-PROJ-42"
     assert t.name == "Fix the thing"
     assert t.source_label == "Jira"
-    assert "works" in t.acceptance_criteria
+    # ONLY the Acceptance Criteria bullets — the Background bullets are context.
+    assert t.acceptance_criteria == ["works", "no regressions"]
+    assert "## Acceptance Criteria" in t.description  # markers survived the ADF
+    assert t.state == "In Progress"  # bucket for the assigned-tickets panel
     assert t.owner_ids == ["acc-1"]
     assert t.app_url == "https://acme.atlassian.net/browse/PROJ-42"
     assert t.comments and "a note" in t.comments[0]
@@ -638,6 +686,52 @@ class TestJiraSearchAssigned:
             with pytest.raises(aiohttp.ClientError, match="500"):
                 await prov.search_assigned(_SINCE)
 
+    async def test_status_field_requested_for_the_bucket(self):
+        prov = self._prov()
+        session = _FakeSession(
+            post_responses=[_FakeResp(200, json_data={"issues": []})]
+        )
+        with _patch_session(session):
+            await prov.search_assigned(_SINCE)
+        assert "status" in session.post_calls[0][1]["json"]["fields"]
+
+    async def test_search_assigned_all_drops_state_and_age_filters(self):
+        # The panel exists to surface the issue you are about to move INTO the
+        # ingest state, so its query must carry NEITHER the status filter nor
+        # the "updated >=" cutoff — even though the source configures one.
+        prov = self._prov(workflow_state="10001")
+        session = _FakeSession(
+            post_responses=[_FakeResp(200, json_data={"issues": []})]
+        )
+        with _patch_session(session):
+            await prov.search_assigned_all()
+        body = session.post_calls[0][1]["json"]
+        assert body["jql"] == "assignee = currentUser() ORDER BY updated DESC"
+        assert "status IN" not in body["jql"] and "updated >=" not in body["jql"]
+        assert "status" in body["fields"]
+
+    async def test_search_assigned_all_populates_state(self):
+        prov = self._prov()
+        issue = {
+            "key": "P-1",
+            "fields": {
+                "summary": "s",
+                "created": "2025-01-01T00:00:00.000+0000",
+                "status": {"name": "Ready for Dev"},
+            },
+        }
+        session = _FakeSession(
+            post_responses=[_FakeResp(200, json_data={"issues": [issue]})]
+        )
+        with _patch_session(session):
+            out = await prov.search_assigned_all()
+        assert [t.state for t in out] == ["Ready for Dev"]
+
+    async def test_missing_status_leaves_state_empty(self):
+        # No status in the payload -> "" (the panel's "No state" bucket), never None.
+        t = self._prov()._issue_to_ticket({"key": "P-1", "fields": {"summary": "s"}})
+        assert t.state == ""
+
 
 # --------------------------------------------------------------------------- #
 # Linear HTTP path: with_state query gating + GraphQL errors -> ProviderError
@@ -674,6 +768,59 @@ class TestLinearSearchAssigned:
         await prov.search_assigned(_SINCE)
         assert "stateIds" not in captured["query"]
         assert "stateIds" not in captured["variables"]
+
+    async def test_search_assigned_all_drops_state_filter_and_age_cutoff(
+        self, monkeypatch
+    ):
+        # The panel exists to surface the issue you are about to move INTO the
+        # ingest state, so its query must carry no state filter at all — even
+        # though this source configures one — and reach back to the epoch.
+        prov = LinearProvider(
+            TicketProviderConfig(
+                provider="linear", api_token="k", workflow_state="s1,s2"
+            )
+        )
+        captured: dict = {}
+
+        async def fake_gql(query, variables):
+            captured["query"] = query
+            captured["variables"] = variables
+            return {"viewer": {"assignedIssues": {"nodes": []}}}
+
+        monkeypatch.setattr(prov, "_gql", fake_gql)
+        await prov.search_assigned_all()
+        assert "state:" not in captured["query"]
+        assert "stateIds" not in captured["query"]
+        assert "stateIds" not in captured["variables"]
+        assert captured["variables"]["since"] == "1970-01-01T00:00:00+00:00"
+
+    async def test_search_assigned_all_populates_state(self, monkeypatch):
+        prov = LinearProvider(TicketProviderConfig(provider="linear", api_token="k"))
+
+        async def fake_gql(query, variables):
+            assert "state {" in query  # the state has to be asked for
+            return {
+                "viewer": {
+                    "assignedIssues": {
+                        "nodes": [
+                            {
+                                "identifier": "ENG-1",
+                                "title": "T",
+                                "state": {
+                                    "id": "s1",
+                                    "name": "In Progress",
+                                    "team": {"key": "ENG"},
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+
+        monkeypatch.setattr(prov, "_gql", fake_gql)
+        out = await prov.search_assigned_all()
+        # Team-prefixed, i.e. spelled exactly as list_states() spells it.
+        assert [t.state for t in out] == ["ENG · In Progress"]
 
     async def test_gql_graphql_errors_raise_provider_error(self):
         prov = LinearProvider(TicketProviderConfig(provider="linear", api_token="k"))
@@ -1372,7 +1519,45 @@ class TestJiraFetchTestStates:
         session = _FakeSession(get_responses=[_FakeResp(200, json_data=statuses)])
         with _patch_session(session):
             out = await self._prov().list_states()
-        assert out == [{"id": "1", "name": "To Do"}, {"id": "2", "name": "2"}]
+        # No statusCategory -> type "" (bucket stays unparked).
+        assert out == [
+            {"id": "1", "name": "To Do", "type": ""},
+            {"id": "2", "name": "2", "type": ""},
+        ]
+
+    async def test_list_states_maps_status_category_to_shared_type(self):
+        # The assigned-tickets panel parks done-type buckets behind the Add menu
+        # by reading type == "done", using the Shortcut adapter's vocabulary.
+        statuses = [
+            {"id": "1", "name": "To Do", "statusCategory": {"key": "new"}},
+            {
+                "id": "2",
+                "name": "In Progress",
+                "statusCategory": {"key": "indeterminate"},
+            },
+            {"id": "3", "name": "Done", "statusCategory": {"key": "done"}},
+            {"id": "4", "name": "Odd", "statusCategory": {"key": "future-key"}},
+        ]
+        session = _FakeSession(get_responses=[_FakeResp(200, json_data=statuses)])
+        with _patch_session(session):
+            out = await self._prov().list_states()
+        assert [(s["name"], s["type"]) for s in out] == [
+            ("To Do", "unstarted"),
+            ("In Progress", "started"),
+            ("Done", "done"),
+            ("Odd", ""),  # unknown category -> no type, never a made-up one
+        ]
+
+    async def test_list_states_names_match_ticket_state(self):
+        # The panel matches Ticket.state against these names, so the two
+        # spellings must agree exactly.
+        prov = self._prov()
+        status = {"id": "3", "name": "Ready for Dev", "statusCategory": {"key": "new"}}
+        session = _FakeSession(get_responses=[_FakeResp(200, json_data=[status])])
+        with _patch_session(session):
+            states = await prov.list_states()
+        ticket = prov._issue_to_ticket({"key": "P-1", "fields": {"status": status}})
+        assert ticket.state == states[0]["name"]
 
 
 # --------------------------------------------------------------------------- #
@@ -1451,9 +1636,63 @@ class TestLinearFetchTestStates:
         monkeypatch.setattr(prov, "_gql", fake_gql)
         out = await prov.list_states()
         assert out == [
-            {"id": "s1", "name": "ENG · Todo"},
-            {"id": "s2", "name": "Done"},
+            {"id": "s1", "name": "ENG · Todo", "type": ""},
+            {"id": "s2", "name": "Done", "type": ""},
         ]
+
+    async def test_list_states_maps_linear_type_to_shared_vocabulary(self, monkeypatch):
+        # Linear's own vocabulary is triage/backlog/unstarted/started/completed/
+        # canceled; the panel's done-parking reads type == "done", so the
+        # terminal states have to be translated, not passed through.
+        prov = self._prov()
+        nodes = [
+            {"id": "a", "name": "Triage", "type": "triage"},
+            {"id": "b", "name": "Backlog", "type": "backlog"},
+            {"id": "c", "name": "Todo", "type": "unstarted"},
+            {"id": "d", "name": "In Progress", "type": "started"},
+            {"id": "e", "name": "Done", "type": "completed"},
+            {"id": "f", "name": "Canceled", "type": "canceled"},
+            {"id": "g", "name": "Future", "type": "something-new"},
+        ]
+
+        async def fake_gql(query, variables):
+            assert "type" in query  # the type has to be asked for
+            return {"workflowStates": {"nodes": nodes}}
+
+        monkeypatch.setattr(prov, "_gql", fake_gql)
+        out = await prov.list_states()
+        assert [(s["name"], s["type"]) for s in out] == [
+            ("Triage", "unstarted"),
+            ("Backlog", "unstarted"),
+            ("Todo", "unstarted"),
+            ("In Progress", "started"),
+            ("Done", "done"),
+            ("Canceled", "done"),  # Shortcut's "Won't do" equivalent
+            ("Future", ""),  # unknown type -> no type, never a made-up one
+        ]
+
+    async def test_list_states_names_match_ticket_state(self, monkeypatch):
+        # The panel matches Ticket.state against these names, so the two
+        # spellings (team prefix included) must agree exactly.
+        prov = self._prov()
+        state = {
+            "id": "s1",
+            "name": "Todo",
+            "type": "unstarted",
+            "team": {"key": "ENG"},
+        }
+
+        async def fake_gql(query, variables):
+            return {"workflowStates": {"nodes": [state]}}
+
+        monkeypatch.setattr(prov, "_gql", fake_gql)
+        states = await prov.list_states()
+        ticket = prov._issue_to_ticket({"identifier": "ENG-1", "state": state})
+        assert ticket.state == states[0]["name"] == "ENG · Todo"
+
+    def test_missing_state_leaves_state_empty(self):
+        # No state in the payload -> "" (the panel's "No state" bucket).
+        assert self._prov()._issue_to_ticket({"identifier": "ENG-1"}).state == ""
 
     def test_issue_transform_skips_blank_comment_and_urlless_attachment(self):
         prov = self._prov()

@@ -53,7 +53,10 @@ class EnvironmentProvisioner:
         branch_name = _branch_name_for(story)
         directory = Path(self.config.workspace_dir) / branch_name.replace("/", "-")
         _logger.info(
-            "Provisioning workspace for story %d at %s (branch: %s)",
+            # %s, not %d: Ticket.id is the provider-native id and is a string
+            # for Jira (PROJ-42), Linear (ENG-9) and Asana (gid). %d makes
+            # logging raise TypeError and DROP the record entirely.
+            "Provisioning workspace for story %s at %s (branch: %s)",
             story.id,
             directory,
             branch_name,
@@ -67,7 +70,7 @@ class EnvironmentProvisioner:
         await self._launch_cursor(story, directory)
         await self._install_precommit_log_wrapper(story, directory)
         window_id = 0
-        _logger.info("Workspace ready for story %d.", story.id)
+        _logger.info("Workspace ready for story %s.", story.id)
 
         return ProvisionedEnvironment(
             directory=directory,
@@ -89,7 +92,7 @@ class EnvironmentProvisioner:
     async def _git_clone(self, story: Ticket, directory: Path) -> None:
         if directory.exists():
             _logger.info(
-                "Removing existing workspace at %s for story %d", directory, story.id
+                "Removing existing workspace at %s for story %s", directory, story.id
             )
             shutil.rmtree(directory)
         # Clone into a sibling temp dir to avoid races with background processes
@@ -102,7 +105,7 @@ class EnvironmentProvisioner:
         # Multi-repo ingestion: clone the ticket's own source repo when set,
         # else the global default.
         clone_url = getattr(story, "repo_url", "") or self.config.repo_url
-        _logger.info("Cloning %s for story %d into %s", clone_url, story.id, directory)
+        _logger.info("Cloning %s for story %s into %s", clone_url, story.id, directory)
         rc, _, stderr = await self._run(
             "git",
             "clone",
@@ -134,7 +137,7 @@ class EnvironmentProvisioner:
     async def _git_checkout(
         self, story: Ticket, directory: Path, branch_name: str
     ) -> None:
-        _logger.info("Creating branch %s for story %d", branch_name, story.id)
+        _logger.info("Creating branch %s for story %s", branch_name, story.id)
         rc, _, stderr = await self._run(
             "git", "checkout", "-B", branch_name, cwd=str(directory)
         )
@@ -146,7 +149,7 @@ class EnvironmentProvisioner:
         from backend.config import ide as _ide
         from backend.web.core import ide_launch as _ide_launch
 
-        _logger.info("Opening %s for story %d", _ide.ide_name(), story.id)
+        _logger.info("Opening %s for story %s", _ide.ide_name(), story.id)
         try:
             # launch_ide is sync (fire-and-forget Popen); run it off-loop.
             await asyncio.to_thread(_ide_launch.launch_ide, str(directory))
@@ -161,12 +164,12 @@ class EnvironmentProvisioner:
         script = directory / "auto_fix_precommit_hook.py"
         if not script.is_file():
             _logger.info(
-                "No auto_fix_precommit_hook.py at %s; skipping log wrapper install for story %d",
+                "No auto_fix_precommit_hook.py at %s; skipping log wrapper install for story %s",
                 script,
                 story.id,
             )
             return
-        _logger.info("Installing pre-commit log wrapper for story %d", story.id)
+        _logger.info("Installing pre-commit log wrapper for story %s", story.id)
         rc, _, stderr = await self._run(
             "uv",
             "run",
@@ -178,7 +181,7 @@ class EnvironmentProvisioner:
         if rc != 0:
             msg = stderr.decode(errors="replace").strip()
             _logger.warning(
-                "auto_fix_precommit_hook.py failed for story %d (continuing): %s",
+                "auto_fix_precommit_hook.py failed for story %s (continuing): %s",
                 story.id,
                 msg,
             )
