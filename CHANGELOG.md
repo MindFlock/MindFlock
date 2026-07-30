@@ -107,15 +107,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   separate: MindFlock still clones from the local path, then re-points `origin`
   at that repo's own forge URL (copied verbatim — an SSH remote stays SSH). A
   base clone created before this fix is healed on its next use rather than
-  needing a manual reset, and a repo with no upstream at all is left exactly as
-  it was, so purely local work still provisions offline. Two consequences worth
-  knowing: sessions now fork from the **forge's** base branch rather than your
-  local one, so committed-but-unpushed work on that branch is no longer carried
-  into new sessions (this is what the configured-repo flow already did, and it
-  keeps unrelated commits out of your PR); and local clone sources are no longer
-  cloned `--filter=blob:none`, because a blobless clone defers its objects to
-  whatever `origin` points at and those blobs would have become network-only.
-  Cloning a local path in full costs nothing — git hardlinks the object store.
+  needing a manual reset — worktree *and* clone strategies, the latter on
+  resume — and a repo with no upstream at all is left exactly as it was, so
+  purely local work still provisions offline.
+
+  Only the push destination changes. What a session's base branch *tracks* is
+  deliberately untouched: the workspace keeps a `mindflock-source` remote
+  pointing at your checkout and still refreshes from it, so committed-but-
+  unpushed work reaches every session, not just the first one. Two smaller
+  consequences: local clone sources are no longer cloned `--filter=blob:none`
+  (a blobless clone defers objects to whatever `origin` points at, which would
+  have made them network-only; cloning a local path in full costs nothing since
+  git hardlinks the object store), and any leftover partial-clone config from a
+  pre-fix base clone is cleared during healing for the same reason. A failed
+  refresh fetch no longer resets the base to a stale tracking ref, which could
+  freeze it at its first snapshot forever.
 - **Jira acceptance criteria were being mined from the wrong bullets.** ADF
   headings were flattened without their `#` markers, so no Jira issue ever
   matched the `## Acceptance Criteria` section the miner looks for — every

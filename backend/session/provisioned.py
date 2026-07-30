@@ -453,7 +453,16 @@ def point_origin_at_forge(repo_dir: str | Path, settings: ProvisionSettings) -> 
     this fix is healed on its next use rather than needing a manual reset. A
     failure here is logged and tolerated: a workspace with the old origin is
     exactly as broken as it was before, and never worse.
+
+    Also records the clone source in the workspace's own git config. ``origin``
+    used to double as the record of where a universal-flow workspace came from
+    (:func:`settings_for_workspace` recovered it with ``os.path.isdir(origin)``);
+    once origin is a forge URL that link is gone, and the workspace would be
+    re-attributed to whatever repo happens to be configured — running THAT
+    repo's setup commands and cache seeds inside it. So the provenance is stored
+    explicitly instead of being inferred from the remote.
     """
+    _record_clone_source(repo_dir, settings)
     forge = forge_origin(settings)
     if not forge:
         return
@@ -470,6 +479,14 @@ def point_origin_at_forge(repo_dir: str | Path, settings: ProvisionSettings) -> 
             current or "(unset)",
         )
         return
+    # A pre-fix base clone was made with `--filter=blob:none` off a LOCAL path.
+    # git ignores the filter for local clones (every object is present) but
+    # still writes the partial-clone keys. Left in place while origin becomes a
+    # forge, they would turn the next fetch into a genuinely partial one against
+    # the network — re-aiming the exact hazard the local-source clone avoids.
+    # The objects are all here, so dropping the keys is safe.
+    for key in ("remote.origin.promisor", "remote.origin.partialclonefilter"):
+        _run("git", "-C", str(repo_dir), "config", "--unset-all", key)
     if current:
         _logger.info(
             "provision: origin of %s re-pointed from %s to %s",
@@ -477,6 +494,63 @@ def point_origin_at_forge(repo_dir: str | Path, settings: ProvisionSettings) -> 
             current,
             forge,
         )
+
+
+#: git-config key recording the local path a workspace was provisioned from.
+SOURCE_REPO_CONFIG_KEY = "mindflock.source-repo"
+
+#: Remote name for that same local path, so the base can still be refreshed
+#: from the user's checkout once ``origin`` has become the forge.
+SOURCE_REMOTE_NAME = "mindflock-source"
+
+
+def _record_clone_source(repo_dir: str | Path, settings: ProvisionSettings) -> None:
+    """Record the LOCAL clone source on the workspace, if there is one.
+
+    Stored twice, for two different jobs:
+
+    * a config key, so :func:`settings_for_workspace` can still resolve the
+      workspace back to the user's repo after ``origin`` becomes a forge URL;
+    * a git REMOTE, so :func:`_refresh_base_repo` can keep refreshing the base
+      from the user's own checkout. Without it, re-pointing origin would also
+      change *what the base tracks* — the first session would still contain the
+      user's committed-but-unpushed work (it was cloned from the checkout) while
+      every later one silently would not. Where a session's code comes from is
+      not something a fix to where it PUSHES should quietly change.
+
+    Only local sources are recorded: a remote ``repo_url`` is already ``origin``.
+    Best-effort — the caller never fails because of this.
+    """
+    src = (settings.repo_url or "").strip()
+    if not src or not remote_url.is_local_path(src):
+        return
+    _run("git", "-C", str(repo_dir), "config", SOURCE_REPO_CONFIG_KEY, src)
+    # `remote add` fails when it already exists; `set-url` fails when it does
+    # not. Try to add, then set-url — together they are idempotent.
+    _run("git", "-C", str(repo_dir), "remote", "add", SOURCE_REMOTE_NAME, src)
+    _run("git", "-C", str(repo_dir), "remote", "set-url", SOURCE_REMOTE_NAME, src)
+
+
+def _refresh_remote_for(base: Path) -> str:
+    """Which remote the base branch is refreshed from.
+
+    The user's own checkout when the workspace was provisioned from one (so the
+    base keeps following their local work), else ``origin``.
+    """
+    cp = _run("git", "-C", str(base), "remote")
+    if cp.returncode == 0:
+        names = cp.stdout.decode("utf-8", "replace").split()
+        if SOURCE_REMOTE_NAME in names:
+            return SOURCE_REMOTE_NAME
+    return "origin"
+
+
+def clone_source_of(repo_dir: str | Path) -> str:
+    """The local repo a workspace was provisioned from, or ``""``."""
+    cp = _run("git", "-C", str(repo_dir), "config", "--get", SOURCE_REPO_CONFIG_KEY)
+    if cp.returncode != 0:
+        return ""
+    return cp.stdout.decode("utf-8", "replace").strip()
 
 
 def settings_for_workspace(repo_path: str) -> Optional[ProvisionSettings]:
@@ -491,9 +565,25 @@ def settings_for_workspace(repo_path: str) -> Optional[ProvisionSettings]:
     ``repo_url``: since a provisioned workspace's origin is now the FORGE and
     its clone source may have been a local path, comparing against the clone
     source alone would stop recognising the workspace as the configured repo.
+
+    A workspace that records its own clone source
+    (:data:`SOURCE_REPO_CONFIG_KEY`) is resolved from that FIRST, before the
+    configured settings are consulted. Otherwise a universal-flow workspace —
+    whose origin is now a forge URL rather than a directory — would fall past
+    every check to the configured repo and be handed a different project's
+    setup commands and cache seeds. The old ``os.path.isdir(origin)`` branch is
+    kept below for workspaces provisioned before the source was recorded.
     """
     settings = load_provision_settings()
     origin = _git_origin_url(repo_path) if repo_path else ""
+    source = clone_source_of(repo_path) if repo_path else ""
+    if source and os.path.isdir(source):
+        # Unless that source IS the configured repo, in which case the
+        # configured settings carry more (cache seeds, setup commands).
+        if settings is None or not _same_repo_url(source, settings.repo_url):
+            local = local_settings_for(source)
+            if local is not None:
+                return local
     if settings is not None and (
         not origin
         or _same_repo_url(origin, settings.repo_url)
@@ -774,16 +864,33 @@ def _refresh_base_repo(base: Path, settings: ProvisionSettings) -> None:
     # push) there forever. Done BEFORE the fetch so this refresh already tracks
     # the forge.
     point_origin_at_forge(base, settings)
-    # Refresh best-effort.
-    _run(
+    # Refresh best-effort, from the user's own checkout when there is one — see
+    # _record_clone_source. Pushing goes to origin (the forge); what the base
+    # TRACKS is deliberately left as it was.
+    source = _refresh_remote_for(base)
+    fetched = _run(
         "git",
         "-C",
         str(base),
         "fetch",
-        "origin",
+        source,
         settings.base_branch,
         timeout=_NET_TIMEOUT,
     )
+    if fetched.returncode != 0:
+        # Offline, or a base_branch that does not exist on that remote. Do NOT
+        # fall through to the reset: `<source>/<base_branch>` may still resolve
+        # to a stale remote-tracking ref from the original clone, so resetting
+        # would silently pin the base at that first snapshot and it would never
+        # advance again. Leave it on its current HEAD instead.
+        _logger.info(
+            "provision: could not fetch %s from %s; leaving base repo on its "
+            "current HEAD",
+            settings.base_branch,
+            source,
+        )
+        return
+    tracking = "{}/{}".format(source, settings.base_branch)
     co = _run(
         "git",
         "-C",
@@ -791,7 +898,7 @@ def _refresh_base_repo(base: Path, settings: ProvisionSettings) -> None:
         "checkout",
         "-B",
         settings.base_branch,
-        "origin/" + settings.base_branch,
+        tracking,
     )
     if co.returncode == 0:
         _run(
@@ -800,7 +907,7 @@ def _refresh_base_repo(base: Path, settings: ProvisionSettings) -> None:
             str(base),
             "reset",
             "--hard",
-            "origin/" + settings.base_branch,
+            tracking,
         )
     else:
         _logger.info(
@@ -1175,6 +1282,13 @@ class ProvisionedCloneWorktree(GitWorktree):
         if (d / ".git").exists():
             # Idempotent: clone already present (e.g. resume) — ensure the
             # branch is checked out, then re-provision (cheap/incremental).
+            # Heal the remote too: a clone-strategy workspace survives pause
+            # (Remove is a no-op), so one created before origin was split from
+            # the clone source would otherwise keep pushing into the user's own
+            # checkout forever — the worktree strategy heals on refresh, and
+            # this is the matching path.
+            if self._provision_settings is not None:
+                point_origin_at_forge(d, self._provision_settings)
             cp = _run("git", "-C", str(d), "checkout", self.branchName)
             if cp.returncode != 0:
                 _run("git", "-C", str(d), "checkout", "-B", self.branchName)

@@ -1157,3 +1157,329 @@ def test_local_clone_source_leaves_no_promisor_remote(tmp_path):
     assert "partialclonefilter" not in cfg
     # ...and origin is still the forge.
     assert _origin_of(base) == "git@github.com:Org/app.git"
+
+
+# --------------------------------------------------------------------------- #
+# the branch REACHES the forge — a real push, not a config string
+# --------------------------------------------------------------------------- #
+# RFC 2606 reserves ``.invalid``: it can never resolve, so nothing below can
+# reach the network even if a code path forgot to route a push.
+_FORGE_URL = "git@forge.invalid:Org/app.git"
+
+
+def _branches(repo) -> list:
+    """Local branch names in ``repo`` (works on a bare repo too)."""
+    out = _git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads").stdout
+    return [b for b in out.splitlines() if b]
+
+
+@pytest.fixture
+def forge_world(tmp_path, monkeypatch):
+    """A real bare forge, a real checkout of it, and a git that routes pushes to
+    ``_FORGE_URL`` into that bare repo. Returns ``(forge, checkout)``.
+
+    ``url.<path>.pushInsteadOf`` is what makes the assertions honest: unlike
+    ``insteadOf`` it does NOT rewrite what ``git remote get-url`` reports, so
+    provisioning still sees — and still has to route — the real forge URL.
+    (``insteadOf`` would rewrite ``_git_origin_url`` too and hand the test a
+    result it never earned.)
+
+    ``$HOME`` is redirected so the worktrees dir (``$HOME/.mindflock``) is
+    per-test, and ``GIT_CONFIG_GLOBAL`` is re-pointed at this test's own config
+    (the suite-wide ``_isolate_git_config`` fixture owns that variable and
+    explicitly allows a test to override it) so the rewrite rule is seen.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    forge = tmp_path / "forge.git"
+    subprocess.run(
+        ["git", "init", "-q", "--bare", "-b", "main", str(forge)], check=True
+    )
+    seed = _init_origin_on(tmp_path / "seed", "main")
+    subprocess.run(
+        ["git", "-C", str(seed), "push", "-q", str(forge), "main"], check=True
+    )
+
+    checkout = tmp_path / "checkout"
+    subprocess.run(["git", "clone", "-q", str(forge), str(checkout)], check=True)
+    subprocess.run(
+        ["git", "-C", str(checkout), "remote", "set-url", "origin", _FORGE_URL],
+        check=True,
+    )
+    gitconfig = home / ".gitconfig"
+    gitconfig.write_text(
+        "[user]\n\tname = t\n\temail = t@t\n"
+        "[init]\n\tdefaultBranch = main\n"
+        '[url "{}"]\n\tpushInsteadOf = {}\n'.format(forge, _FORGE_URL)
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    # Setup commands / cache seeding are a different subsystem and would run
+    # real installers against the temp repo; the routing of the push is what is
+    # under test here.
+    monkeypatch.setattr(provisioned, "provision_workspace", lambda *a, **k: None)
+    return forge, checkout
+
+
+def _session_settings(checkout, tmp_path):
+    """Exactly what the universal flow builds for a session on a local repo."""
+    settings = provisioned.local_settings_for(checkout)
+    assert settings is not None
+    assert settings.origin_url == _FORGE_URL
+    settings.workspace_dir = tmp_path / "workspaces"
+    settings.base_branch = "main"
+    return settings
+
+
+def test_worktree_session_pushes_its_branch_into_the_forge(forge_world, tmp_path):
+    """THE BUG, proven at the level the user experiences it: provision a session
+    on a local checkout, commit, ``PushChanges`` — the branch must appear in the
+    FORGE and must NOT appear in the user's own checkout.
+
+    Before the fix this pushed into the user's laptop and reported success
+    (verified by neutralising ``point_origin_at_forge``: the branch then lands
+    in ``checkout`` and never in ``forge``)."""
+    forge, checkout = forge_world
+    settings = _session_settings(checkout, tmp_path)
+
+    wt = provisioned.build_provisioned_worktree(
+        "worktree", "feature/agent-work", "sess", settings
+    )
+    wt.Setup()
+    Path(wt.worktreePath, "agent.txt").write_text("work\n")
+    wt.PushChanges("agent work", False)
+
+    assert "feature/agent-work" in _branches(forge)
+    assert "feature/agent-work" not in _branches(checkout)
+    # And the commit really is there, not just the ref name.
+    assert _git(forge, "show", "feature/agent-work:agent.txt").stdout.strip() == "work"
+
+
+def test_clone_strategy_session_pushes_its_branch_into_the_forge(forge_world, tmp_path):
+    """The other strategy: a standalone per-session clone. Its origin comes from
+    ``_clone_and_branch``, a different call site, so it needs its own proof."""
+    forge, checkout = forge_world
+    settings = _session_settings(checkout, tmp_path)
+
+    wt = provisioned.build_provisioned_worktree(
+        "clone", "feature/clone-work", "sess", settings
+    )
+    wt.Setup()
+    Path(wt.worktreePath, "agent.txt").write_text("work\n")
+    wt.PushChanges("agent work", False)
+
+    assert "feature/clone-work" in _branches(forge)
+    assert "feature/clone-work" not in _branches(checkout)
+
+
+def test_clone_strategy_resume_heals_a_pre_fix_workspace(forge_world, tmp_path):
+    """Resume of a workspace provisioned before the split must heal it too."""
+    forge, checkout = forge_world
+    settings = _session_settings(checkout, tmp_path)
+
+    # Old behaviour: no origin_url, so the clone's origin is the local checkout.
+    legacy = provisioned.ProvisionSettings(
+        repo_url=str(checkout.resolve()),
+        workspace_dir=tmp_path / "workspaces",
+        base_branch="main",
+    )
+    wt = provisioned.build_provisioned_worktree(
+        "clone", "feature/legacy", "sess", legacy
+    )
+    wt.Setup()
+    assert _origin_of(wt.worktreePath) == str(checkout.resolve())
+
+    # Restart: instance._worktree_from_data rebuilds the workspace with settings
+    # that DO know the forge, and Setup() runs again on the existing clone.
+    resumed = provisioned.ProvisionedCloneWorktree(
+        settings=settings,
+        repoPath=wt.worktreePath,
+        worktreePath=wt.worktreePath,
+        sessionName="sess",
+        branchName="feature/legacy",
+    )
+    resumed.Setup()
+    Path(resumed.worktreePath, "agent.txt").write_text("work\n")
+    resumed.PushChanges("agent work", False)
+
+    assert "feature/legacy" in _branches(forge)
+    assert "feature/legacy" not in _branches(checkout)
+
+
+def test_universal_flow_session_keeps_its_repo_label_after_a_restart(
+    forge_world, tmp_path, monkeypatch
+):
+    """After a server restart the in-memory ``_provision_repo`` is gone (it is
+    not persisted), so the sidebar label is derived from the workspace's origin.
+    """
+    from backend.web.core import snapshot
+
+    forge, checkout = forge_world
+    settings = _session_settings(checkout, tmp_path)
+    base = Path(provisioned.ensure_base_repo(settings))
+    # Universal flow: there is no configured repo at all.
+    monkeypatch.setattr(provisioned, "load_provision_settings", lambda: None)
+
+    class _Wt:
+        def GetRepoPath(self):  # noqa: N802
+            return str(base)
+
+    class _Inst:
+        Provisioned = True
+
+        def GetGitWorktree(self):  # noqa: N802
+            return _Wt()
+
+    assert snapshot._repo_name(_Inst()) == "checkout"
+
+
+def test_base_repo_survives_an_unreachable_forge(forge_world, tmp_path):
+    """Re-pointing origin makes every later refresh a NETWORK fetch. When the
+    forge can't be reached (offline, no credentials) the base clone must stay
+    usable — on its base branch, clean, and still able to cut a session that
+    pushes.
+
+    NOTE the tradeoff this pins down: the refresh no longer follows the user's
+    local checkout, so a base clone whose forge is unreachable is frozen at the
+    commit it was cloned at.
+    """
+    forge, checkout = forge_world
+    settings = _session_settings(checkout, tmp_path)
+    base = Path(provisioned.ensure_base_repo(settings))
+    cloned_head = _git(base, "rev-parse", "HEAD").stdout.strip()
+
+    # Second provision: _refresh_base_repo runs, and its fetch of
+    # git@forge.invalid:... fails. It must not raise or wedge the base.
+    again = Path(provisioned.ensure_base_repo(settings))
+    assert again == base
+    assert _origin_of(base) == _FORGE_URL
+    assert _git(base, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == "main"
+    assert _git(base, "status", "--porcelain").stdout == ""
+    assert _git(base, "rev-parse", "HEAD").stdout.strip() == cloned_head
+
+    # ...and a session cut from it still works end to end.
+    wt = provisioned.build_provisioned_worktree(
+        "worktree", "feature/after-failed-fetch", "sess", settings
+    )
+    wt.Setup()
+    Path(wt.worktreePath, "agent.txt").write_text("work\n")
+    wt.PushChanges("agent work", False)
+    assert "feature/after-failed-fetch" in _branches(forge)
+
+
+def test_worktree_session_resume_heals_a_pre_fix_workspace(forge_world, tmp_path):
+    """The worktree strategy's half of the heal, proven by a real push.
+
+    A base clone provisioned BEFORE the split has ``origin`` set to the user's
+    checkout, and every worktree cut off it shares that config — so its pushes
+    land on the laptop. Resume rebuilds the worktree through
+    ``build_provisioned_worktree`` -> ``ensure_base_repo`` -> ``_refresh_base_repo``,
+    which must re-point origin so the SAME session's next push reaches the forge.
+    """
+    forge, checkout = forge_world
+    ws = tmp_path / "workspaces"
+
+    # Old behaviour: no origin_url, so the base clone's origin is the checkout.
+    legacy = provisioned.ProvisionSettings(
+        repo_url=str(checkout.resolve()), workspace_dir=ws, base_branch="main"
+    )
+    wt = provisioned.build_provisioned_worktree(
+        "worktree", "feature/legacy-wt", "sess", legacy
+    )
+    wt.Setup()
+    Path(wt.worktreePath, "agent.txt").write_text("v1\n")
+    wt.PushChanges("first", False)
+    # The pre-fix symptom, reproduced: the branch landed on the laptop.
+    assert "feature/legacy-wt" in _branches(checkout)
+    assert "feature/legacy-wt" not in _branches(forge)
+
+    # Pause removes the worktree; resume rebuilds it from settings that now
+    # know the forge.
+    wt.Remove()
+    fixed = provisioned.local_settings_for(checkout)
+    assert fixed is not None
+    fixed.workspace_dir = ws
+    fixed.base_branch = "main"
+    resumed = provisioned.build_provisioned_worktree(
+        "worktree", "feature/legacy-wt", "sess", fixed
+    )
+    resumed.Setup()
+    Path(resumed.worktreePath, "agent.txt").write_text("v2\n")
+    resumed.PushChanges("second", False)
+
+    assert "feature/legacy-wt" in _branches(forge)
+    assert _git(forge, "show", "feature/legacy-wt:agent.txt").stdout.strip() == "v2"
+
+
+@pytest.fixture
+def reachable_forge_world(forge_world, tmp_path, monkeypatch):
+    """``forge_world`` with the forge URL also reachable for FETCH.
+
+    ``pushInsteadOf`` alone routes pushes only, so a refresh's fetch of
+    ``_FORGE_URL`` fails and "the base did not move" is ambiguous between "the
+    forge was unreachable" and "the base no longer follows the checkout". Adding
+    plain ``insteadOf`` makes the forge a working remote in both directions, so
+    the assertions below can only be about WHICH repo the base follows.
+
+    CAVEAT, and why tests on this fixture must NOT use ``local_settings_for``:
+    ``insteadOf`` (unlike ``pushInsteadOf``) is expanded by ``git remote
+    get-url``, so ``_git_origin_url`` would report the bare repo's PATH instead
+    of ``_FORGE_URL``. Settings are therefore built by hand here.
+    """
+    forge, checkout = forge_world
+    gitconfig = Path(os.environ["GIT_CONFIG_GLOBAL"])
+    gitconfig.write_text(
+        gitconfig.read_text()
+        + '\n[url "{}"]\n\tinsteadOf = {}\n'.format(forge, _FORGE_URL)
+    )
+    return forge, checkout
+
+
+def _reachable_settings(checkout, tmp_path):
+    """What ``local_settings_for(checkout)`` would build, spelled out (see the
+    fixture's caveat about ``insteadOf`` and ``git remote get-url``)."""
+    return provisioned.ProvisionSettings(
+        repo_url=str(checkout.resolve()),
+        origin_url=_FORGE_URL,
+        workspace_dir=tmp_path / "workspaces",
+        base_branch="main",
+    )
+
+
+def test_reachable_forge_world_really_can_fetch(reachable_forge_world, tmp_path):
+    """Positive control for the fixture: a commit that IS on the forge reaches
+    the base clone on refresh. Without this, the xfail below could be passing
+    because the fetch failed rather than because the base changed allegiance."""
+    forge, checkout = reachable_forge_world
+    settings = _reachable_settings(checkout, tmp_path)
+    base = Path(provisioned.ensure_base_repo(settings))
+    assert not (base / "pushed.txt").exists()
+
+    (checkout / "pushed.txt").write_text("shared\n")
+    subprocess.run(["git", "-C", str(checkout), "add", "pushed.txt"], check=True)
+    subprocess.run(["git", "-C", str(checkout), "commit", "-qm", "shared"], check=True)
+    subprocess.run(
+        ["git", "-C", str(checkout), "push", "-q", "origin", "main"], check=True
+    )
+
+    provisioned.ensure_base_repo(settings)
+    assert (base / "pushed.txt").exists()
+
+
+def test_unpushed_local_commits_still_reach_a_later_session(
+    reachable_forge_world, tmp_path
+):
+    """The user commits in their own checkout without pushing, then starts a
+    session. The agent should see that work."""
+    forge, checkout = reachable_forge_world
+    settings = _reachable_settings(checkout, tmp_path)
+
+    base = Path(provisioned.ensure_base_repo(settings))  # first session
+    assert not (base / "local.txt").exists()
+
+    (checkout / "local.txt").write_text("work in progress\n")
+    subprocess.run(["git", "-C", str(checkout), "add", "local.txt"], check=True)
+    subprocess.run(["git", "-C", str(checkout), "commit", "-qm", "wip"], check=True)
+
+    provisioned.ensure_base_repo(settings)  # second session
+    assert (base / "local.txt").exists()
