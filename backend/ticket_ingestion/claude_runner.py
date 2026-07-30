@@ -274,7 +274,9 @@ class ClaudeCodeRunner:
                     ) as resp:
                         if resp.status != 200:
                             logger.warning(
-                                "Attachment download failed for story %d (%s): HTTP %d",
+                                # %s for the id (string for Jira/Linear/Asana),
+                                # %d only for the numeric HTTP status.
+                                "Attachment download failed for story %s (%s): HTTP %d",
                                 story.id,
                                 att.url,
                                 resp.status,
@@ -288,7 +290,7 @@ class ClaudeCodeRunner:
                                     fh.close()
                                     dest.unlink(missing_ok=True)
                                     logger.warning(
-                                        "Attachment %s for story %d exceeds %d bytes; skipping",
+                                        "Attachment %s for story %s exceeds %d bytes; skipping",
                                         att.url,
                                         story.id,
                                         _MAX_ATTACHMENT_BYTES,
@@ -300,14 +302,14 @@ class ClaudeCodeRunner:
                                 continue
                 except (aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
                     logger.warning(
-                        "Attachment download error for story %d (%s): %s",
+                        "Attachment download error for story %s (%s): %s",
                         story.id,
                         att.url,
                         e,
                     )
         if results:
             logger.info(
-                "Downloaded %d attachment(s) for story %d into %s",
+                "Downloaded %d attachment(s) for story %s into %s",
                 len(results),
                 story.id,
                 target_dir,

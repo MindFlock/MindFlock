@@ -114,7 +114,7 @@ export function GitIssues({ gotoScreen }: ScreenProps) {
         <p>
           Connect a <strong>ticketing tool</strong> to get access to these features —
           automated issue handling runs alongside ticket ingestion, which needs a connected
-          ticketing source (Shortcut, Jira, Linear, GitHub Issues or Asana).
+          ticketing source (Jira, Linear, GitHub Issues, Shortcut or Asana).
         </p>
         <p>
           <button type="button" className="linklike" data-goto-screen="ticketing" onClick={() => gotoScreen("ticketing")}>

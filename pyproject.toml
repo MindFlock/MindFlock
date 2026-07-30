@@ -1,7 +1,7 @@
 [project]
 name = "mindflock"
 version = "0.1.4"
-description = "MindFlock — a web platform for managing AI coding-agent sessions, with a multi-provider ticket-ingestion pipeline"
+description = "MindFlock — turns your ticket queue into a queue of pull requests: assigned work in Jira, Linear, GitHub Issues, Shortcut or Asana becomes an isolated AI coding session"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [

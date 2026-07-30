@@ -9,10 +9,34 @@ import type { ScreenProps } from "../SettingsDialog";
 export function Advanced(_: ScreenProps) {
   const s = useSettings();
   const mode = String(s.get("engine", "mode") ?? "");
+  // Tri-state on the wire: unset (never touched) means the backend default,
+  // which is ON — so only an explicit stored `false` unchecks this.
+  const engineSessions = s.get("engine", "enabled") !== false;
   const { restarting, timedOut, restart } = useServerRestart();
   return (
     <>
       <h3 className="set-section-title">Engine</h3>
+      <div
+        className="set-row set-switch-row"
+        title="On: each ingested ticket becomes a MindFlock session — worktree, branch, seeded agent, and the guided commit → push → PR bar. Off: a detached tmux session plus an OS terminal tab, with no session in the app."
+      >
+        <span className="set-label">Ticket sessions in MindFlock</span>
+        {/* label wraps only the switch, so clicking the row text no longer flips it */}
+        <label className="ca-switch">
+          <input
+            type="checkbox"
+            checked={engineSessions}
+            onChange={(e) => s.saveField("engine", "enabled", e.target.checked)}
+          />
+          <span className="ca-slider" />
+        </label>
+      </div>
+      <p className="set-hint">
+        Leave this on to get the flow in the screenshots: tickets assigned to you become
+        MindFlock sessions you can watch, commit, and open a PR from. Turning it off sends
+        ingested tickets to a bare tmux session and an OS terminal tab instead. Takes effect
+        the next time the ingestion pipeline starts.
+      </p>
       <label className="set-row">
         <span className="set-label">Worktree mode</span>
         <select

@@ -150,7 +150,7 @@ issue_poll_interval_seconds = 60 # default 60
 issue_skip_authors = []          # issue authors to ignore
 
 [mindflock]                        # engine routing — see WARNING below
-enabled = true                   # default false — route pipeline sessions through the engine
+enabled = true                   # default true — route pipeline sessions through the engine
 mode = "worktree"                # "worktree" (default) or "clone"
 open_cursor = true               # default false — open each provisioned workspace in Cursor
 skip_permissions = true          # default true — launch claude with --dangerously-skip-permissions
@@ -159,9 +159,9 @@ skip_permissions = true          # default true — launch claude with --dangero
 > **WARNING — section must be named `[mindflock]`.** Both the pipeline
 > (`ticket_ingestion/config.py`) and the engine (`session/provisioned.py`) read the
 > engine-routing section as `raw.get("mindflock")`. A leftover section from an
-> earlier project name is **silently ignored** — the pipeline then falls back to
-> the standalone clone + Windows Terminal path and `open_cursor`/`skip_permissions`
-> revert to their defaults. If you migrated an old config, rename the section.
+> earlier project name is **silently ignored** — every key in it, including an
+> `enabled = false` you meant to apply, reverts to its default. If you migrated
+> an old config, rename the section.
 
 ### Ticketing providers
 
@@ -207,6 +207,16 @@ Notes on individual keys:
 - `repository.workspace_dir` — resolved relative to the config file's directory.
 - `github.base_branch` — also used by provisioned mode as the base branch
   worktrees fork from (default `main`).
+- `[mindflock].enabled` — **default `true`, including when the whole `[mindflock]`
+  section (or the entire `config.toml`) is absent.** On, each ingested ticket
+  becomes a real MindFlock session: worktree + branch + seeded agent, listed in
+  the app grid with the stage badge and the guided commit → push → PR bar. The
+  bridge is in-process (`session_runner` imports `backend.session` directly), so
+  it needs no running server and works headless; sessions land in
+  `~/.mindflock/state.json` and a running server adopts them within ~4s. Set
+  `false` for the standalone path instead: a detached tmux session plus an OS
+  terminal tab, no app session. Also settable from Settings → **Advanced →
+  Engine → Ticket sessions**, which overrides this file.
 - `[mindflock].mode` — `worktree`: sessions are git worktrees off a single canonical
   blobless clone at `<workspace_dir>/_base_<repo-slug>` (fast, disk-cheap, native
   to pause/resume). `clone`: a full standalone clone per session (strongest

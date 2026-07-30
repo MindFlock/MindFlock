@@ -2,8 +2,7 @@
 
 # 🐦‍⬛ MindFlock
 
-**Run a flock of AI coding agents — each in its own git worktree and tmux
-session — supervised from one desktop app.**
+**MindFlock turns your ticket queue into a queue of pull requests.**
 
 [![CI](https://github.com/MindFlock/MindFlock/actions/workflows/ci.yml/badge.svg)](https://github.com/MindFlock/MindFlock/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/MindFlock/MindFlock?include_prereleases)](https://github.com/MindFlock/MindFlock/releases)
@@ -13,6 +12,7 @@ session — supervised from one desktop app.**
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 [What is it?](#what-is-mindflock) •
+[What it looks like in use](#what-it-looks-like-in-use) •
 [How is this different?](#how-is-this-different) •
 [Quick Start](#quick-start) •
 [Download](#download) •
@@ -23,65 +23,121 @@ session — supervised from one desktop app.**
 
 <div align="center">
 
-![MindFlock demo — four coding agents running in parallel, each in its own git worktree and a different state: one working, one waiting for your answer, one running commit hooks, one reviewed and ready to push](docs/demo.gif)
+![MindFlock demo — a Jira issue and a Linear issue assigned to you, then that Jira issue becoming a running AI coding session on its own git worktree with nothing typed, alongside four other ticket-born sessions in different states](docs/demo.gif)
 
-<sub>Four agents · four git worktrees, side by side — one working, one waiting for your input, one running commit hooks, one reviewed with checks green.</sub>
+<sub>A Jira issue assigned to you becomes its own git worktree, installed
+environment and seeded agent — with nothing typed — next to four other sessions
+that arrived the same way. A recording of the shipped app; the tickets, repo,
+diffs and terminal output are sample data.</sub>
 
 </div>
 
-## Why
-
-Staring at a terminal waiting for an AI agent to finish is mind-numbingly
-boring — so you run several at once, and then you have six terminal windows and
-no idea which one needs you. MindFlock exists to answer one question at a
-glance: **which agent needs me right now?**
-
 ## What is MindFlock?
 
-MindFlock turns one repository into a fleet of parallel, isolated AI coding
-sessions. Each session is a **git worktree** (or clone) plus a **tmux session**
-running the coding-agent CLI of your choice — **any agent, declared in a TOML
-file** — surfaced in the desktop app as a live terminal with a guided
-**commit → push → PR → merge** workflow. An optional ingestion pipeline can
-watch your issue tracker (Shortcut, Jira, Linear, GitHub Issues, Asana) and
-reviewed pull requests, and spin up a ready-to-work session for each —
-automatically.
+Work assigned to you in **Jira, Linear, GitHub Issues, Shortcut, or Asana**
+becomes an isolated AI coding session: its own **git worktree** on its own
+`feature/<ticket>/<slug>` branch, dependencies installed, and an agent already
+seeded with the ticket's title, description, acceptance criteria and comments.
+Nothing typed.
+
+<sub>Two caveats worth knowing before you read further: dependency install is
+auto-detected for Python/uv repos (`uv sync --all-groups`, `pre-commit install`)
+and every other stack declares its own `setup_commands`; and *provisioned*
+sessions — the ones ingestion creates — launch **Claude Code**. Any agent CLI can
+drive sessions you start yourself.</sub>
+
+You come in at the end that needs a human: **read the diff**, then drive it home
+with one click each — commit (in your terminal, so you watch the hooks), push,
+`gh pr create`, merge. Pull requests that come back with review comments become
+sessions the same way, on the PR's own branch, with every unresolved inline
+review comment in the prompt (outdated threads and top-level PR conversation are
+skipped).
+
+Parallel orchestration, worktree isolation and tmux are *how* it works — see
+[How It Works](#how-it-works). The point is that the work arrives on its own and
+leaves as a pull request.
+
+**What is not automatic** — because a pipeline you can't trust is worse than
+none. MindFlock never commits, pushes, opens or merges a PR by itself: every one
+of those is your click, you write the commit message, and `gh pr create --fill`
+takes the PR text from your commits. It never writes to your tracker — no
+comments, no status transitions. It polls (every 20 s) rather than listening for
+webhooks, works one ticket at a time, and only picks up review comments on *your
+own* PRs.
+
+## What it looks like in use
+
+Numbers from the author's own use, not a benchmark. Three different things, kept
+apart on purpose, because the interesting one is the smallest.
+
+**What MindFlock itself has run** — 38 days, 2026-06-22 → 2026-07-29, on one
+private production repo:
+
+| | |
+|---|---|
+| Tickets provisioned into sessions with nothing typed | **38** |
+| Median time from provisioning to a merged pull request | **22 hours** |
+| Own pull requests triaged for review comments | **42** — the ones with nothing actionable were skipped automatically; the rest came back as sessions |
+| Agent CLIs the pipeline drove | **2** (`claude`, `ccc`) — of 5 driven on this machine overall |
+
+<sub>The ticket figure counts distinct tickets: the pipeline's dedup state holds
+47 records, of which 7 were throwaway test tickets and 2 were re-runs of the same
+ticket. Log rotation means the PR-session count is a floor, not a ceiling.</sub>
+
+**The workload it was built to serve** — the author's day job. This predates
+MindFlock by two years and is not a claim about it:
+
+| | |
+|---|---|
+| Tickets closed in the last 12 months | **626** (~52/month) |
+| Merged pull requests authored in that repo since June 2024 | **2,232** |
+| Merged PRs in the last 99 days | **230** (~2.3/day) |
+
+**Agent volume on this machine** — **13.5 B tokens over 46 logged days**
+(~294 M/day), as of 2026-07-29. A large share of that is MindFlock building
+MindFlock, so read it as "what supervising this many agents costs", not as
+day-job output.
+
+MindFlock has been built and used daily since May 2026; it has been running
+ticket → agent → pull request in production since 22 June. It did not make the
+ticket throughput go up — that was already high. It changed who does the typing.
 
 ## How is this different?
 
-Parallel-agent orchestrators are a crowded category, and several of them are
-good. Here's an honest read on where MindFlock actually differs.
+Every tool below is a good way to *start* an AI coding session. The difference
+is that in MindFlock you don't start them — your tracker does.
 
 | | **MindFlock** | **Claude Squad** | **Conductor** | **Claude Code Agent Teams** |
 |---|---|---|---|---|
-| Interface | Cross-platform desktop app **+ phone UI** | Terminal TUI | Native macOS app | Built into the CLI |
-| Platforms | Linux, macOS, Windows (WSL2) | macOS, Linux | macOS only | Anywhere Claude Code runs |
+| **Ticket → session, automatically** | **Jira · Linear · GitHub Issues · Shortcut · Asana** | — | — | — |
+| **Reviewed PR → session, automatically** | **unresolved inline review comments become the prompt** | — | — | — |
+| Git workflow | **one-click commit → push → PR → merge** (`gh`) | commit + push branch | per-task diff + review | manual (agent runs git) |
 | Agent CLIs | **Any — declared in a TOML file** | Several, bundled (Claude Code, Codex, Gemini, aider, OpenCode) | Claude Code, Codex, Cursor, OpenCode | Claude only |
 | Session isolation | git worktree + tmux | git worktree + tmux | git worktree | git worktree |
-| Git workflow | **one-click commit → push → PR → merge** (`gh`) | commit + push branch | per-task diff + review | manual (agent runs git) |
 | Agent-state detection | **deterministic — provider-defined hooks** (working / idle / needs-input) | inferred from the tmux pane | built-in, per supported agent | Claude-native |
-| Ticket → session ingestion | **Shortcut · Jira · Linear · GitHub Issues · Asana** | — | — | — |
-| PR-review → session ingestion | **reviewed PRs become sessions** | — | — | — |
+| Interface | Cross-platform desktop app **+ phone UI** | Terminal TUI | Native macOS app | Built into the CLI |
+| Platforms | Linux, macOS, Windows (WSL2) | macOS, Linux | macOS only | Anywhere Claude Code runs |
 | Remote / phone control | **tailnet + QR, full action bar** | — | — | — |
 
 <sub>Comparison as of July 2026; these tools move fast. If a cell is out of date, please [open an issue or PR](CONTRIBUTING.md) and we'll correct it.</sub>
 
-MindFlock is a ground-up parallel-agent workspace. A few things set it apart:
+The top two rows are the ones that matter. Everything else is a feature race;
+those two change what your day looks like:
 
-- **Provider-agnostic by design.** A coding agent in MindFlock is just a TOML
-  file — binary, launch args, prompt seeding, activity-detection hooks, model
-  pricing — so it drives *any* CLI (Claude Code, Codex, Gemini, aider,
-  OpenCode, or one nobody's heard of) with the same working / idle /
-  needs-input detection and token + cost tracking. Adding an agent is a config
-  change, not a patch.
-- **Work comes to the agents.** MindFlock can turn tickets and code review into
-  sessions on its own: it watches your issue tracker (Shortcut, Jira, Linear,
-  GitHub Issues, Asana) for work assigned to you, and GitHub for PRs that came
-  back with review comments, then provisions a worktree and launches a seeded
-  agent for each — nothing typed.
+- **Work comes to the agents.** MindFlock polls your tracker for tickets
+  assigned to you and GitHub for your PRs that came back with review comments,
+  then provisions a worktree and launches a seeded agent for each. The ticket's
+  acceptance criteria are mined out of its markdown and handed to the agent; a
+  ticket is never worked twice.
 - **The whole git loop is guided.** Every session carries a one-click
   commit → push → PR → merge action bar (via `gh`) and live workflow-stage
   badges, so you drive the change home without leaving the app.
+- **Provider-agnostic by design.** A coding agent in MindFlock is just a TOML
+  file — binary, launch args, prompt seeding, activity-detection hooks, model
+  pricing — so it drives *any* CLI (Claude Code, Codex, Antigravity, aider,
+  OpenCode, Cline, Goose, or one nobody's heard of) with the same working / idle /
+  needs-input detection and token + cost tracking. Adding an agent is a config
+  change, not a patch.
 - **Supervise from anywhere.** `mindflock serve tailscale` prints a QR code;
   the mobile UI carries the same guided action bar, so you can unblock an agent
   from your phone.
@@ -100,11 +156,20 @@ MindFlock is a ground-up parallel-agent workspace. A few things set it apart:
 
 ## Features
 
-- 🎫 **Ticket & PR-review ingestion** — watches your issue tracker (Shortcut,
-  Jira, Linear, GitHub Issues, Asana) for assigned work and GitHub for reviewed
-  PRs, then provisions a workspace and launches a seeded agent session for each.
+- 🎫 **Ticket & PR-review ingestion** — polls **Jira, Linear, GitHub Issues,
+  Shortcut or Asana** (several sources at once, including two of the same
+  provider) for work assigned to you, and GitHub for your PRs that came back
+  with review comments. Each one gets a worktree, an installed environment and
+  an agent seeded with the ticket — title, description, mined acceptance
+  criteria, comments. Read-only against your tracker: it never comments or
+  moves a ticket's status.
+- 🔀 **Guided git workflow** — one-click commit → push → PR → merge, driven by
+  the `gh` CLI, with live workflow-stage badges
+  (provisioning → agent → pre-commit → committed → pushed → PR open). The
+  commit runs in the session's own terminal, so you watch the hooks.
 - 🔌 **Provider-agnostic** — every coding-agent CLI is just a TOML file (Claude
-  Code, Codex, Gemini, aider, OpenCode bundled; add your own). Shared
+  Code, Codex, Antigravity, aider, OpenCode, Cline and Goose bundled; add your
+  own — though sessions that *ingestion* provisions launch Claude Code). Shared
   hook-based activity detection (working / idle / needs-input) and token & cost
   tracking apply to all of them.
 - 🖥️ **Desktop app** (Electron) — a draggable terminal grid with Agent /
@@ -116,8 +181,6 @@ MindFlock is a ground-up parallel-agent workspace. A few things set it apart:
   from a phone. Auth-token protected — never open to the LAN unauthenticated.
 - 🌳 **Isolated workspaces** — every session gets its own git worktree, so
   agents never step on each other (or on you).
-- 🔀 **Guided git workflow** — one-click commit → push → PR → merge, driven by
-  the `gh` CLI.
 - ⚡ **Terminal-first, too** — the `mindflock` CLI drives the same sessions as
   the app (`new`, `ls`, `attach`, `rm`, `open`, `events`), so terminal and UI
   stay one system.
@@ -126,8 +189,34 @@ MindFlock is a ground-up parallel-agent workspace. A few things set it apart:
 
 ## Quick Start
 
-[Install first](#download) — one command — then, from zero to a supervised
-agent session (this CLI flow is verified in CI on every push by
+[Install first](#download) — one command — then pick the half you came for.
+
+### The point: let your tracker start the sessions
+
+On a fresh install you connect a tracker in the desktop app under **Settings →
+Ticketing** — a token, plus the repo that source's tickets should land in — and
+flip the **Ticket Ingestion** switch, which sits in the sidebar by default. From
+then on MindFlock polls for tickets assigned to you and turns each one into a
+real session: an isolated git worktree on its own `feature/…` branch with the
+agent already seeded with the ticket, appearing in the session grid within
+seconds, carrying its stage badge and the guided
+commit → push → PR → merge bar.
+
+There is nothing else to install or configure — no config file, no extra
+service, and it behaves the same headless. The switch is the on/off control and
+it remembers across restarts, so ingestion is never a surprise. It polls rather
+than listening for webhooks, so expect a ticket to take up to ~20 s to show up.
+Review sessions additionally leave a pull request alone until the PR itself is at
+least 15 minutes old — a branch you just pushed doesn't get jumped on.
+
+Prefer a file to a dialog? [`config.toml.example`](config.toml.example) is the
+headless equivalent, and `python -m backend.ticket_ingestion` runs the pipeline
+standalone — see [docs/ingestion-pipeline.md](docs/ingestion-pipeline.md).
+
+### Or start one by hand
+
+From zero to a supervised agent session (this CLI flow is verified in CI on
+every push by
 [`scripts/quickstart-verify.sh`](scripts/quickstart-verify.sh)):
 
 ```bash
@@ -306,22 +395,31 @@ It finds — and auto-starts — the server by itself.
 ## How It Works
 
 ```
- ticketing service ─┐                           ┌─ desktop app (Electron)
- GitHub PR reviews  ┴─► ingestion pipeline ─┐   ├─ phone UI at /m (tailnet QR)
-                                           ▼    ▼
-                                    ┌──────────────────┐
-                                    │  session engine  │  git worktrees + tmux
-                                    │  (backend.*)     │  + provider launch
-                                    └──────────────────┘
-                                           ▲
-                            FastAPI server (backend.web)
+  Jira · Linear · GitHub Issues · Shortcut · Asana ──┐
+  your own PRs that came back with review comments ──┴──►  ingestion pipeline
+                                                           poll · filter · dedup
+                                                                    │
+                                                                    ▼
+                                                        ┌───────────────────────┐
+                                                        │    session engine     │
+                                                        │  git worktree+branch  │
+                                                        │  deps · seeded agent  │
+                                                        └───────────────────────┘
+                                                                    │
+             desktop app (Electron) · phone UI at /m  ◄──────────────┤
+                          │                     FastAPI (backend.web)
+                          ▼
+        you read the diff ──►  commit → push → PR → merge   (one click each, gh)
+                                                    │
+                                                    ▼
+                                              pull request
 ```
 
 | Component | Package | What it does |
 |---|---|---|
 | **Session engine** | `backend.session`, `backend.config`, `backend.cmd`, `backend.log` | Instance lifecycle (start/pause/resume/kill), git worktree management, tmux/PTY plumbing, persisted state in `~/.mindflock/`. |
 | **Server + UI** | `backend.web` | FastAPI server + the UI the desktop app renders: draggable terminal grid, Agent/Terminal/Diff/Queue tabs per session, workflow-stage badges with guided next-step buttons, token/cost usage, IDE integration, phone UI at `/m`, addon framework. |
-| **Ingestion pipeline** | `backend.ticket_ingestion` | Polls your ticketing service (Shortcut, Jira, Linear, GitHub Issues, Asana) for assigned work and GitHub for reviewed PRs; validates, provisions a workspace, and launches a seeded agent session per ticket / per PR. |
+| **Ingestion pipeline** | `backend.ticket_ingestion` | Polls your ticketing service (Jira, Linear, GitHub Issues, Shortcut, Asana) for assigned work and GitHub for reviewed PRs; validates, provisions a workspace, and launches a seeded agent session per ticket / per PR. |
 | **Provider framework** | `backend.providers` | Pluggable coding-agent CLIs (Claude built in; aider/codex and others bundled; add your own via TOML). Shared hooks-based activity detection, model pricing, and rolling token/cost usage history. |
 
 Something not working? Run `mindflock doctor` and check
@@ -370,9 +468,12 @@ See [docs/cli.md](docs/cli.md) for the full command reference.
 
 ### Ticket-ingestion pipeline
 
-Configure it from the web UI's ⚙ **Settings** dialog (Ticketing / Repository /
+Configure it from the app's ⚙ **Settings** dialog (Ticketing / Repository /
 GitHub sections) — values are saved to `~/.mindflock/settings.json` (mode
-`0600`, never committed). No file editing needed.
+`0600`, never committed). No file editing needed. Add as many sources as you
+like, including two of the same provider (two Jira sites, say), each with its
+own credentials and target repo. Then flip the sidebar's **Ticket Ingestion**
+switch; it stays off across restarts until you do, and stays on after.
 
 ```bash
 python -m backend.ticket_ingestion  # run from the repo root

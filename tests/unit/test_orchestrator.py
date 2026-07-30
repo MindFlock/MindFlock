@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from backend.ticket_ingestion.config import PipelineConfig, TicketProviderConfig
+from backend.ticket_ingestion.config import (
+    EngineConfig,
+    PipelineConfig,
+    TicketProviderConfig,
+)
 from backend.ticket_ingestion.models import (
     ClarificationResult,
     ProcessingRecord,
@@ -18,6 +22,7 @@ from backend.ticket_ingestion.models import (
 )
 from backend.ticket_ingestion import orchestrator as orchestrator_mod
 from backend.ticket_ingestion.orchestrator import PipelineOrchestrator
+from backend.ticket_ingestion.session_runner import SessionRunner, engine_bridge_error
 from backend.ticket_ingestion.state import (
     load_processed_story_ids,
     record_processed_story,
@@ -881,3 +886,47 @@ class TestFetchStory:
 
             with pytest.raises(RuntimeError, match="404"):
                 await orchestrator._fetch_story(99999)
+
+
+class TestEngineRunnerSelection:
+    """Which launcher the orchestrator picks, and the one honest fallback.
+
+    Engine mode is the shipped default because the bridge is in-process — no
+    server to reach — so the only reason to drop to the standalone tmux +
+    terminal-tab launcher is an environment where the engine half of the package
+    does not import. That downgrade must be visible in the log, not silent.
+    """
+
+    def _engine_config(self, config: PipelineConfig) -> PipelineConfig:
+        config.engine = EngineConfig()  # defaults: enabled, worktree
+        return config
+
+    def test_engine_config_defaults_select_the_session_runner(self, config) -> None:
+        orch = PipelineOrchestrator(self._engine_config(config))
+        assert isinstance(orch._cs_runner, SessionRunner)
+
+    def test_engine_disabled_selects_the_standalone_launcher(self, config) -> None:
+        config.engine = EngineConfig(enabled=False)
+        orch = PipelineOrchestrator(config)
+        assert orch._cs_runner is None
+
+    def test_unimportable_engine_falls_back_and_warns(
+        self, config, monkeypatch, caplog
+    ) -> None:
+        monkeypatch.setattr(
+            orchestrator_mod,
+            "engine_bridge_error",
+            lambda: "ModuleNotFoundError: No module named 'backend.session'",
+        )
+        with caplog.at_level("WARNING", logger=orchestrator_mod.__name__):
+            orch = PipelineOrchestrator(self._engine_config(config))
+
+        assert orch._cs_runner is None
+        assert "falling back to the standalone launcher" in caplog.text
+        # The reason is named so the log says WHY the product downgraded.
+        assert "No module named 'backend.session'" in caplog.text
+
+    def test_bridge_probe_passes_in_this_environment(self) -> None:
+        """The real probe must succeed where the engine is installed — otherwise
+        every install would silently ship the terminal-tab path."""
+        assert engine_bridge_error() is None

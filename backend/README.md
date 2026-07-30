@@ -1,7 +1,7 @@
 # mindflock (package)
 
 The MindFlock Python package: session engine, provider framework, web UI, and the
-Shortcut ticket-ingestion pipeline.
+ticket-ingestion pipeline (Jira, Linear, GitHub Issues, Shortcut, Asana).
 
 ```
 mindflock/

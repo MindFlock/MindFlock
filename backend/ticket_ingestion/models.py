@@ -55,9 +55,11 @@ class Ticket:
     # from its ingestion source. Empty = fall back to the global repository.url.
     repo_url: str = ""
     # Human name of the ticket's workflow state / bucket ("In Progress",
-    # "Ready for Dev", …) when the provider knows it. Only populated by the
-    # unfiltered assigned-tickets listing (``search_assigned_all``) — the
-    # pipeline itself never reads it. Empty = unknown.
+    # "Ready for Dev", …) when the provider knows it, spelled exactly the way
+    # that provider's ``list_states()`` spells it — the assigned-tickets panel
+    # matches the two. Populated by the adapters that expose a state model
+    # (Shortcut/Jira/Linear); the pipeline itself never reads it.
+    # Empty = unknown.
     state: str = ""
 
     def __post_init__(self) -> None:
@@ -69,7 +71,11 @@ class Ticket:
 @dataclass
 class WebhookEvent:
     event_id: str
-    story_id: int
+    # Same union as ``Ticket.id``: the provider-native id, which is a string for
+    # Jira/Linear/Asana. ``PipelineOrchestrator._fetch_story`` already accepts
+    # ``int | str`` and stringifies it, so annotating this ``int`` was a
+    # Shortcut-era leftover that mistyped every non-Shortcut event.
+    story_id: int | str
     action_type: str
     member_id: str
     owner_ids: list[str]

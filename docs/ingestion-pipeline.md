@@ -2,7 +2,7 @@
 
 Package: `backend.ticket_ingestion` (the module name is retained for
 compatibility; the pipeline is now provider-agnostic). Turns tickets from any
-connected ticketing platform — **Shortcut, Jira, Linear, GitHub Issues, or
+connected ticketing platform — **Jira, Linear, GitHub Issues, Shortcut, or
 Asana** — plus GitHub PR reviews and newly opened GitHub issues into running
 Claude sessions, hands-free.
 
@@ -39,7 +39,7 @@ provider is chosen by `[ticketing].provider` (see
 | Provider | How "assigned to me" is fetched |
 |---|---|
 | `shortcut` | `POST /stories/search` by `owner_id`, then per-story hydration |
-| `jira` | `POST /rest/api/3/search/jql`, `assignee = currentUser()` (description flattened from ADF) |
+| `jira` | `POST /rest/api/3/search/jql`, `assignee = currentUser()` (description flattened from ADF — headings keep their `#` level, which is what acceptance-criteria mining matches on) |
 | `linear` | GraphQL `viewer.assignedIssues(filter: {updatedAt})` |
 | `github_issues` | `GET /repos/{owner}/{repo}/issues?assignee=<you>` (PRs filtered out) |
 | `asana` | `GET /tasks?assignee=me&workspace=<gid>` |
@@ -47,6 +47,14 @@ provider is chosen by `[ticketing].provider` (see
 Adding a provider = one new module implementing `search_assigned` / `fetch` /
 `test_connection`, plus a `PROVIDER_REGISTRY` + `PROVIDER_META` entry. Acceptance-
 criteria mining and link/attachment extraction are shared in `providers/base.py`.
+
+Optionally an adapter also implements **`search_assigned_all()`** (`base.py`),
+which backs Settings → Ticketing → *Assigned tickets*: every ticket assigned to
+you with no age cutoff and no workflow-state filter, each annotated with its
+state. Shortcut, Jira and Linear override it; GitHub Issues and Asana keep the
+base implementation (an epoch-anchored `search_assigned`) because they expose no
+workflow-state model — so their tickets land in the panel's `No state` bucket.
+That asymmetry is visible in the panel itself.
 
 **Multiple sources.** You can configure more than one source at once — different
 providers *and* several of the same provider with different credentials (two Jira
@@ -112,12 +120,21 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
    provisioned and Claude is launched with a "Clarification Needed" prompt listing
    what's missing, so you can fix the ticket interactively.
 6. **Valid → launch** (two paths, chosen by `[mindflock].enabled`):
-   - **Engine path** (enabled) — `SessionRunner` creates an engine instance
+   - **Engine path** (enabled — **the default**, also when `[mindflock]` is
+     absent entirely) — `SessionRunner` creates an engine instance
      (`title sc-<id>`, provisioned workspace, branch
      `feature/sc-<id>/<slug>`, ticket text as the seed prompt). The session
      shows up in the web grid as `mindflock_sc-<id>` within seconds. Attachments
      are downloaded into the live worktree's `.ticket_attachments/`.
-   - **Standalone path** (disabled/default) — `EnvironmentProvisioner` makes a
+     The bridge is **in-process** (`session_runner` imports `backend.session`
+     and calls `Instance.Start` directly): no HTTP, no host/port, nothing that
+     can be "unreachable", so it works headless too. Instances are written to
+     `~/.mindflock/state.json`; a running server adopts them into its grid
+     within ~4s (`web/core/engine._sync_external_instances`) and a server
+     started later picks them up on boot. The orchestrator falls back to the
+     standalone path only when `backend.session` / `backend.config` cannot be
+     imported at all (partial install), and logs a `WARNING` naming the reason.
+   - **Standalone path** (`enabled = false`) — `EnvironmentProvisioner` makes a
      full `git clone` workspace (deps synced, pre-commit installed, testmon
      seeded, opened in Cursor), then `ClaudeCodeRunner` starts a bare tmux
      session `sc-<id>` running `claude "$(cat <prompt>)"` and opens a terminal
@@ -221,9 +238,12 @@ hand-editing `state.json`.
 
 ## Current-behavior caveats
 
-- **Engine routing requires `[mindflock].enabled = true`** — a section left over
-  from an older project name is ignored and silently leaves you on the
-  standalone clone + Windows Terminal path (see [configuration.md](configuration.md)).
+- **Engine routing is on by default** (`[mindflock].enabled`, default `true`,
+  including when the section is absent) — but the section must be named
+  `[mindflock]`: a section left over from an older project name is ignored, so
+  an `enabled = false` in it does **not** take effect (and neither do
+  `mode`/`open_cursor`/`skip_permissions`; see
+  [configuration.md](configuration.md)).
 - **Ingestion is polling-only** — there is no webhook listener.
 - Only review-thread comments are actioned on PRs; top-level issue comments are
   fetched by dead code and ignored.

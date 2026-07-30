@@ -21,11 +21,15 @@ export const SIDEBAR_BARS: BarDef[] = [
   { key: "assistant", label: "Assistant" },
 ];
 
-/** Bars shown out of the box to a brand-new user — the two essentials. The
- * rest start hidden so a first run isn't overwhelming; they're one click away
- * in the footer Customize menu. Only applied when the user has never touched
- * the Customize menu (no persisted hiddenBars). */
-export const DEFAULT_VISIBLE_BARS = ["usage", "assistant"];
+/** Bars shown out of the box to a brand-new user. Ticket Ingestion is in here
+ * because it is the headline feature — connecting a tracker is the first thing a
+ * new user does, and hiding its bar meant they had to go find the product before
+ * they could use it. The remaining two (PR Review, Issue Handling) start hidden
+ * so a first run isn't overwhelming; they're one click away in the footer
+ * Customize menu. Only applied when the user has never touched the Customize
+ * menu (no persisted hiddenBars) — order and length carry no meaning, this is
+ * only a membership set (see `defaultHiddenBars`). */
+export const DEFAULT_VISIBLE_BARS = ["usage", "ingestion", "assistant"];
 
 /** The default hidden set for a fresh user: every bar not in the essentials. */
 export function defaultHiddenBars(): string[] {

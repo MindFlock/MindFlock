@@ -12,7 +12,7 @@ from backend.ticket_ingestion.backfill import BackfillScanner
 from backend.ticket_ingestion.providers import get_provider
 from backend.ticket_ingestion.clarification import InteractiveClarificationHandler
 from backend.ticket_ingestion.claude_runner import ClaudeCodeRunner
-from backend.ticket_ingestion.session_runner import SessionRunner
+from backend.ticket_ingestion.session_runner import SessionRunner, engine_bridge_error
 from backend.ticket_ingestion.config import PipelineConfig
 from backend.ticket_ingestion.filter import AssigneeFilter
 from backend.ticket_ingestion.issue_monitor import (
@@ -111,11 +111,28 @@ class PipelineOrchestrator:
         self._validator = TicketValidator(config)
         self._provisioner = EnvironmentProvisioner(config)
         self._claude_runner = ClaudeCodeRunner(config)
-        # When enabled, hand story sessions to the MindFlock engine (it provisions
-        # + runs the session) instead of this package's own provisioner + runner.
-        self._cs_runner = (
-            SessionRunner(config) if config.engine and config.engine.enabled else None
-        )
+        # Engine mode (the default) hands story sessions to the MindFlock engine,
+        # so a ticket becomes a real app session — worktree + branch + seeded
+        # agent, visible in the grid with the stage badge and the guided
+        # commit → push → PR bar — instead of this package's own provisioner +
+        # runner, which only leaves a detached tmux session and an OS terminal
+        # tab. The bridge is in-process (no server to reach), so the only reason
+        # to fall back is an environment where the engine half of the package
+        # does not import; say so loudly, because a silent downgrade is exactly
+        # what made a connected tracker look like it shipped terminal tabs.
+        self._cs_runner: SessionRunner | None = None
+        if config.engine and config.engine.enabled:
+            reason = engine_bridge_error()
+            if reason is None:
+                self._cs_runner = SessionRunner(config)
+            else:
+                _logger.warning(
+                    "Engine mode is enabled but the MindFlock engine bridge is "
+                    "unavailable (%s); falling back to the standalone launcher — "
+                    "tickets will get a detached tmux session and an OS terminal "
+                    "tab, NOT an app session with the guided PR bar.",
+                    reason,
+                )
         self._clarification_handler = InteractiveClarificationHandler(config)
         self._pr_monitor = PRMonitor(config.github) if config.github else None
         self._issue_monitor = IssueMonitor(config.github) if config.github else None

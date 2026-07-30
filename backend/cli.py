@@ -57,7 +57,7 @@ _NEW_POLL_S = 1.0
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mindflock",
-        description="MindFlock — run and supervise AI coding-agent sessions.",
+        description="MindFlock — turn your ticket queue into a queue of pull requests.",
     )
     parser.add_argument(
         "--version", action="version", version=f"%(prog)s {__version__}"

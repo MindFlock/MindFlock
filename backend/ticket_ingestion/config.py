@@ -108,16 +108,25 @@ SUPPORTED_PROVIDERS = ("shortcut", "jira", "linear", "github_issues", "asana")
 
 @dataclass
 class EngineConfig:
-    """Optional integration: run story sessions via the MindFlock engine.
+    """How story sessions are launched: via the MindFlock engine, or standalone.
 
-    When ``enabled``, the story path provisions + launches each session as an
-    engine ``Instance`` (provisioned mode) instead of spawning a standalone tmux +
-    Windows Terminal tab. ``mode`` selects the workspace strategy:
-    ``"worktree"`` (fast worktree off a canonical clone) or ``"clone"`` (a full
-    standalone clone, the classic behaviour).
+    When ``enabled`` (**the default**), the story path provisions + launches each
+    session as an engine ``Instance`` (provisioned mode) — a real MindFlock
+    session with a worktree, a branch and a seeded agent, which the app shows in
+    its grid with the stage badge and the commit → push → PR bar. Disabling it
+    reverts to the standalone path: a detached tmux session plus an OS terminal
+    tab, with no app session at all.
+
+    Enabled is the default because the engine bridge is *in-process*
+    (:mod:`backend.ticket_ingestion.session_runner` imports
+    :mod:`backend.session` directly): there is no HTTP call and no running
+    ``mindflock serve`` it needs to reach, so it works headless as well.
+
+    ``mode`` selects the workspace strategy: ``"worktree"`` (fast worktree off a
+    canonical clone) or ``"clone"`` (a full standalone clone).
     """
 
-    enabled: bool = False
+    enabled: bool = True
     mode: str = "worktree"
 
 
@@ -143,6 +152,9 @@ class PipelineConfig:
     setup_commands: list[str] | None = None
     caches: list[CacheSeed] = field(default_factory=list)
     github: GithubConfig | None = None
+    #: Launch routing. :func:`load_config` always fills this in (engine mode on
+    #: by default); ``None`` only happens for a hand-built config (tests) and is
+    #: read as "standalone launcher" by the orchestrator.
     engine: EngineConfig | None = None
     # The *primary* (first) ticketing source; ``ticketing_sources`` is the full
     # list the pipeline polls.
@@ -636,10 +648,16 @@ def _parse_github(raw: dict, config_path: Path) -> GithubConfig | None:
     )
 
 
-def _parse_engine(raw: dict, config_path: Path) -> EngineConfig | None:
+def _parse_engine(raw: dict, config_path: Path) -> EngineConfig:
+    """Parse the ``[mindflock]`` block, defaulting to engine mode ON.
+
+    An **absent** section must not mean "standalone": a config written entirely
+    from the Settings UI never grows a ``[mindflock]`` block, so returning
+    ``None`` here used to silently downgrade every fresh install to the
+    tmux + OS-terminal-tab path. A missing section (and a missing ``enabled``
+    key inside a present one) therefore yields :class:`EngineConfig` defaults.
+    """
     engine_section = raw.get("mindflock") or {}
-    if not engine_section:
-        return None
     engine_mode = str(engine_section.get("mode", "worktree"))
     if engine_mode not in ("worktree", "clone"):
         raise ConfigError(
@@ -647,7 +665,7 @@ def _parse_engine(raw: dict, config_path: Path) -> EngineConfig | None:
             "[mindflock].mode must be 'worktree' or 'clone'"
         )
     return EngineConfig(
-        enabled=bool(engine_section.get("enabled", False)),
+        enabled=bool(engine_section.get("enabled", True)),
         mode=engine_mode,
     )
 
