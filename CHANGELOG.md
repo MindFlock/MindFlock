@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The pitch, everywhere: MindFlock turns your ticket queue into a queue of
+  pull requests.** The README, the website and the package description used to
+  lead with parallel agent supervision — a crowded category — and buried ticket
+  ingestion in bullet six. They now lead with the thing nothing else does: work
+  assigned to you in Jira, Linear, GitHub Issues, Shortcut or Asana becomes an
+  isolated session with nothing typed, and you review the diff and drive it
+  home. Worktree isolation, tmux and the grid are described as *how* it works.
+  The README also states plainly what is **not** automatic (no commit, push, PR
+  or merge without your click; no writes to your tracker; polling, not
+  webhooks), and carries the first published usage figures.
+- **Ticket sessions land in the app by default.** `[mindflock].enabled` now
+  defaults to `true`, and is exposed in Settings → Advanced instead of being
+  file-only. Previously a fresh install that connected a tracker got detached
+  tmux sessions and OS terminal tabs — no stage badge, no guided git bar — until
+  it found an undocumented config flag. The engine bridge is in-process (it does
+  not need a running server, and behaves the same headless); if it is ever
+  unimportable the pipeline falls back to the standalone path with a warning
+  naming what was lost.
+- **The Ticket Ingestion bar is visible out of the box** (`DEFAULT_VISIBLE_BARS`),
+  so the flagship feature is no longer hidden behind ⚙ Customize. The first-run
+  footer hint now points at the bars that are still hidden.
+- **The demo shows the pipeline, not the dashboard.** `docs/demo.gif` and the
+  site's `demo.mp4` are re-cut from a new `pipeline` scene that opens on the
+  ticket queue — a Jira issue assigned to you, then that issue becoming a
+  worktree and a seeded agent with nothing typed — before it ever shows the
+  grid, and then follows one session through diff → commit → push → PR → merge.
+  Every session in it is titled by a tracker slug on a `feature/<slug>/<name>`
+  branch, because that is what the pipeline actually produces.
+
+### Fixed
+
+- **Jira acceptance criteria were being mined from the wrong bullets.** ADF
+  headings were flattened without their `#` markers, so no Jira issue ever
+  matched the `## Acceptance Criteria` section the miner looks for — every
+  top-level bullet in the description was handed to the agent as a criterion
+  instead, and an AC section written as prose yielded none at all (routing the
+  ticket to clarification). Headings now keep their level.
+- **Jira and Linear reached parity in the Assigned-tickets panel.** Both now
+  implement `search_assigned_all()`, so the panel lists work you are about to
+  move *into* an ingest state rather than only what already matches; both
+  populate `Ticket.state`, so their tickets stop collecting in the `No state`
+  bucket; and both emit a state `type`, so Done/Canceled states park correctly.
+  (GitHub Issues and Asana expose no comparable state model — unchanged.)
+- **String ticket ids no longer break the pipeline's logs.** Jira (`PROJ-42`),
+  Linear (`ENG-9`) and Asana ids were formatted with `%d`, so every affected log
+  line raised inside logging and was dropped — the provisioning narrative simply
+  went missing for three of the five trackers.
+- **Claims that were not true, on both surfaces.** Checking every sentence of the
+  new copy against the code turned up several the old copy had been making for a
+  while: that Gemini ships as a provider (Antigravity replaced that CLI; the real
+  bundled set is Claude Code, Codex, Antigravity, aider, OpenCode, Cline, Goose);
+  that the Windows installer runs the WSL2 setup for you (it probes for `wsl.exe`
+  and tells you what to run); that the 15-minute grace period applies to reviews
+  (it is on the pull request's own age, and tracker tickets have no age gate);
+  that "every unresolved comment" reaches the review prompt (only unresolved
+  *inline* review comments do — outdated threads and top-level PR conversation are
+  skipped); and that dependencies are installed for any repo (auto-detected for
+  Python/uv; other stacks declare `setup_commands`). All corrected, and the docs
+  now say plainly that sessions the pipeline *provisions* launch Claude Code —
+  any agent CLI drives sessions you start yourself.
+- **Website:** a dead script block threw a `TypeError` on every page load and
+  33% of the stylesheet was orphaned markup from a mock the video replaced; both
+  are gone. The social card no longer bakes in `mindflock.ai/install` (which
+  404s), the video poster is a real frame from the demo instead of that card, and
+  the download note no longer claims the builds are unsigned (the macOS build is
+  self-signed) or gives the Control-click → Open workaround that macOS Sequoia
+  removed. `privacy.html` no longer claims the site makes no third-party
+  requests or that the app never contacts GitHub — both were contradicted by the
+  version check.
+
 ## [0.1.4] - 2026-07-29
 
 ### Added
