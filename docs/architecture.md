@@ -33,7 +33,7 @@ from a browser.
 
 The **ingestion pipeline** (`backend.ticket_ingestion`) is a separate process that
 feeds the same engine state: it polls the configured ticketing provider
-(Shortcut, Jira, Linear, GitHub Issues, or Asana) and GitHub PRs and creates
+(Jira, Linear, GitHub Issues, Shortcut, or Asana) and GitHub PRs and creates
 sessions, which the web server's 4-second reload loop then adopts into the grid.
 
 ## Components
@@ -188,7 +188,7 @@ cold load again after a short break, which is when the wait feels worst.
 
 `python -m backend.ticket_ingestion`, configured by `./config.toml`, singleton
 per directory via `.mindflock-pipeline.lock`. Despite the historical package
-name it is multi-provider: tickets can come from **Shortcut, Jira, Linear,
+name it is multi-provider: tickets can come from **Jira, Linear, Shortcut,
 GitHub Issues, or Asana** (`ticket_ingestion/providers/`). Two loops:
 
 - **Tickets** — poll the configured provider(s) for tickets assigned to you

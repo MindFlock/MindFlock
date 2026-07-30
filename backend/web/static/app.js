@@ -30531,7 +30531,7 @@ function PrReview({ gotoScreen }) {
       /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
         "Connect a ",
         /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "ticketing tool" }),
-        " to get access to these features — automated PR review runs alongside ticket ingestion, which needs a connected ticketing source (Shortcut, Jira, Linear, GitHub Issues or Asana)."
+        " to get access to these features — automated PR review runs alongside ticket ingestion, which needs a connected ticketing source (Jira, Linear, GitHub Issues, Shortcut or Asana)."
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "linklike", "data-goto-screen": "ticketing", onClick: () => gotoScreen("ticketing"), children: "Connect one in Settings → Ticketing" }) })
     ] }),
@@ -30841,7 +30841,7 @@ function GitIssues({ gotoScreen }) {
       /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
         "Connect a ",
         /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "ticketing tool" }),
-        " to get access to these features — automated issue handling runs alongside ticket ingestion, which needs a connected ticketing source (Shortcut, Jira, Linear, GitHub Issues or Asana)."
+        " to get access to these features — automated issue handling runs alongside ticket ingestion, which needs a connected ticketing source (Jira, Linear, GitHub Issues, Shortcut or Asana)."
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "linklike", "data-goto-screen": "ticketing", onClick: () => gotoScreen("ticketing"), children: "Connect one in Settings → Ticketing" }) })
     ] }),
@@ -33008,7 +33008,7 @@ const SLIDES = [
     logo: true,
     title: "Welcome to MindFlock",
     body: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-      "MindFlock runs a flock of coding agents side by side — each in its own session, terminal, and git worktree. This tour covers the basics and then walks you through connecting your accounts. You can skip it any time and replay it later from ",
+      "MindFlock turns your ticket queue into a queue of pull requests: work assigned to you in Jira, Linear, GitHub Issues, Shortcut or Asana becomes its own git worktree with an agent already seeded with the ticket, and you review the diff and merge. This tour covers the basics and then walks you through connecting your accounts. You can skip it any time and replay it later from ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "Settings → General" }),
       "."
     ] })
@@ -33028,8 +33028,10 @@ const SLIDES = [
     icon: "⚙",
     title: "Your sidebar, your way",
     body: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-      "To keep the first run calm you start with just ",
+      "You start with ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "Usage" }),
+      ", ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "Ticket Ingestion" }),
       " and",
       " ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "Assistant" }),
@@ -33037,10 +33039,7 @@ const SLIDES = [
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "⚙ Customize" }),
       " at the bottom of the sidebar to switch on ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "PR review" }),
-      ", ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "ticket ingestion" }),
-      ", and",
-      " ",
+      " and ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "issue handling" }),
       " whenever you want them — and drag any bar to reorder."
     ] })
@@ -33097,7 +33096,7 @@ const SLIDES = [
     title: "2. Ticket ingestion",
     body: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
       "Add a source — ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "Shortcut, Jira, Linear, GitHub Issues, or Asana" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "Jira, Linear, GitHub Issues, Shortcut or Asana" }),
       " — and paste its ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "API token" }),
       ". The non-obvious part: set each source's",

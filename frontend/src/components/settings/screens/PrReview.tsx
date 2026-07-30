@@ -127,7 +127,7 @@ export function PrReview({ gotoScreen }: ScreenProps) {
         <p>
           Connect a <strong>ticketing tool</strong> to get access to these features — automated
           PR review runs alongside ticket ingestion, which needs a connected ticketing source
-          (Shortcut, Jira, Linear, GitHub Issues or Asana).
+          (Jira, Linear, GitHub Issues, Shortcut or Asana).
         </p>
         <p>
           <button type="button" className="linklike" data-goto-screen="ticketing" onClick={() => gotoScreen("ticketing")}>

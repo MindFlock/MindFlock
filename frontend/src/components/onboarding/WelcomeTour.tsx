@@ -28,10 +28,12 @@ const SLIDES: Slide[] = [
     title: "Welcome to MindFlock",
     body: (
       <>
-        MindFlock runs a flock of coding agents side by side — each in its own
-        session, terminal, and git worktree. This tour covers the basics and then
-        walks you through connecting your accounts. You can skip it any time and
-        replay it later from <b>Settings → General</b>.
+        MindFlock turns your ticket queue into a queue of pull requests: work
+        assigned to you in Jira, Linear, GitHub Issues, Shortcut or Asana becomes
+        its own git worktree with an agent already seeded with the ticket, and you
+        review the diff and merge. This tour covers the basics and then walks you
+        through connecting your accounts. You can skip it any time and replay it
+        later from <b>Settings → General</b>.
       </>
     ),
   },
@@ -52,10 +54,10 @@ const SLIDES: Slide[] = [
     title: "Your sidebar, your way",
     body: (
       <>
-        To keep the first run calm you start with just <b>Usage</b> and{" "}
+        You start with <b>Usage</b>, <b>Ticket Ingestion</b> and{" "}
         <b>Assistant</b>. Click <b>⚙ Customize</b> at the bottom of the sidebar to
-        switch on <b>PR review</b>, <b>ticket ingestion</b>, and{" "}
-        <b>issue handling</b> whenever you want them — and drag any bar to reorder.
+        switch on <b>PR review</b> and <b>issue handling</b> whenever you want them
+        — and drag any bar to reorder.
       </>
     ),
   },
@@ -104,7 +106,7 @@ const SLIDES: Slide[] = [
     title: "2. Ticket ingestion",
     body: (
       <>
-        Add a source — <b>Shortcut, Jira, Linear, GitHub Issues, or Asana</b> —
+        Add a source — <b>Jira, Linear, GitHub Issues, Shortcut or Asana</b> —
         and paste its <b>API token</b>. The non-obvious part: set each source's{" "}
         <b>Repo URL</b> so agents know which repository to clone and branch from.
         Press <b>Test</b> on a source to confirm the credentials before you rely

@@ -2,7 +2,7 @@
 
 Package: `backend.ticket_ingestion` (the module name is retained for
 compatibility; the pipeline is now provider-agnostic). Turns tickets from any
-connected ticketing platform — **Shortcut, Jira, Linear, GitHub Issues, or
+connected ticketing platform — **Jira, Linear, GitHub Issues, Shortcut, or
 Asana** — plus GitHub PR reviews and newly opened GitHub issues into running
 Claude sessions, hands-free.
 
