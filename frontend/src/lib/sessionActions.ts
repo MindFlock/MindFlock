@@ -5,7 +5,7 @@
  * dialog components own their submit logic. */
 
 import { api, instApi } from "../api/client";
-import type { Config, Instance } from "../api/types";
+import type { Caps, Config, Instance } from "../api/types";
 import { computeVisible } from "../components/grid/layout";
 import { queryClient, refreshInstances } from "../state/queries";
 import { useUi } from "../state/store";
@@ -19,6 +19,7 @@ function caps() {
     git: true,
     tailscale: true,
     ticketing: true,
+    github: true,
   };
 }
 
@@ -63,6 +64,62 @@ export function requireGit(): boolean {
   if (caps().git) return true;
   toast("git is not installed — install git to use diffs, commits and PRs");
   return false;
+}
+
+// --- PR support: gh is optional, never required ------------------------------
+// Pushing is always plain `git push` over whatever remote (SSH or HTTPS) the
+// user configured — MindFlock is never in that path. Only *opening* and
+// *merging* a PR need GitHub credentials, and even then the server degrades to
+// handing back a prefilled GitHub URL. So "no PR support" is a detour sign, not
+// a wall: every entry point stays clickable and ends on github.com.
+
+/** The one remedy sentence. Asserted verbatim in docs and tests — if you
+ * change it, change it there too. */
+export const PR_REMEDY =
+  "add a GitHub token in Settings → PR review, or install the GitHub CLI";
+
+/** Tooltip for a PR/Merge affordance that will fall back to the browser. */
+export const PR_FALLBACK_HINT =
+  "MindFlock can’t open or merge the PR for you yet — " +
+  PR_REMEDY +
+  ".\nThis still works: it opens GitHub’s prefilled page in your browser instead.";
+
+/** POST /make-pr — 200 either way. `ok: false` carries the browser fallback. */
+interface MakePrResult {
+  ok?: boolean;
+  url?: string;
+  compare_url?: string;
+  message?: string;
+}
+
+/** POST /merge-pr — 200 either way; `pr_url` is where to merge by hand. */
+interface MergePrResult {
+  ok?: boolean;
+  pr_url?: string;
+  message?: string;
+}
+
+/** True when the server can open/merge PRs itself (gh authenticated OR a
+ * GitHub token resolves). Feature-detected against an explicit `false` so an
+ * older server that never reports the capability is assumed capable and
+ * nothing regresses. */
+export function hasPrSupport(c?: Partial<Caps>): boolean {
+  return (c ?? caps()).github !== false;
+}
+
+/** Open `url` in a new tab, and if the popup blocker ate it (we are in an
+ * async continuation, not a click handler) fall back to a clickable toast —
+ * the user's click then counts as the gesture. Never blocks the UI. */
+function offerUrl(url: string, msg: string) {
+  const win = window.open(url, "_blank");
+  if (win) {
+    toast(msg, { duration: 6000 });
+    return;
+  }
+  toast(msg + " — click to open", {
+    onClick: () => window.open(url, "_blank"),
+    duration: 9000,
+  });
 }
 
 /** Stack of sessions closed this run (newest last) so Ctrl+Shift+T reopens
@@ -262,31 +319,49 @@ export function makePrSession(title: string) {
 }
 
 /** Actually open the PR into `base` (empty = let the server decide). Called by
- * the Make-PR dialog once the user picks a branch. */
+ * the Make-PR dialog once the user picks a branch.
+ *
+ * The server always answers 200. `ok: false` is the "I pushed your branch but
+ * I can't file the PR for you" case (no gh, no token): it comes with a
+ * prefilled `compare_url`, so we send the user straight there rather than
+ * showing them a modal about a CLI they never asked for. */
 export async function submitMakePr(title: string, base: string) {
   if (!title || !requireGit()) return;
   try {
-    const r = await instApi<{ url?: string }>(title, "/make-pr", {
+    const r = await instApi<MakePrResult>(title, "/make-pr", {
       json: base ? { base } : {},
     });
-    if (r?.url) window.open(r.url, "_blank");
-    // PR is open — restart the guided cycle: pin the pill back to idle so the
-    // button reads "Commit…" again and the commit→push→PR loop can repeat in
-    // this session (the pin self-clears once real new work moves the stage).
-    markLoopReset(title);
+    if (r && r.ok === false) {
+      const msg = r.message || PR_REMEDY;
+      if (r.compare_url) offerUrl(r.compare_url, "Opened GitHub’s compare page — " + msg);
+      else toast(msg, { duration: 9000 });
+    } else {
+      if (r?.url) window.open(r.url, "_blank");
+      // PR is open — restart the guided cycle: pin the pill back to idle so the
+      // button reads "Commit…" again and the commit→push→PR loop can repeat in
+      // this session (the pin self-clears once real new work moves the stage).
+      markLoopReset(title);
+    }
   } catch (err) {
-    alert("Make PR failed: " + errMsg(err));
+    toast("Make PR failed: " + errMsg(err), { duration: 6000 });
   }
   await refreshInstances();
 }
 
+/** Merge the branch's PR. Same shape as make-pr: `ok: false` + `pr_url` means
+ * "merge it yourself on GitHub", which is a link, not a failure. */
 export async function mergeSession(title: string) {
   if (!title || !requireGit()) return;
   if (!confirm("Merge this branch's PR into staging?")) return;
   try {
-    await instApi(title, "/merge-pr", { method: "POST" });
+    const r = await instApi<MergePrResult>(title, "/merge-pr", { method: "POST" });
+    if (r && r.ok === false) {
+      const msg = r.message || PR_REMEDY;
+      if (r.pr_url) offerUrl(r.pr_url, "Opened the PR on GitHub to merge there — " + msg);
+      else toast(msg, { duration: 9000 });
+    }
   } catch (err) {
-    alert("Merge failed: " + errMsg(err));
+    toast("Merge failed: " + errMsg(err), { duration: 6000 });
   }
   await refreshInstances();
 }

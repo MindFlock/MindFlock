@@ -23,6 +23,12 @@ import pytest
 from backend.session.storage import Status
 from backend.web import server
 from backend.web.core import agent_state
+from backend.web.core import github_pr
+
+# The autouse fixture below stubs ``server._pr_info`` out for every other test
+# in this file; the one test that is ABOUT _pr_info needs the real thing, so it
+# is captured here at import time, before any patching.
+_REAL_PR_INFO = server._pr_info
 
 
 # --------------------------------------------------------------------------- #
@@ -90,7 +96,7 @@ def _clear_caches(monkeypatch):
         cache.clear()
     # The interrupt path shells out to tmux for the failed-step text.
     monkeypatch.setattr(server, "_failed_precommit_step", lambda title: "hook")
-    # No gh in unit tests.
+    # No PR lookup in unit tests (neither gh nor the REST rung).
     monkeypatch.setattr(server, "_pr_info", lambda *a, **k: None)
     yield
     for cache in (
@@ -272,16 +278,38 @@ def test_inplace_degenerate_repo_falls_back_to_own_branch(tmp_path):
     assert server._session_base_branch(inst) == "trunk"
 
 
+def test_pr_info_falls_back_to_rest_without_gh(tmp_path, monkeypatch):
+    # The stage machine's ONLY PR signal. Without a REST fallback a gh-less
+    # user's chip sticks on "pushed" and keeps offering Make PR forever, even
+    # after they opened the PR by hand.
+    server._PR_CACHE.clear()
+    monkeypatch.setattr(server, "gh_available", lambda: False)
+    monkeypatch.setattr(
+        server._github_pr,
+        "find_pr_sync",
+        lambda wt, branch: {"url": "https://example.test/pr/9", "state": "MERGED"},
+    )
+    try:
+        info = _REAL_PR_INFO(str(tmp_path), "feat-x")
+        assert info == {"url": "https://example.test/pr/9", "state": "MERGED"}
+    finally:
+        server._PR_CACHE.clear()
+
+
 # --------------------------------------------------------------------------- #
 # action endpoints follow the live branch
 # --------------------------------------------------------------------------- #
-def test_merge_pr_targets_live_branch_and_resets_flow(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_gh", [True, False])
+def test_merge_pr_targets_live_branch_and_resets_flow(tmp_path, monkeypatch, with_gh):
+    # The invariant is WHICH branch gets merged (the live one, not the stored
+    # one) and that the flow resets afterwards — not which rung of the PR
+    # ladder did it, so both the gh and the token-only path are driven here.
     wt = _init_repo(tmp_path / "r")
     _git("checkout", "-q", "-b", "feat-live", cwd=str(wt))
     status = _write_status(wt)
     inst = _FakeInst(str(wt), branch="feat-old", in_place=True)
     monkeypatch.setitem(server.ENGINE.instances, inst.Title, inst)
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(server, "gh_available", lambda: with_gh)
     server._ORIGIN_SHA_CACHE[(str(wt), "feat-live")] = (float("inf"), "sha")
 
     calls = []
@@ -292,11 +320,30 @@ def test_merge_pr_targets_live_branch_and_resets_flow(tmp_path, monkeypatch):
 
     monkeypatch.setattr(server, "_run_capped", fake_run_capped)
 
+    # The REST rung resolves the branch to a PR number, then merges that number.
+    asked: list = []
+
+    async def _find_pr(w, branch):
+        asked.append(branch)
+        return {"url": "https://example.test/pr/3", "state": "OPEN", "number": 3}
+
+    async def _merge_pr(w, number):
+        asked.append(number)
+        return github_pr.PRResult(ok=True, number=number, state="MERGED")
+
+    monkeypatch.setattr(github_pr, "find_pr", _find_pr)
+    monkeypatch.setattr(github_pr, "merge_pr", _merge_pr)
+
     resp = asyncio.run(server.instance_merge_pr(inst.Title))
 
     assert resp.status_code == 200
-    merge_cmds = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
-    assert merge_cmds and merge_cmds[0][3] == "feat-live"  # live, not stored
+    if with_gh:
+        # gh takes a branch name; assert the LIVE one reached the merge argv.
+        merge_cmds = [c for c in calls if "merge" in c]
+        assert merge_cmds and "feat-live" in merge_cmds[0]
+        assert "feat-old" not in merge_cmds[0]
+    else:
+        assert asked == ["feat-live", 3]  # live branch -> its PR number
     assert any(c[:2] == ["git", "-C"] and "fetch" in c for c in calls)
     assert not status.exists()
     assert (str(wt), "feat-live") not in server._ORIGIN_SHA_CACHE

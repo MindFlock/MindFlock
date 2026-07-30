@@ -35,7 +35,21 @@ poll_interval_seconds = 20
 
 [repository]
 # The repo MindFlock provisions worktrees/clones from. Env: $MINDFLOCK_REPO_URL
+# SSH and HTTPS are both fully supported, and this URL is used VERBATIM —
+# MindFlock never rewrites your remote. Either spelling works:
+#   url = "git@github.com:org/repo.git"        # SSH
+#   url = "https://github.com/org/repo.git"    # HTTPS
 url = ""
+# Which transport to clone with when MindFlock only knows a repo by its
+# "owner/name" slug (PR review and issue handling discover work that way).
+# Env: $MINDFLOCK_GIT_TRANSPORT
+#   "auto"  (default) match the transport of `url` above when it names the same
+#           repo — so an SSH checkout keeps using SSH — else HTTPS.
+#   "ssh"   always clone over SSH (git@host:owner/repo.git).
+#   "https" always clone over HTTPS.
+# An unrecognized value falls back to "auto". Your own git
+# `url.<base>.insteadOf` rewrites still apply on top of whatever is chosen.
+git_transport = "auto"
 # Where per-session workspaces are created (relative to this file). Env: $MINDFLOCK_WORKSPACE_DIR
 workspace_dir = "./workspaces"
 

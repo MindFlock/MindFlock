@@ -23,7 +23,10 @@ python -m backend.web.run [local|tailscale] [port]   # same thing
 ```
 
 Prerequisites from a source checkout: `uv sync --group web` (engine deps +
-FastAPI), and `tmux` + `gh` on PATH.
+FastAPI), and `git` + `tmux` on PATH. `gh` is **not** a prerequisite: the
+guided flow pushes with plain `git push` over the repo's own remote, and the
+make-PR/merge endpoints prefer `gh` but fall back to the GitHub REST API with a
+token and then to a browser compare URL.
 
 ## Layout
 

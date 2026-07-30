@@ -20,13 +20,16 @@ import { errMsg } from "../../lib/format";
 import { chipState, checkChip } from "../../lib/stage";
 import { sessionLabel } from "../../lib/sessionLabel";
 import {
+  PR_FALLBACK_HINT,
   cleanupMissing,
   commitSession,
   copySession,
+  hasPrSupport,
   hideSession,
   ideSession,
   killSession,
   makePrSession,
+  mergeSession,
   pauseSession,
   pushSession,
   resumeSession,
@@ -85,7 +88,10 @@ export const SidebarRow = memo(function SidebarRow({
   // A force-start the server has accepted but not yet turned into a session:
   // it exists only as this row, so nothing on it is actionable yet.
   const pending = !!inst.pending;
-  const caps = config?.caps ?? { git: true, tailscale: true, ticketing: true };
+  const caps = config?.caps ?? { git: true, tailscale: true, ticketing: true, github: true };
+  // gh/token absent: PR + Merge stay in the menu (they fall back to GitHub in
+  // the browser), but say so on hover instead of failing after the click.
+  const prSupport = hasPrSupport(caps);
   const ideName = config?.ide_name || "Cursor";
   const chip = chipState(inst);
   const check = checkChip(inst);
@@ -316,24 +322,22 @@ export const SidebarRow = memo(function SidebarRow({
                   <button onClick={() => pushSession(title)}>
                     Push<span className="kbd">Ctrl+K P</span>
                   </button>
-                  <button onClick={() => makePrSession(title)}>
-                    Make PR<span className="kbd">Ctrl+K R</span>
+                  <button
+                    onClick={() => makePrSession(title)}
+                    title={prSupport ? undefined : PR_FALLBACK_HINT}
+                  >
+                    Make PR{prSupport ? "" : " ↗"}
+                    <span className="kbd">Ctrl+K R</span>
                   </button>
                   {inst.stage === "pr" && (
+                    // Shares mergeSession() with the pill, the palette and the
+                    // pane header so the confirm text and the
+                    // can't-merge-from-here fallback exist in exactly one place.
                     <button
-                      onClick={() =>
-                        act(async () => {
-                          if (!confirm("Merge this branch's PR into staging?")) return;
-                          try {
-                            await instApi(title, "/merge-pr", { method: "POST" });
-                          } catch (err) {
-                            alert("Merge failed: " + errMsg(err));
-                          }
-                          await refreshInstances();
-                        })
-                      }
+                      onClick={() => act(() => mergeSession(title))}
+                      title={prSupport ? undefined : PR_FALLBACK_HINT}
                     >
-                      Merge to staging
+                      Merge to staging{prSupport ? "" : " ↗"}
                     </button>
                   )}
                   {inst.pr_url && (

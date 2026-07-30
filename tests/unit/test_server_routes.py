@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 from backend.session.storage import Loading, Status
 from backend.web import server
+from backend.web.core import github_pr
 from backend.web.server import app
 
 client = TestClient(app)
@@ -652,116 +653,319 @@ def test_branches_lists_remote_heads(registered, monkeypatch, tmp_path):
     assert body["default"] == "main"
 
 
-def test_make_pr_400_without_gh(registered, monkeypatch, tmp_path):
-    wt = tmp_path / "ws"
-    wt.mkdir()
-    registered("gt-9", wt=str(wt))
-    monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server.shutil, "which", lambda name: None)
-    r = client.post("/api/instances/gt-9/make-pr", json={})
-    assert r.status_code == 400
-    assert "gh" in r.json()["error"].lower()
+# --------------------------------------------------------------------------- #
+# make-pr / merge-pr: gh is PREFERRED but OPTIONAL                             #
+#                                                                              #
+# Each behaviour is asserted BOTH ways round. "gh present" exercises the CLI   #
+# rung; "gh absent" exercises REST and then the browser handoff — the path an  #
+# SSH-remote contributor who never installed gh actually takes. Nothing here   #
+# may 400 merely because gh is missing.                                        #
+# --------------------------------------------------------------------------- #
+def _use_gh(monkeypatch, present: bool) -> None:
+    """Decide the gh rung without touching PATH (or running `gh auth status`)."""
+    monkeypatch.setattr(server, "gh_available", lambda: present)
 
 
-def test_make_pr_409_when_on_base_branch(registered, monkeypatch, tmp_path):
-    wt = tmp_path / "ws"
-    wt.mkdir()
-    registered("gt-10", wt=str(wt))
-    monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/gh")
-    monkeypatch.setattr(server, "_configured_pr_base", lambda: "main")
-    monkeypatch.setattr(server, "_current_branch", lambda w: "main")
-    r = client.post("/api/instances/gt-10/make-pr", json={})
-    assert r.status_code == 409
-    assert "base branch" in r.json()["error"]
-
-
-def test_make_pr_success_returns_url(registered, monkeypatch, tmp_path):
-    wt = tmp_path / "ws"
-    wt.mkdir()
-    registered("gt-11", wt=str(wt))
-    monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/gh")
-    monkeypatch.setattr(server, "_configured_pr_base", lambda: "main")
-    monkeypatch.setattr(server, "_current_branch", lambda w: "feat/x")
-    monkeypatch.setattr(server, "_forget_probes", lambda t: None)
-    url = "https://github.com/o/r/pull/7"
+def _stub_gh(monkeypatch, returncode: int, out: bytes):
+    """One canned `gh` result; returns the argv list every call recorded."""
+    calls: list = []
 
     def _fake_run(args, **kw):
-        return SimpleNamespace(returncode=0, stdout=(url + "\n").encode(), stderr=b"")
+        calls.append(list(args))
+        return SimpleNamespace(returncode=returncode, stdout=out, stderr=b"")
 
     monkeypatch.setattr(server, "_run_capped", _fake_run)
-    r = client.post("/api/instances/gt-11/make-pr", json={"base": "main"})
+    return calls
+
+
+def _stub_rest(
+    monkeypatch,
+    *,
+    token: str = "ghp_test",
+    origin: str = "git@github.com:o/r.git",  # SSH on purpose: the reported case
+    commits=("Add a thing\n\nthe why",),
+    responses=(),
+):
+    """Wire github_pr's four seams: auth, origin, `git log`, HTTP.
+
+    Everything above them — the --fill semantics, status handling, the
+    open/merged/closed folding — stays real code, so these tests cover the rung
+    rather than aiohttp.
+    """
+    calls: list = []
+    queued = list(responses)
+
+    async def _token():
+        return token
+
+    async def _request(method, path, *, token, params=None, body=None):
+        calls.append((method, path, params, body))
+        return queued.pop(0) if queued else (0, "no stubbed response")
+
+    monkeypatch.setattr(github_pr, "_token", _token)
+    monkeypatch.setattr(github_pr, "origin_url", lambda wt: origin)
+    monkeypatch.setattr(
+        github_pr, "_commit_messages", lambda wt, base, head: list(commits)
+    )
+    monkeypatch.setattr(github_pr, "_request", _request)
+    return calls
+
+
+def _prime(registered, monkeypatch, tmp_path, title, *, branch="feat/x", base="main"):
+    """Register a session and resolve git/base/branch for the PR routes."""
+    wt = tmp_path / "ws"
+    wt.mkdir()
+    registered(title, wt=str(wt))
+    monkeypatch.setattr(server, "git_available", lambda: True)
+    monkeypatch.setattr(server, "_configured_pr_base", lambda: base)
+    monkeypatch.setattr(server, "_current_branch", lambda w: branch)
+    monkeypatch.setattr(server, "_forget_probes", lambda t: None)
+    return str(wt)
+
+
+def test_make_pr_uses_rest_when_gh_absent(registered, monkeypatch, tmp_path):
+    # THE regression: no gh, but a token resolves -> the PR is opened over REST
+    # and the route answers 200 with its URL, never "gh is not installed".
+    _prime(registered, monkeypatch, tmp_path, "gt-9a")
+    _use_gh(monkeypatch, False)
+    url = "https://github.com/o/r/pull/7"
+    calls = _stub_rest(monkeypatch, responses=[(201, {"html_url": url, "number": 7})])
+    r = client.post("/api/instances/gt-9a/make-pr", json={})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "url": url}
+    method, path, _params, body = calls[0]
+    assert (method, path) == ("POST", "/repos/o/r/pulls")
+    # --fill parity: title is the first commit's subject, body is everything
+    # else the branch's commits say (including that commit's own body).
+    assert body["title"] == "Add a thing"
+    assert body["body"] == "the why"
+    assert body["base"] == "main" and body["head"] == "feat/x"
+
+
+def test_make_pr_browser_fallback_without_gh_or_token(
+    registered, monkeypatch, tmp_path
+):
+    # No gh AND no token: still a 200, carrying the prefilled compare page and
+    # a message naming BOTH ways out. A wall here is what blocked the reporter.
+    _prime(registered, monkeypatch, tmp_path, "gt-9b")
+    _use_gh(monkeypatch, False)
+    _stub_rest(monkeypatch, token="")
+    r = client.post("/api/instances/gt-9b/make-pr", json={})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["compare_url"] == (
+        "https://github.com/o/r/compare/main...feat/x?expand=1"
+    )
+    assert "token" in body["message"] and "GitHub CLI" in body["message"]
+
+
+@pytest.mark.parametrize("with_gh", [True, False])
+def test_make_pr_409_when_on_base_branch(registered, monkeypatch, tmp_path, with_gh):
+    # The self-PR guard fires BEFORE any transport is chosen, so it behaves
+    # identically with and without gh — and neither rung is touched.
+    _prime(registered, monkeypatch, tmp_path, "gt-10-%s" % with_gh, branch="main")
+    _use_gh(monkeypatch, with_gh)
+    gh_calls = _stub_gh(monkeypatch, 0, b"")
+    rest_calls = _stub_rest(monkeypatch)
+    r = client.post("/api/instances/gt-10-%s/make-pr" % with_gh, json={})
+    assert r.status_code == 409
+    assert "base branch" in r.json()["error"]
+    assert gh_calls == [] and rest_calls == []
+
+
+@pytest.mark.parametrize("with_gh", [True, False])
+def test_make_pr_success_returns_url(registered, monkeypatch, tmp_path, with_gh):
+    _prime(registered, monkeypatch, tmp_path, "gt-11-%s" % with_gh)
+    _use_gh(monkeypatch, with_gh)
+    url = "https://github.com/o/r/pull/7"
+    if with_gh:
+        _stub_gh(monkeypatch, 0, (url + "\n").encode())
+    else:
+        _stub_rest(monkeypatch, responses=[(201, {"html_url": url, "number": 7})])
+    r = client.post("/api/instances/gt-11-%s/make-pr" % with_gh, json={"base": "main"})
     assert r.status_code == 200
     assert r.json() == {"ok": True, "url": url}
 
 
-def test_make_pr_no_commits_message(registered, monkeypatch, tmp_path):
-    wt = tmp_path / "ws"
-    wt.mkdir()
-    registered("gt-12", wt=str(wt))
-    monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/gh")
-    monkeypatch.setattr(server, "_configured_pr_base", lambda: "main")
-    monkeypatch.setattr(server, "_current_branch", lambda w: "feat/x")
-    monkeypatch.setattr(server, "_forget_probes", lambda t: None)
+@pytest.mark.parametrize("with_gh", [True, False])
+def test_make_pr_no_commits_message(registered, monkeypatch, tmp_path, with_gh):
+    # gh says "no commits between", the API says "No commits between" — the
+    # friendly message must not depend on which rung ran.
+    _prime(registered, monkeypatch, tmp_path, "gt-12-%s" % with_gh)
+    _use_gh(monkeypatch, with_gh)
     monkeypatch.setattr(server, "_pr_info", lambda *a, **k: None)
-
-    def _fake_run(args, **kw):
-        return SimpleNamespace(
-            returncode=1, stdout=b"no commits between main and feat/x", stderr=b""
+    if with_gh:
+        _stub_gh(monkeypatch, 1, b"no commits between main and feat/x")
+    else:
+        _stub_rest(
+            monkeypatch,
+            responses=[
+                (
+                    422,
+                    {
+                        "message": "Validation Failed",
+                        "errors": [{"message": "No commits between main and feat/x"}],
+                    },
+                )
+            ],
         )
-
-    monkeypatch.setattr(server, "_run_capped", _fake_run)
-    r = client.post("/api/instances/gt-12/make-pr", json={})
+    r = client.post("/api/instances/gt-12-%s/make-pr" % with_gh, json={})
     assert r.status_code == 400
     assert "nothing to PR" in r.json()["error"]
 
 
-def test_make_pr_bounces_to_existing_open_pr(registered, monkeypatch, tmp_path):
-    wt = tmp_path / "ws"
-    wt.mkdir()
-    registered("gt-13", wt=str(wt))
-    monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/gh")
-    monkeypatch.setattr(server, "_configured_pr_base", lambda: "main")
-    monkeypatch.setattr(server, "_current_branch", lambda w: "feat/x")
-    monkeypatch.setattr(server, "_forget_probes", lambda t: None)
+@pytest.mark.parametrize("with_gh", [True, False])
+def test_make_pr_bounces_to_existing_open_pr(
+    registered, monkeypatch, tmp_path, with_gh
+):
+    _prime(registered, monkeypatch, tmp_path, "gt-13-%s" % with_gh)
+    _use_gh(monkeypatch, with_gh)
     monkeypatch.setattr(
         server,
         "_pr_info",
         lambda *a, **k: {"state": "OPEN", "url": "https://x/pull/1"},
     )
-    monkeypatch.setattr(
-        server,
-        "_run_capped",
-        lambda args, **kw: SimpleNamespace(
-            returncode=1, stdout=b"a pull request already exists", stderr=b""
-        ),
-    )
-    r = client.post("/api/instances/gt-13/make-pr", json={})
+    if with_gh:
+        _stub_gh(monkeypatch, 1, b"a pull request already exists")
+    else:
+        _stub_rest(
+            monkeypatch,
+            responses=[
+                (
+                    422,
+                    {
+                        "message": "Validation Failed",
+                        "errors": [
+                            {"message": "A pull request already exists for o:feat/x."}
+                        ],
+                    },
+                )
+            ],
+        )
+    r = client.post("/api/instances/gt-13-%s/make-pr" % with_gh, json={})
     assert r.status_code == 200
     assert r.json()["note"] == "PR already open"
     assert r.json()["url"] == "https://x/pull/1"
 
 
-def test_merge_pr_failure_surfaces_gh_error(registered, monkeypatch, tmp_path):
-    wt = tmp_path / "ws"
-    wt.mkdir()
-    registered("gt-14", wt=str(wt))
-    monkeypatch.setattr(server, "git_available", lambda: True)
-    monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/gh")
-    monkeypatch.setattr(server, "_current_branch", lambda w: "feat/x")
-    monkeypatch.setattr(
-        server,
-        "_run_capped",
-        lambda args, **kw: SimpleNamespace(
-            returncode=1, stdout=b"required reviews missing", stderr=b""
-        ),
-    )
-    r = client.post("/api/instances/gt-14/merge-pr")
+@pytest.mark.parametrize("with_gh", [True, False])
+def test_merge_pr_failure_surfaces_the_refusal(
+    registered, monkeypatch, tmp_path, with_gh
+):
+    # The repo's refusal reaches the user verbatim; WHICH tool was refused is
+    # not part of the contract, so the assertion is on the message alone.
+    _prime(registered, monkeypatch, tmp_path, "gt-14-%s" % with_gh)
+    _use_gh(monkeypatch, with_gh)
+    if with_gh:
+        _stub_gh(monkeypatch, 1, b"required reviews missing")
+    else:
+        _stub_rest(
+            monkeypatch,
+            responses=[
+                (200, [{"html_url": "https://x/pull/1", "state": "open", "number": 1}]),
+                (405, {"message": "required reviews missing"}),
+            ],
+        )
+    r = client.post("/api/instances/gt-14-%s/merge-pr" % with_gh)
     assert r.status_code == 400
     assert "required reviews missing" in r.json()["error"]
+
+
+def test_merge_pr_links_out_without_gh_or_token(registered, monkeypatch, tmp_path):
+    # No gh and no token: 200 + a link the user can merge from, not a 400.
+    _prime(registered, monkeypatch, tmp_path, "gt-14c")
+    _use_gh(monkeypatch, False)
+    _stub_rest(monkeypatch, token="")
+    r = client.post("/api/instances/gt-14c/merge-pr")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["pr_url"].startswith("https://github.com/o/r/pulls?q=")
+    assert "token" in body["message"] and "GitHub CLI" in body["message"]
+
+
+def test_capabilities_github_true_with_token_and_no_gh(monkeypatch):
+    # The UI learns PR create/merge is possible from `caps`, not from a 400.
+    monkeypatch.setattr(server, "gh_available", lambda: False)
+    monkeypatch.setattr(github_pr, "has_token_sync", lambda: True)
+    server._GITHUB_CAP_CACHE[0] = 0.0  # the probe is cached 60s
+    assert server._capabilities()["github"] is True
+    monkeypatch.setattr(github_pr, "has_token_sync", lambda: False)
+    server._GITHUB_CAP_CACHE[0] = 0.0
+    assert server._capabilities()["github"] is False
+
+
+# --------------------------------------------------------------------------- #
+# github_pr: the gh-free client itself                                         #
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "git@github.com:o/r.git",  # scp-style SSH — the reported contributor's
+        "ssh://git@github.com:22/o/r.git",
+        "https://github.com/o/r.git",
+    ],
+)
+def test_repo_ref_is_transport_independent(monkeypatch, origin):
+    # Every spelling of the same remote resolves to the same API slug, so the
+    # REST rung works without ever rewriting the user's remote.
+    monkeypatch.setattr(github_pr, "origin_url", lambda wt: origin)
+    assert github_pr.repo_ref("/ws").slug == "o/r"
+
+
+def test_repo_ref_none_for_a_local_clone(monkeypatch):
+    # Provisioning clones from the user's own checkout: a local path is a
+    # normal remote, just one with no forge to call.
+    monkeypatch.setattr(github_pr, "origin_url", lambda wt: "/home/me/app")
+    assert github_pr.repo_ref("/ws") is None
+
+
+def test_find_pr_folds_a_merged_pr_into_ghs_vocabulary(monkeypatch):
+    # REST reports a merged PR as state "closed" + merged_at; the stage machine
+    # only understands gh's OPEN/MERGED/CLOSED, so the fold must happen here.
+    _stub_rest(
+        monkeypatch,
+        responses=[
+            (
+                200,
+                [
+                    {
+                        "html_url": "https://github.com/o/r/pull/4",
+                        "state": "closed",
+                        "merged_at": "2026-07-30T00:00:00Z",
+                        "number": 4,
+                    }
+                ],
+            )
+        ],
+    )
+    got = asyncio.run(github_pr.find_pr("/ws", "feat/x"))
+    assert got == {
+        "url": "https://github.com/o/r/pull/4",
+        "state": "MERGED",
+        "number": 4,
+    }
+
+
+def test_create_pr_without_commits_reports_no_commits(monkeypatch):
+    # An empty branch never reaches the API: the message is pre-shaped so the
+    # route's "nothing to PR" mapping fires on it.
+    calls = _stub_rest(monkeypatch, commits=())
+    res = asyncio.run(github_pr.create_pr("/ws", "main", "feat/x"))
+    assert res.ok is False and res.unavailable is False
+    assert "No commits between main and feat/x" in res.error
+    assert calls == []
+
+
+def test_client_degrades_instead_of_raising_when_offline(monkeypatch):
+    # A dead network is a routine outcome for these routes, not a 500.
+    _stub_rest(monkeypatch, responses=[(0, "connection refused")])
+    res = asyncio.run(github_pr.create_pr("/ws", "main", "feat/x"))
+    assert res.ok is False and res.unavailable is False
+    assert "api.github.com" in res.error
+    _stub_rest(monkeypatch, responses=[(0, "connection refused")])
+    assert asyncio.run(github_pr.find_pr("/ws", "feat/x")) is None
 
 
 # --------------------------------------------------------------------------- #

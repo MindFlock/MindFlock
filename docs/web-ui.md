@@ -126,7 +126,8 @@ Terminals keep tmux mouse scrolling (speed configurable in settings);
 
 ## Workflow stages and the guided next step
 
-Each session shows a stage badge (sidebar + pane) computed from git/`gh`:
+Each session shows a stage badge (sidebar + pane) computed from git, plus a
+GitHub lookup (`gh` or a token) for the two PR stages:
 
 ```
 provisioning → agent → pre-commit → committed → pushed → PR open → merged
@@ -139,14 +140,18 @@ The pane shows a single **guided next-step button**:
 |---|---|---|
 | agent | **Commit…** | Prompts for a message; runs `git commit` in the Terminal tab (pre-commit hooks visible; auto-fix retries up to 5×) |
 | pre-commit ✗ | **Re-commit** | Restages the hook auto-fixes and retries with the same message |
-| committed | **Push** | `git push --no-verify -u origin HEAD` (hooks already ran) |
-| pushed | **Make PR** | `gh pr create --base <staging> --fill` |
-| PR open | **Merge** | `gh pr merge --merge` (confirmed) |
+| committed | **Push** | `git push --no-verify -u origin HEAD` (hooks already ran) — plain git over your own remote, SSH or HTTPS |
+| pushed | **Make PR** | `gh pr create --base <base> --fill` when `gh` is authenticated; else the GitHub REST API with a token; else opens a prefilled compare URL in your browser |
+| PR open | **Merge** | `gh pr merge --merge` (confirmed); else the REST API with a token; else opens the PR page |
 | merged | **Open PR ↗** | Opens the PR page |
 
 Stages are detected best-effort from git state, so a commit made in Cursor also
-advances the badge within a few seconds. Live agent **activity** overlays the
-stage chip: `running`, `clarify` (the agent is asking you something), `idle`,
+advances the badge within a few seconds. Everything up to and including
+**pushed** is pure git and needs no GitHub credential at all; the `PR open` and
+`merged` stages do (an authenticated `gh`, or a token from Settings → PR
+review), so with neither the chip parks on `pushed` while the buttons keep
+working through the browser. Live agent **activity** overlays the stage chip:
+`running`, `clarify` (the agent is asking you something), `idle`,
 `offline`, `paused` — detected from the CLI's own activity hooks where
 available, with CPU/pane-hash fallback (see [providers.md](providers.md)).
 

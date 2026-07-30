@@ -11,6 +11,10 @@ can't silently regress.
 - L7: missing-workspace row/pane treatment with a single Clean up action.
 - L8: no-origin push guidance (hint button + copyable command + error toasts).
 - L9: light-theme stage-chip contrast on focused/active rows.
+
+The last section is newer: it pins the "gh is optional" contract into the
+shipped bundle after a contributor with an SSH remote hit a blocking modal
+about a CLI she had no reason to install.
 """
 
 from __future__ import annotations
@@ -152,7 +156,11 @@ def test_app_js_no_origin_hint():
     js = client.get("/app.js").text
     # Feature-detected: only an explicit false changes the button.
     assert "inst.has_origin === false" in js
-    assert "git remote add origin <url>" in js
+    # A runnable example, not a placeholder — and SSH is the one spelled out,
+    # because MindFlock never rewrites a remote and pushes with plain git.
+    assert "git remote add origin" in js
+    assert "git@github.com:owner/repo.git" in js
+    assert "https://github.com/owner/repo.git" in js
     assert "No remote — add origin…" in js
     # Clicking copies the command and toasts.
     assert '"command copied"' in js
@@ -197,3 +205,83 @@ def test_light_focused_rows_outline_all_chips():
     block = css[idx : css.index("}", idx)]
     assert ".light .pane.focused .stagechip" in block
     assert "inset 0 0 0 1px var(--border)" in block
+
+
+# --------------------------------------------------------------------------- #
+# ssh-friendly-github — the GitHub CLI is optional in every UI surface.
+#
+# The contributor bug: `gh` absent -> a blocking modal echoing "GitHub CLI (gh)
+# is not installed", from four independent entry points, for someone whose only
+# sin was an SSH remote. These pin the degrade-don't-abort behaviour into the
+# shipped bundle so it cannot regress the next time the surfaces are touched.
+# --------------------------------------------------------------------------- #
+
+# The user-facing remedy, verbatim. Also asserted in the docs and the backend.
+PR_REMEDY = "add a GitHub token in Settings → PR review, or install the GitHub CLI"
+
+
+def test_app_js_pr_actions_never_alert_about_gh():
+    js = client.get("/app.js").text
+    # The remedy sentence exists exactly once — one constant, no copies to drift.
+    assert js.count(PR_REMEDY) == 1
+    # No surface renders the backend's old gh sentence.
+    assert "GitHub CLI (gh) is not installed" not in js
+    # Make PR / Merge report through toasts; the blocking alert() is gone.
+    for fn in ("async function submitMakePr", "async function mergeSession"):
+        body = js[js.index(fn) :]
+        body = body[: body.index("\n}\n")]
+        assert "alert(" not in body, fn
+        assert "toast(" in body, fn
+    assert 'toast("Make PR failed: " + errMsg(err)' in js
+    assert 'toast("Merge failed: " + errMsg(err)' in js
+
+
+def test_app_js_handles_the_browser_fallback_responses():
+    js = client.get("/app.js").text
+    # 200 + ok:false is the "I can't file it for you" answer, not an error: the
+    # prefilled compare / PR URL is opened (or offered as a clickable toast when
+    # the popup blocker eats it).
+    assert "r.ok === false" in js
+    assert "r.compare_url" in js
+    assert "r.pr_url" in js
+    assert "click to open" in js
+
+
+def test_app_js_gates_pr_entry_points_on_the_github_capability():
+    js = client.get("/app.js").text
+    # Feature-detected against an explicit false, like has_origin: a server that
+    # never reports the capability keeps its buttons.
+    assert "github !== false" in js
+    # Unavailable != disabled — the step stays runnable, just marked as a hint
+    # that lands in the browser.
+    assert "Make PR ↗" in js
+    assert "Merge on GitHub ↗" in js
+    assert "opens GitHub" in js
+
+
+def test_app_js_github_test_says_gh_is_optional_once():
+    js = client.get("/app.js").text
+    # One helper behind the setup checklist, PR review and Git issues.
+    assert js.count("gh not installed (optional)") == 1
+    assert 'gh not installed"' not in js
+    # The ✓/✗ verdict is token-driven, so no-gh is not a red ✗.
+    assert 'source !== "none"' in js
+
+
+def test_app_js_doctor_and_tour_stop_selling_gh_as_required():
+    js = client.get("/app.js").text
+    # Doctor no longer lists gh among the required probes.
+    assert "Probes git, tmux, gh," not in js
+    assert "plus gh, which is optional" in js
+    # The welcome tour leads with the token; `gh auth login` is no longer the
+    # onboarding's concrete instruction.
+    assert "gh auth login" not in js
+    assert "That token is the whole setup" in js
+
+
+def test_mobile_js_offers_a_link_not_a_raw_gh_error():
+    js = client.get("/mobile.js").text
+    assert PR_REMEDY in js
+    assert "j.ok === false" in js
+    assert "j.compare_url" in js
+    assert "j.pr_url" in js

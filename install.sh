@@ -16,8 +16,11 @@
 #      suitable Python by itself, builds in an isolated venv, and links the
 #      `mindflock` command into ~/.local/bin. Re-running upgrades in place.
 #   4. Runs `mindflock doctor` so you immediately see which runtime
-#      dependencies (git, tmux, gh, claude) still need installing — with the
-#      exact install command for your platform. When a terminal is attached
+#      dependencies (git, tmux, claude — plus the optional gh) still need
+#      installing — with the exact install command for your platform. gh is
+#      listed as optional on purpose: pushing is plain `git push` over the
+#      remote you already have (SSH or HTTPS), and only PR create/merge prefer
+#      gh. When a terminal is attached
 #      it runs `doctor --fix`, which offers to run each of those commands
 #      for you (y/n per item) so a fresh machine ends the install ready to go.
 #
@@ -162,7 +165,7 @@ say "installed: $(command -v mindflock)"
 uv tool update-shell >/dev/null 2>&1 || true
 
 # --- 4. doctor ---------------------------------------------------------------
-say "checking runtime dependencies (git, tmux, gh, agent CLI)…"
+say "checking runtime dependencies (git, tmux, agent CLI; gh optional)…"
 # Doctor exits 1 when something required is missing — that's information for
 # the user, not an installer failure, so don't abort on it. Under `curl | sh`
 # stdin is the script pipe, so the guided --fix mode reads its y/n prompts

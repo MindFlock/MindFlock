@@ -1,12 +1,14 @@
 """Doctor addon: dependency preflight over HTTP.
 
 Exposes the shared dependency doctor (:mod:`backend.doctor`) as
-``GET /api/doctor`` so the SPA can surface missing tmux/gh/claude (and their
+``GET /api/doctor`` so the SPA can surface missing tmux/git/claude (and their
 per-platform fixes) up front instead of the user discovering them as cryptic
-errors at session-create or push time.
+errors at session-create time. Optional tools (``gh``, ``uv``, ``tailscale``)
+are reported too, but as ``info``/``warn`` — never as a blocker.
 
-Results are cached for ~30s (the checks shell out to ``git``/``gh``/``tmux``);
-pass ``?refresh=1`` to force a re-probe after installing something.
+Results are cached for ~30s (the checks shell out to ``git``/``tmux``, plus the
+optional ``gh``/``tailscale`` probes); pass ``?refresh=1`` to force a re-probe
+after installing something.
 """
 
 from __future__ import annotations

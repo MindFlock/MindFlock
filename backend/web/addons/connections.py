@@ -94,8 +94,23 @@ def _agent_connection() -> dict:
     }
 
 
+#: The remedy we print whenever PR create/merge cannot proceed. A token leads
+#: because it is the better answer of the two: nothing to install, it works the
+#: same over SSH and HTTPS remotes, and it is what the REST fallback uses. This
+#: exact sentence is asserted in tests and mirrored in the docs — keep it verbatim.
+_NO_CREDENTIAL_FIX = (
+    "add a GitHub token in Settings → PR review, or install the GitHub CLI"
+)
+
+
 def _github_connection() -> dict:
-    """GitHub: opening PRs from a session and the automated PR-review loop."""
+    """GitHub: opening PRs from a session and the automated PR-review loop.
+
+    Deliberately NOT about pushing. A push is plain ``git push`` over whatever
+    remote (SSH or HTTPS) the user configured themselves — it never goes through
+    this connection, so an unconfigured GitHub must not read as "you cannot
+    push".
+    """
     source = _github_token_source()
     gh = doctor.check_gh()
     authenticated = gh.status == "ok" or bool(source)
@@ -103,15 +118,32 @@ def _github_connection() -> dict:
         where = source or "gh-cli"
         detail = f"authenticated (token from {where})"
         status = CONNECTED
+        fix_fields = _fix_fields(gh, True)
     elif gh.status == "warn":
-        # gh is installed but not signed in — a nudge worth surfacing.
+        # gh is installed but not signed in — here its own fix (`gh auth login`)
+        # really is the shortest path, so let the doctor's Check through as-is.
         detail = gh.detail or "gh installed, not authenticated — run `gh auth login`"
         status = ATTENTION
+        fix_fields = _fix_fields(gh, False)
     else:
-        # gh not installed (info/fail) and no token: GitHub is optional, so this
-        # is the calm gray "off" state, not an attention-seeking failure.
-        detail = "no token and gh CLI not installed — GitHub features off"
+        # Neither a token nor gh. Say precisely what is lost (PR create/merge and
+        # the review loop) and what is not (pushing), then name BOTH remedies with
+        # the token first. Offering only gh's `brew install gh` here — which is
+        # what the doctor Check carries — would send people to install a CLI they
+        # may not want for a job a token already does, over any transport.
+        detail = (
+            "no GitHub token and no gh CLI — PR create/merge and PR review are off "
+            "(pushing still works: it uses plain git over your own remote)"
+        )
         status = NOT_CONNECTED
+        # No fix_command on purpose: the primary remedy is Configure (which opens
+        # Settings → PR review) or $GH_TOKEN, neither of which is a shell command.
+        # The gh install stays a secondary mention inside the hint, not a button.
+        fix_fields = {
+            "fix": _NO_CREDENTIAL_FIX,
+            "fix_command": "",
+            "docs": getattr(gh, "docs", "") or "",
+        }
 
     # Surface the automated PR-review state so the feature is discoverable here,
     # not just buried in Settings. Off when explicitly disabled or no repo set.
@@ -131,14 +163,14 @@ def _github_connection() -> dict:
     return {
         "id": "github",
         "name": "GitHub",
-        "purpose": "Push/open PRs, and auto-review your own open PRs.",
+        "purpose": "Open and merge PRs, and auto-review your own open PRs.",
         "required": False,
         "status": status,
         "detail": detail,
         "settings_screen": "repo",
         "test_endpoint": "/api/settings/test/github",
         "pr_review_enabled": pr_on,
-        **_fix_fields(gh, status == CONNECTED),
+        **fix_fields,
     }
 
 

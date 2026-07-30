@@ -48,7 +48,7 @@ drive sessions you start yourself.</sub>
 
 You come in at the end that needs a human: **read the diff**, then drive it home
 with one click each — commit (in your terminal, so you watch the hooks), push,
-`gh pr create`, merge. Pull requests that come back with review comments become
+open the PR, merge. Pull requests that come back with review comments become
 sessions the same way, on the PR's own branch, with every unresolved inline
 review comment in the prompt (outdated threads and top-level PR conversation are
 skipped).
@@ -64,9 +64,9 @@ a hand-started session runs whichever agent CLI you point it at.
 
 **What is not automatic** — because a pipeline you can't trust is worse than
 none. MindFlock never commits, pushes, opens or merges a PR by itself: every one
-of those is your click, you write the commit message, and `gh pr create --fill`
-takes the PR text from your commits. It never writes to your tracker — no
-comments, no status transitions. It polls (every 20 s) rather than listening for
+of those is your click, you write the commit message, and the PR text is filled
+in from your commits. It never writes to your tracker — no comments, no status
+transitions. It polls (every 20 s) rather than listening for
 webhooks, works one ticket at a time, and only picks up review comments on *your
 own* PRs.
 
@@ -173,7 +173,7 @@ is that in MindFlock you don't *have* to: your tracker can do it for you.
 |---|---|---|---|---|
 | **Ticket → session, automatically** | **Jira · Linear · GitHub Issues · Shortcut · Asana** | — | — | — |
 | **Reviewed PR → session, automatically** | **unresolved inline review comments become the prompt** | — | — | — |
-| Git workflow | **one-click commit → push → PR → merge** (`gh`) | commit + push branch | per-task diff + review | manual (agent runs git) |
+| Git workflow | **one-click commit → push → PR → merge** (plain `git push` over your own SSH/HTTPS remote; `gh` optional for the PR steps) | commit + push branch | per-task diff + review | manual (agent runs git) |
 | Agent CLIs | **Any — declared in a TOML file** | Several, bundled (Claude Code, Codex, Gemini, aider, OpenCode) | Claude Code, Codex, Cursor, OpenCode | Claude only |
 | Session isolation | git worktree + tmux | git worktree + tmux | git worktree | git worktree |
 | Agent-state detection | **deterministic — provider-defined hooks** (working / idle / needs-input) | inferred from the tmux pane | built-in, per supported agent | Claude-native |
@@ -192,8 +192,9 @@ those two change what your day looks like:
   acceptance criteria are mined out of its markdown and handed to the agent; a
   ticket is never worked twice.
 - **The whole git loop is guided.** Every session carries a one-click
-  commit → push → PR → merge action bar (via `gh`) and live workflow-stage
-  badges, so you drive the change home without leaving the app.
+  commit → push → PR → merge action bar and live workflow-stage badges, so you
+  drive the change home without leaving the app. The push is plain `git push`
+  over the remote your repo already has — SSH or HTTPS, your choice.
 - **Provider-agnostic by design.** A coding agent in MindFlock is just a TOML
   file — binary, launch args, prompt seeding, activity-detection hooks, model
   pricing — so it drives *any* CLI (Claude Code, Codex, Antigravity, aider,
@@ -225,10 +226,14 @@ those two change what your day looks like:
   an agent seeded with the ticket — title, description, mined acceptance
   criteria, comments. Read-only against your tracker: it never comments or
   moves a ticket's status.
-- 🔀 **Guided git workflow** — one-click commit → push → PR → merge, driven by
-  the `gh` CLI, with live workflow-stage badges
+- 🔀 **Guided git workflow** — one-click commit → push → PR → merge, with live
+  workflow-stage badges
   (provisioning → agent → pre-commit → committed → pushed → PR open). The
-  commit runs in the session's own terminal, so you watch the hooks.
+  commit runs in the session's own terminal, so you watch the hooks. Pushing is
+  plain `git push` over whatever remote you already have — SSH or HTTPS, never
+  rewritten by MindFlock. **Make PR** / **Merge** use the `gh` CLI when it's
+  installed and authenticated, a GitHub token (Settings → PR review) when it
+  isn't, and a prefilled compare URL in your browser when you have neither.
 - 🔌 **Provider-agnostic** — every coding-agent CLI is just a TOML file (Claude
   Code, Codex, Antigravity, aider, OpenCode, Cline and Goose bundled; add your
   own — though sessions that *ingestion* provisions launch Claude Code). Shared
@@ -451,8 +456,9 @@ It finds — and auto-starts — the server by itself.
 | **OS** | Linux, macOS (Apple silicon & Intel), Windows **via WSL2** (the app runs natively on Windows; the engine lives in WSL2 — native Windows has no tmux/PTYs) |
 | `git` ≥ 2.17, `tmux` ≥ 2.4 | On `PATH`; checked, with versions, by `mindflock doctor` |
 | A coding-agent CLI | `claude` (Claude Code) by default |
-| `gh` (GitHub CLI) | For the push/PR/merge workflow |
-| Optional | `cursor` (IDE integration), `tailscale` (phone access) |
+| A git remote you can already push to | **SSH or HTTPS — either works.** MindFlock pushes with plain `git push` over the remote your repo already has, verbatim, and never rewrites it. If `git push` works in your terminal, it works here |
+| Optional — `gh` (GitHub CLI) | Only makes **Make PR** / **Merge** one click. Without it they fall back to a GitHub token (Settings → PR review), and without a token to a prefilled compare URL you open in your browser. Never involved in pushing. The PR-review poller runs on the same token and treats `gh auth token` as just one place to find it |
+| Optional — everything else | `cursor` (IDE integration), `tailscale` (phone access) |
 
 ## How It Works
 
@@ -471,7 +477,7 @@ It finds — and auto-starts — the server by itself.
              desktop app (Electron) · phone UI at /m  ◄──────────────┤
                           │                     FastAPI (backend.web)
                           ▼
-        you read the diff ──►  commit → push → PR → merge   (one click each, gh)
+        you read the diff ──►  commit → push → PR → merge   (one click each)
                                                     │
                                                     ▼
                                               pull request
@@ -619,7 +625,7 @@ On macOS the desktop app additionally leaves `/Applications/MindFlock.app`,
 git clone https://github.com/MindFlock/MindFlock
 cd MindFlock
 uv sync --group web --group dev   # web = FastAPI server deps, dev = pytest
-uv run mindflock doctor           # checks git/tmux/gh/agent CLI
+uv run mindflock doctor           # checks git/tmux/agent CLI (+ gh, optional)
 uv run mindflock serve            # localhost:8765, from a repo you want to manage
 ```
 

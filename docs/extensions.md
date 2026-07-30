@@ -96,7 +96,7 @@ notify-send "MindFlock: $MINDFLOCK_SESSION" "The agent needs your input"
 
 ```sh
 #!/bin/sh
-# Ping Slack when a session reaches the PR stage (gh just opened one).
+# Ping Slack when a session reaches the PR stage (a PR just opened for it).
 [ "$MINDFLOCK_NEW" = "pr" ] || exit 0
 cat > /dev/null   # drain the JSON envelope from stdin
 curl -s -X POST -H 'Content-Type: application/json' \

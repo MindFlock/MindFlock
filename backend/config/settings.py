@@ -38,6 +38,7 @@ _logger = logging.getLogger(__name__)
 __all__ = [
     "SettingsFileName",
     "SETTINGS_SCHEMA_VERSION",
+    "GIT_TRANSPORTS",
     "CodingCliSettings",
     "TicketingSource",
     "TicketingSettings",
@@ -239,6 +240,12 @@ class TicketingSettings:
         return cls(sources=sources)
 
 
+#: Accepted ``[repository].git_transport`` values. ``"auto"`` matches the
+#: transport of the user's own ``url`` when it names the repo being cloned and
+#: falls back to HTTPS otherwise; ``"ssh"``/``"https"`` force one spelling.
+GIT_TRANSPORTS = ("auto", "ssh", "https")
+
+
 @dataclass
 class RepositorySettings:
     url: str = ""
@@ -249,6 +256,12 @@ class RepositorySettings:
     # PRs into e.g. "staging" instead of whatever branch it happened to be cut
     # from. Blank = use the session's own base (the prior behaviour).
     pr_base_branch: str = ""
+    # Which transport the ingestion pipeline clones with when it only knows a
+    # repo by its owner/name slug (see
+    # :mod:`backend.ticket_ingestion.clone_transport`). One of GIT_TRANSPORTS;
+    # blank = unset, which falls through the resolution chain to "auto".
+    # NOT a rewrite of `url` — that spelling is always used verbatim.
+    git_transport: str = ""
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -260,6 +273,8 @@ class RepositorySettings:
             d["base_branch"] = self.base_branch
         if self.pr_base_branch:
             d["pr_base_branch"] = self.pr_base_branch
+        if self.git_transport:
+            d["git_transport"] = self.git_transport
         return d
 
     @classmethod
@@ -269,6 +284,7 @@ class RepositorySettings:
             workspace_dir=str(d.get("workspace_dir", "") or ""),
             base_branch=str(d.get("base_branch", "") or ""),
             pr_base_branch=str(d.get("pr_base_branch", "") or ""),
+            git_transport=_git_transport(d.get("git_transport")),
         )
 
 
@@ -708,6 +724,20 @@ def _opt_bool(v: Any) -> Optional[bool]:
     if s in ("false", "0", "no", "off"):
         return False
     return None
+
+
+def _git_transport(v: Any) -> str:
+    """Normalize a ``git_transport`` value (see :data:`GIT_TRANSPORTS`).
+
+    Tolerant like every other coercion here: a typo ("shh", "SSH2") becomes
+    ``"auto"`` — the safe default — rather than raising and taking the whole
+    store down with it. Missing/blank stays ``""`` so it falls through to the
+    next resolution layer instead of pinning "auto" over a config.toml value.
+    """
+    s = str(v or "").strip().lower()
+    if not s:
+        return ""
+    return s if s in GIT_TRANSPORTS else "auto"
 
 
 def _str_list(v: Any) -> List[str]:

@@ -1,10 +1,14 @@
 """Capability gating: only the coding agent is required; everything else hides.
 
 Locks the contract that /api/config exposes a `caps` block (git / tailscale /
-ticketing), that the git-only endpoints refuse cleanly (409, `error` field)
-when git isn't installed instead of 500ing mid-subprocess, and that the static
-frontend carries the data-caps hooks + "connect X" gate messages the body
+ticketing / github), that the git-only endpoints refuse cleanly (409, `error`
+field) when git isn't installed instead of 500ing mid-subprocess, and that the
+static frontend carries the data-caps hooks + "connect X" gate messages the body
 classes (no-git / no-tailscale / no-ticketing) switch on.
+
+`github` is the odd one out: it does not hide anything. False only means Make
+PR / Merge hand the user a prefilled GitHub page instead of doing it themselves,
+so it is deliberately NOT wired to a body class or a data-caps gate.
 """
 
 from __future__ import annotations
@@ -24,8 +28,36 @@ client = TestClient(server.app)
 # --------------------------------------------------------------------------- #
 def test_config_exposes_caps_booleans():
     caps = client.get("/api/config").json()["caps"]
-    assert set(caps) == {"git", "tailscale", "ticketing"}
+    assert set(caps) == {"git", "tailscale", "ticketing", "github"}
     assert all(isinstance(v, bool) for v in caps.values())
+
+
+def test_caps_github_follows_the_pr_probe(monkeypatch):
+    # `github` is gh-OR-token: either rung of the PR ladder makes it True. The
+    # probe is cached for 60s (it shells out to `gh auth status`), so the cache
+    # has to be cleared between the two halves or the second read is stale.
+    monkeypatch.setattr(server, "gh_available", lambda: False)
+    monkeypatch.setattr(server._github_pr, "has_token_sync", lambda: False)
+    server._GITHUB_CAP_CACHE[0] = 0.0
+    assert client.get("/api/config").json()["caps"]["github"] is False
+
+    # A token alone is enough — gh stays absent.
+    monkeypatch.setattr(server._github_pr, "has_token_sync", lambda: True)
+    server._GITHUB_CAP_CACHE[0] = 0.0
+    assert client.get("/api/config").json()["caps"]["github"] is True
+    server._GITHUB_CAP_CACHE[0] = 0.0
+
+
+def test_caps_github_never_500s_when_the_probe_explodes(monkeypatch):
+    def _boom():
+        raise RuntimeError("gh exploded")
+
+    monkeypatch.setattr(server, "gh_available", _boom)
+    server._GITHUB_CAP_CACHE[0] = 0.0
+    r = client.get("/api/config")
+    assert r.status_code == 200
+    assert r.json()["caps"]["github"] is False
+    server._GITHUB_CAP_CACHE[0] = 0.0
 
 
 def test_caps_git_follows_binary_presence(monkeypatch):
@@ -36,6 +68,11 @@ def test_caps_git_follows_binary_presence(monkeypatch):
 
 
 def test_caps_tailscale_follows_binary_presence(monkeypatch):
+    # gh_available() has its own `shutil` import (backend/session/git/util.py),
+    # so blanking server.shutil.which does NOT stop the github probe from
+    # shelling out to `gh auth status` on a machine that has gh. Stub it too,
+    # so this test stays a PATH-stat test and never runs a subprocess.
+    monkeypatch.setattr(server, "gh_available", lambda: False)
     monkeypatch.setattr(server.shutil, "which", lambda name: None)
     assert client.get("/api/config").json()["caps"]["tailscale"] is False
 

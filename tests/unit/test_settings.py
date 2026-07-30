@@ -178,6 +178,32 @@ class TestOptionalFieldSerialization:
         d = S.RepositorySettings(base_branch="main", pr_base_branch="staging").to_dict()
         assert d == {"base_branch": "main", "pr_base_branch": "staging"}
 
+    @pytest.mark.parametrize("transport", S.GIT_TRANSPORTS)
+    def test_git_transport_round_trips(self, transport):
+        d = S.RepositorySettings(git_transport=transport).to_dict()
+        assert d == {"git_transport": transport}
+        assert S.RepositorySettings.from_dict(d).git_transport == transport
+
+    def test_git_transport_case_is_normalized(self):
+        back = S.RepositorySettings.from_dict({"git_transport": "  SSH "})
+        assert back.git_transport == "ssh"
+
+    def test_invalid_git_transport_falls_back_to_auto(self):
+        # A typo must not raise — the store is a tolerant fall-through overlay.
+        back = S.RepositorySettings.from_dict({"git_transport": "shh"})
+        assert back.git_transport == "auto"
+
+    def test_git_transport_unset_stays_unset(self):
+        # Blank means "fall through to config.toml / the built-in default",
+        # which is why it is not eagerly pinned to "auto" here.
+        assert S.RepositorySettings.from_dict({}).git_transport == ""
+        assert "git_transport" not in S.RepositorySettings().to_dict()
+
+    def test_git_transport_survives_a_save_load_cycle(self):
+        S.update_settings(repository={"url": "u", "git_transport": "ssh"})
+        S.invalidate()
+        assert S.load_settings().repository.git_transport == "ssh"
+
     def test_github_issue_tuning_fields(self):
         d = S.GithubSettings(
             issue_min_age_minutes=5,

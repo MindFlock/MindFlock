@@ -101,6 +101,7 @@ workflow_state_id = 500000007   # Shortcut only — restrict the story search to
 # its own repo_url. Ingestion refuses to start unless SOME repo is resolvable.
 # url = "git@github.com:Org/repo.git"
 workspace_dir = "./workspaces"        # REQUIRED — where story/PR workspaces live
+git_transport = "auto"                # "auto" (default) | "ssh" | "https"
 
 [validation]
 min_description_length = 20     # REQUIRED — shorter descriptions trigger a clarification session
@@ -205,6 +206,35 @@ Notes on individual keys:
   `uv run python scripts/list_workflows.py`. The integer `workflow_state_id`
   (integer) is still honoured when `workflow_state` is empty.
 - `repository.workspace_dir` — resolved relative to the config file's directory.
+- `repository.git_transport` — `auto` (default), `ssh` or `https`. The
+  ingestion monitors discover work by `owner/repo` **slug**, not by remote URL,
+  so at some point the pipeline has to turn a slug into a clone URL. This
+  setting decides which spelling it picks — and *only* that. It is not a
+  rewriter:
+
+  - `auto` — prefer your own `[repository].url`, **verbatim**, whenever it names
+    the same repo. So a config repo of `git@github.com:Org/repo.git` means slugs
+    for that repo clone over SSH, with your key, no HTTPS credential needed. The
+    match is transport-independent (`same_repo()` in
+    `backend/session/git/remote_url.py`), so `https://github.com/Org/repo` and
+    `git@github.com:Org/repo.git` count as the same repo. When nothing you
+    configured names the repo, it falls back to the API's HTTPS clone URL and
+    then to a synthesized one.
+  - `ssh` / `https` — an explicit instruction, respelling whatever URL we
+    started with. Always wins over `auto`'s inference.
+
+  Resolved in the usual layered order: `$MINDFLOCK_GIT_TRANSPORT` → the settings
+  store → this key → `auto`. An unrecognised value logs a warning and degrades
+  to `auto` rather than taking the pipeline down.
+
+  **URLs you supply are used verbatim.** A remote that already exists on a repo
+  is never rewritten, converted or "normalised" by MindFlock, and a `url` you
+  set here is passed to git exactly as written — so git's own
+  `url.<base>.insteadOf` / `pushInsteadOf` rewrites still apply and still win,
+  the same way they do when you run `git clone` yourself. (Which is why an SSH
+  user with an `insteadOf` rule needs nothing here at all: git rewrites our
+  HTTPS URL before it dials out.) Pushing never consults this setting either —
+  it is plain `git push` over the remote the repo already has.
 - `github.base_branch` — also used by provisioned mode as the base branch
   worktrees fork from (default `main`).
 - `[mindflock].enabled` — **default `true`, including when the whole `[mindflock]`
@@ -273,6 +303,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_REPO_ROOT` | — | Where the web server resolves the pipeline's repo root (`config.toml`, `state.json`); unset → nearest ancestor with `config.toml` → cwd. Set it for installed (uv-tool/pipx) copies — a wrong root splits the processed-story ledger |
 | `MINDFLOCK_REPO_URL` | — | Overrides `[repository].url` — the repo provisioning clones/worktrees from (engine + pipeline) |
 | `MINDFLOCK_WORKSPACE_DIR` | `./workspaces` | Overrides `[repository].workspace_dir` — where per-session workspaces are created |
+| `MINDFLOCK_GIT_TRANSPORT` | `auto` | Overrides `[repository].git_transport` — `auto` \| `ssh` \| `https`, the URL form used when the pipeline must build a clone URL from an `owner/repo` slug. Never affects pushing, and never rewrites a URL you configured |
 | `MINDFLOCK_BASE_BRANCH` | `main` | Overrides `[github].base_branch` — the fork point for new branches |
 | `MINDFLOCK_GITHUB_REPO` | — | Single-repo override for `[github].repos` (the PR monitor's `owner/name`) |
 | `SHORTCUT_API_TOKEN` | — | Fallback Shortcut API token when the Settings/ticketing store has none — used by the Settings connection test and Shortcut ingestion |

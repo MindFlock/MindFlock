@@ -12,6 +12,13 @@ from backend.workspace_setup import (
     parse_setup_commands,
 )
 
+# Imported for the one coercion, not for the resolution chain: clone_transport
+# owns the vocabulary ("auto"/"ssh"/"https") and the degrade-with-a-warning
+# rule, so the parser must not grow a second copy that could drift from it.
+from backend.ticket_ingestion.clone_transport import (
+    normalize_transport as _normalize_transport,
+)
+
 
 class ConfigError(Exception):
     """Raised for any configuration loading failure."""
@@ -139,6 +146,13 @@ class PipelineConfig:
     #: configs (tests, standalone) default to on.
     tickets_enabled: bool = True
     repo_url: str = ""
+    #: Which URL spelling the pipeline builds when it has to turn an
+    #: ``owner/repo`` slug into a clone URL: ``"auto"`` (copy ``repo_url``'s own
+    #: transport when it names the same repo) | ``"ssh"`` | ``"https"``. Read by
+    #: :func:`backend.ticket_ingestion.clone_transport.resolve_transport` as the
+    #: config.toml layer of its env -> settings.json -> toml -> ``"auto"`` chain.
+    #: Never affects pushing, and never rewrites a URL the user configured.
+    git_transport: str = "auto"
     workspace_dir: Path = Path("./workspaces")
     min_description_length: int = 20
     log_file: Path = Path("./logs/pipeline.log")
@@ -271,6 +285,21 @@ def _merge_layers(raw: dict) -> dict:
             settings_getter=lambda s: s.repository.workspace_dir,
             toml_value=repository.get("workspace_dir"),
             default="./workspaces",
+        ),
+    )
+    # Which URL spelling the pipeline synthesizes from an ``owner/repo`` slug.
+    # Layered here (rather than only in clone_transport) so a value set in
+    # config.toml actually reaches the clone path — env and settings.json are
+    # read directly by resolve_transport, but the toml layer only exists if it
+    # is carried on the config object.
+    _put(
+        repository,
+        "git_transport",
+        _s.resolve_str(
+            env="MINDFLOCK_GIT_TRANSPORT",
+            settings_getter=lambda s: s.repository.git_transport,
+            toml_value=repository.get("git_transport"),
+            default="auto",
         ),
     )
     _put(
@@ -578,6 +607,9 @@ def _parse_generic_config(
             "repository.url (or a per-source repo_url on each ticketing source)"
         )
     workspace_dir = repository.get("workspace_dir") or "./workspaces"
+    # Normalized (not validated) on purpose: a typo here must not refuse to
+    # start the pipeline, it degrades to "auto" with a warning.
+    git_transport = _normalize_transport(repository.get("git_transport"))
     min_description_length = validation.get("min_description_length", 20)
     if not isinstance(min_description_length, int) or isinstance(
         min_description_length, bool
@@ -611,6 +643,7 @@ def _parse_generic_config(
     return PipelineConfig(
         tickets_enabled=bool(raw.get("tickets_enabled", tickets_default)),
         repo_url=str(repo_url),
+        git_transport=git_transport,
         workspace_dir=Path(workspace_dir),
         min_description_length=int(min_description_length),
         log_file=Path(log_file),

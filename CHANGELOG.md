@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **SSH remotes work, and the GitHub CLI is genuinely optional.** `gh` was
+  declared optional in 0.1.1, but the code and the docs had not caught up: the
+  engine's push ran `gh repo sync` with `git push` only as a fallback, the
+  make-PR and merge endpoints refused with "GitHub CLI (gh) is not installed",
+  and the README listed `gh` above the Optional row while doctor, CONTRIBUTING
+  and the installer each said something different. A contributor whose git
+  config uses SSH could not push at all. Now: **pushing is always plain
+  `git push -u origin <branch>` over whatever remote your repo already has** —
+  SSH or HTTPS, used verbatim, with your own git credentials, and MindFlock
+  never rewrites a remote URL (so `url.<base>.insteadOf` still applies). Only
+  **Make PR** and **Merge** need to reach the GitHub API, and each now resolves
+  in three tiers: `gh` when it is installed *and* authenticated, then the GitHub
+  REST API with a resolved token, then a prefilled compare/PR URL handed to your
+  browser — `POST /api/instances/{title}/make-pr` returns `200 {ok: false,
+  compare_url}` rather than a 400, and no response is ever just "gh is not
+  installed". When a credential is genuinely needed the app prints one sentence:
+  *add a GitHub token in Settings → PR review, or install the GitHub CLI*.
+  Doctor's missing-`gh` line now reads
+  `not found (optional — only PR create/merge and PR review need it; pushing uses plain git)`
+  instead of "push/PR steps will fail"; `GET /api/config` gains
+  `caps.github` (true when either credential exists). Remote URLs of every
+  spelling — `https://`, `ssh://`, `ssh://host:22/…`, scp-style
+  `git@host:owner/repo.git`, `git://`, and local paths — go through one parser
+  (`backend/session/git/remote_url.py`), and a new `[repository].git_transport`
+  setting (`auto` | `ssh` | `https`, default `auto`) picks the form used when
+  MindFlock has to *build* a clone URL from an `owner/repo` slug: `auto` matches
+  the transport of your own `[repository].url` for that repo, and an explicit
+  value always wins. CI's cold-install job no longer installs `gh`, so a
+  gh-forcing regression now fails the build instead of shipping.
 - **The pitch, everywhere: MindFlock turns your ticket queue into a queue of
   pull requests.** The README, the website and the package description used to
   lead with parallel agent supervision — a crowded category — and buried ticket
@@ -68,6 +97,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Provisioned sessions pushed into your own laptop instead of the forge.**
+  Provisioning clones from the repo you picked because a local clone is fast and
+  works offline — but that left the workspace's `origin` pointing at a directory
+  on your machine. `git push origin <branch>` then *succeeded* into your own
+  checkout: the stage chip flipped to `pushed`, `git ls-remote` confirmed the
+  branch, and yet nothing ever reached GitHub, so **Make PR** failed against a
+  remote that is not a GitHub repo. The clone source and the push target are now
+  separate: MindFlock still clones from the local path, then re-points `origin`
+  at that repo's own forge URL (copied verbatim — an SSH remote stays SSH). A
+  base clone created before this fix is healed on its next use rather than
+  needing a manual reset — worktree *and* clone strategies, the latter on
+  resume — and a repo with no upstream at all is left exactly as it was, so
+  purely local work still provisions offline.
+
+  Only the push destination changes. What a session's base branch *tracks* is
+  deliberately untouched: the workspace keeps a `mindflock-source` remote
+  pointing at your checkout and still refreshes from it, so committed-but-
+  unpushed work reaches every session, not just the first one. Two smaller
+  consequences: local clone sources are no longer cloned `--filter=blob:none`
+  (a blobless clone defers objects to whatever `origin` points at, which would
+  have made them network-only; cloning a local path in full costs nothing since
+  git hardlinks the object store), and any leftover partial-clone config from a
+  pre-fix base clone is cleared during healing for the same reason. A failed
+  refresh fetch no longer resets the base to a stale tracking ref, which could
+  freeze it at its first snapshot forever.
 - **Jira acceptance criteria were being mined from the wrong bullets.** ADF
   headings were flattened without their `#` markers, so no Jira issue ever
   matched the `## Acceptance Criteria` section the miner looks for — every

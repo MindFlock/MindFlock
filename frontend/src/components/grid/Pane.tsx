@@ -46,7 +46,16 @@ export function Pane({
   const lastTab = useUi((s) => s.lastTab[title]);
   const setLastTab = useUi((s) => s.setLastTab);
   const reduceMotion = useUi((s) => s.reduceMotion);
-  const caps = config?.caps ?? { git: true, tailscale: true, ticketing: true };
+  // Same "assume capable until the server says otherwise" fallback as the other
+  // caps consumers (SidebarRow, CommandPalette, lib/sessionActions) — keep the
+  // four literals identical so a PR affordance added here can't silently start
+  // out disabled while the same button stays live everywhere else.
+  const caps = config?.caps ?? {
+    git: true,
+    tailscale: true,
+    ticketing: true,
+    github: true,
+  };
 
   const missing = !!inst.workspace_missing;
   const loading = inst.status === "loading";

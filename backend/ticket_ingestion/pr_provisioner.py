@@ -8,6 +8,12 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.ticket_ingestion._subprocess import run_capture
+from backend.ticket_ingestion.clone_transport import (
+    apply_transport,
+    clone_failure_hint,
+    resolve_transport,
+    run_network_git,
+)
 from backend.ticket_ingestion.config import PipelineConfig
 from backend.ticket_ingestion.models import (
     ProvisionedPRWorkspace,
@@ -129,15 +135,18 @@ class PRProvisioner:
 
     async def _clone(self, pr: PullRequest, directory: Path) -> None:
         directory.parent.mkdir(parents=True, exist_ok=True)
-        # Clone the PR's own repo (multi-repo review).
-        clone_url = pr.clone_url
+        # Clone the PR's own repo (multi-repo review). The monitor already
+        # picked the transport when it recorded clone_url; apply_transport only
+        # re-spells it when the user explicitly configured ssh/https (and leaves
+        # any other spelling — including a local path — exactly as given).
+        clone_url = apply_transport(pr.clone_url, resolve_transport(self.config))
         # Blobless partial clone (matches the ticket path's canonical clone in
         # session/provisioned.py): fetches commit/tree objects now and blobs on
         # demand, which is dramatically faster than a full clone of a large repo
         # — that plain `git clone` was the bulk of PR provisioning time. `--no-tags`
         # skips the tag refs we never use. Full history is preserved so diffs
         # against the base branch still work.
-        rc, _, stderr = await _run(
+        rc, _, stderr = await _run_network(
             "git",
             "clone",
             "--filter=blob:none",
@@ -155,7 +164,7 @@ class PRProvisioner:
                 stderr.decode(errors="replace").strip(),
             )
             shutil.rmtree(directory, ignore_errors=True)
-            rc, _, stderr = await _run(
+            rc, _, stderr = await _run_network(
                 "git",
                 "clone",
                 clone_url,
@@ -164,7 +173,9 @@ class PRProvisioner:
             )
         if rc != 0:
             raise PRProvisioningError(
-                f"git clone failed for PR #{pr.number}: {stderr.decode(errors='replace').strip()}"
+                f"git clone failed for PR #{pr.number}: "
+                f"{stderr.decode(errors='replace').strip()} "
+                f"[{clone_failure_hint(clone_url)}]"
             )
         await self._checkout_pr_head(pr, directory)
 
@@ -175,7 +186,7 @@ class PRProvisioner:
         # Fetch the PR head via refs/pull/<n>/head, which GitHub exposes for both
         # same-repo and fork PRs. This avoids depending on origin/<head_ref>, which
         # does not exist when the branch lives on a fork.
-        rc, _, stderr = await _run(
+        rc, _, stderr = await _run_network(
             "git",
             "fetch",
             "origin",
@@ -186,7 +197,8 @@ class PRProvisioner:
         if rc != 0:
             raise PRProvisioningError(
                 f"git fetch pull/{pr.number}/head failed for PR #{pr.number}: "
-                f"{stderr.decode(errors='replace').strip()}"
+                f"{stderr.decode(errors='replace').strip()} "
+                f"[{clone_failure_hint(pr.clone_url)}]"
             )
         # Pin the local branch to the exact head SHA we recorded. Fall back to the
         # fetched tip (FETCH_HEAD) if the PR was force-pushed since we polled and the
@@ -227,3 +239,12 @@ async def _run(
     # The rc-124 timeout convention lives in the shared helper so it can't
     # drift from the provisioner / cache-refresher copies.
     return await run_capture(*args, cwd=cwd, timeout=timeout)
+
+
+async def _run_network(
+    *args: str, cwd: str | None = None, timeout: float = _NETWORK_GIT_TIMEOUT
+) -> tuple[int, bytes, bytes]:
+    # Same contract as _run, for the git calls that dial out (clone / fetch):
+    # credential prompts disabled and stdin closed so a missing SSH key or PAT
+    # errors in seconds instead of hanging until the wall-clock cap.
+    return await run_network_git(*args, cwd=cwd, timeout=timeout)

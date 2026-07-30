@@ -28,7 +28,7 @@ from a browser.
 │   cline · goose · user TOMLs)                                            │
 └──────────────┬───────────────────────────────────────────────────────────┘
                │ shells out to
-        git · tmux · gh · uv · agent CLIs · IDEs (cursor/code/…)
+        git · tmux · uv · agent CLIs · IDEs (cursor/code/…) · gh (optional)
 ```
 
 The **ingestion pipeline** (`backend.ticket_ingestion`) is a separate process that
@@ -210,7 +210,9 @@ The `mindflock` console entry point: host commands (`serve`, `doctor [--fix]`)
 plus session commands (`new`, `ls`, `attach`, `rm`, `open`, `events`) that are
 thin clients over a running server's HTTP API — the terminal and the browser
 drive the same server. `doctor` (`backend/doctor.py`, also surfaced as a
-web addon) preflights git/tmux/gh/agent-CLI and can install missing deps.
+web addon) preflights git/tmux/agent-CLI and can install missing deps. `gh` is
+preflighted too but reported as *optional* (`info`, never `fail`): it is not on
+any required path — pushing is plain `git push`.
 See [cli.md](cli.md).
 
 ### Desktop app (`electron/`)
@@ -239,8 +241,11 @@ independent cadences, so each side has to tolerate the other being older. See
 5. The web server's reload loop adopts the session; it appears in the grid within
    ~4 seconds with a stage badge. You watch/steer it from the browser or phone.
 6. The guided flow walks it forward: **Commit…** (runs pre-commit in the visible
-   Terminal tab) → **Push** → **Make PR** → **Merge**. Stage detection is inferred
-   from git/`gh`, so commits made in Cursor also move the badge.
+   Terminal tab) → **Push** (plain `git push` over the repo's own remote, SSH or
+   HTTPS) → **Make PR** → **Merge** (`gh` when available, else the GitHub REST
+   API with a token, else a prefilled browser URL). Stage detection is inferred
+   from git plus whichever GitHub credential exists, so commits made in Cursor
+   also move the badge.
 
 ## On-disk state map
 

@@ -4,19 +4,24 @@ Holds the git-and-gh-driven methods of ``GitWorktree`` (exposed via
 :class:`GitWorktreeGitMixin`), plus the free functions ``FetchBranches`` /
 ``SearchBranches`` and the constant ``MaxBranchSearchResults``.
 
-Command argv and error strings are byte-for-byte identical to the Go source.
-Notably, the push fallback runs a **bare** ``git push -u origin <branch>`` with
-``cwd`` set to the worktree path (no ``-C``), exactly as Go does.
+Command argv and error strings are byte-for-byte identical to the Go source,
+with one deliberate divergence: Go pushed through ``gh repo sync``, which made
+the GitHub CLI mandatory for a push. Pushing here is a **bare**
+``git push -u origin <branch>`` with ``cwd`` set to the worktree path (no
+``-C``), so it works over whatever remote the user configured — SSH or HTTPS,
+gh or no gh.
 """
 
 from __future__ import annotations
 
 import os
 import subprocess
+import webbrowser
 from typing import List
 
 from backend import log
-from backend.session.git.util import _exit_error, _trim_prefix, check_gh_cli
+from backend.session.git.remote_url import branch_url, is_local_path
+from backend.session.git.util import _exit_error, _trim_prefix, gh_available
 
 __all__ = [
     "MaxBranchSearchResults",
@@ -159,13 +164,17 @@ class GitWorktreeGitMixin:
     def PushChanges(self, commit_message: str, open: bool) -> None:
         """Commit and push changes in the worktree to the remote branch.
 
-        Steps: verify gh is available, commit dirty changes, ensure the branch
-        exists on the remote (``gh repo sync --source`` then fall back to a bare
-        ``git push -u origin <branch>``), then ``gh repo sync`` to sync. If
-        ``open`` is set, open the branch URL (failures there are logged only).
-        """
-        check_gh_cli()
+        Steps: commit dirty changes, then a bare ``git push -u origin
+        <branch>``. If ``open`` is set, open the branch URL (failures there are
+        logged only).
 
+        The push is plain git on purpose. It goes over whatever remote the user
+        configured — SSH or HTTPS — and needs no GitHub CLI and no token, so a
+        contributor whose git config uses SSH can push exactly as she always
+        does. (Go drove this through ``gh repo sync``, which both required gh
+        and was the wrong command: ``repo sync`` updates a fork from its
+        upstream, it does not publish a branch.)
+        """
         # Check if there are any changes to commit.
         try:
             is_dirty = self.IsDirty()
@@ -195,74 +204,34 @@ class GitWorktreeGitMixin:
                     log.ErrorLog.Print(err)
                 raise RuntimeError("failed to commit changes: {}".format(err)) from err
 
-        # First push the branch to remote to ensure it exists.
+        # Publish the branch. `-u` sets upstream tracking so the branch exists
+        # on the remote and later pushes need no arguments.
+        # NOTE: bare `git push` (no -C); cwd is the worktree path.
         try:
-            push_failed = (
-                subprocess.run(
-                    ["gh", "repo", "sync", "--source", "-b", self.branchName],
-                    cwd=self.worktreePath,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=_NET_TIMEOUT,
-                ).returncode
-                != 0
-            )
-        except subprocess.TimeoutExpired:
-            push_failed = True
-        if push_failed:
-            # If sync fails, try creating the branch on remote first.
-            # NOTE: bare `git push` (no -C); cwd is the worktree path.
-            try:
-                git_push_cmd = subprocess.run(
-                    ["git", "push", "-u", "origin", self.branchName],
-                    cwd=self.worktreePath,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,  # CombinedOutput()
-                    timeout=_NET_TIMEOUT,
-                )
-            except subprocess.TimeoutExpired as err:
-                push_err = "timed out after {:g}s".format(_NET_TIMEOUT)
-                if log.ErrorLog is not None:
-                    log.ErrorLog.Print(push_err)
-                raise RuntimeError(
-                    "failed to push branch: {} ({})".format(
-                        _decode(err.output or b""), push_err
-                    )
-                ) from err
-            if git_push_cmd.returncode != 0:
-                push_err = _exit_error(git_push_cmd.returncode)
-                if log.ErrorLog is not None:
-                    log.ErrorLog.Print(push_err)
-                raise RuntimeError(
-                    "failed to push branch: {} ({})".format(
-                        _decode(git_push_cmd.stdout), push_err
-                    )
-                )
-
-        # Now sync with remote.
-        try:
-            sync_cmd = subprocess.run(
-                ["gh", "repo", "sync", "-b", self.branchName],
+            git_push_cmd = subprocess.run(
+                ["git", "push", "-u", "origin", self.branchName],
                 cwd=self.worktreePath,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # CombinedOutput()
                 timeout=_NET_TIMEOUT,
             )
         except subprocess.TimeoutExpired as err:
-            timeout_err = "timed out after {:g}s".format(_NET_TIMEOUT)
+            push_err = "timed out after {:g}s".format(_NET_TIMEOUT)
             if log.ErrorLog is not None:
-                log.ErrorLog.Print(timeout_err)
+                log.ErrorLog.Print(push_err)
             raise RuntimeError(
-                "failed to sync changes: {} ({})".format(
-                    _decode(err.output or b""), timeout_err
+                "failed to push branch: {} ({})".format(
+                    _decode(err.output or b""), push_err
                 )
             ) from err
-        if sync_cmd.returncode != 0:
-            err = _exit_error(sync_cmd.returncode)
+        if git_push_cmd.returncode != 0:
+            push_err = _exit_error(git_push_cmd.returncode)
             if log.ErrorLog is not None:
-                log.ErrorLog.Print(err)
+                log.ErrorLog.Print(push_err)
             raise RuntimeError(
-                "failed to sync changes: {} ({})".format(_decode(sync_cmd.stdout), err)
+                "failed to push branch: {} ({})".format(
+                    _decode(git_push_cmd.stdout), push_err
+                )
             )
 
         # Open the branch in the browser.
@@ -359,30 +328,63 @@ class GitWorktreeGitMixin:
 
     # --- OpenBranchURL ----------------------------------------------------
     def OpenBranchURL(self) -> None:
-        """Open the branch URL in the default browser via ``gh browse``.
+        """Open the branch's page on the forge in the default browser.
 
-        Verifies gh is available, then runs ``gh browse --branch <branch>`` with
-        ``cwd`` set to the worktree. Raises ``RuntimeError("failed to open
-        branch URL: <err>")`` on failure.
+        ``gh browse --branch <branch>`` is preferred when gh is installed and
+        authenticated: it knows about forks and the user's gh host config. When
+        gh is missing, logged out, hung, or simply fails, this falls through to
+        deriving the URL from ``origin`` itself and handing it to the stdlib
+        browser opener — the same page, without the CLI.
+
+        Raises ``RuntimeError("failed to open branch URL: <reason>")`` only when
+        no URL can be produced at all (e.g. ``origin`` is a local clone path,
+        which has no branch page) or no browser could be launched.
         """
-        # Check if GitHub CLI is available.
-        check_gh_cli()
+        # Preferred path: let gh do it when it is actually usable.
+        if gh_available():
+            try:
+                cmd = subprocess.run(
+                    ["gh", "browse", "--branch", self.branchName],
+                    cwd=self.worktreePath,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=_GIT_TIMEOUT,
+                )
+                if cmd.returncode == 0:
+                    return
+            except (subprocess.TimeoutExpired, OSError):
+                # A hung or unusable gh is not a failure to report: the plain
+                # URL below reaches the same page.
+                pass
 
+        # Fallback: whatever remote the user configured already names the repo.
         try:
-            cmd = subprocess.run(
-                ["gh", "browse", "--branch", self.branchName],
-                cwd=self.worktreePath,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=_GIT_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired as err:
+            origin = self.run_git_command(
+                self.worktreePath, "remote", "get-url", "origin"
+            ).strip()
+        except Exception as err:  # noqa: BLE001
             raise RuntimeError(
-                "failed to open branch URL: timed out after {:g}s".format(_GIT_TIMEOUT)
+                "failed to open branch URL: could not read remote 'origin': {}".format(
+                    err
+                )
             ) from err
-        if cmd.returncode != 0:
+
+        url = branch_url(origin, self.branchName)
+        if url is None:
+            if is_local_path(origin):
+                reason = (
+                    "remote 'origin' is a local path ({}), which has no branch "
+                    "page to open".format(origin)
+                )
+            else:
+                reason = "remote 'origin' ({}) is not a recognised forge URL".format(
+                    origin
+                )
+            raise RuntimeError("failed to open branch URL: {}".format(reason))
+
+        if not webbrowser.open(url):
             raise RuntimeError(
-                "failed to open branch URL: {}".format(_exit_error(cmd.returncode))
+                "failed to open branch URL: no browser available for {}".format(url)
             )
 
     # snake_case aliases

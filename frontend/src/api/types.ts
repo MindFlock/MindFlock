@@ -93,6 +93,12 @@ export interface Caps {
   git: boolean;
   tailscale: boolean;
   ticketing: boolean;
+  /** MindFlock can open/merge PRs itself — gh is authenticated OR a GitHub
+   * token resolves. False only means "we can't do it for you": pushing is
+   * always plain git, and the PR surfaces fall back to GitHub's own compare
+   * page. Optional so an older server that doesn't report it is treated as
+   * capable (feature-detected with `=== false`, never `!caps.github`). */
+  github?: boolean;
 }
 
 export interface Config {

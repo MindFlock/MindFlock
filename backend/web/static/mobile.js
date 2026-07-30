@@ -301,11 +301,28 @@
       });
   }
 
+  // The GitHub CLI is optional everywhere, including here. Pushing is plain
+  // `git push` over whatever remote the user configured (SSH or HTTPS); only
+  // opening/merging a PR needs credentials, and when the server has none it
+  // answers 200 with ok:false plus a prefilled GitHub URL. So the phone shows a
+  // link and a remedy, never a raw "gh is not installed" bounced back at it.
+  var PR_REMEDY = "add a GitHub token in Settings → PR review, or install the GitHub CLI";
+
   function doMakePr() {
     if (!current) return;
     flashStatus("opening PR…");
     postAction("make-pr", {})
       .then(function (j) {
+        if (j && j.ok === false) {
+          if (j.compare_url) {
+            window.open(j.compare_url, "_blank");
+            flashStatus("opened GitHub’s compare page — " + (j.message || PR_REMEDY));
+          } else {
+            flashStatus(j.message || PR_REMEDY);
+          }
+          setTimeout(poll, 800);
+          return;
+        }
         flashStatus(j && j.note ? j.note : "PR opened");
         if (j && j.url) window.open(j.url, "_blank");
         setTimeout(poll, 800);
@@ -318,7 +335,19 @@
     if (!confirm("Merge this branch's PR into the base branch?")) return;
     flashStatus("merging…");
     postAction("merge-pr", {})
-      .then(function () { flashStatus("merged"); setTimeout(poll, 800); })
+      .then(function (j) {
+        if (j && j.ok === false) {
+          if (j.pr_url) {
+            window.open(j.pr_url, "_blank");
+            flashStatus("opened the PR to merge on GitHub — " + (j.message || PR_REMEDY));
+          } else {
+            flashStatus(j.message || PR_REMEDY);
+          }
+        } else {
+          flashStatus("merged");
+        }
+        setTimeout(poll, 800);
+      })
       .catch(function (err) { flashStatus("merge failed: " + err.message); });
   }
 

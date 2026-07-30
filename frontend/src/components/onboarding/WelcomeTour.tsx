@@ -120,12 +120,15 @@ const SLIDES: Slide[] = [
     title: "3. PR review",
     body: (
       <>
-        List repositories as <b>owner/name</b> (e.g. <code>mindflockai/MindFlock</code>).
-        No token field? That's fine — it falls back to <code>$GH_TOKEN</code> /{" "}
-        <code>$GITHUB_TOKEN</code> / <code>gh auth token</code>, so a local{" "}
-        <code>gh auth login</code> is enough. Tune <b>base branch</b>,{" "}
-        <b>min PR age</b>, <b>poll interval</b>, and <b>skip authors</b> (e.g.
-        dependabot) to control what gets reviewed.
+        List repositories as <b>owner/name</b> (e.g. <code>mindflockai/MindFlock</code>),
+        then paste a <b>GitHub token</b>. That token is the whole setup: it also
+        lets MindFlock open and merge PRs for you. It falls back to{" "}
+        <code>$GH_TOKEN</code> / <code>$GITHUB_TOKEN</code>, and to{" "}
+        <code>gh auth token</code> if you happen to have the GitHub CLI — which is
+        optional, not required. <b>Pushing</b> is always plain <code>git push</code>{" "}
+        over the remote you already use, so an SSH remote needs nothing extra. Tune{" "}
+        <b>base branch</b>, <b>min PR age</b>, <b>poll interval</b>, and{" "}
+        <b>skip authors</b> (e.g. dependabot) to control what gets reviewed.
       </>
     ),
     screen: "repo",

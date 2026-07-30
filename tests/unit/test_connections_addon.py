@@ -102,6 +102,50 @@ def test_github_no_token_no_cli_is_not_connected(monkeypatch):
     assert connections._github_connection()["status"] == "not_connected"
 
 
+def test_github_no_credential_leads_with_the_token_not_a_gh_install(monkeypatch):
+    # The bug this replaces: the tile's only offered remedy was `brew install gh`,
+    # so a contributor with SSH remotes and no interest in the CLI was told the
+    # single fix was to install it. A token is the better answer and must lead.
+    monkeypatch.setattr(connections, "_github_token_source", lambda: "")
+    monkeypatch.setattr(
+        doctor,
+        "check_gh",
+        lambda: types.SimpleNamespace(
+            status="info",
+            detail="not found (optional)",
+            fix="brew install gh",
+            docs="https://cli.github.com",
+        ),
+    )
+    c = connections._github_connection()
+    assert c["fix"] == connections._NO_CREDENTIAL_FIX
+    assert (
+        c["fix"]
+        == "add a GitHub token in Settings → PR review, or install the GitHub CLI"
+    )
+    assert c["fix_command"] == ""  # Configure/$GH_TOKEN, not a shell command
+    assert "brew install gh" not in c["fix"]
+    assert c["docs"] == "https://cli.github.com"  # still reachable as a secondary
+
+
+def test_github_no_credential_detail_is_honest_about_pushing(monkeypatch):
+    monkeypatch.setattr(connections, "_github_token_source", lambda: "")
+    monkeypatch.setattr(doctor, "check_gh", lambda: _chk("info", "not found"))
+    detail = connections._github_connection()["detail"]
+    # Names exactly what is lost...
+    assert "PR create/merge and PR review are off" in detail
+    # ...and refuses to imply the user cannot push. Pushing is plain git over
+    # whatever remote (SSH or HTTPS) they configured; gh is never in that path.
+    assert "pushing still works" in detail
+
+
+def test_github_purpose_does_not_claim_pushing_needs_this_connection(monkeypatch):
+    monkeypatch.setattr(connections, "_github_token_source", lambda: "settings")
+    monkeypatch.setattr(doctor, "check_gh", lambda: _chk("info", "not found"))
+    purpose = connections._github_connection()["purpose"]
+    assert "Push" not in purpose and "push" not in purpose
+
+
 def test_git_missing_is_calm_not_connected(monkeypatch):
     # Git is optional: absent git is the calm gray state (never "attention"),
     # and Configure points at Doctor (a system dep, no in-app credential).

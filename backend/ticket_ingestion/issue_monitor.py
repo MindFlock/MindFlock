@@ -12,6 +12,11 @@ from pathlib import Path
 
 import aiohttp
 
+from backend.ticket_ingestion.clone_transport import (
+    configured_repo_url,
+    resolve_clone_url,
+    resolve_transport,
+)
 from backend.ticket_ingestion.config import GithubConfig
 from backend.ticket_ingestion.github_auth import resolve_token
 from backend.ticket_ingestion.models import Issue
@@ -88,7 +93,17 @@ class IssueMonitor:
                     return []
                 raw = await resp.json()
 
-        clone_url = f"https://github.com/{repo}.git"
+        # Where a session for these issues will clone from. The issues endpoint
+        # only knows the repo by its owner/name slug, so the transport is a
+        # choice rather than a given: honour the user's own [repository].url
+        # spelling (SSH or HTTPS) instead of hardcoding an HTTPS URL that an
+        # SSH-only checkout has no credential for. Per-item `repository` data is
+        # preferred when the payload carries it (cross-repo issue feeds do).
+        transport = resolve_transport(self.config)
+        configured = configured_repo_url(self.config)
+        default_clone_url = resolve_clone_url(
+            repo, configured_url=configured, transport=transport
+        )
         out: list[Issue] = []
         for item in raw:
             try:
@@ -97,6 +112,18 @@ class IssueMonitor:
                     continue
                 if str(item.get("state", "")).lower() != "open":
                     continue
+                item_repo = item.get("repository") or {}
+                clone_url = (
+                    resolve_clone_url(
+                        repo,
+                        api_https=item_repo.get("clone_url"),
+                        api_ssh=item_repo.get("ssh_url"),
+                        configured_url=configured,
+                        transport=transport,
+                    )
+                    if item_repo
+                    else default_clone_url
+                )
                 out.append(
                     Issue(
                         number=int(item["number"]),

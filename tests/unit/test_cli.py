@@ -74,6 +74,29 @@ class TestDoctorCommand:
         assert "✗" in out
         assert "fix: sudo apt install tmux" in out
 
+    def test_missing_gh_prints_info_not_a_failure(self, monkeypatch, capsys):
+        # gh is optional: absent, it must print the `-` info glyph, keep exit 0
+        # and never render as ✗. The installer runs this command and honours the
+        # exit code, so a ✗ here would make gh a de-facto requirement for people
+        # who only ever `git push` over their own SSH remote.
+        monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+        monkeypatch.setattr(doctor, "run_checks", lambda: [doctor.CHECKS_BY_ID["gh"]()])
+        assert cli.main(["doctor"]) == 0
+        out = capsys.readouterr().out
+        assert "✗" not in out
+        assert "- GitHub CLI (gh)" in out
+        assert "pushing uses plain git" in out
+        assert "All required dependencies look good." in out
+
+    def test_help_does_not_list_gh_as_required(self):
+        # The subcommand help is the first place anyone learns what MindFlock
+        # needs; gh belongs in the optional parenthetical, not the required list.
+        # Collapse whitespace: argparse wraps the subcommand help column.
+        help_text = " ".join(cli._build_parser().format_help().split())
+        assert "check git/tmux/agent-CLI (plus optional gh, uv, tailscale)" in help_text
+        assert "optional gh" in help_text
+        assert "git/tmux/gh" not in help_text
+
 
 class TestDoctorFix:
     _FAIL = Check(

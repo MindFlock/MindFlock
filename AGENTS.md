@@ -16,8 +16,10 @@ Tests assume the web auth gate is off: run with `CS_WEB_MODE` unset and
 `MINDFLOCK_AUTH=0` if your shell exports either, or API-contract tests 401.
 
 Run the server with `mindflock serve` (or `python -m backend.web.run local`).
-`mindflock doctor --fix` preflights/installs runtime deps (git, tmux, gh,
-agent CLIs).
+`mindflock doctor --fix` preflights/installs runtime deps (git, tmux, agent
+CLIs; `gh` is reported but **optional** — pushing is plain `git push` over the
+user's own remote, SSH or HTTPS, and PR create/merge fall back to the GitHub
+REST API with a token, then to a browser URL).
 
 ## Map
 

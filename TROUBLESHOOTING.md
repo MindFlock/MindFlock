@@ -94,15 +94,27 @@ The terminal scroll-speed feature uses `send-keys -X -N` (tmux 2.4, 2017).
 Upgrade tmux via your package manager; on old LTS distros use the
 [tmux appimage/backport](https://github.com/tmux/tmux/wiki/Installing).
 
-### `GitHub CLI (gh)` — `not found on PATH — push/PR steps will fail`
+### `GitHub CLI (gh)` — `not found (optional — only PR create/merge and PR review need it; pushing uses plain git)`
 
-Sessions work without it, but the guided push → PR → merge buttons shell out
-to `gh`. Install: <https://cli.github.com>, then `gh auth login`.
+Informational, not a failure — nothing about this line stops a session, a
+commit or a push. **Push** is plain `git push -u origin <branch>` over whatever
+remote your repo already has (SSH or HTTPS); `gh` is never in that path.
+
+`gh` only makes **Make PR** and **Merge** one click. Without it MindFlock falls
+back to the GitHub REST API using a token (Settings → PR review), and without a
+token to a prefilled compare URL it hands your browser. The PR-review poller —
+the one that turns reviewed PRs back into sessions — likewise runs on a token
+when `gh` is absent.
+
+Want the one-click path anyway? Install: <https://cli.github.com>, then
+`gh auth login`.
 
 ### `installed but not authenticated` (gh)
 
-Run `gh auth login` and follow the prompts. MindFlock uses your existing gh
-auth for pushing branches and opening/merging PRs.
+Run `gh auth login` and follow the prompts. This affects **Make PR** / **Merge**
+and the PR-review poller only — an unauthenticated `gh` never blocks a push,
+because pushing uses your own git remote and your own git credentials (SSH key
+or credential helper), not `gh`.
 
 ### `agent CLI (claude)` — `` `claude` not found on PATH ``
 
@@ -123,6 +135,106 @@ back to PATH lookup.
 Claude Code is installed but has never logged in. Run `claude` once in any
 terminal and complete the login; MindFlock then finds the credential state in
 `~/.claude.json` / `~/.claude/.credentials.json` (or set `ANTHROPIC_API_KEY`).
+
+---
+
+## Pushing and pull requests
+
+**The one thing to know:** pushing is plain git — `git push --no-verify -u
+origin HEAD` from the **Push** button, `git push -u origin <branch>` from the
+engine — run in the session's own worktree against whatever remote that repo
+already has. MindFlock reads your remote URL and uses it verbatim: it never
+rewrites it, never converts SSH to HTTPS or back, and never routes a push
+through `gh`. So a push fails here for exactly the reasons it would fail in your
+own terminal, and the fix is the same one. If `git push` works in your terminal,
+it works here.
+
+### `Permission denied (publickey)`
+
+Your SSH remote can't authenticate. Test it directly:
+
+```bash
+ssh -T git@github.com          # expects "Hi <you>! You've successfully authenticated"
+```
+
+If that fails, your key isn't loaded or isn't on your GitHub account:
+
+```bash
+ssh-add -l                     # empty / "Could not open a connection"? start the agent:
+eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_ed25519
+```
+
+Two MindFlock-specific wrinkles. First, sessions run under **tmux**, and a tmux
+server that outlived your ssh-agent is still holding the *old* `SSH_AUTH_SOCK`;
+if pushing works in a fresh terminal but not in a session, `tmux kill-server`
+(this kills running sessions — pause first) and start them again. Second, on
+Windows the engine lives in
+**WSL2** — the key has to exist inside the WSL filesystem (or be forwarded
+there); a key that only Windows' OpenSSH agent holds is invisible to it.
+
+### `could not read Username for 'https://github.com'`
+
+An HTTPS remote with no credential helper: git has nowhere to get a password
+from and there is no terminal to prompt on. Either give git a credential source:
+
+```bash
+gh auth setup-git                          # if you have gh
+git config --global credential.helper store   # or your OS keychain helper
+```
+
+…or switch that repo's remote to SSH, which MindFlock will then use as-is:
+
+```bash
+git remote set-url origin git@github.com:Org/repo.git
+```
+
+Do it in your own clone — the session worktree inherits the repository's
+remotes, so the change applies to sessions already running.
+
+### **Make PR** / **Merge** unavailable, or "no way to reach GitHub"
+
+Opening and merging a PR is the one part of the flow that has to talk to the
+GitHub *API*, and MindFlock needs one of two credentials to do it: an
+authenticated `gh`, or a GitHub token. The remedy is the sentence the app itself
+prints, and it is an either/or:
+
+> add a GitHub token in Settings → PR review, or install the GitHub CLI
+
+With neither, nothing is lost and nothing errors out: **Make PR** hands your
+browser a prefilled compare URL (base…head, PR form already open) and **Merge**
+opens the pull request page. You finish the click on github.com.
+
+### `Git clone failed for story <id>: … [cloned over SSH … / cloned over HTTPS …]`
+
+The ingestion pipeline finds work by `owner/repo` **slug**, so it has to build a
+clone URL itself, and the bracketed hint tells you which transport it chose and
+what to check:
+
+- *cloned over SSH* → `ssh -T git@<host>` and `ssh-add -l`, as above. The clone
+  runs headless with prompts disabled and stdin closed, so a credential helper
+  that would have asked you something gets EOF instead of hanging the poll loop.
+- *cloned over HTTPS* → your git credential helper or token for that host.
+
+By default (`git_transport = "auto"`) it copies the spelling of your own
+`[repository].url` whenever that names the same repo, so setting that to your
+SSH URL is usually the whole fix. To force it either way, set
+`[repository].git_transport = "ssh"` (or `"https"`) — see
+[configuration.md](docs/configuration.md). If you already have an
+`insteadOf` rule in `~/.gitconfig`, you need none of this: git rewrites the URL
+before it dials out, because MindFlock passes URLs to git untouched.
+
+### The stage chip is stuck on `pushed` after you opened the PR
+
+Stage detection asks GitHub whether a PR exists for the branch, and that query
+needs the same credential as above. With `gh` or a token, the chip advances to
+**PR open** within a poll or two. With neither, MindFlock can see that your
+branch is pushed (that is pure git) but cannot see the PR, so the chip stays on
+`pushed` even though the PR is open — the branch and the PR are fine, only the
+badge is blind. Add a token in Settings → PR review to light it up.
+
+Unrelated but commonly confused: a push made **outside** MindFlock can take up
+to ~45 s to move the badge, because the origin-branch SHA is a cached
+`git ls-remote`.
 
 ---
 

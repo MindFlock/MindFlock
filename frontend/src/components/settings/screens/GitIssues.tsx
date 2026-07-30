@@ -8,6 +8,7 @@ import { api } from "../../../api/client";
 import { toast } from "../../../lib/toast";
 import { refreshInstances, usePanelQuery } from "../../../state/queries";
 import { SettingField, useSettings } from "../useSettings";
+import { runGithubTest } from "../../dialogs/SetupDialog";
 import type { ScreenProps } from "../SettingsDialog";
 
 interface OpenIssue {
@@ -288,19 +289,7 @@ export function GitIssues({ gotoScreen }: ScreenProps) {
                 className="test-btn"
                 onClick={async () => {
                   setGhTest({ testing: true });
-                  try {
-                    const r = await api<Record<string, unknown>>("/api/settings/test/github", {
-                      method: "POST",
-                    });
-                    const bits = ["token: " + (r?.token_source || "none")];
-                    if (r?.gh_installed)
-                      bits.push(r.gh_authenticated ? "gh authenticated" : "gh not authenticated");
-                    else bits.push("gh not installed");
-                    if (r?.detail) bits.push(String(r.detail));
-                    setGhTest({ testing: false, ok: !!r?.ok, msg: bits.join(" · ") });
-                  } catch (e) {
-                    setGhTest({ testing: false, ok: false, msg: (e as Error).message });
-                  }
+                  setGhTest(await runGithubTest());
                 }}
               >
                 Test GitHub

@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import type { Instance } from "../api/types";
+import { describe, it, expect, afterEach } from "vitest";
+import type { Caps, Instance } from "../api/types";
+import { queryClient } from "../state/queries";
 import {
   stageMeta,
   chipState,
@@ -12,9 +13,19 @@ import {
   markLoopReset,
   clearLoopReset,
   reconcileLoopReset,
+  NO_ORIGIN_CMD,
+  NO_ORIGIN_ALT,
 } from "../lib/stage";
 
 const inst = (o: Partial<Instance>): Instance => o as unknown as Instance;
+
+/** Publish a caps payload the way the /api/config query would. */
+function setCaps(caps: Partial<Caps>) {
+  queryClient.setQueryData(["config"], {
+    caps: { git: true, tailscale: true, ticketing: true, ...caps },
+  });
+}
+afterEach(() => queryClient.removeQueries({ queryKey: ["config"] }));
 
 describe("chipState (persistent status chip)", () => {
   it("prioritizes lifecycle states over activity/stage", () => {
@@ -68,6 +79,46 @@ describe("nextStep (guided next action)", () => {
     const ns = step({ title: "n6", stage: "committed", has_origin: false });
     expect(ns?.label).toBe("No remote — add origin…");
     expect(ns?.hint).toBe(true);
+    // The copied line is runnable, not a <url> placeholder, and SSH is the
+    // example — MindFlock never rewrites your remote, so SSH is first-class.
+    expect(NO_ORIGIN_CMD).toContain("git remote add origin");
+    expect(NO_ORIGIN_CMD).toContain("git@github.com:");
+    expect(NO_ORIGIN_CMD).not.toContain("<url>");
+    // ...and HTTPS is offered alongside it, so neither reads as "the real one".
+    expect(ns?.title).toContain(NO_ORIGIN_ALT);
+  });
+
+  it("keeps PR + Merge actionable when gh/token are absent (github: false)", () => {
+    setCaps({ github: false });
+    const pr = step({ title: "g1", stage: "pushed" });
+    // Still runnable — it degrades to GitHub's prefilled compare page — but
+    // rendered as a hint that says where the click lands.
+    expect(pr?.label).toBe("Make PR ↗");
+    expect(pr?.hint).toBe(true);
+    expect(typeof pr?.run).toBe("function");
+    expect(pr?.title).toContain(
+      "add a GitHub token in Settings → PR review, or install the GitHub CLI"
+    );
+    const merge = step({ title: "g2", stage: "pr", pr_url: "https://github.com/o/r/pull/7" });
+    expect(merge?.label).toBe("Merge on GitHub ↗");
+    expect(merge?.hint).toBe(true);
+    // No PR URL known yet: still offered, still a hint, never a dead end.
+    expect(step({ title: "g3", stage: "pr" })?.label).toBe("Merge ↗");
+  });
+
+  it("uses the plain PR labels when the server can open PRs itself", () => {
+    setCaps({ github: true });
+    expect(step({ title: "g4", stage: "pushed" })?.label).toBe("Make PR");
+    expect(step({ title: "g5", stage: "pushed" })?.hint).toBeUndefined();
+    expect(step({ title: "g6", stage: "pr" })?.label).toBe("Merge");
+  });
+
+  it("assumes PR support when the server never reports the capability", () => {
+    // Feature-detected against an explicit false: an older server that omits
+    // `github` must not lose its Make PR button.
+    setCaps({});
+    expect(step({ title: "g7", stage: "pushed" })?.label).toBe("Make PR");
+    expect(step({ title: "g8", stage: "pr" })?.label).toBe("Merge");
   });
 
   it("has no next step while loading, paused, or workspace-gone", () => {
