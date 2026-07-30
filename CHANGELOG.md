@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not need a running server, and behaves the same headless); if it is ever
   unimportable the pipeline falls back to the standalone path with a warning
   naming what was lost.
+- **Both ways in are stated as first-class.** Leading with ingestion is right —
+  nothing else does it — but the README now says plainly that MindFlock is also a
+  parallel-agent workspace you drive by hand (`+ New`, or `mindflock new`), that a
+  tracker is a source of sessions rather than a requirement for them, and that a
+  hand-started session runs whichever agent CLI you point it at. The website gets
+  a section of its own for it.
 - **The Ticket Ingestion bar is visible out of the box** (`DEFAULT_VISIBLE_BARS`),
   so the flagship feature is no longer hidden behind ⚙ Customize. The first-run
   footer hint now points at the bars that are still hidden.

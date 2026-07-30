@@ -53,9 +53,14 @@ sessions the same way, on the PR's own branch, with every unresolved inline
 review comment in the prompt (outdated threads and top-level PR conversation are
 skipped).
 
-Parallel orchestration, worktree isolation and tmux are *how* it works — see
-[How It Works](#how-it-works). The point is that the work arrives on its own and
-leaves as a pull request.
+**Two ways in, and both are first-class.** The tracker path leads because
+nothing else does it — but MindFlock is also, plainly, a parallel-agent
+workspace, and plenty of days that is all it is: hit **+ New**, pick a repo and
+an agent, type a prompt, and you have another isolated worktree running beside
+the rest. Same grid, same live terminals, same Diff tab, same guided
+commit → push → PR → merge, same phone UI, same cost tracking. **A tracker is a
+source of sessions, not a requirement for them** — and unlike the ingestion path,
+a hand-started session runs whichever agent CLI you point it at.
 
 **What is not automatic** — because a pipeline you can't trust is worse than
 none. MindFlock never commits, pushes, opens or merges a PR by itself: every one
@@ -104,8 +109,9 @@ ticket throughput go up — that was already high. It changed who does the typin
 
 ## How is this different?
 
-Every tool below is a good way to *start* an AI coding session. The difference
-is that in MindFlock you don't start them — your tracker does.
+Every tool below is a good way to *start* an AI coding session, and MindFlock is
+a good way to start one too — `+ New`, a repo, an agent, a prompt. The difference
+is that in MindFlock you don't *have* to: your tracker can do it for you.
 
 | | **MindFlock** | **Claude Squad** | **Conductor** | **Claude Code Agent Teams** |
 |---|---|---|---|---|
@@ -191,7 +197,7 @@ those two change what your day looks like:
 
 [Install first](#download) — one command — then pick the half you came for.
 
-### The point: let your tracker start the sessions
+### Let your tracker start the sessions
 
 On a fresh install you connect a tracker in the desktop app under **Settings →
 Ticketing** — a token, plus the repo that source's tickets should land in — and
@@ -213,7 +219,7 @@ Prefer a file to a dialog? [`config.toml.example`](config.toml.example) is the
 headless equivalent, and `python -m backend.ticket_ingestion` runs the pipeline
 standalone — see [docs/ingestion-pipeline.md](docs/ingestion-pipeline.md).
 
-### Or start one by hand
+### Or start them yourself — no tracker required
 
 From zero to a supervised agent session (this CLI flow is verified in CI on
 every push by
