@@ -12,7 +12,7 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 [What is it?](#what-is-mindflock) •
-[What it looks like in use](#what-it-looks-like-in-use) •
+[Does it actually work?](#what-it-looks-like-in-use) •
 [How is this different?](#how-is-this-different) •
 [Quick Start](#quick-start) •
 [Download](#download) •
@@ -72,11 +72,63 @@ own* PRs.
 
 ## What it looks like in use
 
-Numbers from the author's own use, not a benchmark. Three different things, kept
-apart on purpose, because the interesting one is the smallest.
+One developer's own repository, measured three ways. Every figure below is
+recomputed from git and the Shortcut API, not estimated — method at the bottom.
 
-**What MindFlock itself has run** — 38 days, 2026-06-22 → 2026-07-29, on one
-private production repo:
+|  | before agents<br><sub>2024-07 → 2025-12</sub> | agents, one at a time<br><sub>2026-01 → 03</sub> | **the flock**<br><sub>2026-04 → 07</sub> |
+|---|---|---|---|
+| Tickets closed per month | 43 | 53 | **55** |
+| Median **source lines per ticket** | 114 | 168 | **979** |
+| Median source lines per PR | 68 | 210 | **873** |
+| Median files per PR | 4 | 7 | **13** |
+| Median modules touched per PR | 2 | 2 | **4** |
+| PRs that touch tests | 5% | 58% | **88%** |
+| Most branches in flight in one day | 16 | 13 | **31** |
+| Half-hour windows with a commit, per month | 87 | 93 | 138 |
+| **Reviewed source per engaged half-hour** | 72 | 208 | **453** |
+
+**The ticket count barely moved. What each ticket contains did.** A change that
+used to be 114 lines across 4 files is now 979 lines across 13 files in twice as
+many modules — and where 1 PR in 20 used to touch a test, 9 in 10 now do. Per
+half-hour that a commit actually landed in, **6.3× more reviewed source code**.
+
+That is the honest shape of it: the first step up came from using coding agents at
+all, and the second, larger one came from being able to run a flock of them
+without losing track — peak work in flight nearly doubled the old ceiling.
+
+Two things this is *not*. It is not a speed-up in wall-clock ticket cycle time:
+Shortcut's start→done clock got *longer*, because it measures review, QA and
+deploy queues that no coding tool touches. And it is not free: engaged windows per
+month went up by half, and 13.5 B tokens went through agents on this machine over
+46 logged days.
+
+<details>
+<summary>Method — so you can check it</summary>
+
+- **Source-only.** Lockfiles, generated and minified files, images, CSVs,
+  notebooks, `dist/`, `vendor/`, `node_modules/` and DB dumps are excluded. They
+  are under 1% of the lines in the recent period and 2.6% in the older one, so
+  they are not what moved.
+- **Medians, not means.** A handful of bulk-import PRs (one month has 1.6 M lines
+  in a single batch) dominate any average; medians are what a typical change looks
+  like. "Reviewed source per engaged half-hour" is PR count × median PR size ÷
+  engaged windows, so one giant import cannot inflate it.
+- **Diff per PR** = `git diff <base> <branch-tip>` at the merge commit, computed
+  from the local clone for all 2,210 merged PRs authored by one person.
+- **Engaged half-hour** = a distinct 30-minute window containing at least one
+  commit on one of those branches. In the recent period some of those commits are
+  an agent's while the human was elsewhere, which *overstates* engaged time and so
+  makes the 6.3× a floor.
+- **Tickets** = Shortcut stories owned by that person with a `completed_at`.
+- **Eras.** Agent-authored commits first appear 2026-02; the ingestion pipeline's
+  ancestor lands in the work repo 2026-04-22 and has been running ticket → agent →
+  PR in production since 2026-06-22.
+
+</details>
+
+## What MindFlock itself has run
+
+38 days, 2026-06-22 → 2026-07-29, from the pipeline's own dedup state:
 
 | | |
 |---|---|
@@ -85,27 +137,9 @@ private production repo:
 | Own pull requests triaged for review comments | **42** — the ones with nothing actionable were skipped automatically; the rest came back as sessions |
 | Agent CLIs the pipeline drove | **2** (`claude`, `ccc`) — of 5 driven on this machine overall |
 
-<sub>The ticket figure counts distinct tickets: the pipeline's dedup state holds
-47 records, of which 7 were throwaway test tickets and 2 were re-runs of the same
-ticket. Log rotation means the PR-session count is a floor, not a ceiling.</sub>
-
-**The workload it was built to serve** — the author's day job. This predates
-MindFlock by two years and is not a claim about it:
-
-| | |
-|---|---|
-| Tickets closed in the last 12 months | **626** (~52/month) |
-| Merged pull requests authored in that repo since June 2024 | **2,232** |
-| Merged PRs in the last 99 days | **230** (~2.3/day) |
-
-**Agent volume on this machine** — **13.5 B tokens over 46 logged days**
-(~294 M/day), as of 2026-07-29. A large share of that is MindFlock building
-MindFlock, so read it as "what supervising this many agents costs", not as
-day-job output.
-
-MindFlock has been built and used daily since May 2026; it has been running
-ticket → agent → pull request in production since 22 June. It did not make the
-ticket throughput go up — that was already high. It changed who does the typing.
+<sub>The ticket figure counts distinct tickets: the dedup state holds 47 records,
+of which 7 were throwaway test tickets and 2 were re-runs. Log rotation makes the
+PR-session count a floor.</sub>
 
 ## How is this different?
 

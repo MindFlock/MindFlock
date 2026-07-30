@@ -18,7 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   home. Worktree isolation, tmux and the grid are described as *how* it works.
   The README also states plainly what is **not** automatic (no commit, push, PR
   or merge without your click; no writes to your tracker; polling, not
-  webhooks), and carries the first published usage figures.
+  webhooks).
+- **The first published productivity figures, measured properly.** An earlier
+  draft leaned on volume counts, which turned out to prove nothing: pull requests
+  per month actually went *down*, and Shortcut's start→done clock got *longer*
+  (it measures review, QA and deploy queues that no coding tool touches). Three
+  eras of one repository — before agents, one agent at a time, and a flock —
+  recomputed from the git graph and the Shortcut API instead: the ticket rate
+  barely moved (43 → 55/month) while the median ticket went from **114 source
+  lines across 4 files to 979 across 13**, pull requests touching tests went from
+  **5% to 88%**, peak branches in flight went from 16 to 31, and reviewed source
+  per half-hour-with-a-commit went up **6.3×**. Source files only (lockfiles,
+  generated files, images and DB dumps excluded — under 1% of recent lines),
+  medians not means, because a single 1.6 M-line bulk import would otherwise
+  dominate every average. The method is documented in the README so the figures
+  can be re-derived.
 - **Ticket sessions land in the app by default.** `[mindflock].enabled` now
   defaults to `true`, and is exposed in Settings → Advanced instead of being
   file-only. Previously a fresh install that connected a tracker got detached
