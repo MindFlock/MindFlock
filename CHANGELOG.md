@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-07-30
+
 ### Changed
 
 - **SSH remotes work, and the GitHub CLI is genuinely optional.** `gh` was
@@ -452,7 +454,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.5
 [0.1.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.4
 [0.1.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.3
 [0.1.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.2
