@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The README also states plainly what is **not** automatic (no commit, push, PR
   or merge without your click; no writes to your tracker; polling, not
   webhooks).
+- **The evidence is now visual, on both surfaces.** The README and the website's
+  numbers section lead with the result — 6.3× more reviewed source per half-hour at
+  the keyboard — instead of with the flat metric that makes the *method* interesting,
+  and both now carry the charts: a 24-month trend showing the ticket rate holding
+  while diff size and test coverage climb, and a second showing that the average day
+  never changed while the ceiling on work in flight went from 16 branches to 31. That
+  second chart is the clearest argument for the app rather than for agents in general,
+  and it was previously nowhere.
 - **The first published productivity figures, measured properly.** An earlier
   draft leaned on volume counts, which turned out to prove nothing: pull requests
   per month actually went *down*, and Shortcut's start→done clock got *longer*

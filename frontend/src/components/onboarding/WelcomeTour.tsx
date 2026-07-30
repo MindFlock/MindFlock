@@ -28,12 +28,12 @@ const SLIDES: Slide[] = [
     title: "Welcome to MindFlock",
     body: (
       <>
-        MindFlock turns your ticket queue into a queue of pull requests: work
-        assigned to you in Jira, Linear, GitHub Issues, Shortcut or Asana becomes
-        its own git worktree with an agent already seeded with the ticket, and you
-        review the diff and merge. This tour covers the basics and then walks you
-        through connecting your accounts. You can skip it any time and replay it
-        later from <b>Settings → General</b>.
+        MindFlock runs a flock of AI coding agents, each in its own git worktree.
+        Start one yourself with any agent CLI — or let a ticket assigned to you in
+        Jira, Linear, GitHub Issues, Shortcut or Asana start it for you, with the
+        ticket already seeded. Either way you review the diff and merge. This tour
+        covers the basics and then walks you through connecting your accounts. You
+        can skip it any time and replay it later from <b>Settings → General</b>.
       </>
     ),
   },
