@@ -72,8 +72,17 @@ own* PRs.
 
 ## What it looks like in use
 
-One developer's own repository, measured three ways. Every figure below is
-recomputed from git and the Shortcut API, not estimated — method at the bottom.
+Running a flock does not get you more tickets. It changes what fits inside one.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/fig1-what-changed-dark.png">
+  <img alt="Three stacked trends, Aug 2024 to Jul 2026. Tickets closed per month stays flat around 40–60 throughout. Median source lines in a pull request sits under 100 until late 2025, then climbs to 1,152. The share of pull requests that touch tests sits near zero until early 2026, then climbs to 97%." src="docs/img/fig1-what-changed.png">
+</picture>
+
+**6.3× more reviewed source code per half-hour at the keyboard** — at the same
+ticket cadence, with tests on nine changes in ten instead of one in twenty. One
+developer's own repository, 2,210 merged pull requests, recomputed from git and the
+Shortcut API rather than estimated.
 
 |  | before agents<br><sub>2024-07 → 2025-12</sub> | agents, one at a time<br><sub>2026-01 → 03</sub> | **the flock**<br><sub>2026-04 → 07</sub> |
 |---|---|---|---|
@@ -84,23 +93,36 @@ recomputed from git and the Shortcut API, not estimated — method at the bottom
 | Median modules touched per PR | 2 | 2 | **4** |
 | PRs that touch tests | 5% | 58% | **88%** |
 | Most branches in flight in one day | 16 | 13 | **31** |
-| Half-hour windows with a commit, per month | 87 | 93 | 138 |
 | **Reviewed source per engaged half-hour** | 72 | 208 | **453** |
 
-**The ticket count barely moved. What each ticket contains did.** A change that
-used to be 114 lines across 4 files is now 979 lines across 13 files in twice as
-many modules — and where 1 PR in 20 used to touch a test, 9 in 10 now do. Per
-half-hour that a commit actually landed in, **6.3× more reviewed source code**.
+A change that used to be 114 lines across 4 files is now 979 lines across 13, in
+twice as many modules. Tests came along for the ride: **5% of pull requests touched
+a test before, 88% do now** — which is the number that makes the extra volume worth
+having rather than worth worrying about.
 
-That is the honest shape of it: the first step up came from using coding agents at
-all, and the second, larger one came from being able to run a flock of them
-without losing track — peak work in flight nearly doubled the old ceiling.
+### Why the flock, and not just an agent
 
-Two things this is *not*. It is not a speed-up in wall-clock ticket cycle time:
-Shortcut's start→done clock got *longer*, because it measures review, QA and
-deploy queues that no coding tool touches. And it is not free: engaged windows per
-month went up by half, and 13.5 B tokens went through agents on this machine over
-46 logged days.
+Adopting one agent roughly tripled the size of a typical change. Going from one
+agent to a flock multiplied it by **four again on top of that** — the second step is
+the bigger one. This is why:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/fig3-parallelism-dark.png">
+  <img alt="Column chart of the most branches in flight on the busiest day of each month. Values sit between 7 and 16 every month from Aug 2024 through Mar 2026, then jump to 25 in April 2026 and 31 in May 2026." src="docs/img/fig3-parallelism.png">
+</picture>
+
+An average day is 5–8 branches in both eras — that never changed. **The ceiling
+did**, from 16 to 31. Parallelism is not something you use all day; it is what you
+need on the days when six things are half-finished at once, and those are exactly
+the days that used to cap out. MindFlock is the thing that raised that ceiling: one
+grid, one worktree per session, deterministic per-agent state, and the next git step
+always one button away.
+
+<sub>Honest edges, because they make the rest checkable: this is **not** faster
+wall-clock ticket cycle time — Shortcut's start→done clock is longer, since it
+measures review, QA and deploy queues that no coding tool touches. And it is not
+free: 13.5 B tokens went through agents on this machine over 46 logged days, and
+engaged windows per month rose by half.</sub>
 
 <details>
 <summary>Method — so you can check it</summary>
