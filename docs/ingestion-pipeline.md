@@ -39,7 +39,7 @@ provider is chosen by `[ticketing].provider` (see
 | Provider | How "assigned to me" is fetched |
 |---|---|
 | `shortcut` | `POST /stories/search` by `owner_id`, then per-story hydration |
-| `jira` | `POST /rest/api/3/search/jql`, `assignee = currentUser()` (description flattened from ADF) |
+| `jira` | `POST /rest/api/3/search/jql`, `assignee = currentUser()` (description flattened from ADF — headings keep their `#` level, which is what acceptance-criteria mining matches on) |
 | `linear` | GraphQL `viewer.assignedIssues(filter: {updatedAt})` |
 | `github_issues` | `GET /repos/{owner}/{repo}/issues?assignee=<you>` (PRs filtered out) |
 | `asana` | `GET /tasks?assignee=me&workspace=<gid>` |
@@ -47,6 +47,14 @@ provider is chosen by `[ticketing].provider` (see
 Adding a provider = one new module implementing `search_assigned` / `fetch` /
 `test_connection`, plus a `PROVIDER_REGISTRY` + `PROVIDER_META` entry. Acceptance-
 criteria mining and link/attachment extraction are shared in `providers/base.py`.
+
+Optionally an adapter also implements **`search_assigned_all()`** (`base.py`),
+which backs Settings → Ticketing → *Assigned tickets*: every ticket assigned to
+you with no age cutoff and no workflow-state filter, each annotated with its
+state. Shortcut, Jira and Linear override it; GitHub Issues and Asana keep the
+base implementation (an epoch-anchored `search_assigned`) because they expose no
+workflow-state model — so their tickets land in the panel's `No state` bucket.
+That asymmetry is visible in the panel itself.
 
 **Multiple sources.** You can configure more than one source at once — different
 providers *and* several of the same provider with different credentials (two Jira

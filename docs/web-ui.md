@@ -65,13 +65,16 @@ dir a live session is using are left alone.
 
 **Customizable bars** — the sidebar bars are movable and hideable, driven by a
 shared registry (`sidebar/barDefs.ts`: Usage, Ticket Ingestion, PR Review, Issue
-Handling, Assistant). A **fresh install starts minimal** — only **Usage** and
-**Assistant** show, so a first run isn't overwhelming; the rest start hidden.
-The footer **⚙ Customize** popover (`FooterCustomize`) toggles each bar on/off,
-and bars drag-to-reorder (the session list is a fixed anchor bars can sit above
-or below, but which never itself moves). Order and the hidden set persist per
-browser (`localStorage`). Turning a feature's bar on is how you reveal PR
-review, ticket ingestion, and issue handling once you've connected them.
+Handling, Assistant). A **fresh install shows three** (`DEFAULT_VISIBLE_BARS`) —
+**Usage**, **Ticket Ingestion** and **Assistant** — so the flagship
+ticket → session flow is reachable out of the box without being overwhelming;
+**PR Review** and **Issue Handling** start hidden. The footer **⚙ Customize**
+popover (`FooterCustomize`) toggles each bar on/off, and bars drag-to-reorder
+(the session list is a fixed anchor bars can sit above or below, but which never
+itself moves). Order and the hidden set persist per browser (`localStorage`).
+Turning a feature's bar on is how you reveal PR review and issue handling once
+you've connected them; the first-run footer hint points only at those still-hidden
+bars.
 
 **Command palette** — `Ctrl+P` or `Ctrl+Shift+P` (`Cmd` on Mac, or the top bar's
 **Command** button) opens a fuzzy-filtered palette over everything: jump to
@@ -374,7 +377,18 @@ default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-
   assigned to you, grouped into collapsible workflow buckets (which buckets show
   is yours to pick and is persisted), each annotated with why auto-ingest did /
   didn't take it, plus a **Begin work** force-start (`/api/tickets`,
-  `/api/tickets/start`). The slowest of the three list panels (~3 s).
+  `/api/tickets/start`). The slowest of the three list panels (~3 s). It lists
+  work you are about to move *into* an ingest state, not only what already
+  matches the source's filters — Jira, Linear and Shortcut annotate each ticket
+  with its workflow state (so Done/Canceled park in their own buckets), while
+  GitHub Issues and Asana expose no workflow-state model and land in `No state`.
+- **Advanced → Engine → Ticket sessions in MindFlock** (`engine.enabled`,
+  **default on**) — where ingested tickets land. On: each one becomes a MindFlock
+  session with its own worktree, branch, seeded agent, stage badge and guided git
+  bar. Off: a detached tmux session plus an OS terminal tab, with no session in
+  the app. Takes effect the next time the ingestion pipeline starts; it is the
+  same switch as `[mindflock].enabled` in `config.toml` and overrides that file
+  (see [configuration.md](configuration.md)).
 - **General → Onboarding** — the master **getting-started hints** switch and a
   **Replay tour** button (see [First-run onboarding](#first-run-onboarding)).
 - **Agent CLI → scheduled window refresh** — a keepalive that periodically
