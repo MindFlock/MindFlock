@@ -115,11 +115,10 @@ export function Notifications(_: ScreenProps) {
         </label>
       </div>
       <p className="set-hint" id="notif-browser-status">{status}</p>
-      <Ntfy />
       <h3 className="set-section-title">What triggers a notification</h3>
       <p className="set-hint">
         Pick exactly which events notify you — turn off any you don't want. These switches
-        apply to every channel above.
+        apply to both channels — the browser above and phone push below.
       </p>
       <div id="notif-rules-list">
         {rulesError ? (
@@ -135,6 +134,7 @@ export function Notifications(_: ScreenProps) {
         )}
       </div>
       <p className="set-hint">Also reachable from the bell in the sidebar header.</p>
+      <Ntfy />
     </>
   );
 }
@@ -143,9 +143,10 @@ export function Notifications(_: ScreenProps) {
  * ntfy — the phone-push channel.
  *
  * Why it's a section of its own rather than another rule switch: it's a
- * *delivery channel*, not a trigger. The rule list below decides WHAT notifies
+ * *delivery channel*, not a trigger. The rule list above decides WHAT notifies
  * you; browser and ntfy decide WHERE. ntfy is the one that works with MindFlock
- * closed, since the push happens server-side.
+ * closed, since the push happens server-side. It renders last on purpose: the
+ * triggers read first, then the two channels they feed.
  * ------------------------------------------------------------------------ */
 interface NtfyView {
   enabled?: boolean;
