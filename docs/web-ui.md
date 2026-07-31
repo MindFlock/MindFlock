@@ -205,6 +205,63 @@ the events bus, **including the backlog replayed on connect** so it answers
 opened it (keyed on timestamp so it survives server restarts); clicking an entry
 focuses that session.
 
+**One rule list, two delivery channels.** Settings → Notifications is split that
+way on purpose: *What triggers a notification* (needs-input, PR merged/closed,
+budget exceeded, pre-commit failed — plus the noisy opt-ins) governs **both**
+channels, and each channel decides only where an alert lands.
+
+- **Browser / desktop** — the notify addon's `Notification` popup. Needs a tab
+  open on a secure origin (HTTPS or localhost), so it is silent on a plain-http
+  tailnet URL and says so in the toggle's status line.
+- **Phone push (ntfy)** — optional, off until you turn it on. The *server*
+  publishes to an [ntfy](https://ntfy.sh) topic your phone subscribes to, so an
+  alert reaches you with MindFlock closed and no tab anywhere. Set a topic
+  (**Generate** offers a random one), scan the QR into the ntfy app, and
+  **Send a test** confirms the round trip; the row afterwards reports the last
+  push (or why it failed). Point **Server** at your own ntfy instance to keep
+  everything in-house, and give **Access token** a value only if the topic is
+  protected. *Tapping opens* is an optional URL the notification opens — paste
+  your phone URL from Settings → Mobile; MindFlock strips an `?token=` from it,
+  since that URL is stored on the ntfy server.
+
+  Priority is per rule: "needs your input", "budget exceeded" and "pre-commit
+  failed" go out at ntfy priority 4 (buzzes through most do-not-disturb
+  setups), PR merged/closed at 3, and the ambient opt-ins (idle, pre-commit
+  running) at 2 so they arrive quietly.
+
+  On the **public ntfy.sh server the topic name is the credential** — anyone who
+  knows it can read your session titles or send you fakes — so keep the
+  generated random name, or self-host. The screen shows that warning while the
+  channel is on and pointed at ntfy.sh.
+
+**Diagnosing a channel you can't see.** A push channel is invisible when it works
+and baffling when it doesn't, so the row beside **Send a test** is the whole
+diagnostic surface — no log reading required:
+
+- Straight after a test it shows that test's verdict: *"Sent — check your phone."*
+  or the failure reason. The reason is ntfy's **own** sentence when the server
+  sent one (`{"error": …}` from its JSON body — "topic is reserved", an auth
+  refusal), otherwise the transport error (DNS, TLS, timeout).
+- Otherwise it shows the last *real* push, either **"Last push sent 4 min ago"**
+  (relative: "just now" under a minute, then minutes, hours, days) or
+  **"Last push failed: …"** with the same surfaced reason. Blank means nothing has
+  been attempted yet this server run — the record lives in memory, so it resets on
+  restart, and a fresh reload of a long-running server shows the real history.
+- A missing QR is not a failure: it means the optional `segno` package isn't
+  installed, and the subscribe URL printed beside it is the intended fallback.
+- One failure mode this row will *not* show you: the 60-pushes/hour runaway cap.
+  Throttled pushes are dropped before any HTTP attempt and deliberately don't
+  overwrite the last result, so the symptom is a cheerful "Last push sent …"
+  next to a silent phone. **Send a test** is exempt from the cap and will still
+  succeed; the evidence is a single line in Settings → System logs
+  (`ntfy: over 60 pushes/hour — dropping further pushes this window`).
+
+Delivery is best-effort in one direction only: **a failed push never touches the
+session it was reporting on.** The event that triggered it has already been
+emitted, the websocket clients and shell hooks have already seen it, and the
+browser channel fires independently. A wrong token or an unreachable ntfy server
+costs you the phone alert and nothing else.
+
 ## Diff → instruction
 
 Select any text in a pane's **Diff** tab and a floating **✦ Ask agent** button
@@ -362,7 +419,8 @@ default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-
 - **Per-session budget (USD, 0 = off)** — cost guardrail: when a session's
   estimated cost crosses this figure the server emits a one-shot
   `session.budget_exceeded` event → warning toast (click focuses the session),
-  desktop notification (notify addon), and shell hooks. An over-budget session's
+  a notification on every enabled channel (desktop and/or ntfy — see
+  [Notifications](#notifications-)), and shell hooks. An over-budget session's
   pane shows a lock overlay with a **Raise budget** action
   (`POST /api/instances/{title}/budget/raise`); sends are refused (409) until
   raised.
@@ -414,7 +472,16 @@ default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-
   **launch flags** (`[launch] args`). The per-provider **default launch flags**
   (`coding_cli.default_launch_args`) that pre-fill the New-session dialog are
   also edited here.
-- **Mobile** — the `/m` URLs and QR code (`GET /api/mobile`).
+- **Mobile** — the `/m` URLs and QR code (`GET /api/mobile`). The tailnet URL here
+  is also the natural paste target for *Tapping opens* on the
+  [Notifications](#notifications-) screen, so a phone push lands in the mobile UI
+  — with one wrinkle worth knowing before you blame the link. The URL is offered
+  with `?token=…` baked in so a scan lands signed in, and MindFlock **strips that
+  token** when saving it as an ntfy click URL (it would otherwise be stored on the
+  ntfy server). A tap therefore only lands signed in if that device already holds
+  the `mf_auth` cookie — i.e. you scanned the QR there once before. Otherwise it
+  lands on the login prompt, which is the intended trade: one extra tap on a new
+  device instead of this machine's token sitting on a third party's server.
 - **Security** — view/copy this device's web-auth token, plus a **Regenerate**
   button (`POST /api/settings/auth-token/rotate`) for compromise recovery: it
   mints a new token and invalidates every issued cookie, QR code, and paired
@@ -551,7 +618,8 @@ SPA provides one. A module that fails to load is skipped with a console warning.
 The hand-wired built-ins (MindFlock, Assistant, Settings, Doctor) are
 `builtin_ui: true` with `module: null`; the **notify** addon
 (`static/addons/notify.js`, desktop notifications on clarify / PR close /
-budget exceeded — rules are data-driven from `GET /api/notify/config`) is the
+budget exceeded — rules are data-driven from `GET /api/notify/config`, and the
+same rules drive the server-side ntfy push in `web/core/ntfy.py`) is the
 reference for this generic path — the full contract lives in
 [docs/extensions.md](extensions.md). `slots.js` also feeds the provider list
 into the New-session dialog's Program field.

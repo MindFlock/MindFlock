@@ -246,6 +246,11 @@ those two change what your day looks like:
 - 📱 **Phone UI** — `mindflock serve tailscale` prints a QR code; the mobile
   UI at `/m` carries the same guided git action bar, so the full flow drives
   from a phone. Auth-token protected — never open to the LAN unauthenticated.
+- 🔔 **Notifications where you actually are** — desktop popups while a tab is
+  open, and optional **[ntfy](https://ntfy.sh) push to your phone** sent by the
+  server, so "session needs your input" or "pre-commit blocked the commit"
+  reaches you with MindFlock closed. Off by default; one rule list picks which
+  events notify you, and you can point it at your own ntfy instance.
 - 🌳 **Isolated workspaces** — every session gets its own git worktree, so
   agents never step on each other (or on you).
 - ⚡ **Terminal-first, too** — the `mindflock` CLI drives the same sessions as

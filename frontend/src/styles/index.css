@@ -47,6 +47,7 @@
 @import "../components/grid/missingWorkspace.css" layer(components); /* 240 */
 @import "../components/settings/screens/ticketingConnections.css" layer(components); /* 250 */
 @import "../components/settings/screens/mobileLogs.css" layer(components); /* 260 */
+@import "../components/settings/screens/notifications.css" layer(components); /* 260 */
 @import "../components/capsGate.css" layer(components); /* 270 */
 @import "../components/dialogs/DeviceDialog.css" layer(components); /* 270 */
 @import "../components/settings/screens/Appearance.css" layer(components); /* 280 */

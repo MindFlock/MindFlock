@@ -236,8 +236,12 @@ def _mobile_banner(*, for_log: bool = False) -> str:
     return "\n".join(lines)
 
 
-def _mobile_svg(data: str):
-    """``data`` as an inline, scannable SVG QR (dark-on-white), or None."""
+def qr_svg(data: str):
+    """``data`` as an inline, scannable SVG QR (dark-on-white), or None.
+
+    The one QR renderer any settings screen shares — Settings → Mobile's phone
+    URL and the notify addon's ntfy subscribe URL both come through here.
+    """
     try:
         import io
 
@@ -278,6 +282,11 @@ def _mobile_svg(data: str):
         return svg
     except Exception:  # noqa: BLE001
         return None
+
+
+#: Historical name, kept because server.py re-exports it (and _mobile_info calls
+#: it back through the server module).
+_mobile_svg = qr_svg
 
 
 def _mobile_info() -> dict:

@@ -29589,10 +29589,248 @@ function Notifications(_) {
       }
     ),
     /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", id: "notif-browser-status", children: status }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(Ntfy, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "What triggers a notification" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Pick exactly which events notify you — turn off any you don't want." }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Pick exactly which events notify you — turn off any you don't want. These switches apply to every channel above." }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "notif-rules-list", children: rulesError ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "Couldn't load notification rules." }) : rules === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "Loading…" }) : !rules.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "No notification rules configured." }) : rules.map((rule) => /* @__PURE__ */ jsxRuntimeExports.jsx(RuleRow, { rule }, rule.id)) }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Also reachable from the bell in the sidebar header." })
+  ] });
+}
+function ago(ts) {
+  const secs = Math.max(0, Math.round(Date.now() / 1e3 - ts));
+  if (secs < 60) return "just now";
+  if (secs < 3600) return Math.round(secs / 60) + " min ago";
+  if (secs < 86400) return Math.round(secs / 3600) + "h ago";
+  return Math.round(secs / 86400) + "d ago";
+}
+function Ntfy() {
+  const [view, setView] = reactExports.useState(null);
+  const [failed, setFailed] = reactExports.useState(false);
+  const [server, setServer] = reactExports.useState("");
+  const [topic, setTopic] = reactExports.useState("");
+  const [token, setToken] = reactExports.useState("");
+  const [click, setClick] = reactExports.useState("");
+  const [testing, setTesting] = reactExports.useState(false);
+  const [verdict, setVerdict] = reactExports.useState(null);
+  const apply2 = reactExports.useCallback((v) => {
+    setView(v);
+    setServer(v.server || "");
+    setTopic(v.topic || "");
+    setClick(v.click_url || "");
+    setToken("");
+    if (v.note) toast(v.note);
+  }, []);
+  const load2 = reactExports.useCallback(async () => {
+    try {
+      apply2(await api("/api/notify/ntfy"));
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    }
+  }, [apply2]);
+  reactExports.useEffect(() => {
+    load2();
+  }, [load2]);
+  const save2 = reactExports.useCallback(
+    async (patch) => {
+      try {
+        apply2(await api("/api/notify/ntfy", { json: patch }));
+      } catch (err) {
+        toast(err.message || "Couldn't save the ntfy settings");
+        load2();
+      }
+    },
+    [apply2, load2]
+  );
+  if (failed)
+    return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Phone push (ntfy)" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "Couldn't load the ntfy settings." })
+    ] });
+  if (!view) return /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Phone push (ntfy)" });
+  const on = !!view.enabled;
+  const last = view.last || {};
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Phone push (ntfy)" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint", children: [
+      "Get these alerts on your phone — even with MindFlock closed, because the server sends them, not the browser. Install the free",
+      " ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("a", { href: "https://ntfy.sh", target: "_blank", rel: "noopener noreferrer", children: "ntfy" }),
+      " ",
+      "app, subscribe to the topic below, and check in on the flock from anywhere."
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "div",
+      {
+        className: "set-row set-switch-row",
+        id: "ntfy-row",
+        title: "Push notifications to an ntfy topic your phone subscribes to",
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Push to ntfy" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                type: "checkbox",
+                id: "ntfy-toggle",
+                checked: on,
+                onChange: (e) => save2({
+                  enabled: e.target.checked,
+                  // Send the typed-but-uncommitted topic too, so flipping the
+                  // switch right after typing one doesn't fail validation.
+                  topic: topic.trim(),
+                  server: server.trim()
+                })
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
+          ] })
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ntfy-field-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Topic" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          id: "ntfy-topic",
+          value: topic,
+          autoComplete: "off",
+          spellCheck: false,
+          placeholder: view.suggested_topic || "mindflock-…",
+          onChange: (e) => setTopic(e.target.value),
+          onBlur: () => topic.trim() !== (view.topic || "") && save2({ topic: topic.trim() }),
+          onKeyDown: (e) => e.key === "Enter" && e.target.blur()
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          className: "test-btn",
+          id: "ntfy-generate",
+          title: "Use a long random topic name — on the public server the topic name is the only thing keeping strangers out",
+          onClick: () => {
+            const fresh = view.suggested_topic;
+            if (!fresh) return;
+            setTopic(fresh);
+            save2({ topic: fresh });
+          },
+          children: "Generate"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ntfy-field-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Server" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          id: "ntfy-server",
+          value: server,
+          autoComplete: "off",
+          spellCheck: false,
+          placeholder: view.server_default || "https://ntfy.sh",
+          onChange: (e) => setServer(e.target.value),
+          onBlur: () => server.trim() !== (view.server || "") && save2({ server: server.trim() }),
+          onKeyDown: (e) => e.key === "Enter" && e.target.blur()
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", {}),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Leave as-is for the public server, or point at your own." })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ntfy-field-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Access token" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          id: "ntfy-token",
+          type: "password",
+          value: token,
+          autoComplete: "off",
+          placeholder: view.has_token ? SECRET_MASK + " (saved)" : "only for a protected topic",
+          onChange: (e) => setToken(e.target.value),
+          onBlur: () => token && save2({ token }),
+          onKeyDown: (e) => e.key === "Enter" && e.target.blur()
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", {}),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Needed only if your topic is access-protected (self-hosted, or a reserved ntfy.sh topic). Blank keeps the saved one." })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ntfy-field-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Tapping opens" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          id: "ntfy-click",
+          value: click,
+          autoComplete: "off",
+          spellCheck: false,
+          placeholder: "optional — e.g. your phone URL from Settings → Mobile",
+          onChange: (e) => setClick(e.target.value),
+          onBlur: () => click.trim() !== (view.click_url || "") && save2({ click_url: click.trim() }),
+          onKeyDown: (e) => e.key === "Enter" && e.target.blur()
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", {}),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Opened when you tap the notification. Don't paste an access token into it — it would be stored on the ntfy server (MindFlock strips one if you do)." })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ntfy-test-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          className: "test-btn",
+          id: "ntfy-test",
+          disabled: testing || !topic.trim(),
+          onClick: async () => {
+            setTesting(true);
+            setVerdict(null);
+            try {
+              const r = await api("/api/notify/ntfy/test", {
+                json: {
+                  server: server.trim(),
+                  topic: topic.trim(),
+                  token: token || void 0,
+                  click_url: click.trim()
+                }
+              });
+              setVerdict(
+                (r == null ? void 0 : r.ok) ? { ok: true, text: "Sent — check your phone." } : { ok: false, text: (r == null ? void 0 : r.error) || "The push failed." }
+              );
+            } catch (err) {
+              setVerdict({ ok: false, text: err.message || "The push failed." });
+            }
+            setTesting(false);
+          },
+          children: testing ? "Sending…" : "Send a test"
+        }
+      ),
+      verdict && /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "span",
+        {
+          id: "ntfy-verdict",
+          className: verdict.ok ? "ntfy-verdict-ok" : "ntfy-verdict-bad",
+          children: verdict.text
+        }
+      ),
+      !verdict && last.ts && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: last.ok ? "ntfy-verdict-ok" : "ntfy-verdict-bad", children: last.ok ? "Last push sent " + ago(last.ts) : "Last push failed: " + last.error })
+    ] }),
+    view.qr_svg && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "ntfy-qr", className: "qr-card", dangerouslySetInnerHTML: { __html: view.qr_svg } }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint", children: [
+        "Scan this in the ntfy app to subscribe, or open",
+        " ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("a", { href: view.subscribe_url, target: "_blank", rel: "noopener noreferrer", children: view.subscribe_url }),
+        "."
+      ] })
+    ] }),
+    on && view.public_server && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "ntfy-warning", id: "ntfy-public-warning", children: [
+      "You're using the public ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "ntfy.sh" }),
+      " server: your session titles travel through it, and ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "anyone who knows the topic name can read them" }),
+      " (or send you fakes). Keep a long random topic — or self-host ntfy and point the Server field at it."
+    ] })
   ] });
 }
 function RuleRow({ rule }) {

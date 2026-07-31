@@ -173,6 +173,26 @@ class Addon(abc.ABC):
     async def on_shutdown(self, ctx: AppContext) -> None: ...
 ```
 
+`on_startup` / `on_shutdown` are the lifecycle pair, awaited on the server loop
+around the app's lifespan, and they are where an **in-process subscription**
+belongs — a constructor runs too early to have a loop to hand work to.
+The contract:
+
+- `ctx.subscribe(...)` returns an **unsubscribe callable**. The addon must retain
+  it and call it from `on_shutdown`; nothing reclaims it otherwise, so a
+  re-subscribing addon accumulates live callbacks (the notify addon guards with
+  `if self._unsubscribe is None`, making startup idempotent).
+- Subscribe **unconditionally** and let the *callback* decide whether the feature
+  is switched on. The alternative — subscribing only when configured — means a
+  toggle in Settings does nothing until the next restart.
+- `on_startup` runs on the server's event loop, so it is the place to capture that
+  loop for later cross-thread work (`ntfy.set_loop(asyncio.get_running_loop())`).
+- Both hooks are isolated: the server calls each in a `try/except` and logs a
+  failure as `addon <id> startup failed`, so one broken addon neither takes the
+  server down nor stops its siblings' hooks — but it *does* fail silently apart
+  from that log line, so don't rely on a raise to surface misconfiguration.
+  Shutdown hooks run in reverse registration order.
+
 Optionally implement the structural `ManagedProcess` protocol
 (`start/stop/status/is_running`) to get generic start/stop/logs treatment.
 
@@ -271,6 +291,45 @@ window.mindflockAddons.mine = {
   notification (with the session title; click focuses the tab) when a session
   hits `clarify` or its PR leaves the open stage.
 - **Registry**: one `NotifyAddon(ctx)` line in `build_addons()`.
+
+It also demonstrates the *server-side* half of the seam. `on_startup` takes
+`ctx.subscribe("*", …)` and runs the same rules in-process, pushing matches to
+the user's [ntfy](https://ntfy.sh) topic (`web/core/ntfy.py`) — which is how a
+notification arrives with no browser open at all. Three things generalize to any
+addon that reacts to events in-process:
+
+- The subscription is registered unconditionally and the **callback** checks
+  whether the feature is configured, so turning it on in Settings takes effect
+  immediately instead of at the next restart.
+- Bus callbacks run synchronously on whichever thread emitted, so the handler
+  stays tiny and hands its HTTP call to the loop (`ntfy.publish_soon`, the same
+  trampoline `EventBus._dispatch_hooks` uses for shell hooks). It also swallows
+  its own exceptions — one subscriber must not break an `emit()` for everyone.
+- There is no replay to guard against server-side (the bus replays only to
+  reconnecting websockets) and no first-poll burst after a restart, because
+  `server._emit_state_changes` seeds its snapshot on first sighting without
+  emitting. The browser channel, which *does* see a replayed backlog, filters it
+  with `ctx.events.isReplay(env)`.
+
+**Invariant: the rule engine is implemented twice, by hand.** The rule *data*
+(`NOTIFY_RULES`) is served from one place, but each channel evaluates it in its own
+language, and those evaluators are hand-mirrored twins with no shared code and no
+test that diffs them:
+
+| `notify.py` (server / ntfy) | `notify.js` (browser / desktop) |
+|---|---|
+| `_matches(rule, envelope)` | `ruleMatches(rule, env)` |
+| `_fill(template, envelope)` | `fill(template, env)` |
+| `_DEDUPE_SECONDS = 5.0` | `DEDUPE_MS = 5000` |
+
+Any change to rule *semantics* — a new constraint field, different `{…}`
+placeholder handling, a different dedupe key or window — must land in **both**, or
+the two channels quietly disagree and the same event notifies you on one channel
+and not the other. (The `priority`/`tags` fields are the deliberate exception:
+ntfy-only presentation, stripped from the client payload by
+`_INTERNAL_RULE_FIELDS` along with `default_enabled`, since the browser gets the
+already-resolved `enabled`.) A third channel should factor the evaluator out
+rather than add a third twin.
 
 ## `window.mindflock` client API reference
 

@@ -376,6 +376,17 @@ of the masked settings store (groups include `general`, e.g.
 `general.session_budget_usd`, the J5 per-session cost guardrail; `0`/absent =
 off), the account-attach "Test" validations (C5):
 
+**The secret convention** (cross-cutting, not settings-only): every field the
+server treats as a secret — API tokens, the ntfy access token — reads back as the
+sentinel `•••set` when one is stored and `""` when none is, and a write of either
+`""` **or** the sentinel *keeps* the saved value rather than clearing it. Only a
+different non-empty string replaces a secret; clearing one is a deliberate
+product decision per field (the ntfy token, for instance, is cleared by
+retargeting the server — see Notify below). The sentinel is one shared constant,
+`SECRET_MASK` in `web/addons/base.py`, with a hand-mirrored counterpart in the
+frontend's `settings/useSettings.tsx`; changing the string means changing both,
+or the UI starts writing the literal mask into the store as a password.
+
 | Method | Path | Returns |
 |---|---|---|
 | GET/POST | `/api/settings` | The masked settings store (secrets never echoed). POST **rejects** `coding_cli.default_provider` when that CLI is not installed (a `ValueError`-derived 400) — an absent CLI can never become the launch default |
@@ -436,8 +447,64 @@ the generic extension path (see [docs/extensions.md](extensions.md)):
 
 | Method | Path | Returns |
 |---|---|---|
-| GET | `/api/notify/config` | `{rules: [{event, old, new, title, body}]}` — the event → desktop-notification rules `static/addons/notify.js` applies |
-| POST | `/api/notify/rules/{rule_id}` | Enable/disable one rule |
+| GET | `/api/notify/config` | `{rules: [{id, label, event, old, new, title, body, enabled}]}` — the event → notification rules, applied client-side by `static/addons/notify.js` and server-side by the ntfy channel |
+| POST | `/api/notify/rules/{rule_id}` | Enable/disable one rule (for **both** channels) |
+| GET | `/api/notify/ntfy` | The ntfy channel's state: `{enabled, server, server_default, topic, has_token, click_url, configured, active, public_server, subscribe_url, qr_svg, suggested_topic, last}`. Never the token — only `has_token`; `suggested_topic` is a fresh random name, `last` is `{ts, ok, error}` of the most recent push |
+| POST | `/api/notify/ntfy` | Save `{enabled?, server?, topic?, token?, click_url?}` (only the keys present are touched); returns the `GET` view, plus a `note` when something was rewritten. `400 {error}` on an invalid topic/server URL |
+| POST | `/api/notify/ntfy/test` | Send one test push — `{ok, error}`. Takes its config from the body when supplied, so a topic can be verified before it is saved; exempt from the rate cap |
+
+The ntfy channel is a **server-side** delivery path for the same rules
+(`web/core/ntfy.py`): the server publishes to the topic over ntfy's JSON publish
+API (POST to the server root, topic in the body — session titles are arbitrary
+UTF-8, which an `X-Title` header could not carry), so an alert arrives with no
+browser tab open. It is off until configured, resolves through
+env → `settings.json` → defaults (`MINDFLOCK_NTFY_ENABLED` / `_SERVER` /
+`_TOPIC` / `_TOKEN` / `_CLICK_URL`, where an env-supplied topic is an implicit
+opt-in for headless boxes), and is capped at 60 pushes/hour per process.
+
+Two write-path guards worth knowing: the token follows the store's secret
+convention (empty or the `•••set` sentinel keeps the saved one) **and** is
+dropped when the server URL is retargeted at a different host without a fresh
+token, so server A's credential is never sent to server B; and a `token=` query
+parameter in `click_url` is stripped, since that URL is stored on the ntfy
+server.
+
+**Errors: branch on the body, not the status.** The two write endpoints report
+failure differently on purpose. `POST /api/notify/ntfy` is a validating write, so
+a bad topic or server URL is a `400 {error}` and nothing is saved.
+`POST /api/notify/ntfy/test` is a *probe* — every outcome it produces itself is a
+`200` with `{ok, error}`, including an invalid config and a send that failed
+outright (DNS, TLS, timeout, a `403` from ntfy); only a malformed request body gets
+a status error, from FastAPI's own validation. A client that branches on HTTP
+status therefore reads every failed test as a success: branch on `ok` and display
+`error`, which carries the ntfy server's own error sentence when it sent one.
+
+**Rate cap** — pushes are capped at **60 per rolling hour, per server process**,
+shared across every session and every rule (not per-session, not per-rule). It is
+a runaway guard, not a tunable: no env var or setting changes it. `POST
+/api/notify/ntfy/test` is **exempt**, so a test still reports a true verdict while
+the event channel is being throttled.
+
+A throttled push is **not** observable over the API. The cap is checked before the
+HTTP attempt and returns `"Rate limit: too many ntfy pushes this hour"` to its
+caller, but the event path is fire-and-forget and discards that return value, and
+the drop is deliberately *not* recorded as a `last` result — so `last` keeps
+showing the last real attempt rather than being buried under throttle noise. The
+only trace is one server-log line per window (`ntfy: over 60 pushes/hour …`). If a
+client needs to explain missing pushes, that log line is the evidence; `last: {ok:
+true}` alongside silent phones is the symptom.
+
+**Outbound reach** — `POST /api/notify/ntfy/test` publishes to the `server` in the
+*request body*, so an authenticated caller can make the MindFlock process issue
+one outbound `http(s)` POST (with a JSON body they largely control) to a host of
+their choosing, and — when that host answers `4xx`/`5xx` — read back the first
+~200 characters of its response body, surfaced as `error`. That is inherent to
+"test before you save", and it is bounded (one call, 10 s total timeout, nothing
+echoed back on a `2xx`), but a request-forgery probe is a fair way to describe it.
+Hence two things worth not undoing: this endpoint takes the same auth middleware as
+everything else, and the gate switches itself on for any non-local `CS_WEB_MODE`
+(see [Authentication](#authentication)). An exposed server with `MINDFLOCK_AUTH=0`
+would hand this probe to the network.
 
 ## Authentication
 
