@@ -17,6 +17,14 @@ Dependency groups (`pyproject.toml`): base (`aiohttp`, `tomli`), `dev` (pytest,
 pytest-asyncio, hypothesis, httpx), `engine` (pyperclip, ptyprocess), `web`
 (engine + fastapi, uvicorn, segno).
 
+`segno` (pure-Python QR codes) is imported **lazily and optionally**: it renders
+the startup banner's mobile-URL QR, the Settings → Mobile QR, and the ntfy
+subscribe QR, all through `mobile_access.qr_svg` / `_qr_lines`. Without it
+installed, `qr_svg` returns `None`, the API fields that carry it (`GET /api/mobile`,
+`GET /api/notify/ntfy` → `qr_svg`) are `null`, and each surface falls back to the
+plain URL — a graceful degradation, not a bug to chase. Anything asserting on a QR
+should skip when the import fails rather than fail.
+
 External tools the code shells out to: `git`, `tmux`, `uv`, plus the agent
 CLI (`claude`) and optionally `gh` (PR create/merge only — pushing is plain
 `git push`), `cursor`, `tailscale`, `wt.exe`.

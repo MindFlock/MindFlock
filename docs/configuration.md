@@ -333,6 +333,11 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_LOG_QUIET` | unset | Web server request log — by default **every** request is logged; set `1` to drop the UI's high-frequency poll endpoints (`/api/instances`, `/api/events`, `/static/…`, `/vendor/…`, favicon), which are still logged when they error or take ≥ 1.5 s |
 | `MINDFLOCK_PIPELINE_LOG_MAX_BYTES` | `51200` (50 KB) | Ingestion pipeline log (`[logging].log_file`) rotation cap — current file ≤ this plus one rollover backup |
 | `MINDFLOCK_SETTINGS_FILE` | `~/.mindflock/settings.json` | Path of the web settings store (tests point it at a tmp file) |
+| `MINDFLOCK_NTFY_TOPIC` | — | ntfy topic session notifications are pushed to. Setting it is an **implicit opt-in** (a headless box has no Settings screen to flip the switch in); wins over `notifications.ntfy_topic` |
+| `MINDFLOCK_NTFY_SERVER` | `https://ntfy.sh` | ntfy server the pushes go to — point it at your own instance to keep session titles off the public one |
+| `MINDFLOCK_NTFY_TOKEN` | — | ntfy access token, for a protected topic or an authenticated self-hosted server |
+| `MINDFLOCK_NTFY_ENABLED` | unset | Master switch for the ntfy channel (`1`/`0`). Redundant when `MINDFLOCK_NTFY_TOPIC` is set, which already implies on — but not powerless against it: setting this **explicitly** wins either way, so `MINDFLOCK_NTFY_ENABLED=0` silences a box whose topic var stays exported |
+| `MINDFLOCK_NTFY_CLICK_URL` | — | URL a tapped ntfy notification opens (e.g. your tailnet `/m` URL). Never put an access token in it — it is stored on the ntfy server |
 | `MINDFLOCK_TEMPLATES_FILE` | `~/.mindflock/session_templates.json` | Path of the session-template store |
 | `MINDFLOCK_PROMPT_QUEUE_FILE` | `~/.mindflock/prompt_queues.json` | Path of the per-session prompt-queue store (queued prompts, loop/enabled flags) |
 | `MINDFLOCK_PORTS_FILE` | `~/.mindflock/ports.json` | Path of the session port-block allocation store (the O4 `PORT`/`MINDFLOCK_PORT_BASE` blocks) |
@@ -350,6 +355,17 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_INSTALL_SCRIPT` | bundled `install.sh` | Desktop app only — path to the installer the **Install the engine** button runs. Point it at a stub to exercise that flow without reinstalling anything |
 
 > Naming note: launcher variables kept their historical `CS_` prefix
+
+> **`MINDFLOCK_NTFY_*` wins over Settings → Notifications.** Each of the five
+> resolves `env → settings.json → default` **per field** (the standard
+> `config/settings.py` resolver: a non-empty env var short-circuits, an empty one
+> counts as unset). The consequence is worth stating plainly because it is
+> invisible from the UI: on a box where these are exported the Notifications
+> screen still renders as editable and still saves, but the saved value has no
+> effect while the env var is set — and since `GET /api/notify/ntfy` reports the
+> *resolved* value, the screen shows the env value rather than what was typed.
+> Precedence being per field, exporting only `MINDFLOCK_NTFY_SERVER` pins the
+> server while topic and token still come from the UI. Pick one source per field.
 
 ## Web-exposed settings
 
@@ -384,3 +400,40 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   (empty entries dropped); a **bare string** left by an older build is coerced to
   the current `default_provider` key on load (dropped if no default provider is
   set).
+- **Notification rules** (`notifications.muted_rules` / `enabled_rules`,
+  Settings → Notifications) — which session events notify you. Default-on rules
+  are opt-*out* (their id lands in `muted_rules`), noisier ones are opt-*in*
+  (`enabled_rules`), so a rule added in a later release starts in the state its
+  author intended. One list governs every delivery channel.
+- **ntfy push** (`notifications.ntfy_enabled` / `_server` / `_topic` / `_token` /
+  `_click_url`, Settings → Notifications) — the optional server-side push channel
+  that reaches a phone with no browser tab open (see
+  [web-ui.md](web-ui.md#notifications-) for the UI and
+  [web-api.md](web-api.md) for the endpoints). Off until configured. `_server`
+  defaults to the public `https://ntfy.sh`; `_topic` is the address your phone
+  subscribes to and, on a public server, the *only* thing keeping strangers out —
+  so let the UI generate a random one. `_token` is a secret (masked on read, kept
+  on an empty write, and dropped if `_server` is retargeted at a different host).
+  `_click_url` is opened when you tap the notification; a `token=` parameter is
+  stripped from it, since it is stored on the ntfy server.
+
+The whole `notifications` group as it lands in `settings.json`:
+
+```jsonc
+"notifications": {
+  "muted_rules": ["pr_closed"],          // default-on rules switched OFF
+  "enabled_rules": ["session_idle"],     // default-off rules switched ON
+  "ntfy_enabled": true,
+  "ntfy_server": "https://ntfy.sh",      // omitted = the public default
+  "ntfy_topic": "mindflock-xTPq…",       // on a public server this IS the credential
+  "ntfy_token": "tk_…",                  // secret: masked on read as "•••set"
+  "ntfy_click_url": "https://box.tailnet.ts.net/m"
+}
+```
+
+**Absent means default, not corrupt.** Every key here is omitted from the written
+file when its value is falsy (`NotificationSettings.to_dict` writes only what is
+set), so a freshly-configured install shows `"notifications": {"ntfy_enabled":
+true, "ntfy_topic": "…"}` and nothing else — no empty strings, no `false`. A group
+missing entirely means "all defaults". Editing the file by hand works, but the
+server caches the store per process, so a hand edit needs a restart to be seen.

@@ -28,7 +28,7 @@ from backend import doctor, providers
 from backend.config import settings as settings_store
 from backend.providers import config as provider_config
 
-from .base import Addon, AppContext, FrontendDescriptor
+from .base import SECRET_MASK, Addon, AppContext, FrontendDescriptor
 
 # Field paths (group, field) that hold secrets — masked on read, keep-on-empty
 # on write.
@@ -37,8 +37,9 @@ from .base import Addon, AppContext, FrontendDescriptor
 _SECRET_FIELDS = {
     ("github", "token"),
     ("general", "auth_token"),
+    ("notifications", "ntfy_token"),
 }
-_MASK = "•••set"
+_MASK = SECRET_MASK  # the one sentinel, defined in addons/base.py
 
 
 def _mask_ticketing(d: dict) -> None:

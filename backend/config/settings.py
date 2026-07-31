@@ -568,7 +568,8 @@ class GeneralSettings:
 
 @dataclass
 class NotificationSettings:
-    """Which desktop-notification rules the user has toggled off/on.
+    """Which notification rules the user has toggled off/on, and the optional
+    ntfy push channel that delivers them to a phone.
 
     Rules carry a per-rule default (see ``notify.NOTIFY_RULES``):
 
@@ -576,10 +577,29 @@ class NotificationSettings:
       so new default-on rules added later start enabled.
     * **default-off** rules (e.g. "went idle", "pre-commit hooks running" — noisy
       by nature) fire only when their id is in ``enabled_rules`` (opt-in).
+
+    The rule list is shared by every delivery channel — one "what notifies me"
+    list, not one per channel. The ``ntfy_*`` fields configure the second
+    channel (:mod:`backend.web.core.ntfy`), which is off until the user opts in:
+
+    ``ntfy_enabled``: master switch for server-side pushes.
+    ``ntfy_server``: base URL of the ntfy server (``""`` -> the public
+    ``https://ntfy.sh``). ``ntfy_topic``: the topic to publish to — on a public
+    server the topic name IS the credential, so it should be long and random.
+    ``ntfy_token``: access token for a protected topic / self-hosted server, a
+    SECRET (masked on read, keep-on-empty on write by the settings addon).
+    ``ntfy_click_url``: optional URL a tapped notification opens (your phone
+    MindFlock URL); never store an access token in it — it would be handed to
+    the ntfy server.
     """
 
     muted_rules: List[str] = field(default_factory=list)
     enabled_rules: List[str] = field(default_factory=list)
+    ntfy_enabled: bool = False
+    ntfy_server: str = ""  # "" -> ntfy.ntfy DEFAULT_SERVER (https://ntfy.sh)
+    ntfy_topic: str = ""
+    ntfy_token: str = ""  # SECRET
+    ntfy_click_url: str = ""
 
     def to_dict(self) -> dict:
         out: dict = {}
@@ -587,6 +607,16 @@ class NotificationSettings:
             out["muted_rules"] = list(self.muted_rules)
         if self.enabled_rules:
             out["enabled_rules"] = list(self.enabled_rules)
+        if self.ntfy_enabled:
+            out["ntfy_enabled"] = True
+        if self.ntfy_server:
+            out["ntfy_server"] = self.ntfy_server
+        if self.ntfy_topic:
+            out["ntfy_topic"] = self.ntfy_topic
+        if self.ntfy_token:
+            out["ntfy_token"] = self.ntfy_token
+        if self.ntfy_click_url:
+            out["ntfy_click_url"] = self.ntfy_click_url
         return out
 
     @classmethod
@@ -594,6 +624,11 @@ class NotificationSettings:
         return cls(
             muted_rules=_str_list(d.get("muted_rules")),
             enabled_rules=_str_list(d.get("enabled_rules")),
+            ntfy_enabled=bool(d.get("ntfy_enabled", False)),
+            ntfy_server=str(d.get("ntfy_server", "") or "").strip(),
+            ntfy_topic=str(d.get("ntfy_topic", "") or "").strip(),
+            ntfy_token=str(d.get("ntfy_token", "") or "").strip(),
+            ntfy_click_url=str(d.get("ntfy_click_url", "") or "").strip(),
         )
 
 

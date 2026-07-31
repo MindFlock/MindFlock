@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Optional ntfy push, so notifications reach your phone.** Until now the only
+  notification channel was the browser's `Notification` popup — which needs a
+  MindFlock tab open on a secure origin, exactly the situation you're not in when
+  you'd most like to know that a session is waiting on you. Settings →
+  Notifications gains a **Phone push (ntfy)** section: give it a topic
+  (**Generate** offers a random one), scan the QR into the free
+  [ntfy](https://ntfy.sh) app, and the **server** publishes matching events to
+  it — no tab, no browser, no MindFlock window required. **Send a test**
+  confirms the round trip and the row afterwards reports the last push or why it
+  failed. Off until you turn it on, and pointable at your own ntfy instance
+  (**Server**) with a token for a protected topic.
+
+  The existing per-rule switches are now labelled as governing *both* channels —
+  one "what notifies me" list, with channels deciding only where an alert lands.
+  Per-rule ntfy priority means the actionable rules (needs-input, budget
+  exceeded, pre-commit failed) buzz at priority 4 while the ambient opt-ins
+  (idle, pre-commit running) arrive quietly at 2.
+
+  New endpoints `GET|POST /api/notify/ntfy` and `POST /api/notify/ntfy/test`
+  (see [docs/web-api.md](docs/web-api.md)); new settings
+  `notifications.ntfy_enabled` / `_server` / `_topic` / `_token` / `_click_url`,
+  resolved through env → `settings.json` → defaults so a headless box can just
+  export `MINDFLOCK_NTFY_TOPIC` (an env topic is an implicit opt-in — there is no
+  Settings screen there to flip a switch in).
+
+  Care taken with the parts that could leak: the token is masked on read and
+  kept on an empty write like every other secret, **and** is dropped when the
+  server URL is retargeted at a different host without a fresh token, so one
+  server's credential is never handed to another. A `token=` query parameter in
+  the optional tap-to-open URL is stripped, because that URL is stored on the
+  ntfy server. Nothing logs the topic name (`mindflock.log` is served back out
+  over `GET /api/logs`, and on the public server the topic *is* the credential —
+  hence the random default and the on-screen warning while pointed at
+  `ntfy.sh`). Pushes are capped at 60/hour per process so a flapping session
+  can't burn a quota, and delivery is best-effort throughout: a failed push is
+  recorded for the settings screen and never touches the event that triggered it.
+
 ## [0.1.5] - 2026-07-30
 
 ### Changed

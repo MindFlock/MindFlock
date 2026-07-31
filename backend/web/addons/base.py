@@ -64,6 +64,13 @@ class ManagedProcess(Protocol):
     def is_running(self) -> bool: ...
 
 
+#: What a GET returns in place of a stored credential — it says "a value is
+#: saved" without ever transmitting the value. Writing it back (or writing "")
+#: means "keep the saved one". Shared so every addon that handles a credential
+#: agrees on the sentinel; the frontend's counterpart is ``SECRET_MASK`` in
+#: settings/useSettings.tsx.
+SECRET_MASK = "•••set"  # pragma: allowlist secret — it IS the placeholder
+
 #: Namespace every addon-originated event lives under (``emit()`` auto-prefixes).
 ADDON_EVENT_PREFIX = "addon."
 # The namespace reserved for core lifecycle events (web/core/events.py); an

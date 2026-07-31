@@ -94,6 +94,17 @@ FastAPI app `backend.web.server:app`. Key pieces:
 - **`core/events.py`** — the server-side session event bus: `session.*` events
   broadcast over `WS /api/events`, delivered to in-process addons via
   `AppContext.subscribe`, and to user shell hooks under `~/.mindflock/hooks/`.
+  Note the asymmetry: websocket clients and shell hooks are decoupled from the
+  emitter, but `subscribe` callbacks run **synchronously on the emitting thread**,
+  so every subscriber is on `emit()`'s critical path and must neither block nor
+  raise. Anything slow gets offloaded — `ntfy.publish_soon` is the reference
+  pattern, handing its HTTP call to the server loop via the same trampoline
+  `EventBus._dispatch_hooks` uses for shell hooks.
+- **`core/ntfy.py`** — the optional [ntfy](https://ntfy.sh) push channel: the
+  transport (JSON publish, rate cap, last-result reporting) behind the notify
+  addon's server-side bus subscriber, so a "needs your input" reaches a phone
+  with no browser tab open. Off until configured; see
+  [web-ui.md](web-ui.md#notifications-).
 - **`core/auth.py`** — shared bearer-token ASGI middleware gating HTTP + websockets
   whenever the server is exposed beyond localhost (cookie / header / `?token=`,
   QR deep-link for the mobile page).

@@ -1,0 +1,56 @@
+/* Settings → Notifications: the ntfy (phone push) section.
+   The QR card itself is the shared .qr-card from mobileLogs.css. */
+
+/* Label + field + trailing button on one line (Topic […] [Generate]), so the
+   generate/test affordance sits with the field it acts on instead of below it. */
+.ntfy-field-row {
+  display: grid;
+  grid-template-columns: 150px 1fr auto;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 8px 0;
+}
+
+.ntfy-field-row .set-label {
+  min-width: 0;
+}
+
+.ntfy-field-row input {
+  min-width: 0; /* let the input shrink inside the grid track instead of overflowing */
+  width: 100%;
+}
+
+/* The hint under a field spans the whole row, aligned under the input. */
+.ntfy-field-row .set-hint {
+  grid-column: 2 / -1;
+  margin: 0;
+}
+
+/* "Anyone who knows your topic can read these" — a real caveat of the public
+   server, so it gets a callout rather than another grey hint nobody reads. */
+.ntfy-warning {
+  border: 1px solid var(--gold);
+  border-radius: 10px;
+  background: var(--panel-2);
+  padding: 10px 14px;
+  margin: 10px 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* Test button + its verdict on one line. */
+.ntfy-test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0 4px;
+}
+
+.ntfy-verdict-ok {
+  color: var(--green);
+}
+
+.ntfy-verdict-bad {
+  color: var(--red);
+}
