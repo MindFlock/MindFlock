@@ -29195,9 +29195,35 @@ function General(_) {
         ]
       }
     ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(ResumeOnUsageResetRow, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(ScrollSpeedRow, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(ReduceMotionRow, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(GettingStarted, {})
+  ] });
+}
+function ResumeOnUsageResetRow() {
+  const s = useSettings();
+  const stored = s.get("general", "resume_on_usage_reset");
+  const on = stored !== false && stored !== "false" && stored !== "0";
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row set-switch-row", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "notif-rule-text", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Resume sessions when usage comes back" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint notif-rule-desc", children: "When an agent runs out of usage it parks on its CLI's limit screen and stays there — even after the window resets. With this on, MindFlock watches those sessions and tells them to continue the moment usage returns, the same way the prompt queue already resumes sessions that have something queued. You get a notification either way (Settings → Notifications)." })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          type: "checkbox",
+          checked: on,
+          onChange: (e) => {
+            s.saveField("general", "resume_on_usage_reset", e.target.checked);
+            toast(e.target.checked ? "Auto-resume on" : "Auto-resume off");
+          }
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
+    ] })
   ] });
 }
 function GettingStarted() {
@@ -29349,7 +29375,7 @@ function useServerRestart() {
     if (timer.current) clearInterval(timer.current);
     setRestarting(true);
     setTimedOut(false);
-    api("/api/server/restart", { method: "POST" }).catch(() => {
+    if (!(opts == null ? void 0 : opts.alreadyRequested)) api("/api/server/restart", { method: "POST" }).catch(() => {
     });
     const t0 = Date.now();
     const finish = (didTimeOut) => {
@@ -29398,12 +29424,17 @@ function Mobile(_) {
   }, [load2]);
   const setMode = async (on) => {
     setModeBusy(true);
+    let restarting2 = false;
     try {
-      await api("/api/settings", { json: { general: { serve_mode: on ? "tailscale" : "local" } } });
+      const res = await api("/api/settings", {
+        json: { general: { serve_mode: on ? "tailscale" : "local" } }
+      });
+      restarting2 = !!(res == null ? void 0 : res.restarting);
     } catch {
     }
     setModeBusy(false);
-    load2();
+    if (restarting2) restart({ alreadyRequested: true, onBack: load2 });
+    else load2();
   };
   const onRestart = () => restart({ onBack: load2 });
   const pending = !!((data == null ? void 0 : data.serve_mode) && data.serve_mode === "tailscale" === !!data.local_only);

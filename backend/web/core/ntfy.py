@@ -406,6 +406,7 @@ def publish_soon(
     message: str,
     priority: Optional[int] = None,
     tags: Optional[List[str]] = None,
+    click: Optional[str] = None,
 ) -> None:
     """Fire-and-forget :func:`publish` from any thread.
 
@@ -414,7 +415,26 @@ def publish_soon(
     loop at all — a bare sync context such as a unit test — a throwaway thread
     with its own), exactly like ``EventBus._dispatch_hooks``.
     """
-    coro = publish(cfg, title=title, message=message, priority=priority, tags=tags)
+    dispatch(
+        publish(
+            cfg,
+            title=title,
+            message=message,
+            priority=priority,
+            tags=tags,
+            click=click,
+        )
+    )
+
+
+def dispatch(coro) -> None:
+    """Run a push coroutine on the server loop from any thread, and never raise.
+
+    The trampoline behind :func:`publish_soon` — split out because it is also
+    what :mod:`backend.web.core.mobile_announce` needs: a sync caller (a
+    FastAPI route on a worker thread, a settings save) handing a whole
+    push *sequence* to the loop without waiting for it.
+    """
     try:
         try:
             running = asyncio.get_running_loop()

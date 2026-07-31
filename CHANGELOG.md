@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-07-31
+
+### Added
+
+- **Your phone URL now travels with the notifications.** When Tailscale is up,
+  every ntfy push carries this machine's tailnet `/m` address — in the message
+  and as the tap target — deep-linked to the session it is about (`/m?s=<title>`),
+  so a notification is one tap from the thing it's telling you about instead of
+  the start of a hunt for the URL. On top of that, one push announces the URL
+  whenever it becomes newly reachable: at server start, when the ntfy channel is
+  switched on, and when tailscale mode is turned on. The access token is never
+  included — the message is stored on a third-party server, so it goes bare and
+  says that a new device will meet the sign-in page. Deduplicated (turning on
+  push and tailscale mode back to back is one intent), and a URL that isn't live
+  until a restart says so. *Tapping opens* stays available for sending taps
+  somewhere else entirely.
+
+- **A Diff tab in the phone UI.** `/m` gains a third tab beside Agent and Shell,
+  reading the same `GET /api/instances/<title>/diff` as the desktop Diff tab
+  with the same two baselines behind one button (**All changes** vs
+  **Uncommitted**, persisted under the shared `mf_diffbase` key). Unified and
+  colorized like the desktop, with each file's name lifted into a header that
+  sticks while its hunks scroll past, sideways scrolling contained inside the
+  panel, and a cap for very large diffs. The terminal stays attached behind it,
+  so switching back is instant — and the git action bar (with its status toast)
+  stays on screen, because reading the diff is exactly when you decide to push.
+  A phone can now approve work, not just unblock it.
+
+- **Tailscale mode applies itself.** Which interface uvicorn binds is fixed at
+  process start, so the Settings → Mobile toggle only ever meant something after
+  a restart. Turning it on now takes that restart: `POST /api/settings` answers
+  `{"restarting": true}` and the screen waits for the server to come back and
+  refreshes the URLs/QR in place. Bounded at three attempts (counted in the
+  environment, since each attempt is a new process image) before it gives up and
+  leaves the manual button, rather than restart-looping a server that isn't
+  going to come up on the tailnet. The same check runs at every boot, so a
+  server started in local mode while the setting says tailscale corrects itself.
+
+- **Sessions that run out of usage get picked back up.** The prompt queue has
+  always ridden out a usage limit for sessions with something queued; a session
+  that simply ran out mid-task had an empty queue, so nothing was watching it —
+  it sat on its CLI's limit screen until a human came back, often hours after
+  the window reopened. The drain pass now also walks the sessions whose activity
+  is `limit` (a free read of the state snapshot — no probes when nothing has run
+  out), waits the window out with the same meter/banner logic, and sends
+  Esc + `continue` so the agent resumes its task. New setting
+  `general.resume_on_usage_reset` (Settings → General, default on).
+
+  Two notification rules go with it, both default-on and mutable like the rest:
+  **"A session runs out of usage"** and **"Usage comes back after running out"**.
+  The second rides on a new `session.usage_restored` event, emitted once per
+  reopening by that watcher — so it cannot fire for a window that merely rolled
+  over while nothing was blocked, and several sessions unblocking together still
+  make one notification.
+
 ## [0.1.6] - 2026-07-30
 
 ### Added
@@ -495,7 +550,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.7
 [0.1.6]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.6
 [0.1.5]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.5
 [0.1.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.4

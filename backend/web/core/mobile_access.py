@@ -23,6 +23,7 @@ import os
 import shutil
 import subprocess
 import sys
+from typing import Optional, Tuple
 
 from backend.web.core import auth as _auth
 
@@ -103,6 +104,35 @@ def _tailscale_serves_port(port: int) -> bool:
     return any(
         s in out for s in (":%d" % port, "localhost:%d" % port, "127.0.0.1:%d" % port)
     )
+
+
+def tailnet_url() -> Tuple[Optional[str], bool]:
+    """``(the phone URL for this machine, whether it works right now)``.
+
+    The same "best URL a phone on the tailnet can reach" the banner and the
+    Settings → Mobile QR advertise — but deliberately **without** ``?token=``:
+    this one is handed to a third party (the ntfy push in
+    :mod:`backend.web.core.mobile_announce`), and the access token is not
+    theirs to store. Same call ``ntfy.strip_token_param`` makes for the
+    tap-to-open URL.
+
+    ``(None, False)`` when Tailscale isn't up — there is no phone URL to give,
+    and inventing one would just be wrong. The second element is False when the
+    URL is *right but not live yet*: uvicorn is still bound to 127.0.0.1
+    (``mindflock serve local``), so the tailnet address only starts answering
+    after a restart in tailscale mode.
+    """
+    srv = _server()
+    port = srv._server_port()
+    name, ip = srv._tailscale_info()
+    if name and srv._tailscale_serves_port(port):
+        # `tailscale serve` fronts localhost with HTTPS, so this URL works even
+        # while uvicorn stays bound to 127.0.0.1 — local mode is not a caveat.
+        return "https://%s/m" % name, True
+    host = name or ip
+    if not host:
+        return None, False
+    return "http://%s:%d/m" % (host, port), not srv._local_only_mode()
 
 
 def _qr_lines(data: str):

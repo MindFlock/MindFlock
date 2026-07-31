@@ -28,6 +28,9 @@
       <div id="tabs">
         <button type="button" class="tab active" data-tab="agent">Agent</button>
         <button type="button" class="tab" data-tab="shell">Shell</button>
+        <!-- Read the work before you approve it: the same diff the desktop
+             pane's Diff tab shows, unified and colorized for a narrow screen. -->
+        <button type="button" class="tab" data-tab="diff">Diff</button>
       </div>
     </header>
 
@@ -46,6 +49,18 @@
       <div id="term"></div>
       <div id="empty" class="hidden">No sessions yet. Create one from the desktop view.</div>
       <div id="status" class="hidden"></div>
+    </div>
+
+    <!-- Diff panel: takes the terminal's place under the Diff tab (the PTY
+         stays connected behind it, so switching back is instant). Unified only
+         — a split view needs width a phone doesn't have. -->
+    <div id="diff-wrap" class="hidden">
+      <div id="diff-head">
+        <button type="button" id="diff-base" class="diff-btn">All changes</button>
+        <span id="diff-stat"></span>
+        <button type="button" id="diff-refresh" class="diff-btn">Refresh</button>
+      </div>
+      <div id="diff-body"></div>
     </div>
 
     <!-- Native compose box: type/paste/autocorrect like any phone text field,

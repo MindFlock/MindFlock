@@ -35,7 +35,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from backend.config import settings as settings_store
-from backend.web.core import mobile_access, ntfy
+from backend.web.core import mobile_access, mobile_announce, ntfy
 
 from .base import SECRET_MASK, Addon, AppContext, FrontendDescriptor
 
@@ -90,6 +90,38 @@ NOTIFY_RULES: List[dict] = [
         "default_enabled": True,
         "priority": 4,
         "tags": ["moneybag"],
+    },
+    {
+        # Roadmap D: the agent ran out of usage and is parked on its CLI's
+        # limit screen. Actionable in the "stop waiting for this one" sense —
+        # nothing will move until the provider's window resets, and MindFlock
+        # picks it back up on its own when it does.
+        "id": "usage_limit",
+        "label": "A session runs out of usage",
+        "event": "session.activity_changed",
+        "old": None,
+        "new": "limit",
+        "title": "{session} ran out of usage",
+        "body": "The agent hit its usage limit. MindFlock resumes it when the window resets.",
+        "default_enabled": True,
+        "priority": 3,
+        "tags": ["hourglass"],
+    },
+    {
+        # The other end of the same story. Emitted once per reopening by the
+        # drain-loop watcher (server._watch_one_limited), which only ever looks
+        # at sessions that had run out — so this cannot fire on a window that
+        # merely rolled over while everything was fine.
+        "id": "usage_restored",
+        "label": "Usage comes back after running out",
+        "event": "session.usage_restored",
+        "old": None,
+        "new": None,
+        "title": "Usage is back",
+        "body": "The provider's window reset — {session} can run again.",
+        "default_enabled": True,
+        "priority": 3,
+        "tags": ["arrows_counterclockwise"],
     },
     {
         # Opt-in (noisy): fires whenever a session finishes its turn and goes
@@ -269,12 +301,25 @@ class NotifyAddon(Addon):
                     if now - self._last_push.get(key, 0.0) < _DEDUPE_SECONDS:
                         continue
                     self._last_push[key] = now
+                # Tap the notification -> the mobile view, already on the
+                # session it is about. Cached, never probed here: this runs on
+                # the emitting thread. Empty when there's no tailnet — and then
+                # publish() falls back to the user's own configured click URL.
+                click = mobile_announce.click_for(str(envelope.get("session") or ""))
+                message = _fill(rule.get("body", ""), envelope)
+                if click:
+                    # Also in the text: a notification you have to go find the
+                    # server for is a notification that made you get up. The
+                    # click action covers most clients; the line covers the rest
+                    # (and a phone that shows the push without acting on it).
+                    message += "\n" + click
                 ntfy.publish_soon(
                     cfg,
                     title=_fill(rule.get("title", ""), envelope),
-                    message=_fill(rule.get("body", ""), envelope),
+                    message=message,
                     priority=rule.get("priority"),
                     tags=rule.get("tags"),
+                    click=click or None,
                 )
         except Exception as err:  # noqa: BLE001 — a push never breaks an emit
             ntfy.log_error(
@@ -407,6 +452,10 @@ class NotifyAddon(Addon):
 
             if patch:
                 settings_store.update_settings(notifications=patch)
+            # Channel just came on: the first thing worth pushing to a phone
+            # that has never heard from this machine is how to reach it.
+            if patch.get("ntfy_enabled") and not stored.ntfy_enabled:
+                mobile_announce.announce_soon(mobile_announce.REASON_NTFY)
             view = _ntfy_view()
             if note:
                 view["note"] = note
@@ -443,15 +492,25 @@ class NotifyAddon(Addon):
                 token=token,
                 click_url=click,
             )
+            # The test push is the first one anyone sees, so it shows what the
+            # real ones will: the phone URL, tappable. Probed here (an async
+            # route can afford it) rather than read from the cache — this is
+            # also where a first-run install *fills* that cache.
+            phone_url, _live = await asyncio.to_thread(mobile_access.tailnet_url)
+            mobile_announce.remember_url(phone_url)
+            message = (
+                "Push notifications are working — this is where session "
+                "alerts will land."
+            )
+            if phone_url:
+                message += "\n" + phone_url
             ok, error = await ntfy.publish(
                 cfg,
                 title="MindFlock is connected",
-                message=(
-                    "Push notifications are working — this is where session "
-                    "alerts will land."
-                ),
+                message=message,
                 priority=3,
                 tags=["bell"],
+                click=phone_url or None,
                 budgeted=False,
             )
             return JSONResponse({"ok": ok, "error": error})

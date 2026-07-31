@@ -27,6 +27,7 @@ from fastapi.responses import JSONResponse
 from backend import doctor, providers
 from backend.config import settings as settings_store
 from backend.providers import config as provider_config
+from backend.web.core import mobile_announce, restart
 
 from .base import SECRET_MASK, Addon, AppContext, FrontendDescriptor
 
@@ -457,6 +458,20 @@ class SettingsAddon(Addon):
                 "enabled" in gh_in or "issues_enabled" in gh_in
             )
             before = _toggle_states() if watch_toggle else None
+
+            # Settings → Mobile's tailscale-mode switch (general.serve_mode).
+            # Turning it ON is the moment a phone URL starts to exist, so it is
+            # also the moment worth pushing that URL to the phone.
+            def _serve_mode() -> str:
+                return (
+                    (settings_store.load_settings().general.serve_mode or "")
+                    .strip()
+                    .lower()
+                )
+
+            gen_in = payload.get("general")
+            watch_serve = isinstance(gen_in, dict) and "serve_mode" in gen_in
+            serve_before = _serve_mode() if watch_serve else None
             try:
                 _apply_post(payload)
             except Exception as err:  # noqa: BLE001
@@ -467,7 +482,30 @@ class SettingsAddon(Addon):
                         self.ctx.emit("settings.github_toggled")
                     except Exception:  # noqa: BLE001 — never let the bus break a save
                         pass
-            return JSONResponse({"settings": _masked_view()})
+
+            view = {"settings": _masked_view()}
+            if (
+                watch_serve
+                and serve_before != "tailscale"
+                and _serve_mode() == "tailscale"
+            ):
+                # A hand-flipped toggle is a fresh intent — it gets the full
+                # retry budget back even if an earlier one was spent giving up.
+                restart.reset_tailscale_attempts()
+                if restart.auto_restart_for_tailscale(delay=0.5):
+                    # Which bind uvicorn holds is fixed at boot, so the toggle
+                    # only means something after a restart — take it here rather
+                    # than leaving the user a button to press. `restarting` tells
+                    # the client to wait for the server to come back instead of
+                    # reporting the dropped connection as a failure.
+                    view["restarting"] = True
+                else:
+                    # Already listening on the tailnet (or we've given up
+                    # restarting): the URL is as live as it is going to get, so
+                    # push it now. When a restart IS coming, the fresh process
+                    # announces instead — it can say the URL works.
+                    mobile_announce.announce_soon(mobile_announce.REASON_MOBILE)
+            return JSONResponse(view)
 
         # --- account-attach validation (C5): "Test" buttons ----------------- #
         @router.post("/settings/test/shortcut")

@@ -40,13 +40,22 @@ export function Mobile(_: ScreenProps) {
 
   const setMode = async (on: boolean) => {
     setModeBusy(true);
+    let restarting = false;
     try {
-      await api("/api/settings", { json: { general: { serve_mode: on ? "tailscale" : "local" } } });
+      const res = await api<{ restarting?: boolean }>("/api/settings", {
+        json: { general: { serve_mode: on ? "tailscale" : "local" } },
+      });
+      restarting = !!res?.restarting;
     } catch {
       /* revert via reload */
     }
     setModeBusy(false);
-    load();
+    // Turning tailscale mode on restarts the server by itself (which interface
+    // uvicorn binds is fixed at boot). It's already going down — wait it out
+    // and refresh the URLs/QR, rather than letting the reload below fail
+    // against a port that is mid-re-exec.
+    if (restarting) restart({ alreadyRequested: true, onBack: load });
+    else load();
   };
 
   // Refresh the QR/URLs in place once the server is back — the new serve mode

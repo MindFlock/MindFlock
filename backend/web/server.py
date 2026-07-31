@@ -238,6 +238,8 @@ from backend.web.core.engine import (
     _reload_loop,
     _sync_external_instances,
 )
+from backend.web.core import mobile_announce
+from backend.web.core import restart as _restart
 from backend.web.core.mobile_access import (
     _local_only_mode,
     _mobile_banner,
@@ -413,6 +415,13 @@ async def lifespan(app: FastAPI):
     # Tailscale banner probe alone can hang for seconds on a machine without
     # tailscale).
     async def _startup_warmups() -> None:
+        # Tailscale mode is on but this process came up bound to 127.0.0.1 (a
+        # `serve local` that predates the toggle, or a CS_WEB_MODE inherited
+        # from somewhere): the setting isn't in effect, and the fix is a
+        # restart — so take it, up to core.restart's attempt cap. Everything
+        # below would be work done by a process on its way out.
+        if await asyncio.to_thread(_restart.auto_restart_for_tailscale):
+            return
         # Apply the persisted terminal scroll speed to already-running sessions.
         try:
             await asyncio.to_thread(apply_scroll_speed)
@@ -441,6 +450,10 @@ async def lifespan(app: FastAPI):
                     pass
         except Exception:  # noqa: BLE001
             pass
+        # Same URL, second channel: if ntfy is configured and Tailscale is up,
+        # the phone gets the /m URL as a push (without the token) so reaching
+        # the mobile view doesn't require being at this console to read it.
+        await mobile_announce.announce(mobile_announce.REASON_STARTUP)
 
     _register_task(_startup_warmups())
     # Addon startup hooks (e.g. the Assistant seeds its working dir here).
@@ -1170,11 +1183,125 @@ def _drain_one_queue(title: str) -> None:
     _send_queued_item(title, name, nxt, rec, now)
 
 
+# --- Usage-limit watch: sessions parked on the limit screen with no queue --- #
+# The drain above resumes a limited session that has something QUEUED. A session
+# that simply ran out mid-task has an empty queue, so nothing was watching it —
+# it sat on the limit screen until a human came back hours later, long after the
+# window reopened. This watcher covers exactly that gap, and pays for itself:
+# the candidate list comes from the snapshot the /api/events tick already keeps
+# (a dict read), so a flock with nothing limited does no work at all.
+_LIMIT_RESUME_PROMPT = "continue"
+
+#: "Usage is back" is one fact about the account, not one per session — several
+#: sessions typically unblock in the same pass. Announce it once per window.
+_LIMIT_RESTORE_QUIET = 300.0
+_LAST_RESTORE_EMIT = 0.0
+
+
+def _resume_on_usage_reset() -> bool:
+    """Whether to nudge a limited session once its window reopens
+    (``general.resume_on_usage_reset``; unset = on). Never raises."""
+    try:
+        from backend.config import settings as _settings
+
+        return _settings.load_settings().general.resume_on_usage_reset is not False
+    except Exception:  # noqa: BLE001 — an unreadable store keeps the default
+        return True
+
+
+def _limited_titles() -> list:
+    """Sessions whose last observed activity was ``limit``, from the event
+    snapshot — free (no probes), and refreshed every ~4s by the state tick."""
+    with _EVENT_SNAPSHOT_LOCK:
+        return [
+            t for t, snap in _EVENT_SNAPSHOT.items() if snap.get("activity") == "limit"
+        ]
+
+
+def _watch_one_limited(title: str) -> None:
+    """One usage-limit decision for a session sitting on the limit screen.
+
+    Runs only while the session's *observed* activity is ``limit``, so the pane
+    capture in :func:`_refresh_limit_state` happens for genuinely stuck sessions
+    only. Never raises."""
+    global _LAST_RESTORE_EMIT
+    st = _prompt_queue.get_state(title)
+    if st["enabled"] and st["items"]:
+        return  # the drain owns this one — it has a prompt to send on reopening
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        return
+    try:
+        if not inst.Started() or inst.Status == session.Paused:
+            return
+    except Exception:  # noqa: BLE001
+        return
+    name, err = _ensure_agent_session(inst, title)
+    if err is not None:
+        return
+    now = time.time()
+    if _refresh_limit_state(inst, title, name) > now:
+        return  # still limited — the UI shows the countdown
+    # The window reopened. Reuse the drain's per-session send bookkeeping so the
+    # nudge obeys the same "once, then wait to see it picked up" rule: an Esc +
+    # prompt that doesn't take (a menu that needs a second key, a meter that
+    # lags the real reset) retries after _QUEUE_REARM_IDLE instead of every 5s.
+    rec = _QUEUE_STATE.setdefault(
+        title,
+        {"armed": True, "sent_at": 0.0, "rebooted_at": 0.0, "idle_since": None},
+    )
+    if (
+        not rec.get("armed", True)
+        and now - rec.get("sent_at", 0.0) >= _QUEUE_REARM_IDLE
+    ):
+        rec["armed"] = True
+    if (
+        not rec.get("armed", True)
+        or now - rec.get("sent_at", 0.0) < _QUEUE_SEND_COOLDOWN
+    ):
+        return
+    resume = _resume_on_usage_reset()
+    if resume:
+        _send_escape_to_agent(name)  # drop the lingering limit menu
+        time.sleep(0.15)  # let the CLI redraw its prompt before we type
+        if _send_to_agent(name, _LIMIT_RESUME_PROMPT, submit=True):
+            rec["armed"] = False
+            rec["sent_at"] = now
+            if log.ErrorLog is not None:
+                try:
+                    log.ErrorLog.Printf(
+                        "[MONITORING] usage window reopened — resumed %s", title
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+        else:
+            return  # tmux gone: no resume, and no "usage is back" to announce
+    # Announce the reopening whether or not we acted on it — "your usage is
+    # back" is worth knowing even with auto-resume off, and it can only fire for
+    # a session that had actually run out (that is what put it on this list).
+    if now - _LAST_RESTORE_EMIT >= _LIMIT_RESTORE_QUIET:
+        _LAST_RESTORE_EMIT = now
+        _events.BUS.emit(
+            "session.usage_restored", session=title, data={"resumed": resume}
+        )
+
+
+def _watch_limited_sessions() -> None:
+    """One pass over every session parked on a usage-limit screen."""
+    for title in _limited_titles():
+        try:
+            _watch_one_limited(title)
+        except Exception:  # noqa: BLE001 — one bad session can't stop the pass
+            pass
+
+
 def _drain_prompt_queues() -> None:
-    """One pass over every session with a queue. Runs in a worker thread (it
-    shells out to tmux) so it never blocks the event loop."""
+    """One pass over every session with a queue, plus every session parked on a
+    usage-limit screen. Runs in a worker thread (it shells out to tmux) so it
+    never blocks the event loop."""
     titles = _prompt_queue.all_titles()
     if not titles:
+        _watch_limited_sessions()
         return
     _prompt_queue.prune(list(ENGINE.instances.keys()))
     _ports.prune(list(ENGINE.instances.keys()))
@@ -1183,6 +1310,7 @@ def _drain_prompt_queues() -> None:
             _drain_one_queue(title)
         except Exception:  # noqa: BLE001 — one bad session can't stop the drain
             pass
+    _watch_limited_sessions()
     # Forget in-memory drain state for sessions that vanished.
     for gone in [t for t in _QUEUE_STATE if t not in ENGINE.instances]:
         _QUEUE_STATE.pop(gone, None)
@@ -1674,18 +1802,10 @@ def post_server_restart() -> JSONResponse:
     so the fresh process falls through to the *persisted* general.serve_mode
     instead of resurrecting the mode this process happened to boot with.
     """
-    os.environ.pop("CS_WEB_MODE", None)
-    argv = [
-        a
-        for a in sys.argv
-        if a.strip().lower() not in ("local", "localhost", "tailscale", "ts", "all")
-    ]
-
-    def _reexec() -> None:
-        time.sleep(0.5)  # let the HTTP response flush to the client first
-        os.execv(sys.executable, [sys.executable] + argv)
-
-    threading.Thread(target=_reexec, daemon=True).start()
+    # An explicit restart is a fresh intent: whatever the automatic
+    # tailscale-mode retries (core.restart) already spent, this one starts over.
+    _restart.reset_tailscale_attempts()
+    _restart.reexec_soon()
     return JSONResponse({"ok": True, "restarting": True})
 
 

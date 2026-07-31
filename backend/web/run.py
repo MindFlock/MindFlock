@@ -251,6 +251,18 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     threading.Thread(target=_fast_preflight, daemon=True).start()
 
+    # This process is now the server, and nothing else is: the only place that
+    # can honestly say so is right here, one line before uvicorn takes over.
+    # core.restart requires it before it will re-exec the process by itself
+    # (chasing a tailscale mode that isn't in effect) — importing the app must
+    # never be enough to get yourself replaced by a server.
+    try:
+        from backend.web.core import restart as _restart
+
+        _restart.mark_serving()
+    except Exception:  # noqa: BLE001 — never block the boot on a marker
+        pass
+
     # Never open a browser: the desktop app (Electron) is the client, and it
     # auto-starts/connects to this server itself. (The retired CS_WEB_OPEN
     # browser auto-open left with browser mode.)

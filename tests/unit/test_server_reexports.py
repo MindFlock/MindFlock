@@ -24,6 +24,21 @@ import pytest
 from backend.web import server
 
 
+@pytest.fixture(autouse=True)
+def _unstub_tailnet_probes(monkeypatch):
+    """Put the real Tailscale probes back on the server facade.
+
+    tests/conftest.py stubs them there suite-wide (no test machine has a
+    tailnet, and probing shells out). This module asserts the facade holds the
+    *same object* as ``core`` — a stub is exactly the shadowing redefinition it
+    exists to catch, so here the real bindings have to be in place.
+    """
+    from backend.web.core import mobile_access
+
+    for _name in ("_tailscale_info", "_tailscale_serves_port"):
+        monkeypatch.setattr(server, _name, getattr(mobile_access, _name))
+
+
 def _iter_module_level(nodes):
     """Walk statements without descending into function/class bodies, so only
     imports bound at module import time are seen (a ``from core import _x``

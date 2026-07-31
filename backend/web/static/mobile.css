@@ -218,6 +218,85 @@ html, body {
 .xterm .xterm-viewport { scrollbar-width: none; }
 .xterm .xterm-viewport::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
+/* --- diff panel (Diff tab): fills the same space as the terminal --- */
+#diff-wrap {
+  position: relative;   /* anchors #status when the toast moves in here */
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+#diff-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.diff-btn {
+  flex: 0 0 auto;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  user-select: none;
+}
+.diff-btn:active { background: var(--border); }
+#diff-stat {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#diff-stat .add { color: #4ade80; }
+#diff-stat .del { color: #f87171; }
+/* The one scroller on this page: vertical for the diff, horizontal for long
+   lines (which are not wrapped — a wrapped diff line loses its shape). */
+#diff-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 6px 0 24px 0;
+}
+#diff-body .dl {
+  white-space: pre;
+  padding: 0 10px;
+  min-width: 100%;
+  width: max-content;
+}
+#diff-body .add { background: rgba(74, 222, 128, 0.12); color: #86efac; }
+#diff-body .del { background: rgba(248, 113, 113, 0.12); color: #fca5a5; }
+#diff-body .hunk { color: #38bdf8; }
+#diff-body .note { color: var(--muted); padding: 10px; white-space: normal; }
+/* File headers stick to the top while you scroll that file's hunks — on a
+   phone the filename otherwise scrolls away long before the hunks do. */
+#diff-body .file {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  padding: 7px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 #empty, #status {
   position: absolute;
   left: 0; right: 0;

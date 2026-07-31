@@ -57,6 +57,12 @@ EVENT_NAMES = (
     # "loop": bool}).
     "session.prompt_sent",
     "session.queue_changed",
+    # Usage limits (roadmap D): the provider's window reopened for a session
+    # that had run out — emitted once per reopening, by the drain-loop watcher
+    # that also nudges such a session to carry on (data: {"resumed": bool}).
+    # Running OUT needs no event of its own: that is
+    # ``session.activity_changed`` with ``new == "limit"``.
+    "session.usage_restored",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay

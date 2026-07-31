@@ -27,6 +27,13 @@ export interface RestartOptions {
   /** Runs once the server answers again. Skipped when `reload` wins, since
    * the page is on its way out. */
   onBack?(): void;
+  /** The server is *already* on its way down — just wait for it.
+   *
+   * Turning tailscale mode on restarts the server by itself (the bind is fixed
+   * at boot), and `POST /api/settings` says so with `restarting: true`. Asking
+   * for a second restart there would either race the re-exec or fire at the
+   * fresh process a moment after it came up. */
+  alreadyRequested?: boolean;
 }
 
 export interface ServerRestart {
@@ -55,7 +62,7 @@ export function useServerRestart(): ServerRestart {
     setTimedOut(false);
     // Fire-and-forget: the response races the re-exec, so a transport error
     // here means nothing. The poll below is what actually reports the outcome.
-    api("/api/server/restart", { method: "POST" }).catch(() => {});
+    if (!opts?.alreadyRequested) api("/api/server/restart", { method: "POST" }).catch(() => {});
     const t0 = Date.now();
     const finish = (didTimeOut: boolean) => {
       if (timer.current) clearInterval(timer.current);

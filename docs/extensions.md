@@ -44,6 +44,7 @@ Core vocabulary (emitted by the server):
 | `session.budget_exceeded` | Estimated cost first crosses `general.session_budget_usd` | `data: {cost, budget}` |
 | `session.prompt_sent` | The queue drain loop auto-sends a prompt | `data: {text, remaining, loop}` |
 | `session.queue_changed` | Any prompt-queue edit | `data: {pending, enabled, loop}` |
+| `session.usage_restored` | A provider window reopened for a session that had run out | `data: {resumed}` |
 
 Addon-originated events (see `AppContext.emit`) live under the `addon.`
 namespace, e.g. `addon.notify.ping`. Notable transitions:
@@ -51,6 +52,11 @@ namespace, e.g. `addon.notify.ping`. Notable transitions:
 - **agent needs you**: `session.activity_changed` with `new == "clarify"`
 - **PR merged/closed**: `session.stage_changed` with `old == "pr"` (an open PR
   is stage `pr`; merging or closing it moves the stage off `pr`)
+- **out of usage**: `session.activity_changed` with `new == "limit"` — the pane
+  is showing the CLI's usage-limit screen. There is no separate "ran out" event;
+  the counterpart `session.usage_restored` is emitted once per reopening (not
+  once per session) by the watcher that resumes such sessions, so it can only
+  fire after a real outage — never on a window that merely rolled over
 
 The last ~100 envelopes are kept in a ring buffer for replay; `seq` survives the
 buffer rolling over (it keeps counting), but not a server restart.

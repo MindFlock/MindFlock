@@ -99,6 +99,7 @@ def test_event_names_vocabulary_is_complete():
         "session.budget_exceeded",
         "session.prompt_sent",
         "session.queue_changed",
+        "session.usage_restored",
     }
 
 

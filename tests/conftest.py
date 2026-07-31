@@ -67,6 +67,33 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
         pass
 
 
+@pytest.fixture(autouse=True)
+def _no_tailnet_side_effects(monkeypatch):
+    """No test machine has a tailnet, and no test fires a phone-URL push.
+
+    Two escapes this closes, both introduced by the "here's your phone URL"
+    notification (backend.web.core.mobile_announce):
+
+    * the probes shell out to ``tailscale``, so on a developer's own machine the
+      suite would pick up their real tailnet name — and take seconds doing it;
+    * ``announce_soon`` is fire-and-forget on a thread of its own, so a test that
+      merely enables ntfy could outlive its own monkeypatches and land a *real*
+      push (or a stray call into the next test's fake transport).
+
+    Tests that exercise either path re-patch these themselves — see
+    tests/unit/test_mobile_announce.py.
+    """
+    from backend.web import server
+    from backend.web.core import mobile_announce
+
+    monkeypatch.setattr(server, "_tailscale_info", lambda: (None, None))
+    monkeypatch.setattr(server, "_tailscale_serves_port", lambda port: False)
+    monkeypatch.setattr(mobile_announce, "announce_soon", lambda reason: None)
+    monkeypatch.setattr(mobile_announce, "_refresh_cache_soon", lambda: None)
+    monkeypatch.setattr(mobile_announce, "_CACHED_URL", None)
+    monkeypatch.setattr(mobile_announce, "_CACHED_AT", 0.0)
+
+
 @pytest.fixture
 def isolate_settings_store(tmp_path, monkeypatch):
     """Point the user settings store at a flat per-test ``settings.json`` and
