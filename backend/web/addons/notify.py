@@ -342,6 +342,15 @@ class NotifyAddon(Addon):
             with one extra safety: retargeting the channel at a *different host*
             without supplying a new token drops the old one rather than shipping
             server A's credential to server B.
+
+            That convention has no way to say "I want no token at all", which
+            matters here more than for the app's other secrets: an ntfy token is
+            *optional* (public topics need none), and a wrong one is worse than
+            none — ntfy rejects a bad credential with 401 instead of ignoring
+            it, so a stray token breaks a push that would otherwise work.
+            ``{"clear_token": true}`` is that escape hatch, and it wins over any
+            ``token`` in the same payload: it is the destructive intent, and the
+            only way to send both is to mean it.
             """
             payload = payload or {}
             stored = settings_store.load_settings().notifications
@@ -379,7 +388,13 @@ class NotifyAddon(Addon):
                     return JSONResponse({"error": problem}, status_code=400)
 
             token = str(payload.get("token") or "").strip()
-            if token and token != SECRET_MASK:
+            if payload.get("clear_token"):
+                patch["ntfy_token"] = ""  # "" clears (see update_settings)
+                if stored.ntfy_token:
+                    note = (
+                        (note + " ") if note else ""
+                    ) + "The saved access token was cleared."
+            elif token and token != SECRET_MASK:
                 patch["ntfy_token"] = token
             elif stored.ntfy_token and not ntfy.same_host(
                 stored.ntfy_server or ntfy.DEFAULT_SERVER, server

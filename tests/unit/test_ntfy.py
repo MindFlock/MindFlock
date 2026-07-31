@@ -435,6 +435,41 @@ def test_token_is_dropped_when_the_server_host_changes():
     assert S.load_settings().notifications.ntfy_token == ""
 
 
+def test_clear_token_removes_the_saved_token():
+    """The escape hatch from the "empty = keep" convention.
+
+    An ntfy token is optional, and a wrong one is worse than none (ntfy answers
+    a bad credential with 401 even on a topic that needs no credential), so
+    there has to be a way back to having none at all.
+    """
+    client.post("/api/notify/ntfy", json={"topic": "t1", "token": "tk_secret"})
+    v = client.post("/api/notify/ntfy", json={"clear_token": True}).json()
+    assert v["has_token"] is False
+    assert "cleared" in v.get("note", "")
+    S.invalidate()
+    assert S.load_settings().notifications.ntfy_token == ""
+    # Same server, same topic: clearing must not disturb the rest of the config.
+    assert v["topic"] == "t1"
+
+
+def test_clear_token_wins_over_a_token_in_the_same_payload():
+    client.post("/api/notify/ntfy", json={"topic": "t1", "token": "tk_secret"})
+    v = client.post(
+        "/api/notify/ntfy", json={"token": "tk_new", "clear_token": True}
+    ).json()
+    assert v["has_token"] is False
+    S.invalidate()
+    assert S.load_settings().notifications.ntfy_token == ""
+
+
+def test_clear_token_on_a_channel_with_no_token_is_a_no_op():
+    """No stored token: still fine, and no note claiming something was cleared."""
+    client.post("/api/notify/ntfy", json={"topic": "t1"})
+    v = client.post("/api/notify/ntfy", json={"clear_token": True}).json()
+    assert v["has_token"] is False
+    assert "cleared" not in v.get("note", "")
+
+
 def test_token_survives_an_unrelated_save():
     client.post(
         "/api/notify/ntfy",

@@ -325,10 +325,29 @@ function Ntfy() {
           onBlur={() => token && save({ token })}
           onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
         />
-        <span />
+        {/* Blanking the field means "keep" (the app-wide secret convention), so
+            without this there is no way back to having no token at all — and a
+            wrong token is worse than none: ntfy 401s a bad credential on a
+            topic that needs no credential. */}
+        {view.has_token ? (
+          <button
+            type="button"
+            className="test-btn"
+            id="ntfy-token-clear"
+            title="Remove the saved access token — most public topics need none"
+            onClick={() => {
+              setToken("");
+              save({ clear_token: true });
+            }}
+          >
+            Clear
+          </button>
+        ) : (
+          <span />
+        )}
         <span className="set-hint">
           Needed only if your topic is access-protected (self-hosted, or a reserved ntfy.sh
-          topic). Blank keeps the saved one.
+          topic). Blank keeps the saved one — use <strong>Clear</strong> to remove it.
         </span>
       </div>
       <div className="ntfy-field-row">
