@@ -562,6 +562,42 @@ Or toggle it from the web UI sidebar (**Ticket Ingestion** bar), which runs
 it as a managed subprocess and tails its log. The pipeline is a singleton per
 directory (`.mindflock-pipeline.lock`); a second copy exits cleanly.
 
+### Notifications & phone push (ntfy)
+
+Settings → **Notifications** holds one rule list — *What triggers a
+notification* (needs-input, PR merged/closed, budget exceeded, pre-commit
+failed, plus quieter opt-ins) — and two channels it feeds:
+
+- **Browser / desktop** popups, which need a tab open on a secure origin
+  (HTTPS or localhost).
+- **Phone push via [ntfy](https://ntfy.sh)** — off until you turn it on. The
+  *server* publishes to a topic your phone subscribes to, so an alert reaches
+  you with MindFlock closed and no tab anywhere.
+
+To set it up: install the free ntfy app, then in Settings → Notifications →
+**Phone push (ntfy)** hit **Generate** for a random topic, scan the QR into the
+app, and **Send a test**. Point **Server** at your own ntfy instance to keep
+session titles off the public one, and set *Tapping opens* to your phone URL
+from Settings → Mobile so a tap lands in the mobile UI.
+
+> On the public `ntfy.sh` server **the topic name is the credential** — anyone
+> who knows it can read your session titles or send you fakes. Keep the
+> generated random name, or self-host.
+
+Headless boxes have no Settings screen, so the same channel configures from the
+environment — exporting `MINDFLOCK_NTFY_TOPIC` is an implicit opt-in:
+
+```bash
+export MINDFLOCK_NTFY_TOPIC=mindflock-xTPq…      # implicit opt-in
+export MINDFLOCK_NTFY_SERVER=https://ntfy.example  # optional: your own instance
+export MINDFLOCK_NTFY_TOKEN=tk_…                   # optional: protected topic
+```
+
+See [docs/web-ui.md](docs/web-ui.md#notifications-) for the full screen guide
+(including how to diagnose a push that doesn't arrive) and
+[docs/configuration.md](docs/configuration.md) for every `MINDFLOCK_NTFY_*`
+variable and its precedence over the Settings values.
+
 ### Extensions & hooks
 
 Every session event (created, status/activity/stage changed, paused, deleted…)

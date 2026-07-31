@@ -29589,11 +29589,11 @@ function Notifications(_) {
       }
     ),
     /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", id: "notif-browser-status", children: status }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(Ntfy, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "What triggers a notification" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Pick exactly which events notify you — turn off any you don't want. These switches apply to every channel above." }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Pick exactly which events notify you — turn off any you don't want. These switches apply to both channels — the browser above and phone push below." }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "notif-rules-list", children: rulesError ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "Couldn't load notification rules." }) : rules === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "Loading…" }) : !rules.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "No notification rules configured." }) : rules.map((rule) => /* @__PURE__ */ jsxRuntimeExports.jsx(RuleRow, { rule }, rule.id)) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Also reachable from the bell in the sidebar header." })
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Also reachable from the bell in the sidebar header." }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(Ntfy, {})
   ] });
 }
 function ago(ts) {
