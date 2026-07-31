@@ -313,3 +313,107 @@ def test_mobile_js_postaction_contract():
         in js
     )
     assert "return j;" in js
+
+
+# --------------------------------------------------------------------------- #
+# /m mobile view — the Diff tab
+#
+# Reading the diff is what turns the phone from "unblock the agent" into
+# "approve the work", so it sits next to Agent/Shell rather than behind a menu.
+# Unified only (a split view needs width a phone hasn't got), same endpoint and
+# same two baselines as the desktop Diff tab.
+# --------------------------------------------------------------------------- #
+def test_mobile_html_has_the_diff_tab():
+    html = client.get("/m").text
+    assert 'data-tab="diff"' in html
+    for el in (
+        'id="diff-wrap"',
+        'id="diff-head"',
+        'id="diff-body"',
+        'id="diff-base"',
+        'id="diff-refresh"',
+        'id="diff-stat"',
+    ):
+        assert el in html, el
+    # Hidden until the tab is chosen — the terminal owns that space by default.
+    assert 'id="diff-wrap" class="hidden"' in html
+
+
+def test_mobile_css_diff_rules():
+    css = client.get("/mobile.css").text
+    for sel in ("#diff-wrap", "#diff-head", "#diff-body", ".diff-btn"):
+        assert sel in css, sel
+    # Diff lines are not wrapped (a wrapped diff line loses its shape), so the
+    # panel scrolls in both directions instead.
+    body = css.split("#diff-body {")[1].split("}")[0]
+    assert "overflow: auto" in body
+    assert "white-space: pre" in css.split("#diff-body .dl {")[1].split("}")[0]
+    # The colors carry the same meaning as the desktop diff.
+    for rule in ("#diff-body .add", "#diff-body .del", "#diff-body .hunk"):
+        assert rule in css, rule
+    # The filename stays visible while its hunks scroll past.
+    assert "position: sticky" in css.split("#diff-body .file {")[1].split("}")[0]
+
+
+def test_mobile_js_diff_fetches_the_same_endpoint_as_the_desktop():
+    js = client.get("/mobile.js").text
+    assert (
+        '"/api/instances/" + encodeURIComponent(title) + "/diff?base=" + diffBase' in js
+    )
+    # Both baselines the desktop offers, persisted under the same key.
+    assert 'localStorage.getItem("mf_diffbase") === "head" ? "head" : "fork"' in js
+    assert 'localStorage.setItem("mf_diffbase", diffBase)' in js
+
+
+def test_mobile_js_diff_is_built_without_html():
+    """Diff text is repo content — it reaches the DOM as text, never markup."""
+    js = client.get("/mobile.js").text
+    diff_fns = js.split("function diffNode(")[1].split("function loadDiff(")[0]
+    assert "d.textContent = text;" in js
+    assert "innerHTML = " not in diff_fns.replace('innerHTML = ""', "")
+
+
+def test_mobile_js_diff_classifies_lines_like_the_desktop():
+    js = client.get("/mobile.js").text
+    # Same classification as lib/diff.ts parseUnifiedDiff.
+    assert 'var cls = line.indexOf("@@") === 0 ? "hunk"' in js
+    assert 'c === "+" ? "add"' in js
+    assert 'c === "-" ? "del" : "";' in js
+    # The filename is lifted out of the "diff --git" line into a header.
+    assert 'if (line.indexOf("diff --git ") === 0)' in js
+    assert "DIFF_NOISE.test(line)" in js
+    # A phone can't usefully render an unbounded diff.
+    assert "shown >= DIFF_MAX_LINES" in js
+
+
+def test_mobile_js_diff_load_is_race_safe():
+    js = client.get("/mobile.js").text
+    # A slow load must not overwrite the result of a newer one (switching
+    # sessions or baselines mid-flight).
+    assert "var seq = ++diffSeq;" in js
+    assert "if (seq !== diffSeq) return;" in js
+
+
+def test_mobile_js_diff_tab_keeps_the_pty_attached():
+    js = client.get("/mobile.js").text
+    # The Diff panel is a *view*, not another PTY: `tab` (which tmux session the
+    # terminal holds) only changes for agent/shell, so coming back from Diff
+    # doesn't tear down and rebuild the websocket.
+    assert 'var view = "agent";' in js
+    assert "if (isDiff) { loadDiff(); return; }" in js
+    assert "if (next === tab) { fitSoon(); return; }" in js
+    # The compose box and key bar go with the terminal; the git action bar stays.
+    assert (
+        'document.getElementById("composer").classList.toggle("hidden", isDiff);' in js
+    )
+    assert 'document.getElementById("keys").classList.toggle("hidden", isDiff);' in js
+    # Switching sessions while the Diff tab is up re-reads the diff.
+    assert 'if (view === "diff") loadDiff();' in js
+
+
+def test_mobile_js_status_toast_follows_the_visible_panel():
+    """Push/merge feedback has to be readable from the Diff tab — that's where
+    the decision to push is made."""
+    js = client.get("/mobile.js").text
+    assert 'var host = view === "diff" ? diffWrap : termWrap;' in js
+    assert "if (statusEl.parentNode !== host) host.appendChild(statusEl);" in js

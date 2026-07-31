@@ -324,14 +324,21 @@ Live stream of the server-side session event bus (see
 
 Events: `session.created|create_failed|deleted|paused|resumed|status_changed|
 activity_changed|stage_changed|setup_started|setup_finished|check_started|
-check_finished|budget_exceeded|budget_raised|prompt_sent|queue_changed`
+check_finished|budget_exceeded|budget_raised|prompt_sent|queue_changed|
+usage_restored`
 (plus addon-originated `addon.*`). `session.budget_exceeded` (J5) fires when a
 session's estimated cost first crosses the configured
 `general.session_budget_usd` — `data: {"cost": <float>, "budget": <float>}` —
 once per session until the server restarts or the budget is changed.
 `session.prompt_sent` fires when the drain loop auto-sends a queued prompt
 (`data: {"text", "remaining", "loop"}`); `session.queue_changed` fires on any
-queue edit (`data: {"pending", "enabled", "loop"}`). The notification-center
+queue edit (`data: {"pending", "enabled", "loop"}`). `session.usage_restored`
+fires once per reopening of a provider's usage window — emitted by the same
+drain-loop pass that nudges sessions parked on a limit screen to carry on
+(`data: {"resumed": <bool>}`, false when `general.resume_on_usage_reset` is
+off). It only ever fires for sessions that had actually run out, so it is the
+"your usage is back" signal; running *out* is `session.activity_changed` with
+`new == "limit"`. The notification-center
 bell (frontend) curates these into a "what happened while I was away" feed.
 
 On connect the server sends a **hello frame first** (L4): `seq: 0, event:

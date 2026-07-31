@@ -6,7 +6,7 @@ import { api } from "../../../api/client";
 import { setWheelDamping } from "../../../lib/terminals";
 import { toast } from "../../../lib/toast";
 import { useUi } from "../../../state/store";
-import { SettingField } from "../useSettings";
+import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 
 export function General(_: ScreenProps) {
@@ -34,10 +34,49 @@ export function General(_: ScreenProps) {
           this. Not billed dollars.
         </span>
       </label>
+      <ResumeOnUsageResetRow />
       <ScrollSpeedRow />
       <ReduceMotionRow />
       <GettingStarted />
     </>
+  );
+}
+
+/** Auto-resume after a usage limit: nudge a session that ran out mid-task to
+ * carry on once the provider's window reopens. The prompt queue has always done
+ * this for sessions with something queued; this covers the ones with an empty
+ * queue, which otherwise sit on the CLI's limit screen until someone comes
+ * back. Unset reads as on (see settings.GeneralSettings). */
+function ResumeOnUsageResetRow() {
+  const s = useSettings();
+  const stored = s.get("general", "resume_on_usage_reset");
+  const on = stored !== false && stored !== "false" && stored !== "0";
+  return (
+    <div className="set-row set-switch-row">
+      <span className="notif-rule-text">
+        <span className="set-label">Resume sessions when usage comes back</span>
+        <span className="set-hint notif-rule-desc">
+          When an agent runs out of usage it parks on its CLI's limit screen and
+          stays there — even after the window resets. With this on, MindFlock
+          watches those sessions and tells them to continue the moment usage
+          returns, the same way the prompt queue already resumes sessions that
+          have something queued. You get a notification either way (Settings →
+          Notifications).
+        </span>
+      </span>
+      {/* label wraps only the switch, so clicking the row text no longer flips it */}
+      <label className="ca-switch">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            s.saveField("general", "resume_on_usage_reset", e.target.checked);
+            toast(e.target.checked ? "Auto-resume on" : "Auto-resume off");
+          }}
+        />
+        <span className="ca-slider" />
+      </label>
+    </div>
   );
 }
 

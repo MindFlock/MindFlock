@@ -35,6 +35,7 @@
 
   var pickerEl = document.getElementById("picker");
   var dotEl = document.getElementById("dot");
+  var termWrap = document.getElementById("term-wrap");
   var termHost = document.getElementById("term");
   var emptyEl = document.getElementById("empty");
   var statusEl = document.getElementById("status");
@@ -42,12 +43,21 @@
   var actionsEl = document.getElementById("actions");
   var commitSheet = document.getElementById("commit-sheet");
   var commitText = document.getElementById("commit-text");
+  var diffWrap = document.getElementById("diff-wrap");
+  var diffBody = document.getElementById("diff-body");
+  var diffStat = document.getElementById("diff-stat");
+  var diffBaseBtn = document.getElementById("diff-base");
 
   var term = null;
   var fit = null;
   var ws = null;
   var closedByUs = false;       // true when we intentionally tear down a ws
   var current = null;           // selected session title
+  // Two different "which tab": `view` is what the screen shows (the Diff panel
+  // is a view with no PTY behind it), `tab` is which tmux session the terminal
+  // is attached to. Splitting them is what lets Diff overlay the terminal
+  // without tearing the websocket down and rebuilding it on the way back.
+  var view = "agent";           // "agent" | "shell" | "diff"
   var tab = "agent";            // "agent" | "shell"
   var ctrlActive = false;       // sticky Ctrl modifier
   var instances = [];
@@ -155,20 +165,39 @@
     fitSoon();
     connect();
     updateActions();
+    if (view === "diff") loadDiff();
   }
 
   function switchTab(next) {
-    if (next === tab) return;
-    tab = next;
+    if (next === view) return;
+    view = next;
     document.querySelectorAll(".tab").forEach(function (b) {
       b.classList.toggle("active", b.dataset.tab === next);
     });
+    // The Diff panel takes the terminal's place; the compose box and key bar go
+    // with it (there is nothing to type at) but the git action bar stays — the
+    // whole point of reading the diff on a phone is deciding whether to push it.
+    var isDiff = next === "diff";
+    diffWrap.classList.toggle("hidden", !isDiff);
+    termWrap.classList.toggle("hidden", isDiff);
+    document.getElementById("composer").classList.toggle("hidden", isDiff);
+    document.getElementById("keys").classList.toggle("hidden", isDiff);
+    if (isDiff) { loadDiff(); return; }
+    // Coming back from Diff to the PTY the terminal is already attached to:
+    // nothing to rebuild, just re-fit into the space it got back.
+    if (next === tab) { fitSoon(); return; }
+    tab = next;
     // Rebuild the terminal against the other tmux session of the same instance.
     var t = current; current = null; select(t);
   }
 
   function setStatus(msg) {
     if (!msg) { statusEl.classList.add("hidden"); statusEl.textContent = ""; return; }
+    // The toast lives inside whichever panel is on screen — parked in the
+    // terminal wrap it would be display:none along with it under the Diff tab,
+    // which is exactly where "pushed" / "merge failed" needs to be readable.
+    var host = view === "diff" ? diffWrap : termWrap;
+    if (statusEl.parentNode !== host) host.appendChild(statusEl);
     statusEl.textContent = msg;
     statusEl.classList.remove("hidden");
   }
@@ -372,6 +401,119 @@
       .then(function () { flashStatus("commit started — watch the shell"); setTimeout(poll, 800); })
       .catch(function (err) { flashStatus("commit failed: " + err.message); });
   }
+
+  // --- diff panel ------------------------------------------------------------
+  // The desktop Diff tab, narrowed to what a phone can show: unified only (a
+  // split view needs width that isn't there) and colorized the same way
+  // (lib/diff.ts parseUnifiedDiff — "@@" cyan, "+" green, "-" red). Same
+  // endpoint and same two baselines the desktop offers, so the numbers here
+  // match the badge over there:
+  //   base=fork  everything vs the branch's fork point (committed + not)
+  //   base=head  uncommitted only
+  var DIFF_MAX_LINES = 4000;   // a phone renders (and scrolls) no more usefully
+  var diffBase = "fork";
+  // Same localStorage key as the desktop's diff base (lib/diff.ts) — a phone is
+  // a different browser, so this is just one name for one preference.
+  try { diffBase = localStorage.getItem("mf_diffbase") === "head" ? "head" : "fork"; } catch (e) {}
+  var diffSeq = 0;             // guards against a slow load overwriting a newer one
+
+  // Diff text is repo content: build every line with textContent, never HTML.
+  function diffNode(cls, text) {
+    var d = document.createElement("div");
+    d.className = cls;
+    d.textContent = text;
+    return d;
+  }
+
+  function diffNote(msg) {
+    diffBody.innerHTML = "";
+    diffBody.appendChild(diffNode("note", msg));
+  }
+
+  function setDiffStat(added, removed) {
+    diffStat.innerHTML = "";
+    var a = diffNode("add", "+" + (added || 0));
+    var d = diffNode("del", "−" + (removed || 0));
+    a.style.display = d.style.display = "inline";
+    diffStat.appendChild(a);
+    diffStat.appendChild(document.createTextNode("  "));
+    diffStat.appendChild(d);
+  }
+
+  // Header lines git emits that a phone has no room for: the filename pulled
+  // out of "diff --git" already says all of it, in a header that stays put.
+  var DIFF_NOISE = /^(index |--- |\+\+\+ |new file mode|deleted file mode|old mode|new mode|similarity index|dissimilarity index|rename |copy )/;
+
+  function renderDiff(content) {
+    var frag = document.createDocumentFragment();
+    var lines = content.split("\n");
+    // A trailing newline yields one empty last element — not a diff line.
+    if (lines.length && lines[lines.length - 1] === "") lines.pop();
+    var shown = 0;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (line.indexOf("diff --git ") === 0) {
+        var m = line.match(/ b\/(.+)$/);
+        frag.appendChild(diffNode("file", m ? m[1] : line.slice(11)));
+        continue;
+      }
+      if (DIFF_NOISE.test(line)) continue;
+      if (shown >= DIFF_MAX_LINES) {
+        frag.appendChild(diffNode(
+          "note",
+          "… truncated at " + DIFF_MAX_LINES + " lines — open this session on " +
+          "the desktop to read the rest."));
+        break;
+      }
+      var c = line.charAt(0);
+      var cls = line.indexOf("@@") === 0 ? "hunk"
+              : c === "+" ? "add"
+              : c === "-" ? "del" : "";
+      // An empty context line still needs a box to occupy, hence the space.
+      frag.appendChild(diffNode("dl " + cls, line || " "));
+      shown++;
+    }
+    diffBody.innerHTML = "";
+    diffBody.appendChild(frag);
+    diffBody.scrollTop = 0;
+  }
+
+  function loadDiff() {
+    if (view !== "diff") return;
+    if (!current) { diffStat.textContent = ""; diffNote("No session selected."); return; }
+    var seq = ++diffSeq;
+    var title = current;
+    diffStat.textContent = "loading…";
+    fetch("/api/instances/" + encodeURIComponent(title) + "/diff?base=" + diffBase)
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok) throw new Error((j && j.error) || "diff failed (" + r.status + ")");
+          return j;
+        });
+      })
+      .then(function (j) {
+        if (seq !== diffSeq) return;   // a newer load (or session) won
+        if (j.error) { diffStat.textContent = ""; diffNote(j.error); return; }
+        setDiffStat(j.added, j.removed);
+        if (!(j.content || "").trim()) {
+          diffNote(diffBase === "head"
+            ? "No uncommitted changes."
+            : "No changes on this branch yet.");
+          return;
+        }
+        renderDiff(j.content);
+      })
+      .catch(function (err) {
+        if (seq !== diffSeq) return;
+        diffStat.textContent = "";
+        diffNote((err && err.message) || "could not load the diff");
+      });
+  }
+
+  function setDiffBaseLabel() {
+    diffBaseBtn.textContent = diffBase === "head" ? "Uncommitted" : "All changes";
+  }
+  setDiffBaseLabel();
 
   // O1: attention rank (lower = more urgent) + its picker marker. Mirrors the
   // desktop inbox priorities (app.js attentionItems).
@@ -597,6 +739,17 @@
       }
     });
   });
+  // Diff panel controls: flip the baseline (persisted), or re-read the diff.
+  diffBaseBtn.addEventListener("click", function () {
+    diffBase = diffBase === "head" ? "fork" : "head";
+    try { localStorage.setItem("mf_diffbase", diffBase); } catch (e) {}
+    setDiffBaseLabel();
+    loadDiff();
+  });
+  document.getElementById("diff-refresh").addEventListener("click", function () {
+    loadDiff();
+  });
+
   document.getElementById("commit-ok").addEventListener("click", submitCommit);
   document.getElementById("commit-cancel").addEventListener("click", closeCommitSheet);
   // Tap the dimmed backdrop (outside the sheet box) to dismiss.

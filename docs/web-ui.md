@@ -193,6 +193,20 @@ carries **no usable reset time** (a null/absent/past reset) holds on a bounded
 fallback instead of sending. A meter that reads *open* — or is *unavailable* —
 leaves the queue free to send, so healthy sessions are never over-held.
 
+**A session that ran out with nothing queued** used to fall outside all of that:
+an empty queue meant nothing was watching, so it sat on the CLI's limit screen
+until a human came back, often hours after the window reopened. The same drain
+pass now also walks the sessions whose activity is `limit` (a free read of the
+state snapshot — no probes when nothing has run out), waits out the window with
+the same meter/banner logic, then sends **Esc + `continue`** so the agent picks
+its task back up. Settings → General's **Resume sessions when usage comes back**
+turns the nudge off (default on); either way the reopening emits
+`session.usage_restored` once, which is what the "Usage comes back" notification
+rule rides on. Sessions with a queued prompt are left to the drain — its prompt
+is the better thing to send — and the nudge obeys the drain's own
+send-once-then-wait rule, so a menu that doesn't clear gets a bounded retry
+rather than one every five seconds.
+
 The command palette has **Send message…** and **Queue prompt…** for the focused
 session (keyboard-only via a prompt).
 
@@ -207,8 +221,19 @@ focuses that session.
 
 **One rule list, two delivery channels.** Settings → Notifications is split that
 way on purpose: *What triggers a notification* (needs-input, PR merged/closed,
-budget exceeded, pre-commit failed — plus the noisy opt-ins) governs **both**
-channels, and each channel decides only where an alert lands.
+budget exceeded, pre-commit failed, ran out of usage / usage came back — plus
+the noisy opt-ins) governs **both** channels, and each channel decides only
+where an alert lands.
+
+The two usage rules are a pair: **"A session runs out of usage"** fires on the
+activity flip to `limit` (the agent is parked on its CLI's usage-limit screen),
+and **"Usage comes back after running out"** fires on `session.usage_restored`,
+which is emitted once per reopening by the watcher that resumes those
+sessions — so it cannot fire for a window that merely rolled over while nothing
+was blocked, and several sessions unblocking together still make one
+notification. Whether those sessions are actually nudged to carry on is
+Settings → General's **Resume sessions when usage comes back**; the
+notification fires either way.
 
 - **Browser / desktop** — the notify addon's `Notification` popup. Needs a tab
   open on a secure origin (HTTPS or localhost), so it is silent on a plain-http
@@ -223,14 +248,25 @@ channels, and each channel decides only where an alert lands.
   protected — **Clear** beside it removes a saved one, since blanking the field
   means "keep" and a *wrong* token is worse than none (ntfy 401s a bad
   credential on a topic that needed no credential at all).
-  *Tapping opens* is an optional URL the notification opens — paste
-  your phone URL from Settings → Mobile; MindFlock strips an `?token=` from it,
-  since that URL is stored on the ntfy server.
+  *Tapping opens* is an optional URL the notification opens. You usually do not
+  need it: when Tailscale is up every push already carries this machine's
+  tailnet `/m` URL — in the message text and as the tap target — deep-linked to
+  the session the alert is about (`/m?s=<title>`), so a tap lands on that
+  session's terminal. Set the field only to send taps somewhere else; MindFlock
+  strips an `?token=` from whatever you paste, since that URL is stored on the
+  ntfy server. (The automatic URL is bare for the same reason.)
 
   Priority is per rule: "needs your input", "budget exceeded" and "pre-commit
   failed" go out at ntfy priority 4 (buzzes through most do-not-disturb
-  setups), PR merged/closed at 3, and the ambient opt-ins (idle, pre-commit
-  running) at 2 so they arrive quietly.
+  setups), PR merged/closed and the two usage rules at 3, and the ambient
+  opt-ins (idle, pre-commit running) at 2 so they arrive quietly.
+
+  You also get one push carrying the phone URL whenever it becomes newly
+  reachable — at server start, when you switch this channel on, and when you
+  turn on tailscale mode — so a phone that has never heard from this machine
+  learns where it is without a QR scan at the desk. It is deduplicated (turning
+  on push and tailscale mode back to back is one intent), and a URL that is not
+  live until the server restarts says so.
 
   On the **public ntfy.sh server the topic name is the credential** — anyone who
   knows it can read your session titles or send you fakes — so keep the
@@ -455,6 +491,13 @@ default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-
   the app. Takes effect the next time the ingestion pipeline starts; it is the
   same switch as `[mindflock].enabled` in `config.toml` and overrides that file
   (see [configuration.md](configuration.md)).
+- **General → Resume sessions when usage comes back**
+  (`general.resume_on_usage_reset`, **default on**) — whether a session parked
+  on its CLI's usage-limit screen with an empty queue is told to `continue` once
+  the provider's window reopens (see
+  [Send a message / prompt queue](#send-a-message--prompt-queue--per-pane) for
+  the gate it shares with `wait_for_limit`). Off leaves it parked; the "Usage comes back"
+  notification fires either way.
 - **General → Onboarding** — the master **getting-started hints** switch and a
   **Replay tour** button (see [First-run onboarding](#first-run-onboarding)).
 - **Agent CLI → scheduled window refresh** — a keepalive that periodically
@@ -475,10 +518,21 @@ default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-
   **launch flags** (`[launch] args`). The per-provider **default launch flags**
   (`coding_cli.default_launch_args`) that pre-fill the New-session dialog are
   also edited here.
-- **Mobile** — the `/m` URLs and QR code (`GET /api/mobile`). The tailnet URL here
-  is also the natural paste target for *Tapping opens* on the
-  [Notifications](#notifications-) screen, so a phone push lands in the mobile UI
-  — with one wrinkle worth knowing before you blame the link. The URL is offered
+- **Mobile** — the `/m` URLs and QR code (`GET /api/mobile`), plus the
+  **tailscale mode** toggle. Which interface uvicorn binds is fixed at process
+  start, so that toggle only means something after a restart — and turning it
+  **on** now takes that restart itself: `POST /api/settings` answers
+  `{"restarting": true}`, the screen waits for the server to come back and
+  refreshes the URLs/QR in place. It gives up after three attempts (counted in
+  the environment, since each attempt is a new process image) and leaves the
+  manual **Restart server to apply** button, rather than restart-looping a
+  server that isn't going to come up on the tailnet. The same check runs at
+  every boot, so a server started in local mode while the setting says tailscale
+  corrects itself. The tailnet URL here is also the natural paste target for
+  *Tapping opens* on the [Notifications](#notifications-) screen — though pushes
+  now carry it automatically, so that field is only needed to send taps
+  somewhere else. One wrinkle is worth knowing before you blame the link: the
+  URL is offered
   with `?token=…` baked in so a scan lands signed in, and MindFlock **strips that
   token** when saving it as an ntfy click URL (it would otherwise be stored on the
   ntfy server). A tap therefore only lands signed in if that device already holds
@@ -593,6 +647,23 @@ Shift+Enter inserts a newline in the draft, an empty Send just presses Enter
 (confirming TUI prompts), and the field keeps focus after sending so the
 keyboard stays up. The soft-key bar still acts on the PTY directly while
 composing — arrows and sticky ctrl work mid-draft.
+
+**Diff tab** — a third tab beside Agent/Shell showing the session's diff, so a
+phone can *approve* work and not just unblock it. It reads the same
+`GET /api/instances/<title>/diff` the desktop Diff tab does, with the same two
+baselines behind one button: **All changes** (`base=fork` — everything vs the
+branch's fork point, matching the header badge) and **Uncommitted**
+(`base=head`), persisted per browser under the same `mf_diffbase` key. Unified
+only — a split view needs width a phone hasn't got — colorized like the desktop
+(`@@` cyan, `+` green, `-` red), with each file's name lifted out of its
+`diff --git` line into a header that sticks while its hunks scroll past. Long
+lines scroll sideways inside the panel rather than wrapping (a wrapped diff line
+loses its shape) and the page itself never scrolls horizontally. Very large
+diffs are truncated with a note pointing at the desktop. The Diff panel is a
+*view*, not another terminal: the PTY stays attached behind it, so switching
+back is instant, and the git action bar stays visible (with its status toast
+following you into the tab) because reading the diff is exactly when you decide
+to push.
 
 **Git workflow action bar** — a **Commit / Push / PR / Merge** button row that
 brings the desktop pane header's guided flow to a phone, so the whole git

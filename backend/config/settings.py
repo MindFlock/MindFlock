@@ -521,6 +521,14 @@ class GeneralSettings:
     web server start the pipeline on boot, so a reboot restores the toggle
     to where the user left it; ``None`` (never toggled) / ``False`` = stay
     stopped.
+
+    ``resume_on_usage_reset``: whether a session parked on a usage-limit screen
+    is nudged to carry on once the window reopens. The prompt queue has always
+    done this for sessions with something queued (``wait_for_limit``); this
+    extends it to sessions that ran out mid-task with an empty queue, which
+    otherwise sit on the limit screen until a human comes back. ``None``
+    (never set) reads as ON — the whole point of the limit gate is that running
+    out is temporary. ``False`` turns it off.
     """
 
     session_budget_usd: Optional[float] = None
@@ -531,6 +539,7 @@ class GeneralSettings:
     remote_control: str = ""  # "" / "off" | "on"
     serve_mode: str = ""  # "" / "local" | "tailscale"
     ingestion_autostart: Optional[bool] = None
+    resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -550,6 +559,8 @@ class GeneralSettings:
             d["serve_mode"] = self.serve_mode
         if self.ingestion_autostart is not None:
             d["ingestion_autostart"] = self.ingestion_autostart
+        if self.resume_on_usage_reset is not None:
+            d["resume_on_usage_reset"] = self.resume_on_usage_reset
         return d
 
     @classmethod
@@ -563,6 +574,7 @@ class GeneralSettings:
             remote_control=str(d.get("remote_control", "") or "").strip().lower(),
             serve_mode=str(d.get("serve_mode", "") or "").strip().lower(),
             ingestion_autostart=_opt_bool(d.get("ingestion_autostart")),
+            resume_on_usage_reset=_opt_bool(d.get("resume_on_usage_reset")),
         )
 
 

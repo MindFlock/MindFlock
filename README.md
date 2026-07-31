@@ -244,13 +244,19 @@ those two change what your day looks like:
   next-step buttons, in a window that follows each OS's own chrome conventions
   (native traffic lights on macOS, frameless with our own – □ ✕ elsewhere).
 - 📱 **Phone UI** — `mindflock serve tailscale` prints a QR code; the mobile
-  UI at `/m` carries the same guided git action bar, so the full flow drives
-  from a phone. Auth-token protected — never open to the LAN unauthenticated.
+  UI at `/m` carries the same guided git action bar **and a Diff tab**, so you
+  can read the work before approving it and drive the full flow from a phone.
+  Auth-token protected — never open to the LAN unauthenticated.
 - 🔔 **Notifications where you actually are** — desktop popups while a tab is
   open, and optional **[ntfy](https://ntfy.sh) push to your phone** sent by the
   server, so "session needs your input" or "pre-commit blocked the commit"
   reaches you with MindFlock closed. Off by default; one rule list picks which
-  events notify you, and you can point it at your own ntfy instance.
+  events notify you, and you can point it at your own ntfy instance. Each push
+  carries your tailnet phone URL, deep-linked to the session it's about.
+- ⏳ **Usage limits ride themselves out** — when an agent runs out of tokens it
+  parks on its CLI's limit screen and would sit there long after the window
+  reopens. MindFlock notices, tells you, and picks the work back up the moment
+  usage returns — queued prompt or not — then tells you that too.
 - 🌳 **Isolated workspaces** — every session gets its own git worktree, so
   agents never step on each other (or on you).
 - ⚡ **Terminal-first, too** — the `mindflock` CLI drives the same sessions as
@@ -566,7 +572,8 @@ directory (`.mindflock-pipeline.lock`); a second copy exits cleanly.
 
 Settings → **Notifications** holds one rule list — *What triggers a
 notification* (needs-input, PR merged/closed, budget exceeded, pre-commit
-failed, plus quieter opt-ins) — and two channels it feeds:
+failed, out of usage / usage back, plus quieter opt-ins) — and two channels it
+feeds:
 
 - **Browser / desktop** popups, which need a tab open on a secure origin
   (HTTPS or localhost).
@@ -577,8 +584,17 @@ failed, plus quieter opt-ins) — and two channels it feeds:
 To set it up: install the free ntfy app, then in Settings → Notifications →
 **Phone push (ntfy)** hit **Generate** for a random topic, scan the QR into the
 app, and **Send a test**. Point **Server** at your own ntfy instance to keep
-session titles off the public one, and set *Tapping opens* to your phone URL
-from Settings → Mobile so a tap lands in the mobile UI.
+session titles off the public one.
+
+**Every push carries your phone URL.** When Tailscale is up, MindFlock appends
+its tailnet `/m` address to each notification and makes it the tap target —
+deep-linked to the session the alert is about, so "alpha needs your input"
+opens the mobile UI already showing alpha. You also get one push with that URL
+whenever it becomes newly reachable: at server start, when you switch the ntfy
+channel on, and when you turn on tailscale mode. The access token is never
+included (it would be stored on the ntfy server) — a device that has not
+scanned the QR before lands on the sign-in page, which the message says.
+*Tapping opens* stays available for pointing pushes somewhere else entirely.
 
 > On the public `ntfy.sh` server **the topic name is the credential** — anyone
 > who knows it can read your session titles or send you fakes. Keep the
