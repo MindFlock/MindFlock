@@ -382,7 +382,8 @@ sentinel `•••set` when one is stored and `""` when none is, and a write of
 `""` **or** the sentinel *keeps* the saved value rather than clearing it. Only a
 different non-empty string replaces a secret; clearing one is a deliberate
 product decision per field (the ntfy token, for instance, is cleared by
-retargeting the server — see Notify below). The sentinel is one shared constant,
+retargeting the server, or explicitly with `{"clear_token": true}` — see Notify
+below). The sentinel is one shared constant,
 `SECRET_MASK` in `web/addons/base.py`, with a hand-mirrored counterpart in the
 frontend's `settings/useSettings.tsx`; changing the string means changing both,
 or the UI starts writing the literal mask into the store as a password.
@@ -450,7 +451,7 @@ the generic extension path (see [docs/extensions.md](extensions.md)):
 | GET | `/api/notify/config` | `{rules: [{id, label, event, old, new, title, body, enabled}]}` — the event → notification rules, applied client-side by `static/addons/notify.js` and server-side by the ntfy channel |
 | POST | `/api/notify/rules/{rule_id}` | Enable/disable one rule (for **both** channels) |
 | GET | `/api/notify/ntfy` | The ntfy channel's state: `{enabled, server, server_default, topic, has_token, click_url, configured, active, public_server, subscribe_url, qr_svg, suggested_topic, last}`. Never the token — only `has_token`; `suggested_topic` is a fresh random name, `last` is `{ts, ok, error}` of the most recent push |
-| POST | `/api/notify/ntfy` | Save `{enabled?, server?, topic?, token?, click_url?}` (only the keys present are touched); returns the `GET` view, plus a `note` when something was rewritten. `400 {error}` on an invalid topic/server URL |
+| POST | `/api/notify/ntfy` | Save `{enabled?, server?, topic?, token?, click_url?, clear_token?}` (only the keys present are touched); returns the `GET` view, plus a `note` when something was rewritten. `clear_token: true` removes the saved token — the escape hatch from "empty = keep", and it wins over a `token` in the same payload. `400 {error}` on an invalid topic/server URL |
 | POST | `/api/notify/ntfy/test` | Send one test push — `{ok, error}`. Takes its config from the body when supplied, so a topic can be verified before it is saved; exempt from the rate cap |
 
 The ntfy channel is a **server-side** delivery path for the same rules
@@ -468,6 +469,14 @@ dropped when the server URL is retargeted at a different host without a fresh
 token, so server A's credential is never sent to server B; and a `token=` query
 parameter in `click_url` is stripped, since that URL is stored on the ntfy
 server.
+
+Unlike the app's other secrets, this one can also be *removed*, with
+`{"clear_token": true}`. The reason is specific to ntfy: the token is optional
+(public topics need none), and a wrong token is strictly worse than no token —
+ntfy answers a bad credential with `401 unauthorized` rather than ignoring it,
+so a stray value breaks a publish that would have succeeded unauthenticated.
+Without an explicit clear, "empty = keep" would make a mistyped token permanent
+short of retargeting the server or hand-editing `settings.json`.
 
 **Errors: branch on the body, not the status.** The two write endpoints report
 failure differently on purpose. `POST /api/notify/ntfy` is a validating write, so

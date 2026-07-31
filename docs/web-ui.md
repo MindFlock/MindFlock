@@ -220,7 +220,10 @@ channels, and each channel decides only where an alert lands.
   **Send a test** confirms the round trip; the row afterwards reports the last
   push (or why it failed). Point **Server** at your own ntfy instance to keep
   everything in-house, and give **Access token** a value only if the topic is
-  protected. *Tapping opens* is an optional URL the notification opens — paste
+  protected — **Clear** beside it removes a saved one, since blanking the field
+  means "keep" and a *wrong* token is worse than none (ntfy 401s a bad
+  credential on a topic that needed no credential at all).
+  *Tapping opens* is an optional URL the notification opens — paste
   your phone URL from Settings → Mobile; MindFlock strips an `?token=` from it,
   since that URL is stored on the ntfy server.
 

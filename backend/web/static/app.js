@@ -29753,8 +29753,25 @@ function Ntfy() {
           onKeyDown: (e) => e.key === "Enter" && e.target.blur()
         }
       ),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", {}),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Needed only if your topic is access-protected (self-hosted, or a reserved ntfy.sh topic). Blank keeps the saved one." })
+      view.has_token ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          className: "test-btn",
+          id: "ntfy-token-clear",
+          title: "Remove the saved access token — most public topics need none",
+          onClick: () => {
+            setToken("");
+            save2({ clear_token: true });
+          },
+          children: "Clear"
+        }
+      ) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", {}),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+        "Needed only if your topic is access-protected (self-hosted, or a reserved ntfy.sh topic). Blank keeps the saved one — use ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Clear" }),
+        " to remove it."
+      ] })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ntfy-field-row", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Tapping opens" }),
