@@ -19,6 +19,7 @@ imports them from there to avoid a circular import.
 
 from __future__ import annotations
 
+import dataclasses as _dataclasses
 import datetime as _datetime
 import os
 import subprocess
@@ -471,29 +472,34 @@ class Instance:
             # (now provisioned) workspace. The wrapper exports each
             # cache's env vars (e.g. TESTMON_ENV, so a warm testmon seed
             # stays valid for in-session commits) and seeds the ticket
-            # prompt when one is set. The launcher is
-            # Claude/MindFlock-owned and threads the program through, so
-            # use the Claude provider regardless of self.Program
-            # (preserves the default behaviour for any program).
+            # prompt when one is set. The script is MindFlock-owned but
+            # provider-NEUTRAL: provisioning.write_launcher asks the
+            # provider that claims self.Program for its flag vocabulary,
+            # so an ingested ticket on codex/aider/goose is launched the
+            # way that CLI expects instead of with Claude's flags.
             try:
                 from backend import workspace_setup as _ws
+                from backend.session import provisioned as _provisioning
 
                 _scs = getattr(self._git_worktree, "_provision_settings", None)
                 _skip = _scs.skip_permissions if _scs is not None else True
                 _cache_env = (
                     _ws.merged_cache_env(_scs.caches) if _scs is not None else None
                 )
-                launcher = _providers.resolve("claude").write_launcher(
-                    _LaunchContext(
-                        program=self.Program or "claude",
-                        workdir=_wt_path,
-                        prompt=self.Prompt,
-                        skip_permissions=_skip,
-                        in_place=_ctx.in_place,
-                        session_name=_ctx.session_name,
-                        launch_args=_ctx.launch_args,
-                        cache_env=_cache_env,
-                    )
+                # The resolved provider still gets to prepare the workspace for
+                # its own launch (Claude installs its activity hooks and
+                # pre-trusts the folder here; Codex installs its hooks.json).
+                try:
+                    _provider.install_activity_hooks(_wt_path, _ctx.session_name)
+                except Exception:  # noqa: BLE001 — hooks are best-effort
+                    pass
+                launcher = _provisioning.write_launcher(
+                    _wt_path,
+                    self.Prompt,
+                    program=self.Program or "claude",
+                    skip_permissions=_skip,
+                    cache_env=_cache_env,
+                    launch_args=_ctx.launch_args,
                 )
                 self._tmux_session.launch_command = launcher
             except Exception as err:  # noqa: BLE001
@@ -504,6 +510,18 @@ class Instance:
             # builds the launch command; a custom program runs bare.
             # ``cmd is None`` means "use the bare program".
             try:
+                # Local-model routing: the flags join this session's launch args
+                # and the env rides on the tmux session (ExtraEnv is applied to
+                # the pane right after this returns). No-op when off.
+                from backend.providers import launch_script as _ls
+
+                _local_env, _local_args = _ls.local_overlay(self.Program)
+                if _local_args:
+                    _ctx = _dataclasses.replace(
+                        _ctx, launch_args=tuple(_local_args) + tuple(_ctx.launch_args)
+                    )
+                if _local_env:
+                    self.ExtraEnv = {**(self.ExtraEnv or {}), **_local_env}
                 _cmd = _provider.build_launch_command(_ctx)
                 if _cmd is not None:
                     self._tmux_session.launch_command = _cmd

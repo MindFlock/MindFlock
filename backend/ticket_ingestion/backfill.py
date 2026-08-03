@@ -153,8 +153,11 @@ class BackfillScanner:
 
         for story in ordered:
             # Stamp the source repo so process_story / the provisioner clone the
-            # right repo (empty -> global fallback downstream).
+            # right repo (empty -> global fallback downstream), and the source's
+            # agent CLI so the session launches with it (empty -> the
+            # [mindflock].agent / engine-default fallback downstream).
             story.repo_url = self._source.repo_url
+            story.agent = self._source.agent
             # Crash safety: persist a pending marker BEFORE the checkpoint
             # advances, so a ticket that dies in the in-memory queue is
             # re-enqueued on the next startup instead of lost forever.

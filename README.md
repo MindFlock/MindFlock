@@ -34,7 +34,7 @@ diffs and terminal output are sample data.</sub>
 
 ## What is MindFlock?
 
-Work assigned to you in **Jira, Linear, GitHub Issues, Shortcut, or Asana**
+Work assigned to you in **GitHub Issues, Jira, Linear, Shortcut, or Asana**
 becomes an isolated AI coding session: its own **git worktree** on its own
 `feature/<ticket>/<slug>` branch, dependencies installed, and an agent already
 seeded with the ticket's title, description, acceptance criteria and comments.
@@ -171,10 +171,11 @@ is that in MindFlock you don't *have* to: your tracker can do it for you.
 
 | | **MindFlock** | **Claude Squad** | **Conductor** | **Claude Code Agent Teams** |
 |---|---|---|---|---|
-| **Ticket → session, automatically** | **Jira · Linear · GitHub Issues · Shortcut · Asana** | — | — | — |
+| **Ticket → session, automatically** | **GitHub Issues · Jira · Linear · Shortcut · Asana** (GitHub Issues needs zero config) | — | — | — |
 | **Reviewed PR → session, automatically** | **unresolved inline review comments become the prompt** | — | — | — |
 | Git workflow | **one-click commit → push → PR → merge** (plain `git push` over your own SSH/HTTPS remote; `gh` optional for the PR steps) | commit + push branch | per-task diff + review | manual (agent runs git) |
-| Agent CLIs | **Any — declared in a TOML file** | Several, bundled (Claude Code, Codex, Gemini, aider, OpenCode) | Claude Code, Codex, Cursor, OpenCode | Claude only |
+| Agent CLIs | **Any — declared in a TOML file**, including for ingested sessions (per-source choice) | Several, bundled (Claude Code, Codex, Gemini, aider, OpenCode) | Claude Code, Codex, Cursor, OpenCode | Claude only |
+| **Runs fully local (no subscription)** | **Ollama · LM Studio · any OpenAI-compatible server** | — | — | — |
 | Session isolation | git worktree + tmux | git worktree + tmux | git worktree | git worktree |
 | Agent-state detection | **deterministic — provider-defined hooks** (working / idle / needs-input) | inferred from the tmux pane | built-in, per supported agent | Claude-native |
 | Interface | Cross-platform desktop app **+ phone UI** | Terminal TUI | Native macOS app | Built into the CLI |
@@ -219,13 +220,15 @@ those two change what your day looks like:
 
 ## Features
 
-- 🎫 **Ticket & PR-review ingestion** — polls **Jira, Linear, GitHub Issues,
+- 🎫 **Ticket & PR-review ingestion** — polls **GitHub Issues, Jira, Linear,
   Shortcut or Asana** (several sources at once, including two of the same
   provider) for work assigned to you, and GitHub for your PRs that came back
   with review comments. Each one gets a worktree, an installed environment and
   an agent seeded with the ticket — title, description, mined acceptance
   criteria, comments. Read-only against your tracker: it never comments or
-  moves a ticket's status.
+  moves a ticket's status. **GitHub Issues needs no configuration at all** — the
+  token comes from your existing `gh auth login` and the repo from this
+  checkout's `origin`.
 - 🔀 **Guided git workflow** — one-click commit → push → PR → merge, with live
   workflow-stage badges
   (provisioning → agent → pre-commit → committed → pushed → PR open). The
@@ -236,9 +239,17 @@ those two change what your day looks like:
   isn't, and a prefilled compare URL in your browser when you have neither.
 - 🔌 **Provider-agnostic** — every coding-agent CLI is just a TOML file (Claude
   Code, Codex, Antigravity, aider, OpenCode, Cline and Goose bundled; add your
-  own — though sessions that *ingestion* provisions launch Claude Code). Shared
-  hook-based activity detection (working / idle / needs-input) and token & cost
-  tracking apply to all of them.
+  own). That includes **ingested** sessions: each ticketing source picks its own
+  agent, so one queue can run on a hosted CLI while another runs on a local
+  model. Shared hook-based activity detection (working / idle / needs-input) and
+  token & cost tracking apply to all of them.
+- 🔒 **Local models — no subscription, nothing leaves the machine** — point
+  sessions at a model you serve yourself (**Ollama**, **LM Studio**, or any
+  OpenAI-compatible server) and the whole loop runs offline: no API key, and no
+  prompt, diff or file crosses the network. Works with codex, aider and goose,
+  each of which has native local-model support; Claude Code speaks only the
+  Anthropic API, and `mindflock doctor` tells you so rather than letting a
+  session quietly use it.
 - 🖥️ **Desktop app** (Electron) — a draggable terminal grid with Agent /
   Terminal / Diff / Queue tabs per session, workflow-stage badges, and guided
   next-step buttons, in a window that follows each OS's own chrome conventions
@@ -498,8 +509,8 @@ It finds — and auto-starts — the server by itself.
 |---|---|---|
 | **Session engine** | `backend.session`, `backend.config`, `backend.cmd`, `backend.log` | Instance lifecycle (start/pause/resume/kill), git worktree management, tmux/PTY plumbing, persisted state in `~/.mindflock/`. |
 | **Server + UI** | `backend.web` | FastAPI server + the UI the desktop app renders: draggable terminal grid, Agent/Terminal/Diff/Queue tabs per session, workflow-stage badges with guided next-step buttons, token/cost usage, IDE integration, phone UI at `/m`, addon framework. |
-| **Ingestion pipeline** | `backend.ticket_ingestion` | Polls your ticketing service (Jira, Linear, GitHub Issues, Shortcut, Asana) for assigned work and GitHub for reviewed PRs; validates, provisions a workspace, and launches a seeded agent session per ticket / per PR. |
-| **Provider framework** | `backend.providers` | Pluggable coding-agent CLIs (Claude built in; aider/codex and others bundled; add your own via TOML). Shared hooks-based activity detection, model pricing, and rolling token/cost usage history. |
+| **Ingestion pipeline** | `backend.ticket_ingestion` | Polls your ticketing service (GitHub Issues, Jira, Linear, Shortcut, Asana) for assigned work and GitHub for reviewed PRs; validates, provisions a workspace, and launches a seeded agent session per ticket / per PR — on whichever agent CLI that source is configured for. |
+| **Provider framework** | `backend.providers` | Pluggable coding-agent CLIs (Claude built in; aider/codex and others bundled; add your own via TOML). Shared hooks-based activity detection, local-model routing, model pricing, and rolling token/cost usage history. |
 
 Something not working? Run `mindflock doctor` and check
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — it's indexed by the exact error

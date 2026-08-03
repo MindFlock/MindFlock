@@ -181,6 +181,10 @@ async def prepare_start(issue) -> tuple:
     cfg = _load_config()
     comments = await IssueMonitor(cfg.github).fetch_comments(issue)
     story = issue_to_ticket(issue, comments)
+    # GitHub's issue loop has no ticketing source, so it takes the
+    # ingestion-wide default agent ([mindflock].agent); "" = the app default.
+    agent_for = getattr(cfg, "agent_for", None)
+    story.agent = agent_for() if callable(agent_for) else ""
     prompt = ClaudeCodeRunner(cfg)._build_prompt(story, None, None)
     return story, prompt, _branch_name_for(story)
 

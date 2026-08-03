@@ -86,10 +86,17 @@ def engine_bridge_error() -> str | None:
     return None
 
 
-def _resolve_program() -> str:
-    """The configured agent binary for a MindFlock instance, falling back to
-    ``claude`` if the engine config can't be loaded (single source for both
-    engine-launch paths so they can't diverge)."""
+def _resolve_program(agent: str = "") -> str:
+    """The agent program a MindFlock instance should run.
+
+    ``agent`` is the ingestion pipeline's choice for this session (the ticket's
+    source ``agent``, else ``[mindflock].agent``); empty falls through to the
+    engine's configured default program, and then to ``claude`` if the engine
+    config can't be loaded. Single source for both engine-launch paths so they
+    can't diverge.
+    """
+    if agent:
+        return agent
     from backend import config as cs_config
 
     try:
@@ -135,9 +142,11 @@ class SessionRunner:
 
         branch = _branch_name_for(story)
         title = story.slug
+        agent = self._agent_for(story)
         logger.info(
-            "Launching ticket %s via MindFlock (mode=%s, branch=%s, session=%s)",
+            "Launching ticket %s via MindFlock (agent=%s, mode=%s, branch=%s, session=%s)",
             story.slug,
+            agent or "engine default",
             self._mode,
             branch,
             title,
@@ -151,6 +160,7 @@ class SessionRunner:
                     branch,
                     prompt,
                     getattr(story, "repo_url", ""),
+                    agent,
                 ),
                 timeout=_INSTANCE_START_TIMEOUT,
             )
@@ -215,12 +225,28 @@ class SessionRunner:
         return pr.head_ref
 
     # --- internals (run off the event loop) --------------------------------
+    def _agent_for(self, story) -> str:
+        """The agent CLI this story's session runs (``""`` = engine default).
+
+        The ticket's own stamp wins (the orchestrator copies it from the source
+        that produced the ticket), then the pipeline-wide chain in
+        :meth:`PipelineConfig.agent_for`.
+        """
+        return getattr(story, "agent", "") or self.config.agent_for(
+            getattr(story, "provider", "")
+        )
+
     def _create_instance(
-        self, title: str, branch: str, prompt: str, repo_url: str = ""
+        self,
+        title: str,
+        branch: str,
+        prompt: str,
+        repo_url: str = "",
+        agent: str = "",
     ):
         from backend import session as cs_session
 
-        program = _resolve_program()
+        program = _resolve_program(agent)
 
         opts = cs_session.InstanceOptions(
             title=title,
@@ -244,7 +270,9 @@ class SessionRunner:
     ):
         from backend import session as cs_session
 
-        program = _resolve_program()
+        # PR review has no ticketing source, so it runs the ingestion-wide
+        # default agent.
+        program = _resolve_program(self.config.agent_for())
 
         # Adopt the already-provisioned PR workspace: clone-style worktree at the
         # exact directory, on the PR's existing head branch (verbatim, no fork).

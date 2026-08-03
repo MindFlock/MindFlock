@@ -12,11 +12,23 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 from .antigravity import AntigravityProvider
-from .base import BaseProvider, CodingProvider, LaunchContext, TrustSpec
+from .base import (
+    BaseProvider,
+    CodingProvider,
+    LauncherSpec,
+    LaunchContext,
+    TrustSpec,
+)
 from .claude import ClaudeProvider
 from .codex import CodexProvider
 from .config import BUILTIN_CONFIGS, load_user_configs
 from .generic import GenericProvider
+
+# Imported (not just re-exported) so ``providers.launch_script`` /
+# ``providers.local_models`` are always bound on the package — several launch
+# paths reach them as attributes. Neither imports back into this module at
+# module scope, so there is no cycle.
+from . import launch_script, local_models  # noqa: E402
 
 # Bundled config names whose behaviour needs a dedicated GenericProvider
 # subclass (live usage / telemetry / resume-thread discovery). Anything not
@@ -27,8 +39,11 @@ __all__ = [
     "BaseProvider",
     "CodingProvider",
     "GenericProvider",
+    "LauncherSpec",
     "LaunchContext",
     "TrustSpec",
+    "launch_script",
+    "local_models",
     "register",
     "resolve",
     "normalize_program",

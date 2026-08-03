@@ -14,7 +14,13 @@ import threading
 
 from typing import Optional
 
-from .base import BaseProvider, LaunchContext, TrustSpec, seed_prompt_expr
+from .base import (
+    BaseProvider,
+    LauncherSpec,
+    LaunchContext,
+    TrustSpec,
+    seed_prompt_expr,
+)
 from ._timeparse import ts_epoch
 
 # Activity markers live in the shared, provider-agnostic module (Codex reuses
@@ -209,6 +215,17 @@ class ClaudeProvider(BaseProvider):
         # Claude generates the workspace launcher; in-place sessions borrow a
         # worktree and never do.
         return not ctx.in_place
+
+    def launcher_spec(self) -> LauncherSpec:
+        # The provisioned launcher's original, hardcoded vocabulary — now stated
+        # as data so the generated script is byte-identical for Claude while
+        # every other CLI gets its own flags instead of these.
+        return LauncherSpec(
+            skip_perms_flag="--dangerously-skip-permissions",
+            prompt_arg="{prompt}",  # claude accepts the prompt positionally
+            resume_flag="--continue",
+            resume_fallback=True,
+        )
 
     def write_launcher(self, ctx: LaunchContext) -> str:
         # Install the activity-reporting hooks alongside the launcher so the

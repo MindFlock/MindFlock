@@ -61,6 +61,53 @@ class TrustSpec:
 _NATURAL_EXIT_CODES = (0, 130)
 
 
+@dataclass(frozen=True)
+class LauncherSpec:
+    """The CLI-specific vocabulary the provisioned-workspace launcher needs.
+
+    :func:`backend.session.provisioned.write_launcher` generates ONE shell
+    script — the thing tmux runs for a provisioned session (a ticket ingested by
+    the pipeline, a PR workspace, a warm workspace). It used to hardcode Claude
+    Code's spelling of all four knobs below, which meant a provisioned session
+    running any other CLI was launched with Claude's flags: an ingested ticket
+    on ``aider`` got ``aider --dangerously-skip-permissions "<prompt>"`` and
+    resumed with ``aider --continue``, neither of which aider accepts. This spec
+    is that vocabulary, per provider, so the launcher is provider-neutral.
+
+    * ``skip_perms_flag`` — the CLI's "don't ask me to approve each action" flag,
+      appended when the workspace was provisioned with skip-permissions on.
+      ``""`` = the CLI has no such flag (goose configures it via ``GOOSE_MODE``,
+      cline auto-approves by default), so nothing is appended.
+    * ``prompt_arg`` — template that passes the seed prompt at launch, with a
+      ``{prompt}`` placeholder (Claude/codex take it positionally, so
+      ``"{prompt}"``; antigravity wants ``"--prompt-interactive {prompt}"``).
+      ``""`` = this CLI takes no prompt argument, and the launcher falls back to
+      typing the prompt into the pane once the TUI has drawn.
+    * ``resume_flag`` — how to continue the workspace's prior conversation on a
+      relaunch (``"--continue"``, ``"resume --last"``, ``"-r"``). ``""`` = the
+      CLI cannot resume, so a relaunch starts a fresh conversation.
+    * ``resume_fallback`` — whether a failed resume should be retried once and
+      then fall back to a plain launch. False for a CLI whose resume flag is
+      harmless with nothing to resume (aider's ``--restore-chat-history``).
+    * ``natural_codes`` — exit codes that mean the human quit deliberately, so
+      the launcher's in-session loop drops to a shell instead of relaunching.
+    * ``command`` — the provider's own resolved base command, for CLIs whose
+      interactive entry point is a SUBCOMMAND rather than the bare binary
+      (``goose session``, ``cline -i``) or whose binary differs from its name
+      (``antigravity`` -> ``agy``). It replaces the executable token of the
+      session's program string, keeping any trailing args the caller added.
+      ``""`` = launch the program string verbatim (Claude, and any custom
+      program), which is what keeps the generated script byte-stable.
+    """
+
+    skip_perms_flag: str = ""
+    prompt_arg: str = ""
+    resume_flag: str = "--continue"
+    resume_fallback: bool = True
+    natural_codes: Sequence[int] = _NATURAL_EXIT_CODES
+    command: str = ""
+
+
 def seed_prompt_expr(session_name: str, prompt: str) -> str:
     """A shell expression that expands to ``prompt`` as ONE argument, or ``""``.
 
@@ -142,6 +189,19 @@ class BaseProvider:
         launcher concept; providers that own one override this.
         """
         raise NotImplementedError("%s has no launcher script" % self.name)
+
+    def launcher_spec(self) -> LauncherSpec:
+        """This CLI's flag vocabulary for the provisioned-workspace launcher.
+
+        :func:`backend.session.provisioned.write_launcher` asks the provider that
+        claims a session's program for this, so one generated script serves every
+        CLI instead of hardcoding Claude Code's spelling. Base default mirrors
+        :meth:`build_launch_command`: run the program bare, resume it with
+        ``--continue`` (retried, then a plain launch), no skip-permissions flag
+        and no prompt argument — the safe reading of an unknown program, since
+        appending a flag it doesn't accept makes it refuse to start at all.
+        """
+        return LauncherSpec(natural_codes=_NATURAL_EXIT_CODES)
 
     # --- exit / resume policy --------------------------------------------- #
     def is_natural_exit(self, code) -> bool:

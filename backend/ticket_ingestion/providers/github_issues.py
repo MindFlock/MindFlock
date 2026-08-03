@@ -1,10 +1,18 @@
-"""GitHub Issues provider.
+"""GitHub Issues provider — the zero-config on-ramp.
 
-Ingests issues assigned to you in a single repository (``project`` =
-``owner/repo``). Reuses the shared GitHub auth chain — an explicit
-``ticketing.api_token``, else ``github.token`` in settings, else
-``$GH_TOKEN``/``$GITHUB_TOKEN``, else ``gh auth token`` — so a user who already
-connected GitHub for PR ingestion needs no extra credential.
+Ingests issues assigned to you in a single repository. This is the source that
+should cost a new user nothing to connect, so **both** of its inputs resolve
+themselves:
+
+* **Credential** — the shared GitHub auth chain: an explicit
+  ``ticketing.api_token``, else ``github.token`` in settings, else
+  ``$GH_TOKEN``/``$GITHUB_TOKEN``, else ``gh auth token``. Anyone who has ever
+  run ``gh auth login`` (or connected GitHub for PR review) is already done.
+* **Repository** — :meth:`GithubIssuesProvider.resolve_repo` walks
+  ``ticketing.project`` -> the source's own ``repo_url`` -> the global
+  ``[repository].url`` -> this checkout's ``origin`` remote. So on a machine
+  sitting in a GitHub clone, picking "GitHub Issues" and saving is the entire
+  setup: no ``owner/repo`` to type, no token to paste.
 
 Issue bodies are markdown, so the shared acceptance-criteria miner works
 directly. Pull requests (which the issues endpoint also returns) are filtered out.
@@ -87,11 +95,68 @@ class GithubIssuesProvider(TicketProvider):
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
+    def resolve_repo(self) -> str:
+        """The ``owner/repo`` to ingest from, or ``""`` if nothing names one.
+
+        Tries, in order: an explicit ``project``; this source's ``repo_url``
+        (already required, so a configured source almost always resolves here);
+        the global ``[repository].url``; and finally this checkout's ``origin``
+        remote — which is what makes "install, pick GitHub Issues, save" work
+        with no repo typed anywhere.
+
+        Every step is best-effort and any failure just falls through to the next,
+        because a resolution error here must read as "tell me the repo", not as a
+        crash during a poll.
+        """
+        explicit = (self.cfg.project or "").strip().strip("/")
+        if explicit:
+            return explicit
+        from backend.session.git.remote_url import parse_remote
+
+        for url in (self._config_repo_url(), self._origin_url()):
+            ref = parse_remote(url)
+            if ref is not None:
+                return ref.slug
+        return ""
+
+    def _config_repo_url(self) -> str:
+        """This source's clone URL, else the globally configured one."""
+        if (self.cfg.repo_url or "").strip():
+            return self.cfg.repo_url.strip()
+        try:
+            from backend.config import settings as _settings
+
+            return (_settings.load_settings().repository.url or "").strip()
+        except Exception:  # noqa: BLE001 — settings are optional
+            return ""
+
+    def _origin_url(self) -> str:
+        """This checkout's ``origin`` remote, or ``""``.
+
+        The last resort in :meth:`resolve_repo`. Short timeout and every failure
+        swallowed: not being in a git repo is an ordinary outcome here.
+        """
+        import subprocess
+
+        try:
+            out = subprocess.run(
+                ["git", "config", "--get", "remote.origin.url"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return out.stdout.strip() if out.returncode == 0 else ""
+
     def _repo(self) -> tuple[str, str]:
-        parts = (self.cfg.project or "").strip().split("/")
+        slug = self.resolve_repo()
+        parts = slug.split("/")
         if len(parts) != 2 or not all(parts):
             raise ProviderError(
-                f"github_issues requires ticketing.project = 'owner/repo' (got {self.cfg.project!r})"
+                "github_issues could not work out which repository to read. Set "
+                "the source's Repo URL (or its Repository field to 'owner/repo'), "
+                "or run MindFlock from a GitHub clone so `origin` can be used."
             )
         return parts[0], parts[1]
 
@@ -200,7 +265,7 @@ class GithubIssuesProvider(TicketProvider):
     async def test_connection(self) -> tuple[dict | None, str]:
         try:
             headers = await self._headers()
-            self._repo()  # validate scope shape early
+            owner, repo = self._repo()  # resolve + validate the scope early
             async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
                 async with session.get(f"{_API}/user", headers=headers) as resp:
                     if resp.status in (401, 403):
@@ -212,4 +277,11 @@ class GithubIssuesProvider(TicketProvider):
             return None, str(e)
         except aiohttp.ClientError as e:
             return None, f"network error reaching GitHub: {e}"
-        return {"member_id": str(me.get("login", "")), "name": me.get("name")}, ""
+        # ``project`` rides back so the UI can show (and store) the repo it
+        # auto-detected — the user sees what "zero config" actually resolved to
+        # instead of an empty field they have to trust.
+        return {
+            "member_id": str(me.get("login", "")),
+            "name": me.get("name"),
+            "project": f"{owner}/{repo}",
+        }, ""

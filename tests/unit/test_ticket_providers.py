@@ -1232,7 +1232,13 @@ class TestGithubFetchAndTestConnection:
         )
         with _patch_session(session):
             identity, err = await prov.test_connection()
-        assert err == "" and identity == {"member_id": "octo", "name": "O"}
+        # ``project`` rides back so the UI can show (and store) whichever repo the
+        # zero-config chain resolved to, instead of an empty auto-filled field.
+        assert err == "" and identity == {
+            "member_id": "octo",
+            "name": "O",
+            "project": "octo/repo",
+        }
 
     async def test_test_connection_token_rejected(self, monkeypatch):
         prov = self._prov(monkeypatch)

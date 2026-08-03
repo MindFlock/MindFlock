@@ -30194,6 +30194,164 @@ function WindowRefresh() {
     ] })
   ] });
 }
+const RUNTIMES = [
+  { id: "ollama", label: "Ollama", hint: "ollama serve — the default at :11434" },
+  { id: "lmstudio", label: "LM Studio", hint: "Developer → Start Server, at :1234" },
+  {
+    id: "custom",
+    label: "Other (OpenAI-compatible)",
+    hint: "llama.cpp, vLLM, a LiteLLM proxy — anything serving /v1"
+  }
+];
+function LocalModel(_) {
+  var _a2, _b2;
+  const s = useSettings();
+  const group = s.settings.local_model || {};
+  const enabled = group.enabled === true;
+  const runtime = String(group.runtime || "ollama");
+  const baseUrl = String(group.base_url || "");
+  const model = String(group.model || "");
+  const [probe, setProbe] = reactExports.useState(null);
+  const [testing, setTesting] = reactExports.useState(false);
+  reactExports.useEffect(() => {
+    if (!enabled) return;
+    (async () => {
+      try {
+        setProbe(await api("/api/settings/test/local-model", { json: {} }));
+      } catch {
+      }
+    })();
+  }, []);
+  const runTest = async (over) => {
+    setTesting(true);
+    try {
+      const r = await api("/api/settings/test/local-model", {
+        json: { runtime, base_url: baseUrl, model, ...over || {} }
+      });
+      setProbe(r);
+      toast((r == null ? void 0 : r.ok) ? "Local model server is up" : "Local model server unreachable");
+    } catch (err) {
+      setProbe({ ok: false, error: err.message });
+    } finally {
+      setTesting(false);
+    }
+  };
+  const placeholder = ((_a2 = probe == null ? void 0 : probe.default_base_urls) == null ? void 0 : _a2[runtime]) || "";
+  const models = (probe == null ? void 0 : probe.models) || [];
+  const supported = (probe == null ? void 0 : probe.supported_agents) || [];
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Local model" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint set-block-hint", children: [
+      "Point your agent CLI at a model running on this machine. No subscription and no API key — and nothing you type, no diff and no file ever leaves the box. Works with ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "codex" }),
+      ", ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "aider" }),
+      " and ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "goose" }),
+      ", each of which has native local-model support; Claude Code talks only to the Anthropic API, so a session on it keeps using that."
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row set-switch-row", id: "lm-enabled-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Use a local model" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            type: "checkbox",
+            id: "lm-enabled",
+            checked: enabled,
+            onChange: (e) => s.saveField("local_model", "enabled", e.target.checked)
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Server" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "select",
+        {
+          id: "lm-runtime",
+          value: runtime,
+          onChange: (e) => s.saveField("local_model", "runtime", e.target.value),
+          children: RUNTIMES.map((r) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: r.id, children: r.label }, r.id))
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: ((_b2 = RUNTIMES.find((r) => r.id === runtime)) == null ? void 0 : _b2.hint) || "" })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Base URL" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          type: "text",
+          id: "lm-base-url",
+          autoComplete: "off",
+          placeholder: placeholder || "leave blank for this server's default",
+          defaultValue: baseUrl,
+          onBlur: (e) => {
+            if (e.target.value !== baseUrl)
+              s.saveField("local_model", "base_url", e.target.value);
+          }
+        },
+        runtime
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Blank uses the server's documented default. Point it at another machine on your LAN to share one GPU box across a flock." })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Model" }),
+      models.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "select",
+        {
+          id: "lm-model",
+          value: models.includes(model) ? model : "",
+          onChange: (e) => s.saveField("local_model", "model", e.target.value),
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "Pick a model…" }),
+            models.map((m) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: m, children: m }, m))
+          ]
+        }
+      ) : /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          type: "text",
+          id: "lm-model",
+          autoComplete: "off",
+          placeholder: "qwen2.5-coder:7b",
+          defaultValue: model,
+          onBlur: (e) => {
+            if (e.target.value !== model)
+              s.saveField("local_model", "model", e.target.value);
+          }
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: models.length ? "Served by your local server right now." : "Exactly as your server names it — press Test to list what it has." })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "test-row", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            type: "button",
+            id: "lm-test",
+            className: "test-btn",
+            disabled: testing,
+            onClick: () => runTest(),
+            children: "Test connection"
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "span",
+          {
+            className: "test-result" + (probe ? probe.ok ? " ok" : " bad" : ""),
+            id: "lm-test-result",
+            children: testing ? "testing…" : probe ? probe.ok ? `✓ up at ${probe.base_url} · ${models.length} model(s)` : "✗ " + (probe.error || "unreachable") : ""
+          }
+        )
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: supported.length ? `Installed CLIs that can use it: ${supported.join(", ")}. Set a session's agent (or a ticketing source's) to one of those.` : "Test also reports which of your installed CLIs can be pointed at it." })
+    ] })
+  ] });
+}
 function IngestionToggle() {
   const [busy, setBusy] = reactExports.useState(false);
   const [optimistic, setOptimistic] = reactExports.useState(null);
@@ -30250,6 +30408,7 @@ function Ticketing(_) {
   const [catalog, setCatalog] = reactExports.useState([]);
   const [sources, setSources] = reactExports.useState(null);
   const [collapsed, setCollapsed] = reactExports.useState(/* @__PURE__ */ new Set());
+  const [agents, setAgents] = reactExports.useState({ names: [], fallback: "" });
   const seq = reactExports.useRef(0);
   reactExports.useEffect(() => {
     (async () => {
@@ -30262,6 +30421,16 @@ function Ticketing(_) {
         setCollapsed(new Set(list.map((s) => s.id)));
       } catch {
         setSources([]);
+      }
+      try {
+        const p = await api(
+          "/api/providers"
+        );
+        setAgents({
+          names: ((p == null ? void 0 : p.providers) || []).map((x) => x.name).filter(Boolean),
+          fallback: (p == null ? void 0 : p.default) || ""
+        });
+      } catch {
       }
     })();
   }, []);
@@ -30330,6 +30499,7 @@ function Ticketing(_) {
       {
         source: src,
         catalog,
+        agents,
         collapsed: collapsed.has(src.id),
         onToggle: () => setCollapsed((prev) => {
           const next = new Set(prev);
@@ -30632,6 +30802,7 @@ function AssignedTicketRow({ t, onStarted }) {
 function SourceCard({
   source,
   catalog,
+  agents,
   collapsed,
   onToggle,
   onChange,
@@ -30642,7 +30813,8 @@ function SourceCard({
   const [states, setStates] = reactExports.useState([]);
   const provName = (meta == null ? void 0 : meta.label) || source.provider;
   const detail = (source.label || source.member_id || source.repo_url || "").trim();
-  const summary = detail ? provName + " — " + detail : provName;
+  const base = detail ? provName + " — " + detail : provName;
+  const summary = source.agent ? base + " · " + source.agent : base;
   const repoMissing = !(source.repo_url || "").trim();
   const testPayload = () => {
     const payload = { id: source.id, provider: source.provider };
@@ -30734,6 +30906,23 @@ function SourceCard({
           }
         ),
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Required — tickets from this source clone into this repo." })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Agent" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "select",
+          {
+            className: "tk-agent",
+            "data-tk-field": "agent",
+            value: source.agent || "",
+            onChange: (e) => onChange({ agent: e.target.value }),
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: agents.fallback ? `App default (${agents.fallback})` : "App default" }),
+              agents.names.map((n) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: n, children: n }, n))
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Which coding CLI runs the sessions this source starts. Route one queue to a cloud CLI and another to a local model — pick a provider whose Connections row is green, or leave it on the app default." })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "tk-fields", children: ((meta == null ? void 0 : meta.fields) || []).map(
         (f) => f.type === "state" ? /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -32115,6 +32304,7 @@ const SCREENS = [
   { key: "connections", label: "Connections", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Connections, { ...p }) },
   { key: "notifications", label: "Notifications", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Notifications, { ...p }) },
   { key: "coding", label: "Agent CLI", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(CodingCli, { ...p }) },
+  { key: "localmodel", label: "Local model", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(LocalModel, { ...p }) },
   { key: "ticketing", label: "Ticketing", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Ticketing, { ...p }) },
   { key: "workspace", label: "Workspace", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Workspace, { ...p }) },
   { key: "repo", label: "PR review", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(PrReview, { ...p }) },

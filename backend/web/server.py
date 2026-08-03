@@ -4358,7 +4358,9 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
                 session.InstanceOptions(
                     title=title,
                     path=".",
-                    program=ENGINE.default_program(),
+                    # The ticket's source may pin its own agent CLI; empty falls
+                    # back to this app's default program.
+                    program=_ticket_start.agent_for(story) or ENGINE.default_program(),
                     provisioned=True,
                     workspace_strategy=_ticket_start.workspace_mode(),
                     new_branch=branch,
@@ -4507,7 +4509,7 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
                 session.InstanceOptions(
                     title=title,
                     path=".",
-                    program=ENGINE.default_program(),
+                    program=getattr(story, "agent", "") or ENGINE.default_program(),
                     provisioned=True,
                     workspace_strategy=_issue_start.workspace_mode(),
                     new_branch=branch,

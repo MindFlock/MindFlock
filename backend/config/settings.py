@@ -153,6 +153,47 @@ class CodingCliSettings:
 
 
 @dataclass
+class LocalModelSettings:
+    """Run sessions against a model served on this machine (``[local_model]``).
+
+    Off by default, and off means every launch path behaves exactly as before.
+    On, the launch paths overlay the env vars and flags that point the session's
+    CLI at ``base_url`` (see :mod:`backend.providers.local_models`) — no
+    subscription needed, and no prompt or diff leaves the machine.
+
+    ``runtime`` is ``ollama`` | ``lmstudio`` | ``custom`` (any other
+    OpenAI-compatible server); ``base_url`` blank = that runtime's documented
+    default; ``model`` is the name the server itself reports.
+    """
+
+    enabled: Optional[bool] = None
+    runtime: str = ""
+    base_url: str = ""
+    model: str = ""
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        if self.enabled is not None:
+            d["enabled"] = self.enabled
+        if self.runtime:
+            d["runtime"] = self.runtime
+        if self.base_url:
+            d["base_url"] = self.base_url
+        if self.model:
+            d["model"] = self.model
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "LocalModelSettings":
+        return cls(
+            enabled=_opt_bool(d.get("enabled")),
+            runtime=str(d.get("runtime", "") or ""),
+            base_url=str(d.get("base_url", "") or ""),
+            model=str(d.get("model", "") or ""),
+        )
+
+
+@dataclass
 class TicketingSource:
     """One configured ticketing source. Field keys map 1:1 onto
     :class:`~backend.ticket_ingestion.config.TicketProviderConfig`.
@@ -175,6 +216,9 @@ class TicketingSource:
     # Git clone URL / local path this source's tickets provision into. Empty =
     # fall back to the global repository.url (single-repo behavior).
     repo_url: str = ""
+    # Coding-CLI provider name this source's tickets run ("claude", "codex",
+    # "aider", …). Empty = fall back to engine.agent, then the engine default.
+    agent: str = ""
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -189,6 +233,7 @@ class TicketingSource:
             "workflow_state",
             "label",
             "repo_url",
+            "agent",
         ):
             v = getattr(self, k)
             if v:
@@ -214,6 +259,7 @@ class TicketingSource:
             poll_interval_seconds=_opt_int(d.get("poll_interval_seconds")),
             label=str(d.get("label", "") or ""),
             repo_url=str(d.get("repo_url", "") or ""),
+            agent=str(d.get("agent", "") or ""),
         )
 
 
@@ -388,6 +434,9 @@ class EngineSettings:
     mode: str = ""  # worktree | clone
     open_cursor: Optional[bool] = None
     skip_permissions: Optional[bool] = None
+    # Coding-CLI provider name ingested sessions run when their ticketing source
+    # names none. Empty = the engine's configured default program.
+    agent: str = ""
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -399,6 +448,8 @@ class EngineSettings:
             d["open_cursor"] = self.open_cursor
         if self.skip_permissions is not None:
             d["skip_permissions"] = self.skip_permissions
+        if self.agent:
+            d["agent"] = self.agent
         return d
 
     @classmethod
@@ -408,6 +459,7 @@ class EngineSettings:
             mode=str(d.get("mode", "") or ""),
             open_cursor=_opt_bool(d.get("open_cursor")),
             skip_permissions=_opt_bool(d.get("skip_permissions")),
+            agent=str(d.get("agent", "") or ""),
         )
 
 
@@ -661,6 +713,7 @@ class Settings:
     repository: RepositorySettings = field(default_factory=RepositorySettings)
     github: GithubSettings = field(default_factory=GithubSettings)
     engine: EngineSettings = field(default_factory=EngineSettings)
+    local_model: LocalModelSettings = field(default_factory=LocalModelSettings)
     ui: UiSettings = field(default_factory=UiSettings)
     platform: PlatformSettings = field(default_factory=PlatformSettings)
     general: GeneralSettings = field(default_factory=GeneralSettings)
@@ -686,6 +739,7 @@ class Settings:
             "repository": self.repository,
             "github": self.github,
             "engine": self.engine,
+            "local_model": self.local_model,
             "ui": self.ui,
             "platform": self.platform,
             "general": self.general,
@@ -723,6 +777,7 @@ class Settings:
             repository=RepositorySettings.from_dict(_group(d, "repository")),
             github=GithubSettings.from_dict(_group(d, "github")),
             engine=EngineSettings.from_dict(_group(d, "engine")),
+            local_model=LocalModelSettings.from_dict(_group(d, "local_model")),
             ui=UiSettings.from_dict(_group(d, "ui")),
             platform=PlatformSettings.from_dict(_group(d, "platform")),
             general=GeneralSettings.from_dict(_group(d, "general")),

@@ -402,6 +402,7 @@ or the UI starts writing the literal mask into the store as a password.
 | POST | `/api/settings/test/shortcut` | Validate a Shortcut token (body `{api_token}` or the stored one) → `{ok, member_id, name, mention_name}` for auto-fill, or `{ok: false, error}` |
 | POST | `/api/settings/test/github` | `{ok, token_source: "settings·env·gh-cli·none", gh_installed, gh_authenticated, detail}` |
 | POST | `/api/settings/test/agent` | Probe the configured agent CLI → `{ok, cli, auth}` (binary resolvable + login evidence) |
+| POST | `/api/settings/test/local-model` | Probe a local model server (body `{runtime, base_url, model}`, each falling back to the stored value — so it can be tested *before* saving) → `{ok, runtime, base_url, models, error, supported_agents, default_base_urls}`. `models` turns the model field into a dropdown; `supported_agents` lists the installed CLIs that can actually be pointed at it (never `claude`) |
 | GET | `/api/settings/providers/ticketing` | The ticketing-provider registry (fields per provider for the Settings form) |
 | POST | `/api/settings/test/ticketing` | Validate the active ticketing connection |
 | POST | `/api/settings/ticketing/states` | Live workflow-state list for a ticketing source |

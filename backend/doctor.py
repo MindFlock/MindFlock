@@ -448,12 +448,80 @@ def check_state_schema() -> Check:
     )
 
 
+def check_local_model() -> Check:
+    """Check the configured local model server, when local models are enabled.
+
+    Skipped entirely (``info``) when the feature is off — the common case — so
+    this never nags a user on a hosted CLI. When it IS on, three things can be
+    wrong and each has a different fix, so they are reported apart:
+
+    * the server isn't reachable -> start it,
+    * it's reachable but doesn't serve the configured model -> pull it,
+    * it's fine, but the default agent has no local route -> the session would
+      silently go on using its hosted API, which is the failure the privacy
+      story most needs surfaced.
+    """
+    from backend.providers import local_models
+
+    cfg = local_models.load_config()
+    if not cfg.enabled:
+        return Check("local-model", "local model", "info", "not enabled")
+    if not cfg.model.strip():
+        return Check(
+            "local-model",
+            "local model",
+            "fail",
+            "enabled but no model is set",
+            "pick a model in Settings → Local model",
+        )
+    label = f"local model ({cfg.runtime})"
+    result = local_models.probe(cfg)
+    if not result.get("running"):
+        fix = {
+            "ollama": "start it with `ollama serve`",
+            "lmstudio": "start LM Studio's local server (Developer → Start Server)",
+        }.get(cfg.runtime, "start your OpenAI-compatible server")
+        return Check("local-model", label, "fail", result.get("error", ""), fix)
+    models = result.get("models") or []
+    # Compare on the bare name too: servers report tags ("qwen2.5-coder:7b") and
+    # a user may have configured either spelling.
+    wanted = cfg.model.strip()
+    served = any(m == wanted or m.split(":")[0] == wanted.split(":")[0] for m in models)
+    if not served:
+        listed = ", ".join(models[:5]) or "none"
+        fix = (
+            f"pull it with `ollama pull {wanted}`"
+            if cfg.runtime == "ollama"
+            else f"load {wanted} in your local server"
+        )
+        return Check(
+            "local-model",
+            label,
+            "warn",
+            f"{result['base_url']} is up but does not serve {wanted} (has: {listed})",
+            fix,
+        )
+    note = local_models.unsupported_note(
+        _resolve_agent_binary(_default_provider_name())
+    )
+    if note:
+        return Check(
+            "local-model",
+            label,
+            "warn",
+            note,
+            "set the session or source agent to codex, aider or goose",
+        )
+    return Check("local-model", label, "ok", f"{wanted} at {result['base_url']}")
+
+
 CHECKS_BY_ID: dict[str, Callable[[], Check]] = {
     "git": check_git,
     "tmux": check_tmux,
     "gh": check_gh,
     "agent-cli": check_agent_cli,
     "agent-auth": check_agent_auth,
+    "local-model": check_local_model,
     "uv": check_uv,
     "clipboard": check_clipboard,
     "tailscale": check_tailscale,

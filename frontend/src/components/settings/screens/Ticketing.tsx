@@ -28,6 +28,13 @@ interface CatalogEntry {
 
 type Source = Record<string, string> & { id: string; provider: string };
 
+/** Coding-CLI names a source's Agent picker offers, plus the app-wide default
+ * shown as the "unset" option's label (so the empty choice is never a mystery). */
+interface AgentChoices {
+  names: string[];
+  fallback: string;
+}
+
 /** Master ticket-ingestion switch — the settings-screen twin of the sidebar's
  * AutomationBar. Same server contract (GET /api/mindflock/status for the
  * desired state, POST /api/mindflock/{start,stop} to flip it) and the same
@@ -91,6 +98,7 @@ export function Ticketing(_: ScreenProps) {
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [sources, setSources] = useState<Source[] | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [agents, setAgents] = useState<AgentChoices>({ names: [], fallback: "" });
   const seq = useRef(0);
 
   useEffect(() => {
@@ -105,6 +113,19 @@ export function Ticketing(_: ScreenProps) {
         setCollapsed(new Set(list.map((s) => s.id)));
       } catch {
         setSources([]);
+      }
+      // Agent choices are enrichment: a failure just leaves the per-source
+      // picker empty, and an unset agent still means "use the app default".
+      try {
+        const p = await api<{ providers?: Array<{ name: string }>; default?: string }>(
+          "/api/providers"
+        );
+        setAgents({
+          names: (p?.providers || []).map((x) => x.name).filter(Boolean),
+          fallback: p?.default || "",
+        });
+      } catch {
+        /* keep the empty list */
       }
     })();
   }, []);
@@ -192,6 +213,7 @@ export function Ticketing(_: ScreenProps) {
             key={src.id}
             source={src}
             catalog={catalog}
+            agents={agents}
             collapsed={collapsed.has(src.id)}
             onToggle={() =>
               setCollapsed((prev) => {
@@ -622,6 +644,7 @@ function AssignedTicketRow({ t, onStarted }: { t: AssignedTicket; onStarted(): v
 function SourceCard({
   source,
   catalog,
+  agents,
   collapsed,
   onToggle,
   onChange,
@@ -629,6 +652,7 @@ function SourceCard({
 }: {
   source: Source;
   catalog: CatalogEntry[];
+  agents: AgentChoices;
   collapsed: boolean;
   onToggle(): void;
   onChange(patch: Record<string, string>): void;
@@ -640,7 +664,10 @@ function SourceCard({
 
   const provName = meta?.label || source.provider;
   const detail = (source.label || source.member_id || source.repo_url || "").trim();
-  const summary = detail ? provName + " — " + detail : provName;
+  const base = detail ? provName + " — " + detail : provName;
+  // A non-default agent is worth seeing without expanding the card: it is the
+  // difference between this queue running on a cloud CLI and on a local model.
+  const summary = source.agent ? base + " · " + source.agent : base;
   const repoMissing = !(source.repo_url || "").trim();
 
   const testPayload = () => {
@@ -734,6 +761,29 @@ function SourceCard({
             }}
           />
           <span className="set-hint">Required — tickets from this source clone into this repo.</span>
+        </label>
+        <label className="set-row">
+          <span className="set-label">Agent</span>
+          <select
+            className="tk-agent"
+            data-tk-field="agent"
+            value={source.agent || ""}
+            onChange={(e) => onChange({ agent: e.target.value })}
+          >
+            <option value="">
+              {agents.fallback ? `App default (${agents.fallback})` : "App default"}
+            </option>
+            {agents.names.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          <span className="set-hint">
+            Which coding CLI runs the sessions this source starts. Route one queue to a
+            cloud CLI and another to a local model — pick a provider whose Connections
+            row is green, or leave it on the app default.
+          </span>
         </label>
         <div className="tk-fields">
           {(meta?.fields || []).map((f) =>

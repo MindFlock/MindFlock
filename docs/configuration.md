@@ -172,10 +172,10 @@ exactly these fields and a "Test connection" button that auto-fills `member_id`.
 
 | Provider | Required keys | Notes |
 |---|---|---|
+| `github_issues` | **none** | The zero-config on-ramp, and the catalog's first entry. `api_token` falls back to the GitHub connection (`[github].token` / `$GH_TOKEN` / `gh auth token`); `project` falls back to the source's `repo_url`, then `[repository].url`, then this checkout's `origin`. No workflow states. |
 | `shortcut` | `api_token`, `member_id` | `workflow_state` optional (workflow-state id; integer `workflow_state_id` also works). |
 | `jira` | `base_url`, `email`, `api_token` | Jira Cloud, `assignee = currentUser()`. `member_id` (accountId) optional. `workflow_state` optional (status id → `status = <id>`). |
 | `linear` | `api_token` | GraphQL `viewer.assignedIssues`. `workflow_state` optional (state id). |
-| `github_issues` | `project` (`owner/repo`) | `api_token` optional — falls back to the GitHub connection (`[github].token` / `$GH_TOKEN` / `gh auth token`). No workflow states. |
 | `asana` | `api_token`, `project` (workspace gid) | Tasks with `assignee = me`. No workflow states. |
 
 Every source also takes an OPTIONAL-in-TOML-but-required-in-the-UI `repo_url`
@@ -183,6 +183,14 @@ Every source also takes an OPTIONAL-in-TOML-but-required-in-the-UI `repo_url`
 global default repo. `workflow_state` gates ingestion so a ticket only gets a
 session once it reaches the chosen state (blank = any state). The Settings →
 **Ticketing** screen loads the live state list per source (Shortcut/Jira/Linear).
+
+Each source also takes an optional **`agent`** — the coding CLI its sessions run
+(`claude`, `codex`, `aider`, `goose`, `opencode`, `cline`, `antigravity`, or a
+provider you defined yourself). Unset falls back to `[mindflock].agent` and then
+the app's default program, so omitting it changes nothing; set it to route
+different queues to different CLIs (one to a hosted CLI, another to a fully local
+model). An unknown name is rejected at load time with the valid list. See
+[ingestion-pipeline.md](ingestion-pipeline.md#which-agent-cli-a-ticket-runs).
 
 Every ticket becomes a branch `feature/<slug>/<name>` and a session titled
 `<slug>`, where `<slug>` is source-scoped (`sc-123`, `jira-PROJ-1`,
@@ -195,8 +203,29 @@ provider-scoped slugs (`sc-<id>`, `jira-PROJ-1`, …).
 
 Layered/env resolution (productization path, no `config.toml` needed):
 `MINDFLOCK_TICKET_PROVIDER`, `MINDFLOCK_TICKET_TOKEN`, `MINDFLOCK_TICKET_BASE_URL`,
-`MINDFLOCK_TICKET_EMAIL`, `MINDFLOCK_TICKET_MEMBER_ID`, `MINDFLOCK_TICKET_PROJECT`
-override the settings store, which overrides `[ticketing]`.
+`MINDFLOCK_TICKET_EMAIL`, `MINDFLOCK_TICKET_MEMBER_ID`, `MINDFLOCK_TICKET_PROJECT`,
+`MINDFLOCK_TICKET_AGENT` override the settings store, which overrides
+`[ticketing]`. `MINDFLOCK_INGESTION_AGENT` does the same for `[mindflock].agent`.
+
+### Local model (`[local_model]`, settings store only)
+
+Runs sessions against a model served on this machine — no subscription, no API
+key, and nothing typed or edited leaves the box. Configured in the Settings →
+**Local model** screen (not `config.toml`, because the screen probes your server
+to list its models), stored in `~/.mindflock/settings.json`:
+
+| Key | Values | Notes |
+|---|---|---|
+| `enabled` | bool | Off (the default) is an exact no-op on every launch path |
+| `runtime` | `ollama` \| `lmstudio` \| `custom` | `custom` = any other OpenAI-compatible server (llama.cpp, vLLM, a LiteLLM proxy) |
+| `base_url` | URL | Blank = that runtime's documented default (`:11434`, `:1234/v1`). Point it at a LAN box to share one GPU across a flock |
+| `model` | string | Exactly as the server names it; MindFlock adds whichever prefix the CLI needs |
+
+Supported by **codex**, **aider** and **goose**. Claude Code speaks only the
+Anthropic API, so a session on it keeps using that — `mindflock doctor`'s
+`local-model` check says so explicitly rather than letting it pass silently. See
+[providers.md](providers.md#local-models-local_modelspy) for the per-CLI mappings
+and where each was verified.
 
 Notes on individual keys:
 
@@ -306,6 +335,8 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_GIT_TRANSPORT` | `auto` | Overrides `[repository].git_transport` — `auto` \| `ssh` \| `https`, the URL form used when the pipeline must build a clone URL from an `owner/repo` slug. Never affects pushing, and never rewrites a URL you configured |
 | `MINDFLOCK_BASE_BRANCH` | `main` | Overrides `[github].base_branch` — the fork point for new branches |
 | `MINDFLOCK_GITHUB_REPO` | — | Single-repo override for `[github].repos` (the PR monitor's `owner/name`) |
+| `MINDFLOCK_INGESTION_AGENT` | — | Overrides `[mindflock].agent` — the coding CLI ingested sessions run when their source names none. The headless/CI knob for a cron pipeline that must not touch `settings.json` |
+| `MINDFLOCK_TICKET_AGENT` | — | The `agent` of the single ticketing source built from the `MINDFLOCK_TICKET_*` env override |
 | `SHORTCUT_API_TOKEN` | — | Fallback Shortcut API token when the Settings/ticketing store has none — used by the Settings connection test and Shortcut ingestion |
 | `MINDFLOCK_IDE` | `cursor` | Editor CLI that opens workspaces (`code`, `windsurf`, …); also settable in Settings → Advanced |
 | `MINDFLOCK_ASSISTANT_DIR` | `~/.mindflock-assistant` | Providers, assistant, settings files |
