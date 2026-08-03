@@ -256,7 +256,7 @@ export const SidebarRow = memo(function SidebarRow({
             <span
               className={"title" + (alias ? " aliased" : "")}
               title={[
-                alias ? `${alias}  ·  ${label.full}` : label.full,
+                alias ? `${alias}  ·  ${label.text}` : label.text,
                 // The real title is the identity behind a reformatted label —
                 // it's what every API path and `tmux attach` is keyed by.
                 label.kind ? `session: ${displayTitle(inst)}` : "",

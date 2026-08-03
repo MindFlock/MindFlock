@@ -28,10 +28,12 @@ const SLIDES: Slide[] = [
     title: "Welcome to MindFlock",
     body: (
       <>
-        MindFlock runs a flock of AI coding agents, each in its own git worktree.
-        Start one yourself with any agent CLI — or let a ticket assigned to you in
-        Jira, Linear, GitHub Issues, Shortcut or Asana start it for you, with the
-        ticket already seeded. Either way you review the diff and merge. This tour
+        MindFlock runs a private flock of AI coding agents, each in its own git
+        worktree, all of them on this machine — there is no MindFlock cloud and no
+        account. Start one yourself with any agent CLI — or let a ticket assigned
+        to you in Jira, Linear, GitHub Issues, Shortcut or Asana start it for you,
+        with the ticket already seeded. Either way you review the diff and merge.
+        This tour
         covers the basics and then walks you through connecting your accounts. You
         can skip it any time and replay it later from <b>Settings → General</b>.
       </>

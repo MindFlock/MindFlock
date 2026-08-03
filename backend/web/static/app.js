@@ -22379,6 +22379,13 @@ function orderedSections(order) {
 function orderedBars(order) {
   return orderedSections(order).map((key) => BY_KEY.get(key)).filter((b) => !!b);
 }
+const SIDEBAR_MIN_W = 260;
+const SIDEBAR_MAX_W = 560;
+const SIDEBAR_DEFAULT_W = 260;
+function clampSidebarWidth(px) {
+  if (!isFinite(px)) return SIDEBAR_DEFAULT_W;
+  return Math.round(Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, px)));
+}
 function load(key, fallback, parse = true) {
   try {
     const raw = localStorage.getItem(key);
@@ -22406,6 +22413,7 @@ const useUi = create((set, get) => ({
   viewMode: load("cs_viewmode", "auto", false),
   gridRows: load("cs_gridrows", []),
   sidebarHidden: load("cs_sidebar", "", false) === "hidden",
+  sidebarWidth: clampSidebarWidth(load("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
   order: load("cs_order", []),
   mru: load("cs_mru", []),
   filter: "",
@@ -22451,6 +22459,12 @@ const useUi = create((set, get) => ({
     const hidden = !get().sidebarHidden;
     save("cs_sidebar", hidden ? "hidden" : "", false);
     set({ sidebarHidden: hidden });
+  },
+  setSidebarWidth: (px) => {
+    const w = clampSidebarWidth(px);
+    if (w === get().sidebarWidth) return;
+    save("mf_sidebar_w", w);
+    set({ sidebarWidth: w });
   },
   setOrder: (order) => {
     save("cs_order", order);
@@ -22876,6 +22890,10 @@ async function cleanupMissing(title) {
   toast("Session removed");
   await refreshInstances();
 }
+function clearStaleAlias(title) {
+  const ui = useUi.getState();
+  if (title && ui.aliases[title]) ui.setAlias(title, "");
+}
 function addPendingSession(base) {
   const taken = new Set(instances$1().map((i) => i.title));
   let title = base;
@@ -22884,6 +22902,7 @@ function addPendingSession(base) {
     while (taken.has(base + "-" + i)) i++;
     title = base + "-" + i;
   }
+  clearStaleAlias(title);
   const pending = { title, status: "loading", pending_create: true };
   queryClient.setQueryData(["instances"], (prev) => [...prev || [], pending]);
   return title;
@@ -22901,6 +22920,7 @@ async function copySession(title) {
   const guess = addPendingSession(title + "-copy");
   try {
     const inst = await instApi(title, "/copy", { method: "POST" });
+    if (inst == null ? void 0 : inst.title) clearStaleAlias(inst.title);
     await refreshInstances();
     if (inst == null ? void 0 : inst.title) selectSession(inst.title);
   } catch (err) {
@@ -23006,6 +23026,7 @@ async function resumeSession(title) {
   }
   await refreshInstances();
 }
+const STEP_BADGE_MAX = 24;
 const STAGE_META = {
   provisioning: { label: "provisioning" },
   agent: { label: "agent" },
@@ -23106,9 +23127,10 @@ function chipState(inst) {
   if (stage === "agent")
     return act === "offline" ? { label: "offline", cls: "s-offline", title: "Agent offline" } : { label: "idle", cls: "s-idle", title: "Agent is idle — waiting for input" };
   if (stage === "interrupt") {
-    const step = inst.failed_step;
+    const step = (inst.failed_step || "").trim();
+    const badgeable = !!step && step.length <= STEP_BADGE_MAX;
     return {
-      label: step ? "✗ " + step : "pre-commit ✗",
+      label: badgeable ? "✗ " + step : "pre-commit ✗",
       cls: "s-interrupt",
       title: step ? "Pre-commit failed at: " + step : "Pre-commit failed"
     };
@@ -24543,7 +24565,6 @@ function VoiceInput() {
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "mic-caption", className: caption == null ? "hidden" : "", children: caption || "" })
   ] });
 }
-const MAX_NAME = 20;
 function escapeRe(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -24555,16 +24576,13 @@ function branchTail(branch) {
   const parts = branch.split("/").filter(Boolean);
   return parts.length ? parts[parts.length - 1] : "";
 }
-function clip(name) {
-  return name.length > MAX_NAME ? name.slice(0, MAX_NAME - 1) + "…" : name;
-}
 function splitKind(title) {
   if (title.startsWith("pr-")) return { kind: "pr", slug: title.slice(3) };
   if (title.startsWith("issue-")) return { kind: "iss", slug: title.slice(6) };
   return null;
 }
 function sessionLabel(title, branch) {
-  const plain = { text: title, full: title, kind: "", name: "", slug: title };
+  const plain = { text: title, kind: "", name: "", slug: title };
   if (!title) return plain;
   const split = splitKind(title);
   const ticketName = split ? "" : featureBranchName(branch, title);
@@ -24575,8 +24593,7 @@ function sessionLabel(title, branch) {
   const name = split ? featureBranchName(branch, title) || branchTail(branch) : ticketName;
   const useName = name && name !== slug && name !== title ? name : "";
   return {
-    text: useName ? `(${kind}) ${clip(useName)}/${slug}` : `(${kind}) ${slug}`,
-    full: useName ? `(${kind}) ${useName}/${slug}` : `(${kind}) ${slug}`,
+    text: useName ? `(${kind}) ${useName}/${slug}` : `(${kind}) ${slug}`,
     kind,
     name: useName,
     slug
@@ -24758,7 +24775,7 @@ const SidebarRow = reactExports.memo(function SidebarRow2({
                 {
                   className: "title" + (alias ? " aliased" : ""),
                   title: [
-                    alias ? `${alias}  ·  ${label.full}` : label.full,
+                    alias ? `${alias}  ·  ${label.text}` : label.text,
                     // The real title is the identity behind a reformatted label —
                     // it's what every API path and `tmux attach` is keyed by.
                     label.kind ? `session: ${displayTitle(inst)}` : "",
@@ -24968,6 +24985,64 @@ function SessionFilter() {
       }
     )
   ] });
+}
+const STEP = 16;
+function SidebarResizer() {
+  const width = useUi((s) => s.sidebarWidth);
+  const setSidebarWidth = useUi((s) => s.setSidebarWidth);
+  const startX = reactExports.useRef(0);
+  const startW = reactExports.useRef(width);
+  const liveW = reactExports.useRef(width);
+  const paint = reactExports.useCallback((px) => {
+    liveW.current = px;
+    document.body.style.setProperty("--sidebar-w", px + "px");
+  }, []);
+  reactExports.useEffect(() => () => document.body.classList.remove("sidebar-resizing"), []);
+  const onPointerDown = (ev) => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    startX.current = ev.clientX;
+    startW.current = width;
+    liveW.current = width;
+    ev.currentTarget.setPointerCapture(ev.pointerId);
+    document.body.classList.add("sidebar-resizing");
+  };
+  const onPointerMove = (ev) => {
+    if (!ev.currentTarget.hasPointerCapture(ev.pointerId)) return;
+    paint(clampSidebarWidth(startW.current + (ev.clientX - startX.current)));
+  };
+  const endDrag = (ev) => {
+    if (!ev.currentTarget.hasPointerCapture(ev.pointerId)) return;
+    ev.currentTarget.releasePointerCapture(ev.pointerId);
+    document.body.classList.remove("sidebar-resizing");
+    setSidebarWidth(liveW.current);
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      className: "sidebar-resizer",
+      role: "separator",
+      "aria-orientation": "vertical",
+      "aria-label": "Resize sidebar",
+      "aria-valuenow": width,
+      "aria-valuemin": SIDEBAR_MIN_W,
+      "aria-valuemax": SIDEBAR_MAX_W,
+      tabIndex: 0,
+      title: "Drag to resize · double-click to reset",
+      onPointerDown,
+      onPointerMove,
+      onPointerUp: endDrag,
+      onPointerCancel: endDrag,
+      onDoubleClick: () => setSidebarWidth(SIDEBAR_DEFAULT_W),
+      onKeyDown: (ev) => {
+        if (ev.key === "ArrowLeft") setSidebarWidth(width - STEP);
+        else if (ev.key === "ArrowRight") setSidebarWidth(width + STEP);
+        else if (ev.key === "Home") setSidebarWidth(SIDEBAR_DEFAULT_W);
+        else return;
+        ev.preventDefault();
+      }
+    }
+  );
 }
 function BulkBar() {
   const { data: instances2 = [] } = useInstances();
@@ -26353,6 +26428,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
   const countHead = isFinite(cap) && shownCount > cap ? `${cap} of ${shownCount} shown` : `${instances2.length} session${instances2.length === 1 ? "" : "s"}`;
   const searchVisible = instances2.length >= SEARCH_MIN || !!ui.filter;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { id: "sidebar", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(SidebarResizer, {}),
     doctorWarn.failing && !doctorWarn.dismissed && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "doctor-warn", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "dw-text", children: "⚠ setup issues —" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -28603,6 +28679,7 @@ function NewSessionDialog() {
     closeDialog();
     try {
       const inst = await api("/api/instances", { json: body });
+      clearStaleAlias(inst.title);
       await refreshInstances();
       selectSession(inst.title);
     } catch (err) {
@@ -33530,7 +33607,7 @@ const SLIDES = [
     logo: true,
     title: "Welcome to MindFlock",
     body: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-      "MindFlock runs a flock of AI coding agents, each in its own git worktree. Start one yourself with any agent CLI — or let a ticket assigned to you in Jira, Linear, GitHub Issues, Shortcut or Asana start it for you, with the ticket already seeded. Either way you review the diff and merge. This tour covers the basics and then walks you through connecting your accounts. You can skip it any time and replay it later from ",
+      "MindFlock runs a private flock of AI coding agents, each in its own git worktree, all of them on this machine — there is no MindFlock cloud and no account. Start one yourself with any agent CLI — or let a ticket assigned to you in Jira, Linear, GitHub Issues, Shortcut or Asana start it for you, with the ticket already seeded. Either way you review the diff and merge. This tour covers the basics and then walks you through connecting your accounts. You can skip it any time and replay it later from ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "Settings → General" }),
       "."
     ] })
@@ -33832,6 +33909,9 @@ function App() {
     const t = setTimeout(() => window.dispatchEvent(new Event("resize")), 60);
     return () => clearTimeout(t);
   }, [ui.sidebarHidden]);
+  reactExports.useEffect(() => {
+    document.body.style.setProperty("--sidebar-w", ui.sidebarWidth + "px");
+  }, [ui.sidebarWidth]);
   reactExports.useEffect(() => {
     for (const inst of instances2 || []) noteActivity(inst);
   }, [instances2]);

@@ -13,6 +13,7 @@ import { toast } from "../../lib/toast";
 import { viewCap } from "../grid/layout";
 import { SidebarRow } from "./SidebarRow";
 import { SessionFilter } from "./SessionFilter";
+import { SidebarResizer } from "./SidebarResizer";
 import { BulkBar } from "./BulkBar";
 import { BarSlot, barContent, SECTION_MIME } from "./SidebarBars";
 import { orderedSections, SESSIONS_KEY } from "./barDefs";
@@ -177,6 +178,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
 
   return (
     <aside id="sidebar">
+      <SidebarResizer />
       {doctorWarn.failing && !doctorWarn.dismissed && (
         <div id="doctor-warn">
           <span className="dw-text">⚠ setup issues —</span>

@@ -825,7 +825,13 @@ def _failed_precommit_step(title: str) -> Optional[str]:
     try:
         name = _server()._shell_tmux_name(title)
         cp = subprocess.run(
-            ["tmux", "capture-pane", "-p", "-S", "-400", "-t", name],
+            # -J joins tmux's wrapped lines. Without it a long error is captured
+            # as one line per PANE ROW, so the generic fallback below — which
+            # takes the LAST error-looking line — surfaced the tail of a wrapped
+            # line and the badge read as a mid-word fragment ("ffic-reduction'."
+            # out of "…'traffic-reduction'."). tmux.py and server.py already
+            # capture with -J for the same reason.
+            ["tmux", "capture-pane", "-p", "-J", "-S", "-400", "-t", name],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,

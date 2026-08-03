@@ -53,6 +53,24 @@ describe("chipState (persistent status chip)", () => {
       "✗ typecheck"
     );
   });
+
+  it("badges a hook NAME but keeps a line of hook output in the tooltip", () => {
+    // The server's generic fallback can return a whole output line (up to 80
+    // chars). Pills are never truncated, so a sentence has to stay out of one.
+    const line =
+      "branch 'feature/sc-20834/token-saving-and-traffic-reduction' set up to track ...";
+    const c = chipState(
+      inst({ title: "a7", stage: "interrupt", activity: "idle", failed_step: line })
+    );
+    expect(c.label).toBe("pre-commit ✗");
+    expect(c.title).toContain(line);
+
+    // "Run Tests (+3)" is a name, spaces and all — it still gets badged.
+    expect(
+      chipState(inst({ title: "a8", stage: "interrupt", activity: "idle", failed_step: "Run Tests (+3)" }))
+        .label
+    ).toBe("✗ Run Tests (+3)");
+  });
 });
 
 describe("checkChip (verification gate)", () => {

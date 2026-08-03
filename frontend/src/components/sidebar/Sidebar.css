@@ -9,6 +9,48 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Anchors .sidebar-resizer on the right edge. */
+  position: relative;
+}
+
+/* Resize handle on the sidebar's right edge. It overhangs into the grid's 10px
+   padding rather than sitting inside the sidebar, so it never steals clicks
+   from #instance-list's scrollbar; z-index lifts it over #grid, which is a
+   later sibling and would otherwise paint on top. */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  width: 8px;
+  margin-left: -2px;
+  z-index: 40;
+  cursor: col-resize;
+  /* The strip is invisible until hovered — the accent line is painted by the
+     :hover / :focus-visible rule below. */
+  background: transparent;
+  touch-action: none;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer:focus-visible,
+body.sidebar-resizing .sidebar-resizer {
+  background: linear-gradient(
+    to right,
+    transparent 2px,
+    var(--accent) 2px,
+    var(--accent) 4px,
+    transparent 4px
+  );
+  outline: none;
+}
+
+/* While dragging, the cursor must not flicker back to a text caret as the
+   pointer crosses terminals, and nothing on the page should select. */
+body.sidebar-resizing,
+body.sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 #sidebar header {
@@ -61,6 +103,12 @@ body.sidebar-collapsed {
 }
 
 body.sidebar-collapsed #sidebar {
+  display: none;
+}
+
+/* Nothing to resize when the column is gone (the handle would float over the
+   grid's left edge with no sidebar behind it). */
+body.sidebar-collapsed .sidebar-resizer {
   display: none;
 }
 

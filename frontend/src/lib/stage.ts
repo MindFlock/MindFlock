@@ -15,6 +15,10 @@ import {
   pushSession,
 } from "./sessionActions";
 
+/** Longest `failed_step` that still reads as a hook NAME rather than a line of
+ * output, and so still belongs in the stage pill. "Run Tests (+3)" is 14. */
+const STEP_BADGE_MAX = 24;
+
 const STAGE_META: Record<string, { label: string }> = {
   provisioning: { label: "provisioning" },
   agent: { label: "agent" },
@@ -162,9 +166,16 @@ export function chipState(inst: Partial<Instance>): ChipState {
       ? { label: "offline", cls: "s-offline", title: "Agent offline" }
       : { label: "idle", cls: "s-idle", title: "Agent is idle — waiting for input" };
   if (stage === "interrupt") {
-    const step = inst.failed_step;
+    const step = (inst.failed_step || "").trim();
+    // A pre-commit hook NAME is pill-sized ("ruff", "Run Tests (+3)"), and that
+    // is what the badge is for. The server's generic fallback can instead hand
+    // back a whole line of hook output (up to 80 chars) — real detail, but not a
+    // pill: badging it would either overflow the row or force the chip to be
+    // truncated, and a truncated pill is exactly what we don't want. So long
+    // details ride in the tooltip and the badge stays generic.
+    const badgeable = !!step && step.length <= STEP_BADGE_MAX;
     return {
-      label: step ? "✗ " + step : "pre-commit ✗",
+      label: badgeable ? "✗ " + step : "pre-commit ✗",
       cls: "s-interrupt",
       title: step ? "Pre-commit failed at: " + step : "Pre-commit failed",
     };

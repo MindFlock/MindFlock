@@ -18,17 +18,12 @@
  * along in the row's tooltip.
  */
 
-/** How much of the feature name survives in the row text. The name is the
- * flexible part and the slug is the identifying part, so a long name is
- * clipped here rather than being allowed to push the slug into the row's
- * ellipsis. The tooltip always carries the full thing. */
-const MAX_NAME = 20;
-
 export interface SessionLabel {
-  /** "(tix) add-dark-mode/sc-12345", or the plain title when not a pipeline session. */
+  /** "(tix) add-dark-mode/sc-12345", or the plain title when not a pipeline
+   * session. Never truncated: how much fits is a question about the width of
+   * the sidebar right now, which only CSS knows, so the row ellipsizes this
+   * with `text-overflow` instead of a JS character budget guessing at it. */
   text: string;
-  /** Same as {@link text} but with the feature name never clipped — for tooltips. */
-  full: string;
   /** Kind tag without parens ("tix" | "pr" | "iss"), or "" for plain sessions. */
   kind: string;
   /** Feature name, un-clipped ("add-dark-mode"), or "" when none was derivable. */
@@ -54,10 +49,6 @@ function branchTail(branch: string): string {
   return parts.length ? parts[parts.length - 1] : "";
 }
 
-function clip(name: string): string {
-  return name.length > MAX_NAME ? name.slice(0, MAX_NAME - 1) + "…" : name;
-}
-
 /** Split a session title into its kind tag and identifying slug. */
 function splitKind(title: string): { kind: string; slug: string } | null {
   if (title.startsWith("pr-")) return { kind: "pr", slug: title.slice(3) };
@@ -71,7 +62,7 @@ function splitKind(title: string): { kind: string; slug: string } | null {
  * @param branch The session's branch, which is where the feature name lives.
  */
 export function sessionLabel(title: string, branch: string): SessionLabel {
-  const plain: SessionLabel = { text: title, full: title, kind: "", name: "", slug: title };
+  const plain: SessionLabel = { text: title, kind: "", name: "", slug: title };
   if (!title) return plain;
 
   const split = splitKind(title);
@@ -91,8 +82,7 @@ export function sessionLabel(title: string, branch: string): SessionLabel {
   const useName = name && name !== slug && name !== title ? name : "";
 
   return {
-    text: useName ? `(${kind}) ${clip(useName)}/${slug}` : `(${kind}) ${slug}`,
-    full: useName ? `(${kind}) ${useName}/${slug}` : `(${kind}) ${slug}`,
+    text: useName ? `(${kind}) ${useName}/${slug}` : `(${kind}) ${slug}`,
     kind,
     name: useName,
     slug,

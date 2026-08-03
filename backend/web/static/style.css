@@ -635,7 +635,9 @@ body {
 
 body {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  /* --sidebar-w is written by App.tsx from the UI store (the sidebar's right
+     edge is draggable); the literal is the fallback before the first paint. */
+  grid-template-columns: var(--sidebar-w, 260px) 1fr;
   grid-template-rows: 1fr;
   height: 100vh;
   /* Reserve the top-bar strip; the fixed #topbar sits in this band, so the
@@ -965,6 +967,48 @@ body #mf-winctl {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Anchors .sidebar-resizer on the right edge. */
+  position: relative;
+}
+
+/* Resize handle on the sidebar's right edge. It overhangs into the grid's 10px
+   padding rather than sitting inside the sidebar, so it never steals clicks
+   from #instance-list's scrollbar; z-index lifts it over #grid, which is a
+   later sibling and would otherwise paint on top. */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  width: 8px;
+  margin-left: -2px;
+  z-index: 40;
+  cursor: col-resize;
+  /* The strip is invisible until hovered — the accent line is painted by the
+     :hover / :focus-visible rule below. */
+  background: transparent;
+  touch-action: none;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer:focus-visible,
+body.sidebar-resizing .sidebar-resizer {
+  background: linear-gradient(
+    to right,
+    transparent 2px,
+    var(--accent) 2px,
+    var(--accent) 4px,
+    transparent 4px
+  );
+  outline: none;
+}
+
+/* While dragging, the cursor must not flicker back to a text caret as the
+   pointer crosses terminals, and nothing on the page should select. */
+body.sidebar-resizing,
+body.sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 #sidebar header {
@@ -1017,6 +1061,12 @@ body.sidebar-collapsed {
 }
 
 body.sidebar-collapsed #sidebar {
+  display: none;
+}
+
+/* Nothing to resize when the column is gone (the handle would float over the
+   grid's left edge with no sidebar behind it). */
+body.sidebar-collapsed .sidebar-resizer {
   display: none;
 }
 
@@ -2855,24 +2905,43 @@ p.set-hint {
 .inst-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 9px 10px;
+  gap: 5px;
+  /* Left padding is the grip's lane: the grip is absolutely positioned (see
+     .inst .grip) so it costs the row no width, and this keeps it from landing
+     on top of the Alt+N number when it fades in. */
+  padding: 9px 8px 9px 12px;
   border-radius: 8px;
   cursor: pointer;
+  /* Anchors the grip to THIS row rather than to .inst, which also contains the
+     expanded actions menu (the grip would stretch down the whole card). */
+  position: relative;
 }
 
 .inst-row:hover {
   background: var(--panel-2);
 }
 
-/* Drag-to-reorder grip (sidebar) — appears on hover to keep the row clean. */
+/* Drag-to-reorder grip (sidebar) — the SAME affordance the movable bars use
+   (.bar-grip in toolbars.css): pinned to the hard left edge, out of flow so it
+   costs the row no width, invisible until the row is hovered.
+   Nothing is lost by hiding it: the whole <li> is draggable, so the grip is
+   pure signposting, and the row it signposts is the thing under the cursor. */
 .inst .grip {
-  flex: none;
+  position: absolute;
+  left: 1px;
+  top: 0;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  overflow: hidden;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 10px;
   line-height: 1;
   cursor: grab;
-  opacity: 0.35;
+  opacity: 0;
   transition: opacity 0.12s ease;
   user-select: none;
   letter-spacing: -1px;
@@ -2882,6 +2951,10 @@ p.set-hint {
   opacity: 0.85;
 }
 
+.inst .grip:active {
+  cursor: grabbing;
+}
+
 .inst.dragging .grip {
   cursor: grabbing;
 }
@@ -2889,7 +2962,7 @@ p.set-hint {
 /* Alt+N number badge (first 9 rows). */
 .inst .idx {
   flex: none;
-  width: 13px;
+  width: 11px;
   text-align: center;
   font-size: 10px;
   color: var(--muted);
@@ -2956,13 +3029,28 @@ p.set-hint {
    illegible sliver while the title ellipsized even when space existed); the
    branch is capped at 40% of the row with its own ellipsis. */
 .inst .title {
-  font-size: 13px;
+  /* 12px, not the 13px body size: the row has to fit a grip, a number, a
+     status dot, a chevron, the stage chip and the ✕ alongside the name, and
+     ellipsizing the name is the thing that actually costs the user. */
+  font-size: 12px;
   font-weight: 600;
   flex: 1 1 auto;
   min-width: 34px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Sidebar chips size to their CONTENT rather than to the base 96px cap, so a
+   pill is never cut while the row still has room. They stay shrinkable as a
+   last resort, which is what keeps the row from ever overflowing: flex shrink
+   is proportional to base size, so the title (much wider) gives way first and
+   only stops at its min-width floor — by which point the pills have already
+   been shown in full. Below that the pills ellipsize too, but with a real "…". */
+.inst .stagechip {
+  max-width: none;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 /* A force-start the server accepted but hasn't turned into a session yet: it
@@ -2980,7 +3068,8 @@ p.set-hint {
   padding: 0 2px;
   margin: -1px 0;
   font-family: inherit;
-  font-size: 13px;
+  /* Matches .inst .title exactly, or the row height jumps on rename. */
+  font-size: 12px;
   font-weight: 600;
   color: var(--text);
   background: var(--bg);
