@@ -11,6 +11,7 @@ import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import {
   addPendingSession,
+  clearStaleAlias,
   failPendingSession,
   selectSession,
 } from "../../lib/sessionActions";
@@ -179,6 +180,9 @@ export function NewSessionDialog() {
     closeDialog();
     try {
       const inst = await api<Instance>("/api/instances", { json: body });
+      // Same reason as the guess in addPendingSession: the server's real title
+      // must not arrive wearing a closed session's rename.
+      clearStaleAlias(inst.title);
       await refreshInstances();
       selectSession(inst.title);
     } catch (err) {

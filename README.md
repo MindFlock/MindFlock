@@ -2,7 +2,7 @@
 
 # 🐦‍⬛ MindFlock
 
-**Run a flock of AI coding agents — started by your ticket queue, merged by you.**
+**A private flock of AI coding agents — started by your ticket queue, merged by you.**
 
 [![CI](https://github.com/MindFlock/MindFlock/actions/workflows/ci.yml/badge.svg)](https://github.com/MindFlock/MindFlock/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/MindFlock/MindFlock?include_prereleases)](https://github.com/MindFlock/MindFlock/releases)
@@ -12,6 +12,7 @@
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 [What is it?](#what-is-mindflock) •
+[Where your code goes](#where-your-code-goes) •
 [Does it actually work?](#what-it-looks-like-in-use) •
 [How is this different?](#how-is-this-different) •
 [Quick Start](#quick-start) •
@@ -35,16 +36,18 @@ diffs and terminal output are sample data.</sub>
 ## What is MindFlock?
 
 Work assigned to you in **GitHub Issues, Jira, Linear, Shortcut, or Asana**
-becomes an isolated AI coding session: its own **git worktree** on its own
-`feature/<ticket>/<slug>` branch, dependencies installed, and an agent already
-seeded with the ticket's title, description, acceptance criteria and comments.
-Nothing typed.
+becomes an isolated AI coding session **on your own machine**: its own **git
+worktree** on its own `feature/<ticket>/<slug>` branch, dependencies installed,
+and an agent already seeded with the ticket's title, description, acceptance
+criteria and comments. Nothing typed. No vendor sandbox, no account, no copy of
+your repository anywhere but your disk — and with a local model, no network
+either.
 
-<sub>Two caveats worth knowing before you read further: dependency install is
+<sub>One caveat worth knowing before you read further: dependency install is
 auto-detected for Python/uv repos (`uv sync --all-groups`, `pre-commit install`)
-and every other stack declares its own `setup_commands`; and *provisioned*
-sessions — the ones ingestion creates — launch **Claude Code**. Any agent CLI can
-drive sessions you start yourself.</sub>
+and every other stack declares its own `setup_commands`. Any agent CLI can drive
+any session — including the *provisioned* ones ingestion creates, which each
+ticketing source picks its own agent for.</sub>
 
 You come in at the end that needs a human: **read the diff**, then drive it home
 with one click each — commit (in your terminal, so you watch the hooks), push,
@@ -69,6 +72,55 @@ in from your commits. It never writes to your tracker — no comments, no status
 transitions. It polls (every 20 s) rather than listening for
 webhooks, works one ticket at a time, and only picks up review comments on *your
 own* PRs.
+
+## Where your code goes
+
+Nowhere new. **MindFlock is not a service.** There is no MindFlock cloud, no
+account to create, no sandbox that gets a copy of your repository. The engine is
+a process on your laptop bound to `127.0.0.1` by default; the agents are the same
+CLIs you already run in a terminal, launched into a git worktree on your own
+disk, on your own subscription.
+
+That is the whole difference from the cloud ticket-to-PR tools. Devin, Google
+Jules, GitHub Copilot's coding agent, Cursor's background agents and Atlassian
+Rovo Dev take the same input — a ticket assigned to you — and clone your
+repository into a VM the vendor operates. MindFlock takes the same input and
+never moves the code.
+
+Everything MindFlock itself talks to over the network, in full:
+
+| It calls | When | What it sends |
+|---|---|---|
+| Your tracker's API (GitHub Issues · Jira · Linear · Shortcut · Asana) | every ~20 s while ingestion is on | nothing — **read-only**. It never comments and never moves a status |
+| your local model server, if you configure one | every turn of a session on a local model | your prompt and code — to `127.0.0.1` (or whatever host you pointed it at). Never leaves your machine unless you aim it off-box |
+| `api.github.com` | polling *your own* PRs for review comments; the **Make PR** / **Merge** buttons | what `gh` would send if you ran it by hand |
+| `aipricing.guru` | at most once a day, for the model price table behind the cost display | nothing. Falls back to a built-in table offline |
+| your git remote | only when *you* click push | your commits, over the remote your repo already has |
+| `ntfy.sh`, or your own instance | only if you switch phone push on | the notification text |
+| GitHub Releases | the desktop app's update check | nothing |
+
+No analytics, no telemetry, no crash reporting, no license check, no phone-home
+of any kind — the tree is public, so grep it. Tracker tokens live in
+`~/.mindflock/settings.json` at mode `0600` and are sent to the tracker they
+belong to and nowhere else. `mindflock serve` refuses the network until you
+explicitly ask for `tailscale` mode, and even then it's your tailnet behind an
+auth token, never the public internet.
+
+**The honest boundary, because it's the first thing a security review will
+ask:** your *agent* still talks to its own vendor. `claude` sends code to
+Anthropic and `codex` sends it to OpenAI, exactly as they do when you run them
+yourself in that repo — MindFlock adds no hop and introduces no third party, but
+by default it does not remove that one either.
+
+**If that call is the one you can't make, close it.** Settings → **Local model**
+points the session's CLI at a model you serve yourself — Ollama, LM Studio, or
+any OpenAI-compatible server — and then there is no code egress at all: no
+subscription, no API key, and nothing you type or edit crosses the network.
+Supported by `codex`, `aider` and `goose`, each of which has native local-model
+support, and it applies to *ingested* sessions too, so a ticket can go from
+assigned to committed without leaving the machine. `claude` speaks only the
+Anthropic API, so it has no local route — the screen and `mindflock doctor` both
+say so rather than letting a session quietly keep using it.
 
 ## What it looks like in use
 
@@ -165,9 +217,28 @@ PR-session count a floor.</sub>
 
 ## How is this different?
 
-Every tool below is a good way to *start* an AI coding session, and MindFlock is
-a good way to start one too — `+ New`, a repo, an agent, a prompt. The difference
-is that in MindFlock you don't *have* to: your tracker can do it for you.
+Two different families of tools each do half of what MindFlock does, and they
+sit on opposite sides of it.
+
+**The ticket-to-PR tools run in someone else's cloud.** Assigning an issue and
+getting a pull request back is no longer rare — it's a first-party feature at
+GitHub, Google, Atlassian and Linear. What every one of them has in common is
+that your repository is checked out on a machine you don't own.
+
+| | ticket → PR | where the agent runs | your repo is cloned to |
+|---|---|---|---|
+| **MindFlock** | **yes** | **your machine** | **nowhere — it's already there** |
+| Devin (Cognition) | yes | vendor sandbox | Cognition |
+| Google Jules | yes | vendor VM | Google |
+| GitHub Copilot coding agent | yes | GitHub Actions runner | GitHub |
+| Cursor background agents | yes | vendor sandbox | Cursor |
+| Atlassian Rovo Dev | yes | remote sandbox | Atlassian |
+
+**The local orchestrators make you start every session yourself.** Each one below
+is a good way to *start* an AI coding session, and MindFlock is a good way to
+start one too — `+ New`, a repo, an agent, a prompt. The difference is that in
+MindFlock you don't *have* to: your tracker can do it for you, and it still
+happens on your hardware.
 
 | | **MindFlock** | **Claude Squad** | **Conductor** | **Claude Code Agent Teams** |
 |---|---|---|---|---|
@@ -182,10 +253,17 @@ is that in MindFlock you don't *have* to: your tracker can do it for you.
 | Platforms | Linux, macOS, Windows (WSL2) | macOS, Linux | macOS only | Anywhere Claude Code runs |
 | Remote / phone control | **tailnet + QR, full action bar** | — | — | — |
 
-<sub>Comparison as of July 2026; these tools move fast. If a cell is out of date, please [open an issue or PR](CONTRIBUTING.md) and we'll correct it.</sub>
+<sub>Both comparisons are as of July 2026; these tools move fast. If a cell is out of date, please [open an issue or PR](CONTRIBUTING.md) and we'll correct it.</sub>
 
-The top two rows are the ones that matter. Everything else is a feature race;
-those two change what your day looks like:
+**Nothing in either table sits where MindFlock does** — the queue starts the
+session *and* the session runs on your hardware. Seven local orchestrators were
+checked for a personal assigned-ticket poller and none of them has one: the
+closest, Conductor, can open a workspace from a GitHub or Linear issue but needs
+a click per issue. That is a narrow claim about a fast-moving space rather than a
+moat, and it's exactly the kind of cell worth correcting if you find one.
+
+The top two rows of the second table are the ones that matter. Everything else is
+a feature race; those two change what your day looks like:
 
 - **Work comes to the agents.** MindFlock polls your tracker for tickets
   assigned to you and GitHub for your PRs that came back with review comments,
@@ -217,6 +295,10 @@ those two change what your day looks like:
 - **[Claude Squad](https://github.com/smtg-ai/claude-squad)** is a mature
   multi-agent TUI that also drives several CLIs. If you'd rather stay in the
   terminal than run a desktop app, it's the closer fit.
+- **The cloud tools, if you actually want the cloud.** Work continuing while
+  your laptop is shut, a fleet running against one backlog, someone else's
+  compute paying for the tokens — those are real advantages and MindFlock has
+  none of them. It trades all three for the repository never leaving your disk.
 
 ## Features
 
@@ -229,6 +311,13 @@ those two change what your day looks like:
   moves a ticket's status. **GitHub Issues needs no configuration at all** — the
   token comes from your existing `gh auth login` and the repo from this
   checkout's `origin`.
+- 🔒 **No cloud in the middle** — there is no MindFlock service, no account and
+  no vendor sandbox holding a copy of your repo. The engine binds `127.0.0.1`
+  unless you ask for tailnet mode, ships no analytics or telemetry of any kind,
+  and keeps tracker tokens at mode `0600` on your own disk. The one code egress
+  is your agent CLI's own call to its vendor — the one you were already making,
+  and one you can close entirely by pointing it at a local model.
+  [The full network inventory is above](#where-your-code-goes).
 - 🔀 **Guided git workflow** — one-click commit → push → PR → merge, with live
   workflow-stage badges
   (provisioning → agent → pre-commit → committed → pushed → PR open). The

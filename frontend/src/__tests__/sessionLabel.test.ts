@@ -35,11 +35,14 @@ describe("sessionLabel", () => {
     expect(sessionLabel("pr-app-42", "pr-app-42").text).toBe("(pr) app-42");
   });
 
-  it("clips a long feature name in the row but not in the tooltip", () => {
+  it("never clips a long feature name — CSS ellipsis owns that call", () => {
     const long = "rework-the-entire-billing-pipeline";
     const l = sessionLabel("sc-9", `feature/sc-9/${long}`);
-    expect(l.text).toBe("(tix) rework-the-entire-b…/sc-9");
-    expect(l.full).toBe(`(tix) ${long}/sc-9`);
+    // A JS character budget can't know how wide the sidebar is right now, so it
+    // put a "…" in names that had room to spare. The row ellipsizes instead.
+    expect(l.text).toBe(`(tix) ${long}/sc-9`);
+    expect(l.text).not.toContain("…");
+    expect(l.name).toBe(long);
   });
 
   it("survives regex-special characters in a title", () => {

@@ -10,6 +10,26 @@ import { defaultHiddenBars } from "../components/sidebar/barDefs";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
 
+/** Sidebar width bounds (px).
+ *
+ * The floor is the width the sidebar shipped at for its whole life, and it is a
+ * floor rather than a suggestion because narrower genuinely breaks the row: the
+ * intrinsic minimum of a row (number + dot + chevron + the title's 34px legible
+ * floor + a 96px stage chip + ✕) is ~240px, so below that the chip and the ✕
+ * spill past the sidebar's edge and the name collapses to two characters.
+ * Dragging can only make the sidebar WIDER — which is the direction anyone
+ * reaches for the handle to go anyway.
+ *
+ * The ceiling stops a drag from squeezing the agent panes it exists beside. */
+export const SIDEBAR_MIN_W = 260;
+export const SIDEBAR_MAX_W = 560;
+export const SIDEBAR_DEFAULT_W = 260;
+
+export function clampSidebarWidth(px: number): number {
+  if (!isFinite(px)) return SIDEBAR_DEFAULT_W;
+  return Math.round(Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, px)));
+}
+
 function load<T>(key: string, fallback: T, parse = true): T {
   try {
     const raw = localStorage.getItem(key);
@@ -63,6 +83,8 @@ interface UiState {
   /** Persisted row layout: array of arrays of titles. */
   gridRows: string[][];
   sidebarHidden: boolean;
+  /** Sidebar column width in px (drag the right edge; SIDEBAR_MIN_W…MAX_W). */
+  sidebarWidth: number;
   /** User drag order of sidebar rows (stable; selection never reorders). */
   order: string[];
   /** Most-recently-used order (selection updates it; fills fixed views). */
@@ -109,6 +131,8 @@ interface UiState {
   setViewMode(v: ViewMode): void;
   setGridRows(rows: string[][]): void;
   toggleSidebar(): void;
+  /** Set the sidebar width (clamped + persisted). */
+  setSidebarWidth(px: number): void;
   setOrder(order: string[]): void;
   moveInOrder(title: string, before: string | null): void;
   setFilter(f: string): void;
@@ -140,6 +164,7 @@ export const useUi = create<UiState>((set, get) => ({
   viewMode: load<ViewMode>("cs_viewmode", "auto", false),
   gridRows: load<string[][]>("cs_gridrows", []),
   sidebarHidden: load<string>("cs_sidebar", "", false) === "hidden",
+  sidebarWidth: clampSidebarWidth(load<number>("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
   order: load<string[]>("cs_order", []),
   mru: load<string[]>("cs_mru", []),
   filter: "",
@@ -186,6 +211,12 @@ export const useUi = create<UiState>((set, get) => ({
     const hidden = !get().sidebarHidden;
     save("cs_sidebar", hidden ? "hidden" : "", false);
     set({ sidebarHidden: hidden });
+  },
+  setSidebarWidth: (px) => {
+    const w = clampSidebarWidth(px);
+    if (w === get().sidebarWidth) return;
+    save("mf_sidebar_w", w);
+    set({ sidebarWidth: w });
   },
   setOrder: (order) => {
     save("cs_order", order);

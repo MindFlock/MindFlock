@@ -15,7 +15,9 @@ body {
 
 body {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  /* --sidebar-w is written by App.tsx from the UI store (the sidebar's right
+     edge is draggable); the literal is the fallback before the first paint. */
+  grid-template-columns: var(--sidebar-w, 260px) 1fr;
   grid-template-rows: 1fr;
   height: 100vh;
   /* Reserve the top-bar strip; the fixed #topbar sits in this band, so the

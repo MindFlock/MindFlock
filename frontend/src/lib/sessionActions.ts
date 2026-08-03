@@ -239,6 +239,20 @@ export async function cleanupMissing(title: string) {
   await refreshInstances();
 }
 
+/** A brand-new session must not wear a dead one's name.
+ *
+ * Renames are client-side aliases keyed by title, and they deliberately OUTLIVE
+ * the session — a closed session can be reopened (Ctrl+Shift+T) and should come
+ * back with the name the user gave it. The cost is that a REUSED title inherits
+ * the alias: duplicating hit this every time, because the second `foo-copy`
+ * picked up whatever the first `foo-copy` had been renamed to, and the new row
+ * read as some unrelated session from last week. So creating a title drops any
+ * alias left over for it. */
+export function clearStaleAlias(title: string) {
+  const ui = useUi.getState();
+  if (title && ui.aliases[title]) ui.setAlias(title, "");
+}
+
 /** Optimistic "provisioning" row for create/duplicate (mirrors the server's
  * _unique_title numbering; a mismatch resolves on the next poll). */
 export function addPendingSession(base: string): string {
@@ -249,6 +263,7 @@ export function addPendingSession(base: string): string {
     while (taken.has(base + "-" + i)) i++;
     title = base + "-" + i;
   }
+  clearStaleAlias(title);
   const pending = { title, status: "loading", pending_create: true } as unknown as Instance;
   queryClient.setQueryData<Instance[]>(["instances"], (prev) => [...(prev || []), pending]);
   return title;
@@ -268,6 +283,9 @@ export async function copySession(title: string) {
   const guess = addPendingSession(title + "-copy");
   try {
     const inst = await instApi<Instance>(title, "/copy", { method: "POST" });
+    // The server picks the real title (its own -copy/-copy-2 numbering), which
+    // can differ from the optimistic guess — so clear that one's alias too.
+    if (inst?.title) clearStaleAlias(inst.title);
     await refreshInstances();
     if (inst?.title) selectSession(inst.title);
   } catch (err) {

@@ -61,6 +61,13 @@ export default function App() {
     return () => clearTimeout(t);
   }, [ui.sidebarHidden]);
 
+  // Sidebar width (dragged from its right edge) drives the body grid column.
+  // SidebarResizer writes the var directly while dragging; this is what makes
+  // the committed width survive a reload.
+  useEffect(() => {
+    document.body.style.setProperty("--sidebar-w", ui.sidebarWidth + "px");
+  }, [ui.sidebarWidth]);
+
   // Feed the activity debounce on every poll.
   useEffect(() => {
     for (const inst of instances || []) noteActivity(inst);
