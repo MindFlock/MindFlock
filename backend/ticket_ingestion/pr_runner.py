@@ -1,9 +1,14 @@
 """Launch one Windows Terminal window per PR with a tab per comment.
 
-Each tab is a detached tmux session running an autonomous Claude Code session
-with a prompt scoped to a single PR comment. The PR's workspace is shared
-across tabs; Claude is instructed to `flock` a workspace edit lock around any
-write/commit phase to serialize edits.
+Each tab is a detached tmux session running an autonomous agent session with a
+prompt scoped to a single PR comment. The PR's workspace is shared across tabs;
+the agent is instructed to `flock` a workspace edit lock around any write/commit
+phase to serialize edits.
+
+Which CLI runs comes from ``[mindflock].agent`` (the ingestion-wide default) —
+PR review has no ticketing source of its own to override it — and the launch
+command is built from that provider's spec, so a flock configured for codex or a
+local model reviews PRs with it too.
 """
 
 import asyncio
@@ -17,9 +22,11 @@ import time
 from pathlib import Path
 
 from backend import osenv
+from backend.providers import launch_script
 from backend.ticket_ingestion.claude_runner import (
     _prompt_dir,
     _prune_old_prompts,
+    default_agent,
 )
 from backend.ticket_ingestion.models import (
     PRComment,
@@ -60,6 +67,12 @@ def _session_name(pr_number: int, comment_id: int) -> str:
 
 
 class PRClaudeRunner:
+    def __init__(self, agent: str = "") -> None:
+        # Empty = resolve the engine's configured default at launch time. Kept
+        # optional so `PRClaudeRunner()` (tests, and any caller predating agent
+        # selection) still constructs.
+        self.agent = agent
+
     async def launch(
         self,
         pr: PullRequest,
@@ -107,7 +120,11 @@ class PRClaudeRunner:
             done_marker.unlink()
             await _kill_session(session)
             await _start_tmux_session(
-                session, workspace.directory, prompt_file, done_marker
+                session,
+                workspace.directory,
+                prompt_file,
+                done_marker,
+                agent=self.agent,
             )
             sessions.append((comment, session))
             done_markers.append(done_marker)
@@ -328,16 +345,22 @@ async def _kill_session(session: str) -> None:
 
 
 async def _start_tmux_session(
-    session: str, workdir: Path, prompt_file: Path, done_marker: Path
+    session: str, workdir: Path, prompt_file: Path, done_marker: Path, agent: str = ""
 ) -> None:
     shell = shutil.which("zsh") or shutil.which("bash") or "bash"
     shell_flag = "-ilc"
     marker = shlex.quote(str(done_marker))
-    inner = (
-        f"trap 'touch {marker}' EXIT; "
-        f"claude --dangerously-skip-permissions "
-        f'"$(cat {shlex.quote(str(prompt_file))})"'
+    # The agent's own skip-prompts flag and prompt-passing form (see
+    # backend.providers.launch_script) — these tabs are unattended, so
+    # skip_permissions is on wherever the CLI supports it.
+    preamble, command = launch_script.launch_command(
+        agent or default_agent(),
+        str(prompt_file),
+        skip_permissions=True,
     )
+    # The EXIT trap is what the waiter below blocks on, so it is armed before the
+    # agent starts and fires however the session ends.
+    inner = f"{preamble}trap 'touch {marker}' EXIT; {command}"
     proc = await asyncio.create_subprocess_exec(
         "tmux",
         "new-session",

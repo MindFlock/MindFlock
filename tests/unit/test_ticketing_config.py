@@ -79,17 +79,24 @@ api_token = "tok"
     assert "ticketing.email" in msg and "ticketing.base_url" in msg
 
 
-def test_github_issues_requires_project(tmp_path):
-    with pytest.raises(ConfigError, match="ticketing.project"):
-        load_config(
-            _write(
-                tmp_path,
-                """
+def test_github_issues_needs_no_fields_at_all(tmp_path):
+    """The zero-config on-ramp: GitHub Issues must load with nothing configured.
+
+    Its token comes from the shared GitHub auth chain and its repo from the
+    source's repo_url / [repository].url / this checkout's origin, so requiring
+    ``project`` would reject exactly the config the feature exists to allow."""
+    cfg = load_config(
+        _write(
+            tmp_path,
+            """
 [ticketing]
 provider = "github_issues"
 """ + COMMON,
-            )
         )
+    )
+    assert cfg.ticketing is not None
+    assert cfg.ticketing.provider == "github_issues"
+    assert cfg.ticketing.project == ""
 
 
 def test_unknown_provider_errors(tmp_path):

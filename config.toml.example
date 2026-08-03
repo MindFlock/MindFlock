@@ -14,10 +14,18 @@
 # to `config.toml` (already gitignored) and fill in your values.
 
 # Ticketing sources — one [[ticketing.source]] block per connected tracker.
-# provider ∈ shortcut | jira | linear | github_issues | asana. Each provider
+# provider ∈ github_issues | shortcut | jira | linear | asana. Each provider
 # reads the credential subset it needs (see docs/configuration.md). PREFER the
 # Settings UI (Ticketing) or $MINDFLOCK_TICKET_* env vars over committing
 # secrets here.
+#
+# The shortest possible source is GitHub Issues, which needs NO fields at all:
+# its token comes from your GitHub connection (or `gh auth token`) and its repo
+# from [repository].url, or this checkout's `origin` if that is unset too.
+#
+#   [[ticketing.source]]
+#   provider = "github_issues"
+#
 [[ticketing.source]]
 provider = "shortcut"
 # Shortcut API token — create one at
@@ -32,6 +40,13 @@ poll_interval_seconds = 20
 # Optional: clone URL this source's tickets provision into (defaults to
 # [repository].url).
 # repo_url = ""
+# Optional: which agent CLI this source's sessions run — claude | codex | aider |
+# goose | opencode | cline | antigravity, or any provider you defined yourself.
+# Unset falls back to [mindflock].agent and then the app's default program, so
+# leaving it out changes nothing. Set it per source to route queues to different
+# CLIs — e.g. one team's tickets on a hosted CLI and a compliance queue on a
+# fully local model (see [local_model] below).
+# agent = "codex"
 
 [repository]
 # The repo MindFlock provisions worktrees/clones from. Env: $MINDFLOCK_REPO_URL
@@ -120,9 +135,34 @@ enabled = true
 mode = "worktree"
 # Open the workspace in Cursor once provisioned (best-effort; no-op without `cursor`).
 open_cursor = true
-# Launch the agent with --dangerously-skip-permissions so a fresh worktree path
-# doesn't re-prompt the per-folder trust gate.
+# Launch the agent with the CLI's own skip-all-prompts flag so a fresh worktree
+# path doesn't re-prompt the per-folder trust gate. The exact flag comes from the
+# CLI's provider (claude: --dangerously-skip-permissions, codex:
+# --dangerously-bypass-approvals-and-sandbox, aider: --yes-always; goose and
+# cline have none and get nothing appended).
 skip_permissions = true
+# Which agent CLI ingested sessions run when their source names none — i.e. the
+# ingestion-wide default, also used by PR review and issue handling, which have
+# no source of their own. Env: $MINDFLOCK_INGESTION_AGENT
+# Unset = the app's configured default program (unchanged behaviour).
+# agent = "codex"
+
+# --- Local model (privacy / no-subscription path) -----------------------------
+# NOT read from config.toml — set it in the Settings UI (Local model) so the
+# server can probe your server and list its models. Documented here for
+# reference; it lives in ~/.mindflock/settings.json as:
+#
+#   [local_model]
+#   enabled  = true
+#   runtime  = "ollama"          # ollama | lmstudio | custom (OpenAI-compatible)
+#   base_url = ""                # blank = that runtime's documented default
+#   model    = "qwen2.5-coder:7b"
+#
+# With this on, the session's CLI is pointed at your own server: no subscription,
+# no API key, and nothing you type or edit leaves the machine. Supported by
+# codex, aider and goose (each has native local-model support). Claude Code
+# speaks only the Anthropic API, so sessions on it keep using that —
+# `mindflock doctor` says so out loud rather than letting it pass silently.
 
 # --- Platform (Windows / WSL only) ------------------------------------------
 # These have no effect on native Linux/macOS. NOTE: unlike the sections above,

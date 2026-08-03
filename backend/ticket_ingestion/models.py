@@ -54,6 +54,11 @@ class Ticket:
     # Git clone URL / local path this ticket's session provisions into, stamped
     # from its ingestion source. Empty = fall back to the global repository.url.
     repo_url: str = ""
+    # Which agent CLI this ticket's session runs — a provider name ("claude",
+    # "codex", "aider", "goose", …) stamped from its ingestion source, so one
+    # flock can route (say) Jira tickets to codex and GitHub issues to a local
+    # model. Empty = fall back to [mindflock].agent, then the engine default.
+    agent: str = ""
     # Human name of the ticket's workflow state / bucket ("In Progress",
     # "Ready for Dev", …) when the provider knows it, spelled exactly the way
     # that provider's ``list_states()`` spells it — the assigned-tickets panel

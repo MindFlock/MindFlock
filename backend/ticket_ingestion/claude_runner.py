@@ -1,21 +1,32 @@
-"""Claude Code runner for the ticket-ingestion pipeline.
+"""Standalone agent-CLI runner for the ticket-ingestion pipeline.
 
-Spawns Claude Code inside a detached tmux session per story, then opens a
-Windows Terminal tab that attaches to it. Lets the developer continue the
+Spawns the ticket's agent CLI inside a detached tmux session per story, then
+opens a terminal tab that attaches to it. Lets the developer continue the
 conversation interactively while the pipeline keeps processing other stories.
+
+Which CLI runs is per-ticket: ``Ticket.agent`` (stamped from the ingesting
+source's ``agent``), else ``[mindflock].agent``, else the engine's configured
+default program. The launch command itself is built from that provider's
+:class:`~backend.providers.base.LauncherSpec` via
+:mod:`backend.providers.launch_script` — the same vocabulary the engine's
+provisioned launcher uses, so the two ingestion paths start a CLI identically.
+
+The module keeps its historical name (and the ``ClaudeCodeRunner`` alias) so
+existing imports and the on-disk prompt-file naming are undisturbed; the runner
+itself has not been Claude-specific since agent selection landed.
 """
 
 import asyncio
 import logging
 import os
 import re
-import shlex
 import tempfile
 import time
 from pathlib import Path
 
 import aiohttp
 
+from backend.providers import launch_script
 from backend.ticket_ingestion.config import PipelineConfig
 from backend.ticket_ingestion.models import (
     Attachment,
@@ -27,17 +38,19 @@ from backend.ticket_ingestion.terminal_launch import build_terminal_tab_argv
 logger = logging.getLogger(__name__)
 
 
-def _claude_binary() -> str:
-    """The coding-CLI executable for the standalone tmux launch.
+def default_agent() -> str:
+    """The engine's configured default agent program, or ``"claude"``.
 
-    Defaults to ``claude`` but honors a user binary-path override for the claude
-    provider (Settings ``coding_cli.binary_paths[claude]`` / env
-    ``MINDFLOCK_PROVIDER_BIN_CLAUDE``). With no override it returns ``"claude"`` so
-    the launch string is unchanged. Best-effort — never raises."""
+    The last link in the ``ticket.agent -> [mindflock].agent -> engine default``
+    chain. Read lazily and defensively: the standalone launcher is exactly the
+    path that runs when the engine half of the package is unavailable, so a
+    missing :mod:`backend.config` must degrade to the historical default rather
+    than fail the launch.
+    """
     try:
-        from backend.providers.config import binary_override
+        from backend import config as cs_config
 
-        return binary_override("claude") or "claude"
+        return cs_config.LoadConfig().GetProgram() or "claude"
     except Exception:  # noqa: BLE001
         return "claude"
 
@@ -85,11 +98,19 @@ def _prune_old_prompts(
         pass
 
 
-class ClaudeCodeRunner:
-    """Starts a Claude Code session in a tmux pane and surfaces it in a Windows Terminal tab."""
+class AgentCliRunner:
+    """Starts the ticket's agent CLI in a tmux pane and surfaces it in a terminal tab."""
 
     def __init__(self, config: PipelineConfig):
         self.config = config
+
+    def agent_for(self, story: Ticket) -> str:
+        """Which agent CLI ``story`` runs: its own, else the pipeline default."""
+        return (
+            getattr(story, "agent", "")
+            or self.config.agent_for(getattr(story, "provider", ""))
+            or default_agent()
+        )
 
     async def invoke(
         self,
@@ -110,8 +131,10 @@ class ClaudeCodeRunner:
         prompt_file.write_text(prompt, encoding="utf-8")
 
         session = _tmux_session_name(story)
+        agent = self.agent_for(story)
         logger.info(
-            "Starting Claude Code for ticket %s in tmux session '%s' (prompt file: %s)",
+            "Starting %s for ticket %s in tmux session '%s' (prompt file: %s)",
+            agent,
             story.slug,
             session,
             prompt_file,
@@ -119,10 +142,11 @@ class ClaudeCodeRunner:
 
         try:
             await self._kill_existing_session(session)
-            await self._start_tmux_session(session, env.directory, prompt_file)
+            await self._start_tmux_session(session, env.directory, prompt_file, agent)
             await self._open_terminal_tab(session)
             logger.info(
-                "Claude session '%s' is live. Attach manually with: tmux attach -t %s",
+                "%s session '%s' is live. Attach manually with: tmux attach -t %s",
+                agent,
                 session,
                 session,
             )
@@ -130,12 +154,13 @@ class ClaudeCodeRunner:
             raise
         except Exception as e:
             logger.error(
-                "Unexpected error invoking Claude Code for ticket %s: %s",
+                "Unexpected error invoking %s for ticket %s: %s",
+                agent,
                 story.slug,
                 e,
             )
             raise RuntimeError(
-                f"Failed to invoke Claude Code for ticket {story.slug}: {e}"
+                f"Failed to invoke {agent} for ticket {story.slug}: {e}"
             ) from e
 
     async def _kill_existing_session(self, session: str) -> None:
@@ -151,16 +176,20 @@ class ClaudeCodeRunner:
         await process.wait()
 
     async def _start_tmux_session(
-        self, session: str, workdir: Path, prompt_file: Path
+        self, session: str, workdir: Path, prompt_file: Path, agent: str = ""
     ) -> None:
         # bash -ilc: login+interactive shell so PATH from .bashrc/.profile is set.
-        # Trailing `exec bash -i` keeps the tmux pane alive after claude exits,
+        # Trailing `exec bash -i` keeps the tmux pane alive after the agent exits,
         # so the user can re-run or inspect output.
-        # The executable defaults to ``claude`` but honors a user binary-path
-        # override (Settings ``coding_cli.binary_paths[claude]`` / env
-        # ``MINDFLOCK_PROVIDER_BIN_CLAUDE``); with no override it stays ``claude``.
-        exe = _claude_binary()
-        inner = f'{exe} "$(cat {shlex.quote(str(prompt_file))})"; ' f"exec bash -i"
+        #
+        # The command comes from the agent's own provider (its entry subcommand,
+        # its binary-path override, and how it accepts a seed prompt — as argv, or
+        # typed into the pane for a CLI that takes none), so this path launches
+        # codex/aider/goose correctly instead of assuming Claude's argv shape.
+        preamble, command = launch_script.launch_command(
+            agent or default_agent(), str(prompt_file)
+        )
+        inner = f"{preamble}{command}; exec bash -i"
         process = await asyncio.create_subprocess_exec(
             "tmux",
             "new-session",
@@ -370,6 +399,12 @@ class ClaudeCodeRunner:
             lines.append(supplemental_context)
             lines.append("")
         return "\n".join(lines)
+
+
+#: Historical name for :class:`AgentCliRunner`, kept because the class is
+#: constructed from the orchestrator, the clarification handler, the engine
+#: bridge and two web force-start paths (plus their tests).
+ClaudeCodeRunner = AgentCliRunner
 
 
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")

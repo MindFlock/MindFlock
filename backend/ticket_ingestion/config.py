@@ -107,10 +107,58 @@ class TicketProviderConfig:
     #: single-repo setup keeps working unchanged; set it per source to run
     #: ingestion across many repos.
     repo_url: str = ""
+    #: Agent CLI that tickets from THIS source run — a coding-provider name
+    #: (``claude`` | ``codex`` | ``aider`` | ``goose`` | ``opencode`` | … or a
+    #: user-defined provider). Empty = fall back to ``[mindflock].agent`` and
+    #: then the engine's configured default, so an existing config is unchanged.
+    #: Per-source so one flock can route different queues to different CLIs (or
+    #: to a local model) — e.g. compliance tickets to an offline Ollama-backed
+    #: session while everything else stays on a hosted CLI.
+    agent: str = ""
 
 
-#: Providers the pipeline knows how to ingest from.
-SUPPORTED_PROVIDERS = ("shortcut", "jira", "linear", "github_issues", "asana")
+#: Providers the pipeline knows how to ingest from. GitHub Issues leads: it is
+#: the zero-config on-ramp (see :mod:`backend.ticket_ingestion.providers`), and
+#: the Settings UI defaults a new source to the first entry of the catalog.
+SUPPORTED_PROVIDERS = ("github_issues", "shortcut", "jira", "linear", "asana")
+
+
+def known_agents() -> tuple[str, ...]:
+    """Coding-CLI provider names an ``agent`` field may name, or ``()``.
+
+    Read from the live coding-provider registry (bundled CLIs plus any
+    user-defined provider TOML), minus the ``generic`` catch-all — that one
+    claims every program, so offering it as a *choice* would be meaningless.
+
+    Returns ``()`` when the registry can't be imported at all, which is the one
+    genuinely partial install the ingestion half tolerates (see
+    :func:`backend.ticket_ingestion.session_runner.engine_bridge_error`). Callers
+    read ``()`` as "can't validate" and accept the configured name as-is rather
+    than rejecting a config they cannot check.
+    """
+    try:
+        from backend import providers
+
+        return tuple(p.name for p in providers.all_providers() if p.name != "generic")
+    except Exception:  # noqa: BLE001 — validation is a convenience, not a gate
+        return ()
+
+
+def _validate_agent(value, label: str, problems: list[str]) -> str:
+    """Normalize an ``agent`` field, recording a problem for an unknown CLI.
+
+    A typo here is worth catching at load time: the launch path would otherwise
+    fall through to the generic catch-all provider and run the misspelled name as
+    a bare program, so the session dies immediately with a shell "command not
+    found" that looks like a MindFlock bug.
+    """
+    agent = str(value or "").strip()
+    if not agent:
+        return ""
+    allowed = known_agents()
+    if allowed and agent not in allowed:
+        problems.append(f"{label} must be one of {', '.join(allowed)} (got {agent!r})")
+    return agent
 
 
 @dataclass
@@ -131,10 +179,17 @@ class EngineConfig:
 
     ``mode`` selects the workspace strategy: ``"worktree"`` (fast worktree off a
     canonical clone) or ``"clone"`` (a full standalone clone).
+
+    ``agent`` is the coding CLI ingested sessions run when a ticketing source
+    doesn't name its own (``[[ticketing.source]].agent``). Empty = the engine's
+    configured default program, which is what every existing install resolves to,
+    so this only ever *widens* the choice. It applies to the standalone launcher
+    too — both ingestion paths run the same CLI.
     """
 
     enabled: bool = True
     mode: str = "worktree"
+    agent: str = ""
 
 
 @dataclass
@@ -183,6 +238,20 @@ class PipelineConfig:
         # The primary source is always the first configured one.
         self.ticketing = self.ticketing_sources[0]
         _assign_source_ids(self.ticketing_sources)
+
+    def agent_for(self, source_id: str = "") -> str:
+        """The coding CLI a session from ``source_id`` should run, or ``""``.
+
+        Precedence: that source's own ``agent`` → ``[mindflock].agent`` → ``""``,
+        which every launch path reads as "use the engine's configured default
+        program". The single place this chain lives, so the engine bridge, the
+        standalone tmux launcher, the PR runner and the web force-start paths
+        cannot disagree about which CLI a ticket runs.
+        """
+        for src in self.ticketing_sources or ():
+            if source_id and (src.id or src.provider) == source_id and src.agent:
+                return src.agent
+        return (self.engine.agent if self.engine else "") or ""
 
 
 def _assign_source_ids(sources: list[TicketProviderConfig]) -> None:
@@ -418,6 +487,17 @@ def _merge_layers(raw: dict) -> dict:
             toml_value=engine.get("mode"),
         ),
     )
+    # Which CLI ingested sessions run by default. MINDFLOCK_INGESTION_AGENT is the
+    # headless/CI knob (a cron pipeline that must not touch settings.json).
+    _put(
+        engine,
+        "agent",
+        _s.resolve_str(
+            env="MINDFLOCK_INGESTION_AGENT",
+            settings_getter=lambda s: s.engine.agent,
+            toml_value=engine.get("agent"),
+        ),
+    )
 
     # --- ticketing block (generic provider selection) -----------------------
     # Resolve ticketing sources: an env single-source override wins; else the
@@ -466,6 +546,7 @@ def _resolve_ticketing_layer(toml_ticketing: dict, _s) -> dict:
             ("email", "MINDFLOCK_TICKET_EMAIL"),
             ("member_id", "MINDFLOCK_TICKET_MEMBER_ID"),
             ("project", "MINDFLOCK_TICKET_PROJECT"),
+            ("agent", "MINDFLOCK_TICKET_AGENT"),
         ):
             v = (os.environ.get(env) or "").strip()
             if v:
@@ -483,8 +564,14 @@ def _resolve_ticketing_layer(toml_ticketing: dict, _s) -> dict:
 
 
 # Per-provider required credential fields (ticketing.*), with the human hint
-# shown when one is missing. GitHub Issues needs no token here (it falls back to
-# the shared GitHub auth chain), only a repo scope.
+# shown when one is missing.
+#
+# GitHub Issues is deliberately absent: it is the zero-config on-ramp, so BOTH
+# its inputs self-resolve — the token from the shared GitHub auth chain
+# (``gh auth token``) and the repo from the source's ``repo_url`` / the global
+# ``[repository].url`` / this checkout's ``origin`` (see
+# ``GithubIssuesProvider.resolve_repo``). Requiring ``project`` here would reject
+# exactly the config that needs no fields filled in.
 _PROVIDER_REQUIRED: dict[str, list[tuple[str, str]]] = {
     "shortcut": [
         ("api_token", "Shortcut API token"),
@@ -496,7 +583,6 @@ _PROVIDER_REQUIRED: dict[str, list[tuple[str, str]]] = {
         ("base_url", "Jira site URL (https://your-domain.atlassian.net)"),
     ],
     "linear": [("api_token", "Linear API key")],
-    "github_issues": [("project", "owner/repo to ingest issues from")],
     "asana": [
         ("api_token", "Asana personal access token"),
         ("project", "Asana workspace gid"),
@@ -559,6 +645,7 @@ def _parse_source(
         id=str(src.get("id", "") or ""),
         label=str(src.get("label", "") or ""),
         repo_url=str(src.get("repo_url", "") or ""),
+        agent=_validate_agent(src.get("agent"), f"{label}.agent", problems),
     )
     return cfg, problems
 
@@ -697,9 +784,16 @@ def _parse_engine(raw: dict, config_path: Path) -> EngineConfig:
             f"Invalid configuration in {config_path}: "
             "[mindflock].mode must be 'worktree' or 'clone'"
         )
+    problems: list[str] = []
+    agent = _validate_agent(engine_section.get("agent"), "[mindflock].agent", problems)
+    if problems:
+        raise ConfigError(
+            f"Invalid configuration in {config_path}: " + "; ".join(problems)
+        )
     return EngineConfig(
         enabled=bool(engine_section.get("enabled", True)),
         mode=engine_mode,
+        agent=agent,
     )
 
 

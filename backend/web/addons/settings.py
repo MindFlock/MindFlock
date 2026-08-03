@@ -368,6 +368,11 @@ def _source_cfg_from_body(body: dict):
         member_id=pick("member_id", sp("member_id")),
         project=pick("project", sp("project")),
         workflow_state=pick("workflow_state", sp("workflow_state")),
+        # Carried so a provider that derives its scope from the repo (GitHub
+        # Issues auto-detects owner/repo from repo_url) can Test with nothing but
+        # a repo filled in, and so the agent shows up in the round-tripped config.
+        repo_url=pick("repo_url", sp("repo_url")),
+        agent=pick("agent", sp("agent")),
     )
 
 
@@ -536,6 +541,52 @@ class SettingsAddon(Addon):
                     "mention_name": str(
                         member.get("mention_name") or profile.get("mention_name") or ""
                     ),
+                }
+            )
+
+        @router.post("/settings/test/local-model")
+        def test_local_model(body: Optional[dict] = None) -> JSONResponse:
+            """Probe a local model server and list what it serves.
+
+            Uses the request-supplied runtime/base_url when present (so the user
+            can Test before saving) and otherwise the stored config. The model
+            list is what makes this more than a ping: it turns "type the exact
+            tag your server uses" into picking from a dropdown.
+            """
+            from backend.providers import local_models
+
+            body = body or {}
+            stored = local_models.load_config()
+            runtime = (
+                str(body.get("runtime", "") or "").strip().lower() or stored.runtime
+            )
+            cfg = local_models.LocalModelConfig(
+                # Probe on demand regardless of the saved on/off state — the
+                # whole point is to check the server BEFORE switching it on.
+                enabled=True,
+                runtime=runtime if runtime in local_models.RUNTIMES else "ollama",
+                base_url=str(body.get("base_url", "") or "").strip() or stored.base_url,
+                model=str(body.get("model", "") or "").strip() or stored.model,
+            )
+            result = local_models.probe(cfg)
+            return JSONResponse(
+                {
+                    "ok": bool(result.get("running")),
+                    "runtime": cfg.runtime,
+                    "base_url": result.get("base_url", ""),
+                    "models": result.get("models", []),
+                    "error": result.get("error", ""),
+                    # Which of the installed CLIs can actually be pointed at it,
+                    # so the screen can say so instead of failing at launch.
+                    "supported_agents": [
+                        p.name
+                        for p in providers.all_providers()
+                        if local_models.supported(p.name)
+                    ],
+                    "default_base_urls": {
+                        r: local_models.default_base_url(r)
+                        for r in local_models.RUNTIMES
+                    },
                 }
             )
 

@@ -143,7 +143,13 @@ def test_run_story_title_branch_and_prompt_passthrough(config):
     assert branch == expected_branch
 
     create.assert_called_once()
-    passed_title, passed_branch, passed_prompt, passed_repo = create.call_args.args
+    (
+        passed_title,
+        passed_branch,
+        passed_prompt,
+        passed_repo,
+        passed_agent,
+    ) = create.call_args.args
     assert passed_title == "sc-42"
     assert passed_branch == expected_branch
 
@@ -160,7 +166,7 @@ def test_run_story_passes_supplemental_context_into_prompt(config):
     with patch.object(runner, "_create_instance", return_value=MagicMock()) as create:
         _run(runner.run(story, supplemental_context=supplemental))
 
-    _, _, passed_prompt, _ = create.call_args.args
+    _, _, passed_prompt, _, _ = create.call_args.args
     assert supplemental in passed_prompt
     # And it matches the helper output for the same supplemental context.
     assert passed_prompt == runner._prompt_helper._build_prompt(
@@ -182,7 +188,7 @@ def test_run_story_appends_attachment_notice_to_prompt(config):
     with patch.object(runner, "_create_instance", return_value=fake_inst) as create:
         _run(runner.run(story))
 
-    _, _, passed_prompt, _ = create.call_args.args
+    _, _, passed_prompt, _, _ = create.call_args.args
     base_prompt = runner._prompt_helper._build_prompt(story, None, None)
     # Attachment notice is appended AFTER the base prompt.
     assert passed_prompt.startswith(base_prompt)

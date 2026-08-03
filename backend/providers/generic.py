@@ -10,7 +10,13 @@ from __future__ import annotations
 import shlex
 from typing import Optional
 
-from .base import BaseProvider, LaunchContext, TrustSpec, seed_prompt_expr
+from .base import (
+    BaseProvider,
+    LauncherSpec,
+    LaunchContext,
+    TrustSpec,
+    seed_prompt_expr,
+)
 from .config import ProviderConfig
 
 
@@ -79,10 +85,33 @@ class GenericProvider(BaseProvider):
             return fresh
         return fresh
 
-    # Generic providers are launched directly; the workspace launcher script is
-    # Claude/MindFlock-specific, so they never own one.
+    # Generic providers don't GENERATE the workspace launcher script (that stays
+    # a MindFlock-owned artifact written by the provisioning path), but they do
+    # supply the flag vocabulary it launches them with — see launcher_spec.
     def owns_launcher(self, ctx: LaunchContext) -> bool:
         return False
+
+    def launcher_spec(self) -> LauncherSpec:
+        """This CLI's provisioned-launcher vocabulary, straight from its config.
+
+        The same four knobs ``build_launch_command`` uses for a plain session, so
+        a provisioned session (an ingested ticket, a PR workspace) launches the
+        CLI exactly the way a hand-started one does — codex resumes with
+        ``resume --last``, goose with ``-r``, aider with
+        ``--restore-chat-history`` and no ``|| fresh`` fallback, and none of them
+        is handed Claude's ``--dangerously-skip-permissions``.
+        """
+        cfg = self.cfg
+        return LauncherSpec(
+            skip_perms_flag=cfg.skip_perms_flag,
+            prompt_arg=cfg.prompt_arg,
+            resume_flag=cfg.resume_flag,
+            resume_fallback=cfg.resume_fallback,
+            natural_codes=tuple(cfg.natural_codes),
+            # resolved_binary() already folds in the user's binary-path override,
+            # so the launcher must not apply one a second time.
+            command=cfg.resolved_binary(),
+        )
 
     # --- exit / resume policy --------------------------------------------- #
     def is_natural_exit(self, code) -> bool:

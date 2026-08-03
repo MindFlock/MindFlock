@@ -13,6 +13,8 @@ from __future__ import annotations
 import datetime as dt
 import os
 import shlex
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -154,13 +156,90 @@ def _render_launcher(tmp_path, prompt, program, skip) -> str:
         ("launcher_claude_prompt_skip.golden.sh", "Do the thing", "claude", True),
         ("launcher_claude_noprompt_skip.golden.sh", "", "claude", True),
         ("launcher_claude_prompt_noskip.golden.sh", "Do the thing", "claude", False),
-        ("launcher_custom_prog_prompt.golden.sh", "Do the thing", "aider --foo", True),
+        # One golden per distinct provider SHAPE the launcher has to speak, so a
+        # regression that reinstates Claude's flags for another CLI fails here:
+        #   aider   — own skip flag, resume flag with NO fallback chain, and no
+        #             prompt argument at all (so the keystroke seeder appears)
+        #   codex   — own skip flag, `resume --last` SUBCOMMAND, positional prompt
+        #   goose   — no skip flag, `goose session` entry subcommand, `-r` resume
+        #   mycli   — unknown program: no flags invented, `--continue` resume
+        ("launcher_aider_prompt_skip.golden.sh", "Do the thing", "aider --foo", True),
+        ("launcher_codex_prompt_skip.golden.sh", "Do the thing", "codex", True),
+        ("launcher_goose_prompt_skip.golden.sh", "Do the thing", "goose", True),
+        ("launcher_unknown_prog_prompt.golden.sh", "Do the thing", "mycli", True),
     ],
 )
 def test_write_launcher_golden(tmp_path, golden, prompt, program, skip):
     expected = (_DATA / golden).read_text(encoding="utf-8")
     got = _render_launcher(tmp_path, prompt, program, skip)
     assert got == expected
+
+
+@pytest.mark.parametrize("program", ["aider", "codex", "goose", "opencode", "cline"])
+def test_write_launcher_never_leaks_claude_flags_to_other_clis(tmp_path, program):
+    """The bug this whole spec exists for: a provisioned (= ingested) session on
+    any non-Claude CLI used to be launched with Claude Code's flags, which those
+    CLIs reject outright — so ingestion was Claude-only in practice."""
+    d = tmp_path / program
+    d.mkdir()
+    got = _render_launcher(d, "Do the thing", program, True)
+    assert "--dangerously-skip-permissions" not in got
+    # codex resumes with `resume --last`, aider with --restore-chat-history,
+    # goose/opencode with -r/--continue… none of them with Claude's --continue
+    # unless it is genuinely their own flag.
+    if program in ("aider", "codex", "goose", "cline"):
+        assert "--continue" not in got
+
+
+def test_write_launcher_seeds_the_prompt_for_every_bundled_cli(tmp_path):
+    """Every bundled CLI must actually RECEIVE the ticket prompt — as argv when
+    it takes one, otherwise typed into the pane. A provisioned session that
+    launches idle silently drops the ticket."""
+    for program in ("claude", "codex", "antigravity", "aider", "goose", "opencode"):
+        d = tmp_path / program
+        d.mkdir()
+        got = _render_launcher(d, "Do the thing", program, True)
+        seeded = (
+            f'"$(cat {provisioned.PROMPT_BASENAME})"' in got or "mf_seed_prompt" in got
+        )
+        assert seeded, f"{program} launches without the ticket prompt"
+
+
+@pytest.mark.parametrize(
+    "program",
+    ["claude", "codex", "antigravity", "aider", "goose", "opencode", "cline", "mycli"],
+)
+@pytest.mark.parametrize("prompt", ["Do the thing\nsecond line", ""])
+def test_generated_launcher_is_valid_shell(tmp_path, program, prompt):
+    """Parse every generated launcher with a real shell.
+
+    The script is assembled from string fragments — a function definition, a
+    `seeder & cli` background form, `||` resume chains, a `case` list — and a
+    syntax error in any of them makes the session die instantly with a message
+    nobody reads. The launcher runs under `bash -ilc`, and the ingestion PR runner
+    prefers `zsh` when present, so both have to accept it.
+    """
+    d = tmp_path / program
+    d.mkdir()
+    path = provisioned.write_launcher(str(d), prompt, program=program)
+    for shell in ("bash", "zsh"):
+        if shutil.which(shell) is None:
+            continue
+        proc = subprocess.run([shell, "-n", path], capture_output=True, text=True)
+        assert proc.returncode == 0, f"{shell} rejected the launcher: {proc.stderr}"
+
+
+def test_keystroke_seeder_pastes_as_one_block_and_only_on_first_launch(tmp_path):
+    """A multi-line prompt sent as literal keys would submit line-by-line, so the
+    seeder goes through a bracketed tmux paste. And it must sit only in the
+    first-launch branch: re-seeding a resumed session restarts the whole ticket."""
+    got = _render_launcher(tmp_path, "line one\nline two", "aider", True)
+    assert "paste-buffer" in got and "-p" in got
+    assert 'send-keys -t "$TMUX_PANE" -l' not in got
+    first_branch = got.split("else\n", 1)[1].split("fi\n", 1)[0]
+    assert "mf_seed_prompt &" in first_branch
+    resume_branch = got.split("if [ -f", 1)[1].split("else\n", 1)[0]
+    assert "mf_seed_prompt" not in resume_branch
 
 
 def test_write_launcher_cache_env_generalized(tmp_path):

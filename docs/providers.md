@@ -78,6 +78,83 @@ The Claude provider launches plain `claude` (Claude Code). It:
   yet, or the session not listed
 - reads token usage from Claude Code transcripts (below)
 
+## The launcher vocabulary (`LauncherSpec`, `launch_script.py`)
+
+MindFlock starts an agent from three places — the provisioned workspace launcher
+(`.mindflock_launch.sh`, written by `session.provisioned.write_launcher`), the
+standalone tmux launcher used by ticket ingestion when the engine bridge is off,
+and the web relaunch path — and all three need the same four CLI-specific
+spellings. `BaseProvider.launcher_spec()` supplies them:
+
+| Field | What it is | Empty means |
+|---|---|---|
+| `skip_perms_flag` | the CLI's skip-all-prompts flag | append nothing (goose, cline) |
+| `prompt_arg` | template passing the seed prompt (`{prompt}`) | the CLI takes no prompt argument |
+| `resume_flag` | how to continue the prior conversation | the CLI cannot resume; relaunch fresh |
+| `resume_fallback` | retry-once-then-plain-launch on a failed resume | use the bare resume (aider) |
+| `natural_codes` | exit codes meaning a deliberate quit | — |
+| `command` | the real entry command when it isn't the bare binary | launch the program verbatim |
+
+`Claude` states its historical values as data (so the generated script is
+byte-identical), `GenericProvider` reads them straight from its
+`ProviderConfig`, and `BaseProvider` returns a **provider-neutral** default: no
+flags invented, `--continue` for resume. That neutrality matters — the previous
+launcher hardcoded Claude's four spellings, so a provisioned session on any other
+CLI was started with flags that CLI rejects (`aider
+--dangerously-skip-permissions "<prompt>"`). This is what made ingestion
+Claude-only in practice; see [ingestion-pipeline.md](ingestion-pipeline.md).
+
+`command` covers the CLIs whose interactive entry point is a subcommand —
+`goose session`, `cline -i` — or whose binary differs from its name (`antigravity`
+→ `agy`). It replaces the executable token and keeps any trailing args.
+
+### Seeding a prompt into a CLI that takes no argument
+
+aider, opencode, cline and goose all take their first instruction
+interactively, so a seeded session on one of them would start idle and the
+ticket would sit unread. For those, `launch_script.seed_by_keys_function()`
+emits a shell function that waits for the pane to stop changing (capped at
+~60s), then pastes the prompt through a **named tmux buffer with bracketed
+paste** and sends `Enter`. The bracketed paste is the important part: a
+multi-line prompt sent as literal keys would have every newline read as
+"submit", firing the ticket at the agent one line at a time.
+
+Passing the prompt as argv is still strongly preferred — no race, no readiness
+wait — and is what every `prompt_arg` provider does. The keystroke path is
+best-effort at every step: no tmux, no `TMUX_PANE`, or a refused paste all leave
+the session running with the prompt still on disk at `.mindflock_prompt.md`. It
+runs **only on a first launch**, never on a resume (re-seeding a resumed session
+restarts the whole ticket in a fresh thread).
+
+## Local models (`local_models.py`)
+
+Runs a session against a model served on this machine: no subscription, no API
+key, and nothing typed or edited leaves the box. It is a **runtime overlay**, not
+a provider — a local model is a property of where the CLI points, not of which
+CLI it is — so the registry is untouched and user TOML providers keep working.
+
+`local_models.launch_overlay(program)` returns `(env, launch_args)` for the
+user's `[local_model]` settings, and every launch path applies it
+unconditionally; `({}, ())` when the feature is off, unconfigured, or unsupported
+for that CLI. Verified mappings:
+
+| CLI | Overlay | Verified against |
+|---|---|---|
+| `codex` | `--oss --local-provider {ollama\|lmstudio} -m <model>` | `codex --help` |
+| `aider` | `OLLAMA_API_BASE` + `ollama_chat/<model>`; `LM_STUDIO_API_BASE`/`_API_KEY` + `lm_studio/<model>` | aider's bundled `docs/llms/{ollama,lm-studio}.md` |
+| `goose` | `GOOSE_PROVIDER`/`GOOSE_MODEL` (+ `OLLAMA_HOST`); no model flag | strings in the goose binary |
+
+A `custom` runtime (llama.cpp, vLLM, a LiteLLM proxy) is driven through the
+OpenAI-compatible path with a placeholder API key — those servers ignore the key,
+but a client sending an empty `Bearer` header is rejected before the request is
+served.
+
+**Claude Code is deliberately unsupported**: it speaks only the Anthropic API, so
+a local model needs a translating proxy. Rather than invent env for it,
+`unsupported_note()` says so, and both the Local model settings screen and
+`mindflock doctor` surface it — a session silently using its hosted API is the
+one outcome the privacy story cannot afford to be quiet about.
+
 ## Activity signal (`activity_markers.py`)
 
 The working/idle/clarify **activity** state shown in the UI comes, wherever

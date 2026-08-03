@@ -148,6 +148,19 @@ def _ensure_agent_session(inst, title: str):
         # (claude: resume via --resume <id>/--continue with a retried fallback;
         # a custom program runs bare — resuming a killed thread, starting clean
         # after a quit). ``None`` -> use the bare program.
+        # Local-model routing has to be re-derived HERE, not inherited: the
+        # engine applied it when the session first started, but a relaunch
+        # rebuilds the command from inst.Program/LaunchArgs, which never carried
+        # the overlay. Without this a rebooted local-model session would quietly
+        # go back to the CLI's hosted API. No-op when the feature is off.
+        local_env: dict = {}
+        local_args: tuple = ()
+        try:
+            local_env, local_args = providers.launch_script.local_overlay(
+                inst.Program or ""
+            )
+        except Exception:  # noqa: BLE001 — never block a relaunch over settings
+            pass
         cmd = provider.build_launch_command(
             providers.LaunchContext(
                 program=inst.Program or "",
@@ -155,11 +168,17 @@ def _ensure_agent_session(inst, title: str):
                 skip_permissions=False,
                 in_place=bool(getattr(inst, "InPlace", False)),
                 session_name=name,
-                launch_args=tuple(getattr(inst, "LaunchArgs", ()) or ()),
+                launch_args=tuple(local_args)
+                + tuple(getattr(inst, "LaunchArgs", ()) or ()),
             )
         )
         if cmd is None:
             cmd = inst.Program
+        # Export the env in FRONT of the command: this runs under `sh -c`, and
+        # the `||` fallback chains mean a `K=V cmd` prefix would only cover the
+        # first link of the chain.
+        if local_env:
+            cmd = providers.launch_script.env_exports(local_env) + cmd
     # (Re)install the provider's activity-reporting hooks with THIS session's
     # name right before launching, so the CLI announces working/idle/clarify
     # for the run we are about to start (Claude snapshots hook config at

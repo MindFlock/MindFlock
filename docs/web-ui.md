@@ -484,6 +484,23 @@ default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-
   matches the source's filters — Jira, Linear and Shortcut annotate each ticket
   with its workflow state (so Done/Canceled park in their own buckets), while
   GitHub Issues and Asana expose no workflow-state model and land in `No state`.
+- **Ticketing → source → Agent** — which coding CLI the sessions *this source*
+  starts will run, from `GET /api/providers` (so a provider you defined yourself is
+  selectable too). The unset option names the app default rather than showing a
+  blank, and a non-default choice appears on the collapsed source card — the
+  difference between a queue running on a hosted CLI and on a local model is worth
+  seeing without expanding. Unset falls back to `[mindflock].agent`, then the app
+  default (see
+  [ingestion-pipeline.md](ingestion-pipeline.md#which-agent-cli-a-ticket-runs)).
+- **Local model** (screen key `localmodel`) — run sessions against a model served
+  on this machine: an on/off switch, the server (**Ollama** / **LM Studio** /
+  any OpenAI-compatible), its base URL (blank = that runtime's default) and the
+  model. **Test connection** (`POST /api/settings/test/local-model`) does three
+  things at once: confirms the server answers, lists the models it actually serves
+  — which turns the model field from "type the exact tag" into a dropdown — and
+  names which installed CLIs can be pointed at it. It also states plainly that
+  Claude Code has no local route, because a session silently using its hosted API
+  is the one outcome the privacy claim cannot afford to be quiet about.
 - **Advanced → Engine → Ticket sessions in MindFlock** (`engine.enabled`,
   **default on**) — where ingested tickets land. On: each one becomes a MindFlock
   session with its own worktree, branch, seeded agent, stage badge and guided git

@@ -38,11 +38,56 @@ provider is chosen by `[ticketing].provider` (see
 
 | Provider | How "assigned to me" is fetched |
 |---|---|
+| `github_issues` | `GET /repos/{owner}/{repo}/issues?assignee=<you>` (PRs filtered out) |
 | `shortcut` | `POST /stories/search` by `owner_id`, then per-story hydration |
 | `jira` | `POST /rest/api/3/search/jql`, `assignee = currentUser()` (description flattened from ADF — headings keep their `#` level, which is what acceptance-criteria mining matches on) |
 | `linear` | GraphQL `viewer.assignedIssues(filter: {updatedAt})` |
-| `github_issues` | `GET /repos/{owner}/{repo}/issues?assignee=<you>` (PRs filtered out) |
 | `asana` | `GET /tasks?assignee=me&workspace=<gid>` |
+
+**`github_issues` is the zero-config on-ramp** and therefore leads both the
+registry and the UI catalog (the Settings screen seeds a newly added source with
+the catalog's first entry). It is the only source that needs **no fields at all**:
+
+- its **token** comes from the shared GitHub auth chain — `ticketing.api_token`,
+  else `github.token` in settings, else `$GH_TOKEN`/`$GITHUB_TOKEN`, else
+  `gh auth token` — so anyone who has run `gh auth login` is already done;
+- its **repository** resolves through `GithubIssuesProvider.resolve_repo()`:
+  explicit `project` → the source's `repo_url` → the global `[repository].url` →
+  this checkout's `origin` remote.
+
+So on a machine sitting in a GitHub clone, picking "GitHub Issues" and saving is
+the whole setup. `test_connection` returns the repo it resolved to, which the UI
+shows (and stores), so "zero config" never means "an empty field you have to
+trust". When nothing names a repo the error says what to fill in rather than
+failing mid-poll.
+
+## Which agent CLI a ticket runs
+
+Ingestion is **multi-CLI**: sessions are not tied to Claude Code. The chain,
+resolved once in `PipelineConfig.agent_for()` and shared by every launch path so
+they cannot disagree:
+
+```
+ticket.agent  ->  [[ticketing.source]].agent  ->  [mindflock].agent  ->  engine default program
+```
+
+`""` at the end means "use the app's configured default", which is what every
+existing install resolves to — so this only ever widens the choice. The scanner
+stamps `Ticket.agent` from the source that produced the ticket, so a flock can
+route one queue to a hosted CLI and another to a fully local model. PR review and
+issue handling have no ticketing source of their own and take `[mindflock].agent`.
+
+An unknown name is a **config error at load time**, listing the valid providers:
+otherwise resolution falls through to the `generic` catch-all and runs the typo as
+a bare program, so the session dies with a shell "command not found" that reads
+like a MindFlock bug.
+
+Making this actually work required fixing the launcher itself — it used to
+hardcode Claude Code's flags, so a provisioned session on any other CLI was
+launched with flags that CLI rejects. See
+[providers.md](providers.md#the-launcher-vocabulary-launcherspec-launch_scriptpy).
+Combined with `[local_model]`, an ingested ticket can run start-to-finish against
+a model on your own machine with no subscription and nothing leaving the box.
 
 Adding a provider = one new module implementing `search_assigned` / `fetch` /
 `test_connection`, plus a `PROVIDER_REGISTRY` + `PROVIDER_META` entry. Acceptance-
@@ -136,8 +181,10 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
      imported at all (partial install), and logs a `WARNING` naming the reason.
    - **Standalone path** (`enabled = false`) — `EnvironmentProvisioner` makes a
      full `git clone` workspace (deps synced, pre-commit installed, testmon
-     seeded, opened in Cursor), then `ClaudeCodeRunner` starts a bare tmux
-     session `sc-<id>` running `claude "$(cat <prompt>)"` and opens a terminal
+     seeded, opened in Cursor), then `AgentCliRunner` starts a bare tmux
+     session `sc-<id>` running the ticket's agent CLI (built from that
+     provider's `LauncherSpec`, so codex gets a positional prompt, goose gets
+     `goose session` plus the keystroke seeder, …) and opens a terminal
      tab attached to it. Opening that tab is **strictly best-effort**
      (`terminal_launch.build_terminal_tab_argv`): Windows Terminal on WSL,
      `gnome-terminal`/`konsole`/`xterm` on Linux, `Terminal.app` on macOS. On

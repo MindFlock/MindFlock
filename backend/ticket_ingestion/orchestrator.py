@@ -137,7 +137,9 @@ class PipelineOrchestrator:
         self._pr_monitor = PRMonitor(config.github) if config.github else None
         self._issue_monitor = IssueMonitor(config.github) if config.github else None
         self._pr_provisioner = PRProvisioner(config)
-        self._pr_runner = PRClaudeRunner()
+        # PR review has no ticketing source of its own, so it runs the
+        # ingestion-wide default agent ([mindflock].agent).
+        self._pr_runner = PRClaudeRunner(agent=config.agent_for())
         # Counts of in-flight work per kind, mirrored to the activity beacon.
         self._busy: dict[str, int] = {"ticket": 0, "pr": 0, "issue": 0}
 
@@ -329,6 +331,7 @@ class PipelineOrchestrator:
                 )
                 continue
             story.repo_url = scanner._source.repo_url
+            story.agent = scanner._source.agent
             await self._queue.put(story)
             _logger.info("Re-enqueued pending ticket %s from a prior run.", slug)
 

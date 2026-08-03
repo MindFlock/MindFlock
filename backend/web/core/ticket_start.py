@@ -78,6 +78,22 @@ def workspace_mode() -> str:
         return "worktree"
 
 
+def agent_for(story) -> str:
+    """The agent CLI a forced ticket session should run, or ``""``.
+
+    Same chain ``SessionRunner`` applies to a pipeline-launched ticket (the
+    source's ``agent``, then ``[mindflock].agent``), so a ticket started by hand
+    from the Assigned-tickets panel runs the CLI its source is configured for
+    rather than the app's global default. ``""`` = use that global default.
+    """
+    if getattr(story, "agent", ""):
+        return story.agent
+    try:
+        return _load_config().agent_for(getattr(story, "provider", ""))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def branch_for(story) -> str:
     """The ``feature/<slug>/<name-slug>`` branch the pipeline would push for
     ``story`` — the pipeline's own naming, so a forced start and an auto ingest
@@ -204,6 +220,7 @@ async def list_assigned_tickets() -> dict:
         member_ids = [src.member_id] if src.member_id else []
         for story in stories:
             story.repo_url = src.repo_url
+            story.agent = getattr(src, "agent", "")
             reasons = skip_reasons(
                 story,
                 ledger,
@@ -256,6 +273,7 @@ async def find_ticket(source: str, ticket_id: str):
             provider = get_provider(src)
             story = await provider.fetch(str(ticket_id))
             story.repo_url = src.repo_url
+            story.agent = getattr(src, "agent", "")
             return story
     raise LookupError(
         f"No ticketing source {source!r} is configured — " "check Settings → Ticketing"

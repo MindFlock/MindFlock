@@ -32,10 +32,10 @@ __all__ = [
 ]
 
 PROVIDER_REGISTRY: dict[str, Type[TicketProvider]] = {
+    GithubIssuesProvider.name: GithubIssuesProvider,
     ShortcutProvider.name: ShortcutProvider,
     JiraProvider.name: JiraProvider,
     LinearProvider.name: LinearProvider,
-    GithubIssuesProvider.name: GithubIssuesProvider,
     AsanaProvider.name: AsanaProvider,
 }
 
@@ -43,7 +43,38 @@ PROVIDER_REGISTRY: dict[str, Type[TicketProvider]] = {
 # UI-facing description of each provider and the fields it needs. ``field.key``
 # maps 1:1 onto a ``TicketProviderConfig`` attribute so the settings layer can
 # store/resolve it generically. ``secret`` fields are masked on read.
+#
+# ORDER MATTERS: the Settings UI defaults a newly added source to the first
+# entry, so GitHub Issues leads. It is the widest surface (every OSS maintainer
+# already has issues assigned to them) and the only source that needs no input at
+# all — the token comes from `gh auth login` and the repo from `origin` — so it
+# is the on-ramp a first-time user should land on.
 PROVIDER_META: list[dict] = [
+    {
+        "id": "github_issues",
+        "label": "GitHub Issues",
+        "blurb": (
+            "Zero config: uses your existing GitHub login and this repo. "
+            "Auto-creates a session for each issue assigned to you."
+        ),
+        "fields": [
+            {
+                "key": "project",
+                "label": "Repository",
+                "secret": False,
+                "required": False,
+                "placeholder": "auto-detected from this repo — or owner/repo",
+                "auto": True,
+            },
+            {
+                "key": "api_token",
+                "label": "Token",
+                "secret": True,
+                "required": False,
+                "placeholder": "optional — falls back to your GitHub connection",
+            },
+        ],
+    },
     {
         "id": "shortcut",
         "label": "Shortcut",
@@ -145,27 +176,6 @@ PROVIDER_META: list[dict] = [
                 "secret": False,
                 "required": False,
                 "placeholder": "any state (add one or more)",
-            },
-        ],
-    },
-    {
-        "id": "github_issues",
-        "label": "GitHub Issues",
-        "blurb": "Ingest GitHub issues assigned to you in a repo. Reuses your GitHub connection.",
-        "fields": [
-            {
-                "key": "project",
-                "label": "Repository",
-                "secret": False,
-                "required": True,
-                "placeholder": "owner/repo",
-            },
-            {
-                "key": "api_token",
-                "label": "Token",
-                "secret": True,
-                "required": False,
-                "placeholder": "optional — falls back to your GitHub connection",
             },
         ],
     },
