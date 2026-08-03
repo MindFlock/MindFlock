@@ -70,6 +70,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trust; when nothing names a repo, the error says what to fill in instead of
   failing mid-poll.
 
+- **The sidebar is the width you need it to be.** It was a fixed 260px, so long
+  session labels ellipsized while the agent panes had width to spare — or the
+  reverse on a wide screen. It has a drag handle now (arrow keys too), with the
+  width persisted across reloads. Session labels stop being truncated in JS along
+  with it: the old 20-character budget on the feature name was always a guess at
+  how much fits, which is a CSS question, and one whose answer now changes as you
+  drag.
+
+- **The pre-commit stage pill stays a pill.** It badges a `failed_step` only when
+  that value is actually pill-sized; the server's generic fallback can return a
+  whole line of hook output (up to 80 chars), which either overflowed the row or
+  forced the chip itself to be truncated. Long details ride in the tooltip
+  instead. That fallback was also picking the wrong text — `capture-pane` without
+  `-J` returns one line per pane *row*, so a wrapped error got split and the
+  "last error-looking line" was its tail, leaving the badge reading as a mid-word
+  fragment (`ffic-reduction'.` out of `…'traffic-reduction'.`).
+
+- **The project says what it is: a _private_ flock, on your own machine.** New
+  README section with the full network inventory — everything MindFlock itself
+  talks to, when, and what it sends — and the honest boundary stated plainly:
+  your agent CLI still calls its own vendor, and with a local model you can close
+  even that.
+
 ## [0.1.7] - 2026-07-31
 
 ### Added
