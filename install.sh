@@ -42,8 +42,8 @@ set -eu
 
 # The uv installer we run if uv is absent: version-pinned + checksum-verified.
 # Bump both together (sha256 of https://astral.sh/uv/<version>/install.sh).
-UV_PINNED_VERSION="0.11.29"
-UV_INSTALLER_SHA256="504a79fd2ed0dcd47e7f04f0792cfd0871f62e24a7fe40fa8ae0f563a369f2bd"  # pragma: allowlist secret
+UV_PINNED_VERSION="0.12.1"
+UV_INSTALLER_SHA256="d3f5412d38c99f9d024901843bf98206f0d2c6dbe64df40d0b740e2751ca62c1"  # pragma: allowlist secret
 
 say()  { printf '\033[1;36m[mindflock]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[mindflock] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
