@@ -85,7 +85,15 @@ _SETTINGS_MIGRATIONS: dict = {}
 @dataclass
 class CodingCliSettings:
     #: Preferred provider name for new sessions (e.g. "claude", "codex").
+    #: Read at launch time via :func:`backend.config.program.resolve_default_program`
+    #: — it outranks the engine config's ``default_program``, which is only a
+    #: first-run seed.
     default_provider: str = ""
+    #: Provider the built-in Assistant runs. Empty = the same default as
+    #: everything else. Its own field because the Assistant is a long-lived
+    #: chat rather than a coding session, so people pair it with a different
+    #: CLI than the one doing the work.
+    assistant_provider: str = ""
     #: provider-name -> absolute binary path override.
     binary_paths: Dict[str, str] = field(default_factory=dict)
     #: Default launch flags, keyed by PROVIDER NAME (e.g. "claude", "codex").
@@ -107,6 +115,8 @@ class CodingCliSettings:
         d: dict = {}
         if self.default_provider:
             d["default_provider"] = self.default_provider
+        if self.assistant_provider:
+            d["assistant_provider"] = self.assistant_provider
         if self.binary_paths:
             # Drop empty-string overrides so a cleared field falls through.
             paths = {k: v for k, v in self.binary_paths.items() if k and v}
@@ -147,6 +157,7 @@ class CodingCliSettings:
             launch_args = {}
         return cls(
             default_provider=default_provider,
+            assistant_provider=str(d.get("assistant_provider", "") or ""),
             binary_paths=paths,
             default_launch_args=launch_args,
         )
@@ -371,6 +382,14 @@ class GithubSettings:
     issue_min_age_minutes: Optional[int] = None
     issue_poll_interval_seconds: Optional[int] = None
     issue_skip_authors: List[str] = field(default_factory=list)
+    # Coding-CLI provider name PR-review sessions run ("claude", "codex", …).
+    # Empty = fall back to engine.agent, then the resolved default. Separate
+    # from ``issue_agent`` because reviewing your own PR and taking a fresh
+    # issue are different jobs people reasonably want different CLIs for.
+    agent: str = ""
+    #: Same, for issue-handling sessions. Independent of ``agent`` exactly as
+    #: ``issue_repos`` is independent of ``repos``.
+    issue_agent: str = ""
 
     def repo_list(self) -> List[str]:
         """Effective ``owner/name`` repos to watch (blanks stripped)."""
@@ -406,6 +425,10 @@ class GithubSettings:
             d["issue_poll_interval_seconds"] = self.issue_poll_interval_seconds
         if self.issue_skip_authors:
             d["issue_skip_authors"] = list(self.issue_skip_authors)
+        if self.agent:
+            d["agent"] = self.agent
+        if self.issue_agent:
+            d["issue_agent"] = self.issue_agent
         return d
 
     @classmethod
@@ -423,6 +446,8 @@ class GithubSettings:
             issue_min_age_minutes=_opt_int(d.get("issue_min_age_minutes")),
             issue_poll_interval_seconds=_opt_int(d.get("issue_poll_interval_seconds")),
             issue_skip_authors=_str_list(d.get("issue_skip_authors")),
+            agent=str(d.get("agent", "") or ""),
+            issue_agent=str(d.get("issue_agent", "") or ""),
         )
 
 

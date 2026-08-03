@@ -91,18 +91,15 @@ def _resolve_program(agent: str = "") -> str:
 
     ``agent`` is the ingestion pipeline's choice for this session (the ticket's
     source ``agent``, else ``[mindflock].agent``); empty falls through to the
-    engine's configured default program, and then to ``claude`` if the engine
-    config can't be loaded. Single source for both engine-launch paths so they
-    can't diverge.
+    user's configured default — Settings → Coding provider first, then the
+    engine config, then ``claude``. Single source for both engine-launch paths
+    so they can't diverge.
     """
     if agent:
         return agent
-    from backend import config as cs_config
+    from backend.config.program import resolve_default_program
 
-    try:
-        return cs_config.LoadConfig().GetProgram()
-    except Exception:  # noqa: BLE001
-        return "claude"
+    return resolve_default_program()
 
 
 class SessionRunner:
@@ -270,9 +267,9 @@ class SessionRunner:
     ):
         from backend import session as cs_session
 
-        # PR review has no ticketing source, so it runs the ingestion-wide
-        # default agent.
-        program = _resolve_program(self.config.agent_for())
+        # PR review has no ticketing source, so it runs its own configured
+        # agent ([github].agent) before falling back to the ingestion-wide one.
+        program = _resolve_program(self.config.pr_agent())
 
         # Adopt the already-provisioned PR workspace: clone-style worktree at the
         # exact directory, on the PR's existing head branch (verbatim, no fork).

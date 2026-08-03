@@ -208,10 +208,18 @@ class Engine:
                 log.ErrorLog.Printf("failed to load instances: %v", err)
 
     def default_program(self) -> str:
-        try:
-            return self.cfg.GetProgram()
-        except Exception:  # noqa: BLE001
-            return "claude"
+        """The agent CLI new sessions launch with.
+
+        Deliberately NOT ``self.cfg.GetProgram()``: that reads only the engine
+        config, which ignores the default the user picked in Settings → Coding
+        provider (stored as ``coding_cli.default_provider``). Resolving through
+        the shared chain also means this is read fresh rather than from the
+        config snapshot taken at server start, so changing the default takes
+        effect without a restart.
+        """
+        from backend.config.program import resolve_default_program
+
+        return resolve_default_program()
 
     def save(self, exclude_titles=()) -> None:
         """Persist instances, merging in entries written by other processes.

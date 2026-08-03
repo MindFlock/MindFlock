@@ -46,6 +46,11 @@ class GithubConfig:
     issue_min_age_minutes: int = 15
     issue_poll_interval_seconds: int = 60
     issue_skip_authors: list[str] = field(default_factory=list)
+    #: Coding CLI PR-review sessions run. Empty = ``[mindflock].agent``, then
+    #: the resolved default. Independent of ``issue_agent`` below.
+    agent: str = ""
+    #: Coding CLI issue-handling sessions run, same fallback chain.
+    issue_agent: str = ""
 
     def repo_list(self) -> list[str]:
         """The effective ``owner/name`` repos to watch (blanks stripped)."""
@@ -251,7 +256,35 @@ class PipelineConfig:
         for src in self.ticketing_sources or ():
             if source_id and (src.id or src.provider) == source_id and src.agent:
                 return src.agent
+        return self._pipeline_agent()
+
+    def _pipeline_agent(self) -> str:
+        """The ingestion-wide agent (``[mindflock].agent``), or ``""``."""
         return (self.engine.agent if self.engine else "") or ""
+
+    def pr_agent(self) -> str:
+        """The coding CLI a PR-review session should run, or ``""``.
+
+        Precedence: ``[github].agent`` → ``[mindflock].agent`` → ``""`` (the
+        resolved default). PR review has no ticketing source, so it never
+        consults the per-source chain.
+        """
+        return (
+            (self.github.agent if self.github else "") or ""
+        ) or self._pipeline_agent()
+
+    def issue_agent(self) -> str:
+        """The coding CLI an issue-handling session should run, or ``""``.
+
+        Precedence: ``[github].issue_agent`` → ``[mindflock].agent`` → ``""``.
+        Deliberately does NOT fall back to ``[github].agent``: issue handling
+        and PR review are separately configured features (separate repo lists,
+        separate toggles), so inheriting the review CLI would surprise anyone
+        who set one and not the other.
+        """
+        return (
+            (self.github.issue_agent if self.github else "") or ""
+        ) or self._pipeline_agent()
 
 
 def _assign_source_ids(sources: list[TicketProviderConfig]) -> None:
@@ -470,6 +503,12 @@ def _merge_layers(raw: dict) -> dict:
     # issue_repos (issue handling): its own list — settings overrides toml.
     if _gh.issue_repos:
         github["issue_repos"] = list(_gh.issue_repos)
+    # Per-surface agent CLI: settings override toml, blank falls through to the
+    # pipeline-wide chain rather than pinning anything.
+    if _gh.agent:
+        github["agent"] = _gh.agent
+    if _gh.issue_agent:
+        github["issue_agent"] = _gh.issue_agent
 
     # --- engine block (settings override the [mindflock] section) --------------
     eng_enabled = _s.resolve_bool(

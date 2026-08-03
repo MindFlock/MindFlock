@@ -421,9 +421,17 @@ def test_settings_panel_refresh_asks_the_server_to_skip_its_cache():
     assert '"gh-prs-refresh"' in js
     # A force start does NOT force a sweep: has_session is annotated live on
     # every response, so the cheap re-list already shows the new session.
-    assert "onStarted: relistPrs" in js
-    assert "onStarted: relistIssues" in js
-    assert "onStarted: relistTickets" in js
+    # PR review and Git issues call these inside the shared WorkItemRow's
+    # onStart (screens/automation.tsx) rather than through an `onStarted` prop,
+    # so assert the re-list is still wired, not how it is passed. The negative
+    # below is the actual contract: the refresh-only `loadOpen*` sweep must not
+    # be what a force start triggers.
+    assert "relistPrs" in js
+    assert "relistIssues" in js
+    assert "relistTickets" in js
+    for sweep in ("loadOpenPrs", "loadOpenIssues"):
+        # Referenced exactly once — by the Refresh button, not by a force start.
+        assert js.count(sweep) == 2, f"{sweep} should only be the Refresh handler"
 
 
 def test_settings_panel_repolls_only_while_the_server_reports_stale():

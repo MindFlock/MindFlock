@@ -39,18 +39,19 @@ logger = logging.getLogger(__name__)
 
 
 def default_agent() -> str:
-    """The engine's configured default agent program, or ``"claude"``.
+    """The user's configured default agent program, or ``"claude"``.
 
-    The last link in the ``ticket.agent -> [mindflock].agent -> engine default``
-    chain. Read lazily and defensively: the standalone launcher is exactly the
-    path that runs when the engine half of the package is unavailable, so a
-    missing :mod:`backend.config` must degrade to the historical default rather
-    than fail the launch.
+    The last link in the ``ticket.agent -> [mindflock].agent -> user default``
+    chain, where "user default" is Settings → Coding provider first and the
+    engine config second. Read lazily and defensively: the standalone launcher
+    is exactly the path that runs when the engine half of the package is
+    unavailable, so a missing :mod:`backend.config` must degrade to the
+    historical default rather than fail the launch.
     """
     try:
-        from backend import config as cs_config
+        from backend.config.program import resolve_default_program
 
-        return cs_config.LoadConfig().GetProgram() or "claude"
+        return resolve_default_program() or "claude"
     except Exception:  # noqa: BLE001
         return "claude"
 

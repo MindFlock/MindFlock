@@ -1,13 +1,17 @@
 /** Settings → Git issues: the issue-handling twin of PrReview.tsx. Its own
  * repo list (github.issue_repos, independent of PR review's github.repos) and
- * opt-in toggle (github.issues_enabled — absent = OFF, unlike PR review);
- * open-issues panel with skip-reason chips + force start. */
+ * opt-in toggle (github.issues_enabled — absent = OFF, unlike PR review).
+ *
+ * The screen's shape — switch, status, watched list, agent, open-work panel,
+ * Advanced — comes from ./automation so this and PR review and Ticketing stay
+ * the same screen with different nouns. */
 
 import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
-import { toast } from "../../../lib/toast";
 import { refreshInstances, usePanelQuery } from "../../../state/queries";
 import { SettingField, useSettings } from "../useSettings";
+import { AgentPicker, useAgentChoices } from "./AgentPicker";
+import { AutomationSwitch, RepoListField, WorkItemRow, WorkListPanel, ageText } from "./automation";
 import { runGithubTest } from "../../dialogs/SetupDialog";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -23,20 +27,12 @@ interface OpenIssue {
   reasons?: string[];
 }
 
-function issueAgeText(iso?: string): string {
-  const t = Date.parse(iso || "");
-  if (!isFinite(t)) return "";
-  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
-  if (mins < 60) return mins + "m old";
-  const h = Math.round(mins / 60);
-  if (h < 48) return h + "h old";
-  return Math.round(h / 24) + "d old";
-}
-
 export function GitIssues({ gotoScreen }: ScreenProps) {
   const s = useSettings();
+  const agentChoices = useAgentChoices();
   const gh = (s.settings.github || {}) as {
     issues_enabled?: boolean;
+    issue_agent?: string;
     issue_repos?: string[];
     issue_skip_authors?: string[] | string;
   };
@@ -47,7 +43,6 @@ export function GitIssues({ gotoScreen }: ScreenProps) {
     ? gh.issue_skip_authors.join(", ")
     : gh.issue_skip_authors || "";
 
-  const [repoNew, setRepoNew] = useState("");
   const [skipDraft, setSkipDraft] = useState(String(skipAuthors));
   useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
   // Cached in the query client so reopening the screen keeps the last list.
@@ -74,31 +69,7 @@ export function GitIssues({ gotoScreen }: ScreenProps) {
   const saveGithub = (patch: Record<string, unknown>, okMsg: string) =>
     s.saveGroup("github", patch, okMsg);
 
-  const saveRepos = (list: string[], msg: string) =>
-    saveGithub({ issue_repos: list }, msg);
-
-  const addRepo = () => {
-    const val = repoNew.trim();
-    if (!val) return;
-    if (!/^[^\s/]+\/[^\s/]+$/.test(val)) {
-      toast("Use owner/name, e.g. MindFlock/MindFlock");
-      return;
-    }
-    if (repos.some((r) => r.toLowerCase() === val.toLowerCase())) {
-      setRepoNew("");
-      toast(val + " is already in the list");
-      return;
-    }
-    setRepoNew("");
-    saveRepos([...repos, val], "Added " + val);
-  };
-
   const n = repos.length;
-  const statusText = !n
-    ? "○ Add a repository below, then turn Automated handling on"
-    : enabled
-      ? `● Active — handling new issues in ${n} ${n === 1 ? "repository" : "repositories"}`
-      : `‖ Off — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated handling on to start`;
 
   return (
     <>
@@ -130,117 +101,111 @@ export function GitIssues({ gotoScreen }: ScreenProps) {
         are independent.
       </p>
 
-      <div
-        className="set-row set-switch-row"
-        id="gh-issues-toggle-row"
+      <AutomationSwitch
+        label="Automated handling"
         title="Turn automated issue handling on or off — your repositories are kept either way"
-      >
-        <span className="set-label">Automated handling</span>
-        {/* label wraps only the switch, so clicking the row text no longer flips it */}
-        <label className="ca-switch">
-          <input
-            type="checkbox"
-            id="gh-issues-enabled"
-            checked={enabled}
-            onChange={(e) =>
-              saveGithub(
-                { issues_enabled: e.target.checked },
-                e.target.checked ? "Automated issue handling on" : "Automated issue handling off"
-              )
-            }
-          />
-          <span className="ca-slider" />
-        </label>
-      </div>
-      <div
-        id="gh-issues-status"
-        className={"pr-status" + (n > 0 && enabled ? " on" : n > 0 ? " paused" : "")}
-      >
-        {statusText}
-      </div>
+        rowId="gh-issues-toggle-row"
+        inputId="gh-issues-enabled"
+        statusId="gh-issues-status"
+        checked={enabled}
+        onChange={(next) =>
+          saveGithub(
+            { issues_enabled: next },
+            next ? "Automated issue handling on" : "Automated issue handling off"
+          )
+        }
+        tone={n > 0 && enabled ? "on" : n > 0 ? "paused" : ""}
+        status={
+          !n
+            ? "○ Add a repository below, then turn Automated handling on"
+            : enabled
+              ? `● Active — handling new issues in ${n} ${n === 1 ? "repository" : "repositories"}`
+              : `‖ Off — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated handling on to start`
+        }
+      />
 
-      <div className="set-row">
-        <span className="set-label">Repositories to watch</span>
-        <div id="gh-issue-repos-list" className="repo-list">
-          {!repos.length ? (
-            <div className="repo-empty">
-              No repositories yet — add one below to start handling new issues.
-            </div>
-          ) : (
-            repos.map((repo) => (
-              <span className="repo-chip" key={repo}>
-                <span className="repo-chip-name">{repo}</span>
-                <button
-                  type="button"
-                  className="repo-chip-x"
-                  title={"Remove " + repo}
-                  aria-label={"Remove " + repo}
-                  onClick={() =>
-                    saveRepos(
-                      repos.filter((r) => r !== repo),
-                      "Removed " + repo
-                    )
-                  }
-                >
-                  ✕
-                </button>
-              </span>
-            ))
-          )}
-        </div>
-        <div className="repo-add-row">
-          <input
-            type="text"
-            id="gh-issue-repo-new"
-            placeholder="owner/name — e.g. mindflockai/MindFlock"
-            autoComplete="off"
-            spellCheck={false}
-            value={repoNew}
-            onChange={(e) => setRepoNew(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                addRepo();
+      <RepoListField
+        label="Repositories to watch"
+        repos={repos}
+        onSave={(list, msg) => saveGithub({ issue_repos: list }, msg)}
+        emptyText="No repositories yet — add one below to start handling new issues."
+        listId="gh-issue-repos-list"
+        inputId="gh-issue-repo-new"
+        addId="gh-issue-repo-add-btn"
+        hint={
+          <>
+            Type a repo as <code>owner/name</code>, then press Enter or click Add. This list
+            is separate from PR review's — a repo can be on either, or both.
+          </>
+        }
+      />
+
+      <AgentPicker
+        label="Agent CLI"
+        value={String(gh.issue_agent || "")}
+        choices={agentChoices}
+        onChange={(v) => s.saveField("github", "issue_agent", v)}
+        hint={
+          <>
+            Which coding CLI runs issue-handling sessions. Independent of PR review's —
+            setting one does not change the other.
+          </>
+        }
+      />
+
+      <WorkListPanel
+        label="Open issues"
+        onRefresh={loadOpenIssues}
+        note={issuesNote}
+        rowId="gh-open-issues-row"
+        refreshId="gh-issues-refresh"
+        noteId="gh-issues-note"
+        listId="gh-issues-list"
+        hint={
+          <>
+            Every open issue on the repositories above, with why auto handling has or hasn't
+            picked it up. <strong>Start work</strong> spins up a session for that issue right
+            now, bypassing the age / already-handled filters.
+          </>
+        }
+      >
+        {issuesError ? (
+          <div className="repo-empty">{issuesError}</div>
+        ) : issues === null ? null : !issuesRepos.length ? (
+          <div className="repo-empty">Add a repository above to see its open issues.</div>
+        ) : !issues.length ? (
+          <div className="repo-empty">No open issues on the watched repositories.</div>
+        ) : (
+          issues.map((i) => (
+            <WorkItemRow
+              key={(i.repo || "") + i.number}
+              reference={(i.repo || "") + "#" + i.number}
+              url={i.url}
+              title={i.title}
+              tooltip={
+                (i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?")
               }
-            }}
-          />
-          <button type="button" id="gh-issue-repo-add-btn" className="btn-primary" onClick={addRepo}>
-            + Add
-          </button>
-        </div>
-        <span className="set-hint">
-          Type a repo as <code>owner/name</code>, then press Enter or click Add. This list
-          is separate from PR review's — a repo can be on either, or both.
-        </span>
-      </div>
-
-      <div className="set-row" id="gh-open-issues-row">
-        <span className="set-label">Open issues</span>
-        <div className="pr-open-toolbar">
-          <button type="button" id="gh-issues-refresh" className="test-btn" onClick={loadOpenIssues}>
-            Refresh
-          </button>
-          <span id="gh-issues-note" className="pr-open-note">{issuesNote}</span>
-        </div>
-        <div id="gh-issues-list" className="pr-open-list">
-          {issuesError ? (
-            <div className="repo-empty">{issuesError}</div>
-          ) : issues === null ? null : !issuesRepos.length ? (
-            <div className="repo-empty">Add a repository above to see its open issues.</div>
-          ) : !issues.length ? (
-            <div className="repo-empty">No open issues on the watched repositories.</div>
-          ) : (
-            issues.map((i) => (
-              <OpenIssueRow key={(i.repo || "") + i.number} i={i} onStarted={relistIssues} />
-            ))
-          )}
-        </div>
-        <span className="set-hint">
-          Every open issue on the repositories above, with why auto handling has or hasn't
-          picked it up. <strong>Start work</strong> spins up a session for that issue right
-          now, bypassing the age / already-handled filters.
-        </span>
-      </div>
+              meta={`by ${i.author || "?"} · ${ageText(i.created_at)}`}
+              hasSession={i.has_session}
+              eligible={i.eligible}
+              eligibleLabel="queued for auto handling"
+              reasons={i.reasons}
+              actionLabel="Start work"
+              failPrefix="Start work failed"
+              onStart={async () => {
+                const r = await api<{ title?: string }>("/api/github/issues/start", {
+                  json: { repo: i.repo, number: i.number },
+                });
+                // The server already has a provisioning row for it: pull it now
+                // instead of leaving the sidebar blank until the next poll.
+                refreshInstances();
+                setTimeout(relistIssues, 5000);
+                return "Issue session " + (r?.title || "");
+              }}
+            />
+          ))
+        )}
+      </WorkListPanel>
 
       <details className="pr-advanced">
         <summary>Advanced options</summary>
@@ -313,74 +278,5 @@ export function GitIssues({ gotoScreen }: ScreenProps) {
         </div>
       </details>
     </>
-  );
-}
-
-function OpenIssueRow({ i, onStarted }: { i: OpenIssue; onStarted(): void }) {
-  const [state, setState] = useState<"idle" | "starting" | "started">("idle");
-  return (
-    <div
-      className="pr-open-item"
-      title={(i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?")}
-    >
-      <div className="pr-open-main">
-        <a
-          href={i.url || "#"}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="pr-open-ref"
-          title={"Open " + (i.repo || "") + "#" + i.number + " on GitHub"}
-        >
-          {(i.repo || "") + "#" + i.number}
-        </a>
-        <span className="pr-open-title">{i.title || ""}</span>
-      </div>
-      <div className="pr-open-meta">
-        <span>
-          by {i.author || "?"} · {issueAgeText(i.created_at)}
-        </span>
-        {i.has_session ? (
-          <span className="pr-open-chip on">session open</span>
-        ) : i.eligible ? (
-          <span className="pr-open-chip ok">queued for auto handling</span>
-        ) : (
-          (i.reasons || []).map((reason) => (
-            <span className="pr-open-chip" key={reason}>
-              {reason}
-            </span>
-          ))
-        )}
-      </div>
-      {i.has_session ? (
-        <button type="button" className="btn-primary pr-review-btn" disabled>
-          Session open
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="btn-primary pr-review-btn"
-          disabled={state !== "idle"}
-          onClick={async () => {
-            setState("starting");
-            try {
-              const r = await api<{ title?: string }>("/api/github/issues/start", {
-                json: { repo: i.repo, number: i.number },
-              });
-              toast("Issue session " + (r?.title || "") + " — provisioning, see the sidebar");
-              setState("started");
-              // The server already has a provisioning row for it: pull it now
-              // instead of leaving the sidebar blank until the next poll.
-              refreshInstances();
-              setTimeout(onStarted, 5000);
-            } catch (err) {
-              toast("Start work failed: " + ((err as Error).message || "error"));
-              setState("idle");
-            }
-          }}
-        >
-          {state === "starting" ? "Starting…" : state === "started" ? "Started" : "Start work"}
-        </button>
-      )}
-    </div>
   );
 }
