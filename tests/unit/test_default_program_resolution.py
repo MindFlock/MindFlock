@@ -209,6 +209,213 @@ class TestAssistantProgram:
         assert assistant._assistant_program() == "aider"
 
 
+class TestParsedGithubCarriesTheAgents:
+    """The seam the per-surface pickers actually travel through.
+
+    TestPerSurfaceAgents builds a GithubConfig by hand and TestSettingsRoundTrip
+    stops at GithubSettings, so nothing used to exercise ``_parse_github`` — and
+    it silently dropped both agent fields, leaving them at their "" dataclass
+    default however the config was configured. The precedence logic was correct
+    and unreachable: every PR review fell through to the app-wide default.
+    """
+
+    def _parsed(self, **github):
+        from pathlib import Path
+
+        from backend.ticket_ingestion.config import _parse_github
+
+        return _parse_github(
+            {"github": {"base_branch": "main", **github}}, Path("config.toml")
+        )
+
+    def test_pr_review_agent_survives_the_parse(self):
+        assert self._parsed(agent="antigravity").agent == "antigravity"
+
+    def test_issue_agent_survives_the_parse(self):
+        assert self._parsed(issue_agent="codex").issue_agent == "codex"
+
+    def test_both_default_to_empty_so_the_resolver_still_decides(self):
+        gh = self._parsed()
+        assert (gh.agent, gh.issue_agent) == ("", "")
+
+    def test_parsed_config_reaches_pr_agent(self):
+        """End to end through the chain the launch paths call."""
+        from backend.ticket_ingestion.config import EngineConfig, PipelineConfig
+
+        cfg = PipelineConfig()
+        cfg.github = self._parsed(agent="antigravity")
+        cfg.engine = EngineConfig(agent="")
+        assert cfg.pr_agent() == "antigravity"
+
+
+class TestForcedReviewHonoursTheReviewAgent:
+    """ "Begin review" used to launch ENGINE.default_program() outright, so the
+    Agent CLI dropdown directly above the button governed only the auto
+    monitor."""
+
+    def test_review_agent_reads_the_configured_pr_agent(self, monkeypatch):
+        from backend.web.core import pr_review
+
+        monkeypatch.setattr(
+            pr_review,
+            "_load_config",
+            lambda: type("C", (), {"pr_agent": lambda self: "antigravity"})(),
+        )
+        assert pr_review.review_agent() == "antigravity"
+
+    def test_unset_returns_blank_so_the_caller_falls_back(self, monkeypatch):
+        from backend.web.core import pr_review
+
+        monkeypatch.setattr(
+            pr_review,
+            "_load_config",
+            lambda: type("C", (), {"pr_agent": lambda self: ""})(),
+        )
+        assert pr_review.review_agent() == ""
+
+    def test_unconfigured_ingestion_degrades_instead_of_blocking_the_review(
+        self, monkeypatch
+    ):
+        from backend.web.core import pr_review
+
+        def boom():
+            raise RuntimeError("ingestion was never configured")
+
+        monkeypatch.setattr(pr_review, "_load_config", boom)
+        assert pr_review.review_agent() == ""
+
+    def test_the_route_prefers_the_review_agent_over_the_app_default(self):
+        """Pins the launch expression itself: the forced-review instance takes
+        review_agent() first and only then ENGINE.default_program()."""
+        import inspect
+
+        from backend.web import server
+
+        src = inspect.getsource(server.github_force_review)
+        assert "_pr_review.review_agent() or ENGINE.default_program()" in src
+
+
+class TestProviderSwitchAppliesToTheNextLaunch:
+    """Switching provider must apply to the NEXT ticket / issue / PR, not to the
+    one after the next pipeline restart.
+
+    ``__main__.main`` calls ``load_config()`` once and hands the snapshot to the
+    orchestrator for the life of the process, so every per-surface agent read off
+    ``self.config`` was pinned to whatever was configured at startup. Agent
+    choice is re-read at launch instead — the rule ``resolve_default_program``
+    already follows for the app-wide default.
+    """
+
+    def test_config_for_launch_rereads(self, monkeypatch):
+        from backend.ticket_ingestion import config as C
+
+        monkeypatch.setattr(C, "load_config", lambda: _pipeline(github_agent="codex"))
+        assert (
+            C.config_for_launch(_pipeline(github_agent="stale")).pr_agent() == "codex"
+        )
+
+    def test_fresh_agent_prefers_disk_over_the_snapshot(self, monkeypatch):
+        from backend.ticket_ingestion import config as C
+
+        monkeypatch.setattr(C, "load_config", lambda: _pipeline(github_agent="codex"))
+        snap = _pipeline(github_agent="stale")
+        assert C.fresh_agent(lambda c: c.pr_agent(), snap) == "codex"
+
+    def test_fresh_agent_keeps_the_snapshot_when_disk_has_no_opinion(self, monkeypatch):
+        """The config is a constructor argument; a caller that built one by hand
+        keeps it unless the on-disk config makes an explicit choice."""
+        from backend.ticket_ingestion import config as C
+
+        monkeypatch.setattr(C, "load_config", lambda: _pipeline())
+        snap = _pipeline(github_agent="aider")
+        assert C.fresh_agent(lambda c: c.pr_agent(), snap) == "aider"
+
+    def test_fresh_agent_survives_an_unreadable_config(self, monkeypatch):
+        from backend.ticket_ingestion import config as C
+
+        def boom():
+            raise RuntimeError("gone")
+
+        monkeypatch.setattr(C, "load_config", boom)
+        assert (
+            C.fresh_agent(lambda c: c.pr_agent(), _pipeline(github_agent="aider"))
+            == "aider"
+        )
+
+    def test_fresh_agent_with_nothing_anywhere_is_blank(self, monkeypatch):
+        from backend.ticket_ingestion import config as C
+
+        monkeypatch.setattr(C, "load_config", lambda: _pipeline())
+        assert C.fresh_agent(lambda c: c.pr_agent(), None) == ""
+
+    def test_config_for_launch_falls_back_when_the_reread_fails(self, monkeypatch):
+        """A config that broke since startup must not fail the launch."""
+        from backend.ticket_ingestion import config as C
+
+        def boom():
+            raise RuntimeError("config.toml went missing")
+
+        monkeypatch.setattr(C, "load_config", boom)
+        snapshot = _pipeline(github_agent="snapshot-value")
+        assert C.config_for_launch(snapshot) is snapshot
+
+    def test_ticket_launch_sees_a_provider_switched_after_startup(self, monkeypatch):
+        """SessionRunner holds a startup snapshot; the ticket's CLI must not."""
+        from backend.ticket_ingestion import config as C, session_runner
+
+        runner = session_runner.SessionRunner(_pipeline(engine_agent="stale"))
+        monkeypatch.setattr(C, "load_config", lambda: _pipeline(engine_agent="codex"))
+        story = type("S", (), {"agent": "", "provider": ""})()
+        assert runner._agent_for(story) == "codex"
+
+    def test_a_ticket_that_pins_its_own_agent_still_wins(self, monkeypatch):
+        from backend.ticket_ingestion import config as C, session_runner
+
+        runner = session_runner.SessionRunner(_pipeline())
+        monkeypatch.setattr(C, "load_config", lambda: _pipeline(engine_agent="codex"))
+        story = type("S", (), {"agent": "aider", "provider": ""})()
+        assert runner._agent_for(story) == "aider"
+
+    def test_pr_launch_rereads_the_review_agent(self):
+        """Both PR runners resolve through pr_agent(), re-read at launch."""
+        import inspect
+
+        from backend.ticket_ingestion import orchestrator, session_runner
+
+        pr_src = inspect.getsource(session_runner.SessionRunner._create_pr_instance)
+        assert "fresh_agent" in pr_src
+        assert "c.pr_agent()" in pr_src
+        # The engine-off fallback runner used the ingestion-wide agent, so the
+        # two runners disagreed about which CLI reviews a PR.
+        init_src = inspect.getsource(orchestrator.PipelineOrchestrator.__init__)
+        assert "config.pr_agent()" in init_src
+        assert "config.agent_for()" not in init_src
+
+    def test_issue_force_start_uses_the_issue_agent_not_the_pipeline_one(self):
+        """Settings → Git issues → Agent CLI governed only the auto monitor:
+        "Start work" read agent_for(), which skips past github.issue_agent."""
+        import inspect
+
+        from backend.web.core import issue_start
+
+        src = inspect.getsource(issue_start.prepare_start)
+        # Comments explain the old behaviour by name, so compare CODE only.
+        code = "\n".join(
+            line for line in src.splitlines() if not line.strip().startswith("#")
+        )
+        assert 'getattr(cfg, "issue_agent"' in code
+        assert "agent_for(" not in code
+
+    def test_every_surface_resolves_through_its_own_chain(self):
+        """One config, three surfaces, three answers — no cross-contamination."""
+        cfg = _pipeline(github_agent="codex", issue_agent="aider", engine_agent="goose")
+        assert (cfg.pr_agent(), cfg.issue_agent(), cfg.agent_for("")) == (
+            "codex",
+            "aider",
+            "goose",
+        )
+
+
 class TestSettingsRoundTrip:
     """The new fields have to survive a save/load cycle or the pickers silently
     forget what you chose."""

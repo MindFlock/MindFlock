@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The per-surface Agent CLI pickers chose a provider that nothing read.**
+  0.1.9 added `github.agent` and `github.issue_agent` so PR review and issue
+  handling could each run their own coding CLI, and the settings round-tripped
+  correctly — but `_parse_github` built its `GithubConfig` without passing either
+  field, so both sat at their `""` dataclass default however they were
+  configured. The merged config computed the right value and then threw it away
+  one line before anything could read it. `pr_agent()` and `issue_agent()` were
+  correct and unreachable, so every review and every issue session fell through
+  to the app-wide default provider.
+
+  The gap survived the suite because the precedence logic was tested against a
+  hand-built `GithubConfig` and the storage against `GithubSettings`, with
+  nothing exercising the parse between them. That seam is now covered.
+
+- **"Begin review" ignored the Agent CLI setting directly above it.** The forced
+  PR-review route passed `ENGINE.default_program()` outright, so the dropdown in
+  Settings → PR review governed only the auto monitor: clicking the button
+  launched the app-wide default. It now resolves through `pr_review.review_agent()`,
+  the same `pr_agent()` chain the monitor uses. The issue equivalent had the
+  matching bug one level up — `prepare_start` read the ingestion-wide
+  `agent_for()`, which skips straight past `github.issue_agent`.
+
+- **Switching provider needed a pipeline restart to take effect.** The ingestion
+  pipeline calls `load_config()` once at startup and holds that snapshot for the
+  life of the process, which is right for poll intervals and tokens and wrong for
+  "which CLI should this session run": a provider chosen in Settings was invisible
+  until the pipeline was restarted. Agent choice is now re-read at the moment of
+  launch — the rule `resolve_default_program` already followed for the app-wide
+  default — via `config_for_launch` / `fresh_agent`, across tickets, issues and
+  both PR runners. An injected config stays the fallback rather than being
+  discarded, so a caller that builds one by hand still has it honoured.
+
+- **A ticket that had run before could not be run again.** Ending a session
+  deliberately keeps its worktree, so a second run of the same ticket met a
+  leftover worktree still holding the feature branch and died in
+  `git worktree add` with "already checked out at …". Nothing in the UI could see
+  it: with no live session the panel enabled **Run ticket**, and the failure was
+  then recorded with advice to delete the `state.json` ledger entry — which
+  clears the *record* of the failure and leaves its cause in place, so the retry
+  failed identically.
+
+  Force-start now reclaims the leftover first, under two rules it never breaks:
+  it never touches a worktree a live session owns, and it never removes one
+  holding work (uncommitted changes, a stash, or unpushed commits). Anything it
+  declines to take keeps the previous behaviour, so the worst case is the error
+  message you already got.
+
+- **A recorded failure now says what went wrong.** The ledger stored a
+  `failure_reason` — "branch '…' is already checked out at `<path>`" — and the
+  loader dropped it, leaving the panel to show a generic chip whose suggested
+  remedy fixed nothing. The reason is carried through and shown in full (chip
+  ellipsizes, tooltip has all of it; the actionable half of these messages is at
+  the end, so clipping server-side removed exactly the part worth reading).
+
 ## [0.1.9] - 2026-08-03
 
 ### Fixed

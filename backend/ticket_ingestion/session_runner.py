@@ -225,13 +225,25 @@ class SessionRunner:
     def _agent_for(self, story) -> str:
         """The agent CLI this story's session runs (``""`` = engine default).
 
-        The ticket's own stamp wins (the orchestrator copies it from the source
-        that produced the ticket), then the pipeline-wide chain in
-        :meth:`PipelineConfig.agent_for`.
+        Precedence: the ticket's own stamp (the orchestrator copies it from the
+        source that produced the ticket) → the config **as it is on disk right
+        now** → the config this runner was constructed with.
+
+        The re-read is what makes a provider switched in Settings apply to the
+        next ticket instead of the next pipeline restart, since ``__main__``
+        loads the config once and hands that snapshot over for the life of the
+        process. The injected config stays the fallback rather than being
+        discarded: it is a constructor argument and tests (and any caller that
+        builds a config by hand) are entitled to have it honoured when the
+        on-disk config expresses no opinion for this story's source.
         """
-        return getattr(story, "agent", "") or self.config.agent_for(
-            getattr(story, "provider", "")
-        )
+        from backend.ticket_ingestion.config import fresh_agent
+
+        stamped = getattr(story, "agent", "")
+        if stamped:
+            return stamped
+        provider = getattr(story, "provider", "")
+        return fresh_agent(lambda c: c.agent_for(provider), self.config)
 
     def _create_instance(
         self,
@@ -269,7 +281,11 @@ class SessionRunner:
 
         # PR review has no ticketing source, so it runs its own configured
         # agent ([github].agent) before falling back to the ingestion-wide one.
-        program = _resolve_program(self.config.pr_agent())
+        # Re-read at launch: the pipeline's startup snapshot would pin whatever
+        # provider was configured when the process began.
+        from backend.ticket_ingestion.config import fresh_agent
+
+        program = _resolve_program(fresh_agent(lambda c: c.pr_agent(), self.config))
 
         # Adopt the already-provisioned PR workspace: clone-style worktree at the
         # exact directory, on the PR's existing head branch (verbatim, no fork).

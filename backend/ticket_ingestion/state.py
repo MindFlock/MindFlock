@@ -148,6 +148,35 @@ def load_processed_story_statuses(state_dir: Path | str) -> dict:
     return out
 
 
+def load_processed_story_failures(state_dir: Path | str) -> dict:
+    """Slug -> the ``failure_reason`` on its latest ``failed`` ledger entry.
+
+    The companion to :func:`load_processed_story_statuses`, which returns only
+    the status. The reason is the one string that says what to DO about a
+    failure — "branch '…' is already checked out at <path>", say — and it sat
+    unread in state.json while the UI offered a generic "delete the ledger entry
+    to retry" remedy that clears the *record* of the failure and not its cause.
+    Same last-entry-wins rule as the status loader.
+    """
+    data = _read_state(state_dir)
+    stories = data.get("processed_stories")
+    if not isinstance(stories, list):
+        return {}
+    out: dict = {}
+    for entry in stories:
+        if not isinstance(entry, dict):
+            continue
+        sid = entry.get("story_id")
+        if not (isinstance(sid, str) and sid):
+            continue
+        if entry.get("status") == "failed":
+            out[sid] = str(entry.get("failure_reason") or "")
+        else:
+            # A later success supersedes an earlier failure's reason.
+            out.pop(sid, None)
+    return out
+
+
 def record_processed_story(state_dir: Path | str, record: ProcessingRecord) -> None:
     data = _read_state(state_dir)
     stories = data.get("processed_stories")

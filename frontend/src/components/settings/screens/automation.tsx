@@ -274,7 +274,10 @@ export function WorkItemRow({
           <span className="pr-open-chip ok">{eligibleLabel}</span>
         ) : (
           (reasons || []).map((reason) => (
-            <span className="pr-open-chip" key={reason}>
+            // title: a recorded failure reason is a full sentence of git output
+            // whose actionable half is at the end, so the chip ellipsizes and
+            // hovering gives you the whole thing.
+            <span className="pr-open-chip" key={reason} title={reason}>
               {reason}
             </span>
           ))

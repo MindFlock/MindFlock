@@ -13,7 +13,7 @@ from backend.ticket_ingestion.providers import get_provider
 from backend.ticket_ingestion.clarification import InteractiveClarificationHandler
 from backend.ticket_ingestion.claude_runner import ClaudeCodeRunner
 from backend.ticket_ingestion.session_runner import SessionRunner, engine_bridge_error
-from backend.ticket_ingestion.config import PipelineConfig
+from backend.ticket_ingestion.config import PipelineConfig, fresh_agent
 from backend.ticket_ingestion.filter import AssigneeFilter
 from backend.ticket_ingestion.issue_monitor import (
     IssueCommentsFetchError,
@@ -137,9 +137,12 @@ class PipelineOrchestrator:
         self._pr_monitor = PRMonitor(config.github) if config.github else None
         self._issue_monitor = IssueMonitor(config.github) if config.github else None
         self._pr_provisioner = PRProvisioner(config)
-        # PR review has no ticketing source of its own, so it runs the
-        # ingestion-wide default agent ([mindflock].agent).
-        self._pr_runner = PRClaudeRunner(agent=config.agent_for())
+        # PR review has no ticketing source of its own, so it runs PR review's
+        # OWN agent ([github].agent) before the ingestion-wide fallback — the
+        # same chain the engine path uses, so the two runners can't disagree
+        # about which CLI reviews a PR. The agent is refreshed at launch (see
+        # _review_pr) because this snapshot is taken once per process.
+        self._pr_runner = PRClaudeRunner(agent=config.pr_agent())
         # Counts of in-flight work per kind, mirrored to the activity beacon.
         self._busy: dict[str, int] = {"ticket": 0, "pr": 0, "issue": 0}
 
@@ -422,7 +425,9 @@ class PipelineOrchestrator:
         # issue handling's own choice onto the ticket here — every downstream
         # launch path already reads `story.agent` first. Blank leaves the
         # existing fallback chain untouched.
-        story.agent = self.config.issue_agent()
+        # Re-read at launch, so switching the issue-handling provider in Settings
+        # applies to the next issue rather than the next pipeline restart.
+        story.agent = fresh_agent(lambda c: c.issue_agent(), self.config)
         try:
             if self._cs_runner is not None:
                 await self._cs_runner.run(story)
@@ -507,6 +512,10 @@ class PipelineOrchestrator:
                 await self._cs_runner.run_pr(pr, comments)
             else:
                 workspace = await self._pr_provisioner.provision(pr)
+                # Refresh the CLI first: the runner was built with the provider
+                # configured at process start, which may be several Settings
+                # changes ago.
+                self._pr_runner.agent = fresh_agent(lambda c: c.pr_agent(), self.config)
                 await self._pr_runner.launch(pr, workspace, comments)
         except Exception as e:
             # Cap retries: without a record, a PR whose provisioning keeps

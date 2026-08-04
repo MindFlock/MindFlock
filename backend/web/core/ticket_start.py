@@ -103,6 +103,26 @@ def branch_for(story) -> str:
     return _branch_name_for(story)
 
 
+def _failed_label(reason: str) -> str:
+    """The chip text for a ``failed`` ledger entry.
+
+    This used to read "failed earlier — delete its state.json ledger entry to
+    retry", which was wrong twice over: force-start never consults the ledger
+    (only a live session blocks it), and the common cause is a leftover worktree
+    still holding the branch — so deleting the ledger entry drops the record of
+    the failure and the retry fails identically. Showing what actually went
+    wrong is the difference between an actionable chip and a wild goose chase.
+
+    Returned in full, only whitespace-normalized: the useful half of these
+    reasons ("… is already checked out at <path>") is at the END, so clipping to
+    a chip-sized budget here would cut off the part worth reading. The chip
+    ellipsizes in CSS and carries the whole string in its tooltip.
+    """
+    if not reason:
+        return "failed earlier (no reason recorded) — Run ticket to retry"
+    return "failed earlier: " + " ".join(reason.split())
+
+
 def skip_reasons(
     story,
     ledger: dict,
@@ -110,6 +130,7 @@ def skip_reasons(
     branches: set,
     member_ids,
     ingest_state: list | None = None,
+    failures: dict | None = None,
 ) -> list[str]:
     """Why auto ingestion would skip ``story`` right now (empty = eligible).
 
@@ -130,12 +151,15 @@ def skip_reasons(
         reasons.append("not in an ingest state — won't auto-ingest")
     status = ledger.get(story.slug) or ledger.get(str(story.id))
     if status:
-        label = {
-            "completed": "already ingested (recorded completed in the ledger)",
-            "in_flight": "a session for it is in flight",
-            "failed": "failed earlier — delete its state.json ledger entry to retry",
-            "skipped": "skipped earlier (recorded in the ledger)",
-        }.get(status, f"already in the processed ledger ({status})")
+        if status == "failed":
+            f = failures or {}
+            label = _failed_label(f.get(story.slug) or f.get(str(story.id)) or "")
+        else:
+            label = {
+                "completed": "already ingested (recorded completed in the ledger)",
+                "in_flight": "a session for it is in flight",
+                "skipped": "skipped earlier (recorded in the ledger)",
+            }.get(status, f"already in the processed ledger ({status})")
         reasons.append(label)
     if story.slug in pending_ids:
         reasons.append("queued for ingestion (pending)")
@@ -158,12 +182,14 @@ async def list_assigned_tickets() -> dict:
     from backend.ticket_ingestion.providers import get_provider
     from backend.ticket_ingestion.state import (
         load_pending_stories,
+        load_processed_story_failures,
         load_processed_story_statuses,
     )
 
     cfg = _load_config()
     sources = cfg.ticketing_sources or []
     ledger = load_processed_story_statuses(_REPO_ROOT)
+    failures = load_processed_story_failures(_REPO_ROOT)
     pending_ids = {e.get("story_id") for e in load_pending_stories(_REPO_ROOT)}
 
     tickets: list[dict] = []
@@ -228,6 +254,7 @@ async def list_assigned_tickets() -> dict:
                 branch_cache[repo],
                 member_ids,
                 ingest_state=ingest_state,
+                failures=failures,
             )
             bucket = story.state or NO_STATE_BUCKET
             if bucket not in bucket_order:

@@ -64,6 +64,32 @@ def _load_config():
     return cfg
 
 
+def review_agent() -> str:
+    """The coding CLI a PR-review session should run, ``""`` = the app default.
+
+    Reads the SAME chain the automated pipeline does
+    (:meth:`PipelineConfig.pr_agent` — Settings → PR review → Agent CLI, stored
+    as ``github.agent``, then ``[mindflock].agent``). The forced-review route
+    used to launch ``ENGINE.default_program()`` outright, so the Agent CLI
+    dropdown sitting directly above the "Begin review" button governed only the
+    auto monitor: clicking Begin review launched the app-wide default instead of
+    the provider the user had picked for reviews.
+
+    Best-effort by design: this is a launch path, and an unconfigured or
+    unreadable ingestion config should fall through to the app default rather
+    than block the review.
+    """
+    try:
+        cfg = _load_config()
+    except Exception:  # noqa: BLE001 — ingestion may not be configured at all
+        return ""
+    fn = getattr(cfg, "pr_agent", None)
+    try:
+        return (fn() if callable(fn) else "") or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def session_title(pr) -> str:
     """Engine session title for a PR review — ``pr-<repo-name>-<number>`` (via
     :func:`pr_slug`), so #7 in two different repos never share a session, and a
