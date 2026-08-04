@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-08-03
+
 ### Fixed
+
+- **The default coding provider was ignored by everything that launches a
+  session.** Settings → Coding provider writes `coding_cli.default_provider`
+  into `settings.json`, but every launch path read `default_program` out of
+  `config.json` — a different store, seeded once on first run by a helper that
+  only ever hunts for `claude`, and which the UI never writes to. Nothing
+  bridged the two, so choosing a default changed the Providers screen badge and
+  `mindflock doctor` and nothing else: ingested tickets, PR-review sessions,
+  issue sessions and the New Session dialog all still launched Claude Code.
+
+  `backend.config.program.resolve_default_program` is now the single answer to
+  "which CLI, when nobody asked for a specific one" — the chosen provider, then
+  the engine config, then `claude` — and the engine bridge, the standalone tmux
+  launcher and the web layer all resolve through it. It is also read fresh
+  rather than from the config snapshot taken at server start, so changing the
+  default no longer needs a restart. An explicitly chosen agent (a ticketing
+  source's own, say) still outranks it.
+
+- **Two welcome-tour slides scrolled.** "Welcome to MindFlock" needed 327px and
+  "3. PR review" 394px inside a 320px content box, so both got a scrollbar and
+  the PR-review slide hid its own *Set up now* button. The card is now 520×490
+  with a 48ch body — widening did most of the work, taking that slide from 394px
+  to 350px — which fits all twelve with room to spare.
 
 - **The per-surface Agent CLI pickers chose a provider that nothing read.**
   0.1.9 added `github.agent` and `github.issue_agent` so PR review and issue
@@ -62,33 +87,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remedy fixed nothing. The reason is carried through and shown in full (chip
   ellipsizes, tooltip has all of it; the actionable half of these messages is at
   the end, so clipping server-side removed exactly the part worth reading).
-
-## [0.1.9] - 2026-08-03
-
-### Fixed
-
-- **The default coding provider was ignored by everything that launches a
-  session.** Settings → Coding provider writes `coding_cli.default_provider`
-  into `settings.json`, but every launch path read `default_program` out of
-  `config.json` — a different store, seeded once on first run by a helper that
-  only ever hunts for `claude`, and which the UI never writes to. Nothing
-  bridged the two, so choosing a default changed the Providers screen badge and
-  `mindflock doctor` and nothing else: ingested tickets, PR-review sessions,
-  issue sessions and the New Session dialog all still launched Claude Code.
-
-  `backend.config.program.resolve_default_program` is now the single answer to
-  "which CLI, when nobody asked for a specific one" — the chosen provider, then
-  the engine config, then `claude` — and the engine bridge, the standalone tmux
-  launcher and the web layer all resolve through it. It is also read fresh
-  rather than from the config snapshot taken at server start, so changing the
-  default no longer needs a restart. An explicitly chosen agent (a ticketing
-  source's own, say) still outranks it.
-
-- **Two welcome-tour slides scrolled.** "Welcome to MindFlock" needed 327px and
-  "3. PR review" 394px inside a 320px content box, so both got a scrollbar and
-  the PR-review slide hid its own *Set up now* button. The card is now 520×490
-  with a 48ch body — widening did most of the work, taking that slide from 394px
-  to 350px — which fits all twelve with room to spare.
 
 ### Added
 
