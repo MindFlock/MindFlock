@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-08-04
+
 ### Added
 
 - **Ticketing, PR review and issue handling moved out of Settings into a new
@@ -900,7 +902,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.9...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.10...HEAD
+[0.1.10]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.10
 [0.1.9]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.9
 [0.1.8]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.8
 [0.1.7]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.7
