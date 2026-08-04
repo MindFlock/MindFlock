@@ -493,10 +493,14 @@ when it is deep-linked one — so every old link keeps working, including the
 **Configure** button on a Connections card (the server's `settings_screen`
 values) and the welcome tour's setup slides.
 
-**One anatomy, three tabs** (`components/intake/kit.tsx`): a master switch and its
-one-line status → a list of collapsible **source cards** with **+ Add** → a
-**work list grouped by source**, each row carrying why auto-pickup did or didn't
-take it. They used to be three dialects of that shape; ticketing had the good one
+**One anatomy, three tabs** (`components/intake/kit.tsx`): a master switch → a
+list of collapsible **source cards** with **+ Add** → a **work list grouped by
+source**, each row carrying why auto-pickup did or didn't take it. Each of the
+three is a titled section, and the switch is a banded row; the switch used to be
+followed by a status sentence ("● Active — polling 1 source…", "‖ Paused — 1
+source kept…") and no longer is — with the toggle beside it and the sources it
+counted listed directly below, the line only restated what was on screen. Its one
+subtitle is the state a switch cannot show: nothing connected yet. They used to be three dialects of that shape; ticketing had the good one
 (add/remove cards, each with its own credentials, repo and agent), so the other
 two were rebuilt onto it — a ticketing source and a watched repo are both just
 *sources* now. What legitimately differs stays in the tabs: only tickets have

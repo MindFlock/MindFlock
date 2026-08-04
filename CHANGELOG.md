@@ -7,7 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The Intake tabs dropped the status line under their master switch, and
+  tightened up.** "● Active — polling 1 source for tickets assigned to you" sat in
+  a row of its own, under a switch that was already green, directly above the very
+  sources it was counting — it restated what was on screen in a third colour and
+  cost a full row in each of the three tabs. The switch is a banded row now, and
+  says something only when the tab has nothing to switch on yet ("Add a repository
+  below and this starts reviewing your PRs on it") — the one state a switch cannot
+  show by itself.
+
+  The dialog also sizes to its content instead of a flat `84vh`, which drew an
+  empty box under any tab that ended early (Issues is 581px now, not a forced
+  760). Each tab's sections — **Sources**, **Repositories**, **Assigned
+  tickets**, **Open issues** — read as headings rather than another line of prose,
+  and workflow-state rows print in the provider's own casing (`Ready for Review`,
+  not `READY FOR REVIEW`), so on this surface uppercase means exactly one thing: a
+  section heading.
+
 ### Fixed
+
+- **The Intake master switch's label sat 10px above its own toggle.** It reused
+  `.set-switch-row`, which nudges its label up to compensate for the desktop app's
+  font; on a row whose label is already centered against a 20px switch, the nudge
+  just pulled the two apart.
+
+- **The Intake top-bar button announced itself as "Open work"** to a screen
+  reader — the surface's name two renames ago, so the spoken label matched nothing
+  on screen. The visible "Intake" is its accessible name now.
 
 - **A commit message the pre-commit hooks rejected is offered back, not retyped.**
   It always survived on disk — `.mindflock_commit_msg` is the file

@@ -5,11 +5,16 @@
  * navigation is a horizontal strip with live counts and the panel gets the full
  * width. Wider than Settings too (780 vs 640) because a work row carries a
  * reference, a title, chips and a button on one line. */
+/* Sized to its content, not to the viewport. A flat `height: 84vh` made every
+   tab as tall as the tallest one could ever be, so a panel that ended at the
+   Assigned-tickets hint still drew ~90px of empty box under it and the whole
+   dialog read as half-finished. Floor keeps a sparse tab (no sources yet) from
+   collapsing into a strip; the body scrolls once content passes the ceiling. */
 #intake-panel {
   width: 780px;
   max-width: 94vw;
-  height: 84vh;
-  max-height: 760px;
+  min-height: min(420px, 84vh);
+  max-height: min(84vh, 760px);
   padding: 18px 22px 20px;
   border-radius: 12px;
   background: var(--panel);
@@ -101,15 +106,43 @@
 }
 
 /* Same display contract as .set-screen, because capsGate.css hides the direct
-   children of a gated panel and reveals its .caps-gate — see the rules there. */
+   children of a gated panel and reveals its .caps-gate — see the rules there.
+
+   The gap is the tab's whole vertical rhythm: three sections (switch, sources,
+   work list), each already fenced by its own heading rule or border, so 16px
+   between them was spacing a boundary that was drawn anyway. */
 .ik-panel {
   display: none;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .ik-panel.active {
   display: flex;
+}
+
+/* The intro paragraph carries its own <p> margins from .set-block-hint; here the
+   flex gap above already spaces it, and doubling the two pushed the master
+   switch a third of the way down the panel. */
+.ik-panel > .set-block-hint {
+  margin: 0;
+}
+
+/* Section headings — "Sources", "Repositories", "Assigned tickets", "Open pull
+   requests". As a plain 13px label these sat at body weight and read as another
+   line of prose, which is what made a structurally-fine panel feel like an
+   undifferentiated column. Same treatment as .set-section-title, so the three
+   tabs and Settings agree on what "a section starts here" looks like. Direct
+   children only: the labels *inside* a source card (Provider, Repo URL) are
+   field labels, not sections. */
+.ik-panel > .set-row > .set-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
 }
 
 .ik-panel > .set-section-title:first-child {
@@ -122,11 +155,49 @@
   padding-top: 10px;
 }
 
+/* The master switch (AutomationSwitch) ------------------------------------- */
+
+/* A banded row rather than a bare label-and-toggle pair. It is the one control
+   that governs everything below it, and the band both says so and gives it a
+   definite edge — the same --panel-2 fill a source group heading wears, so the
+   tab reads as bands-with-content instead of floating text.
+   Deliberately NOT .set-switch-row: that class nudges its label up 10px for the
+   desktop font, which on this surface just left the label hanging above its own
+   switch. Here the row centers them honestly. */
+.ik-switch {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 12px;
+}
+
+/* Label over optional subtitle. min-width:0 so a long "nothing connected yet"
+   note ellipsizes/wraps inside the row instead of shoving the switch off it. */
+.ik-switch-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 /* Source cards stack in their own column so the "+ Add" button below them is
    not mistaken for part of the last card. */
 .ik-cards {
   display: flex;
   flex-direction: column;
+  gap: 8px;
+}
+
+/* The card's own bottom margin is for the Settings screens it came from; inside
+   .ik-cards the flex gap spaces them, and both together left a dead 12px strip
+   between the last card and + Add source. */
+.ik-cards > .tk-source {
+  margin-bottom: 0;
 }
 
 /* Size the add button to its label instead of letting the .set-row flex column
@@ -225,6 +296,18 @@
   text-transform: none;
   letter-spacing: 0;
   color: var(--text);
+}
+
+/* The leaf level — one provider workflow state ("Ready for review", "Deferred").
+   .tk-bucket-name shouts in uppercase for historical reasons, and the two levels
+   above it already opt out (the two rules above this one); the leaf was simply
+   missed. It matters more now that the panel's own section headings are uppercase:
+   with both shouting, a state row read as the start of a new section instead of a
+   row inside one. Uppercase means exactly one thing here — a section heading — and
+   a provider's state name gets printed the way the provider wrote it. */
+.ik-groups .tk-bucket-name {
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .ik-group-detail {

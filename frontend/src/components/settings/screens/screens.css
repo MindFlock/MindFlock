@@ -141,22 +141,6 @@
   line-height: 1.5;
 }
 
-/* Automated PR review status line: no on/off toggle — the repo list is the
-   switch, and this line reflects it. */
-.pr-status {
-  font-size: 13px;
-  color: var(--muted);
-  margin: 2px 0 8px;
-}
-
-.pr-status.on {
-  color: var(--green);
-}
-
-.pr-status.paused {
-  color: var(--amber, #d9a441);
-}
-
 /* Advanced options fold (tuning fields hidden by default so "add a repo" is
    the clear primary action). */
 .pr-advanced {

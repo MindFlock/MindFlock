@@ -179,7 +179,9 @@ export function TopBar() {
             className="tb-item"
             type="button"
             title="Intake — tickets, pull requests and issues waiting to become sessions (Alt+I)"
-            aria-label="Open work"
+            /* No aria-label: the visible "Intake" IS the name. The old one still
+               said "Open work", the surface's name two renames ago, so a screen
+               reader announced a button nobody could see. */
             onClick={() => ui.openDialogFor("intake")}
           >
             Intake

@@ -105,7 +105,6 @@ function IngestionToggle({ sourceCount }: { sourceCount: number }) {
     }
   };
 
-  const n = sourceCount;
   return (
     <AutomationSwitch
       label="Automated ingestion"
@@ -115,14 +114,7 @@ function IngestionToggle({ sourceCount }: { sourceCount: number }) {
       statusId="tk-ingestion-status"
       checked={desired}
       onChange={(next) => { if (!busy) toggle(next); }}
-      tone={n > 0 && desired ? "on" : n > 0 ? "paused" : ""}
-      status={
-        !n
-          ? "○ Add a ticketing source below to start turning tickets into sessions"
-          : desired
-            ? `● Active — polling ${n} ${n === 1 ? "source" : "sources"} for tickets assigned to you`
-            : `‖ Paused — ${n} ${n === 1 ? "source" : "sources"} kept; turn Automated ingestion on to resume`
-      }
+      note={sourceCount ? undefined : "Add a ticketing source below and this starts polling it"}
     />
   );
 }

@@ -140,14 +140,7 @@ export function IssuesTab({ gotoTab }: TabProps) {
             next ? "Automated issue handling on" : "Automated issue handling off"
           )
         }
-        tone={n > 0 && enabled ? "on" : n > 0 ? "paused" : ""}
-        status={
-          !n
-            ? "○ Add a repository below, then turn Automated handling on"
-            : enabled
-              ? `● Active — handling new issues in ${n} ${n === 1 ? "repository" : "repositories"}`
-              : `‖ Off — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated handling on to start`
-        }
+        note={n ? undefined : "Add a repository below and this starts handling its new issues"}
       />
 
       <RepoSourceList
@@ -187,9 +180,8 @@ export function IssuesTab({ gotoTab }: TabProps) {
         listId="gh-issues-list"
         hint={
           <>
-            Every open issue on the repositories above
-, grouped by repository, with why auto handling has or hasn't
-            picked it up. <strong>Start work</strong> spins up a session for that issue right
+            Every open issue on the repositories above, grouped by repository, with why
+            auto handling has or hasn't picked it up. <strong>Start work</strong> spins up a session for that issue right
             now, bypassing the age / already-handled filters.
           </>
         }
