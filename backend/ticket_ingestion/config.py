@@ -345,6 +345,59 @@ def load_config(config_path: Path | str | None = None) -> PipelineConfig:
     return _parse_config(raw, path, layered=layered)
 
 
+def config_for_launch(
+    fallback: "PipelineConfig | None" = None,
+) -> "PipelineConfig | None":
+    """The config to make a LAUNCH decision from — re-read from disk.
+
+    The pipeline calls :func:`load_config` once at startup and holds that
+    snapshot for the life of the process, which is right for poll intervals and
+    tokens but wrong for "which coding CLI should this session run": switching
+    provider in Settings has to apply to the very next ticket / issue / PR, not
+    to the next time the pipeline is restarted. Agent choice is therefore read
+    fresh at the moment of launch — the same rule
+    :func:`backend.config.program.resolve_default_program` follows for the
+    app-wide default.
+
+    Best-effort: a config that has become unreadable since startup falls back to
+    ``fallback`` (the caller's snapshot) rather than failing the launch.
+    """
+    try:
+        return load_config()
+    except Exception:  # noqa: BLE001 — never let a re-read break a launch
+        return fallback
+
+
+def fresh_agent(pick, snapshot: "PipelineConfig | None") -> str:
+    """Resolve one surface's coding CLI, preferring the config on disk NOW.
+
+    ``pick`` is the surface's own chain applied to a config — e.g.
+    ``lambda c: c.pr_agent()``. It is tried against a freshly-read config first
+    so a provider switched in Settings takes effect on the next launch, and falls
+    back to ``snapshot`` (the long-lived config the caller was built with) when
+    the fresh read has no opinion or is unavailable.
+
+    Keeping the snapshot as the fallback rather than replacing it outright means a
+    caller that was handed a config by hand still has it honoured; only an
+    explicit on-disk choice overrides it. Every failure mode answers ``""``, which
+    every launch path reads as "use the resolved app default".
+    """
+    fresh = config_for_launch(None)
+    if fresh is not None:
+        try:
+            chosen = pick(fresh)
+        except Exception:  # noqa: BLE001
+            chosen = ""
+        if chosen:
+            return chosen
+    if snapshot is None:
+        return ""
+    try:
+        return pick(snapshot) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _merge_layers(raw: dict) -> dict:
     """Overlay the settings store + env vars onto a parsed ``config.toml`` dict.
 
@@ -804,6 +857,12 @@ def _parse_github(raw: dict, config_path: Path) -> GithubConfig | None:
             github_section.get("issue_poll_interval_seconds", 60)
         ),
         issue_skip_authors=list(github_section.get("issue_skip_authors", []) or []),
+        # Per-surface coding CLI. Omitting these left both at the dataclass ""
+        # default no matter what the merged config said, so Settings → PR review
+        # → Agent CLI (and its issue-handling twin) resolved to nothing and every
+        # review fell through to the app-wide default provider.
+        agent=str(github_section.get("agent", "") or ""),
+        issue_agent=str(github_section.get("issue_agent", "") or ""),
     )
 
 

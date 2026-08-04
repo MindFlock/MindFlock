@@ -30592,7 +30592,12 @@ function WorkItemRow({
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-meta", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: meta }),
-      hasSession ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip on", children: "session open" }) : eligible ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip ok", children: eligibleLabel }) : (reasons || []).map((reason) => /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip", children: reason }, reason))
+      hasSession ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip on", children: "session open" }) : eligible ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip ok", children: eligibleLabel }) : (reasons || []).map((reason) => (
+        // title: a recorded failure reason is a full sentence of git output
+        // whose actionable half is at the end, so the chip ellipsizes and
+        // hovering gives you the whole thing.
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip", title: reason, children: reason }, reason)
+      ))
     ] }),
     hasSession ? /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "btn-primary pr-review-btn", disabled: true, children: "Session open" }) : /* @__PURE__ */ jsxRuntimeExports.jsx(
       "button",

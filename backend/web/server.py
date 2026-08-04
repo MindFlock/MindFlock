@@ -104,6 +104,7 @@ from backend.web.core import ports as _ports
 from backend.web.core import issue_start as _issue_start
 from backend.web.core import github_pr as _github_pr
 from backend.web.core import pr_review as _pr_review
+from backend.web.core import worktree_reclaim as _worktree_reclaim
 from backend.web.core import ticket_start as _ticket_start
 from backend.web.core import remote as _remote
 from backend.web.core import pending as _pending
@@ -4202,7 +4203,11 @@ async def github_force_review(payload: dict) -> JSONResponse:
                 session.InstanceOptions(
                     title=title,
                     path=".",
-                    program=ENGINE.default_program(),
+                    # Settings → PR review → Agent CLI first (same chain the
+                    # auto monitor uses), then the app-wide default. Mirrors the
+                    # issue force-start below, which already reads its resolved
+                    # agent before falling back.
+                    program=_pr_review.review_agent() or ENGINE.default_program(),
                     provisioned=True,
                     workspace_strategy="clone",
                     new_branch=pr.head_ref,
@@ -4350,6 +4355,16 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
         try:
             prompt = _ticket_start.build_prompt(story)
             branch = _ticket_start.branch_for(story)
+            # A previous run of this ticket may have left a worktree holding the
+            # branch: the session is long gone (nothing blocked the button) but
+            # git still refuses to check the branch out twice. Reclaim it when
+            # nothing owns it and it holds no work — otherwise the provisioning
+            # error stands, unchanged.
+            await asyncio.to_thread(
+                _worktree_reclaim.reclaim_for_launch,
+                getattr(story, "repo_url", "") or "",
+                branch,
+            )
             # In-flight ledger marker BEFORE the slow launch, so a running
             # pipeline's scans treat the ticket as taken (orchestrator guard).
             _ticket_start.record_started(story)
@@ -4505,6 +4520,12 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
         # provisioning (inside Instance.Start), like the ticket path.
         try:
             story, prompt, branch = await _issue_start.prepare_start(issue)
+            # Same leftover-worktree reclaim as the ticket path above.
+            await asyncio.to_thread(
+                _worktree_reclaim.reclaim_for_launch,
+                getattr(story, "repo_url", "") or "",
+                branch,
+            )
             inst = session.NewInstance(
                 session.InstanceOptions(
                     title=title,

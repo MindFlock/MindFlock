@@ -382,6 +382,14 @@
   font-size: 11px;
   color: var(--muted);
   background: var(--bg);
+  /* A recorded failure reason is a whole sentence of git output. Cap it here
+     rather than in the server's label (the actionable half is at the end, so a
+     server-side clip would remove the useful part); the full string is in the
+     chip's title. */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pr-open-chip.ok {

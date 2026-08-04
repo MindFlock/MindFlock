@@ -181,10 +181,13 @@ async def prepare_start(issue) -> tuple:
     cfg = _load_config()
     comments = await IssueMonitor(cfg.github).fetch_comments(issue)
     story = issue_to_ticket(issue, comments)
-    # GitHub's issue loop has no ticketing source, so it takes the
-    # ingestion-wide default agent ([mindflock].agent); "" = the app default.
-    agent_for = getattr(cfg, "agent_for", None)
-    story.agent = agent_for() if callable(agent_for) else ""
+    # Settings → Git issues → Agent CLI first (``github.issue_agent``), then the
+    # ingestion-wide ``[mindflock].agent``; "" = the app default. This used to
+    # call agent_for(), which skips straight to the ingestion-wide value — so the
+    # Agent CLI picker on the Git issues screen governed only the auto monitor
+    # and "Start work" launched whatever the app default was.
+    issue_agent = getattr(cfg, "issue_agent", None)
+    story.agent = issue_agent() if callable(issue_agent) else ""
     prompt = ClaudeCodeRunner(cfg)._build_prompt(story, None, None)
     return story, prompt, _branch_name_for(story)
 

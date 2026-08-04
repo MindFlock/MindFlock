@@ -525,3 +525,119 @@ async def test_list_assigned_tickets_states_failure_and_branch_error(
     assert out["tickets"][0]["bucket"] == ticket_start.NO_STATE_BUCKET
     # Branch lookup failed but listing still succeeds (no "feature branch" chip).
     assert not any("feature branch" in r for r in out["tickets"][0]["reasons"])
+
+
+# --------------------------------------------------------------------------- #
+# A failure's chip says what actually went wrong
+# --------------------------------------------------------------------------- #
+# The old chip read "failed earlier — delete its state.json ledger entry to
+# retry". Both halves misled: force-start never consults the ledger (only a live
+# session blocks it), and the usual cause is a leftover worktree still holding
+# the branch — so clearing the ledger entry drops the RECORD of the failure and
+# the retry fails identically.
+_REAL_REASON = (
+    "failed to create provisioned worktree: branch "
+    "'feature/shortcut-19674/config-build-the-orchestrator-wiring-lay' is already "
+    "checked out at /home/u/.mindflock/worktrees/feature/shortcut-19674/x_18c8. "
+    "Kill that session first, or use a different story id / title."
+)
+
+
+def test_failed_chip_carries_the_recorded_reason():
+    story = _story()
+    reasons = ticket_start.skip_reasons(
+        story,
+        {story.slug: "failed"},
+        set(),
+        set(),
+        MEMBER_IDS,
+        failures={story.slug: _REAL_REASON},
+    )
+    (chip,) = [r for r in reasons if r.startswith("failed earlier")]
+    assert "already checked out" in chip
+    # The remedy that does not fix anything is gone.
+    assert "state.json" not in chip
+
+
+def test_failed_reason_is_never_clipped_by_the_server():
+    """The actionable half of these reasons is at the END, so a server-side
+    character budget would remove exactly the part worth reading. The chip
+    ellipsizes in CSS and keeps the full text in its title."""
+    chip = ticket_start._failed_label(_REAL_REASON)
+    assert chip.endswith("different story id / title.")
+    assert "…" not in chip
+
+
+def test_failed_reason_whitespace_is_normalized():
+    """Captured output arrives with newlines in it; a chip is one line."""
+    assert ticket_start._failed_label("line one\n  line two") == (
+        "failed earlier: line one line two"
+    )
+
+
+def test_failed_with_no_recorded_reason_still_points_at_the_button():
+    chip = ticket_start._failed_label("")
+    assert "Run ticket" in chip
+    assert "state.json" not in chip
+
+
+def test_failed_chip_matches_by_id_when_the_slug_is_absent():
+    story = _story(id=1)  # slug defaults to "sc-1"
+    reasons = ticket_start.skip_reasons(
+        story, {"1": "failed"}, set(), set(), MEMBER_IDS, failures={"1": _REAL_REASON}
+    )
+    assert any("already checked out" in r for r in reasons)
+
+
+def test_missing_failures_map_degrades_to_the_generic_label():
+    """skip_reasons is called from more than one place; the argument is optional
+    and its absence must not crash the panel."""
+    story = _story()
+    reasons = ticket_start.skip_reasons(
+        story, {story.slug: "failed"}, set(), set(), MEMBER_IDS
+    )
+    assert any(r.startswith("failed earlier") for r in reasons)
+
+
+def test_failure_reasons_loader_keeps_the_reason(tmp_path):
+    from backend.ticket_ingestion.state import (
+        load_processed_story_failures,
+        record_processed_story,
+        update_processed_story,
+    )
+    from backend.ticket_ingestion.models import ProcessingRecord
+    from datetime import datetime, timezone
+
+    record_processed_story(
+        tmp_path,
+        ProcessingRecord(
+            story_id="sc-9",
+            branch="sc-9",
+            status="in_flight",
+            processed_at=datetime.now(timezone.utc),
+        ),
+    )
+    update_processed_story(tmp_path, "sc-9", status="failed", failure_reason="boom")
+    assert load_processed_story_failures(tmp_path) == {"sc-9": "boom"}
+
+
+def test_a_later_success_supersedes_an_earlier_failure_reason(tmp_path):
+    from backend.ticket_ingestion.state import (
+        load_processed_story_failures,
+        record_processed_story,
+    )
+    from backend.ticket_ingestion.models import ProcessingRecord
+    from datetime import datetime, timezone
+
+    for status, reason in (("failed", "boom"), ("completed", None)):
+        record_processed_story(
+            tmp_path,
+            ProcessingRecord(
+                story_id="sc-9",
+                branch="sc-9",
+                status=status,
+                processed_at=datetime.now(timezone.utc),
+                failure_reason=reason,
+            ),
+        )
+    assert load_processed_story_failures(tmp_path) == {}

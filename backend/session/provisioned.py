@@ -739,11 +739,12 @@ def _resolve_base_sha(worktree_dir: str, base_branch: str) -> str:
 # ---------------------------------------------------------------------------
 # Base repo (worktree strategy)
 # ---------------------------------------------------------------------------
-def _check_branch_not_checked_out(base_repo: str, branch_name: str) -> None:
-    """Raise a clear error if ``branch_name`` is already checked out in base_repo.
+def worktree_holding_branch(base_repo: str, branch_name: str) -> str:
+    """Path of the worktree that has ``branch_name`` checked out, else ``""``.
 
-    `git worktree add` of a branch that is checked out in another live worktree
-    fails with an opaque message; this turns it into an actionable one.
+    Shared by the pre-flight guard below and the orphan reclaim in
+    :mod:`backend.web.core.worktree_reclaim`, so "who holds this branch" has one
+    implementation and the two can't disagree.
     """
     try:
         cp = subprocess.run(
@@ -753,21 +754,33 @@ def _check_branch_not_checked_out(base_repo: str, branch_name: str) -> None:
             timeout=60,
         )
     except subprocess.TimeoutExpired:
-        return
+        return ""
     if cp.returncode != 0:
-        return
+        return ""
     target = "branch refs/heads/" + branch_name
     current = None
     for line in cp.stdout.decode("utf-8", "replace").splitlines():
         if line.startswith("worktree "):
             current = line[len("worktree ") :]
         elif line.strip() == target:
-            raise ProvisionError(
-                "branch '{}' is already checked out at {}. Kill that "
-                "session first, or use a different story id / title.".format(
-                    branch_name, current
-                )
+            return current or ""
+    return ""
+
+
+def _check_branch_not_checked_out(base_repo: str, branch_name: str) -> None:
+    """Raise a clear error if ``branch_name`` is already checked out in base_repo.
+
+    `git worktree add` of a branch that is checked out in another live worktree
+    fails with an opaque message; this turns it into an actionable one.
+    """
+    held_at = worktree_holding_branch(base_repo, branch_name)
+    if held_at:
+        raise ProvisionError(
+            "branch '{}' is already checked out at {}. Kill that "
+            "session first, or use a different story id / title.".format(
+                branch_name, held_at
             )
+        )
 
 
 def repo_display_name(repo_url: str) -> str:
