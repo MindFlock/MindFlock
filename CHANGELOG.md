@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-08-04
+
 ### Changed
 
 - **The Intake tabs dropped the status line under their master switch, and
@@ -946,7 +948,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.10...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.11...HEAD
+[0.1.11]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.11
 [0.1.10]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.10
 [0.1.9]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.9
 [0.1.8]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.8
