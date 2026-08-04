@@ -17,9 +17,10 @@ def test_every_settings_screen_leads_with_a_heading():
     html = client.get("/").text
     # Each screen section: capture its inner HTML up to the next section/close.
     js = client.get("/app.js").text
-    # Every screen component leads with a .set-section-title heading — the
-    # React bundle carries one per screen (15 screens).
-    assert js.count("set-section-title") >= 15, "screens are missing headings"
+    # Every screen component leads with a .set-section-title heading — the React
+    # bundle carries at least one per screen (14 since ticketing / PR review /
+    # git issues became Intake tabs, where the tab strip is the heading).
+    assert js.count("set-section-title") >= 14, "screens are missing headings"
 
 
 def test_switch_flips_only_on_the_switch_not_the_whole_row():
@@ -407,7 +408,10 @@ def test_settings_panel_keeps_its_rows_while_refetching():
     assert "Could not list issues: " in js
     assert "Could not list tickets: " in js
     # Each panel distinguishes "first load" from "reloading what you can see".
-    assert js.count('? "Refreshing…" : "Loading…"') == 3
+    # One shared implementation now (intake/kit.tsx `panelNote`), driven three
+    # times — the three hand-rolled copies were the drift risk this replaced.
+    assert js.count('? "Refreshing…" : "Loading…"') == 1
+    assert js.count("panelNote({") == 3
 
 
 def test_settings_panel_refresh_asks_the_server_to_skip_its_cache():
@@ -453,15 +457,16 @@ def test_settings_panel_repolls_only_while_the_server_reports_stale():
     assert 2.0 < server._FANOUT_TTL
 
 
-def test_opening_settings_warms_all_three_panels():
-    """Clicking through to a panel shouldn't start with a spinner: the dialog
+def test_opening_work_warms_all_three_panels():
+    """Switching to a tab shouldn't start with a spinner: the Intake dialog
     prefetches all three on open, once per open (not per render), and a panel
-    whose data is still fresh is skipped."""
+    whose data is still fresh is skipped. It is also what fills in the tab
+    strip's counts before you get there."""
     js = client.get("/app.js").text
-    assert "if (open) prefetchSettingsPanels();" in js
-    dialog = js.split("if (open) prefetchSettingsPanels();", 1)[1][:80]
+    assert "if (open) prefetchIntakePanels();" in js
+    dialog = js.split("if (open) prefetchIntakePanels();", 1)[1][:80]
     assert "[open]" in dialog  # the effect keys on `open` alone
-    prefetch = js.split("function prefetchSettingsPanels()", 1)[1][:400]
+    prefetch = js.split("function prefetchIntakePanels()", 1)[1][:400]
     assert "Object.keys(PANELS)" in prefetch  # every panel, no hand-kept list
     assert "staleTime: PANEL_STALE_MS" in prefetch  # a no-op while still fresh
     # `void`: an unconfigured integration 502s here, and a warm-up must not
@@ -471,9 +476,14 @@ def test_opening_settings_warms_all_three_panels():
 
 def test_ticket_source_errors_outrank_the_refresh_note():
     """A per-source failure is the useful message, so it wins over
-    "Refreshing…" — including on a stale payload, which is new: the server can
-    now hand back a cached list that carries source errors."""
+    "Refreshing…" — including on a stale payload: the server can hand back a
+    cached list that carries source errors. The precedence lives in the shared
+    `panelNote` helper (a `detail` outranks the progress note) rather than in
+    each panel's own ternary."""
     js = client.get("/app.js").text
-    assert "error || sourceErrors ? sourceErrors" in js
-    assert 'e.source + ": " + e.error' in js
+    note = js.split("function panelNote(opts)", 1)[1][:400]
+    assert "opts.error || opts.detail" in note
+    assert "opts.detail ||" in note
+    # …and the tickets panel is what passes the per-source errors in as detail.
+    assert '(sourceLabels[s] || s) + ": " + e' in js
     assert 'join(" · ")' in js

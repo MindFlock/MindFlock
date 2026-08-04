@@ -89,7 +89,9 @@ async def fetch_actionable_comments(
     pr: PullRequest, config: GithubConfig
 ) -> list[PRComment]:
     owner, name = pr.repo.split("/", 1)
-    skip = {pr.author, *config.skip_authors}
+    # Per-repo skip list: a bot that reviews one repo often doesn't touch the
+    # next, and each watched repo edits its own list on its own card.
+    skip = {pr.author, *config.skip_authors_for(pr.repo)}
     token = await resolve_token(config)
     try:
         async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:

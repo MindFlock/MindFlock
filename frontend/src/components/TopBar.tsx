@@ -172,6 +172,18 @@ export function TopBar() {
           >
             New
           </button>
+          {/* Intake sits next to New because both are about starting sessions —
+              one from scratch, one from what came in. */}
+          <button
+            id="intake-btn"
+            className="tb-item"
+            type="button"
+            title="Intake — tickets, pull requests and issues waiting to become sessions (Alt+I)"
+            aria-label="Open work"
+            onClick={() => ui.openDialogFor("intake")}
+          >
+            Intake
+          </button>
           <div className={"tb-drop" + (recentOpen ? " open" : "")} id="recent-menu" ref={dropRef}>
             <button
               type="button"

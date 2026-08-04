@@ -76,7 +76,7 @@ export function requireGit(): boolean {
 /** The one remedy sentence. Asserted verbatim in docs and tests — if you
  * change it, change it there too. */
 export const PR_REMEDY =
-  "add a GitHub token in Settings → PR review, or install the GitHub CLI";
+  "add a GitHub token in Intake → Pull requests, or install the GitHub CLI";
 
 /** Tooltip for a PR/Merge affordance that will fall back to the browser. */
 export const PR_FALLBACK_HINT =

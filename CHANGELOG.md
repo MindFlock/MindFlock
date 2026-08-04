@@ -7,6 +7,156 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Ticketing, PR review and issue handling moved out of Settings into a new
+  top-bar surface: Intake.** They were never settings. Settings is where you
+  configure the app once and forget it; these three are somewhere you *visit* —
+  to see what came in, start something by hand, or pause a queue. Sitting in the
+  same left nav as Appearance and System logs, they were both hard to find and
+  mixed in with things that never change.
+
+  **Intake** sits next to **New** in the top bar (`Alt+I`, plus four command-palette
+  entries), and inside it a tab strip — **Tickets**, **Pull requests**, **Issues** —
+  carries a live count per tab — the number of rows that tab will actually show
+  you, not a lifetime total: counting every ticket the provider ever assigned you
+  read `1221` over a list of 52, because done states like Completed are parked
+  behind the **+ Add bucket…** menu. The badge and the panel now share one bucket
+  filter so they cannot disagree. Every
+  old deep link still works: the retired screen keys (`ticketing`, `repo`, `issues`)
+  route to the tab that replaced them, so the sidebar bars' buttons, the welcome
+  tour's "Set up now →", and the server's own `settings_screen` on a Connections
+  card all land in the right place.
+
+- **All three tabs are the same screen now.** They had drifted into three dialects
+  of one shape, and Ticketing had the good one. The shared anatomy is: master
+  switch → status line → a list of collapsible **source cards** with `+ Add` → the
+  **work those sources yielded, grouped by source**, each row saying why automatic
+  pickup did or didn't take it.
+
+- **Each watched repository is its own card, with its own settings.** PR review and
+  issue handling used to show a flat chip list of `owner/name` strings plus one
+  screen-wide set of options, so "watch this one too, but give it half an hour of
+  grace and run it on codex" was not expressible — there was nowhere to hang a
+  per-repo value. Now each card carries its own **Agent CLI**, **base branch** (PR
+  review), **min age**, **skip authors**, a **Test access** button and Remove. The
+  tab-wide fields moved into *Advanced options* and are the defaults a blank card
+  field inherits, shown as its placeholder so "empty" reads as "inherit 15" rather
+  than "no grace period at all". Stored as `github.repo_settings` /
+  `github.issue_repo_settings`, keyed by repo slug; an absent key inherits. The
+  monitors resolve every filter through those (`GithubConfig.min_age_for`,
+  `base_branch_for`, `skip_authors_for`, `agent_for_repo` and the issue twins), so a
+  card never saves a value the pipeline ignores.
+
+- **Assigned tickets group by ticketing source, then by workflow state.** One flat
+  level of buckets merged same-named states from different sources: a Jira site and
+  a Linear workspace both have an "In Progress", and under one heading there was no
+  way to tell which ticket came from where without reading each row. Bucket
+  show/hide stays an app-wide choice ("I don't care about Completed" means it
+  everywhere) while open/closed is per source. `GET /api/tickets` gained a
+  `source_labels` map covering *every* configured source, including ones that
+  returned nothing or failed — deriving labels from the ticket rows alone made
+  exactly those sources vanish.
+
+  Grouping is unconditional, on every tab: "which provider is this from?" is the
+  question a queue answers before any other, and a heading answers it once for
+  however many rows sit under it. The per-row label that was tried instead does
+  not scale — the same name repeated down a column of 500.
+
+- **Ticket states nest under their workflow, instead of repeating it.** A source
+  with several workflows has to qualify its state names to keep them unique, so
+  Shortcut returns `Product Development · Deferred`, `Product Development ·
+  Unscheduled`, and five more — and a flat list wrote `PRODUCT DEVELOPMENT ·`
+  onto seven consecutive headings. `GET /api/tickets` now carries a `bucket_meta`
+  map (`{bucket: {group, label}}`) and the panel renders **source → workflow →
+  state**, each name written once. The composite name stays the bucket key, so
+  `+ Add bucket…` / ✕ and the done-state filter are unaffected; a provider with
+  one workflow (or none — Jira, Linear) reports an empty `group` and the level
+  simply doesn't appear. See `TicketProvider.list_states` for the contract.
+
+  Each heading in that tree is also styled as the control it is — hit area, hover
+  fill, and a caret that rotates instead of swapping ▸ for ▾. As plain text
+  beside a small caret, under a *bordered* source card, the top-level heading
+  read as a stray line of copy rather than the way in to the tickets.
+
+- **The tickets panel's hint describes *your* workflow, not an imagined one.** It
+  said "done states like Completed start hidden", which is a guess — a Shortcut
+  flock has `Product Development · Won't do`, a Jira one has `Closed`. It now
+  names the states actually hidden, with matching singular/plural. And the
+  auto-ingest sentence no longer merges sources: one source watching `Ready`
+  alongside another watching `Todo` was reported as "watches Ready, Todo", which
+  was false for both of them, since neither watched both. With several sources it
+  points at the per-source headings, which each carry their own.
+
+- **Any queued item can be started on a different coding CLI, just for that
+  launch.** A picker beside **Begin work** / **Begin review** / **Start work**, next
+  to the button rather than buried in configuration: you notice mid-review that
+  this one wants a different model, and re-configuring the whole queue to run one
+  item is the wrong shape of action. The three force-start routes take an optional
+  `agent`; an unknown name is a 400 rather than a silent fall back to the default.
+
+- **A per-repository GitHub access test** (`POST /api/settings/test/github-repo`),
+  behind each repo card's **Test access**. The existing `/settings/test/github`
+  answers "is there a credential"; this one answers "does it reach THIS repo",
+  which is the failure people actually hit — a typo'd slug, or a private repo the
+  token has no scope for. It also reports a read-only token, which matters for
+  issue handling (that half has to push a branch).
+
+### Fixed
+
+- **Switching a ticketing source's Agent CLI kept launching the old one.** The
+  pipeline reads its config once at boot and the scanners hold that snapshot, so
+  stamping a ticket with `source.agent` from it meant a provider switched in the UI
+  applied only after a restart — and *clearing* the field did nothing at all. The
+  agent is now re-read from disk at stamp time (`source_agent_now`), for both freshly
+  scanned tickets and ones replayed from a previous run's pending queue. An on-disk
+  config with no opinion is treated as an answer ("use the app default"), which is
+  what makes clearing the field work.
+
+- **The same staleness one layer up: clearing PR review's or issue handling's
+  Agent CLI did nothing on a running pipeline.** Those chains resolved through
+  `fresh_agent`, which falls back to the config the runner was *constructed* with
+  whenever the on-disk chain answers "nothing set" — so the boot-time provider
+  came back every time. They now use `agent_now`, where an empty on-disk answer is
+  an answer ("use the app default") and the snapshot is consulted only when the
+  config cannot be read at all.
+
+- **Forced starts ignored the agent their source was configured for.** A review or
+  issue started by hand now resolves the same chain the automatic monitor does —
+  this start's own pick, then the repo card, then the tab-wide value, then the app
+  default — instead of jumping straight to the app default.
+
+- **A newly pasted GitHub token did not take effect until a restart.** The
+  resolved token is cached for the life of the process, and nothing invalidated
+  it, so PR review, issue handling, **Make PR** and the new per-repo test all kept
+  using the old credential — which reads exactly like the paste not having saved.
+  Writing `github.token` now clears the cache, and the per-repo **Test access**
+  resolves afresh, since answering about the previous token would be worse than
+  not testing at all.
+
+- **The open-PR list hid pull requests it should have explained.** With a base
+  branch configured, the panel asked GitHub only for PRs into that branch, so a PR
+  into any other one was simply absent — indistinguishable from "there are none",
+  and impossible to force-review. It now lists every open PR and reports the
+  mismatch as a skip-reason chip.
+
+- **PR review's "Skip authors" field described itself wrongly.** It said "GitHub
+  logins whose PRs are ignored", but review only ever takes your *own* PRs — the
+  list drops review *comments*, which is how you stop a bot's feedback being acted
+  on. The label now says what the code does.
+
+- **One long failure reason dragged every Intake row sideways.** A recorded
+  failure is a sentence of git output carrying a branch name and an absolute
+  worktree path, and the chip meant to contain it capped itself at
+  `max-width: 100%` — which is circular: a work row is a grid whose first track
+  was `1fr`, whose automatic minimum is its content's min-content width, and a
+  `nowrap` chip has no smaller width. The track had already grown, so 100% *was*
+  the oversized width and the start buttons ended up off the right edge. The
+  track and the meta line may now be narrower than their content, and a long
+  reason wraps instead of ellipsizing on one line — the remedy in these messages
+  ("Kill that session first") is at the end, so a one-line clip hid the half
+  worth reading. The tooltip still carries the raw string.
+
 ## [0.1.9] - 2026-08-03
 
 ### Fixed

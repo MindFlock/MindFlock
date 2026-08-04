@@ -45,8 +45,9 @@ provider is chosen by `[ticketing].provider` (see
 | `asana` | `GET /tasks?assignee=me&workspace=<gid>` |
 
 **`github_issues` is the zero-config on-ramp** and therefore leads both the
-registry and the UI catalog (the Settings screen seeds a newly added source with
-the catalog's first entry). It is the only source that needs **no fields at all**:
+registry and the UI catalog (the Intake → Tickets tab seeds a newly added source
+with the catalog's first entry). It is the only source that needs **no fields
+at all**:
 
 - its **token** comes from the shared GitHub auth chain — `ticketing.api_token`,
   else `github.token` in settings, else `$GH_TOKEN`/`$GITHUB_TOKEN`, else
@@ -74,13 +75,40 @@ ticket.agent  ->  [[ticketing.source]].agent  ->  [mindflock].agent  ->  engine 
 `""` at the end means "use the app's configured default", which is what every
 existing install resolves to — so this only ever widens the choice. The scanner
 stamps `Ticket.agent` from the source that produced the ticket, so a flock can
-route one queue to a hosted CLI and another to a fully local model. PR review and
-issue handling have no ticketing source of their own and take `[mindflock].agent`.
+route one queue to a hosted CLI and another to a fully local model.
 
-An unknown name is a **config error at load time**, listing the valid providers:
-otherwise resolution falls through to the `generic` catch-all and runs the typo as
-a bare program, so the session dies with a shell "command not found" that reads
-like a MindFlock bug.
+That stamp **re-reads the config from disk** (`source_agent_now`) instead of
+using the snapshot the scanner was built with. The pipeline loads its config
+once at boot, so a source's Agent CLI switched in the UI used to keep launching
+the old CLI until the pipeline was restarted, and clearing the field did nothing
+at all: an on-disk config that expresses no opinion is now an answer (`""` → the
+app default), not a reason to defer to the snapshot, which is only consulted
+when the config cannot be read. The startup re-enqueue of tickets left pending
+by a previous run stamps the same way, so a ticket waiting since before the
+change still launches on the CLI configured now.
+
+PR review and issue handling have no ticketing source of their own, so they
+resolve their own chain — `PipelineConfig.pr_agent(repo)` /
+`issue_agent(repo)`: that repo's own card → `[github].agent` /
+`[github].issue_agent` → `[mindflock].agent` → `""`. Issue handling deliberately
+does **not** fall back to `[github].agent`: the two are separately configured
+features with separate repo lists and toggles, so inheriting the review CLI
+would surprise anyone who set one and not the other.
+
+A start clicked by hand in Intake outranks all of it for that one
+launch: every work row has an Agent CLI picker beside its Begin/Start button,
+and `POST /api/tickets/start`, `/api/github/prs/review` and
+`/api/github/issues/start` each take an optional `agent` that wins over the
+source's or repo card's own choice. It is validated against the **registered**
+providers (the same set `GET /api/providers` offers the picker, `generic`
+excluded) — an unrecognised name is a 400, never a quiet fall back to the
+default. Registered, not installed: a launch never gates on install state
+anywhere else either, and doctor is where a missing CLI is reported.
+
+In the config itself an unknown name is a **config error at load time**, listing
+the valid providers: otherwise resolution falls through to the `generic`
+catch-all and runs the typo as a bare program, so the session dies with a shell
+"command not found" that reads like a MindFlock bug.
 
 Making this actually work required fixing the launcher itself — it used to
 hardcode Claude Code's flags, so a provisioned session on any other CLI was
@@ -94,17 +122,22 @@ Adding a provider = one new module implementing `search_assigned` / `fetch` /
 criteria mining and link/attachment extraction are shared in `providers/base.py`.
 
 Optionally an adapter also implements **`search_assigned_all()`** (`base.py`),
-which backs Settings → Ticketing → *Assigned tickets*: every ticket assigned to
-you with no age cutoff and no workflow-state filter, each annotated with its
-state. Shortcut, Jira and Linear override it; GitHub Issues and Asana keep the
-base implementation (an epoch-anchored `search_assigned`) because they expose no
+which backs Intake → Tickets → *Assigned tickets*: every ticket assigned to you
+with no age cutoff and no workflow-state filter, each annotated with its state.
+Shortcut, Jira and Linear override it; GitHub Issues and Asana keep the base
+implementation (an epoch-anchored `search_assigned`) because they expose no
 workflow-state model — so their tickets land in the panel's `No state` bucket.
-That asymmetry is visible in the panel itself.
+That asymmetry is visible in the panel itself. The panel groups rows by
+ticketing source first and by workflow-state bucket *within* the source, so
+same-named states from two sources are no longer merged; `GET /api/tickets`
+carries a `source_labels` entry for EVERY configured source — including ones
+that returned nothing or errored — because a source with no tickets still needs
+a heading to say so under.
 
 **Multiple sources.** You can configure more than one source at once — different
 providers *and* several of the same provider with different credentials (two Jira
 sites, two GitHub repos, …) — via an array of `[[ticketing.source]]` entries (or
-the Settings → Ticketing "Add source" list). The orchestrator runs one poller per
+the Intake → Tickets "Add source" list). The orchestrator runs one poller per
 source, each on its own cadence and its own `last_run_timestamps` checkpoint, all
 feeding the one processing queue. Each source has a stable `id` that becomes its
 slug/branch prefix, so tickets from different sources never collide.
@@ -205,13 +238,31 @@ ticket in-repo and state out-of-scope work explicitly.
 ## PR-review flow
 
 Every `github.poll_interval_seconds`, the monitor lists open non-draft PRs into
-`base_branch` **authored by the authenticated GitHub user**, at least
-`min_age_minutes` old, and not yet in `state.json`'s `processed_prs`.
+that repo's `base_branch` **authored by the authenticated GitHub user**, at
+least its `min_age_minutes` old, and not yet in `state.json`'s `processed_prs`.
+
+**Every one of those filters is resolved per repo.** Each watched repository is
+its own card in Intake → Pull requests, with its own base branch, min age, skip
+authors and agent CLI stored under `github.repo_settings["owner/name"]`; a card
+field left blank inherits the tab-wide value (the flat `[github]` keys, which
+the tab keeps under *Advanced options*). Nothing reads a flat field directly —
+the monitor, the comment fetch and the web panel all go through
+`GithubConfig.min_age_for(repo)` / `base_branch_for(repo)` /
+`skip_authors_for(repo)` / `agent_for_repo(repo)`, so "does this repo override
+it" is one decision made in one place instead of a condition repeated at each
+use. Two consequences worth knowing: the age cutoff is computed per PR rather
+than once for the sweep (a single `now` is still taken first, so a slow sweep
+can't move the goalposts between the first repo and the last), and a blank
+`base_branch` matches any base — which is what a set of repos with different
+default branches needs. Issue handling has the exact twins over
+`github.issue_repo_settings`: `issue_min_age_for` / `issue_skip_authors_for` /
+`issue_agent_for_repo` (issues have no base branch).
 
 For each PR, **actionable comments** are unresolved, non-outdated review-thread
-comments not written by the PR author or anyone in `skip_authors`. CodeRabbit
-comments are reduced to their embedded "Prompt for AI Agents" block when present.
-A PR with no actionable comments is recorded and skipped without provisioning.
+comments not written by the PR author or anyone in that repo's `skip_authors`.
+CodeRabbit comments are reduced to their embedded "Prompt for AI Agents" block
+when present. A PR with no actionable comments is recorded and skipped without
+provisioning.
 
 - **Engine path** — one consolidated session per PR (`pr-<n>` →
   `mindflock_pr-<n>`): the PR's head is checked out via `refs/pull/<n>/head` (fork
@@ -228,7 +279,11 @@ A PR is processed **once per head**; to re-run it, delete its entry from
 `state.json`'s `processed_prs`.
 
 GitHub auth resolution: `[github].token` → `$GH_TOKEN` → `$GITHUB_TOKEN` →
-`gh auth token`.
+`gh auth token`. The token field itself lives in Intake → Pull requests →
+*Advanced options* (the Issues tab links there), and a repo card's **Test
+access** button checks that the resolved credential actually reaches that repo
+(`POST /api/settings/test/github-repo`) rather than only that some credential
+exists.
 
 ## Issue-handling flow
 
@@ -240,18 +295,21 @@ repo list, independent of PR review's `repos`).
 
 Every `github.issue_poll_interval_seconds` (default 60), `IssueMonitor.scan()`
 lists open issues in each `issue_repos` entry (the GitHub issues endpoint also
-returns PRs — those are filtered out), keeping ones at least
-`issue_min_age_minutes` old (default 15), not by an author in
-`issue_skip_authors`, and whose `(repo, number)` isn't already in the
-processed-issues ledger. Each survivor is normalized to the pipeline's `Ticket`
-(`issue_to_ticket` — title, body, comments) and run through the same engine
-launch path as a story, on a fresh branch (`gh-<n>`). Its `(repo, number)` is
-then recorded so it isn't re-ingested.
+returns PRs — those are filtered out), keeping ones at least that repo's
+`issue_min_age_minutes` old (default 15; `issue_min_age_for`), not by an author
+in its `issue_skip_authors` (`issue_skip_authors_for`), and whose
+`(repo, number)` isn't already in the processed-issues ledger. Each survivor is
+normalized to the pipeline's `Ticket` (`issue_to_ticket` — title, body,
+comments) and run through the same engine launch path as a story, on a fresh
+branch (`gh-<n>`). Its `(repo, number)` is then recorded so it isn't
+re-ingested.
 
-The **Git issues** Settings screen surfaces this live (`/api/github/issues`),
-and **Start work** (`/api/github/issues/start`) force-starts one issue against
+The **Intake → Issues** tab surfaces this live (`/api/github/issues`), and
+**Start work** (`/api/github/issues/start`) force-starts one issue against
 the running server's engine — bypassing the age / already-handled filters — so
-the session shows up in the grid without a reload.
+the session shows up in the grid without a reload. That start takes the row's
+own Agent CLI picker if one was used, then the repo card's, then
+`issue_agent`'s chain above.
 
 ## Cache refreshers
 

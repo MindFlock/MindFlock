@@ -302,7 +302,7 @@
   filter: brightness(0.95);
 }
 
-/* Open-PR list + force review (Settings → PR review). Each row: ref+title,
+/* Work-item list + force start (all three Work tabs). Each row: ref+title,
    a meta line with the auto-monitor's skip reasons, and a Begin review button. */
 .pr-open-toolbar {
   display: flex;
@@ -324,7 +324,11 @@
 
 .pr-open-item {
   display: grid;
-  grid-template-columns: 1fr auto;
+  /* minmax(0, …), not 1fr: a `1fr` track's automatic minimum is its content's
+     min-content width, so one long unbreakable chip (a recorded failure reason
+     carrying a worktree path) grew the track past the dialog and dragged every
+     row's button off the right edge with it. */
+  grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: auto auto;
   column-gap: 10px;
   row-gap: 3px;
@@ -373,6 +377,9 @@
   align-items: center;
   font-size: 12px;
   color: var(--muted);
+  /* A grid item's automatic minimum is min-content too, so the track fix above
+     only holds if the item itself is allowed to be narrower than its chips. */
+  min-width: 0;
 }
 
 .pr-open-chip {
@@ -382,14 +389,16 @@
   font-size: 11px;
   color: var(--muted);
   background: var(--bg);
-  /* A recorded failure reason is a whole sentence of git output. Cap it here
-     rather than in the server's label (the actionable half is at the end, so a
-     server-side clip would remove the useful part); the full string is in the
-     chip's title. */
+  /* A recorded failure reason is a whole sentence of git output, and the half
+     worth reading is at the END ("… is already checked out at <path>. Kill that
+     session first"). So it wraps rather than ellipsizing on one line: a clip —
+     here or in the server's label — would cut off exactly the remedy. Short
+     chips are unaffected, since a flex item still takes its max-content width
+     when there is room. `anywhere` so an unbroken branch name or absolute path
+     breaks instead of setting a floor on the row's width. */
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .pr-open-chip.ok {
@@ -641,14 +650,10 @@
 }
 
 
-/* Assigned-tickets buckets (Settings → Ticketing): one titled group per
-   workflow state, chosen via the "+ Add bucket…" dropdown / per-bucket ✕. */
-#tk-tickets-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
+/* Collapsible work groups, shared by all three Work tabs: a source group and,
+   inside a ticket source, a workflow-state bucket. The `tk-` prefix is
+   historical (they started as Ticketing's buckets) — the layout that stacks
+   them lives with the Work dialog (.wk-groups / .wk-group-body). */
 .tk-bucket-add {
   font-size: 12px;
   padding: 4px 8px;
@@ -691,10 +696,6 @@
 .tk-bucket + .tk-bucket {
   border-top: 1px solid var(--border);
   padding-top: 6px;
-}
-
-.tk-bucket .pr-open-list {
-  margin-top: 6px;
 }
 
 .tk-bucket-name {

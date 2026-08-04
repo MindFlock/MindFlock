@@ -205,6 +205,7 @@ class SessionRunner:
                     pr.head_ref,
                     str(workspace.directory),
                     prompt,
+                    pr.repo,
                 ),
                 timeout=_INSTANCE_START_TIMEOUT,
             )
@@ -229,7 +230,7 @@ class SessionRunner:
         source that produced the ticket) → the config **as it is on disk right
         now** → the config this runner was constructed with.
 
-        The re-read is what makes a provider switched in Settings apply to the
+        The re-read is what makes a provider switched in the UI apply to the
         next ticket instead of the next pipeline restart, since ``__main__``
         loads the config once and hands that snapshot over for the life of the
         process. The injected config stays the fallback rather than being
@@ -275,17 +276,24 @@ class SessionRunner:
         return inst
 
     def _create_pr_instance(
-        self, title: str, head_ref: str, directory: str, prompt: str
+        self, title: str, head_ref: str, directory: str, prompt: str, repo: str = ""
     ):
         from backend import session as cs_session
 
-        # PR review has no ticketing source, so it runs its own configured
-        # agent ([github].agent) before falling back to the ingestion-wide one.
-        # Re-read at launch: the pipeline's startup snapshot would pin whatever
-        # provider was configured when the process began.
-        from backend.ticket_ingestion.config import fresh_agent
+        # PR review has no ticketing source, so it runs the repo's own card
+        # first, then review's screen-wide agent ([github].agent), before
+        # falling back to the ingestion-wide one. Re-read at launch, and with
+        # an empty on-disk answer honoured as an answer: the pipeline's startup
+        # snapshot would otherwise pin whatever provider was configured when the
+        # process began, so clearing the field would silently do nothing.
+        from backend.ticket_ingestion.config import agent_now
 
-        program = _resolve_program(fresh_agent(lambda c: c.pr_agent(), self.config))
+        program = _resolve_program(
+            agent_now(
+                lambda c: c.pr_agent(repo),
+                self.config.pr_agent(repo) if self.config else "",
+            )
+        )
 
         # Adopt the already-provisioned PR workspace: clone-style worktree at the
         # exact directory, on the PR's existing head branch (verbatim, no fork).

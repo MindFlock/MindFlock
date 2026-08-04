@@ -1,4 +1,4 @@
-"""Force PR review (Settings → PR review → Open pull requests).
+"""Force PR review (Intake → Pull requests → Open pull requests).
 
 Covers the three layers of the feature without touching the network:
 
@@ -129,6 +129,7 @@ class _FakeMonitor:
     login = "me"
     login_exc = None
     prs: list = []
+    last_all_bases = None
 
     def __init__(self, gh):
         pass
@@ -138,7 +139,10 @@ class _FakeMonitor:
             raise type(self).login_exc
         return type(self).login
 
-    async def _list_prs(self, repo):
+    # all_bases mirrors the real signature: the panel and force-review both pass
+    # it so a base-branch filter can't hide a row they promise to explain.
+    async def _list_prs(self, repo, *, all_bases=False):
+        type(self).last_all_bases = all_bases
         return list(type(self).prs)
 
 

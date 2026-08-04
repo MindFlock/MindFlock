@@ -1661,7 +1661,7 @@ p.set-hint {
   filter: brightness(0.95);
 }
 
-/* Open-PR list + force review (Settings → PR review). Each row: ref+title,
+/* Work-item list + force start (all three Work tabs). Each row: ref+title,
    a meta line with the auto-monitor's skip reasons, and a Begin review button. */
 .pr-open-toolbar {
   display: flex;
@@ -1683,7 +1683,11 @@ p.set-hint {
 
 .pr-open-item {
   display: grid;
-  grid-template-columns: 1fr auto;
+  /* minmax(0, …), not 1fr: a `1fr` track's automatic minimum is its content's
+     min-content width, so one long unbreakable chip (a recorded failure reason
+     carrying a worktree path) grew the track past the dialog and dragged every
+     row's button off the right edge with it. */
+  grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: auto auto;
   column-gap: 10px;
   row-gap: 3px;
@@ -1732,6 +1736,9 @@ p.set-hint {
   align-items: center;
   font-size: 12px;
   color: var(--muted);
+  /* A grid item's automatic minimum is min-content too, so the track fix above
+     only holds if the item itself is allowed to be narrower than its chips. */
+  min-width: 0;
 }
 
 .pr-open-chip {
@@ -1741,14 +1748,16 @@ p.set-hint {
   font-size: 11px;
   color: var(--muted);
   background: var(--bg);
-  /* A recorded failure reason is a whole sentence of git output. Cap it here
-     rather than in the server's label (the actionable half is at the end, so a
-     server-side clip would remove the useful part); the full string is in the
-     chip's title. */
+  /* A recorded failure reason is a whole sentence of git output, and the half
+     worth reading is at the END ("… is already checked out at <path>. Kill that
+     session first"). So it wraps rather than ellipsizing on one line: a clip —
+     here or in the server's label — would cut off exactly the remedy. Short
+     chips are unaffected, since a flex item still takes its max-content width
+     when there is room. `anywhere` so an unbroken branch name or absolute path
+     breaks instead of setting a floor on the row's width. */
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .pr-open-chip.ok {
@@ -2000,14 +2009,10 @@ p.set-hint {
 }
 
 
-/* Assigned-tickets buckets (Settings → Ticketing): one titled group per
-   workflow state, chosen via the "+ Add bucket…" dropdown / per-bucket ✕. */
-#tk-tickets-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
+/* Collapsible work groups, shared by all three Work tabs: a source group and,
+   inside a ticket source, a workflow-state bucket. The `tk-` prefix is
+   historical (they started as Ticketing's buckets) — the layout that stacks
+   them lives with the Work dialog (.wk-groups / .wk-group-body). */
 .tk-bucket-add {
   font-size: 12px;
   padding: 4px 8px;
@@ -2050,10 +2055,6 @@ p.set-hint {
 .tk-bucket + .tk-bucket {
   border-top: 1px solid var(--border);
   padding-top: 6px;
-}
-
-.tk-bucket .pr-open-list {
-  margin-top: 6px;
 }
 
 .tk-bucket-name {
@@ -7279,7 +7280,8 @@ button.linklike {
   color: var(--text);
 }
 } /* 240 */ @layer components{
-/* Ticketing sources: one card per configured source (Settings → Ticketing). */
+/* Source cards: one per watched thing (a ticketing source, a repo) on any Work
+   tab. The `tk-` prefix is historical — Ticketing had them first. */
 .tk-source {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -7470,6 +7472,351 @@ button.linklike {
   margin-right: auto;
 }
 } /* 250 */ @layer components{
+/* The Intake dialog: tab strip over one scrolling panel.
+ *
+ * Deliberately NOT the settings shell. Settings is a long left nav of things
+ * you set once; the Intake is three peers you flip between while you read, so the
+ * navigation is a horizontal strip with live counts and the panel gets the full
+ * width. Wider than Settings too (780 vs 640) because a work row carries a
+ * reference, a title, chips and a button on one line. */
+#intake-panel {
+  width: 780px;
+  max-width: 94vw;
+  height: 84vh;
+  max-height: 760px;
+  padding: 18px 22px 20px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Compact on purpose: with the tab strip naming the surface and each tab's own
+   heading gone, the title block is orientation, not content — it should not eat
+   a fifth of the panel before the first row. */
+#intake-panel .ws-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+#intake-panel .ws-head h2 {
+  margin: 0;
+  font-size: 14.5px;
+}
+
+/* The one-line "what is this" that a top-bar surface needs and a settings
+   screen didn't — flex:1 also pushes Close to the right edge. */
+.ik-subtitle {
+  flex: 1;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+#intake-tabs {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.ik-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 6px 11px;
+  margin-bottom: -1px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.ik-tab:hover {
+  color: var(--text);
+}
+
+.ik-tab.active {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+/* How much is waiting, without opening the tab. Accent-tinted rather than a
+   plain badge: on this surface a non-zero count is the call to action. */
+.ik-tab-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.ik-tab.active .ik-tab-count {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+#intake-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Same display contract as .set-screen, because capsGate.css hides the direct
+   children of a gated panel and reveals its .caps-gate — see the rules there. */
+.ik-panel {
+  display: none;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ik-panel.active {
+  display: flex;
+}
+
+.ik-panel > .set-section-title:first-child {
+  margin-top: 0;
+}
+
+.ik-foot {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+/* Source cards stack in their own column so the "+ Add" button below them is
+   not mistaken for part of the last card. */
+.ik-cards {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Size the add button to its label instead of letting the .set-row flex column
+   stretch it edge to edge: at full width a filled accent bar reads as the
+   panel's primary action, and on this surface the primary action is starting
+   the work below it, not adding another source. */
+.ik-cards + .set-row > .btn-primary {
+  align-self: flex-start;
+}
+
+/* Grouped work lists ------------------------------------------------------- */
+.ik-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Every group heading is a press-target, and has to look like one.
+   As plain text beside a 12px caret — under a *bordered* source card, no less —
+   nothing said "open me", so the top-level heading read as a stray line of copy
+   and people didn't find the tickets under it. All three levels get a hit area,
+   a hover fill and a caret that turns; the source additionally gets a filled
+   band, because it is a section header as well as a control. */
+.ik-groups .tk-bucket-head {
+  border-radius: 7px;
+  padding: 0 6px 0 4px;
+}
+
+.ik-groups .tk-bucket-toggle {
+  padding: 6px 2px;
+  border-radius: 7px;
+}
+
+.ik-groups .tk-bucket-head:hover {
+  background: var(--panel-2);
+}
+
+.ik-groups .tk-bucket-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The caret is the affordance, so it gets to be visible: a filled triangle that
+   rotates rather than two different glyphs, so the state change is motion the
+   eye catches instead of a shape swap it has to read. */
+.ik-groups .tk-caret {
+  font-size: 9px;
+  color: var(--muted);
+  transition: transform 0.12s ease;
+  transform-origin: 45% 50%;
+}
+
+.ik-groups [aria-expanded="true"] .tk-caret {
+  transform: rotate(90deg);
+}
+
+/* The hide-✕ needs to out-contrast the row it sits on: its own hover fill is
+   --panel-2, which is now exactly what the row hover paints, so on hover it
+   vanished into the row it was supposed to stand out from. */
+.ik-groups .tk-bucket-x:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* A source group's heading carries more weight than a bucket's: it names a
+   whole queue, and with several sources connected it is the thing you scan for.
+   The band is what makes it read as the top of a section. */
+.ik-source-group > .tk-bucket-head {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  padding: 0 8px 0 5px;
+}
+
+.ik-source-group > .tk-bucket-head:hover {
+  border-color: var(--accent);
+}
+
+.ik-source-group > .tk-bucket-head .tk-bucket-name {
+  font-size: 12.5px;
+  font-weight: 650;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+
+.ik-source-group > .tk-bucket-head .tk-caret {
+  color: var(--text);
+}
+
+/* The middle level (a Shortcut workflow, a board) — sentence case like the
+   source above it, but muted, so the three levels read as a hierarchy rather
+   than three shouting rows. */
+.ik-workflow-group > .tk-bucket-head .tk-bucket-name {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+
+.ik-group-detail {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.ik-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* Buckets sit inside their source, indented off a rule so the nesting reads at
+   a glance instead of having to be inferred from two font sizes. */
+.ik-nested {
+  border-left: 1px solid var(--border);
+  padding-left: 10px;
+  margin-left: 2px;
+}
+
+.ik-nested + .ik-nested {
+  border-top: none;
+  padding-top: 0;
+}
+
+.ik-nested > .ik-group-body {
+  gap: 6px;
+}
+
+/* Per-start controls -------------------------------------------------------
+   A row's CLI picker sits directly above its start button, taking over the
+   grid cell .pr-review-btn used to occupy alone (screens.css). Stacked rather
+   than inline so the button stays where the eye already expects it and the
+   picker reads as a modifier of it. */
+.ik-item-start {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.ik-item-start .pr-review-btn {
+  grid-column: auto;
+  grid-row: auto;
+}
+
+/* Deliberately quiet: it is a rarely-used override, and matching the primary
+   button's weight would make every row look like it were asking a question.
+   Two classes deep on purpose — a work list lives inside a `.set-row`, and
+   `.set-row select` (SettingsDialog.css) is (0,1,1), so a lone `.ik-item-agent`
+   at (0,1,0) lost every declaration except `max-width` and the picker rendered
+   at full settings-field size. Same reason for the bucket picker below. */
+.ik-item-start .ik-item-agent {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  /* Floor and ceiling: the wrapper stretches both controls to the wider of the
+     two, so without a floor a short label ("Configured") shrinks the picker to
+     the button's width and looks like a clipped mistake. */
+  min-width: 132px;
+  max-width: 170px;
+  font-family: inherit;
+}
+
+.ik-item-start .ik-item-agent:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* An explicit pick is a decision worth seeing at a glance. The flag is a data
+   attribute, not [value]: React sets a select's value as a property, so the
+   attribute selector would never match. */
+.ik-item-start .ik-item-agent[data-picked] {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* The "+ Add bucket…" picker in a panel toolbar, for the same reason. */
+.pr-open-toolbar select.tk-bucket-add {
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  max-width: 220px;
+  font-family: inherit;
+}
+
+/* A blank required field's red cue. `.tk-source .field-missing` is (0,2,0) and
+   loses to `.set-row input[type="text"]` at (0,2,1), so the cue never showed;
+   this sheet loads after both and matches at (0,2,1) + the later position. */
+.set-row input.field-missing,
+.tk-source input.field-missing {
+  border-color: var(--danger, #e5534b);
+}
+
+/* Disabled fields must LOOK disabled: `.set-row input[…]` sets colour,
+   background and border unconditionally, which overrides the UA's greying, so
+   a card's not-yet-usable fields read as editable. */
+.tk-body input:disabled,
+.tk-body select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+} /* 255 — after
+   ticketingConnections.css, whose .tk-* card rules the Intake cards build on */ @layer components{
 /* Settings → Mobile: white QR card + URL rows.
    .qr-card is shared with Settings → Notifications (the ntfy subscribe QR) —
    a QR must stay dark-on-white to scan, whatever the app theme is doing. */
@@ -7666,8 +8013,13 @@ button.linklike {
 /* --- Capability gating (git / tailscale / ticketing) ------------------------
    applyCaps() stamps body.no-git / .no-tailscale / .no-ticketing from
    /api/config `caps`. Static HTML tagged data-caps="X" simply disappears when
-   X is absent; a settings screen tagged data-caps-need="X" swaps its content
-   for its .caps-gate ("connect X to get these features") message instead. */
+   X is absent; a settings screen or work panel tagged data-caps-need="X" swaps
+   its content for its .caps-gate ("connect X to get these features") message
+   instead.
+
+   Both selector families below are DIRECT-child (`>`): the gate hides a panel's
+   own children and reveals its own gate card. Wrapping a gated panel's content
+   in a container would silently defeat it. */
 body.no-git [data-caps~="git"],
 body.no-tailscale [data-caps~="tailscale"],
 body.no-ticketing [data-caps~="ticketing"] {
@@ -7680,13 +8032,19 @@ body.no-ticketing [data-caps~="ticketing"] {
 
 body.no-git .set-screen[data-caps-need~="git"]> :not(.caps-gate):not(.set-section-title),
 body.no-tailscale .set-screen[data-caps-need~="tailscale"]> :not(.caps-gate):not(.set-section-title),
-body.no-ticketing .set-screen[data-caps-need~="ticketing"]> :not(.caps-gate):not(.set-section-title) {
+body.no-ticketing .set-screen[data-caps-need~="ticketing"]> :not(.caps-gate):not(.set-section-title),
+body.no-git .ik-panel[data-caps-need~="git"]> :not(.caps-gate):not(.set-section-title),
+body.no-tailscale .ik-panel[data-caps-need~="tailscale"]> :not(.caps-gate):not(.set-section-title),
+body.no-ticketing .ik-panel[data-caps-need~="ticketing"]> :not(.caps-gate):not(.set-section-title) {
   display: none;
 }
 
 body.no-git .set-screen[data-caps-need~="git"]>.caps-gate[data-caps-gate="git"],
 body.no-tailscale .set-screen[data-caps-need~="tailscale"]>.caps-gate[data-caps-gate="tailscale"],
-body.no-ticketing .set-screen[data-caps-need~="ticketing"]>.caps-gate[data-caps-gate="ticketing"] {
+body.no-ticketing .set-screen[data-caps-need~="ticketing"]>.caps-gate[data-caps-gate="ticketing"],
+body.no-git .ik-panel[data-caps-need~="git"]>.caps-gate[data-caps-gate="git"],
+body.no-tailscale .ik-panel[data-caps-need~="tailscale"]>.caps-gate[data-caps-gate="tailscale"],
+body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-gate="ticketing"] {
   display: block;
 }
 

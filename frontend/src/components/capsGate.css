@@ -1,8 +1,13 @@
 /* --- Capability gating (git / tailscale / ticketing) ------------------------
    applyCaps() stamps body.no-git / .no-tailscale / .no-ticketing from
    /api/config `caps`. Static HTML tagged data-caps="X" simply disappears when
-   X is absent; a settings screen tagged data-caps-need="X" swaps its content
-   for its .caps-gate ("connect X to get these features") message instead. */
+   X is absent; a settings screen or work panel tagged data-caps-need="X" swaps
+   its content for its .caps-gate ("connect X to get these features") message
+   instead.
+
+   Both selector families below are DIRECT-child (`>`): the gate hides a panel's
+   own children and reveals its own gate card. Wrapping a gated panel's content
+   in a container would silently defeat it. */
 body.no-git [data-caps~="git"],
 body.no-tailscale [data-caps~="tailscale"],
 body.no-ticketing [data-caps~="ticketing"] {
@@ -15,13 +20,19 @@ body.no-ticketing [data-caps~="ticketing"] {
 
 body.no-git .set-screen[data-caps-need~="git"]> :not(.caps-gate):not(.set-section-title),
 body.no-tailscale .set-screen[data-caps-need~="tailscale"]> :not(.caps-gate):not(.set-section-title),
-body.no-ticketing .set-screen[data-caps-need~="ticketing"]> :not(.caps-gate):not(.set-section-title) {
+body.no-ticketing .set-screen[data-caps-need~="ticketing"]> :not(.caps-gate):not(.set-section-title),
+body.no-git .ik-panel[data-caps-need~="git"]> :not(.caps-gate):not(.set-section-title),
+body.no-tailscale .ik-panel[data-caps-need~="tailscale"]> :not(.caps-gate):not(.set-section-title),
+body.no-ticketing .ik-panel[data-caps-need~="ticketing"]> :not(.caps-gate):not(.set-section-title) {
   display: none;
 }
 
 body.no-git .set-screen[data-caps-need~="git"]>.caps-gate[data-caps-gate="git"],
 body.no-tailscale .set-screen[data-caps-need~="tailscale"]>.caps-gate[data-caps-gate="tailscale"],
-body.no-ticketing .set-screen[data-caps-need~="ticketing"]>.caps-gate[data-caps-gate="ticketing"] {
+body.no-ticketing .set-screen[data-caps-need~="ticketing"]>.caps-gate[data-caps-gate="ticketing"],
+body.no-git .ik-panel[data-caps-need~="git"]>.caps-gate[data-caps-gate="git"],
+body.no-tailscale .ik-panel[data-caps-need~="tailscale"]>.caps-gate[data-caps-gate="tailscale"],
+body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-gate="ticketing"] {
   display: block;
 }
 

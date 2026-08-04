@@ -46,6 +46,8 @@
 @import "../components/grid/contextPresets.css" layer(components); /* 230 */
 @import "../components/grid/missingWorkspace.css" layer(components); /* 240 */
 @import "../components/settings/screens/ticketingConnections.css" layer(components); /* 250 */
+@import "../components/intake/IntakeDialog.css" layer(components); /* 255 — after
+   ticketingConnections.css, whose .tk-* card rules the Intake cards build on */
 @import "../components/settings/screens/mobileLogs.css" layer(components); /* 260 */
 @import "../components/settings/screens/notifications.css" layer(components); /* 260 */
 @import "../components/capsGate.css" layer(components); /* 270 */

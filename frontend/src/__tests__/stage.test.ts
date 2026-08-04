@@ -115,7 +115,7 @@ describe("nextStep (guided next action)", () => {
     expect(pr?.hint).toBe(true);
     expect(typeof pr?.run).toBe("function");
     expect(pr?.title).toContain(
-      "add a GitHub token in Settings → PR review, or install the GitHub CLI"
+      "add a GitHub token in Intake → Pull requests, or install the GitHub CLI"
     );
     const merge = step({ title: "g2", stage: "pr", pr_url: "https://github.com/o/r/pull/7" });
     expect(merge?.label).toBe("Merge on GitHub ↗");

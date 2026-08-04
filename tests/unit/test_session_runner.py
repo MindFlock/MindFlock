@@ -260,10 +260,13 @@ def test_run_pr_title_branch_and_prompt_passthrough(config):
     assert head == pr.head_ref
 
     create.assert_called_once()
-    title, head_ref, directory, prompt = create.call_args.args
+    title, head_ref, directory, prompt, repo = create.call_args.args
     assert title == "pr-repo-7"
     assert head_ref == pr.head_ref
     assert directory == str(workspace.directory)
+    # The repo rides along so the launch can resolve that repo's own Agent CLI
+    # card (github.repo_settings) before falling back to the screen-wide one.
+    assert repo == pr.repo
 
     from backend.ticket_ingestion.pr_runner import build_consolidated_pr_prompt
 

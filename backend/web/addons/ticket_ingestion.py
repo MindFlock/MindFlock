@@ -432,7 +432,7 @@ class TicketIngestionController:
             # Live activity: True while a ticket / a PR batch / an issue is
             # actually being brought in (vs idle-waiting). The pipeline's beacon
             # only knows about the PIPELINE's queue, so a start forced from the
-            # UI (Settings → Ticketing / PR review / Git issues) used to leave
+            # UI (the Intake dialog: Tickets / Pull requests / Issues) used to leave
             # the dot gold through its whole provisioning; `local` covers those.
             "tickets_active": bool(act.get("ticket_busy")) or "tix" in local,
             "pr_active": bool(act.get("pr_busy")) or "pr" in local,
@@ -552,7 +552,7 @@ class TicketIngestionAddon(Addon):
                 return JSONResponse(
                     {
                         "error": "No repo to ingest into — add a Repo URL to a "
-                        "ticketing source (Settings → Ticketing)"
+                        "ticketing source (Intake → Tickets)"
                     },
                     status_code=400,
                 )

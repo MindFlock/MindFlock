@@ -43,15 +43,18 @@ class PRMonitor:
         if not prs:
             return []
         my_login = await self._authenticated_user_login()
-        cutoff = datetime.now(timezone.utc) - timedelta(
-            minutes=self.config.min_age_minutes
-        )
+        # The grace period is per-repo (each watched repo is its own card in the
+        # Intake), so the cutoff is computed per PR rather than once for
+        # the whole sweep. `now` is still taken once so a slow sweep can't move
+        # the goalposts between the first repo and the last.
+        now = datetime.now(timezone.utc)
         processed = load_processed_prs(_STATE_DIR)
         eligible = [
             pr
             for pr in prs
             if pr.author == my_login
-            and pr.created_at <= cutoff
+            and pr.created_at
+            <= now - timedelta(minutes=self.config.min_age_for(pr.repo))
             and (pr.repo, pr.number) not in processed
         ]
         eligible.sort(key=lambda p: p.created_at)
@@ -81,14 +84,26 @@ class PRMonitor:
         _logger.info("PR monitor restricted to PRs authored by %s", login)
         return login
 
-    async def _list_prs(self, repo: str) -> list[PullRequest]:
+    async def _list_prs(
+        self, repo: str, *, all_bases: bool = False
+    ) -> list[PullRequest]:
+        """Open, non-draft PRs in ``repo``.
+
+        ``all_bases`` ignores the configured base-branch filter. The monitor
+        never wants that — a PR into an unwatched base is not its business — but
+        the UI does: its panel promises "every open PR, with why auto review has
+        or hasn't picked it up", and a PR filtered out server-side can neither be
+        explained nor force-reviewed.
+        """
         url = f"{_GITHUB_API}/repos/{repo}/pulls"
         params = {"state": "open", "per_page": "100"}
-        # base_branch is an optional filter: set it to watch one branch across
-        # every repo; leave it blank so repos with different default branches
-        # (main vs master) all match.
-        if self.config.base_branch:
-            params["base"] = self.config.base_branch
+        # base_branch is an optional filter: set it repo-side to watch one
+        # branch there, or screen-wide to watch the same branch everywhere;
+        # leave it blank so repos with different default branches (main vs
+        # master) all match.
+        base = "" if all_bases else self.config.base_branch_for(repo)
+        if base:
+            params["base"] = base
         token = await resolve_token(self.config)
         headers = {
             "Authorization": f"Bearer {token}",

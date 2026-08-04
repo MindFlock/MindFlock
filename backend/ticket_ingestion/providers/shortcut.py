@@ -343,6 +343,13 @@ class ShortcutProvider(TicketProvider):
                     {
                         "id": str(sid),
                         "name": f"{wf_name} · {name}" if multi else name,
+                        # The qualifier and the bare state name, separately, so
+                        # the panel can nest "Deferred" under "Product
+                        # Development" instead of writing the workflow name onto
+                        # all seven of its state headings. `name` stays the
+                        # unique bucket key either way.
+                        "group": wf_name if multi else "",
+                        "label": name,
                         # unstarted | started | done — lets the assigned-tickets
                         # panel park done-type buckets behind the Add menu by
                         # default. Extra key; id/name consumers are unaffected.

@@ -99,7 +99,7 @@ def _agent_connection() -> dict:
 #: same over SSH and HTTPS remotes, and it is what the REST fallback uses. This
 #: exact sentence is asserted in tests and mirrored in the docs — keep it verbatim.
 _NO_CREDENTIAL_FIX = (
-    "add a GitHub token in Settings → PR review, or install the GitHub CLI"
+    "add a GitHub token in Intake → Pull requests, or install the GitHub CLI"
 )
 
 
@@ -137,7 +137,7 @@ def _github_connection() -> dict:
         )
         status = NOT_CONNECTED
         # No fix_command on purpose: the primary remedy is Configure (which opens
-        # Settings → PR review) or $GH_TOKEN, neither of which is a shell command.
+        # Intake → Pull requests) or $GH_TOKEN, neither of which is a shell command.
         # The gh install stays a secondary mention inside the hint, not a button.
         fix_fields = {
             "fix": _NO_CREDENTIAL_FIX,

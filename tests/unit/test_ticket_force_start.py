@@ -1,4 +1,4 @@
-"""Force-start tickets (Settings -> Ticketing -> Assigned tickets).
+"""Force-start tickets (Work -> Tickets -> Assigned tickets).
 
 Sibling of ``test_pr_force_review``: exercises ``ticket_start.skip_reasons``,
 which mirrors the pipeline's own filters (``BackfillScanner.scan`` +
@@ -561,8 +561,8 @@ def test_failed_chip_carries_the_recorded_reason():
 
 def test_failed_reason_is_never_clipped_by_the_server():
     """The actionable half of these reasons is at the END, so a server-side
-    character budget would remove exactly the part worth reading. The chip
-    ellipsizes in CSS and keeps the full text in its title."""
+    character budget would remove exactly the part worth reading. The chip wraps
+    in CSS and keeps the full text in its title."""
     chip = ticket_start._failed_label(_REAL_REASON)
     assert chip.endswith("different story id / title.")
     assert "…" not in chip

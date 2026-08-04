@@ -1,12 +1,12 @@
-"""Force-start PR reviews from the web UI (Settings → PR review).
+"""Force-start PR reviews from the web UI (Intake → Pull requests).
 
 The automated monitor (``backend.ticket_ingestion.pr_monitor``) only picks
 up open PRs that are (a) authored by the token's own user, (b) past the
 min-age grace period and (c) absent from state.json's ``processed_prs``
 ledger — so a PR can silently never get reviewed (most commonly: it was
 recorded as processed back when it had no actionable comments yet, and new
-comments never re-trigger it). This module backs the Settings → PR review
-screen: it lists every non-draft open PR on the watched repos annotated with
+comments never re-trigger it). This module backs the Intake → Pull requests
+tab: it lists every non-draft open PR on the watched repos annotated with
 *why* auto review is or isn't taking it, and force-starts a review session
 for any of them, bypassing those filters.
 
@@ -64,16 +64,17 @@ def _load_config():
     return cfg
 
 
-def review_agent() -> str:
+def review_agent(repo: str = "") -> str:
     """The coding CLI a PR-review session should run, ``""`` = the app default.
 
     Reads the SAME chain the automated pipeline does
-    (:meth:`PipelineConfig.pr_agent` — Settings → PR review → Agent CLI, stored
-    as ``github.agent``, then ``[mindflock].agent``). The forced-review route
-    used to launch ``ENGINE.default_program()`` outright, so the Agent CLI
-    dropdown sitting directly above the "Begin review" button governed only the
-    auto monitor: clicking Begin review launched the app-wide default instead of
-    the provider the user had picked for reviews.
+    (:meth:`PipelineConfig.pr_agent` — the repo's own card, then Intake → Pull
+    requests' screen-wide Agent CLI stored as ``github.agent``, then
+    ``[mindflock].agent``). The forced-review route used to launch
+    ``ENGINE.default_program()`` outright, so the Agent CLI dropdown sitting
+    directly above the "Begin review" button governed only the auto monitor:
+    clicking Begin review launched the app-wide default instead of the provider
+    the user had picked for reviews.
 
     Best-effort by design: this is a launch path, and an unconfigured or
     unreadable ingestion config should fall through to the app default rather
@@ -85,7 +86,7 @@ def review_agent() -> str:
         return ""
     fn = getattr(cfg, "pr_agent", None)
     try:
-        return (fn() if callable(fn) else "") or ""
+        return (fn(repo) if callable(fn) else "") or ""
     except Exception:  # noqa: BLE001
         return ""
 
@@ -114,9 +115,18 @@ def skip_reasons(
         reasons.append(f"authored by {pr.author}, not you ({login})")
     now = now or datetime.now(timezone.utc)
     age_min = (now - pr.created_at).total_seconds() / 60.0
-    if age_min < gh.min_age_minutes:
-        left = max(1, round(gh.min_age_minutes - age_min))
+    # This repo's own grace period, which its card may have overridden.
+    min_age = gh.min_age_for(pr.repo)
+    if age_min < min_age:
+        left = max(1, round(min_age - age_min))
         reasons.append(f"in the min-age grace period ({left} min left)")
+    # The monitor asks GitHub only for PRs into this repo's base branch, so a PR
+    # into another one is invisible to auto review. The panel lists every open
+    # PR, which means it has to say so — otherwise a PR sitting there with no
+    # chips reads as "queued" when the monitor will never see it.
+    base = gh.base_branch_for(pr.repo)
+    if base and pr.base_ref != base:
+        reasons.append(f"targets {pr.base_ref}, not the watched base ({base})")
     return reasons
 
 
@@ -140,7 +150,10 @@ async def list_open_prs() -> dict:
 
     prs = []
     for repo in gh.repo_list():
-        prs.extend(await monitor._list_prs(repo))
+        # all_bases: the panel lists every open PR and explains the skips in
+        # chips, so a base-branch filter must not silently remove rows — it
+        # becomes a reason instead (and stays force-reviewable).
+        prs.extend(await monitor._list_prs(repo, all_bases=True))
 
     processed = load_processed_prs(_REPO_ROOT)
     now = datetime.now(timezone.utc)
@@ -179,7 +192,9 @@ async def find_pr(repo: str, number: int):
     if cfg.github is None:
         raise LookupError("PR review is not configured — add a repository first")
     monitor = PRMonitor(cfg.github)
-    for pr in await monitor._list_prs(repo):
+    # all_bases, matching the panel: forcing a review is exactly how you take a
+    # PR the auto monitor's base filter skips.
+    for pr in await monitor._list_prs(repo, all_bases=True):
         if pr.number == number:
             return pr
     raise LookupError(

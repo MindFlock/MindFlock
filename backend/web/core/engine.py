@@ -211,7 +211,7 @@ class Engine:
         """The agent CLI new sessions launch with.
 
         Deliberately NOT ``self.cfg.GetProgram()``: that reads only the engine
-        config, which ignores the default the user picked in Settings → Coding
+        config, which ignores the default the user picked in Settings → Agent
         provider (stored as ``coding_cli.default_provider``). Resolving through
         the shared chain also means this is read fresh rather than from the
         config snapshot taken at server start, so changing the default takes

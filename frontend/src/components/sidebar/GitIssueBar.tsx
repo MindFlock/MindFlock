@@ -4,8 +4,8 @@
  * reconciles the pipeline process (start / stop / bounce), so flipping it
  * here takes effect on its own, independent of the other toggles. The dot is
  * gold while starting or idle-waiting for a new issue, green while one is
- * actually being worked on. Hidden until repositories are added (Settings →
- * Git issues, its own list independent of PR review's) since there is nothing
+ * actually being worked on. Hidden until repositories are added (Intake →
+ * Issues, its own list independent of PR review's) since there is nothing
  * to watch with an empty repo list. Unlike PR review (absent = on), issue
  * handling is opt-in: absent = off. */
 
@@ -36,7 +36,7 @@ export function GitIssueBar() {
     >
       <span
         id="git-issue-dot"
-        // `active` outranks the switch: an issue forced from Settings is
+        // `active` outranks the switch: an issue forced from Intake is
         // genuinely in flight even with automated handling switched off.
         className={"dc-dot " + (active ? "on" : !on ? "off" : "idle")}
         title={
@@ -54,8 +54,8 @@ export function GitIssueBar() {
         <button
           id="git-issue-repos-btn"
           className="dc-toggle"
-          title="Repositories, open issues and options (Settings → Git issues)"
-          onClick={() => openDialogFor("settings", "issues")}
+          title="Repositories, open issues and options (Intake → Issues)"
+          onClick={() => openDialogFor("intake", "issues")}
         >
           Issues
         </button>

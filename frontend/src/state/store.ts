@@ -62,6 +62,7 @@ function save(key: string, value: unknown, stringify = true) {
 export type DialogName =
   | "new-session"
   | "settings"
+  | "intake"
   | "commit"
   | "make-pr"
   | "rename"
@@ -119,7 +120,9 @@ interface UiState {
   lastTab: Record<string, string>;
   /** The open modal, if any (one at a time, like the vanilla app). */
   openDialog: DialogName | null;
-  /** Payload for dialogs that target a session (commit/rename/device…). */
+  /** Payload for dialogs that target a session (commit/rename/device…).
+   * Overloaded by the two multi-screen dialogs, which read it as the screen /
+   * tab to open on (Settings screen key, Intake tab key). */
   dialogTarget: string | null;
   /** Last PR base branch chosen per repo (Make-PR dialog pre-fill). */
   prBaseByRepo: Record<string, string>;

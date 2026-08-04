@@ -287,6 +287,20 @@ class TicketProvider(abc.ABC):
         when the ticket is in state X" picker. Each entry is ``{"id": str,
         "name": str}`` (``id`` is what gets stored in ``cfg.workflow_state``).
 
+        ``name`` is the KEY the assigned-tickets panel buckets by, so it must be
+        unique across everything this source can return — which is why a provider
+        with several independent workflows qualifies it (Shortcut: ``"Product
+        Development · Deferred"``). Two optional keys let the panel render that
+        hierarchy instead of repeating the qualifier on every heading:
+
+        * ``group`` — the workflow/board this state belongs to, or ``""``. The
+          panel nests states under it, so the qualifier is written once.
+        * ``label`` — the state's own name, unqualified, for display inside that
+          group. Falls back to ``name``.
+
+        Also optional: ``type`` (``unstarted`` | ``started`` | ``done``), which
+        lets the panel park done-type buckets behind its "+ Add bucket" menu.
+
         Default: ``[]`` — providers without workflow states (GitHub Issues,
         Asana) don't offer the picker. Shortcut/Jira/Linear override.
         """

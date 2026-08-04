@@ -1,10 +1,17 @@
 /** Settings dialog (ports section 21's shell + nav): left nav picks one
- * screen; useUi.dialogTarget preselects a screen (palette/doctor links). */
+ * screen; useUi.dialogTarget preselects a screen (palette/doctor links).
+ *
+ * Ticketing, PR review and issue handling used to be screens here. They moved
+ * to the Intake dialog — they are somewhere you visit to see what came in, not
+ * somewhere you configure once — and what is left is genuinely set-and-forget.
+ * Their old screen keys still route: `gotoScreen("ticketing" | "repo" |
+ * "issues")` opens Intake on the matching tab instead of a blank pane, which
+ * matters because the server hands those keys back on Connections cards. */
 
 import { useEffect, useState } from "react";
 import { useUi } from "../../state/store";
-import { prefetchSettingsPanels } from "../../state/queries";
 import { SettingsCtx, useSettingsModel } from "./useSettings";
+import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
 import { General } from "./screens/General";
 import { Appearance } from "./screens/Appearance";
 import { Mobile } from "./screens/Mobile";
@@ -12,10 +19,7 @@ import { Connections } from "./screens/Connections";
 import { Notifications } from "./screens/Notifications";
 import { CodingCli } from "./screens/CodingCli";
 import { LocalModel } from "./screens/LocalModel";
-import { Ticketing } from "./screens/Ticketing";
 import { Workspace } from "./screens/Workspace";
-import { PrReview } from "./screens/PrReview";
-import { GitIssues } from "./screens/GitIssues";
 import { Ide } from "./screens/Ide";
 import { Providers } from "./screens/Providers";
 import { Security } from "./screens/Security";
@@ -25,6 +29,8 @@ import { Advanced } from "./screens/Advanced";
 
 export interface ScreenProps {
   active: boolean;
+  /** Navigate within Settings — or, for a retired screen key, hand off to the
+   * Intake dialog on the tab that replaced it. */
   gotoScreen(name: string): void;
   onOpenSysLogsPane(): void;
 }
@@ -35,10 +41,7 @@ const SCREENS: Array<{ key: string; label: string; el: (p: ScreenProps) => React
   { key: "notifications", label: "Notifications", el: (p) => <Notifications {...p} /> },
   { key: "coding", label: "Agent CLI", el: (p) => <CodingCli {...p} /> },
   { key: "localmodel", label: "Local model", el: (p) => <LocalModel {...p} /> },
-  { key: "ticketing", label: "Ticketing", el: (p) => <Ticketing {...p} /> },
   { key: "workspace", label: "Workspace", el: (p) => <Workspace {...p} /> },
-  { key: "repo", label: "PR review", el: (p) => <PrReview {...p} /> },
-  { key: "issues", label: "Git issues", el: (p) => <GitIssues {...p} /> },
   { key: "ide", label: "IDE", el: (p) => <Ide {...p} /> },
   { key: "providers", label: "Agent providers", el: (p) => <Providers {...p} /> },
   { key: "security", label: "Security", el: (p) => <Security {...p} /> },
@@ -55,16 +58,27 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
   const closeDialog = useUi((s) => s.closeDialog);
   const [screen, setScreen] = useState("general");
   const model = useSettingsModel(open);
+  const openDialogFor = useUi((s) => s.openDialogFor);
+
+  // A retired screen key hands off to Intake rather than selecting nothing (which
+  // rendered a blank right-hand pane, since .set-screen.active would match no
+  // section). Unknown keys still fall back to General.
+  const gotoScreen = (name: string) => {
+    const tab = LEGACY_SCREEN_TABS[name];
+    if (tab) openDialogFor("intake", tab);
+    else setScreen(SCREENS.some((s) => s.key === name) ? name : "general");
+  };
 
   useEffect(() => {
-    if (open) setScreen(target && SCREENS.some((s) => s.key === target) ? target : "general");
-  }, [open, target]);
-
-  // Warm the slow panels (tickets / PRs / issues) while the first screen is
-  // being read, so clicking through to one doesn't start with a spinner.
-  useEffect(() => {
-    if (open) prefetchSettingsPanels();
-  }, [open]);
+    if (!open) return;
+    const tab = target ? LEGACY_SCREEN_TABS[target] : undefined;
+    if (tab) {
+      // Someone deep-linked a screen that now lives in Intake — send them there.
+      openDialogFor("intake", tab);
+      return;
+    }
+    setScreen(target && SCREENS.some((s) => s.key === target) ? target : "general");
+  }, [open, target, openDialogFor]);
 
   useEffect(() => {
     if (!open) return;
@@ -82,7 +96,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
 
   const props: ScreenProps = {
     active: true,
-    gotoScreen: setScreen,
+    gotoScreen,
     onOpenSysLogsPane: () => {
       onOpenSysLogsPane?.();
       closeDialog();
@@ -125,21 +139,8 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
                   key={s.key}
                   className={"set-screen" + (screen === s.key ? " active" : "")}
                   data-screen={s.key}
-                  id={
-                    s.key === "repo"
-                      ? "pr-review-block"
-                      : s.key === "issues"
-                        ? "git-issues-block"
-                        : undefined
-                  }
                   data-caps-need={
-                    s.key === "mobile"
-                      ? "tailscale"
-                      : s.key === "workspace"
-                        ? "git"
-                        : s.key === "repo" || s.key === "issues"
-                          ? "git ticketing"
-                          : undefined
+                    s.key === "mobile" ? "tailscale" : s.key === "workspace" ? "git" : undefined
                   }
                 >
                   {screen === s.key && s.el(props)}

@@ -55,7 +55,7 @@ export function AutomationBar() {
   // Old servers don't send `desired` — fall back to the live state.
   const desired = optimistic ?? (status.desired ?? running);
   // Green while a ticket is actually being brought in — by the pipeline OR by a
-  // start forced from Settings → Ticketing (the server folds both into
+  // start forced from Intake → Tickets (the server folds both into
   // tickets_active). NOT gated on `running`: a forced ticket provisions with
   // the pipeline stopped, and gold would be a lie about it.
   const active = !!status.tickets_active;
@@ -86,7 +86,7 @@ export function AutomationBar() {
       <span
         id="mindflock-dot"
         className={
-          // `active` outranks the switch: a ticket forced from Settings is
+          // `active` outranks the switch: a ticket forced from Intake is
           // genuinely being brought in even with auto ingestion switched off,
           // and "off" would be a lie about the work in flight.
           "dc-dot " +
@@ -111,8 +111,8 @@ export function AutomationBar() {
         <button
           id="mindflock-tickets-btn"
           className="dc-toggle"
-          title="Ticketing sources and ingestion options (Settings → Ticketing)"
-          onClick={() => openDialogFor("settings", "ticketing")}
+          title="Ticketing sources and assigned tickets (Intake → Tickets)"
+          onClick={() => openDialogFor("intake", "tickets")}
         >
           Tickets
         </button>

@@ -4,12 +4,14 @@
  * mobile access. Opens automatically on first run (see App) and is replayable
  * from Settings → General.
  *
- * Setup slides carry a `screen` key; their "Set up now" button closes the tour
- * (marking it done) and jumps straight to that Settings screen — so a user can
- * act on the exact thing they're reading about. Everything else is Back/Next. */
+ * Setup slides carry a `screen` key; their "Set up now" button pauses the tour
+ * and jumps straight to that surface — a Settings screen, or an Intake tab for the
+ * three intake steps (tickets, PRs, issues) — so a user can act on the exact
+ * thing they're reading about. Everything else is Back/Next. */
 
 import { useEffect, useState } from "react";
 import { useUi } from "../../state/store";
+import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
 import "./WelcomeTour.css";
 
 interface Slide {
@@ -18,7 +20,8 @@ interface Slide {
   logo?: boolean;
   title: string;
   body: React.ReactNode;
-  /** Settings screen key this slide's "Set up now" button jumps to. */
+  /** Where this slide's "Set up now" button jumps to — a Settings screen key,
+   * or an Intake tab key when the setup step lives there. */
   screen?: string;
 }
 
@@ -122,15 +125,15 @@ const SLIDES: Slide[] = [
     title: "3. PR review",
     body: (
       <>
-        List repositories as <b>owner/name</b> (e.g. <code>mindflockai/MindFlock</code>),
-        then paste a <b>GitHub token</b>. That token is the whole setup: it also
+        On <b>Intake → Pull requests</b>, add a card per repository —{" "}
+        <b>owner/name</b> (e.g. <code>mindflockai/MindFlock</code>), and optionally its
+        own agent CLI, base branch and grace period. Then paste a{" "}
+        <b>GitHub token</b> under Advanced options. That token is the whole setup: it also
         lets MindFlock open and merge PRs for you. It falls back to{" "}
         <code>$GH_TOKEN</code> / <code>$GITHUB_TOKEN</code>, and to{" "}
         <code>gh auth token</code> if you happen to have the GitHub CLI — which is
         optional, not required. <b>Pushing</b> is always plain <code>git push</code>{" "}
-        over the remote you already use, so an SSH remote needs nothing extra. Tune{" "}
-        <b>base branch</b>, <b>min PR age</b>, <b>poll interval</b>, and{" "}
-        <b>skip authors</b> (e.g. dependabot) to control what gets reviewed.
+        over the remote you already use, so an SSH remote needs nothing extra.
       </>
     ),
     screen: "repo",
@@ -197,9 +200,12 @@ function Logo() {
 
 export function WelcomeTour() {
   const open = useUi((s) => s.tourOpen);
-  // While Settings is open we PAUSE the tour: hide it but stay mounted so the
-  // slide index survives. Closing Settings brings the tour back where it was.
-  const settingsOpen = useUi((s) => s.openDialog === "settings");
+  // While a setup dialog is open we PAUSE the tour: hide it but stay mounted so
+  // the slide index survives. Closing that dialog brings the tour back where it
+  // was. Both dialogs count — .modal carries no z-index, and the tour renders
+  // last in App.tsx, so an unpaused tour would paint on top of whichever dialog
+  // its own "Set up now" button just opened.
+  const settingsOpen = useUi((s) => s.openDialog === "settings" || s.openDialog === "intake");
   const finishTour = useUi((s) => s.finishTour);
   const openDialogFor = useUi((s) => s.openDialogFor);
   const [i, setI] = useState(0);
@@ -230,10 +236,12 @@ export function WelcomeTour() {
   const last = i === SLIDES.length - 1;
   const slide = SLIDES[i];
 
-  // Open Settings ON TOP of the (now paused) tour instead of ending it, so the
-  // user lands back on this exact slide when they close Settings.
+  // Open the setup surface ON TOP of the (now paused) tour instead of ending it,
+  // so the user lands back on this exact slide when they close it. Three of the
+  // six setup steps live in the Intake dialog now; the key tells us which.
   const jumpTo = (screen: string) => {
-    openDialogFor("settings", screen);
+    const tab = LEGACY_SCREEN_TABS[screen];
+    openDialogFor(tab ? "intake" : "settings", tab || screen);
   };
 
   return (

@@ -169,7 +169,7 @@ export type TestState = { testing: boolean; ok?: boolean; msg?: string };
 const idleTest: TestState = { testing: false };
 
 // --- The one GitHub credential test ------------------------------------------
-// The setup checklist, Settings → PR review and Settings → Git issues all show
+// The setup checklist and both GitHub Intake tabs all show
 // POST /api/settings/test/github. They used to each build their own summary
 // line, which is how "gh not installed" ended up reading like a failure in
 // three places at once. One helper now, so the wording cannot drift again.

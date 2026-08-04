@@ -145,10 +145,28 @@ token = ""                       # secret; empty → $GH_TOKEN / $GITHUB_TOKEN /
 # each get a coding session on a fresh branch. issue_repos is separate from the
 # PR-review `repos`; these knobs are independent of the PR ones above.
 issues_enabled = false           # default false
-issue_repos = []                 # ["owner/name", ...] to watch for new issues
+issue_repos = ["Org/repo"]       # ["owner/name", ...] to watch for new issues
 issue_min_age_minutes = 15       # default 15
 issue_poll_interval_seconds = 60 # default 60
 issue_skip_authors = []          # issue authors to ignore
+# Per-repo overrides of the PR-review knobs above, keyed by the "owner/name"
+# slug (quoted — a slash is not a bare key). Each watched repo is its own card
+# in Intake → Pull requests, so each can carry its own agent CLI, base branch,
+# grace period and skip list; the flat fields above stay the DEFAULTS, inherited
+# by every table that omits the key. A slug that is not in `repos` is never
+# consulted. Keep these tables LAST in the section — after this header every
+# bare key belongs to IT, not to [github].
+[github.repo_settings."Org/repo"]
+agent = "codex"                  # only this repo's reviews run on codex
+base_branch = "develop"          # its PRs target develop, not `main` above
+min_age_minutes = 0              # review it as soon as the PR opens
+skip_authors = ["renovate[bot]"] # whose review comments to ignore here
+# The issue-handling twin, keyed by a repo in `issue_repos`. Same keys minus
+# `base_branch`, which issue work never honours (an issue session branches off
+# the repo's own default).
+[github.issue_repo_settings."Org/repo"]
+agent = "aider"                  # only this repo's issues run on aider
+min_age_minutes = 60             # let issues here settle for an hour
 
 [mindflock]                        # engine routing — see WARNING below
 enabled = true                   # default true — route pipeline sessions through the engine
@@ -167,8 +185,8 @@ skip_permissions = true          # default true — launch claude with --dangero
 ### Ticketing providers
 
 `[ticketing].provider` selects the source; each provider reads the subset of
-`[ticketing]` keys it needs. The web Settings → **Ticketing** screen renders
-exactly these fields and a "Test connection" button that auto-fills `member_id`.
+`[ticketing]` keys it needs. The web Intake → **Tickets** tab renders exactly
+these fields and a "Test connection" button that auto-fills `member_id`.
 
 | Provider | Required keys | Notes |
 |---|---|---|
@@ -181,8 +199,8 @@ exactly these fields and a "Test connection" button that auto-fills `member_id`.
 Every source also takes an OPTIONAL-in-TOML-but-required-in-the-UI `repo_url`
 (the repo that source's tickets clone into) — set it per source; there is no
 global default repo. `workflow_state` gates ingestion so a ticket only gets a
-session once it reaches the chosen state (blank = any state). The Settings →
-**Ticketing** screen loads the live state list per source (Shortcut/Jira/Linear).
+session once it reaches the chosen state (blank = any state). The Intake →
+**Tickets** tab loads the live state list per source (Shortcut/Jira/Linear).
 
 Each source also takes an optional **`agent`** — the coding CLI its sessions run
 (`claude`, `codex`, `aider`, `goose`, `opencode`, `cline`, `antigravity`, or a
@@ -230,7 +248,7 @@ and where each was verified.
 Notes on individual keys:
 
 - `workflow_state` (per source) — the state a ticket must be in to be ingested.
-  In the web UI this is a live dropdown (Settings → Ticketing) populated from the
+  In the web UI this is a live dropdown (Intake → Tickets) populated from the
   provider, so you rarely need the raw id. For Shortcut you can also list ids with
   `uv run python scripts/list_workflows.py`. The integer `workflow_state_id`
   (integer) is still honoured when `workflow_state` is empty.
@@ -266,6 +284,21 @@ Notes on individual keys:
   it is plain `git push` over the remote the repo already has.
 - `github.base_branch` — also used by provisioned mode as the base branch
   worktrees fork from (default `main`).
+- `github.repo_settings` / `github.issue_repo_settings` — the per-repo override
+  tables, spelled as nested tables whose key is the quoted repo slug
+  (`[github.repo_settings."owner/name"]`). Each block accepts `agent`,
+  `min_age_minutes`, `skip_authors` and — PR review only — `base_branch`; any
+  other key is dropped, and so is any key whose value is blank or empty, which
+  is how a card's cleared field means "inherit the flat field above" rather than
+  "set it to nothing". `0` is a real value (no grace period at all), not blank.
+  Both tables go through the same normalizer the Intake tab's cards save
+  through (`_repo_overrides` in `config/settings.py`, reached from the pipeline
+  as `_repo_override_map`), so a hand-written table and a saved one are cleaned
+  identically — and a bad slug or block is dropped rather than raising. Layering
+  is per TABLE, not per key: a non-empty `repo_settings` in `settings.json`
+  replaces this file's table whole (like `repos` and `skip_authors` do), because
+  the card is the only editor either table has and a per-key merge would make
+  "I cleared that field" indistinguishable from "I never set it".
 - `[mindflock].enabled` — **default `true`, including when the whole `[mindflock]`
   section (or the entire `config.toml`) is absent.** On, each ingested ticket
   becomes a real MindFlock session: worktree + branch + seeded agent, listed in

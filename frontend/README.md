@@ -39,8 +39,21 @@ changes.
   shell and the engine-served frontend update independently, so an older shell
   has to be able to keep the layout it was built for.
 - `src/components/` — the UI: `sidebar/`, `grid/` (panes, diff/queue tabs,
-  special panes), `settings/` (one file per screen), `dialogs/`, `palette/`,
-  plus TopBar / NotificationsBell / EventToasts / ConnBanner / VoiceInput.
+  special panes), `settings/` (one file per screen in `screens/` — the
+  set-and-forget config), `intake/` (the Intake dialog: the Tickets / Pull requests
+  / Issues tabs that replaced the Ticketing / PR review / Git issues settings
+  screens), `dialogs/`, `palette/`, plus TopBar / NotificationsBell /
+  EventToasts / ConnBanner / VoiceInput.
+- **All three Intake tabs are built from `intake/kit.tsx`**, which is what keeps
+  them one surface rather than three: master switch + status line → collapsible
+  source cards with "+ Add" → a work list grouped by source, each row carrying
+  why auto-pickup did or didn't take it. A new queue belongs in that vocabulary;
+  a tab that needs a shape the kit can't express is a signal to widen the kit,
+  not to hand-roll the tab. `IntakeDialog.tsx` owns only the tab strip, the live
+  counts, and `LEGACY_SCREEN_TABS` — the retired Settings screen keys
+  (`ticketing` / `repo` / `issues`), still routed so deep links recorded
+  elsewhere (palette entries, sidebar buttons, the server's `settings_screen`
+  on a Connections card) keep landing on the right tab.
 - **Styles** live next to the component they style — `Foo.css` beside
   `Foo.tsx`. Only the cross-cutting sheets stay in `src/styles/`: `tokens.css`
   (the palette, including the `.light` swap), `base.css` (reset + page
@@ -63,5 +76,10 @@ changes.
   `window.WebLinksAddon` for `core/ws-xterm.js` and addon panes.
 - **Build shape**: unminified, stable filenames, single CSS file. Backend
   tests assert on bundle string literals — keep ids, API paths, and
-  user-visible copy stable or update the tests with them.
+  user-visible copy stable or update the tests with them. Some of those
+  assertions are **negative**: `tests/unit/test_intake_surface.py` checks that the
+  retired Ticketing / PR review / Git issues *Settings* entries are gone from
+  the bundle as well as that the Intake ids (`intake-dialog`, `intake-panel`,
+  `ik-tab-count`) are in it — so a stale committed bundle fails loudly instead
+  of quietly serving both surfaces at once.
 - **Mobile**: `/m` (`static/mobile.*`) is separate and still vanilla.

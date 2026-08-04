@@ -12,7 +12,11 @@ from pathlib import Path
 
 import aiohttp
 
-from backend.ticket_ingestion.config import PipelineConfig, TicketProviderConfig
+from backend.ticket_ingestion.config import (
+    PipelineConfig,
+    TicketProviderConfig,
+    source_agent_now,
+)
 from backend.ticket_ingestion.models import Ticket
 from backend.ticket_ingestion.providers import get_provider
 from backend.ticket_ingestion.state import (
@@ -156,8 +160,14 @@ class BackfillScanner:
             # right repo (empty -> global fallback downstream), and the source's
             # agent CLI so the session launches with it (empty -> the
             # [mindflock].agent / engine-default fallback downstream).
+            #
+            # The agent is re-read from disk rather than taken from the config
+            # this scanner was built with: the pipeline loads its config once at
+            # boot, so the snapshot's value is whatever was configured then, and
+            # switching a source's Agent CLI in the UI looked like it was being
+            # ignored until the pipeline was restarted.
             story.repo_url = self._source.repo_url
-            story.agent = self._source.agent
+            story.agent = source_agent_now(self._source_key, self._source.agent)
             # Crash safety: persist a pending marker BEFORE the checkpoint
             # advances, so a ticket that dies in the in-memory queue is
             # re-enqueued on the next startup instead of lost forever.

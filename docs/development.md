@@ -117,7 +117,7 @@ python3 scripts/bump-version.py --check    # verify the three agree (CI guard)
 ```
 
 Writing a version also rolls the CHANGELOG `[Unreleased]` heading into a dated
-`[<version>]` section. The script is stdlib-only.
+`[<version>]` section. The script is stdlik-only.
 
 CI enforces this in a dedicated **`versions`** job (`.github/workflows/ci.yml`):
 every push runs `bump-version.py --check` so a drifted manifest fails the
