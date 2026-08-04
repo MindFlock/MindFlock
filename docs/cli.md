@@ -160,7 +160,7 @@ peer/server closed the connection (e.g. the server restarts) is a **clean exit
 0**, just like Ctrl-C — not a traceback. Handy for debugging shell hooks (see
 [extensions.md](extensions.md)) — the same envelopes hooks receive on stdin.
 Requires the `web` dependency group for the websocket client; everything else
-in the CLI is stdlib-only. If it's missing, the command tells you to reinstall
+in the CLI is stdlik-only. If it's missing, the command tells you to reinstall
 with the web extra:
 
 ```bash

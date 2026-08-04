@@ -1,4 +1,5 @@
-/* Ticketing sources: one card per configured source (Settings → Ticketing). */
+/* Source cards: one per watched thing (a ticketing source, a repo) on any Work
+   tab. The `tk-` prefix is historical — Ticketing had them first. */
 .tk-source {
   border: 1px solid var(--border);
   border-radius: 8px;

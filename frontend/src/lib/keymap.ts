@@ -114,6 +114,9 @@ const MODAL_DIALOG_NAMES: DialogName[] = [
   "commit",
   "rename",
   "device",
+  // The Intake reads like a page, not a popover, and its per-card Remove buttons make
+  // a stray Delete genuinely dangerous behind it.
+  "intake",
 ];
 const MODAL_DOM_IDS = [
   "new-dialog",
@@ -122,6 +125,7 @@ const MODAL_DOM_IDS = [
   "commit-dialog",
   "rename-dialog",
   "device-dialog",
+  "intake-dialog",
 ];
 export function modalOpen(): boolean {
   const open = useUi.getState().openDialog;
@@ -332,6 +336,20 @@ export const KEYMAP: KeymapEntry[] = [
   },
   // browser-safe alias
   { key: "n", alt: true, aliasOf: "new", run: () => useUi.getState().openDialogFor("new-session") },
+  {
+    // Alt rather than Ctrl: Ctrl+I *is* Tab at the terminal, and every other
+    // free Ctrl+letter either belongs to the shell or to the browser. Alt+I is
+    // free and spells the thing.
+    key: "i",
+    alt: true,
+    id: "intake",
+    help: ["Navigation", "Alt+I", "Intake — tickets, PRs and issues"],
+    // Guarded unlike Alt+N: on macOS Option+I types a dead-key accent, and a
+    // surface you open a few times an hour is not worth eating a keystroke
+    // someone meant for a text field or a terminal.
+    when: () => !isEditingTarget(document.activeElement),
+    run: () => useUi.getState().openDialogFor("intake"),
+  },
   {
     key: "Tab",
     mod: "ctrl",

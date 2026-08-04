@@ -129,6 +129,18 @@ def _apply_post(payload: dict) -> None:
             patches[group] = clean
     if patches:
         settings_store.update_settings(**patches)
+    # A new GitHub token has to reach the code that uses it. github_auth caches
+    # the resolved token for the life of the process, so without this every
+    # consumer (PR review, issue handling, Make PR, the per-repo access test)
+    # kept using the old one until a restart — which reads exactly like the
+    # paste not having been saved.
+    if "token" in (patches.get("github") or {}):
+        try:
+            from backend.ticket_ingestion import github_auth
+
+            github_auth.invalidate()
+        except Exception:  # noqa: BLE001 — a settings save must never fail on this
+            pass
 
 
 # --------------------------------------------------------------------------- #
@@ -321,6 +333,28 @@ def _github_token_source() -> str:
         if os.environ.get(var):
             return f"env:{var}"
     return ""
+
+
+def _repo_test_config():
+    """A minimal ``GithubConfig`` carrying only the stored token, for the
+    per-repo access test.
+
+    The shared resolver wants a config object to read ``[github].token`` from
+    and then walks env → ``gh auth token`` on its own. Building a bare one here
+    (rather than loading the whole pipeline config) means the test works on a
+    machine that has never configured ticket ingestion — which is exactly the
+    machine someone is testing a repo on.
+    """
+    from backend.ticket_ingestion.config import GithubConfig
+
+    return GithubConfig(
+        base_branch="",
+        min_age_minutes=15,
+        poll_interval_seconds=60,
+        enabled=True,
+        skip_authors=[],
+        token=(settings_store.load_settings().github.token or "").strip(),
+    )
 
 
 def _gh_cli_status() -> Tuple[bool, bool, str]:
@@ -706,6 +740,88 @@ class SettingsAddon(Addon):
                     "gh_installed": gh_installed,
                     "gh_authenticated": gh_authenticated,
                     "detail": gh_detail,
+                }
+            )
+
+        @router.post("/settings/test/github-repo")
+        async def test_github_repo(body: Optional[dict] = None) -> JSONResponse:
+            """Can the resolved GitHub token actually see ``owner/name``?
+
+            The per-repo twin of ``/settings/test/github``: that one answers
+            "is there a credential", this one answers "does it reach THIS
+            repo" — which is the failure people actually hit (a typo'd slug, a
+            private repo the PAT has no scope for). Each repo card in the Work
+            surface has its own Test button for exactly this, mirroring the
+            per-source Test on a ticketing card.
+            """
+            repo = str((body or {}).get("repo", "") or "").strip()
+            if not re.match(r"^[^\s/]+/[^\s/]+$", repo):
+                return JSONResponse({"ok": False, "error": "repo must be owner/name"})
+            from backend.ticket_ingestion import github_auth
+
+            # Resolve afresh: a cached token from before the user pasted a new
+            # one would make this button answer about the wrong credential.
+            github_auth.invalidate()
+            try:
+                token = (await github_auth.resolve_token(_repo_test_config())).strip()
+            except github_auth.GithubAuthError:
+                # Its message is a five-line config walkthrough aimed at
+                # config.toml; on a card, one sentence naming this screen is
+                # more use.
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "no GitHub token available — set one under "
+                        "Advanced options, or sign in with the gh CLI",
+                    }
+                )
+            except Exception as err:  # noqa: BLE001 — never 500 a probe
+                return JSONResponse({"ok": False, "error": str(err)})
+            import aiohttp
+
+            url = "https://api.github.com/repos/{}".format(repo)
+            headers = {
+                "Authorization": "Bearer {}".format(token),
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+            try:
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url, headers=headers) as resp:
+                        status = resp.status
+                        data = await resp.json(content_type=None)
+            except Exception as err:  # noqa: BLE001 — offline / DNS / TLS
+                return JSONResponse(
+                    {"ok": False, "error": "could not reach api.github.com: %s" % err}
+                )
+            if status == 404:
+                # 404 is also what GitHub returns for a private repo the token
+                # can't see, so the message has to cover both readings.
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "no such repo, or this token cannot see it "
+                        "(private repos need the repo scope)",
+                    }
+                )
+            if status != 200 or not isinstance(data, dict):
+                msg = ""
+                if isinstance(data, dict):
+                    msg = str(data.get("message") or "").strip()
+                return JSONResponse(
+                    {"ok": False, "error": msg or "GitHub returned HTTP %d" % status}
+                )
+            perms = data.get("permissions") or {}
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "name": data.get("full_name") or repo,
+                    "private": bool(data.get("private")),
+                    "default_branch": data.get("default_branch") or "",
+                    # Reviewing pushes nothing, but issue handling needs to push
+                    # a branch — so "read-only" is worth saying out loud.
+                    "can_push": bool(perms.get("push")),
                 }
             )
 

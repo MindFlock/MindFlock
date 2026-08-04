@@ -367,6 +367,14 @@ class GithubSettings:
     ``repos`` is the list of ``owner/name`` repos PR review watches;
     ``issue_repos`` is the list issue handling watches. ``token`` (the GitHub
     credential) is shared by both — it authenticates the same account.
+
+    ``repo_settings`` / ``issue_repo_settings`` carry PER-REPO overrides of the
+    knobs above, keyed by the repo slug. They exist because the Intake tab
+    presents each watched repo as its own card — one repo can want a different
+    agent CLI, base branch or grace period than the next — and a card that
+    could only edit a screen-wide value would be lying about its scope. The
+    flat fields stay the DEFAULT every repo inherits; an override is only what
+    a card was explicitly given (see :func:`_repo_overrides`).
     """
 
     token: str = ""  # SECRET
@@ -390,6 +398,13 @@ class GithubSettings:
     #: Same, for issue-handling sessions. Independent of ``agent`` exactly as
     #: ``issue_repos`` is independent of ``repos``.
     issue_agent: str = ""
+    #: ``{"owner/name": {agent?, base_branch?, min_age_minutes?, skip_authors?}}``
+    #: — per-repo overrides of the PR-review knobs. Absent key = inherit.
+    repo_settings: Dict[str, dict] = field(default_factory=dict)
+    #: The issue-handling twin, keyed by a repo in ``issue_repos``.
+    #: ``base_branch`` is accepted but unused (issue work branches off the
+    #: repo's own default), and dropped rather than silently honoured.
+    issue_repo_settings: Dict[str, dict] = field(default_factory=dict)
 
     def repo_list(self) -> List[str]:
         """Effective ``owner/name`` repos to watch (blanks stripped)."""
@@ -429,6 +444,12 @@ class GithubSettings:
             d["agent"] = self.agent
         if self.issue_agent:
             d["issue_agent"] = self.issue_agent
+        if self.repo_settings:
+            d["repo_settings"] = {k: dict(v) for k, v in self.repo_settings.items()}
+        if self.issue_repo_settings:
+            d["issue_repo_settings"] = {
+                k: dict(v) for k, v in self.issue_repo_settings.items()
+            }
         return d
 
     @classmethod
@@ -448,6 +469,14 @@ class GithubSettings:
             issue_skip_authors=_str_list(d.get("issue_skip_authors")),
             agent=str(d.get("agent", "") or ""),
             issue_agent=str(d.get("issue_agent", "") or ""),
+            repo_settings=_repo_overrides(d.get("repo_settings")),
+            issue_repo_settings={
+                # base_branch is meaningless for issue work — an issue session
+                # branches off the repo's own default — so it is not carried.
+                repo: {k: v for k, v in block.items() if k != "base_branch"}
+                for repo, block in _repo_overrides(d.get("issue_repo_settings")).items()
+                if any(k != "base_branch" for k in block)
+            },
         )
 
 
@@ -886,6 +915,51 @@ def _str_list(v: Any) -> List[str]:
 def _group(d: dict, key: str) -> dict:
     g = d.get(key)
     return g if isinstance(g, dict) else {}
+
+
+#: Keys a per-repo override block may carry (see
+#: :attr:`GithubSettings.repo_settings`). Scoped names, not the flat field's
+#: ``issue_`` prefixed ones: the map it lives in already says which surface it
+#: belongs to, so ``min_age_minutes`` means the same thing in both.
+REPO_OVERRIDE_KEYS = ("agent", "base_branch", "min_age_minutes", "skip_authors")
+
+
+def _repo_overrides(v: Any) -> Dict[str, dict]:
+    """Normalize a ``{"owner/name": {…}}`` per-repo override map.
+
+    Tolerant like every other coercion here — an unknown key, a bad repo slug
+    or a non-dict block is dropped rather than raising, because this store is
+    read on every settings load and a hand-edited file must not take the app
+    down. Blank values are dropped too, which is how a card's field means
+    "inherit the screen-wide default" rather than "set it to empty".
+    """
+    if not isinstance(v, dict):
+        return {}
+    out: Dict[str, dict] = {}
+    for repo, block in v.items():
+        slug = str(repo or "").strip()
+        if not slug or not isinstance(block, dict):
+            continue
+        clean: dict = {}
+        for key in REPO_OVERRIDE_KEYS:
+            if key not in block:
+                continue
+            raw = block[key]
+            if key == "skip_authors":
+                authors = _str_list(raw)
+                if authors:
+                    clean[key] = authors
+            elif key == "min_age_minutes":
+                n = _opt_int(raw)
+                if n is not None:
+                    clean[key] = n
+            else:
+                s = str(raw or "").strip()
+                if s:
+                    clean[key] = s
+        if clean:
+            out[slug] = clean
+    return out
 
 
 # --------------------------------------------------------------------------- #

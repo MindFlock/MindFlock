@@ -51,6 +51,14 @@ class GithubConfig:
     agent: str = ""
     #: Coding CLI issue-handling sessions run, same fallback chain.
     issue_agent: str = ""
+    #: Per-repo overrides of the PR-review knobs, keyed by ``owner/name``:
+    #: ``{"agent"?, "base_branch"?, "min_age_minutes"?, "skip_authors"?}``.
+    #: Each watched repo is its own card in the Intake tab, so each can want
+    #: its own grace period / base branch / CLI; an absent key inherits the
+    #: flat field above. See ``backend.config.settings.REPO_OVERRIDE_KEYS``.
+    repo_settings: dict[str, dict] = field(default_factory=dict)
+    #: The issue-handling twin, keyed by a repo in ``issue_repos``.
+    issue_repo_settings: dict[str, dict] = field(default_factory=dict)
 
     def repo_list(self) -> list[str]:
         """The effective ``owner/name`` repos to watch (blanks stripped)."""
@@ -59,6 +67,52 @@ class GithubConfig:
     def issue_repo_list(self) -> list[str]:
         """The effective ``owner/name`` repos issue handling watches."""
         return [r.strip() for r in (self.issue_repos or []) if r and r.strip()]
+
+    # -- per-repo resolution ------------------------------------------------ #
+    # Every filter the monitors apply goes through one of these rather than
+    # reading the flat field directly, so "this repo overrides it" is a single
+    # decision made in one place instead of a condition repeated at each use.
+    def _override(self, repo: str, key: str, *, issues: bool = False):
+        """This repo's override for ``key``, or ``None`` to inherit."""
+        table = self.issue_repo_settings if issues else self.repo_settings
+        block = (table or {}).get((repo or "").strip())
+        if not isinstance(block, dict):
+            return None
+        val = block.get(key)
+        return None if val in (None, "", []) else val
+
+    def min_age_for(self, repo: str) -> int:
+        """Minutes a PR in ``repo`` must exist before auto review takes it."""
+        val = self._override(repo, "min_age_minutes")
+        return int(val) if val is not None else int(self.min_age_minutes)
+
+    def base_branch_for(self, repo: str) -> str:
+        """The base branch auto review filters ``repo``'s PRs to (``""`` = any)."""
+        val = self._override(repo, "base_branch")
+        return str(val) if val is not None else (self.base_branch or "")
+
+    def skip_authors_for(self, repo: str) -> list[str]:
+        """Logins whose review comments are ignored on ``repo``."""
+        val = self._override(repo, "skip_authors")
+        return list(val) if val is not None else list(self.skip_authors or [])
+
+    def agent_for_repo(self, repo: str) -> str:
+        """Coding CLI ``repo``'s review sessions run (``""`` = inherit)."""
+        return str(self._override(repo, "agent") or "")
+
+    def issue_min_age_for(self, repo: str) -> int:
+        """Minutes an issue in ``repo`` must exist before auto handling takes it."""
+        val = self._override(repo, "min_age_minutes", issues=True)
+        return int(val) if val is not None else int(self.issue_min_age_minutes)
+
+    def issue_skip_authors_for(self, repo: str) -> list[str]:
+        """Logins whose issues are ignored on ``repo``."""
+        val = self._override(repo, "skip_authors", issues=True)
+        return list(val) if val is not None else list(self.issue_skip_authors or [])
+
+    def issue_agent_for_repo(self, repo: str) -> str:
+        """Coding CLI ``repo``'s issue sessions run (``""`` = inherit)."""
+        return str(self._override(repo, "agent", issues=True) or "")
 
 
 @dataclass
@@ -262,29 +316,40 @@ class PipelineConfig:
         """The ingestion-wide agent (``[mindflock].agent``), or ``""``."""
         return (self.engine.agent if self.engine else "") or ""
 
-    def pr_agent(self) -> str:
+    def pr_agent(self, repo: str = "") -> str:
         """The coding CLI a PR-review session should run, or ``""``.
 
-        Precedence: ``[github].agent`` → ``[mindflock].agent`` → ``""`` (the
-        resolved default). PR review has no ticketing source, so it never
-        consults the per-source chain.
+        Precedence: that repo's own card → ``[github].agent`` → ``[mindflock].agent``
+        → ``""`` (the resolved default). The per-repo rung mirrors the
+        per-source rung in :meth:`agent_for`: a repo watched alongside others
+        can route its reviews to a different CLI. PR review has no ticketing
+        source, so it never consults the per-source chain.
         """
+        if not self.github:
+            return self._pipeline_agent()
         return (
-            (self.github.agent if self.github else "") or ""
-        ) or self._pipeline_agent()
+            (repo and self.github.agent_for_repo(repo))
+            or self.github.agent
+            or self._pipeline_agent()
+        )
 
-    def issue_agent(self) -> str:
+    def issue_agent(self, repo: str = "") -> str:
         """The coding CLI an issue-handling session should run, or ``""``.
 
-        Precedence: ``[github].issue_agent`` → ``[mindflock].agent`` → ``""``.
-        Deliberately does NOT fall back to ``[github].agent``: issue handling
-        and PR review are separately configured features (separate repo lists,
-        separate toggles), so inheriting the review CLI would surprise anyone
-        who set one and not the other.
+        Precedence: that repo's own card → ``[github].issue_agent`` →
+        ``[mindflock].agent`` → ``""``. Deliberately does NOT fall back to
+        ``[github].agent``: issue handling and PR review are separately
+        configured features (separate repo lists, separate toggles), so
+        inheriting the review CLI would surprise anyone who set one and not
+        the other.
         """
+        if not self.github:
+            return self._pipeline_agent()
         return (
-            (self.github.issue_agent if self.github else "") or ""
-        ) or self._pipeline_agent()
+            (repo and self.github.issue_agent_for_repo(repo))
+            or self.github.issue_agent
+            or self._pipeline_agent()
+        )
 
 
 def _assign_source_ids(sources: list[TicketProviderConfig]) -> None:
@@ -353,7 +418,7 @@ def config_for_launch(
     The pipeline calls :func:`load_config` once at startup and holds that
     snapshot for the life of the process, which is right for poll intervals and
     tokens but wrong for "which coding CLI should this session run": switching
-    provider in Settings has to apply to the very next ticket / issue / PR, not
+    provider in the UI has to apply to the very next ticket / issue / PR, not
     to the next time the pipeline is restarted. Agent choice is therefore read
     fresh at the moment of launch — the same rule
     :func:`backend.config.program.resolve_default_program` follows for the
@@ -368,12 +433,38 @@ def config_for_launch(
         return fallback
 
 
+def agent_now(pick, fallback: str = "") -> str:
+    """``pick`` applied to the config ON DISK RIGHT NOW, empty answer included.
+
+    The difference from :func:`fresh_agent` is the whole point: there, an
+    on-disk chain that resolves to ``""`` falls through to the caller's
+    snapshot; here ``""`` is an ANSWER ("use the app default"). The pipeline
+    loads its config once at boot and hands that snapshot to every runner, so
+    deferring to it meant switching a provider in the UI kept launching the old
+    CLI until a restart — and *clearing* the field did nothing at all, because
+    the snapshot's value came back every time. ``fallback`` is used only when
+    the config cannot be read at all.
+    """
+    fresh = config_for_launch(None)
+    if fresh is None:
+        return fallback or ""
+    try:
+        return pick(fresh) or ""
+    except Exception:  # noqa: BLE001 — an unreadable config is not a launch error
+        return fallback or ""
+
+
+def source_agent_now(source_key: str, fallback: str = "") -> str:
+    """The Agent CLI configured for ticketing source ``source_key`` RIGHT NOW."""
+    return agent_now(lambda c: c.agent_for(source_key), fallback)
+
+
 def fresh_agent(pick, snapshot: "PipelineConfig | None") -> str:
     """Resolve one surface's coding CLI, preferring the config on disk NOW.
 
     ``pick`` is the surface's own chain applied to a config — e.g.
     ``lambda c: c.pr_agent()``. It is tried against a freshly-read config first
-    so a provider switched in Settings takes effect on the next launch, and falls
+    so a provider switched in the UI takes effect on the next launch, and falls
     back to ``snapshot`` (the long-lived config the caller was built with) when
     the fresh read has no opinion or is unavailable.
 
@@ -562,6 +653,16 @@ def _merge_layers(raw: dict) -> dict:
         github["agent"] = _gh.agent
     if _gh.issue_agent:
         github["issue_agent"] = _gh.issue_agent
+    # Per-repo override tables: whole-map replacement, like the repo lists above
+    # (a per-key merge across layers would make "I cleared that field on the
+    # card" indistinguishable from "I never set it", and the card is the only
+    # editor either table has).
+    if _gh.repo_settings:
+        github["repo_settings"] = {k: dict(v) for k, v in _gh.repo_settings.items()}
+    if _gh.issue_repo_settings:
+        github["issue_repo_settings"] = {
+            k: dict(v) for k, v in _gh.issue_repo_settings.items()
+        }
 
     # --- engine block (settings override the [mindflock] section) --------------
     eng_enabled = _s.resolve_bool(
@@ -858,12 +959,29 @@ def _parse_github(raw: dict, config_path: Path) -> GithubConfig | None:
         ),
         issue_skip_authors=list(github_section.get("issue_skip_authors", []) or []),
         # Per-surface coding CLI. Omitting these left both at the dataclass ""
-        # default no matter what the merged config said, so Settings → PR review
+        # default no matter what the merged config said, so the PR-review tab
         # → Agent CLI (and its issue-handling twin) resolved to nothing and every
         # review fell through to the app-wide default provider.
         agent=str(github_section.get("agent", "") or ""),
         issue_agent=str(github_section.get("issue_agent", "") or ""),
+        repo_settings=_repo_override_map(github_section.get("repo_settings")),
+        issue_repo_settings=_repo_override_map(
+            github_section.get("issue_repo_settings")
+        ),
     )
+
+
+def _repo_override_map(raw) -> dict[str, dict]:
+    """Coerce a ``{"owner/name": {…}}`` per-repo override table from TOML/JSON.
+
+    Deliberately re-uses the settings store's normalizer so a value written by
+    hand into ``config.toml`` and one saved from the Intake tab are cleaned
+    the same way — a second, looser parser here is exactly how the two layers
+    would drift.
+    """
+    from backend.config.settings import _repo_overrides
+
+    return _repo_overrides(raw)
 
 
 def _parse_engine(raw: dict, config_path: Path) -> EngineConfig:

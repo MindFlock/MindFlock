@@ -101,7 +101,7 @@ commit or a push. **Push** is plain `git push -u origin <branch>` over whatever
 remote your repo already has (SSH or HTTPS); `gh` is never in that path.
 
 `gh` only makes **Make PR** and **Merge** one click. Without it MindFlock falls
-back to the GitHub REST API using a token (Settings → PR review), and without a
+back to the GitHub REST API using a token (Intake → Pull requests), and without a
 token to a prefilled compare URL it hands your browser. The PR-review poller —
 the one that turns reviewed PRs back into sessions — likewise runs on a token
 when `gh` is absent.
@@ -121,12 +121,12 @@ or credential helper), not `gh`.
 The default coding agent is Claude Code:
 `npm install -g @anthropic-ai/claude-code`
 (docs: <https://docs.anthropic.com/en/docs/claude-code/setup>). Using a
-different CLI? Set its binary path in Settings → Coding CLI, or add a
+different CLI? Set its binary path in Settings → Agent CLI, or add a
 provider TOML ([docs/providers.md](docs/providers.md)).
 
 ### `configured binary … is missing or not executable`
 
-Settings → Coding CLI has a binary-path override pointing at a file that
+Settings → Agent CLI has a binary-path override pointing at a file that
 doesn't exist (or isn't executable). Fix the path there, or clear it to fall
 back to PATH lookup.
 
@@ -198,7 +198,7 @@ GitHub *API*, and MindFlock needs one of two credentials to do it: an
 authenticated `gh`, or a GitHub token. The remedy is the sentence the app itself
 prints, and it is an either/or:
 
-> add a GitHub token in Settings → PR review, or install the GitHub CLI
+> add a GitHub token in Intake → Pull requests, or install the GitHub CLI
 
 With neither, nothing is lost and nothing errors out: **Make PR** hands your
 browser a prefilled compare URL (base…head, PR form already open) and **Merge**
@@ -230,7 +230,7 @@ needs the same credential as above. With `gh` or a token, the chip advances to
 **PR open** within a poll or two. With neither, MindFlock can see that your
 branch is pushed (that is pure git) but cannot see the PR, so the chip stays on
 `pushed` even though the PR is open — the branch and the PR are fine, only the
-badge is blind. Add a token in Settings → PR review to light it up.
+badge is blind. Add a token in Intake → Pull requests to light it up.
 
 Unrelated but commonly confused: a push made **outside** MindFlock can take up
 to ~45 s to move the badge, because the origin-branch SHA is a cached

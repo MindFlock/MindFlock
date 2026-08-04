@@ -102,13 +102,14 @@ export function refreshInstances() {
 }
 
 /* --------------------------------------------------------------------------
- * Settings panels: assigned tickets, open PRs, open issues.
+ * Intake panels: assigned tickets, open PRs, open issues.
  *
  * Each one is an upstream fan-out (GitHub / the ticket sources) that the
  * server caches and serves stale-while-revalidate. Holding them here rather
- * than in per-screen state is what removes the wait: the settings dialog
- * unmounts on close and screens unmount when you switch, so component state
- * meant every visit started from an empty panel and a spinner.
+ * than in per-tab state is what removes the wait: the Intake dialog unmounts on
+ * close and tabs unmount when you switch, so component state meant every visit
+ * started from an empty panel and a spinner. It is also what lets the tab strip
+ * show a count without a second request.
  * ------------------------------------------------------------------------ */
 
 /** Matches the server's own fresh window, so a mount inside it is answered
@@ -128,7 +129,7 @@ export const PANELS = {
 
 export type PanelKey = keyof typeof PANELS;
 
-/** A settings panel's list, cached across dialog opens.
+/** A work panel's list, cached across dialog opens.
  *
  * `placeholderData` keeps the previous rows on screen while the refetch runs,
  * so reopening a screen shows the last list immediately instead of blanking.
@@ -163,9 +164,11 @@ export function usePanelQuery<T extends { stale?: boolean }>(key: PanelKey) {
   return { ...q, refresh };
 }
 
-/** Warm all three panels when the settings dialog opens, so navigating to one
- * finds it loaded. A no-op for panels whose data is still fresh. */
-export function prefetchSettingsPanels() {
+/** Warm all three panels when the Intake dialog opens, so switching to a tab
+ * finds it loaded — and so the tab strip's counts are filled in before you get
+ * there, which is the point of putting them on the strip. A no-op for panels
+ * whose data is still fresh. */
+export function prefetchIntakePanels() {
   for (const key of Object.keys(PANELS) as PanelKey[]) {
     void queryClient.prefetchQuery({
       queryKey: [key],

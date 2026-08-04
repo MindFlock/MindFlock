@@ -13,8 +13,10 @@ and the contracts to preserve.
 
 **Top bar** — on the left: the brand logo, the sidebar toggle (`Ctrl+B` / `⌘B`),
 the theme toggle 🌙 and the notifications 🔔 bell. Then the menu — **New**,
-**Recent ▾** (Recently closed… / Workspaces on disk…), **Prompts**, **Command**,
-**Settings**. The **MindFlock** wordmark (carrying the *running engine's*
+**Intake** (`Alt+I`; see [Intake](#intake)), **Recent ▾** (Recently closed… /
+Workspaces on disk…), **Prompts**, **Command**, **Settings**. **Intake** sits
+beside **New** because both are about starting sessions — one from scratch, one
+from what came in. The **MindFlock** wordmark (carrying the *running engine's*
 version, plus a red `-DEV` badge under a dev shell) sits centered, and the empty
 strip beside it is the drag region that moves the desktop shell's window.
 
@@ -57,9 +59,10 @@ bar (pipeline on/off switch, state dot, Logs pane), the **PR Review** and
 on plain-http origins, "Blocked" when the browser denies permission).
 Below: view-mode buttons (Auto/1/2/4/9), the session count, a **⚙ Customize**
 button (sidebar bars — see below) and **⌨ Shortcuts**. (Recently closed, the
-workspace manager, the command palette and settings live in the top bar's menu,
-not down here.) The workspace manager lists each managed workspace with its size
-and a per-row delete, plus a **Clear** button that bulk-removes every unprotected, idle workspace in one sweep
+workspace manager, the command palette, Intake and settings live in
+the top bar's menu, not down here.) The workspace manager lists each managed
+workspace with its size and a per-row delete, plus a **Clear** button that
+bulk-removes every unprotected, idle workspace in one sweep
 (`POST /api/workspaces/clear`) — protected base clones / cache refreshers and any
 dir a live session is using are left alone.
 
@@ -72,18 +75,23 @@ ticket → session flow is reachable out of the box without being overwhelming;
 popover (`FooterCustomize`) toggles each bar on/off, and bars drag-to-reorder
 (the session list is a fixed anchor bars can sit above or below, but which never
 itself moves). Order and the hidden set persist per browser (`localStorage`).
-Turning a feature's bar on is how you reveal PR review and issue handling once
-you've connected them; the first-run footer hint points only at those still-hidden
-bars.
+Each feature bar's own button deep-links into the matching **Intake** tab
+(Tickets / PRs / Issues), so a bar is a status light plus a switch rather than
+the only door — Intake is in the top bar whether or not its bar is showing.
+Turning a feature's bar on is still how you get an at-a-glance dot for PR review
+and issue handling once you've connected them; the first-run footer hint points
+only at those still-hidden bars.
 
 **Command palette** — `Ctrl+P` or `Ctrl+Shift+P` (`Cmd` on Mac, or the top bar's
 **Command** button) opens a fuzzy-filtered palette over everything: jump to
 ("Focus:") any session, New session, Commit / Push / Create PR / Open in IDE on
-the focused session, Open Settings / Doctor / Setup checklist, Toggle sidebar,
-and New from Recently closed. Type to filter (subsequence match), `↑`/`↓` to
-select, `Enter` to run, `Esc` to close. Both bindings work from anywhere,
-including while a terminal has keyboard focus — the same VSCode trade-off as
-its quick-open/palette keys.
+the focused session, Open Intake (plus **Intake: Tickets** / **Intake: Pull requests**
+/ **Intake: Issues**, so typing "issues" lands on that queue instead of on a
+dialog you then have to navigate), Open Settings / Doctor / Setup checklist,
+Toggle sidebar, and New from Recently closed. Type to filter (subsequence
+match), `↑`/`↓` to select, `Enter` to run, `Esc` to close. Both bindings work
+from anywhere, including while a terminal has keyboard focus — the same VSCode
+trade-off as its quick-open/palette keys.
 
 **Grid** — terminal panes in a draggable grid (grip `⠿` to rearrange; layout is
 persisted). The view mode caps how many panes are visible; the most recently used
@@ -148,9 +156,9 @@ The pane shows a single **guided next-step button**:
 Stages are detected best-effort from git state, so a commit made in Cursor also
 advances the badge within a few seconds. Everything up to and including
 **pushed** is pure git and needs no GitHub credential at all; the `PR open` and
-`merged` stages do (an authenticated `gh`, or a token from Settings → PR
-review), so with neither the chip parks on `pushed` while the buttons keep
-working through the browser. Live agent **activity** overlays the stage chip:
+`merged` stages do (an authenticated `gh`, or a token from Intake → Pull requests
+→ Advanced options), so with neither the chip parks on `pushed` while the buttons
+keep working through the browser. Live agent **activity** overlays the stage chip:
 `running`, `clarify` (the agent is asking you something), `idle`,
 `offline`, `paused` — detected from the CLI's own activity hooks where
 available, with CPU/pane-hash fallback (see [providers.md](providers.md)).
@@ -365,9 +373,10 @@ built-in alias.
 
 | Keys | Action |
 |---|---|
-| `Ctrl+P` / `Ctrl+Shift+P` | Command palette (fuzzy: focus session, rename, send/queue, commit/push/PR/IDE, settings, doctor, shortcuts…) |
+| `Ctrl+P` / `Ctrl+Shift+P` | Command palette (fuzzy: focus session, rename, send/queue, commit/push/PR/IDE, work, settings, doctor, shortcuts…) |
 | `Ctrl+B` | Toggle sidebar |
 | `Ctrl+N` / `Alt+N` | New-session dialog |
+| `Alt+I` | Intake — tickets, PRs and issues waiting to become sessions |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous session |
 | `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar session |
 | `/` | Focus the sidebar session filter (when it's showing) |
@@ -429,7 +438,11 @@ Two coordinated pieces help a new user find their way, backed by UI store state
   assistant) and then walks through the one-time account hookups (coding
   provider, ticket ingestion, PR review, issue handling, linked IDE, mobile).
   Setup slides carry a **Set up now →** button that jumps straight to the
-  matching Settings screen. It **opens automatically on first run** — when
+  matching surface: three of the six — ticket ingestion, PR review, issue
+  handling — open the **Intake** dialog on their tab, the other three a Settings
+  screen (`LEGACY_SCREEN_TABS` decides which from the slide's `screen` key). The
+  tour pauses behind either dialog rather than ending, so closing it lands you
+  back on the same slide. It **opens automatically on first run** — when
   `tourDone` is `false` *and* `hintsEnabled` is `true` — and is replayable any
   time from **Settings → General** (`openTour`). Finishing or skipping sets
   `tourDone`.
@@ -452,6 +465,211 @@ target. The **last base chosen per repo is remembered** (`prBaseByRepo`,
 persisted) and pre-selected next time (falling back to the server-computed
 default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-pr`.
 
+## Intake
+
+**Where your sessions come from.** Ticketing, PR review and issue handling used
+to be three screens in Settings, and they never belonged there: Settings is
+set-and-forget, while these three are somewhere you *visit* — to see what came
+in, start something by hand, or pause a queue. They now have their own top-bar
+entry (**Intake**, `Alt+I`, or the palette's Open Intake), dialog `#intake-dialog` /
+panel `#intake-panel`, built from
+`frontend/src/components/intake/{IntakeDialog,TicketsTab,PullRequestsTab,IssuesTab,RepoSources,kit}.tsx`.
+
+**Tab strip with live counts** — **Tickets**, **Pull requests**, **Issues** (keys
+`tickets` | `prs` | `issues`), a horizontal strip rather than Settings' long left
+nav because the three are peers you flip between while reading. Each badge is the
+number of rows that tab will actually show you — not a total. That distinction is
+the whole of it: counting every ticket the provider ever assigned you read `1221`
+over a list of 52, because done states are parked behind **+ Add bucket…**, so
+the badge and the panel go through one shared bucket filter (`intake/buckets.ts`)
+and cannot disagree. A tab with nothing (or an unconfigured integration, which
+502s) shows no badge at all rather than a `0` that turns into `12` a second
+later. The
+two GitHub tabs are gated on the `git` + `ticketing` caps and explain themselves
+in place when either is missing. The three retired Settings screen keys
+(`ticketing`, `repo`, `issues`) still route — `LEGACY_SCREEN_TABS` in
+`IntakeDialog.tsx` maps them onto tabs, and the Settings dialog hands off to Intake
+when it is deep-linked one — so every old link keeps working, including the
+**Configure** button on a Connections card (the server's `settings_screen`
+values) and the welcome tour's setup slides.
+
+**One anatomy, three tabs** (`components/intake/kit.tsx`): a master switch and its
+one-line status → a list of collapsible **source cards** with **+ Add** → a
+**work list grouped by source**, each row carrying why auto-pickup did or didn't
+take it. They used to be three dialects of that shape; ticketing had the good one
+(add/remove cards, each with its own credentials, repo and agent), so the other
+two were rebuilt onto it — a ticketing source and a watched repo are both just
+*sources* now. What legitimately differs stays in the tabs: only tickets have
+workflow-state buckets inside a source, and only the two GitHub tabs share one
+credential.
+
+- **Tickets** — the master **Automated ingestion** switch (the same
+  `/api/mindflock/status` + `start`/`stop` contract, query key and 4 s interval as
+  the sidebar's Ticket Ingestion bar, so the two never disagree), one card per
+  connected source (provider, optional label, Repo URL, its own **Agent CLI**,
+  ingest-state picker, credentials, **Test connection**, **Remove**), then
+  **Assigned tickets** — the slowest of the three fan-outs (~3 s: a provider
+  search per source plus a `git ls-remote` per repo). A source's **Agent CLI**
+  lists `GET /api/providers` (so a provider you defined yourself is selectable
+  too), its unset option names the app default rather than showing a blank, and
+  the collapsed card always states which CLI the queue runs — the difference
+  between a queue on a hosted CLI and one on a local model is worth seeing
+  without expanding. Unset falls back to `[mindflock].agent`, then the app
+  default (see
+  [ingestion-pipeline.md](ingestion-pipeline.md#which-agent-cli-a-ticket-runs)).
+- **Pull requests** — **Automated review** (absent = on once repos exist), the
+  repository cards, then **Open pull requests** with **Begin review**. This tab
+  also owns the shared GitHub token, under **Advanced options**.
+- **Issues** — **Automated handling** (opt-in: absent = off), its own repository
+  cards (`github.issue_repos`, independent of review's), then **Open issues**
+  with **Start work**. It links to the Pull requests tab for the credential,
+  which authenticates the same account.
+
+**Per-repo cards, with inherited defaults** — the two GitHub tabs no longer show
+a flat `owner/name` chip list. Each watched repository is its own
+collapsible card carrying its **Agent CLI**, **base branch** (PR only — issue
+work always branches off the repo's own default), **min age**, **skip authors**,
+a **Test access** button and **Remove**; the collapsed header always names the
+CLI that repo's sessions will run. The chip list could not express what people
+actually want from a multi-repo setup — "watch this one too, but give it half an
+hour of grace and run it on codex" — because there was nowhere to hang a per-repo
+value. The tab-wide fields moved into an **Advanced options** fold and are now
+the **defaults a blank card field inherits** (the placeholder shows the inherited
+value, so empty reads as "inherit 15" rather than "no grace period"), alongside
+the genuinely one-per-app settings: the poll interval and the GitHub token.
+Storage is `github.repo_settings` / `github.issue_repo_settings` — maps keyed by
+`owner/name` whose block may carry `agent`, `base_branch` (PR only),
+`min_age_minutes`, `skip_authors`; an absent key or blank value inherits.
+Renaming a card carries its settings across, and removing one drops them. See
+`backend/config/settings.py` (`REPO_OVERRIDE_KEYS`, `_repo_overrides`,
+`GithubSettings`) for the shape and `backend/ticket_ingestion/config.py`
+(`GithubConfig.min_age_for` / `base_branch_for` / `skip_authors_for` /
+`agent_for_repo` and the `issue_*` twins, plus `pr_agent(repo)` /
+`issue_agent(repo)`) for how the monitors resolve them — every filter goes
+through one of those rather than reading the flat field.
+
+**Test access** (`POST /api/settings/test/github-repo`, body `{repo}` →
+`{ok, name, private, default_branch, can_push}`, always HTTP 200) is the
+per-repo twin of `/api/settings/test/github`: that one answers "is there a
+credential", this one "does it reach *this* repo", which is the failure people
+actually hit — a typo'd slug, or a private repo the PAT has no scope for (GitHub
+404s both, so the message covers both readings). On the Issues tab a read-only
+token is called out, since issue work has to push a branch.
+
+**Work lists group by source — always, on every tab.** "Which provider is this
+from?" is the question a queue has to answer before any other, and a heading
+answers it once for however many rows sit under it. A per-row label was the
+alternative and it does not scale: the same name repeated down a column of 500.
+
+**Tickets add a third level, because the providers have one.** A source with
+several workflows/boards has to qualify its state names to keep them unique —
+Shortcut returns `Product Development · Deferred`, `DevOps · Unscheduled` — so a
+flat list wrote `PRODUCT DEVELOPMENT ·` onto seven consecutive headings. The
+workflow becomes a level of its own and the qualifier is written once:
+
+```
+▾ Allure Security          52   auto-ingests Product Development · Will do
+   ▾ Product Development   48
+      ▸ Deferred           20  ✕
+      ▸ Unscheduled        13  ✕
+      ▸ Will do             4  ✕
+   ▾ DevOps                 3
+      ▸ Unscheduled         1  ✕
+   ▾ Creative               1
+      ▸ Unstarted           1  ✕
+```
+
+Every heading in that tree is a press-target and is styled as one: a hit area, a
+hover fill, a caret that *rotates* rather than swapping ▸ for ▾, and — on the
+source, which is a section header as well as a control — a filled band. As plain
+text beside a small caret, sitting under a *bordered* source card, the top-level
+heading read as a stray line of copy and people did not find the tickets under it.
+
+`GET /api/tickets` carries a `bucket_meta` map (`{bucket: {group, label}}`) so the
+UI nests without splitting strings: the provider reports the workflow (`group`)
+and the unqualified state (`label`) alongside the composite `name`, which stays
+the unique bucket key that `+ Add bucket…` / ✕ and `done_buckets` are indexed by
+(see `TicketProvider.list_states`). A provider with one workflow — or none, like
+Jira and Linear — reports an empty `group`, the level doesn't render, and the
+bucket keeps its own name. The two GitHub tabs have no analogous middle level:
+their hierarchy is repository → rows.
+
+The
+source heading carries a count and what that source auto-ingests ("auto-ingests
+In Progress, Ready" / "auto-ingests every state" / "could not be reached"), which
+is also why `GET /api/tickets` gained a top-level `source_labels` map covering
+**every** configured source — one that returned nothing, or errored, still needs
+a heading to say so under. Bucket **show/hide** is app-wide by name (choosing
+"I don't care about Completed" means it everywhere; done-type buckets start
+parked behind **+ Add bucket…**), while a bucket's **open/closed** state is per
+source, keyed `source::bucket`. Both live in `localStorage`
+(`mf_ticket_buckets`, `mf_ticket_buckets_open`, `mf_work_ticket_sources`;
+`mf_work_pr_groups` / `mf_work_issue_groups` for the repo groups) rather than
+settings.json — "I collapsed Backlog on this laptop" is not a property of the
+flock. Source groups default open (the rows are why you came), state buckets
+default closed (the headings with their counts are the overview), and both are
+stored as the set of exceptions so a fresh install writes nothing. The panel
+still lists work you are about to move *into* an ingest state, not only what
+already matches the source's filters — Jira, Linear and Shortcut annotate each
+ticket with its workflow state, while GitHub Issues and Asana expose no
+workflow-state model and land in `No state`.
+
+**Every row can be started on a different coding CLI, for that one launch** — a
+small picker beside **Begin work** / **Begin review** / **Start work**, whose
+empty choice names what the row's source or repo card would use ("Configured
+(codex)"), so it is never a mystery. You notice mid-review that this one wants a
+different model; re-configuring the whole queue to run one item is the wrong
+shape of action, so the override is not persisted. All three start routes
+(`POST /api/tickets/start`, `/api/github/prs/review`, `/api/github/issues/start`)
+accept an optional `agent`; it outranks the source/repo card's own agent, and an
+unknown name is a **400** rather than a silent fall back to the default
+(`_start_agent_override` in `server.py` — a typo that quietly ran the wrong CLI
+is worse than a rejected request).
+
+Two related fixes live behind this surface: a ticketing source's **Agent CLI is
+re-read from disk when a ticket is stamped** (`source_agent_now`), so switching
+it in the UI applies to the next ticket rather than the next pipeline restart —
+and *clearing* it now clears it, instead of the boot snapshot's value living on;
+and a **forced** start resolves the per-repo / per-source agent rather than
+jumping straight to the app default.
+
+`GET /api/github/prs` also lists PRs into **every** base branch now and explains
+a non-matching one as a skip reason (`"targets X, not the watched base (Y)"`)
+instead of filtering the row out server-side — a PR sitting there with no chips
+read as "queued" when the monitor would never see it. **Begin review** works on
+those too.
+
+### Panel lists are cached, not refetched per visit
+
+The three list panels — **Assigned tickets**, **Pull requests**' open PRs,
+**Issues**' open issues — each fan out to a slow upstream. They no longer live in
+per-tab React state (which the dialog threw away on close, and a tab switch
+unmounts anyway); they're held in the query client
+(`frontend/src/state/queries.ts`), so reopening the dialog or switching away and
+back shows the last list **immediately** while a refresh runs behind it. The
+panel's note area says `Loading…` on a cold panel and `Refreshing…` over rows
+already on screen. Opening the Intake dialog **prefetches all three**
+(`prefetchIntakePanels()`), so clicking through to one finds it loaded — and it is
+what fills the tab strip's counts, which read the same cached query the tab does
+and therefore can never disagree with the list underneath.
+**Refresh** sends `?fresh=1`, which skips the server's cache and waits for a real
+sweep, so the click means what it says. A force-start row action deliberately
+does *not*: it re-lists from the cache a few seconds later, because `has_session`
+is annotated live on every response — even a cached one — so the cheap re-list
+already shows the session it just created.
+
+Two consequences worth knowing:
+
+- A failed load now **keeps the previous rows** and adds an error banner instead
+  of emptying the panel, and the server keeps serving its last known list for up
+  to 5 minutes through an upstream blip (see [web-api.md](web-api.md)). A
+  per-source failure on the Tickets tab is reported on that source's own heading
+  and in the note line, not by failing the whole panel.
+- Because opening Intake warms all three, it costs up to three ticket/GitHub
+  fan-outs even if you only glance at the counts — and an integration that isn't
+  configured yet will have its `Could not list …` error ready the moment you
+  first open that tab.
+
 ## Settings (⚙)
 
 - **Cursor auto-adopt** — adopt Cursor-opened workspaces as sessions.
@@ -465,33 +683,9 @@ default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-
   raised.
 - **Connections** — one-screen status of every external integration (GitHub,
   ticketing provider, agent CLI, tailscale) with re-test buttons
-  (`GET /api/connections`).
-- **PR review** — the automated-PR-review screen: open PRs on the configured
-  repo(s), each annotated with why auto-review did / didn't take it, plus a
-  force-review action (`/api/github/prs`).
-- **Git issues** (screen key `issues`, gated on the `git` + `ticketing` caps) —
-  the issue-handling twin of PR review: its own opt-in **Automated handling**
-  switch and its own repo list (`github.issue_repos`, independent of PR
-  review's), plus an open-issues panel with skip-reason chips and a **Start
-  work** force-start (`/api/github/issues`, `/api/github/issues/start`). Reveal
-  its sidebar bar via ⚙ Customize.
-- **Ticketing → Assigned tickets** — the tickets your configured sources have
-  assigned to you, grouped into collapsible workflow buckets (which buckets show
-  is yours to pick and is persisted), each annotated with why auto-ingest did /
-  didn't take it, plus a **Begin work** force-start (`/api/tickets`,
-  `/api/tickets/start`). The slowest of the three list panels (~3 s). It lists
-  work you are about to move *into* an ingest state, not only what already
-  matches the source's filters — Jira, Linear and Shortcut annotate each ticket
-  with its workflow state (so Done/Canceled park in their own buckets), while
-  GitHub Issues and Asana expose no workflow-state model and land in `No state`.
-- **Ticketing → source → Agent** — which coding CLI the sessions *this source*
-  starts will run, from `GET /api/providers` (so a provider you defined yourself is
-  selectable too). The unset option names the app default rather than showing a
-  blank, and a non-default choice appears on the collapsed source card — the
-  difference between a queue running on a hosted CLI and on a local model is worth
-  seeing without expanding. Unset falls back to `[mindflock].agent`, then the app
-  default (see
-  [ingestion-pipeline.md](ingestion-pipeline.md#which-agent-cli-a-ticket-runs)).
+  (`GET /api/connections`). A card's **Configure** button opens the screen its
+  `settings_screen` names — for GitHub and ticketing that is now an [Intake](#intake)
+  tab, via the legacy-key hand-off.
 - **Local model** (screen key `localmodel`) — run sessions against a model served
   on this machine: an on/off switch, the server (**Ollama** / **LM Studio** /
   any OpenAI-compatible), its base URL (blank = that runtime's default) and the
@@ -594,30 +788,6 @@ default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-
 Theme (dark/light), sidebar visibility, view mode, pane order/layout, diff mode,
 last-used tab, and prompt presets are persisted in `localStorage` (`cs_*` /
 `mindflock.*` keys).
-
-### Panel lists are cached, not refetched per visit
-
-The three list panels — **Assigned tickets**, **PR review**'s open PRs, **Git
-issues**' open issues — each fan out to a slow upstream. They no longer live in
-per-screen React state (which the dialog threw away on close); they're held in
-the query client (`frontend/src/state/queries.ts`), so reopening the dialog or
-switching away and back shows the last list **immediately** while a refresh runs
-behind it. The panel's note area says `Loading…` on a cold panel and
-`Refreshing…` over rows already on screen. Opening Settings also **prefetches
-all three** in the background, so clicking through to one finds it loaded.
-**Refresh** — and each force-start / force-review row action — sends
-`?fresh=1`, which skips the server's cache and waits for a real sweep, so the
-click means what it says.
-
-Two consequences worth knowing:
-
-- A failed load now **keeps the previous rows** and adds an error banner instead
-  of emptying the panel, and the server keeps serving its last known list for up
-  to 5 minutes through an upstream blip (see [web-api.md](web-api.md)).
-- Because opening Settings warms all three, it costs up to three ticket/GitHub
-  fan-outs even if you only read **General** — and an integration that isn't
-  configured yet will have its `Could not list …` error ready the moment you
-  first open that screen.
 
 ## Token / cost usage
 

@@ -21591,7 +21591,7 @@ function usePanelQuery(key) {
   }).catch(() => void 0);
   return { ...q, refresh };
 }
-function prefetchSettingsPanels() {
+function prefetchIntakePanels() {
   for (const key of Object.keys(PANELS)) {
     void queryClient.prefetchQuery({
       queryKey: [key],
@@ -22781,7 +22781,7 @@ function requireGit() {
   toast("git is not installed — install git to use diffs, commits and PRs");
   return false;
 }
-const PR_REMEDY = "add a GitHub token in Settings → PR review, or install the GitHub CLI";
+const PR_REMEDY = "add a GitHub token in Intake → Pull requests, or install the GitHub CLI";
 const PR_FALLBACK_HINT = "MindFlock can’t open or merge the PR for you yet — " + PR_REMEDY + ".\nThis still works: it opens GitHub’s prefilled page in your browser instead.";
 function hasPrSupport(c) {
   return (c ?? caps()).github !== false;
@@ -23225,7 +23225,10 @@ const MODAL_DIALOG_NAMES = [
   "recent",
   "commit",
   "rename",
-  "device"
+  "device",
+  // The Intake reads like a page, not a popover, and its per-card Remove buttons make
+  // a stray Delete genuinely dangerous behind it.
+  "intake"
 ];
 const MODAL_DOM_IDS = [
   "new-dialog",
@@ -23233,7 +23236,8 @@ const MODAL_DOM_IDS = [
   "recent-dialog",
   "commit-dialog",
   "rename-dialog",
-  "device-dialog"
+  "device-dialog",
+  "intake-dialog"
 ];
 function modalOpen() {
   const open = useUi.getState().openDialog;
@@ -23393,6 +23397,20 @@ const KEYMAP = [
   },
   // browser-safe alias
   { key: "n", alt: true, aliasOf: "new", run: () => useUi.getState().openDialogFor("new-session") },
+  {
+    // Alt rather than Ctrl: Ctrl+I *is* Tab at the terminal, and every other
+    // free Ctrl+letter either belongs to the shell or to the browser. Alt+I is
+    // free and spells the thing.
+    key: "i",
+    alt: true,
+    id: "intake",
+    help: ["Navigation", "Alt+I", "Intake — tickets, PRs and issues"],
+    // Guarded unlike Alt+N: on macOS Option+I types a dead-key accent, and a
+    // surface you open a few times an hour is not worth eating a keystroke
+    // someone meant for a text field or a terminal.
+    when: () => !isEditingTarget(document.activeElement),
+    run: () => useUi.getState().openDialogFor("intake")
+  },
   {
     key: "Tab",
     mod: "ctrl",
@@ -24182,6 +24200,18 @@ function TopBar() {
             title: "New session (Ctrl+N)",
             onClick: () => ui.openDialogFor("new-session"),
             children: "New"
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            id: "intake-btn",
+            className: "tb-item",
+            type: "button",
+            title: "Intake — tickets, pull requests and issues waiting to become sessions (Alt+I)",
+            "aria-label": "Open work",
+            onClick: () => ui.openDialogFor("intake"),
+            children: "Intake"
           }
         ),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tb-drop" + (recentOpen ? " open" : ""), id: "recent-menu", ref: dropRef, children: [
@@ -25601,7 +25631,7 @@ function AutomationBar() {
           {
             id: "mindflock-dot",
             className: (
-              // `active` outranks the switch: a ticket forced from Settings is
+              // `active` outranks the switch: a ticket forced from Intake is
               // genuinely being brought in even with auto ingestion switched off,
               // and "off" would be a lie about the work in flight.
               "dc-dot " + (netIssue ? "error" : active ? "on" : !desired ? "off" : "idle")
@@ -25616,8 +25646,8 @@ function AutomationBar() {
             {
               id: "mindflock-tickets-btn",
               className: "dc-toggle",
-              title: "Ticketing sources and ingestion options (Settings → Ticketing)",
-              onClick: () => openDialogFor("settings", "ticketing"),
+              title: "Ticketing sources and assigned tickets (Intake → Tickets)",
+              onClick: () => openDialogFor("intake", "tickets"),
               children: "Tickets"
             }
           ),
@@ -25722,8 +25752,8 @@ function GitIssueBar() {
             {
               id: "git-issue-repos-btn",
               className: "dc-toggle",
-              title: "Repositories, open issues and options (Settings → Git issues)",
-              onClick: () => openDialogFor("settings", "issues"),
+              title: "Repositories, open issues and options (Intake → Issues)",
+              onClick: () => openDialogFor("intake", "issues"),
               children: "Issues"
             }
           ),
@@ -25783,8 +25813,8 @@ function PrReviewBar() {
             {
               id: "pr-review-prs-btn",
               className: "dc-toggle",
-              title: "Repositories, open PRs and review options (Settings → PR review)",
-              onClick: () => openDialogFor("settings", "repo"),
+              title: "Repositories, open PRs and review options (Intake → Pull requests)",
+              onClick: () => openDialogFor("intake", "prs"),
               children: "PRs"
             }
           ),
@@ -28155,6 +28185,10 @@ function CommandPalette({ host }) {
         });
     }
     acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host.toggleShortcuts() });
+    acts.push({ label: "Open Intake", hint: "Alt+I", run: () => ui.openDialogFor("intake") });
+    acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
+    acts.push({ label: "Intake: Pull requests", run: () => ui.openDialogFor("intake", "prs") });
+    acts.push({ label: "Intake: Issues", run: () => ui.openDialogFor("intake", "issues") });
     acts.push({ label: "Open Settings", run: () => ui.openDialogFor("settings") });
     acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
     acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });
@@ -29244,6 +29278,1892 @@ function SettingField(props) {
       }
     }
   );
+}
+const NO_STATE_BUCKET = "No state";
+const BUCKETS_LS_KEY = "mf_ticket_buckets";
+function loadShownBuckets() {
+  try {
+    const raw = localStorage.getItem(BUCKETS_LS_KEY);
+    if (raw === null) return null;
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.map(String) : null;
+  } catch {
+    return null;
+  }
+}
+function saveShownBuckets(v) {
+  try {
+    if (v === null) localStorage.removeItem(BUCKETS_LS_KEY);
+    else localStorage.setItem(BUCKETS_LS_KEY, JSON.stringify(v));
+  } catch {
+  }
+}
+function visibleBuckets(buckets, doneBuckets, shown) {
+  return shown === null ? buckets.filter((b) => !doneBuckets.includes(b)) : buckets.filter((b) => shown.includes(b));
+}
+function countInBuckets(tickets, visible) {
+  const set = new Set(visible);
+  return tickets.filter((t) => set.has(t.bucket || NO_STATE_BUCKET)).length;
+}
+function ageText(iso) {
+  const t = Date.parse(iso || "");
+  if (!isFinite(t)) return "";
+  const mins = Math.max(0, Math.round((Date.now() - t) / 6e4));
+  if (mins < 60) return mins + "m old";
+  const h = Math.round(mins / 60);
+  if (h < 48) return h + "h old";
+  return Math.round(h / 24) + "d old";
+}
+function panelNote(opts) {
+  if (opts.error || opts.detail) return opts.detail || "";
+  if (!opts.fetching) return "";
+  return opts.loaded ? "Refreshing…" : "Loading…";
+}
+function AutomationSwitch({
+  label,
+  title,
+  rowId,
+  inputId,
+  statusId,
+  checked,
+  onChange,
+  status,
+  tone
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row set-switch-row", id: rowId, title, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: label }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            type: "checkbox",
+            id: inputId,
+            checked,
+            onChange: (e) => onChange(e.target.checked)
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: statusId, className: "pr-status" + (tone ? " " + tone : ""), children: status })
+  ] });
+}
+function SourceCard({
+  sourceId,
+  summary,
+  collapsed,
+  onToggle,
+  children,
+  footer
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tk-source" + (collapsed ? " tk-collapsed" : ""), "data-source-id": sourceId, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("button", { type: "button", className: "tk-head", "aria-expanded": !collapsed, onClick: onToggle, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tk-caret", children: collapsed ? "▸" : "▾" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tk-summary", children: summary })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tk-body", children: [
+      children,
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "set-row", children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "test-row", children: footer }) })
+    ] })
+  ] });
+}
+function TestButton({
+  label = "Test connection",
+  onTest
+}) {
+  const [state, setState] = reactExports.useState({
+    testing: false
+  });
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "button",
+      {
+        type: "button",
+        className: "test-btn",
+        onClick: async () => {
+          setState({ testing: true });
+          try {
+            setState({ testing: false, ok: true, msg: await onTest() });
+          } catch (err) {
+            setState({ testing: false, ok: false, msg: err.message || "failed" });
+          }
+        },
+        children: label
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "test-result" + (state.msg ? state.ok ? " ok" : " bad" : ""), children: state.testing ? "testing…" : state.msg ? (state.ok ? "✓ " : "✗ ") + state.msg : "" })
+  ] });
+}
+function WorkGroup({
+  name,
+  count,
+  detail,
+  open,
+  onToggle,
+  onHide,
+  hideTitle,
+  indent,
+  heading,
+  middle,
+  children
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      className: "tk-bucket" + (indent ? " ik-nested" : "") + (heading ? " ik-source-group" : "") + (middle ? " ik-workflow-group" : ""),
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tk-bucket-head", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "button",
+            {
+              type: "button",
+              className: "tk-bucket-toggle",
+              "aria-expanded": open,
+              title: (open ? "Collapse" : "Expand") + " " + name,
+              onClick: onToggle,
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tk-caret", children: "▸" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tk-bucket-name", children: name }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tk-bucket-count", children: count }),
+                detail ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ik-group-detail", children: detail }) : null
+              ]
+            }
+          ),
+          onHide && /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              type: "button",
+              className: "tk-bucket-x",
+              title: hideTitle || "Hide " + name,
+              "aria-label": "Hide " + name,
+              onClick: onHide,
+              children: "✕"
+            }
+          )
+        ] }),
+        open && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "ik-group-body", children })
+      ]
+    }
+  );
+}
+function WorkListPanel({
+  label,
+  onRefresh,
+  note,
+  hint,
+  children,
+  rowId,
+  refreshId,
+  noteId,
+  listId,
+  toolbarExtra
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", id: rowId, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: label }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-toolbar", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: refreshId, className: "test-btn", onClick: onRefresh, children: "Refresh" }),
+      toolbarExtra,
+      note ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: noteId, className: "pr-open-note", children: note }) : null
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: listId, className: "ik-groups", children }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: hint })
+  ] });
+}
+function WorkItemRow({
+  reference,
+  url,
+  title,
+  meta,
+  tooltip,
+  hasSession,
+  eligible,
+  eligibleLabel,
+  reasons,
+  actionLabel,
+  onStart,
+  failPrefix,
+  linkTitle,
+  agents,
+  configuredAgent
+}) {
+  const [state, setState] = reactExports.useState("idle");
+  const [agent, setAgent] = reactExports.useState("");
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-item", title: tooltip, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-main", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "a",
+        {
+          href: url || "#",
+          target: "_blank",
+          rel: "noopener noreferrer",
+          className: "pr-open-ref",
+          title: linkTitle || "Open " + reference + " on GitHub",
+          children: reference
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-title", children: title || "" })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-meta", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: meta }),
+      hasSession ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip on", children: "session open" }) : eligible ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip ok", children: eligibleLabel }) : (reasons || []).map((reason) => (
+        // title: a recorded failure reason is a full sentence of git output
+        // whose actionable half is at the end, so the chip wraps to keep it
+        // visible (see .pr-open-chip) and hovering still gives the raw
+        // string on one line.
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip", title: reason, children: reason }, reason)
+      ))
+    ] }),
+    hasSession ? /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "btn-primary pr-review-btn", disabled: true, children: "Session open" }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ik-item-start", children: [
+      agents && agents.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "select",
+        {
+          className: "ik-item-agent",
+          value: agent,
+          "data-picked": agent || void 0,
+          disabled: state !== "idle",
+          title: "Coding CLI to run this one on — just this start, not the whole queue" + (configuredAgent ? " (configured: " + configuredAgent + ")" : ""),
+          "aria-label": "Coding CLI for " + reference,
+          onChange: (e) => setAgent(e.target.value),
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: configuredAgent ? "Configured (" + configuredAgent + ")" : "Configured" }),
+            agents.map((n) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: n, children: n }, n))
+          ]
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          className: "btn-primary pr-review-btn",
+          disabled: state !== "idle",
+          onClick: async () => {
+            setState("starting");
+            try {
+              const created = await onStart(agent);
+              toast(created + " — provisioning, see the sidebar");
+              setState("started");
+            } catch (err) {
+              toast(failPrefix + ": " + (err.message || "error"));
+              setState("idle");
+            }
+          },
+          children: state === "starting" ? "Starting…" : state === "started" ? "Started" : actionLabel
+        }
+      )
+    ] })
+  ] });
+}
+function loadStringSet(key, keep) {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || "[]");
+    const all = Array.isArray(v) ? v.map(String) : [];
+    return new Set(keep ? all.filter(keep) : all);
+  } catch {
+    return /* @__PURE__ */ new Set();
+  }
+}
+function saveStringSet(key, v) {
+  try {
+    localStorage.setItem(key, JSON.stringify([...v]));
+  } catch {
+  }
+}
+function useToggleSet(key, invert = false, keep) {
+  const [set, setSet] = reactExports.useState(() => loadStringSet(key, keep));
+  return {
+    isOpen: (k) => invert ? !set.has(k) : set.has(k),
+    toggle: (k) => setSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      saveStringSet(key, next);
+      return next;
+    })
+  };
+}
+function IngestionToggle({ sourceCount }) {
+  const [busy, setBusy] = reactExports.useState(false);
+  const [optimistic, setOptimistic] = reactExports.useState(null);
+  const { data: status, refetch } = useQuery({
+    queryKey: ["mindflock-status"],
+    queryFn: () => api("/api/mindflock/status"),
+    // Matches the sidebar bars' interval exactly: a shared query key with two
+    // different intervals makes which component mounted first decide the poll
+    // rate, which is the kind of bug that only shows up as "the light feels
+    // laggy sometimes".
+    refetchInterval: 4e3,
+    retry: false
+  });
+  if (!status || !status.available) return null;
+  const running = !!status.running;
+  const desired = optimistic ?? (status.desired ?? running);
+  const toggle = async (start) => {
+    if (busy) return;
+    setBusy(true);
+    setOptimistic(start);
+    try {
+      await api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
+      toast(start ? "Ticket ingestion on" : "Ticket ingestion paused");
+    } catch (err) {
+      toast(`Ticket ingestion ${start ? "start" : "stop"} failed: ` + (err.message || ""));
+    } finally {
+      setBusy(false);
+      setOptimistic(null);
+      refetch();
+    }
+  };
+  const n = sourceCount;
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    AutomationSwitch,
+    {
+      label: "Automated ingestion",
+      title: "Run or stop ticket ingestion — polls your connected sources and auto-creates a coding session for each assigned ticket. Stays in this state across restarts.",
+      rowId: "tk-ingestion-toggle-row",
+      inputId: "tk-ingestion-enabled",
+      statusId: "tk-ingestion-status",
+      checked: desired,
+      onChange: (next) => {
+        if (!busy) toggle(next);
+      },
+      tone: n > 0 && desired ? "on" : n > 0 ? "paused" : "",
+      status: !n ? "○ Add a ticketing source below to start turning tickets into sessions" : desired ? `● Active — polling ${n} ${n === 1 ? "source" : "sources"} for tickets assigned to you` : `‖ Paused — ${n} ${n === 1 ? "source" : "sources"} kept; turn Automated ingestion on to resume`
+    }
+  );
+}
+function TicketsTab(_) {
+  const [catalog, setCatalog] = reactExports.useState([]);
+  const [sources, setSources] = reactExports.useState(null);
+  const [collapsed, setCollapsed] = reactExports.useState(/* @__PURE__ */ new Set());
+  const [agents, setAgents] = reactExports.useState({ names: [], fallback: "" });
+  const seq = reactExports.useRef(0);
+  reactExports.useEffect(() => {
+    (async () => {
+      try {
+        const c = await api("/api/settings/providers/ticketing");
+        setCatalog((c == null ? void 0 : c.providers) || []);
+        const r = await api("/api/settings/ticketing/sources");
+        const list = (r == null ? void 0 : r.sources) || [];
+        setSources(list);
+        setCollapsed(new Set(list.map((s) => s.id)));
+      } catch {
+        setSources([]);
+      }
+      try {
+        const p = await api(
+          "/api/providers"
+        );
+        setAgents({
+          names: ((p == null ? void 0 : p.providers) || []).map((x) => x.name).filter(Boolean),
+          fallback: (p == null ? void 0 : p.default) || ""
+        });
+      } catch {
+      }
+    })();
+  }, []);
+  const persist = reactExports.useCallback(
+    async (list) => {
+      const mySeq = ++seq.current;
+      const missingRepo = list.filter((s) => !(s.repo_url || "").trim()).length;
+      try {
+        await api("/api/settings/ticketing/sources", { method: "PUT", json: { sources: list } });
+        if (mySeq !== seq.current) return;
+        toast(
+          missingRepo ? `Saved — but ${missingRepo} source(s) need a Repo URL to ingest` : "Saved ticketing sources"
+        );
+        refreshConfig();
+      } catch (err) {
+        toast("Save failed: " + (err.message || "ticketing"));
+      }
+    },
+    []
+  );
+  if (sources === null) return /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Loading…" });
+  const uniqueId = (base) => {
+    const taken = new Set(sources.map((s) => s.id));
+    let cand = base, n = 1;
+    while (taken.has(cand)) {
+      n += 1;
+      cand = `${base}-${n}`;
+    }
+    return cand;
+  };
+  const update = (id, patch) => {
+    setSources((prev) => {
+      const next = (prev || []).map((s) => s.id === id ? { ...s, ...patch } : s);
+      persist(next);
+      return next;
+    });
+  };
+  const remove = (id) => {
+    setSources((prev) => {
+      const next = (prev || []).filter((s) => s.id !== id);
+      persist(next);
+      return next;
+    });
+  };
+  const add = () => {
+    var _a2;
+    const provider = ((_a2 = catalog[0]) == null ? void 0 : _a2.id) || "shortcut";
+    const id = uniqueId(provider);
+    setSources((prev) => [...prev || [], { id, provider }]);
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint set-block-hint", children: [
+      "Every ticket assigned to you becomes a coding session. Add as many sources as you like — two of the same provider is fine; each keeps its own credentials, repo and agent. Credentials are stored in ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "~/.mindflock/settings.json" }),
+      ", never committed."
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(IngestionToggle, { sourceCount: (sources || []).length }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Sources" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "ticketing-sources", className: "ik-cards", children: sources.map((src) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+        TicketSourceCard,
+        {
+          source: src,
+          catalog,
+          agents,
+          collapsed: collapsed.has(src.id),
+          onToggle: () => setCollapsed((prev) => {
+            const next = new Set(prev);
+            if (next.has(src.id)) next.delete(src.id);
+            else next.add(src.id);
+            return next;
+          }),
+          onChange: (patch) => update(src.id, patch),
+          onRemove: () => remove(src.id)
+        },
+        src.id
+      )) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "set-row", children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "ticketing-add", className: "btn-primary", onClick: add, children: "+ Add source" }) })
+    ] }),
+    sources.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      AssignedTickets,
+      {
+        agents: agents.names,
+        sourceAgents: Object.fromEntries(
+          sources.map((s) => [s.id, s.agent || agents.fallback || ""])
+        ),
+        defaultAgent: agents.fallback
+      }
+    )
+  ] });
+}
+function StatePicker({
+  field,
+  source,
+  states,
+  loadStates,
+  onChange
+}) {
+  const selected = (source[field.key] || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const nameOf = (id) => {
+    const st = states.find((s) => String(s.id) === id);
+    return (st == null ? void 0 : st.name) || id;
+  };
+  const remaining = states.filter((s) => !selected.includes(String(s.id)));
+  const commit = (list) => onChange({ [field.key]: list.join(",") });
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: field.label }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-list", children: !selected.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Any state — every ticket assigned to you is auto-ingested." }) : selected.map((id) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "repo-chip", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "repo-chip-name", children: nameOf(id) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          className: "repo-chip-x",
+          title: "Stop auto-ingesting " + nameOf(id),
+          "aria-label": "Remove ingest state " + nameOf(id),
+          onClick: () => commit(selected.filter((x) => x !== id)),
+          children: "✕"
+        }
+      )
+    ] }, id)) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "select",
+      {
+        className: "tk-state",
+        "data-tk-field": field.key,
+        value: "",
+        onFocus: () => {
+          if (!states.length) loadStates();
+        },
+        onChange: (e) => {
+          if (e.target.value) commit([...selected, e.target.value]);
+        },
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "+ Add state…" }),
+          remaining.map((st) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: String(st.id), children: st.name || String(st.id) }, String(st.id)))
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Tickets in any of these states are auto-ingested; empty = every state. Everything else starts manually from the Assigned tickets panel below." })
+  ] });
+}
+function listNames(names) {
+  if (names.length <= 2) return names.join(" and ");
+  if (names.length === 3) return names[0] + ", " + names[1] + " and " + names[2];
+  return names.slice(0, 2).join(", ") + " and " + (names.length - 2) + " more";
+}
+const BUCKETS_OPEN_LS_KEY = "mf_ticket_buckets_open";
+const SOURCES_CLOSED_LS_KEY = "mf_intake_ticket_sources";
+const WORKFLOWS_CLOSED_LS_KEY = "mf_intake_ticket_workflows";
+function AssignedTickets({
+  agents,
+  sourceAgents,
+  defaultAgent
+}) {
+  var _a2, _b2, _c2, _d2, _e2, _f2, _g2, _h2;
+  const ticketsQuery = usePanelQuery("tickets");
+  const load2 = ticketsQuery.refresh;
+  const relistTickets = ticketsQuery.refetch;
+  const tickets = ticketsQuery.data ? ticketsQuery.data.tickets || [] : null;
+  const buckets = ((_a2 = ticketsQuery.data) == null ? void 0 : _a2.buckets) || [];
+  const doneBuckets = ((_b2 = ticketsQuery.data) == null ? void 0 : _b2.done_buckets) || [];
+  const ingestStates = ((_c2 = ticketsQuery.data) == null ? void 0 : _c2.ingest_states) || {};
+  const sourceLabels = ((_d2 = ticketsQuery.data) == null ? void 0 : _d2.source_labels) || {};
+  const bucketMeta = ((_e2 = ticketsQuery.data) == null ? void 0 : _e2.bucket_meta) || {};
+  const groupOf = (b) => {
+    var _a3;
+    return ((_a3 = bucketMeta[b]) == null ? void 0 : _a3.group) || "";
+  };
+  const labelOf = (b) => {
+    var _a3;
+    return ((_a3 = bucketMeta[b]) == null ? void 0 : _a3.label) || b;
+  };
+  const listedSources = ((_f2 = ticketsQuery.data) == null ? void 0 : _f2.sources) || [];
+  const sourceErrors = new Map(
+    (((_g2 = ticketsQuery.data) == null ? void 0 : _g2.errors) || []).map((e) => [e.source, e.error])
+  );
+  const error = ticketsQuery.error ? "Could not list tickets: " + (ticketsQuery.error.message || "error") : "";
+  const note = panelNote({
+    error,
+    fetching: ticketsQuery.isFetching,
+    loaded: !!tickets,
+    // Per-source failures outrank the progress note: a source that can't be
+    // reached is the thing worth reading, and it stays true after the sweep.
+    detail: [...sourceErrors].map(([s, e]) => (sourceLabels[s] || s) + ": " + e).join(" · ")
+  });
+  const [shown, setShown] = reactExports.useState(loadShownBuckets);
+  const openBuckets = useToggleSet(BUCKETS_OPEN_LS_KEY, false, (v) => v.includes("::"));
+  const openSources = useToggleSet(SOURCES_CLOSED_LS_KEY, true);
+  const openWorkflows = useToggleSet(WORKFLOWS_CLOSED_LS_KEY, true);
+  const visible = visibleBuckets(buckets, doneBuckets, shown);
+  const hidden = buckets.filter((b) => !visible.includes(b));
+  const bySource = /* @__PURE__ */ new Map();
+  const countAll = /* @__PURE__ */ new Map();
+  for (const t of tickets || []) {
+    const src = t.source || "unknown";
+    const b = t.bucket || NO_STATE_BUCKET;
+    if (!bySource.has(src)) bySource.set(src, /* @__PURE__ */ new Map());
+    const inner = bySource.get(src);
+    if (!inner.has(b)) inner.set(b, []);
+    inner.get(b).push(t);
+    countAll.set(b, (countAll.get(b) || 0) + 1);
+  }
+  const sourceOrder = [
+    ...listedSources,
+    ...[...sourceErrors.keys()].filter((s) => !listedSources.includes(s)),
+    ...[...bySource.keys()].filter(
+      (s) => !listedSources.includes(s) && !sourceErrors.has(s)
+    )
+  ];
+  const hideBucket = (b) => {
+    const next = (shown ?? visible).filter((x) => x !== b);
+    setShown(next);
+    saveShownBuckets(next);
+  };
+  const addBucket = (b) => {
+    if (!b) return;
+    const next = [...shown ?? visible, b];
+    setShown(next);
+    saveShownBuckets(next);
+  };
+  const parkedDone = doneBuckets.filter((b) => !visible.includes(b)).map((b) => labelOf(b));
+  const ingestSummary = sourceOrder.length > 1 ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    "Each source heading says which states ",
+    /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "it" }),
+    " auto-ingests; everything else is started by hand, with ",
+    /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Begin work" }),
+    "."
+  ] }) : ((_h2 = ingestStates[sourceOrder[0]]) == null ? void 0 : _h2.length) ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    "Auto ingestion only watches",
+    " ",
+    /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: listNames(ingestStates[sourceOrder[0]]) }),
+    " — tickets in any other state are only started by hand, with ",
+    /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Begin work" }),
+    "."
+  ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    "No ingest-state filter is set, so auto ingestion watches every state — set one on the source card above to narrow it. ",
+    /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Begin work" }),
+    " starts any ticket by hand."
+  ] });
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    WorkListPanel,
+    {
+      label: "Assigned tickets",
+      onRefresh: load2,
+      note,
+      rowId: "tk-assigned-row",
+      refreshId: "tk-tickets-refresh",
+      noteId: "tk-tickets-note",
+      listId: "tk-tickets-list",
+      toolbarExtra: /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "select",
+        {
+          id: "tk-bucket-add",
+          className: "tk-bucket-add",
+          value: "",
+          disabled: !hidden.length,
+          title: "Show another workflow state in this panel",
+          onChange: (e) => addBucket(e.target.value),
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: hidden.length ? "+ Add bucket…" : "All buckets shown" }),
+            hidden.map((b) => /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: b, children: [
+              b,
+              " (",
+              countAll.get(b) || 0,
+              ")"
+            ] }, b))
+          ]
+        }
+      ),
+      hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+        "Your tickets, grouped by source and then by workflow state. Click a heading to expand or collapse it; use ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "+ Add bucket…" }),
+        " / ✕ to choose which states appear at all.",
+        " ",
+        parkedDone.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          parkedDone.length === 1 ? "The done state " : "Done states ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: listNames(parkedDone) }),
+          " ",
+          parkedDone.length === 1 ? "starts" : "start",
+          " hidden, so this shows fewer than your all-time total.",
+          " "
+        ] }) : null,
+        ingestSummary
+      ] }),
+      children: error ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: error }) : tickets === null ? null : !visible.length && buckets.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "All buckets are hidden — pick one from the “+ Add bucket…” menu above." }) : !sourceOrder.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No tickets are assigned to you on the connected sources." }) : sourceOrder.map((src) => {
+        const inner = bySource.get(src) || /* @__PURE__ */ new Map();
+        const shownBuckets = visible.filter((b) => (inner.get(b) || []).length);
+        const total = shownBuckets.reduce((n, b) => n + (inner.get(b) || []).length, 0);
+        const srcError = sourceErrors.get(src);
+        const label = sourceLabels[src] || src;
+        const states = ingestStates[src];
+        const workflows = [];
+        for (const b of shownBuckets) {
+          const g = groupOf(b);
+          if (!workflows.includes(g)) workflows.push(g);
+        }
+        const nestWorkflows = workflows.filter(Boolean).length > 1;
+        const bucketsOf = (wf) => shownBuckets.filter((b) => wf === null || groupOf(b) === wf).map((b) => {
+          const rows = inner.get(b) || [];
+          const key = src + "::" + b;
+          return /* @__PURE__ */ jsxRuntimeExports.jsx(
+            WorkGroup,
+            {
+              indent: true,
+              name: wf === null ? b : labelOf(b),
+              count: rows.length,
+              open: openBuckets.isOpen(key),
+              onToggle: () => openBuckets.toggle(key),
+              onHide: () => hideBucket(b),
+              hideTitle: "Hide the " + b + " bucket everywhere (re-add it from the dropdown)",
+              children: rows.map((t) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+                AssignedTicketRow,
+                {
+                  t,
+                  agents,
+                  configuredAgent: sourceAgents[t.source] || defaultAgent,
+                  onStarted: relistTickets
+                },
+                t.source + ":" + t.id
+              ))
+            },
+            key
+          );
+        });
+        const buckets2 = srcError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: srcError }) : !inner.size ? (
+          // Nothing at all, vs. nothing in the buckets you chose to show —
+          // two different situations, and only one of them is your filter.
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No tickets are assigned to you on this source." })
+        ) : !shownBuckets.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No tickets from this source in the buckets you're showing." }) : !nestWorkflows ? bucketsOf(null) : workflows.map((wf) => {
+          const rows = shownBuckets.filter((b) => groupOf(b) === wf);
+          const n = rows.reduce((acc, b) => acc + (inner.get(b) || []).length, 0);
+          const key = src + "::wf::" + wf;
+          return /* @__PURE__ */ jsxRuntimeExports.jsx(
+            WorkGroup,
+            {
+              indent: true,
+              middle: true,
+              name: wf || "Other states",
+              count: n,
+              open: openWorkflows.isOpen(key),
+              onToggle: () => openWorkflows.toggle(key),
+              children: bucketsOf(wf)
+            },
+            key
+          );
+        });
+        return /* @__PURE__ */ jsxRuntimeExports.jsx(
+          WorkGroup,
+          {
+            heading: true,
+            name: label,
+            count: total,
+            detail: srcError ? "could not be reached" : states ? "auto-ingests " + states.join(", ") : "auto-ingests every state",
+            open: openSources.isOpen(src),
+            onToggle: () => openSources.toggle(src),
+            children: buckets2
+          },
+          src
+        );
+      })
+    }
+  );
+}
+function AssignedTicketRow({
+  t,
+  agents,
+  configuredAgent,
+  onStarted
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    WorkItemRow,
+    {
+      agents,
+      configuredAgent,
+      reference: t.slug,
+      url: t.url,
+      title: t.name,
+      linkTitle: "Open " + t.slug + " in " + (t.source_label || t.source),
+      tooltip: t.slug + " — " + (t.name || "") + "\nfrom " + (t.source_label || t.source),
+      meta: ageText(t.created_at),
+      hasSession: t.has_session,
+      eligible: t.eligible,
+      eligibleLabel: "queued for auto ingestion",
+      reasons: t.reasons,
+      actionLabel: "Begin work",
+      failPrefix: "Begin work failed",
+      onStart: async (agent) => {
+        const r = await api("/api/tickets/start", {
+          json: { source: t.source, id: t.id, ...agent ? { agent } : {} }
+        });
+        refreshInstances();
+        setTimeout(onStarted, 5e3);
+        return "Session " + ((r == null ? void 0 : r.title) || t.slug);
+      }
+    }
+  );
+}
+function TicketSourceCard({
+  source,
+  catalog,
+  agents,
+  collapsed,
+  onToggle,
+  onChange,
+  onRemove
+}) {
+  const meta = catalog.find((p) => p.id === source.provider) || null;
+  const [states, setStates] = reactExports.useState([]);
+  const provName = (meta == null ? void 0 : meta.label) || source.provider;
+  const detail = (source.label || source.member_id || source.repo_url || "").trim();
+  const base = detail ? provName + " — " + detail : provName;
+  const summary = base + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
+  const repoMissing = !(source.repo_url || "").trim();
+  const testPayload = () => {
+    const payload = { id: source.id, provider: source.provider };
+    for (const f of (meta == null ? void 0 : meta.fields) || []) {
+      const v = source[f.key];
+      if (f.secret && !v) continue;
+      if (v != null) payload[f.key] = v;
+    }
+    if (source.repo_url) payload.repo_url = source.repo_url;
+    return payload;
+  };
+  const loadStates = async () => {
+    try {
+      const r = await api(
+        "/api/settings/ticketing/states",
+        { json: testPayload() }
+      );
+      if ((r == null ? void 0 : r.ok) && Array.isArray(r.states) && r.states.length) setStates(r.states);
+    } catch {
+    }
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    SourceCard,
+    {
+      sourceId: source.id,
+      summary,
+      collapsed,
+      onToggle,
+      footer: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          TestButton,
+          {
+            onTest: async () => {
+              const r = await api("/api/settings/test/ticketing", {
+                json: testPayload()
+              });
+              if (!(r == null ? void 0 : r.ok)) throw new Error(String((r == null ? void 0 : r.error) || "test failed"));
+              if (r.member_id && source.member_id !== r.member_id)
+                onChange({ member_id: String(r.member_id) });
+              loadStates();
+              return "Connected" + (r.name ? " — " + r.name : "");
+            }
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "test-btn tk-remove", onClick: onRemove, children: "Remove" })
+      ] }),
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Provider" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "select",
+            {
+              className: "tk-provider",
+              value: source.provider,
+              onChange: (e) => onChange({ provider: e.target.value }),
+              children: catalog.map((p) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: p.id, children: p.label }, p.id))
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint tk-blurb", children: (meta == null ? void 0 : meta.blurb) || "" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Label (optional)" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              type: "text",
+              className: "tk-label",
+              placeholder: "e.g. Jira – EU",
+              defaultValue: source.label || "",
+              onBlur: (e) => {
+                if (e.target.value !== (source.label || "")) onChange({ label: e.target.value });
+              }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Names this source's group in the Assigned tickets panel — worth setting when you have two of the same provider." })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Repo URL" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              type: "text",
+              autoComplete: "off",
+              required: true,
+              "data-tk-field": "repo_url",
+              className: repoMissing ? "field-missing" : "",
+              placeholder: "git@github.com:org/repo.git",
+              defaultValue: source.repo_url || "",
+              onBlur: (e) => {
+                if (e.target.value !== (source.repo_url || "")) onChange({ repo_url: e.target.value });
+              }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Required — tickets from this source clone into this repo." })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Agent CLI" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "select",
+            {
+              className: "tk-agent",
+              "data-tk-field": "agent",
+              value: source.agent || "",
+              onChange: (e) => onChange({ agent: e.target.value }),
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: agents.fallback ? `App default (${agents.fallback})` : "App default" }),
+                agents.names.map((n) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: n, children: n }, n))
+              ]
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Which coding CLI runs the sessions this source starts. Route one queue to a cloud CLI and another to a local model — pick a provider whose Connections row is green, or leave it on the app default." })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "tk-fields", children: ((meta == null ? void 0 : meta.fields) || []).map(
+          (f) => f.type === "state" ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+            StatePicker,
+            {
+              field: f,
+              source,
+              states,
+              loadStates,
+              onChange
+            },
+            f.key
+          ) : /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: f.label }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                type: f.secret ? "password" : "text",
+                autoComplete: "off",
+                "data-tk-field": f.key,
+                placeholder: f.secret && source[f.key] === "•••set" ? "•••set (saved)" : f.placeholder || "",
+                defaultValue: f.secret ? "" : source[f.key] || "",
+                onBlur: (e) => {
+                  if (f.secret && e.target.value === "") return;
+                  if (e.target.value !== (source[f.key] || ""))
+                    onChange({ [f.key]: e.target.value });
+                }
+              }
+            )
+          ] }, f.key)
+        ) })
+      ]
+    }
+  );
+}
+function useAgentChoices() {
+  const [choices, setChoices] = reactExports.useState({ names: [], fallback: "" });
+  reactExports.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const p = await api(
+          "/api/providers"
+        );
+        if (!alive) return;
+        setChoices({
+          names: ((p == null ? void 0 : p.providers) || []).map((x) => x.name).filter(Boolean),
+          fallback: (p == null ? void 0 : p.default) || ""
+        });
+      } catch {
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return choices;
+}
+function AgentPicker({
+  label,
+  hint,
+  value,
+  choices,
+  fallbackLabel,
+  onChange
+}) {
+  const empty = fallbackLabel || (choices.fallback ? `App default (${choices.fallback})` : "App default");
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: label }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("select", { value: value || "", onChange: (e) => onChange(e.target.value), children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: empty }),
+      choices.names.map((n) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: n, children: n }, n))
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: hint })
+  ] });
+}
+const REPO_RE = /^[^\s/]+\/[^\s/]+$/;
+let nextKey = 1;
+const named = (list) => list.map((c) => c.repo.trim()).filter(Boolean);
+const cardKey = (c) => c.repo || "new-" + c.key;
+function overrideText(o, field) {
+  if (!o) return "";
+  const v = o[field];
+  if (Array.isArray(v)) return v.join(", ");
+  return v == null ? "" : String(v);
+}
+function RepoSourceList({
+  repos,
+  overrides,
+  onSave,
+  surface,
+  defaults,
+  label,
+  listId,
+  addId,
+  addLabel,
+  emptyText,
+  hint
+}) {
+  const agents = useAgentChoices();
+  const [cards, setCards] = reactExports.useState(
+    () => repos.map((r) => ({ key: nextKey++, repo: r }))
+  );
+  const [expanded, setExpanded] = reactExports.useState(() => /* @__PURE__ */ new Set());
+  const [ov, setOv] = reactExports.useState(() => overrides);
+  const saved = repos.join("\n");
+  const savedOv = JSON.stringify(overrides);
+  reactExports.useEffect(() => {
+    setCards((prev) => {
+      if (named(prev).join("\n") === saved) return prev;
+      const drafts = prev.filter((c) => !c.repo.trim());
+      return [...repos.map((r) => ({ key: nextKey++, repo: r })), ...drafts];
+    });
+  }, [saved]);
+  reactExports.useEffect(() => {
+    setOv((prev) => JSON.stringify(prev) === savedOv ? prev : overrides);
+  }, [savedOv]);
+  const persist = (list, nextOverrides, msg) => {
+    const slugs = named(list);
+    const kept = {};
+    for (const slug of slugs) if (nextOverrides[slug]) kept[slug] = nextOverrides[slug];
+    setOv(kept);
+    onSave(slugs, kept, msg);
+  };
+  const rename = (key, raw) => {
+    const val = raw.trim();
+    const card = cards.find((c) => c.key === key);
+    if (!card) return raw;
+    if (val === card.repo) return val;
+    if (val && !REPO_RE.test(val)) {
+      toast("Use owner/name, e.g. MindFlock/MindFlock");
+      return card.repo;
+    }
+    if (val && cards.some((c) => c.key !== key && c.repo.toLowerCase() === val.toLowerCase())) {
+      toast(val + " is already in the list");
+      return card.repo;
+    }
+    if (!val && card.repo) {
+      toast("Repository can't be blank — use Remove to stop watching " + card.repo);
+      return card.repo;
+    }
+    const next = cards.map((c) => c.key === key ? { ...c, repo: val } : c);
+    setCards(next);
+    const moved = { ...ov };
+    if (card.repo && moved[card.repo]) {
+      moved[val] = moved[card.repo];
+      delete moved[card.repo];
+    }
+    setExpanded((prev) => {
+      const was = cardKey(card);
+      if (!prev.has(was)) return prev;
+      const nextSet = new Set(prev);
+      nextSet.delete(was);
+      nextSet.add(val);
+      return nextSet;
+    });
+    persist(next, moved, card.repo ? "Renamed to " + val : "Added " + val);
+    return val;
+  };
+  const patch = (repo, field, value) => {
+    const next = { ...ov };
+    const block = { ...next[repo] || {} };
+    const v = value.trim();
+    if (!v) delete block[field];
+    else if (field === "skip_authors")
+      block.skip_authors = v.split(",").map((x) => x.trim()).filter(Boolean);
+    else if (field === "min_age_minutes") block.min_age_minutes = v;
+    else block[field] = v;
+    if (Object.keys(block).length) next[repo] = block;
+    else delete next[repo];
+    persist(cards, next, "Saved " + repo);
+  };
+  const remove = (key) => {
+    const card = cards.find((c) => c.key === key);
+    const next = cards.filter((c) => c.key !== key);
+    setCards(next);
+    const moved = { ...ov };
+    if (card == null ? void 0 : card.repo) delete moved[card.repo];
+    persist(next, moved, (card == null ? void 0 : card.repo) ? "Removed " + card.repo : "Removed the empty card");
+  };
+  const add = () => {
+    const key = nextKey++;
+    setCards((prev) => [...prev, { key, repo: "" }]);
+    setExpanded((prev) => new Set(prev).add("new-" + key));
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: label }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: listId, className: "ik-cards", children: !cards.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: emptyText }) : cards.map((card) => {
+      const o = ov[card.repo];
+      const agent = (o == null ? void 0 : o.agent) || "";
+      const summary = (card.repo || "New repository") + " · " + (agent || (defaults.agent ? defaults.agent + " (default)" : "app default"));
+      return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        SourceCard,
+        {
+          sourceId: card.repo || "new-" + card.key,
+          summary,
+          collapsed: !expanded.has(cardKey(card)),
+          onToggle: () => setExpanded((prev) => {
+            const next = new Set(prev);
+            const k = cardKey(card);
+            if (next.has(k)) next.delete(k);
+            else next.add(k);
+            return next;
+          }),
+          footer: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              TestButton,
+              {
+                label: "Test access",
+                onTest: async () => {
+                  const r = await api("/api/settings/test/github-repo", { json: { repo: card.repo } });
+                  if (!(r == null ? void 0 : r.ok)) throw new Error((r == null ? void 0 : r.error) || "test failed");
+                  return (r.name || card.repo) + (r.private ? " (private)" : "") + (r.default_branch ? " · default " + r.default_branch : "") + (surface === "issue" && !r.can_push ? " · read-only token — issue work can't push a branch" : "");
+                }
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                type: "button",
+                className: "test-btn tk-remove",
+                onClick: () => remove(card.key),
+                children: "Remove"
+              }
+            )
+          ] }),
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Repository" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "input",
+                {
+                  type: "text",
+                  autoComplete: "off",
+                  spellCheck: false,
+                  required: true,
+                  "data-repo-field": "repo",
+                  className: card.repo ? "" : "field-missing",
+                  placeholder: "owner/name — e.g. mindflockai/MindFlock",
+                  defaultValue: card.repo,
+                  onBlur: (e) => {
+                    e.target.value = rename(card.key, e.target.value);
+                  },
+                  onKeyDown: (e) => {
+                    if (e.key === "Enter") e.target.blur();
+                  }
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Required — press Enter or click away to save. This list is separate from the other GitHub tab's; a repo can be on either, or both." })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Agent CLI" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "select",
+                {
+                  "data-repo-field": "agent",
+                  value: agent,
+                  disabled: !card.repo,
+                  onChange: (e) => patch(card.repo, "agent", e.target.value),
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: defaults.agent ? `Inherit (${defaults.agent})` : "Inherit (app default)" }),
+                    agents.names.map((n) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: n, children: n }, n))
+                  ]
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Which coding CLI this repository's sessions run. Route one repo to a cloud CLI and another to a local model — pick a provider whose Connections row is green, or inherit the tab's default." })
+            ] }),
+            surface === "pr" && /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Base branch" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "input",
+                {
+                  type: "text",
+                  autoComplete: "off",
+                  spellCheck: false,
+                  "data-repo-field": "base_branch",
+                  disabled: !card.repo,
+                  placeholder: defaults.baseBranch || "inherit the tab default",
+                  defaultValue: overrideText(o, "base_branch"),
+                  onBlur: (e) => {
+                    if (e.target.value.trim() !== overrideText(o, "base_branch"))
+                      patch(card.repo, "base_branch", e.target.value);
+                  }
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+                "Only PRs targeting this branch are auto-reviewed here. Blank inherits the tab default — which is ",
+                /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "not" }),
+                ` "every branch": it falls through to your repository's configured base branch. A PR into any other branch is still listed below, with a chip saying so, and`,
+                " ",
+                /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Begin review" }),
+                " works on it."
+              ] })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: surface === "pr" ? "Min PR age (minutes)" : "Min issue age (minutes)" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "input",
+                {
+                  type: "number",
+                  className: "num-sm",
+                  autoComplete: "off",
+                  "data-repo-field": "min_age_minutes",
+                  disabled: !card.repo,
+                  placeholder: defaults.minAge || "15",
+                  defaultValue: (o == null ? void 0 : o.min_age_minutes) == null ? "" : String(o.min_age_minutes),
+                  onBlur: (e) => {
+                    const cur = (o == null ? void 0 : o.min_age_minutes) == null ? "" : String(o.min_age_minutes);
+                    if (e.target.value.trim() !== cur)
+                      patch(card.repo, "min_age_minutes", e.target.value);
+                  }
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Grace period after it opens before work starts, so you can finish pushing or writing. Blank inherits the tab default." })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Skip authors" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "input",
+                {
+                  type: "text",
+                  autoComplete: "off",
+                  spellCheck: false,
+                  "data-repo-field": "skip_authors",
+                  disabled: !card.repo,
+                  placeholder: defaults.skipAuthors || "inherit — none",
+                  defaultValue: overrideText(o, "skip_authors"),
+                  onBlur: (e) => {
+                    if (e.target.value.trim() !== overrideText(o, "skip_authors"))
+                      patch(card.repo, "skip_authors", e.target.value);
+                  }
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+                "Comma-separated GitHub logins.",
+                " ",
+                surface === "pr" ? "Review only ever takes your own PRs, so this drops their review comments instead — the bots whose feedback you don't want acted on." : "Issues opened by these accounts are ignored.",
+                " ",
+                "Blank inherits the tab default."
+              ] })
+            ] })
+          ]
+        },
+        card.key
+      );
+    }) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "set-row", children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: addId, className: "btn-primary", onClick: add, children: addLabel }) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: hint })
+  ] });
+}
+const PR_GROUPS_KEY = "mf_intake_pr_groups";
+function PullRequestsTab({ gotoTab }) {
+  var _a2, _b2, _c2;
+  const s = useSettings();
+  const agentChoices = useAgentChoices();
+  const groups = useToggleSet(PR_GROUPS_KEY, true);
+  const gh = s.settings.github || {};
+  const enabled = gh.enabled !== false;
+  const repos = Array.isArray(gh.repos) ? gh.repos : [];
+  const overrides = gh.repo_settings || {};
+  const skipAuthors = Array.isArray(gh.skip_authors) ? gh.skip_authors.join(", ") : gh.skip_authors || "";
+  const [skipDraft, setSkipDraft] = reactExports.useState(String(skipAuthors));
+  reactExports.useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
+  const prsQuery = usePanelQuery("github-prs");
+  const loadOpenPrs = prsQuery.refresh;
+  const relistPrs = prsQuery.refetch;
+  const prs = prsQuery.data ? prsQuery.data.prs || [] : null;
+  const prsRepos = ((_a2 = prsQuery.data) == null ? void 0 : _a2.repos) || [];
+  const prsError = prsQuery.error ? "Could not list PRs: " + (prsQuery.error.message || "error") : "";
+  const prsNote = panelNote({ error: prsError, fetching: prsQuery.isFetching, loaded: !!prs }) || (((_b2 = prsQuery.data) == null ? void 0 : _b2.login) ? "GitHub: " + prsQuery.data.login : ((_c2 = prsQuery.data) == null ? void 0 : _c2.login_error) ? "GitHub login unknown — force review may still work" : "");
+  const [ghTest, setGhTest] = reactExports.useState({
+    testing: false
+  });
+  const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
+  const n = repos.length;
+  const byRepo = /* @__PURE__ */ new Map();
+  for (const p of prs || []) {
+    const key = p.repo || "unknown";
+    if (!byRepo.has(key)) byRepo.set(key, []);
+    byRepo.get(key).push(p);
+  }
+  const groupOrder = [
+    ...repos.filter((r) => prsRepos.includes(r) || byRepo.has(r)),
+    ...[...byRepo.keys()].filter((r) => !repos.includes(r))
+  ];
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "caps-gate", "data-caps-gate": "git", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
+      "Install ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Git" }),
+      " to get access to these features — automated PR review checks out and works on your pull-request branches, which needs git. Install it (e.g.",
+      " ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "sudo apt install git" }),
+      " / ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "brew install git" }),
+      "), then reload this page."
+    ] }) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "caps-gate", "data-caps-gate": "ticketing", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
+        "Connect a ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "ticketing tool" }),
+        " to get access to these features — automated PR review runs alongside ticket ingestion, which needs a connected ticketing source (Jira, Linear, GitHub Issues, Shortcut or Asana)."
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "linklike", "data-goto-tab": "tickets", onClick: () => gotoTab("tickets"), children: "Connect one on the Tickets tab" }) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint set-block-hint", children: [
+      "MindFlock watches ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "your own" }),
+      " open pull requests on the repositories below and spins up a session to address review comments. Runs while ingestion is active."
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      AutomationSwitch,
+      {
+        label: "Automated review",
+        title: "Turn automated PR review on or off — your repositories are kept either way",
+        rowId: "gh-pr-toggle-row",
+        inputId: "gh-pr-enabled",
+        statusId: "gh-pr-status",
+        checked: enabled,
+        onChange: (next) => saveGithub(
+          { enabled: next },
+          next ? "Automated review on" : "Automated review paused"
+        ),
+        tone: n > 0 && enabled ? "on" : n > 0 ? "paused" : "",
+        status: !n ? "○ Add a repository below to start reviewing your PRs" : enabled ? `● Active — reviewing PRs in ${n} ${n === 1 ? "repository" : "repositories"}` : `‖ Paused — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated review on to resume`
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      RepoSourceList,
+      {
+        surface: "pr",
+        label: "Repositories",
+        repos,
+        overrides,
+        onSave: (list, next, msg) => saveGithub({ repos: list, repo_settings: next }, msg),
+        defaults: {
+          agent: String(gh.agent || agentChoices.fallback || ""),
+          baseBranch: String(gh.base_branch || ""),
+          minAge: gh.min_age_minutes == null ? "" : String(gh.min_age_minutes),
+          skipAuthors: String(skipAuthors)
+        },
+        listId: "gh-repos-list",
+        addId: "gh-repo-add-btn",
+        addLabel: "+ Add repository",
+        emptyText: "No repositories yet — add one below to start reviewing your PRs.",
+        hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          "Each card is one repository, with its own agent CLI and filters. Blank fields inherit the tab defaults under ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Advanced options" }),
+          ". Adding a repository turns review on; remove them all to turn it off."
+        ] })
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      WorkListPanel,
+      {
+        label: "Open pull requests",
+        onRefresh: loadOpenPrs,
+        note: prsNote,
+        rowId: "gh-open-prs-row",
+        refreshId: "gh-prs-refresh",
+        noteId: "gh-prs-note",
+        listId: "gh-prs-list",
+        hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          "Every non-draft open PR on the repositories above , grouped by repository, with why auto review has or hasn't picked it up. ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Begin review" }),
+          " starts a review session for that PR right now, bypassing the author / age / base-branch / already-reviewed filters."
+        ] }),
+        children: prsError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: prsError }) : prs === null ? null : !prsRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open PRs." }) : !prs.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open pull requests on the watched repositories." }) : groupOrder.map((repo) => {
+          const rows = byRepo.get(repo) || [];
+          const body = !rows.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open pull requests in this repository." }) : rows.map((p) => {
+            var _a3;
+            return /* @__PURE__ */ jsxRuntimeExports.jsx(
+              WorkItemRow,
+              {
+                reference: "#" + p.number,
+                url: p.url,
+                title: p.title,
+                tooltip: (p.repo || "") + "#" + p.number + " — " + (p.title || "") + "\nby " + (p.author || "?") + " · " + (p.head_ref || "?") + " → " + (p.base_ref || "?"),
+                meta: `by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`,
+                hasSession: p.has_session,
+                eligible: p.eligible,
+                eligibleLabel: "queued for auto review",
+                reasons: p.reasons,
+                actionLabel: "Begin review",
+                failPrefix: "Begin review failed",
+                agents: agentChoices.names,
+                configuredAgent: ((_a3 = overrides[repo]) == null ? void 0 : _a3.agent) || String(gh.agent || agentChoices.fallback || ""),
+                onStart: async (agent) => {
+                  const r = await api("/api/github/prs/review", {
+                    json: {
+                      repo: p.repo,
+                      number: p.number,
+                      ...agent ? { agent } : {}
+                    }
+                  });
+                  refreshInstances();
+                  setTimeout(relistPrs, 5e3);
+                  return "Review session " + ((r == null ? void 0 : r.title) || "");
+                }
+              },
+              (p.repo || "") + p.number
+            );
+          });
+          return /* @__PURE__ */ jsxRuntimeExports.jsx(
+            WorkGroup,
+            {
+              heading: true,
+              name: repo,
+              count: rows.length,
+              open: groups.isOpen(repo),
+              onToggle: () => groups.toggle(repo),
+              children: body
+            },
+            repo
+          );
+        })
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("details", { className: "pr-advanced", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("summary", { children: "Advanced options" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-advanced-body", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint set-block-hint", children: "The defaults every repository card inherits, plus the settings that are genuinely one-per-app (the poll loop and the GitHub credential)." }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          AgentPicker,
+          {
+            label: "Agent CLI",
+            value: String(gh.agent || ""),
+            choices: agentChoices,
+            onChange: (v) => s.saveField("github", "agent", v),
+            hint: /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: "Which coding CLI runs PR-review sessions by default. Independent of issue handling's — pick a provider whose Connections row is green, or leave it on the app default. A repository card can override it." })
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Base branch" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "base_branch", placeholder: "e.g. main" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+            "Only PRs targeting this branch are auto-reviewed. Blank is ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "not" }),
+            ' "every branch" — it falls through to ',
+            /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "[repository].base_branch" }),
+            " and then to",
+            " ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "main" }),
+            ", so set it explicitly if your repos disagree about their default branch (or override it per repository on its card). A PR into any other branch is still listed above with a chip saying so."
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Min PR age (minutes)" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "min_age_minutes", type: "number", placeholder: "15" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Grace period after a PR opens before review starts, so you can finish pushing. Default 15. A repository card can override it." })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Poll every (seconds)" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "poll_interval_seconds", type: "number", placeholder: "60" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "How often to check GitHub for new PRs. Default 60. One poll loop covers every repository, so this one is not per-card." })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Skip authors" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              type: "text",
+              id: "gh-skip-authors",
+              placeholder: "dependabot, renovate",
+              autoComplete: "off",
+              value: skipDraft,
+              onChange: (e) => setSkipDraft(e.target.value),
+              onBlur: () => {
+                const list = skipDraft.split(",").map((x) => x.trim()).filter(Boolean);
+                saveGithub({ skip_authors: list }, "Saved skip authors");
+              }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+            "Comma-separated GitHub logins whose ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "review comments" }),
+            " are ignored — review only ever takes your own PRs, so this is the bot feedback you don't want acted on, not a list of authors to skip. A repository card can override it."
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Token" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "token", type: "password", placeholder: "optional — else $GH_TOKEN / gh auth" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Shared with issue handling — it authenticates the same account. Also what lets MindFlock open and merge PRs for you without the gh CLI. Falls back to $GH_TOKEN / $GITHUB_TOKEN / `gh auth token`. Pushing never needs it — that is plain git over your own remote." })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "test-row", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                type: "button",
+                id: "gh-test-btn",
+                className: "test-btn",
+                onClick: async () => {
+                  setGhTest({ testing: true });
+                  setGhTest(await runGithubTest());
+                },
+                children: "Test GitHub"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "span",
+              {
+                id: "gh-test-result",
+                className: "test-result" + (ghTest.msg ? ghTest.ok ? " ok" : " bad" : ""),
+                children: ghTest.testing ? "testing…" : ghTest.msg ? (ghTest.ok ? "✓ " : "✗ ") + ghTest.msg : ""
+              }
+            )
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+            "Shows where a token would come from. A token is all this needs — gh is reported too, but it is optional. Use a card's ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Test access" }),
+            " ",
+            "to check one repository."
+          ] })
+        ] })
+      ] })
+    ] })
+  ] });
+}
+const ISSUE_GROUPS_KEY = "mf_intake_issue_groups";
+function IssuesTab({ gotoTab }) {
+  var _a2;
+  const s = useSettings();
+  const agentChoices = useAgentChoices();
+  const groups = useToggleSet(ISSUE_GROUPS_KEY, true);
+  const gh = s.settings.github || {};
+  const enabled = gh.issues_enabled === true;
+  const repos = Array.isArray(gh.issue_repos) ? gh.issue_repos : [];
+  const overrides = gh.issue_repo_settings || {};
+  const skipAuthors = Array.isArray(gh.issue_skip_authors) ? gh.issue_skip_authors.join(", ") : gh.issue_skip_authors || "";
+  const [skipDraft, setSkipDraft] = reactExports.useState(String(skipAuthors));
+  reactExports.useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
+  const issuesQuery = usePanelQuery("github-issues");
+  const loadOpenIssues = issuesQuery.refresh;
+  const relistIssues = issuesQuery.refetch;
+  const issues = issuesQuery.data ? issuesQuery.data.issues || [] : null;
+  const issuesRepos = ((_a2 = issuesQuery.data) == null ? void 0 : _a2.repos) || [];
+  const issuesError = issuesQuery.error ? "Could not list issues: " + (issuesQuery.error.message || "error") : "";
+  const issuesNote = panelNote({
+    error: issuesError,
+    fetching: issuesQuery.isFetching,
+    loaded: !!issues
+  });
+  const [ghTest, setGhTest] = reactExports.useState({
+    testing: false
+  });
+  const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
+  const n = repos.length;
+  const byRepo = /* @__PURE__ */ new Map();
+  for (const i of issues || []) {
+    const key = i.repo || "unknown";
+    if (!byRepo.has(key)) byRepo.set(key, []);
+    byRepo.get(key).push(i);
+  }
+  const groupOrder = [
+    ...repos.filter((r) => issuesRepos.includes(r) || byRepo.has(r)),
+    ...[...byRepo.keys()].filter((r) => !repos.includes(r))
+  ];
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "caps-gate", "data-caps-gate": "git", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
+      "Install ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Git" }),
+      " to get access to these features — automated issue handling clones your repositories and works on fresh branches, which needs git. Install it (e.g. ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "sudo apt install git" }),
+      " / ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "brew install git" }),
+      "), then reload this page."
+    ] }) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "caps-gate", "data-caps-gate": "ticketing", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
+        "Connect a ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "ticketing tool" }),
+        " to get access to these features — automated issue handling runs alongside ticket ingestion, which needs a connected ticketing source (Jira, Linear, GitHub Issues, Shortcut or Asana)."
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "linklike", "data-goto-tab": "tickets", onClick: () => gotoTab("tickets"), children: "Connect one on the Tickets tab" }) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint set-block-hint", children: [
+      "MindFlock watches for ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "newly opened issues" }),
+      " on the repositories below, grabs each one with its comments, and starts a session on a fresh branch. Its repository list is independent of PR review's."
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      AutomationSwitch,
+      {
+        label: "Automated handling",
+        title: "Turn automated issue handling on or off — your repositories are kept either way",
+        rowId: "gh-issues-toggle-row",
+        inputId: "gh-issues-enabled",
+        statusId: "gh-issues-status",
+        checked: enabled,
+        onChange: (next) => saveGithub(
+          { issues_enabled: next },
+          next ? "Automated issue handling on" : "Automated issue handling off"
+        ),
+        tone: n > 0 && enabled ? "on" : n > 0 ? "paused" : "",
+        status: !n ? "○ Add a repository below, then turn Automated handling on" : enabled ? `● Active — handling new issues in ${n} ${n === 1 ? "repository" : "repositories"}` : `‖ Off — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated handling on to start`
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      RepoSourceList,
+      {
+        surface: "issue",
+        label: "Repositories",
+        repos,
+        overrides,
+        onSave: (list, next, msg) => saveGithub({ issue_repos: list, issue_repo_settings: next }, msg),
+        defaults: {
+          agent: String(gh.issue_agent || agentChoices.fallback || ""),
+          baseBranch: "",
+          minAge: gh.issue_min_age_minutes == null ? "" : String(gh.issue_min_age_minutes),
+          skipAuthors: String(skipAuthors)
+        },
+        listId: "gh-issue-repos-list",
+        addId: "gh-issue-repo-add-btn",
+        addLabel: "+ Add repository",
+        emptyText: "No repositories yet — add one below to start handling new issues.",
+        hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          "Each card is one repository, with its own agent CLI and filters. Blank fields inherit the tab defaults under ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Advanced options" }),
+          ". This list is separate from PR review's — a repo can be on either, or both."
+        ] })
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      WorkListPanel,
+      {
+        label: "Open issues",
+        onRefresh: loadOpenIssues,
+        note: issuesNote,
+        rowId: "gh-open-issues-row",
+        refreshId: "gh-issues-refresh",
+        noteId: "gh-issues-note",
+        listId: "gh-issues-list",
+        hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          "Every open issue on the repositories above , grouped by repository, with why auto handling has or hasn't picked it up. ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Start work" }),
+          " spins up a session for that issue right now, bypassing the age / already-handled filters."
+        ] }),
+        children: issuesError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: issuesError }) : issues === null ? null : !issuesRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open issues." }) : !issues.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open issues on the watched repositories." }) : groupOrder.map((repo) => {
+          const rows = byRepo.get(repo) || [];
+          const body = !rows.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open issues in this repository." }) : rows.map((i) => {
+            var _a3;
+            return /* @__PURE__ */ jsxRuntimeExports.jsx(
+              WorkItemRow,
+              {
+                reference: "#" + i.number,
+                url: i.url,
+                title: i.title,
+                tooltip: (i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?"),
+                meta: `by ${i.author || "?"} · ${ageText(i.created_at)}`,
+                hasSession: i.has_session,
+                eligible: i.eligible,
+                eligibleLabel: "queued for auto handling",
+                reasons: i.reasons,
+                actionLabel: "Start work",
+                failPrefix: "Start work failed",
+                agents: agentChoices.names,
+                configuredAgent: ((_a3 = overrides[repo]) == null ? void 0 : _a3.agent) || String(gh.issue_agent || agentChoices.fallback || ""),
+                onStart: async (agent) => {
+                  const r = await api("/api/github/issues/start", {
+                    json: {
+                      repo: i.repo,
+                      number: i.number,
+                      ...agent ? { agent } : {}
+                    }
+                  });
+                  refreshInstances();
+                  setTimeout(relistIssues, 5e3);
+                  return "Issue session " + ((r == null ? void 0 : r.title) || "");
+                }
+              },
+              (i.repo || "") + i.number
+            );
+          });
+          return /* @__PURE__ */ jsxRuntimeExports.jsx(
+            WorkGroup,
+            {
+              heading: true,
+              name: repo,
+              count: rows.length,
+              open: groups.isOpen(repo),
+              onToggle: () => groups.toggle(repo),
+              children: body
+            },
+            repo
+          );
+        })
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("details", { className: "pr-advanced", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("summary", { children: "Advanced options" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-advanced-body", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint set-block-hint", children: "The defaults every repository card inherits, plus the settings that are genuinely one-per-app." }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          AgentPicker,
+          {
+            label: "Agent CLI",
+            value: String(gh.issue_agent || ""),
+            choices: agentChoices,
+            onChange: (v) => s.saveField("github", "issue_agent", v),
+            hint: /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: "Which coding CLI runs issue-handling sessions by default. Independent of PR review's — setting one does not change the other. A repository card can override it." })
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Min issue age (minutes)" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "issue_min_age_minutes", type: "number", placeholder: "15" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Grace period after an issue opens before work starts, so you can finish writing it. Default 15. Independent of PR review's setting; a repository card can override it." })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Poll every (seconds)" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "issue_poll_interval_seconds", type: "number", placeholder: "60" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "How often to check GitHub for new issues. Default 60. One poll loop covers every repository, so this one is not per-card." })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Skip authors" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "input",
+            {
+              type: "text",
+              id: "gh-issue-skip-authors",
+              placeholder: "dependabot, renovate",
+              autoComplete: "off",
+              value: skipDraft,
+              onChange: (e) => setSkipDraft(e.target.value),
+              onBlur: () => {
+                const list = skipDraft.split(",").map((x) => x.trim()).filter(Boolean);
+                saveGithub({ issue_skip_authors: list }, "Saved skip authors");
+              }
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Comma-separated GitHub logins whose issues are ignored. Independent of PR review's list; a repository card can override it." })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "GitHub token" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "test-row", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                type: "button",
+                id: "gh-issue-test-btn",
+                className: "test-btn",
+                onClick: async () => {
+                  setGhTest({ testing: true });
+                  setGhTest(await runGithubTest());
+                },
+                children: "Test GitHub"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "span",
+              {
+                id: "gh-issue-test-result",
+                className: "test-result" + (ghTest.msg ? ghTest.ok ? " ok" : " bad" : ""),
+                children: ghTest.testing ? "testing…" : ghTest.msg ? (ghTest.ok ? "✓ " : "✗ ") + ghTest.msg : ""
+              }
+            )
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+            "The GitHub credential is shared with PR review — it authenticates the same account. Set or change it on the",
+            " ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "linklike", onClick: () => gotoTab("prs"), children: "Pull requests tab" }),
+            "; the button above checks the current connection."
+          ] })
+        ] })
+      ] })
+    ] })
+  ] });
+}
+const LEGACY_SCREEN_TABS = {
+  ticketing: "tickets",
+  repo: "prs",
+  issues: "issues"
+};
+const TABS = [
+  { key: "tickets", label: "Tickets", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(TicketsTab, { ...p }) },
+  {
+    key: "prs",
+    label: "Pull requests",
+    caps: "git ticketing",
+    legacyId: "pr-review-block",
+    el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(PullRequestsTab, { ...p })
+  },
+  {
+    key: "issues",
+    label: "Issues",
+    caps: "git ticketing",
+    legacyId: "git-issues-block",
+    el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(IssuesTab, { ...p })
+  }
+];
+function TabCount({ tab }) {
+  const key = tab === "tickets" ? "tickets" : tab === "prs" ? "github-prs" : "github-issues";
+  const q = usePanelQuery(key);
+  if (!q.data) return null;
+  const n = tab === "tickets" ? countInBuckets(
+    q.data.tickets || [],
+    visibleBuckets(q.data.buckets || [], q.data.done_buckets || [], loadShownBuckets())
+  ) : (q.data.prs || q.data.issues || []).length;
+  if (!n) return null;
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ik-tab-count", children: n });
+}
+function IntakeDialog() {
+  const open = useUi((s) => s.openDialog === "intake");
+  const target = useUi((s) => s.dialogTarget);
+  const closeDialog = useUi((s) => s.closeDialog);
+  const [tab, setTab] = reactExports.useState("tickets");
+  const model = useSettingsModel(open);
+  const { data: config } = useConfig();
+  reactExports.useEffect(() => {
+    if (!open) return;
+    const wanted = target && (LEGACY_SCREEN_TABS[target] || target);
+    setTab(wanted && TABS.some((t) => t.key === wanted) ? wanted : "tickets");
+  }, [open, target]);
+  reactExports.useEffect(() => {
+    if (open) prefetchIntakePanels();
+  }, [open]);
+  reactExports.useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        closeDialog();
+        e.preventDefault();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, closeDialog]);
+  if (!open) return null;
+  const props = { gotoTab: setTab };
+  const noTicketing = !!(config == null ? void 0 : config.caps) && !config.caps.ticketing;
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsCtx.Provider, { value: model, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      id: "intake-dialog",
+      className: "modal",
+      onClick: (e) => {
+        if (e.target === e.currentTarget) closeDialog();
+      },
+      children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "intake-panel", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ws-head", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { children: "Intake" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ik-subtitle", children: "Where your sessions come from" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "intake-close", onClick: closeDialog, children: "Close" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("nav", { id: "intake-tabs", "aria-label": "Intake tabs", children: TABS.map((t) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "button",
+          {
+            type: "button",
+            className: "ik-tab" + (tab === t.key ? " active" : ""),
+            "data-intake-tab": t.key,
+            "aria-current": tab === t.key ? "page" : void 0,
+            onClick: () => setTab(t.key),
+            children: [
+              t.label,
+              /* @__PURE__ */ jsxRuntimeExports.jsx(TabCount, { tab: t.key })
+            ]
+          },
+          t.key
+        )) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "intake-body", children: TABS.map((t) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "section",
+          {
+            className: "ik-panel" + (tab === t.key ? " active" : ""),
+            "data-intake-tab": t.key,
+            id: t.legacyId,
+            "data-caps-need": t.caps,
+            children: tab === t.key && t.el(props)
+          },
+          t.key
+        )) }),
+        noTicketing && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint ik-foot", children: [
+          "Nothing is connected yet — start on ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Tickets" }),
+          ". PR review and issue handling ride along with ticket ingestion, so they light up once a ticketing source is connected."
+        ] })
+      ] })
+    }
+  ) });
 }
 function General(_) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
@@ -30429,801 +32349,6 @@ function LocalModel(_) {
     ] })
   ] });
 }
-function ageText(iso) {
-  const t = Date.parse(iso || "");
-  if (!isFinite(t)) return "";
-  const mins = Math.max(0, Math.round((Date.now() - t) / 6e4));
-  if (mins < 60) return mins + "m old";
-  const h = Math.round(mins / 60);
-  if (h < 48) return h + "h old";
-  return Math.round(h / 24) + "d old";
-}
-function AutomationSwitch({
-  label,
-  title,
-  rowId,
-  inputId,
-  statusId,
-  checked,
-  onChange,
-  status,
-  tone
-}) {
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row set-switch-row", id: rowId, title, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: label }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "input",
-          {
-            type: "checkbox",
-            id: inputId,
-            checked,
-            onChange: (e) => onChange(e.target.checked)
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
-      ] })
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: statusId, className: "pr-status" + (tone ? " " + tone : ""), children: status })
-  ] });
-}
-function RepoListField({
-  label,
-  repos,
-  onSave,
-  emptyText,
-  hint,
-  listId,
-  inputId,
-  addId
-}) {
-  const [draft, setDraft] = reactExports.useState("");
-  const add = () => {
-    const val = draft.trim();
-    if (!val) return;
-    if (!/^[^\s/]+\/[^\s/]+$/.test(val)) {
-      toast("Use owner/name, e.g. MindFlock/MindFlock");
-      return;
-    }
-    if (repos.some((r) => r.toLowerCase() === val.toLowerCase())) {
-      setDraft("");
-      toast(val + " is already in the list");
-      return;
-    }
-    setDraft("");
-    onSave([...repos, val], "Added " + val);
-  };
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: label }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: listId, className: "repo-list", children: !repos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: emptyText }) : repos.map((repo) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "repo-chip", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "repo-chip-name", children: repo }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "button",
-        {
-          type: "button",
-          className: "repo-chip-x",
-          title: "Remove " + repo,
-          "aria-label": "Remove " + repo,
-          onClick: () => onSave(
-            repos.filter((r) => r !== repo),
-            "Removed " + repo
-          ),
-          children: "✕"
-        }
-      )
-    ] }, repo)) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "repo-add-row", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "input",
-        {
-          type: "text",
-          id: inputId,
-          placeholder: "owner/name — e.g. mindflockai/MindFlock",
-          autoComplete: "off",
-          spellCheck: false,
-          value: draft,
-          onChange: (e) => setDraft(e.target.value),
-          onKeyDown: (e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              add();
-            }
-          }
-        }
-      ),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: addId, className: "btn-primary", onClick: add, children: "+ Add" })
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: hint })
-  ] });
-}
-function WorkListPanel({
-  label,
-  onRefresh,
-  note,
-  hint,
-  children,
-  rowId,
-  refreshId,
-  noteId,
-  listId,
-  toolbarExtra
-}) {
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", id: rowId, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: label }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-toolbar", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: refreshId, className: "test-btn", onClick: onRefresh, children: "Refresh" }),
-      toolbarExtra,
-      note ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: noteId, className: "pr-open-note", children: note }) : null
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: listId, className: "pr-open-list", children }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: hint })
-  ] });
-}
-function WorkItemRow({
-  reference,
-  url,
-  title,
-  meta,
-  tooltip,
-  hasSession,
-  eligible,
-  eligibleLabel,
-  reasons,
-  actionLabel,
-  onStart,
-  failPrefix
-}) {
-  const [state, setState] = reactExports.useState("idle");
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-item", title: tooltip, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-main", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "a",
-        {
-          href: url || "#",
-          target: "_blank",
-          rel: "noopener noreferrer",
-          className: "pr-open-ref",
-          title: "Open " + reference + " on GitHub",
-          children: reference
-        }
-      ),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-title", children: title || "" })
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-meta", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: meta }),
-      hasSession ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip on", children: "session open" }) : eligible ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip ok", children: eligibleLabel }) : (reasons || []).map((reason) => (
-        // title: a recorded failure reason is a full sentence of git output
-        // whose actionable half is at the end, so the chip ellipsizes and
-        // hovering gives you the whole thing.
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip", title: reason, children: reason }, reason)
-      ))
-    ] }),
-    hasSession ? /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "btn-primary pr-review-btn", disabled: true, children: "Session open" }) : /* @__PURE__ */ jsxRuntimeExports.jsx(
-      "button",
-      {
-        type: "button",
-        className: "btn-primary pr-review-btn",
-        disabled: state !== "idle",
-        onClick: async () => {
-          setState("starting");
-          try {
-            const created = await onStart();
-            toast(created + " — provisioning, see the sidebar");
-            setState("started");
-          } catch (err) {
-            toast(failPrefix + ": " + (err.message || "error"));
-            setState("idle");
-          }
-        },
-        children: state === "starting" ? "Starting…" : state === "started" ? "Started" : actionLabel
-      }
-    )
-  ] });
-}
-function IngestionToggle({ sourceCount }) {
-  const [busy, setBusy] = reactExports.useState(false);
-  const [optimistic, setOptimistic] = reactExports.useState(null);
-  const { data: status, refetch } = useQuery({
-    queryKey: ["mindflock-status"],
-    queryFn: () => api("/api/mindflock/status"),
-    refetchInterval: 1e4,
-    retry: false
-  });
-  if (!status || !status.available) return null;
-  const running = !!status.running;
-  const desired = optimistic ?? (status.desired ?? running);
-  const toggle = async (start) => {
-    if (busy) return;
-    setBusy(true);
-    setOptimistic(start);
-    try {
-      await api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
-      toast(start ? "Ticket ingestion on" : "Ticket ingestion paused");
-    } catch (err) {
-      toast(`Ticket ingestion ${start ? "start" : "stop"} failed: ` + (err.message || ""));
-    } finally {
-      setBusy(false);
-      setOptimistic(null);
-      refetch();
-    }
-  };
-  const n = sourceCount;
-  return /* @__PURE__ */ jsxRuntimeExports.jsx(
-    AutomationSwitch,
-    {
-      label: "Automated ingestion",
-      title: "Run or stop ticket ingestion — polls your connected sources and auto-creates a coding session for each assigned ticket. Stays in this state across restarts.",
-      rowId: "tk-ingestion-toggle-row",
-      inputId: "tk-ingestion-enabled",
-      statusId: "tk-ingestion-status",
-      checked: desired,
-      onChange: (next) => {
-        if (!busy) toggle(next);
-      },
-      tone: n > 0 && desired ? "on" : n > 0 ? "paused" : "",
-      status: !n ? "○ Add a ticketing source below to start turning tickets into sessions" : desired ? `● Active — polling ${n} ${n === 1 ? "source" : "sources"} for tickets assigned to you` : `‖ Paused — ${n} ${n === 1 ? "source" : "sources"} kept; turn Automated ingestion on to resume`
-    }
-  );
-}
-function Ticketing(_) {
-  const [catalog, setCatalog] = reactExports.useState([]);
-  const [sources, setSources] = reactExports.useState(null);
-  const [collapsed, setCollapsed] = reactExports.useState(/* @__PURE__ */ new Set());
-  const [agents, setAgents] = reactExports.useState({ names: [], fallback: "" });
-  const seq = reactExports.useRef(0);
-  reactExports.useEffect(() => {
-    (async () => {
-      try {
-        const c = await api("/api/settings/providers/ticketing");
-        setCatalog((c == null ? void 0 : c.providers) || []);
-        const r = await api("/api/settings/ticketing/sources");
-        const list = (r == null ? void 0 : r.sources) || [];
-        setSources(list);
-        setCollapsed(new Set(list.map((s) => s.id)));
-      } catch {
-        setSources([]);
-      }
-      try {
-        const p = await api(
-          "/api/providers"
-        );
-        setAgents({
-          names: ((p == null ? void 0 : p.providers) || []).map((x) => x.name).filter(Boolean),
-          fallback: (p == null ? void 0 : p.default) || ""
-        });
-      } catch {
-      }
-    })();
-  }, []);
-  const persist = reactExports.useCallback(
-    async (list) => {
-      const mySeq = ++seq.current;
-      const missingRepo = list.filter((s) => !(s.repo_url || "").trim()).length;
-      try {
-        await api("/api/settings/ticketing/sources", { method: "PUT", json: { sources: list } });
-        if (mySeq !== seq.current) return;
-        toast(
-          missingRepo ? `Saved — but ${missingRepo} source(s) need a Repo URL to ingest` : "Saved ticketing sources"
-        );
-        refreshConfig();
-      } catch (err) {
-        toast("Save failed: " + (err.message || "ticketing"));
-      }
-    },
-    []
-  );
-  if (sources === null)
-    return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Ticketing" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Loading…" })
-    ] });
-  const uniqueId = (base) => {
-    const taken = new Set(sources.map((s) => s.id));
-    let cand = base, n = 1;
-    while (taken.has(cand)) {
-      n += 1;
-      cand = `${base}-${n}`;
-    }
-    return cand;
-  };
-  const update = (id, patch) => {
-    setSources((prev) => {
-      const next = (prev || []).map((s) => s.id === id ? { ...s, ...patch } : s);
-      persist(next);
-      return next;
-    });
-  };
-  const remove = (id) => {
-    setSources((prev) => {
-      const next = (prev || []).filter((s) => s.id !== id);
-      persist(next);
-      return next;
-    });
-  };
-  const add = () => {
-    var _a2;
-    const provider = ((_a2 = catalog[0]) == null ? void 0 : _a2.id) || "shortcut";
-    const id = uniqueId(provider);
-    setSources((prev) => [...prev || [], { id, provider }]);
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-  };
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Ticketing" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint set-block-hint", children: "Connect one or more ticketing platforms and MindFlock auto-creates a coding session for each ticket assigned to you. Add several sources — even two of the same provider (e.g. two Jira sites) — each with its own credentials. Stored in ~/.mindflock/settings.json (never committed)." }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(IngestionToggle, { sourceCount: (sources || []).length }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "ticketing-sources", children: sources.map((src) => /* @__PURE__ */ jsxRuntimeExports.jsx(
-      SourceCard,
-      {
-        source: src,
-        catalog,
-        agents,
-        collapsed: collapsed.has(src.id),
-        onToggle: () => setCollapsed((prev) => {
-          const next = new Set(prev);
-          if (next.has(src.id)) next.delete(src.id);
-          else next.add(src.id);
-          return next;
-        }),
-        onChange: (patch) => update(src.id, patch),
-        onRemove: () => remove(src.id)
-      },
-      src.id
-    )) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "set-row", children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "ticketing-add", className: "btn-primary", onClick: add, children: "+ Add ticketing source" }) }),
-    sources.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(AssignedTickets, {})
-  ] });
-}
-function StatePicker({
-  field,
-  source,
-  states,
-  loadStates,
-  onChange
-}) {
-  const selected = (source[field.key] || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const nameOf = (id) => {
-    const st = states.find((s) => String(s.id) === id);
-    return (st == null ? void 0 : st.name) || id;
-  };
-  const remaining = states.filter((s) => !selected.includes(String(s.id)));
-  const commit = (list) => onChange({ [field.key]: list.join(",") });
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: field.label }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-list", children: !selected.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Any state — every ticket assigned to you is auto-ingested." }) : selected.map((id) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "repo-chip", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "repo-chip-name", children: nameOf(id) }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "button",
-        {
-          type: "button",
-          className: "repo-chip-x",
-          title: "Stop auto-ingesting " + nameOf(id),
-          "aria-label": "Remove ingest state " + nameOf(id),
-          onClick: () => commit(selected.filter((x) => x !== id)),
-          children: "✕"
-        }
-      )
-    ] }, id)) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "select",
-      {
-        className: "tk-state",
-        "data-tk-field": field.key,
-        value: "",
-        onFocus: () => {
-          if (!states.length) loadStates();
-        },
-        onChange: (e) => {
-          if (e.target.value) commit([...selected, e.target.value]);
-        },
-        children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "+ Add state…" }),
-          remaining.map((st) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: String(st.id), children: st.name || String(st.id) }, String(st.id)))
-        ]
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Tickets in any of these states are auto-ingested; empty = every state. Everything else starts manually from the Assigned tickets panel below." })
-  ] });
-}
-const BUCKETS_LS_KEY = "mf_ticket_buckets";
-function loadShownBuckets() {
-  try {
-    const raw = localStorage.getItem(BUCKETS_LS_KEY);
-    if (raw === null) return null;
-    const v = JSON.parse(raw);
-    return Array.isArray(v) ? v.map(String) : null;
-  } catch {
-    return null;
-  }
-}
-function saveShownBuckets(v) {
-  try {
-    if (v === null) localStorage.removeItem(BUCKETS_LS_KEY);
-    else localStorage.setItem(BUCKETS_LS_KEY, JSON.stringify(v));
-  } catch {
-  }
-}
-const BUCKETS_OPEN_LS_KEY = "mf_ticket_buckets_open";
-function loadOpenBuckets() {
-  try {
-    const v = JSON.parse(localStorage.getItem(BUCKETS_OPEN_LS_KEY) || "[]");
-    return new Set(Array.isArray(v) ? v.map(String) : []);
-  } catch {
-    return /* @__PURE__ */ new Set();
-  }
-}
-function saveOpenBuckets(v) {
-  try {
-    localStorage.setItem(BUCKETS_OPEN_LS_KEY, JSON.stringify([...v]));
-  } catch {
-  }
-}
-function ticketAgeText(iso) {
-  const t = Date.parse(iso || "");
-  if (!isFinite(t)) return "";
-  const mins = Math.max(0, Math.round((Date.now() - t) / 6e4));
-  if (mins < 60) return mins + "m old";
-  const h = Math.round(mins / 60);
-  if (h < 48) return h + "h old";
-  return Math.round(h / 24) + "d old";
-}
-function AssignedTickets() {
-  var _a2, _b2, _c2, _d2;
-  const ticketsQuery = usePanelQuery("tickets");
-  const load2 = ticketsQuery.refresh;
-  const relistTickets = ticketsQuery.refetch;
-  const tickets = ticketsQuery.data ? ticketsQuery.data.tickets || [] : null;
-  const buckets = ((_a2 = ticketsQuery.data) == null ? void 0 : _a2.buckets) || [];
-  const doneBuckets = ((_b2 = ticketsQuery.data) == null ? void 0 : _b2.done_buckets) || [];
-  const ingestStates = ((_c2 = ticketsQuery.data) == null ? void 0 : _c2.ingest_states) || {};
-  const error = ticketsQuery.error ? "Could not list tickets: " + (ticketsQuery.error.message || "error") : "";
-  const sourceErrors = (((_d2 = ticketsQuery.data) == null ? void 0 : _d2.errors) || []).map((e) => e.source + ": " + e.error).join(" · ");
-  const note = error || sourceErrors ? sourceErrors : ticketsQuery.isFetching ? tickets ? "Refreshing…" : "Loading…" : "";
-  const [shown, setShown] = reactExports.useState(loadShownBuckets);
-  const [openBuckets, setOpenBuckets] = reactExports.useState(loadOpenBuckets);
-  const toggleOpen = (b) => {
-    setOpenBuckets((prev) => {
-      const next = new Set(prev);
-      if (next.has(b)) next.delete(b);
-      else next.add(b);
-      saveOpenBuckets(next);
-      return next;
-    });
-  };
-  const visible = shown === null ? buckets.filter((b) => !doneBuckets.includes(b)) : buckets.filter((b) => shown.includes(b));
-  const hidden = buckets.filter((b) => !visible.includes(b));
-  const byBucket = /* @__PURE__ */ new Map();
-  for (const t of tickets || []) {
-    const b = t.bucket || "No state";
-    if (!byBucket.has(b)) byBucket.set(b, []);
-    byBucket.get(b).push(t);
-  }
-  const hideBucket = (b) => {
-    const next = (shown ?? visible).filter((x) => x !== b);
-    setShown(next);
-    saveShownBuckets(next);
-  };
-  const addBucket = (b) => {
-    if (!b) return;
-    const next = [...shown ?? [], b];
-    setShown(next);
-    saveShownBuckets(next);
-  };
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", id: "tk-assigned-row", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Assigned tickets" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-toolbar", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "tk-tickets-refresh", className: "test-btn", onClick: load2, children: "Refresh" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs(
-        "select",
-        {
-          id: "tk-bucket-add",
-          className: "tk-bucket-add",
-          value: "",
-          disabled: !hidden.length,
-          title: "Show another bucket in this panel",
-          onChange: (e) => addBucket(e.target.value),
-          children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: hidden.length ? "+ Add bucket…" : "All buckets shown" }),
-            hidden.map((b) => /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: b, children: [
-              b,
-              " (",
-              (byBucket.get(b) || []).length,
-              ")"
-            ] }, b))
-          ]
-        }
-      ),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: "tk-tickets-note", className: "pr-open-note", children: note })
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "tk-tickets-list", children: error ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: error }) : tickets === null ? null : !tickets.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No tickets are assigned to you on the connected sources." }) : !visible.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "All buckets are hidden — pick one from the “+ Add bucket…” menu above." }) : visible.map((b) => {
-      const rows = byBucket.get(b) || [];
-      const open = openBuckets.has(b);
-      return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tk-bucket", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tk-bucket-head", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsxs(
-            "button",
-            {
-              type: "button",
-              className: "tk-bucket-toggle",
-              "aria-expanded": open,
-              title: (open ? "Collapse" : "Expand") + " the " + b + " bucket",
-              onClick: () => toggleOpen(b),
-              children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tk-caret", children: open ? "▾" : "▸" }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tk-bucket-name", children: b }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tk-bucket-count", children: rows.length })
-              ]
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              type: "button",
-              className: "tk-bucket-x",
-              title: "Hide the " + b + " bucket (re-add it from the dropdown)",
-              "aria-label": "Hide bucket " + b,
-              onClick: () => hideBucket(b),
-              children: "✕"
-            }
-          )
-        ] }),
-        open && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-list", children: [
-          rows.map((t) => /* @__PURE__ */ jsxRuntimeExports.jsx(
-            AssignedTicketRow,
-            {
-              t,
-              onStarted: relistTickets
-            },
-            t.source + ":" + t.id
-          )),
-          !rows.length && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No tickets in this bucket." })
-        ] })
-      ] }, b);
-    }) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
-      "Every ticket assigned to you across the sources above, split by workflow state. Click a bucket to expand or collapse it; use",
-      " ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "+ Add bucket…" }),
-      " / ✕ to choose which buckets appear at all (both remembered on this device).",
-      " ",
-      Object.keys(ingestStates).length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-        "Auto ingestion only watches",
-        " ",
-        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: Object.values(ingestStates).flat().join(", ") }),
-        " — tickets in every other bucket are only started by hand, with",
-        " ",
-        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Begin work" }),
-        "."
-      ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-        "No ingest-state filter is set on the source, so auto ingestion watches every state — set one on the source card above to narrow it.",
-        " ",
-        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Begin work" }),
-        " starts any ticket by hand."
-      ] })
-    ] })
-  ] });
-}
-function AssignedTicketRow({ t, onStarted }) {
-  const [state, setState] = reactExports.useState("idle");
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
-    "div",
-    {
-      className: "pr-open-item",
-      title: t.slug + " — " + (t.name || "") + "\nfrom " + (t.source_label || t.source),
-      children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-main", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "a",
-            {
-              href: t.url || "#",
-              target: "_blank",
-              rel: "noopener noreferrer",
-              className: "pr-open-ref",
-              title: "Open " + t.slug + " in " + (t.source_label || t.source),
-              children: t.slug
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-title", children: t.name || "" })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-meta", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: (t.source_label || t.source) + " · " + ticketAgeText(t.created_at) }),
-          t.has_session ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip on", children: "session open" }) : t.eligible ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip ok", children: "queued for auto ingestion" }) : (t.reasons || []).map((reason) => /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip", children: reason }, reason))
-        ] }),
-        t.has_session ? /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "btn-primary pr-review-btn", disabled: true, children: "Session open" }) : /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "button",
-          {
-            type: "button",
-            className: "btn-primary pr-review-btn",
-            disabled: state !== "idle",
-            onClick: async () => {
-              setState("starting");
-              try {
-                const r = await api("/api/tickets/start", {
-                  json: { source: t.source, id: t.id }
-                });
-                toast("Session " + ((r == null ? void 0 : r.title) || t.slug) + " — provisioning, see the sidebar");
-                setState("started");
-                refreshInstances();
-                setTimeout(onStarted, 5e3);
-              } catch (err) {
-                toast("Begin work failed: " + (err.message || "error"));
-                setState("idle");
-              }
-            },
-            children: state === "starting" ? "Starting…" : state === "started" ? "Started" : "Begin work"
-          }
-        )
-      ]
-    }
-  );
-}
-function SourceCard({
-  source,
-  catalog,
-  agents,
-  collapsed,
-  onToggle,
-  onChange,
-  onRemove
-}) {
-  const meta = catalog.find((p) => p.id === source.provider) || null;
-  const [test, setTest] = reactExports.useState({ testing: false });
-  const [states, setStates] = reactExports.useState([]);
-  const provName = (meta == null ? void 0 : meta.label) || source.provider;
-  const detail = (source.label || source.member_id || source.repo_url || "").trim();
-  const base = detail ? provName + " — " + detail : provName;
-  const summary = base + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
-  const repoMissing = !(source.repo_url || "").trim();
-  const testPayload = () => {
-    const payload = { id: source.id, provider: source.provider };
-    for (const f of (meta == null ? void 0 : meta.fields) || []) {
-      const v = source[f.key];
-      if (f.secret && !v) continue;
-      if (v != null) payload[f.key] = v;
-    }
-    if (source.repo_url) payload.repo_url = source.repo_url;
-    return payload;
-  };
-  const loadStates = async () => {
-    try {
-      const r = await api(
-        "/api/settings/ticketing/states",
-        { json: testPayload() }
-      );
-      if ((r == null ? void 0 : r.ok) && Array.isArray(r.states) && r.states.length) setStates(r.states);
-    } catch {
-    }
-  };
-  const runTest = async () => {
-    setTest({ testing: true });
-    try {
-      const r = await api("/api/settings/test/ticketing", {
-        json: testPayload()
-      });
-      if (r == null ? void 0 : r.ok) {
-        setTest({ testing: false, ok: true, msg: "Connected" + (r.name ? " — " + r.name : "") });
-        if (r.member_id && source.member_id !== r.member_id)
-          onChange({ member_id: String(r.member_id) });
-        loadStates();
-      } else {
-        setTest({ testing: false, ok: false, msg: String((r == null ? void 0 : r.error) || "test failed") });
-      }
-    } catch (e) {
-      setTest({ testing: false, ok: false, msg: e.message });
-    }
-  };
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tk-source" + (collapsed ? " tk-collapsed" : ""), "data-source-id": source.id, children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("button", { type: "button", className: "tk-head", "aria-expanded": !collapsed, onClick: onToggle, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tk-caret", children: collapsed ? "▸" : "▾" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tk-summary", children: summary })
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tk-body", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Provider" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "select",
-          {
-            className: "tk-provider",
-            value: source.provider,
-            onChange: (e) => onChange({ provider: e.target.value }),
-            children: catalog.map((p) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: p.id, children: p.label }, p.id))
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint tk-blurb", children: (meta == null ? void 0 : meta.blurb) || "" })
-      ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Label (optional)" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "input",
-          {
-            type: "text",
-            className: "tk-label",
-            placeholder: "e.g. Jira – EU",
-            defaultValue: source.label || "",
-            onBlur: (e) => {
-              if (e.target.value !== (source.label || "")) onChange({ label: e.target.value });
-            }
-          }
-        )
-      ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Repo URL" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "input",
-          {
-            type: "text",
-            autoComplete: "off",
-            required: true,
-            "data-tk-field": "repo_url",
-            className: repoMissing ? "field-missing" : "",
-            placeholder: "git@github.com:org/repo.git",
-            defaultValue: source.repo_url || "",
-            onBlur: (e) => {
-              if (e.target.value !== (source.repo_url || "")) onChange({ repo_url: e.target.value });
-            }
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Required — tickets from this source clone into this repo." })
-      ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Agent CLI" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs(
-          "select",
-          {
-            className: "tk-agent",
-            "data-tk-field": "agent",
-            value: source.agent || "",
-            onChange: (e) => onChange({ agent: e.target.value }),
-            children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: agents.fallback ? `App default (${agents.fallback})` : "App default" }),
-              agents.names.map((n) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: n, children: n }, n))
-            ]
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Which coding CLI runs the sessions this source starts. Route one queue to a cloud CLI and another to a local model — pick a provider whose Connections row is green, or leave it on the app default." })
-      ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "tk-fields", children: ((meta == null ? void 0 : meta.fields) || []).map(
-        (f) => f.type === "state" ? /* @__PURE__ */ jsxRuntimeExports.jsx(
-          StatePicker,
-          {
-            field: f,
-            source,
-            states,
-            loadStates,
-            onChange
-          },
-          f.key
-        ) : /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: f.label }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "input",
-            {
-              type: f.secret ? "password" : "text",
-              autoComplete: "off",
-              "data-tk-field": f.key,
-              placeholder: f.secret && source[f.key] === "•••set" ? "•••set (saved)" : f.placeholder || "",
-              defaultValue: f.secret ? "" : source[f.key] || "",
-              onBlur: (e) => {
-                if (f.secret && e.target.value === "") return;
-                if (e.target.value !== (source[f.key] || ""))
-                  onChange({ [f.key]: e.target.value });
-              }
-            }
-          )
-        ] }, f.key)
-      ) }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "set-row", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "test-row", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "test-btn", onClick: runTest, children: "Test connection" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "test-result" + (test.msg ? test.ok ? " ok" : " bad" : ""), children: test.testing ? "testing…" : test.msg ? (test.ok ? "✓ " : "✗ ") + test.msg : "" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "test-btn tk-remove", onClick: onRemove, children: "Remove" })
-      ] }) })
-    ] })
-  ] });
-}
 function Workspace({ gotoScreen }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Workspace" }),
@@ -31270,452 +32395,6 @@ function Workspace({ gotoScreen }) {
         /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "staging" }),
         " ",
         "to always PR there. Blank = PR into whatever branch the session was created from."
-      ] })
-    ] })
-  ] });
-}
-function useAgentChoices() {
-  const [choices, setChoices] = reactExports.useState({ names: [], fallback: "" });
-  reactExports.useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const p = await api(
-          "/api/providers"
-        );
-        if (!alive) return;
-        setChoices({
-          names: ((p == null ? void 0 : p.providers) || []).map((x) => x.name).filter(Boolean),
-          fallback: (p == null ? void 0 : p.default) || ""
-        });
-      } catch {
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-  return choices;
-}
-function AgentPicker({
-  label,
-  hint,
-  value,
-  choices,
-  fallbackLabel,
-  onChange
-}) {
-  const empty = fallbackLabel || (choices.fallback ? `App default (${choices.fallback})` : "App default");
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: label }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("select", { value: value || "", onChange: (e) => onChange(e.target.value), children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: empty }),
-      choices.names.map((n) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: n, children: n }, n))
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: hint })
-  ] });
-}
-function PrReview({ gotoScreen }) {
-  var _a2, _b2, _c2;
-  const s = useSettings();
-  const agentChoices = useAgentChoices();
-  const gh = s.settings.github || {};
-  const enabled = gh.enabled !== false;
-  const repos = Array.isArray(gh.repos) ? gh.repos : [];
-  const skipAuthors = Array.isArray(gh.skip_authors) ? gh.skip_authors.join(", ") : gh.skip_authors || "";
-  const [skipDraft, setSkipDraft] = reactExports.useState(String(skipAuthors));
-  reactExports.useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
-  const prsQuery = usePanelQuery("github-prs");
-  const loadOpenPrs = prsQuery.refresh;
-  const relistPrs = prsQuery.refetch;
-  const prs = prsQuery.data ? prsQuery.data.prs || [] : null;
-  const prsRepos = ((_a2 = prsQuery.data) == null ? void 0 : _a2.repos) || [];
-  const prsError = prsQuery.error ? "Could not list PRs: " + (prsQuery.error.message || "error") : "";
-  const prsNote = prsError ? "" : ((_b2 = prsQuery.data) == null ? void 0 : _b2.login) ? "GitHub: " + prsQuery.data.login : ((_c2 = prsQuery.data) == null ? void 0 : _c2.login_error) ? "GitHub login unknown — force review may still work" : prsQuery.isFetching ? prs ? "Refreshing…" : "Loading…" : "";
-  const [ghTest, setGhTest] = reactExports.useState({
-    testing: false
-  });
-  const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
-  const n = repos.length;
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Automated PR review" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "caps-gate", "data-caps-gate": "git", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
-      "Install ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Git" }),
-      " to get access to these features — automated PR review checks out and works on your pull-request branches, which needs git. Install it (e.g.",
-      " ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "sudo apt install git" }),
-      " / ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "brew install git" }),
-      "), then reload this page."
-    ] }) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "caps-gate", "data-caps-gate": "ticketing", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
-        "Connect a ",
-        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "ticketing tool" }),
-        " to get access to these features — automated PR review runs alongside ticket ingestion, which needs a connected ticketing source (Jira, Linear, GitHub Issues, Shortcut or Asana)."
-      ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "linklike", "data-goto-screen": "ticketing", onClick: () => gotoScreen("ticketing"), children: "Connect one in Settings → Ticketing" }) })
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint set-block-hint", children: [
-      "MindFlock watches ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "your own" }),
-      " open pull requests on the repositories below and automatically spins up a coding session to address review comments. It runs while ingestion is active."
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      AutomationSwitch,
-      {
-        label: "Automated review",
-        title: "Turn automated PR review on or off — your repositories are kept either way",
-        rowId: "gh-pr-toggle-row",
-        inputId: "gh-pr-enabled",
-        statusId: "gh-pr-status",
-        checked: enabled,
-        onChange: (next) => saveGithub(
-          { enabled: next },
-          next ? "Automated review on" : "Automated review paused"
-        ),
-        tone: n > 0 && enabled ? "on" : n > 0 ? "paused" : "",
-        status: !n ? "○ Add a repository below to start reviewing your PRs" : enabled ? `● Active — reviewing PRs in ${n} ${n === 1 ? "repository" : "repositories"}` : `‖ Paused — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated review on to resume`
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      RepoListField,
-      {
-        label: "Repositories to review",
-        repos,
-        onSave: (list, msg) => saveGithub({ repos: list }, msg),
-        emptyText: "No repositories yet — add one below to start reviewing your PRs.",
-        listId: "gh-repos-list",
-        inputId: "gh-repo-new",
-        addId: "gh-repo-add-btn",
-        hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-          "Type a repo as ",
-          /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "owner/name" }),
-          ", then press Enter or click Add. Adding one turns review on; remove them all to turn it off."
-        ] })
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      AgentPicker,
-      {
-        label: "Agent CLI",
-        value: String(gh.agent || ""),
-        choices: agentChoices,
-        onChange: (v) => s.saveField("github", "agent", v),
-        hint: /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: "Which coding CLI runs PR-review sessions. Independent of issue handling's — pick a provider whose Connections row is green, or leave it on the app default." })
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      WorkListPanel,
-      {
-        label: "Open pull requests",
-        onRefresh: loadOpenPrs,
-        note: prsNote,
-        rowId: "gh-open-prs-row",
-        refreshId: "gh-prs-refresh",
-        noteId: "gh-prs-note",
-        listId: "gh-prs-list",
-        hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-          "Every non-draft open PR on the repositories above, with why auto review has or hasn't picked it up. ",
-          /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Begin review" }),
-          " starts a review session for that PR right now, bypassing the author / age / already-reviewed filters."
-        ] }),
-        children: prsError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: prsError }) : prs === null ? null : !prsRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open PRs." }) : !prs.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open pull requests on the watched repositories." }) : prs.map((p) => /* @__PURE__ */ jsxRuntimeExports.jsx(
-          WorkItemRow,
-          {
-            reference: (p.repo || "") + "#" + p.number,
-            url: p.url,
-            title: p.title,
-            tooltip: (p.repo || "") + "#" + p.number + " — " + (p.title || "") + "\nby " + (p.author || "?") + " · " + (p.head_ref || "?") + " → " + (p.base_ref || "?"),
-            meta: `by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`,
-            hasSession: p.has_session,
-            eligible: p.eligible,
-            eligibleLabel: "queued for auto review",
-            reasons: p.reasons,
-            actionLabel: "Begin review",
-            failPrefix: "Begin review failed",
-            onStart: async () => {
-              const r = await api("/api/github/prs/review", {
-                json: { repo: p.repo, number: p.number }
-              });
-              refreshInstances();
-              setTimeout(relistPrs, 5e3);
-              return "Review session " + ((r == null ? void 0 : r.title) || "");
-            }
-          },
-          (p.repo || "") + p.number
-        ))
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("details", { className: "pr-advanced", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("summary", { children: "Advanced options" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-advanced-body", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Base branch" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "base_branch", placeholder: "any branch" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Only PRs targeting this branch are reviewed. Blank = all branches." })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Min PR age (minutes)" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "min_age_minutes", type: "number", placeholder: "15" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Grace period after a PR opens before review starts, so you can finish pushing. Default 15." })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Poll every (seconds)" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "poll_interval_seconds", type: "number", placeholder: "60" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "How often to check GitHub for new PRs. Default 60." })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Skip authors" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "input",
-            {
-              type: "text",
-              id: "gh-skip-authors",
-              placeholder: "dependabot, renovate",
-              autoComplete: "off",
-              value: skipDraft,
-              onChange: (e) => setSkipDraft(e.target.value),
-              onBlur: () => {
-                const list = skipDraft.split(",").map((x) => x.trim()).filter(Boolean);
-                saveGithub({ skip_authors: list }, "Saved skip authors");
-              }
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Comma-separated GitHub logins whose PRs are ignored." })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Token" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "token", type: "password", placeholder: "optional — else $GH_TOKEN / gh auth" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Also what lets MindFlock open and merge PRs for you without the gh CLI. Falls back to $GH_TOKEN / $GITHUB_TOKEN / `gh auth token`. Pushing never needs it — that is plain git over your own remote." })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "test-row", children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "button",
-              {
-                type: "button",
-                id: "gh-test-btn",
-                className: "test-btn",
-                onClick: async () => {
-                  setGhTest({ testing: true });
-                  setGhTest(await runGithubTest());
-                },
-                children: "Test GitHub"
-              }
-            ),
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "span",
-              {
-                id: "gh-test-result",
-                className: "test-result" + (ghTest.msg ? ghTest.ok ? " ok" : " bad" : ""),
-                children: ghTest.testing ? "testing…" : ghTest.msg ? (ghTest.ok ? "✓ " : "✗ ") + ghTest.msg : ""
-              }
-            )
-          ] }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Shows where a token would come from. A token is all this needs — gh is reported too, but it is optional." })
-        ] })
-      ] })
-    ] })
-  ] });
-}
-function GitIssues({ gotoScreen }) {
-  var _a2;
-  const s = useSettings();
-  const agentChoices = useAgentChoices();
-  const gh = s.settings.github || {};
-  const enabled = gh.issues_enabled === true;
-  const repos = Array.isArray(gh.issue_repos) ? gh.issue_repos : [];
-  const skipAuthors = Array.isArray(gh.issue_skip_authors) ? gh.issue_skip_authors.join(", ") : gh.issue_skip_authors || "";
-  const [skipDraft, setSkipDraft] = reactExports.useState(String(skipAuthors));
-  reactExports.useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
-  const issuesQuery = usePanelQuery("github-issues");
-  const loadOpenIssues = issuesQuery.refresh;
-  const relistIssues = issuesQuery.refetch;
-  const issues = issuesQuery.data ? issuesQuery.data.issues || [] : null;
-  const issuesRepos = ((_a2 = issuesQuery.data) == null ? void 0 : _a2.repos) || [];
-  const issuesError = issuesQuery.error ? "Could not list issues: " + (issuesQuery.error.message || "error") : "";
-  const issuesNote = issuesError || !issuesQuery.isFetching ? "" : issues ? "Refreshing…" : "Loading…";
-  const [ghTest, setGhTest] = reactExports.useState({
-    testing: false
-  });
-  const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
-  const n = repos.length;
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Automated issue handling" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "caps-gate", "data-caps-gate": "git", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
-      "Install ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Git" }),
-      " to get access to these features — automated issue handling clones your repositories and works on fresh branches, which needs git. Install it (e.g. ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "sudo apt install git" }),
-      " / ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "brew install git" }),
-      "), then reload this page."
-    ] }) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "caps-gate", "data-caps-gate": "ticketing", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
-        "Connect a ",
-        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "ticketing tool" }),
-        " to get access to these features — automated issue handling runs alongside ticket ingestion, which needs a connected ticketing source (Jira, Linear, GitHub Issues, Shortcut or Asana)."
-      ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "linklike", "data-goto-screen": "ticketing", onClick: () => gotoScreen("ticketing"), children: "Connect one in Settings → Ticketing" }) })
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint set-block-hint", children: [
-      "MindFlock watches for ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "newly opened issues" }),
-      " on the repositories below, grabs each issue and all its comments, and automatically spins up a coding session that starts work on a fresh branch for it. Separate from PR review — the repository lists are independent."
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      AutomationSwitch,
-      {
-        label: "Automated handling",
-        title: "Turn automated issue handling on or off — your repositories are kept either way",
-        rowId: "gh-issues-toggle-row",
-        inputId: "gh-issues-enabled",
-        statusId: "gh-issues-status",
-        checked: enabled,
-        onChange: (next) => saveGithub(
-          { issues_enabled: next },
-          next ? "Automated issue handling on" : "Automated issue handling off"
-        ),
-        tone: n > 0 && enabled ? "on" : n > 0 ? "paused" : "",
-        status: !n ? "○ Add a repository below, then turn Automated handling on" : enabled ? `● Active — handling new issues in ${n} ${n === 1 ? "repository" : "repositories"}` : `‖ Off — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated handling on to start`
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      RepoListField,
-      {
-        label: "Repositories to watch",
-        repos,
-        onSave: (list, msg) => saveGithub({ issue_repos: list }, msg),
-        emptyText: "No repositories yet — add one below to start handling new issues.",
-        listId: "gh-issue-repos-list",
-        inputId: "gh-issue-repo-new",
-        addId: "gh-issue-repo-add-btn",
-        hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-          "Type a repo as ",
-          /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "owner/name" }),
-          ", then press Enter or click Add. This list is separate from PR review's — a repo can be on either, or both."
-        ] })
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      AgentPicker,
-      {
-        label: "Agent CLI",
-        value: String(gh.issue_agent || ""),
-        choices: agentChoices,
-        onChange: (v) => s.saveField("github", "issue_agent", v),
-        hint: /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: "Which coding CLI runs issue-handling sessions. Independent of PR review's — setting one does not change the other." })
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      WorkListPanel,
-      {
-        label: "Open issues",
-        onRefresh: loadOpenIssues,
-        note: issuesNote,
-        rowId: "gh-open-issues-row",
-        refreshId: "gh-issues-refresh",
-        noteId: "gh-issues-note",
-        listId: "gh-issues-list",
-        hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-          "Every open issue on the repositories above, with why auto handling has or hasn't picked it up. ",
-          /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Start work" }),
-          " spins up a session for that issue right now, bypassing the age / already-handled filters."
-        ] }),
-        children: issuesError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: issuesError }) : issues === null ? null : !issuesRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open issues." }) : !issues.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open issues on the watched repositories." }) : issues.map((i) => /* @__PURE__ */ jsxRuntimeExports.jsx(
-          WorkItemRow,
-          {
-            reference: (i.repo || "") + "#" + i.number,
-            url: i.url,
-            title: i.title,
-            tooltip: (i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?"),
-            meta: `by ${i.author || "?"} · ${ageText(i.created_at)}`,
-            hasSession: i.has_session,
-            eligible: i.eligible,
-            eligibleLabel: "queued for auto handling",
-            reasons: i.reasons,
-            actionLabel: "Start work",
-            failPrefix: "Start work failed",
-            onStart: async () => {
-              const r = await api("/api/github/issues/start", {
-                json: { repo: i.repo, number: i.number }
-              });
-              refreshInstances();
-              setTimeout(relistIssues, 5e3);
-              return "Issue session " + ((r == null ? void 0 : r.title) || "");
-            }
-          },
-          (i.repo || "") + i.number
-        ))
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("details", { className: "pr-advanced", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("summary", { children: "Advanced options" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-advanced-body", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Min issue age (minutes)" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "issue_min_age_minutes", type: "number", placeholder: "15" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Grace period after an issue opens before work starts, so you can finish writing it. Default 15. Independent of PR review's setting." })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Poll every (seconds)" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "github", field: "issue_poll_interval_seconds", type: "number", placeholder: "60" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "How often to check GitHub for new issues. Default 60. Independent of PR review's setting." })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Skip authors" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "input",
-            {
-              type: "text",
-              id: "gh-issue-skip-authors",
-              placeholder: "dependabot, renovate",
-              autoComplete: "off",
-              value: skipDraft,
-              onChange: (e) => setSkipDraft(e.target.value),
-              onBlur: () => {
-                const list = skipDraft.split(",").map((x) => x.trim()).filter(Boolean);
-                saveGithub({ issue_skip_authors: list }, "Saved skip authors");
-              }
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Comma-separated GitHub logins whose issues are ignored. Independent of PR review's list." })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "GitHub token" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "test-row", children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "button",
-              {
-                type: "button",
-                id: "gh-issue-test-btn",
-                className: "test-btn",
-                onClick: async () => {
-                  setGhTest({ testing: true });
-                  setGhTest(await runGithubTest());
-                },
-                children: "Test GitHub"
-              }
-            ),
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "span",
-              {
-                id: "gh-issue-test-result",
-                className: "test-result" + (ghTest.msg ? ghTest.ok ? " ok" : " bad" : ""),
-                children: ghTest.testing ? "testing…" : ghTest.msg ? (ghTest.ok ? "✓ " : "✗ ") + ghTest.msg : ""
-              }
-            )
-          ] }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
-            "The GitHub credential is shared with PR review — it authenticates the same account. Set or change it under",
-            " ",
-            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "linklike", onClick: () => gotoScreen("repo"), children: "Settings → PR review" }),
-            "; the button above checks the current connection."
-          ] })
-        ] })
       ] })
     ] })
   ] });
@@ -32422,10 +33101,7 @@ const SCREENS = [
   { key: "notifications", label: "Notifications", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Notifications, { ...p }) },
   { key: "coding", label: "Agent CLI", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(CodingCli, { ...p }) },
   { key: "localmodel", label: "Local model", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(LocalModel, { ...p }) },
-  { key: "ticketing", label: "Ticketing", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Ticketing, { ...p }) },
   { key: "workspace", label: "Workspace", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Workspace, { ...p }) },
-  { key: "repo", label: "PR review", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(PrReview, { ...p }) },
-  { key: "issues", label: "Git issues", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(GitIssues, { ...p }) },
   { key: "ide", label: "IDE", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Ide, { ...p }) },
   { key: "providers", label: "Agent providers", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Providers, { ...p }) },
   { key: "security", label: "Security", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Security, { ...p }) },
@@ -32441,12 +33117,21 @@ function SettingsDialog({ onOpenSysLogsPane }) {
   const closeDialog = useUi((s) => s.closeDialog);
   const [screen, setScreen] = reactExports.useState("general");
   const model = useSettingsModel(open);
+  const openDialogFor = useUi((s) => s.openDialogFor);
+  const gotoScreen = (name) => {
+    const tab = LEGACY_SCREEN_TABS[name];
+    if (tab) openDialogFor("intake", tab);
+    else setScreen(SCREENS.some((s) => s.key === name) ? name : "general");
+  };
   reactExports.useEffect(() => {
-    if (open) setScreen(target && SCREENS.some((s) => s.key === target) ? target : "general");
-  }, [open, target]);
-  reactExports.useEffect(() => {
-    if (open) prefetchSettingsPanels();
-  }, [open]);
+    if (!open) return;
+    const tab = target ? LEGACY_SCREEN_TABS[target] : void 0;
+    if (tab) {
+      openDialogFor("intake", tab);
+      return;
+    }
+    setScreen(target && SCREENS.some((s) => s.key === target) ? target : "general");
+  }, [open, target, openDialogFor]);
   reactExports.useEffect(() => {
     if (!open) return;
     const onKey = (e) => {
@@ -32461,7 +33146,7 @@ function SettingsDialog({ onOpenSysLogsPane }) {
   if (!open) return null;
   const props = {
     active: true,
-    gotoScreen: setScreen,
+    gotoScreen,
     onOpenSysLogsPane: () => {
       onOpenSysLogsPane == null ? void 0 : onOpenSysLogsPane();
       closeDialog();
@@ -32497,8 +33182,7 @@ function SettingsDialog({ onOpenSysLogsPane }) {
             {
               className: "set-screen" + (screen === s.key ? " active" : ""),
               "data-screen": s.key,
-              id: s.key === "repo" ? "pr-review-block" : s.key === "issues" ? "git-issues-block" : void 0,
-              "data-caps-need": s.key === "mobile" ? "tailscale" : s.key === "workspace" ? "git" : s.key === "repo" || s.key === "issues" ? "git ticketing" : void 0,
+              "data-caps-need": s.key === "mobile" ? "tailscale" : s.key === "workspace" ? "git" : void 0,
               children: screen === s.key && s.el(props)
             },
             s.key
@@ -33785,13 +34469,17 @@ const SLIDES = [
     icon: "🔀",
     title: "3. PR review",
     body: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-      "List repositories as ",
+      "On ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "Intake → Pull requests" }),
+      ", add a card per repository —",
+      " ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "owner/name" }),
       " (e.g. ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "mindflockai/MindFlock" }),
-      "), then paste a ",
+      "), and optionally its own agent CLI, base branch and grace period. Then paste a",
+      " ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "GitHub token" }),
-      ". That token is the whole setup: it also lets MindFlock open and merge PRs for you. It falls back to",
+      " under Advanced options. That token is the whole setup: it also lets MindFlock open and merge PRs for you. It falls back to",
       " ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "$GH_TOKEN" }),
       " / ",
@@ -33804,17 +34492,7 @@ const SLIDES = [
       " is always plain ",
       /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "git push" }),
       " ",
-      "over the remote you already use, so an SSH remote needs nothing extra. Tune",
-      " ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "base branch" }),
-      ", ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "min PR age" }),
-      ", ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "poll interval" }),
-      ", and",
-      " ",
-      /* @__PURE__ */ jsxRuntimeExports.jsx("b", { children: "skip authors" }),
-      " (e.g. dependabot) to control what gets reviewed."
+      "over the remote you already use, so an SSH remote needs nothing extra."
     ] }),
     screen: "repo"
   },
@@ -33881,7 +34559,7 @@ function Logo() {
 }
 function WelcomeTour() {
   const open = useUi((s) => s.tourOpen);
-  const settingsOpen = useUi((s) => s.openDialog === "settings");
+  const settingsOpen = useUi((s) => s.openDialog === "settings" || s.openDialog === "intake");
   const finishTour = useUi((s) => s.finishTour);
   const openDialogFor = useUi((s) => s.openDialogFor);
   const [i, setI] = reactExports.useState(0);
@@ -33903,7 +34581,8 @@ function WelcomeTour() {
   const last = i === SLIDES.length - 1;
   const slide = SLIDES[i];
   const jumpTo = (screen) => {
-    openDialogFor("settings", screen);
+    const tab = LEGACY_SCREEN_TABS[screen];
+    openDialogFor(tab ? "intake" : "settings", tab || screen);
   };
   return /* @__PURE__ */ jsxRuntimeExports.jsx(
     "div",
@@ -34057,6 +34736,7 @@ function App() {
     /* @__PURE__ */ jsxRuntimeExports.jsx(VoiceInput, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(NewSessionDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsDialog, { onOpenSysLogsPane: () => toggleSpecial("syslogs") }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(IntakeDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(CommitDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(MakePrDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(RenameDialog, {}),

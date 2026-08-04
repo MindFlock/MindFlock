@@ -115,11 +115,14 @@ FastAPI app `backend.web.server:app`. Key pieces:
 - **`core/prompt_queue.py`** — per-session FIFO of prompts drained into idle
   agents by a background loop (self-driving runs; state in
   `~/.mindflock/prompt_queues.json`).
-- **`core/pr_review.py`** — the forced-PR-review path behind Settings → PR
-  review: lists open PRs (with why auto-review did/didn't take them) and can
-  start a review session in-process.
+- **`core/pr_review.py`** — the forced-PR-review path behind Intake → Pull
+  requests: lists open PRs into **every** base branch (with why auto-review
+  did/didn't take them — a base the repo's card doesn't watch is one of those
+  reasons, not a filter, so the row stays force-reviewable) and can start a
+  review session in-process, on the CLI that repo's card asks for
+  (`review_agent` → `PipelineConfig.pr_agent`).
 - **`_cached_fanout` (in `server.py`)** — the one place stale-while-revalidate
-  caching lives, shared by the three settings-panel routes (`/api/tickets`,
+  caching lives, shared by the three Intake-panel routes (`/api/tickets`,
   `/api/github/prs`, `/api/github/issues`). Each is an upstream fan-out the
   panels poll while open, so a payload is fresh for `_FANOUT_TTL` (20 s), then
   served *stale* for up to `_FANOUT_MAX_STALE` (5 min) with `stale: true` while
@@ -181,19 +184,23 @@ A React + TypeScript SPA (source in `frontend/`, built with Vite into
 `static/app.js` with stable names). It renders a draggable terminal grid
 (1/2/4/9/auto view modes), a sidebar with per-session actions and stage chips,
 Agent/Terminal/Diff tabs per pane, guided next-step buttons, token/cost popups,
-voice input, and a settings dialog. `core/ws-xterm.js` is the shared
-xterm↔WebSocket wiring; `mobile.*` is a single-terminal phone UI at `/m`.
-See [web-ui.md](web-ui.md).
+voice input, a settings dialog, and a **Intake** dialog (top bar / Alt+I,
+`components/intake/`) whose Tickets / Pull requests / Issues tabs are where
+sessions come from — Settings is set-and-forget, Intake is the surface you visit
+to see what came in and start something by hand. `core/ws-xterm.js` is the
+shared xterm↔WebSocket wiring; `mobile.*` is a single-terminal phone UI at
+`/m`. See [web-ui.md](web-ui.md).
 
 `frontend/src/state/queries.ts` is the shared server-state layer (TanStack
 Query): every hook that reads the HTTP API lives there, including the
-settings-panel fan-outs (`usePanelQuery`, the `PANELS` map, and
-`prefetchSettingsPanels`, called when the dialog opens). Those live in the query
-client *precisely because* the settings dialog and each screen unmount on
-close/switch — component state meant every visit paid the full upstream sweep
-again. Those queries raise `gcTime` to an hour (`PANEL_GC_MS`): on
-TanStack's 5-minute default, "cached across dialog opens" would quietly become a
-cold load again after a short break, which is when the wait feels worst.
+Intake-panel fan-outs (`usePanelQuery`, the `PANELS` map, and
+`prefetchIntakePanels`, called when the Intake dialog opens — warming all three tabs
+is also what fills the tab strip's counts). Those live in the query client
+*precisely because* the Intake dialog and each tab unmount on close/switch —
+component state meant every visit paid the full upstream sweep again. Those
+queries raise `gcTime` to an hour (`PANEL_GC_MS`): on TanStack's 5-minute
+default, "cached across dialog opens" would quietly become a cold load again
+after a short break, which is when the wait feels worst.
 
 ### Ingestion pipeline (`backend/ticket_ingestion`)
 

@@ -6,7 +6,9 @@ Resolution order (see :func:`backend.config.secrets.resolve_secret`):
   3. ``$GH_TOKEN`` / ``$GITHUB_TOKEN``
   4. ``gh auth token`` (OAuth device flow, same as VS Code) as a last resort
 
-The resolved token is cached for the lifetime of the process.
+The resolved token is cached for the lifetime of the process — pasting a new one
+into the UI therefore has to say so (:func:`invalidate`), or every consumer keeps
+using the old one until a restart.
 """
 
 import asyncio
@@ -19,6 +21,18 @@ _cached_token: str | None = None
 
 class GithubAuthError(Exception):
     pass
+
+
+def invalidate() -> None:
+    """Forget the cached token so the next resolve walks the chain again.
+
+    Called when ``github.token`` is written (the settings addon) and by the
+    per-repo access test, whose entire job is to answer "does the credential I
+    just pasted work" — a cached answer from the previous token would be worse
+    than no test at all.
+    """
+    global _cached_token
+    _cached_token = None
 
 
 async def resolve_token(config: GithubConfig) -> str:

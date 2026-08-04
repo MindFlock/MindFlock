@@ -5,7 +5,7 @@
  * here takes effect on its own, independent of the ticket toggle. The dot is
  * gold while starting or idle-waiting for a reviewable PR, green while one is
  * actually being handled. Hidden until PR review is set up (a repository
- * added in Settings → PR review) since review can't run with an empty repo
+ * added in Intake → Pull requests) since review can't run with an empty repo
  * list. */
 
 import { useUi } from "../../state/store";
@@ -34,7 +34,7 @@ export function PrReviewBar() {
     >
       <span
         id="pr-review-dot"
-        // `active` outranks the switch: a review forced from Settings is
+        // `active` outranks the switch: a review forced from Intake is
         // genuinely in flight even with automated review switched off.
         className={"dc-dot " + (active ? "on" : !on ? "off" : "idle")}
         title={
@@ -52,8 +52,8 @@ export function PrReviewBar() {
         <button
           id="pr-review-prs-btn"
           className="dc-toggle"
-          title="Repositories, open PRs and review options (Settings → PR review)"
-          onClick={() => openDialogFor("settings", "repo")}
+          title="Repositories, open PRs and review options (Intake → Pull requests)"
+          onClick={() => openDialogFor("intake", "prs")}
         >
           PRs
         </button>

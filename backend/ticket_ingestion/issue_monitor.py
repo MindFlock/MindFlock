@@ -53,16 +53,26 @@ class IssueMonitor:
             issues.extend(await self._list_issues(repo))
         if not issues:
             return []
-        cutoff = datetime.now(timezone.utc) - timedelta(
-            minutes=self.config.issue_min_age_minutes
-        )
-        skip = {a.strip().lower() for a in (self.config.issue_skip_authors or []) if a}
+        # Grace period and skip list are both per-repo (each watched repo is its
+        # own card in the Intake tab), so they are resolved per issue. `now` is
+        # taken once so a slow sweep can't move the cutoff mid-scan.
+        now = datetime.now(timezone.utc)
         processed = load_processed_issues(_STATE_DIR)
+
+        def _skipped(issue) -> bool:
+            skip = {
+                a.strip().lower()
+                for a in self.config.issue_skip_authors_for(issue.repo)
+                if a
+            }
+            return issue.author.lower() in skip
+
         eligible = [
             issue
             for issue in issues
-            if issue.author.lower() not in skip
-            and issue.created_at <= cutoff
+            if not _skipped(issue)
+            and issue.created_at
+            <= now - timedelta(minutes=self.config.issue_min_age_for(issue.repo))
             and (issue.repo, issue.number) not in processed
         ]
         eligible.sort(key=lambda i: i.created_at)

@@ -335,7 +335,7 @@
   // opening/merging a PR needs credentials, and when the server has none it
   // answers 200 with ok:false plus a prefilled GitHub URL. So the phone shows a
   // link and a remedy, never a raw "gh is not installed" bounced back at it.
-  var PR_REMEDY = "add a GitHub token in Settings → PR review, or install the GitHub CLI";
+  var PR_REMEDY = "add a GitHub token in Intake → Pull requests, or install the GitHub CLI";
 
   function doMakePr() {
     if (!current) return;
@@ -516,7 +516,7 @@
   setDiffBaseLabel();
 
   // O1: attention rank (lower = more urgent) + its picker marker. Mirrors the
-  // desktop inbox priorities (app.js attentionItems).
+  // desktop intake priorities (app.js attentionItems).
   function attnRank(inst) {
     if (inst.status === "paused") return 9;
     if (inst.activity === "clarify") return 0;

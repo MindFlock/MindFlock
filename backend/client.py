@@ -14,7 +14,7 @@ A candidate only counts as "found" when ``GET /api/config`` answers quickly
 (~1s) with the MindFlock config shape (``default_program`` + ``caps``),
 so a random service squatting the port is not mistaken for a server.
 
-Deliberately urllib-only (no aiohttp/requests): these are four small
+Deliberately urllik-only (no aiohttp/requests): these are four small
 JSON calls, and the CLI must work even on an engine-only install where the
 ``web`` dependency group was never synced.
 """

@@ -1980,7 +1980,7 @@ def _capabilities() -> dict:
     Only the coding agent is required to run MindFlock; everything else is
     progressive: no git -> sessions run in-place and diff/commit/PR surfaces
     hide; no tailscale -> the Mobile screen explains how to get phone access;
-    no ticketing source -> ingestion surfaces point at Settings → Ticketing;
+    no ticketing source -> ingestion surfaces point at Intake → Tickets;
     no github -> Make PR / Merge hand the user a prefilled compare page
     instead of opening the PR themselves (they never fail outright).
     Probed per-request (cheap) so installing/connecting takes effect on the
@@ -1992,6 +1992,33 @@ def _capabilities() -> dict:
         "ticketing": _ticketing_connected(),
         "github": _github_pr_available(),
     }
+
+
+def _start_agent_override(payload: dict) -> str:
+    """A validated per-start Agent CLI from a force-start body, or ``""``.
+
+    Every Work row can start on a CLI other than the one its source / repo card
+    is configured for — you notice mid-review that this one wants a different
+    model, and re-configuring the whole queue to run one item is the wrong shape
+    of action. ``""`` (the default) means "use the configured chain", so an old
+    client that sends nothing behaves exactly as before.
+
+    Raises :class:`ValueError` for a name no provider answers to, rather than
+    silently launching the default: a typo that quietly ran the wrong CLI is
+    worse than a rejected request.
+    """
+    name = str((payload or {}).get("agent", "") or "").strip()
+    if not name:
+        return ""
+    # The same set /api/providers offers the picker, `generic` excluded: it is
+    # the fallback for an arbitrary typed-in program, not a CLI anyone means to
+    # choose, and advertising it in the error would send people to a dead end.
+    known = {p.name for p in providers.all_providers() if p.name != "generic"}
+    if name not in known:
+        raise ValueError(
+            "unknown agent %r — pick one of: %s" % (name, ", ".join(sorted(known)))
+        )
+    return name
 
 
 def _no_git_response() -> JSONResponse:
@@ -3796,7 +3823,7 @@ async def instance_branches(title: str) -> JSONResponse:
 # The one remedy sentence every "MindFlock can't do the GitHub half itself"
 # message ends with. Kept in one place because it is asserted verbatim in the
 # tests and quoted in the docs: both rungs are optional and either one fixes it.
-_PR_REMEDY = "add a GitHub token in Settings → PR review, or install the GitHub CLI"
+_PR_REMEDY = "add a GitHub token in Intake → Pull requests, or install the GitHub CLI"
 
 
 def _pr_browser_fallback(wt: str, base: str, branch: str) -> JSONResponse:
@@ -4017,7 +4044,7 @@ async def instance_merge_pr(title: str) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
-# --- Forced PR review (Settings → PR review) ----------------------------------
+# --- Forced PR review (Intake → Pull requests) ----------------------------------
 # The automated monitor silently skips PRs that are already in the processed
 # ledger, not yours, or too young. These endpoints let the Settings screen show
 # every open PR with the skip reason and force-start a review session for one,
@@ -4145,6 +4172,10 @@ async def github_force_review(payload: dict) -> JSONResponse:
         number = int(payload.get("number"))
     except (TypeError, ValueError):
         return JSONResponse({"error": "number must be an integer"}, status_code=400)
+    try:
+        agent_override = _start_agent_override(payload)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
 
     # The provisioning row goes up BEFORE the GitHub lookup below, which is the
     # last thing standing between the click and the sidebar showing anything.
@@ -4203,11 +4234,13 @@ async def github_force_review(payload: dict) -> JSONResponse:
                 session.InstanceOptions(
                     title=title,
                     path=".",
-                    # Settings → PR review → Agent CLI first (same chain the
-                    # auto monitor uses), then the app-wide default. Mirrors the
-                    # issue force-start below, which already reads its resolved
-                    # agent before falling back.
-                    program=_pr_review.review_agent() or ENGINE.default_program(),
+                    # This start's own pick, then this repo's card, then Intake →
+                    # Pull requests' screen-wide Agent CLI (same chain the auto
+                    # monitor uses), then the app-wide default. Mirrors the issue
+                    # force-start below, which reads the same chain.
+                    program=agent_override
+                    or _pr_review.review_agent(repo)
+                    or ENGINE.default_program(),
                     provisioned=True,
                     workspace_strategy="clone",
                     new_branch=pr.head_ref,
@@ -4252,7 +4285,7 @@ async def github_force_review(payload: dict) -> JSONResponse:
     return JSONResponse({"started": True, "title": title}, status_code=202)
 
 
-# --- Ticket force-start (Settings → Ticketing) --------------------------------
+# --- Ticket force-start (Intake → Tickets) --------------------------------
 # The ticket twin of the PR force-review endpoints above: list every ticket
 # assigned to you on the configured sources with the reason auto ingestion has
 # or hasn't picked it up, and force-start a session for one, bypassing those
@@ -4296,6 +4329,10 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
     ticket_id = str(payload.get("id", "") or "").strip()
     if not source or not ticket_id:
         return JSONResponse({"error": "source and id are required"}, status_code=400)
+    try:
+        agent_override = _start_agent_override(payload)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
 
     # Row first, provider fetch second (see the PR endpoint above). The panel's
     # cached list is the title's source: ticket slugs are provider-defined
@@ -4325,6 +4362,11 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
     except Exception as err:  # noqa: BLE001
         _pending_drop(early)
         return JSONResponse({"error": str(err)}, status_code=502)
+
+    # A per-start choice outranks the source's card. Stamped onto the story
+    # because that is the field every launch path already consults first.
+    if agent_override:
+        story.agent = agent_override
 
     title = _ticket_start.session_title(story)
     if title != early:
@@ -4425,7 +4467,7 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
     return JSONResponse({"started": True, "title": title}, status_code=202)
 
 
-# --- Issue force-start (Settings → Git issues) ---------------------------------
+# --- Issue force-start (Intake → Issues) ---------------------------------
 # The issue twin of the PR force-review endpoints above: list every open issue
 # on the issue-handling repos with the reason auto handling has or hasn't
 # picked it up, and force-start a session for one, bypassing those filters
@@ -4467,6 +4509,10 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
         number = int(payload.get("number"))
     except (TypeError, ValueError):
         return JSONResponse({"error": "number must be an integer"}, status_code=400)
+    try:
+        agent_override = _start_agent_override(payload)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
 
     # Row first, GitHub lookup second (see the PR endpoint above).
     early = _cached_session_title(
@@ -4530,7 +4576,11 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
                 session.InstanceOptions(
                     title=title,
                     path=".",
-                    program=getattr(story, "agent", "") or ENGINE.default_program(),
+                    # This start's own pick outranks the repo card's Agent CLI,
+                    # which prepare_start already resolved onto the story.
+                    program=agent_override
+                    or getattr(story, "agent", "")
+                    or ENGINE.default_program(),
                     provisioned=True,
                     workspace_strategy=_issue_start.workspace_mode(),
                     new_branch=branch,

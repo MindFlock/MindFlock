@@ -1,4 +1,4 @@
-"""Force-start ticket sessions from the web UI (Settings → Ticketing).
+"""Force-start ticket sessions from the web UI (Intake → Tickets).
 
 The automated pipeline (``backend.ticket_ingestion``) only picks up
 tickets that are (a) assigned to the configured user and updated since the
@@ -6,7 +6,7 @@ per-source poll checkpoint, (b) absent from state.json's
 ``processed_stories`` ledger and (c) without an existing
 ``feature/<slug>/…`` branch on the remote — so a ticket can silently never
 get ingested (most commonly: it was recorded as failed/skipped once, or its
-branch was pushed by hand). This module backs the Settings → Ticketing
+branch was pushed by hand). This module backs the Intake → Tickets
 "Assigned tickets" panel: it lists recently-updated tickets assigned to you
 on every configured source annotated with *why* auto ingestion is or isn't
 taking each one, and force-starts a session for any of them, bypassing
@@ -115,8 +115,8 @@ def _failed_label(reason: str) -> str:
 
     Returned in full, only whitespace-normalized: the useful half of these
     reasons ("… is already checked out at <path>") is at the END, so clipping to
-    a chip-sized budget here would cut off the part worth reading. The chip
-    ellipsizes in CSS and carries the whole string in its tooltip.
+    a chip-sized budget here would cut off the part worth reading. The chip wraps
+    in CSS and carries the whole string in its tooltip.
     """
     if not reason:
         return "failed earlier (no reason recorded) — Run ticket to retry"
@@ -195,12 +195,26 @@ async def list_assigned_tickets() -> dict:
     tickets: list[dict] = []
     errors: list[dict] = []
     listed_sources: list[str] = []
+    # source key -> human label, for EVERY configured source including ones with
+    # no tickets and ones that failed. The panel groups by source, so a source
+    # that returned nothing still needs a heading to say so under — deriving
+    # labels from the ticket rows alone would make those sources vanish.
+    source_labels: dict = {}
+    # bucket name -> {"group": <workflow/board>, "label": <unqualified state>}.
+    # Lets the panel render source -> workflow -> state instead of stapling the
+    # workflow name onto every state heading.
+    bucket_meta: dict = {}
     bucket_order: list[str] = []
     done_buckets: set = set()
     ingest_states: dict = {}  # source key -> configured ingest bucket name
     branch_cache: dict[str, set] = {}
     for src in sources:
         source_key = src.id or src.provider
+        # The user's own label wins; the provider's is the fallback, and it is
+        # only reachable once the adapter constructs, so seed the key first.
+        source_labels[source_key] = (
+            getattr(src, "label", "") or ""
+        ).strip() or source_key
         try:
             provider = get_provider(src)
             stories = await provider.search_assigned_all()
@@ -208,6 +222,11 @@ async def list_assigned_tickets() -> dict:
             errors.append({"source": source_key, "error": str(err)})
             continue
         listed_sources.append(source_key)
+        source_labels[source_key] = (
+            (getattr(src, "label", "") or "").strip()
+            or getattr(provider, "label", "")
+            or source_key
+        )
         # Bucket order = the provider's workflow order (best-effort; a failed
         # states call just means this source's buckets append as encountered).
         # done-type buckets (Completed, Won't do, …) are flagged so the UI can
@@ -222,6 +241,17 @@ async def list_assigned_tickets() -> dict:
                     bucket_order.append(name)
                 if name and str(st.get("type") or "") == "done":
                     done_buckets.add(name)
+                # The workflow/board this state sits in, and its unqualified
+                # name — so the panel can nest rather than repeat the qualifier
+                # on every heading. Keyed by the bucket name, like every other
+                # bucket-indexed map here; two sources sharing a bucket name
+                # already share the bucket, so the last writer winning is the
+                # same answer the rest of this payload gives.
+                if name:
+                    bucket_meta[name] = {
+                        "group": str(st.get("group") or ""),
+                        "label": str(st.get("label") or "") or name,
+                    }
         except Exception:  # noqa: BLE001
             pass
         # The source's configured ingest filter (one or more states), as
@@ -262,7 +292,7 @@ async def list_assigned_tickets() -> dict:
             tickets.append(
                 {
                     "source": source_key,
-                    "source_label": getattr(provider, "label", "") or source_key,
+                    "source_label": source_labels[source_key],
                     "id": str(story.id),
                     "slug": story.slug,
                     "name": story.name,
@@ -282,7 +312,9 @@ async def list_assigned_tickets() -> dict:
     tickets.sort(key=lambda t: t.get("created_at") or "", reverse=True)
     return {
         "sources": listed_sources,
+        "source_labels": source_labels,
         "buckets": buckets,
+        "bucket_meta": {b: bucket_meta[b] for b in buckets if b in bucket_meta},
         "done_buckets": sorted(done_buckets & set(buckets)),
         "ingest_states": ingest_states,
         "tickets": tickets,
@@ -303,7 +335,7 @@ async def find_ticket(source: str, ticket_id: str):
             story.agent = getattr(src, "agent", "")
             return story
     raise LookupError(
-        f"No ticketing source {source!r} is configured — " "check Settings → Ticketing"
+        f"No ticketing source {source!r} is configured — " "check Intake → Tickets"
     )
 
 

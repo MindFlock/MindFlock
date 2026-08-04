@@ -123,6 +123,13 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         });
     }
     acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host.toggleShortcuts() });
+    // The three Intake tabs get their own entries: the queue you want is the
+    // thing you have in mind, and typing "issues" should land on it directly
+    // rather than on a dialog you then have to navigate.
+    acts.push({ label: "Open Intake", hint: "Alt+I", run: () => ui.openDialogFor("intake") });
+    acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
+    acts.push({ label: "Intake: Pull requests", run: () => ui.openDialogFor("intake", "prs") });
+    acts.push({ label: "Intake: Issues", run: () => ui.openDialogFor("intake", "issues") });
     acts.push({ label: "Open Settings", run: () => ui.openDialogFor("settings") });
     acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
     acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });

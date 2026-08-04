@@ -324,7 +324,7 @@ a feature race; those two change what your day looks like:
   commit runs in the session's own terminal, so you watch the hooks. Pushing is
   plain `git push` over whatever remote you already have — SSH or HTTPS, never
   rewritten by MindFlock. **Make PR** / **Merge** use the `gh` CLI when it's
-  installed and authenticated, a GitHub token (Settings → PR review) when it
+  installed and authenticated, a GitHub token (Intake → Pull requests) when it
   isn't, and a prefilled compare URL in your browser when you have neither.
 - 🔌 **Provider-agnostic** — every coding-agent CLI is just a TOML file (Claude
   Code, Codex, Antigravity, aider, OpenCode, Cline and Goose bundled; add your
@@ -371,9 +371,10 @@ a feature race; those two change what your day looks like:
 
 ### Let your tracker start the sessions
 
-On a fresh install you connect a tracker in the desktop app under **Settings →
-Ticketing** — a token, plus the repo that source's tickets should land in — and
-flip the **Ticket Ingestion** switch, which sits in the sidebar by default. From
+On a fresh install you connect a tracker in the desktop app's top bar under
+**Intake → Tickets** (Alt+I) — **+ Add ticketing source** takes a token, plus the
+repo that source's tickets should land in — and flip that tab's **Automated
+ingestion** switch; the sidebar's **Ticket Ingestion** bar flips it too. From
 then on MindFlock polls for tickets assigned to you and turns each one into a
 real session: an isolated git worktree on its own `feature/…` branch with the
 agent already seeded with the ticket, appearing in the session grid within
@@ -568,7 +569,7 @@ It finds — and auto-starts — the server by itself.
 | `git` ≥ 2.17, `tmux` ≥ 2.4 | On `PATH`; checked, with versions, by `mindflock doctor` |
 | A coding-agent CLI | `claude` (Claude Code) by default |
 | A git remote you can already push to | **SSH or HTTPS — either works.** MindFlock pushes with plain `git push` over the remote your repo already has, verbatim, and never rewrites it. If `git push` works in your terminal, it works here |
-| Optional — `gh` (GitHub CLI) | Only makes **Make PR** / **Merge** one click. Without it they fall back to a GitHub token (Settings → PR review), and without a token to a prefilled compare URL you open in your browser. Never involved in pushing. The PR-review poller runs on the same token and treats `gh auth token` as just one place to find it |
+| Optional — `gh` (GitHub CLI) | Only makes **Make PR** / **Merge** one click. Without it they fall back to a GitHub token (Intake → Pull requests), and without a token to a prefilled compare URL you open in your browser. Never involved in pushing. The PR-review poller runs on the same token and treats `gh auth token` as just one place to find it |
 | Optional — everything else | `cursor` (IDE integration), `tailscale` (phone access) |
 
 ## How It Works
@@ -624,7 +625,9 @@ checkout itself). `mindflock doctor` (also served at `GET /api/doctor`) checks
 every dependency and prints a platform-appropriate fix for anything missing.
 
 In the app, **+ New** creates a session (worktree + tmux + agent); click a
-session to type into its live terminal. The phone UI lives at `/m` (scan the
+session to type into its live terminal. Next to it in the top bar, **Intake**
+(Alt+I) is the surface you visit to see what came in — tickets, pull requests
+and issues — and start any of it by hand. The phone UI lives at `/m` (scan the
 startup QR).
 
 ### Terminal session control
@@ -647,8 +650,8 @@ See [docs/cli.md](docs/cli.md) for the full command reference.
 
 ### Ticket-ingestion pipeline
 
-Configure it from the app's ⚙ **Settings** dialog (Ticketing / Repository /
-GitHub sections) — values are saved to `~/.mindflock/settings.json` (mode
+Configure it from the app's **Intake** dialog (top bar, Alt+I), whose Tickets /
+Pull requests / Issues tabs save to `~/.mindflock/settings.json` (mode
 `0600`, never committed). No file editing needed. Add as many sources as you
 like, including two of the same provider (two Jira sites, say), each with its
 own credentials and target repo. Then flip the sidebar's **Ticket Ingestion**
@@ -662,7 +665,7 @@ For headless/scripted runs you can instead use a `config.toml` (an optional
 advanced override): copy [`config.toml.example`](config.toml.example) to
 `config.toml` and fill in your values. Every field resolves through
 `env var → ~/.mindflock/settings.json → config.toml → default`, so the
-Settings UI, an environment variable, or the file all work.
+web UI, an environment variable, or the file all work.
 
 Or toggle it from the web UI sidebar (**Ticket Ingestion** bar), which runs
 it as a managed subprocess and tails its log. The pipeline is a singleton per

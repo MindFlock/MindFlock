@@ -1,11 +1,11 @@
-"""Force-start issue sessions from the web UI (Settings → Git issues).
+"""Force-start issue sessions from the web UI (Intake → Issues).
 
 The automated monitor (``backend.ticket_ingestion.issue_monitor``) only
 picks up open issues that are (a) not authored by a skipped author, (b) past
 the min-age grace period and (c) absent from state.json's
 ``processed_issues`` ledger — so an issue can silently never get handled
 (most commonly: it was recorded processed/failed once). This module backs the
-Settings → Git issues screen: it lists every open issue on the watched repos
+Intake → Issues tab: it lists every open issue on the watched repos
 annotated with *why* auto handling is or isn't taking it, and force-starts a
 session for any of them, bypassing those filters.
 
@@ -84,13 +84,15 @@ def skip_reasons(issue, processed: set, gh, now: datetime | None = None) -> list
     reasons: list[str] = []
     if (issue.repo, issue.number) in processed:
         reasons.append("already handled (recorded in the processed ledger)")
-    skip = {a.strip().lower() for a in (gh.issue_skip_authors or []) if a}
+    # This repo's own skip list and grace period, which its card may override.
+    skip = {a.strip().lower() for a in gh.issue_skip_authors_for(issue.repo) if a}
     if issue.author.lower() in skip:
         reasons.append(f"authored by {issue.author} (in the skip list)")
     now = now or datetime.now(timezone.utc)
     age_min = (now - issue.created_at).total_seconds() / 60.0
-    if age_min < gh.issue_min_age_minutes:
-        left = max(1, round(gh.issue_min_age_minutes - age_min))
+    min_age = gh.issue_min_age_for(issue.repo)
+    if age_min < min_age:
+        left = max(1, round(min_age - age_min))
         reasons.append(f"in the min-age grace period ({left} min left)")
     return reasons
 
@@ -181,13 +183,16 @@ async def prepare_start(issue) -> tuple:
     cfg = _load_config()
     comments = await IssueMonitor(cfg.github).fetch_comments(issue)
     story = issue_to_ticket(issue, comments)
-    # Settings → Git issues → Agent CLI first (``github.issue_agent``), then the
-    # ingestion-wide ``[mindflock].agent``; "" = the app default. This used to
-    # call agent_for(), which skips straight to the ingestion-wide value — so the
-    # Agent CLI picker on the Git issues screen governed only the auto monitor
-    # and "Start work" launched whatever the app default was.
+    # This repo's own card first, then Intake → Issues' screen-wide Agent CLI
+    # (``github.issue_agent``), then the ingestion-wide ``[mindflock].agent``;
+    # "" = the app default. This used to call agent_for(), which skips straight
+    # to the ingestion-wide value — so the Agent CLI picker on the issues screen
+    # governed only the auto monitor and "Start work" launched whatever the app
+    # default was.
     issue_agent = getattr(cfg, "issue_agent", None)
-    story.agent = issue_agent() if callable(issue_agent) else ""
+    story.agent = (
+        issue_agent(getattr(issue, "repo", "")) if callable(issue_agent) else ""
+    )
     prompt = ClaudeCodeRunner(cfg)._build_prompt(story, None, None)
     return story, prompt, _branch_name_for(story)
 

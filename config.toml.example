@@ -1,10 +1,12 @@
 # MindFlock configuration (ADVANCED / OPTIONAL).
 #
-# You usually do NOT need this file. The recommended way to configure MindFlock is
-# the web Settings dialog (the ⚙ button), which writes secrets and settings to
-# ~/.mindflock/settings.json (mode 0600, never committed).
+# You usually do NOT need this file. The recommended way to configure MindFlock
+# is the web UI: the Settings dialog (the ⚙ button) for the app itself, plus the
+# Intake dialog (Alt+I) for the ticketing / PR-review / issue-handling keys below.
+# Both write secrets and settings to ~/.mindflock/settings.json (mode 0600,
+# never committed).
 #
-# Every value below can instead be set in the Settings UI or via an environment
+# Every value below can instead be set in the web UI or via an environment
 # variable. Resolution order for each field is:
 #
 #     environment variable  →  ~/.mindflock/settings.json  →  this config.toml  →  built-in default
@@ -16,7 +18,7 @@
 # Ticketing sources — one [[ticketing.source]] block per connected tracker.
 # provider ∈ github_issues | shortcut | jira | linear | asana. Each provider
 # reads the credential subset it needs (see docs/configuration.md). PREFER the
-# Settings UI (Ticketing) or $MINDFLOCK_TICKET_* env vars over committing
+# Intake dialog (Intake → Tickets) or $MINDFLOCK_TICKET_* env vars over committing
 # secrets here.
 #
 # The shortest possible source is GitHub Issues, which needs NO fields at all:
@@ -32,7 +34,7 @@ provider = "shortcut"
 # https://app.shortcut.com/settings/account/api-tokens
 api_token = ""
 # Your Shortcut member UUID — tickets owned by this member are the ones the
-# pipeline processes. Settings UI field: Ticketing → Member ID.
+# pipeline processes. UI field: Intake → Tickets → Member ID.
 member_id = ""
 poll_interval_seconds = 20
 # Optional: only ingest stories in this workflow state.
@@ -122,6 +124,28 @@ token = ""
 # issue_min_age_minutes = 15       # ignore issues younger than this
 # issue_poll_interval_seconds = 60
 # issue_skip_authors = []          # ["login", ...] issue authors to ignore
+# --- Per-repo overrides (optional) ------------------------------------------
+# Each watched repo is its own card in the Intake dialog (Intake → Pull requests /
+# Issues), so each can carry its own agent CLI, base branch, grace period and
+# skip list. These tables hold only the deviations: a key you omit inherits the
+# flat field above, and so does a key left blank or empty (0 is a real value —
+# no grace period at all). Keyed by the "owner/name" slug, quoted because of
+# the slash. Keep them LAST inside [github]: after one of these headers, every
+# bare key belongs to IT rather than to [github].
+#
+#   [github.repo_settings."owner/name"]      # PR review, one table per repo
+#   agent = "codex"                  # only this repo's reviews run on codex
+#   base_branch = "develop"          # its PRs target develop, not `main` above
+#   min_age_minutes = 0              # review it as soon as the PR opens
+#   skip_authors = ["renovate[bot]"] # whose review comments to ignore here
+#
+# The issue-handling twin takes the same keys minus base_branch, which it never
+# honours — an issue session always branches off the repo's own default:
+#
+#   [github.issue_repo_settings."owner/name"]
+#   agent = "aider"                  # only this repo's issues run on aider
+#   min_age_minutes = 60             # let issues here settle for an hour
+#   skip_authors = ["renovate[bot]"] # whose issues to ignore here
 
 [mindflock]
 # Engine integration (DEFAULT ON, including when this whole section is absent):

@@ -13,7 +13,11 @@ from backend.ticket_ingestion.providers import get_provider
 from backend.ticket_ingestion.clarification import InteractiveClarificationHandler
 from backend.ticket_ingestion.claude_runner import ClaudeCodeRunner
 from backend.ticket_ingestion.session_runner import SessionRunner, engine_bridge_error
-from backend.ticket_ingestion.config import PipelineConfig, fresh_agent
+from backend.ticket_ingestion.config import (
+    PipelineConfig,
+    agent_now,
+    source_agent_now,
+)
 from backend.ticket_ingestion.filter import AssigneeFilter
 from backend.ticket_ingestion.issue_monitor import (
     IssueCommentsFetchError,
@@ -334,7 +338,10 @@ class PipelineOrchestrator:
                 )
                 continue
             story.repo_url = scanner._source.repo_url
-            story.agent = scanner._source.agent
+            # Re-read from disk, like the scanner's own stamp: a ticket pending
+            # since a previous run must launch on the CLI configured NOW, not
+            # the one configured when that run booted.
+            story.agent = source_agent_now(scanner._source_key, scanner._source.agent)
             await self._queue.put(story)
             _logger.info("Re-enqueued pending ticket %s from a prior run.", slug)
 
@@ -427,7 +434,10 @@ class PipelineOrchestrator:
         # existing fallback chain untouched.
         # Re-read at launch, so switching the issue-handling provider in Settings
         # applies to the next issue rather than the next pipeline restart.
-        story.agent = fresh_agent(lambda c: c.issue_agent(), self.config)
+        story.agent = agent_now(
+            lambda c: c.issue_agent(getattr(issue, "repo", "")),
+            self.config.issue_agent(getattr(issue, "repo", "")),
+        )
         try:
             if self._cs_runner is not None:
                 await self._cs_runner.run(story)
@@ -515,7 +525,10 @@ class PipelineOrchestrator:
                 # Refresh the CLI first: the runner was built with the provider
                 # configured at process start, which may be several Settings
                 # changes ago.
-                self._pr_runner.agent = fresh_agent(lambda c: c.pr_agent(), self.config)
+                self._pr_runner.agent = agent_now(
+                    lambda c: c.pr_agent(getattr(pr, "repo", "")),
+                    self.config.pr_agent(getattr(pr, "repo", "")),
+                )
                 await self._pr_runner.launch(pr, workspace, comments)
         except Exception as e:
             # Cap retries: without a record, a PR whose provisioning keeps

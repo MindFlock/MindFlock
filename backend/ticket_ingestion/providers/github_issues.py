@@ -82,8 +82,9 @@ class GithubIssuesProvider(TicketProvider):
         )
         if not token:
             raise ProviderError(
-                "No GitHub token available — set ticketing.api_token, connect "
-                "GitHub in Settings, export GH_TOKEN, or run `gh auth login`."
+                "No GitHub token available — set this source's Token on its "
+                "card (Intake → Tickets), paste one under Intake → Pull requests → "
+                "Advanced options, export GH_TOKEN, or run `gh auth login`."
             )
         self._token = token
         return token

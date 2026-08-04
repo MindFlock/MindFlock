@@ -217,7 +217,7 @@ def test_light_focused_rows_outline_all_chips():
 # --------------------------------------------------------------------------- #
 
 # The user-facing remedy, verbatim. Also asserted in the docs and the backend.
-PR_REMEDY = "add a GitHub token in Settings → PR review, or install the GitHub CLI"
+PR_REMEDY = "add a GitHub token in Intake → Pull requests, or install the GitHub CLI"
 
 
 def test_app_js_pr_actions_never_alert_about_gh():

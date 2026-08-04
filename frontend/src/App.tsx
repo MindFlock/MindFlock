@@ -19,6 +19,7 @@ import { CommandPalette } from "./components/palette/CommandPalette";
 import { ShortcutsSheet } from "./components/palette/ShortcutsSheet";
 import { NewSessionDialog } from "./components/dialogs/NewSessionDialog";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
+import { IntakeDialog } from "./components/intake/IntakeDialog";
 import { CommitDialog } from "./components/dialogs/CommitDialog";
 import { MakePrDialog } from "./components/dialogs/MakePrDialog";
 import { RenameDialog } from "./components/dialogs/RenameDialog";
@@ -146,6 +147,7 @@ export default function App() {
       {/* Dialogs (each renders null unless open) */}
       <NewSessionDialog />
       <SettingsDialog onOpenSysLogsPane={() => toggleSpecial("syslogs")} />
+      <IntakeDialog />
       <CommitDialog />
       <MakePrDialog />
       <RenameDialog />

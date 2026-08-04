@@ -1,4 +1,4 @@
-"""Force-start issues (Settings -> Git issues) + the issue monitor's scan.
+"""Force-start issues (Work -> Issues) + the issue monitor's scan.
 
 Two layers, both network-free:
 

@@ -121,7 +121,7 @@ def test_github_no_credential_leads_with_the_token_not_a_gh_install(monkeypatch)
     assert c["fix"] == connections._NO_CREDENTIAL_FIX
     assert (
         c["fix"]
-        == "add a GitHub token in Settings → PR review, or install the GitHub CLI"
+        == "add a GitHub token in Intake → Pull requests, or install the GitHub CLI"
     )
     assert c["fix_command"] == ""  # Configure/$GH_TOKEN, not a shell command
     assert "brew install gh" not in c["fix"]

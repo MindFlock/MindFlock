@@ -259,7 +259,7 @@ class TestForcedReviewHonoursTheReviewAgent:
         monkeypatch.setattr(
             pr_review,
             "_load_config",
-            lambda: type("C", (), {"pr_agent": lambda self: "antigravity"})(),
+            lambda: type("C", (), {"pr_agent": lambda self, repo="": "antigravity"})(),
         )
         assert pr_review.review_agent() == "antigravity"
 
@@ -269,7 +269,7 @@ class TestForcedReviewHonoursTheReviewAgent:
         monkeypatch.setattr(
             pr_review,
             "_load_config",
-            lambda: type("C", (), {"pr_agent": lambda self: ""})(),
+            lambda: type("C", (), {"pr_agent": lambda self, repo="": ""})(),
         )
         assert pr_review.review_agent() == ""
 
@@ -285,14 +285,25 @@ class TestForcedReviewHonoursTheReviewAgent:
         assert pr_review.review_agent() == ""
 
     def test_the_route_prefers_the_review_agent_over_the_app_default(self):
-        """Pins the launch expression itself: the forced-review instance takes
-        review_agent() first and only then ENGINE.default_program()."""
+        """Pins the launch chain itself: this start's own pick, then
+        review_agent() for the repo, and only then ENGINE.default_program()."""
         import inspect
 
         from backend.web import server
 
         src = inspect.getsource(server.github_force_review)
-        assert "_pr_review.review_agent() or ENGINE.default_program()" in src
+        # Compare CODE only (the comment above it names the chain in prose), and
+        # on ONE logical line: black wraps the expression across three physical
+        # ones, which is formatting rather than meaning.
+        code = " ".join(
+            line.strip()
+            for line in src.splitlines()
+            if not line.strip().startswith("#")
+        )
+        assert (
+            "program=agent_override or _pr_review.review_agent(repo) "
+            "or ENGINE.default_program()," in code
+        )
 
 
 class TestProviderSwitchAppliesToTheNextLaunch:
@@ -377,14 +388,20 @@ class TestProviderSwitchAppliesToTheNextLaunch:
         assert runner._agent_for(story) == "aider"
 
     def test_pr_launch_rereads_the_review_agent(self):
-        """Both PR runners resolve through pr_agent(), re-read at launch."""
+        """Both PR runners resolve through pr_agent(), re-read at launch.
+
+        `agent_now`, not `fresh_agent`: the latter falls back to the construction
+        snapshot when the on-disk chain answers "", which re-applied the
+        boot-time provider every time — so CLEARING the field did nothing at all.
+        """
         import inspect
 
         from backend.ticket_ingestion import orchestrator, session_runner
 
         pr_src = inspect.getsource(session_runner.SessionRunner._create_pr_instance)
-        assert "fresh_agent" in pr_src
-        assert "c.pr_agent()" in pr_src
+        assert "agent_now(" in pr_src
+        assert "fresh_agent" not in pr_src
+        assert "c.pr_agent(repo)" in pr_src
         # The engine-off fallback runner used the ingestion-wide agent, so the
         # two runners disagreed about which CLI reviews a PR.
         init_src = inspect.getsource(orchestrator.PipelineOrchestrator.__init__)
@@ -392,7 +409,7 @@ class TestProviderSwitchAppliesToTheNextLaunch:
         assert "config.agent_for()" not in init_src
 
     def test_issue_force_start_uses_the_issue_agent_not_the_pipeline_one(self):
-        """Settings → Git issues → Agent CLI governed only the auto monitor:
+        """Intake → Issues → Agent CLI governed only the auto monitor:
         "Start work" read agent_for(), which skips past github.issue_agent."""
         import inspect
 

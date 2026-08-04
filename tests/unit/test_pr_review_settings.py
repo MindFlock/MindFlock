@@ -182,13 +182,19 @@ def test_github_connection_notes_missing_repo(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# Frontend: the redesigned Repo & PR review screen
+# Frontend: the Intake → Pull requests tab
 # --------------------------------------------------------------------------- #
 def test_index_has_pr_review_feature_block():
     html = client.get("/").text
-    assert "PR review" in client.get("/app.js").text  # discoverable nav label
+    # The tab label in the Intake dialog's strip (it left the Settings nav when
+    # the three intake surfaces were unified there). The tab strip IS the
+    # heading now, so there is no in-panel "Automated PR review" title — the
+    # switch label and its status line are what name the feature.
+    js = client.get("/app.js").text
+    assert '"Pull requests"' in js
+    assert '"Automated review"' in js
+    # Legacy id, kept on the work panel for addon CSS that targeted the screen.
     assert '"pr-review-block"' in client.get("/app.js").text
-    assert "Automated PR review" in client.get("/app.js").text
     # Explicit on/off (pause without deleting repos) + a status line reflecting it.
     assert '"gh-pr-enabled"' in client.get("/app.js").text
     assert '"gh-pr-status"' in client.get("/app.js").text
@@ -205,12 +211,18 @@ def test_index_has_pr_review_feature_block():
 
 
 def test_index_has_multi_repo_add_remove_controls():
-    html = client.get("/").text
-    assert (
-        '"gh-repos-list"' in client.get("/app.js").text
-    )  # where the repo chips render
-    assert '"gh-repo-new"' in client.get("/app.js").text  # the "add a repo" input
-    assert '"gh-repo-add-btn"' in client.get("/app.js").text
+    js = client.get("/app.js").text
+    assert '"gh-repos-list"' in js  # where the repo cards render
+    assert '"gh-repo-add-btn"' in js
+    # A watched repo is a CARD now, not a chip plus one screen-wide set of
+    # options: the slug is a field inside the card (alongside that repo's own
+    # agent / base branch / grace period), so there is no separate "add a repo"
+    # text input any more. `+ Add repository` appends an empty card instead.
+    assert '"gh-repo-new"' not in js
+    assert '"+ Add repository"' in js
+    # JSX props survive the bundler as object keys, hence the `":` spelling.
+    for field in ("repo", "agent", "base_branch", "min_age_minutes", "skip_authors"):
+        assert 'data-repo-field": "%s"' % field in js, field
 
 
 def test_app_js_wires_pr_review_repos_and_toggle():
@@ -219,15 +231,15 @@ def test_app_js_wires_pr_review_repos_and_toggle():
     assert "gh-skip-authors" in js
     assert "skip_authors" in js
     assert "skip_authors" in js
-    # Multi-repo add/remove: renders chips and persists the whole array.
-    assert "repo-chip" in js
-    # The add flow moved into the shared RepoListField (screens/automation.tsx)
-    # when PR review, Git issues and Ticketing were unified, so assert on its
-    # two guards rather than on the old local `addRepo` identifier. Exactly one
-    # copy of each IS the point: PR review and Git issues had their own before.
+    # Multi-repo add/remove lives in the shared RepoSourceList (intake/RepoSources
+    # .tsx), which PR review and Git issues both drive. Exactly one copy of each
+    # guard IS the point: both screens had their own before they were unified.
     assert js.count("Use owner/name") == 1  # owner/name format guard
     assert js.count("is already in the list") == 1  # duplicate guard
     assert "repos:" in js  # POST { github: { repos: [...] } }
+    # …and the per-repo override map saved alongside it, which is what makes a
+    # card's own agent / base branch / grace period mean anything.
+    assert "repo_settings:" in js
     # Explicit pause toggle owns github.enabled; a 3-state status line reflects it.
     assert "Paused —" in js
     assert "Automated review paused" in js
@@ -236,8 +248,13 @@ def test_app_js_wires_pr_review_repos_and_toggle():
 def test_style_has_feature_and_repo_rules():
     css = client.get("/style.css").text
     for sel in (
+        # Chips still carry the ticketing state picker.
         ".repo-chip",
         ".repo-chip-x",
-        ".repo-add-row",
+        # The card the watched repos render as, and the grouped work list under
+        # them (one group per repo).
+        ".tk-source",
+        ".ik-cards",
+        ".ik-groups",
     ):
         assert sel in css, sel
