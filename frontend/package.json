@@ -22,7 +22,7 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
-    "@types/react": "^19.0.0",
+    "@types/react": "^19.2.18",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.2.0",
     "playwright": "^1.61.1",
