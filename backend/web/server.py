@@ -3699,6 +3699,46 @@ async def instance_commit(title: str, payload: dict) -> JSONResponse:
     return JSONResponse({"ok": True, "tmux_name": _shell_tmux_name(title)})
 
 
+@app.get("/api/instances/{title}/commit-message")
+async def instance_commit_message(title: str) -> JSONResponse:
+    """The message of a commit that the pre-commit hooks blocked, so the dialog
+    can offer it back instead of making the user retype it.
+
+    The message already survives on disk — ``git commit -F`` reads it from a
+    git-excluded file in the worktree, and a re-commit with no message reuses it.
+    What was missing is any way for the UI to *see* it: the dialog remembered the
+    last message in a JS Map, which a page reload (or the server restart that
+    prompts one) empties, while the file it was a copy of sat right there.
+
+    Returned only when the recorded exit status is a failure — the same condition
+    that raises the "interrupt" stage. After a commit succeeds its message is
+    history, and pre-filling the next commit with it would be worse than empty.
+    """
+    if not git_available():
+        return _no_git_response()
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    wt = inst.GetWorktreePath()
+    if not wt:
+        return JSONResponse({"error": "workspace not ready"}, status_code=409)
+
+    def _read() -> str:
+        try:
+            with open(os.path.join(wt, _COMMIT_STATUS_FILE)) as f:
+                if f.read().strip() in ("", "0"):
+                    return ""
+        except OSError:
+            return ""  # no attempt recorded, or unreadable — nothing pending
+        try:
+            with open(os.path.join(wt, _COMMIT_MSG_FILE)) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    return JSONResponse({"message": await asyncio.to_thread(_read)})
+
+
 @app.post("/api/instances/{title}/push-branch")
 async def instance_push_branch(
     title: str, payload: Optional[dict] = None

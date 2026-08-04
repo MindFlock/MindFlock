@@ -571,6 +571,72 @@ def test_commit_reuses_saved_message_file(registered, monkeypatch, tmp_path):
     assert "git commit" in sent["cmd"]
 
 
+# The message of a blocked commit is offered back rather than retyped. It always
+# survived on disk (it is the file `git commit -F` reads); what was missing was a
+# way for the dialog to see it after a reload emptied its in-memory copy.
+def _commit_msg_session(registered, monkeypatch, tmp_path, name, status, msg):
+    wt = tmp_path / name
+    wt.mkdir()
+    if msg is not None:
+        (wt / ".mindflock_commit_msg").write_text(msg)
+    if status is not None:
+        (wt / ".mindflock_commit_status").write_text(status)
+    registered(name, wt=str(wt))
+    monkeypatch.setattr(server, "git_available", lambda: True)
+    return client.get("/api/instances/" + name + "/commit-message")
+
+
+def test_commit_message_returned_after_a_blocked_commit(
+    registered, monkeypatch, tmp_path
+):
+    r = _commit_msg_session(
+        registered, monkeypatch, tmp_path, "gt-cm1", "1", "hooks ate this\n"
+    )
+    assert r.status_code == 200
+    assert r.json()["message"] == "hooks ate this"
+
+
+def test_commit_message_withheld_after_a_successful_commit(
+    registered, monkeypatch, tmp_path
+):
+    """A committed message is history — pre-filling the NEXT commit with it would
+    be worse than an empty box."""
+    r = _commit_msg_session(
+        registered, monkeypatch, tmp_path, "gt-cm2", "0", "already committed\n"
+    )
+    assert r.status_code == 200
+    assert r.json()["message"] == ""
+
+
+def test_commit_message_empty_when_no_attempt_was_recorded(
+    registered, monkeypatch, tmp_path
+):
+    """No status file at all: a stale message file from some earlier flow must not
+    resurface as this commit's prefill."""
+    r = _commit_msg_session(
+        registered, monkeypatch, tmp_path, "gt-cm3", None, "stale\n"
+    )
+    assert r.status_code == 200
+    assert r.json()["message"] == ""
+
+
+def test_commit_message_survives_a_missing_message_file(
+    registered, monkeypatch, tmp_path
+):
+    """A failure recorded with no message file is an empty box, not a 500 — this
+    endpoint must never be what stops someone committing."""
+    r = _commit_msg_session(registered, monkeypatch, tmp_path, "gt-cm4", "1", None)
+    assert r.status_code == 200
+    assert r.json()["message"] == ""
+
+
+def test_commit_message_409_when_worktree_missing(registered, monkeypatch):
+    registered("gt-cm5", wt="")
+    monkeypatch.setattr(server, "git_available", lambda: True)
+    r = client.get("/api/instances/gt-cm5/commit-message")
+    assert r.status_code == 409
+
+
 def test_push_branch_400_without_origin(registered, monkeypatch, tmp_path):
     wt = tmp_path / "ws"
     wt.mkdir()

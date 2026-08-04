@@ -31,6 +31,33 @@ export function CommitDialog() {
     msgRef.current?.focus();
   }, [open, target]);
 
+  // The Map above is per page load, so a reload — or the server restart that
+  // prompts one — loses a message the hooks rejected. The worktree still holds
+  // it (it is the file `git commit -F` read), so ask for it and adopt it when we
+  // have nothing better. Late and unconditional-on-empty rather than awaited
+  // before the first paint: the textarea stays focused and typeable throughout,
+  // and anything already typed wins.
+  useEffect(() => {
+    if (!open || !target) return;
+    if (lastCommitMsg.get(target)) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await instApi<{ message?: string }>(target, "/commit-message");
+        const saved = (r?.message || "").trim();
+        if (cancelled || !saved) return;
+        // Only fill a still-empty box: the fetch may land after typing began.
+        setMsg((cur) => (cur.trim() ? cur : saved));
+      } catch {
+        // Nothing pending, or the session has no worktree — an empty box is the
+        // right answer either way, and this must never block committing.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, target]);
+
   // Escape closes (vanilla: global Escape chain in 170-new-session.js).
   useEffect(() => {
     if (!open) return;
@@ -69,7 +96,19 @@ export function CommitDialog() {
   }
 
   return (
-    <div id="commit-dialog" className="modal">
+    <div
+      id="commit-dialog"
+      className="modal"
+      // Clicking the backdrop dismisses, like Escape — reaching for Cancel to
+      // put away a dialog you're already looking away from is a wasted trip.
+      // mousedown, not click: a click whose press began inside the form and
+      // whose release landed out here is a text selection that overshot, and
+      // closing on it would throw away the message being selected. Only the
+      // backdrop itself counts, never a bubbled event from the form.
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) closeDialog();
+      }}
+    >
       <form
         id="commit-form"
         onSubmit={(e) => {
