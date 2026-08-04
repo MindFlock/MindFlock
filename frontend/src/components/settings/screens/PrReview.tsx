@@ -1,11 +1,17 @@
 /** Settings → PR review (partial 109 + section 21's github wiring): the repo
- * list IS the switch; open-PR panel with skip-reason chips + force review. */
+ * list IS the switch; open-PR panel with skip-reason chips + force review.
+ *
+ * The screen's shape — switch, status, watched list, agent, open-work panel,
+ * Advanced — comes from ./automation so this and Git issues and Ticketing stay
+ * the same screen with different nouns. This one additionally owns the GitHub
+ * token, which issue handling shares and links back to. */
 
 import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
-import { toast } from "../../../lib/toast";
 import { refreshInstances, usePanelQuery } from "../../../state/queries";
 import { SettingField, useSettings } from "../useSettings";
+import { AgentPicker, useAgentChoices } from "./AgentPicker";
+import { AutomationSwitch, RepoListField, WorkItemRow, WorkListPanel, ageText } from "./automation";
 import { runGithubTest } from "../../dialogs/SetupDialog";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -23,20 +29,13 @@ interface OpenPr {
   reasons?: string[];
 }
 
-function prAgeText(iso?: string): string {
-  const t = Date.parse(iso || "");
-  if (!isFinite(t)) return "";
-  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
-  if (mins < 60) return mins + "m old";
-  const h = Math.round(mins / 60);
-  if (h < 48) return h + "h old";
-  return Math.round(h / 24) + "d old";
-}
-
 export function PrReview({ gotoScreen }: ScreenProps) {
   const s = useSettings();
+  const agentChoices = useAgentChoices();
   const gh = (s.settings.github || {}) as {
     enabled?: boolean;
+    agent?: string;
+    issue_agent?: string;
     repos?: string[];
     skip_authors?: string[] | string;
   };
@@ -47,7 +46,6 @@ export function PrReview({ gotoScreen }: ScreenProps) {
     ? gh.skip_authors.join(", ")
     : gh.skip_authors || "";
 
-  const [repoNew, setRepoNew] = useState("");
   const [skipDraft, setSkipDraft] = useState(String(skipAuthors));
   useEffect(() => setSkipDraft(String(skipAuthors)), [skipAuthors]);
 
@@ -87,31 +85,7 @@ export function PrReview({ gotoScreen }: ScreenProps) {
   const saveGithub = (patch: Record<string, unknown>, okMsg: string) =>
     s.saveGroup("github", patch, okMsg);
 
-  const saveRepos = (list: string[], msg: string) =>
-    saveGithub({ repos: list }, msg);
-
-  const addRepo = () => {
-    const val = repoNew.trim();
-    if (!val) return;
-    if (!/^[^\s/]+\/[^\s/]+$/.test(val)) {
-      toast("Use owner/name, e.g. MindFlock/MindFlock");
-      return;
-    }
-    if (repos.some((r) => r.toLowerCase() === val.toLowerCase())) {
-      setRepoNew("");
-      toast(val + " is already in the list");
-      return;
-    }
-    setRepoNew("");
-    saveRepos([...repos, val], "Added " + val);
-  };
-
   const n = repos.length;
-  const statusText = !n
-    ? "○ Add a repository below to start reviewing your PRs"
-    : enabled
-      ? `● Active — reviewing PRs in ${n} ${n === 1 ? "repository" : "repositories"}`
-      : `‖ Paused — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated review on to resume`;
 
   return (
     <>
@@ -142,115 +116,122 @@ export function PrReview({ gotoScreen }: ScreenProps) {
         ingestion is active.
       </p>
 
-      <div
-        className="set-row set-switch-row"
-        id="gh-pr-toggle-row"
+      <AutomationSwitch
+        label="Automated review"
         title="Turn automated PR review on or off — your repositories are kept either way"
-      >
-        <span className="set-label">Automated review</span>
-        {/* label wraps only the switch, so clicking the row text no longer flips it */}
-        <label className="ca-switch">
-          <input
-            type="checkbox"
-            id="gh-pr-enabled"
-            checked={enabled}
-            onChange={(e) =>
-              saveGithub(
-                { enabled: e.target.checked },
-                e.target.checked ? "Automated review on" : "Automated review paused"
-              )
-            }
-          />
-          <span className="ca-slider" />
-        </label>
-      </div>
-      <div
-        id="gh-pr-status"
-        className={"pr-status" + (n > 0 && enabled ? " on" : n > 0 ? " paused" : "")}
-      >
-        {statusText}
-      </div>
+        rowId="gh-pr-toggle-row"
+        inputId="gh-pr-enabled"
+        statusId="gh-pr-status"
+        checked={enabled}
+        onChange={(next) =>
+          saveGithub(
+            { enabled: next },
+            next ? "Automated review on" : "Automated review paused"
+          )
+        }
+        tone={n > 0 && enabled ? "on" : n > 0 ? "paused" : ""}
+        status={
+          !n
+            ? "○ Add a repository below to start reviewing your PRs"
+            : enabled
+              ? `● Active — reviewing PRs in ${n} ${n === 1 ? "repository" : "repositories"}`
+              : `‖ Paused — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated review on to resume`
+        }
+      />
 
-      <div className="set-row">
-        <span className="set-label">Repositories to review</span>
-        <div id="gh-repos-list" className="repo-list">
-          {!repos.length ? (
-            <div className="repo-empty">
-              No repositories yet — add one below to start reviewing your PRs.
-            </div>
-          ) : (
-            repos.map((repo) => (
-              <span className="repo-chip" key={repo}>
-                <span className="repo-chip-name">{repo}</span>
-                <button
-                  type="button"
-                  className="repo-chip-x"
-                  title={"Remove " + repo}
-                  aria-label={"Remove " + repo}
-                  onClick={() =>
-                    saveRepos(
-                      repos.filter((r) => r !== repo),
-                      "Removed " + repo
-                    )
-                  }
-                >
-                  ✕
-                </button>
-              </span>
-            ))
-          )}
-        </div>
-        <div className="repo-add-row">
-          <input
-            type="text"
-            id="gh-repo-new"
-            placeholder="owner/name — e.g. mindflockai/MindFlock"
-            autoComplete="off"
-            spellCheck={false}
-            value={repoNew}
-            onChange={(e) => setRepoNew(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                addRepo();
+      <RepoListField
+        label="Repositories to review"
+        repos={repos}
+        onSave={(list, msg) => saveGithub({ repos: list }, msg)}
+        emptyText="No repositories yet — add one below to start reviewing your PRs."
+        listId="gh-repos-list"
+        inputId="gh-repo-new"
+        addId="gh-repo-add-btn"
+        hint={
+          <>
+            Type a repo as <code>owner/name</code>, then press Enter or click Add. Adding one
+            turns review on; remove them all to turn it off.
+          </>
+        }
+      />
+
+      <AgentPicker
+        label="Agent CLI"
+        value={String(gh.agent || "")}
+        choices={agentChoices}
+        onChange={(v) => s.saveField("github", "agent", v)}
+        hint={
+          <>
+            Which coding CLI runs PR-review sessions. Independent of issue handling's —
+            pick a provider whose Connections row is green, or leave it on the app
+            default.
+          </>
+        }
+      />
+
+      <WorkListPanel
+        label="Open pull requests"
+        onRefresh={loadOpenPrs}
+        note={prsNote}
+        rowId="gh-open-prs-row"
+        refreshId="gh-prs-refresh"
+        noteId="gh-prs-note"
+        listId="gh-prs-list"
+        hint={
+          <>
+            Every non-draft open PR on the repositories above, with why auto review has or hasn't
+            picked it up. <strong>Begin review</strong> starts a review session for that PR right
+            now, bypassing the author / age / already-reviewed filters.
+          </>
+        }
+      >
+        {prsError ? (
+          <div className="repo-empty">{prsError}</div>
+        ) : prs === null ? null : !prsRepos.length ? (
+          <div className="repo-empty">Add a repository above to see its open PRs.</div>
+        ) : !prs.length ? (
+          <div className="repo-empty">No open pull requests on the watched repositories.</div>
+        ) : (
+          prs.map((p) => (
+            <WorkItemRow
+              key={(p.repo || "") + p.number}
+              reference={(p.repo || "") + "#" + p.number}
+              url={p.url}
+              title={p.title}
+              tooltip={
+                (p.repo || "") +
+                "#" +
+                p.number +
+                " — " +
+                (p.title || "") +
+                "\nby " +
+                (p.author || "?") +
+                " · " +
+                (p.head_ref || "?") +
+                " → " +
+                (p.base_ref || "?")
               }
-            }}
-          />
-          <button type="button" id="gh-repo-add-btn" className="btn-primary" onClick={addRepo}>
-            + Add
-          </button>
-        </div>
-        <span className="set-hint">
-          Type a repo as <code>owner/name</code>, then press Enter or click Add. Adding one
-          turns review on; remove them all to turn it off.
-        </span>
-      </div>
-
-      <div className="set-row" id="gh-open-prs-row">
-        <span className="set-label">Open pull requests</span>
-        <div className="pr-open-toolbar">
-          <button type="button" id="gh-prs-refresh" className="test-btn" onClick={loadOpenPrs}>
-            Refresh
-          </button>
-          <span id="gh-prs-note" className="pr-open-note">{prsNote}</span>
-        </div>
-        <div id="gh-prs-list" className="pr-open-list">
-          {prsError ? (
-            <div className="repo-empty">{prsError}</div>
-          ) : prs === null ? null : !prsRepos.length ? (
-            <div className="repo-empty">Add a repository above to see its open PRs.</div>
-          ) : !prs.length ? (
-            <div className="repo-empty">No open pull requests on the watched repositories.</div>
-          ) : (
-            prs.map((p) => <OpenPrRow key={(p.repo || "") + p.number} p={p} onStarted={relistPrs} />)
-          )}
-        </div>
-        <span className="set-hint">
-          Every non-draft open PR on the repositories above, with why auto review has or hasn't
-          picked it up. <strong>Begin review</strong> starts a review session for that PR right
-          now, bypassing the author / age / already-reviewed filters.
-        </span>
-      </div>
+              meta={`by ${p.author || "?"} · ${ageText(p.created_at)} · into ${p.base_ref || "?"}`}
+              hasSession={p.has_session}
+              eligible={p.eligible}
+              eligibleLabel="queued for auto review"
+              reasons={p.reasons}
+              actionLabel="Begin review"
+              failPrefix="Begin review failed"
+              onStart={async () => {
+                const r = await api<{ title?: string }>("/api/github/prs/review", {
+                  json: { repo: p.repo, number: p.number },
+                });
+                // The server already has a provisioning row for it: pull it now
+                // instead of leaving the sidebar blank through the PR clone.
+                refreshInstances();
+                setTimeout(relistPrs, 5000);
+                return "Review session " + (r?.title || "");
+              }}
+            />
+          ))
+        )}
+      </WorkListPanel>
 
       <details className="pr-advanced">
         <summary>Advanced options</summary>
@@ -328,86 +309,5 @@ export function PrReview({ gotoScreen }: ScreenProps) {
         </div>
       </details>
     </>
-  );
-}
-
-function OpenPrRow({ p, onStarted }: { p: OpenPr; onStarted(): void }) {
-  const [state, setState] = useState<"idle" | "starting" | "started">("idle");
-  return (
-    <div
-      className="pr-open-item"
-      title={
-        (p.repo || "") +
-        "#" +
-        p.number +
-        " — " +
-        (p.title || "") +
-        "\nby " +
-        (p.author || "?") +
-        " · " +
-        (p.head_ref || "?") +
-        " → " +
-        (p.base_ref || "?")
-      }
-    >
-      <div className="pr-open-main">
-        <a
-          href={p.url || "#"}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="pr-open-ref"
-          title={"Open " + (p.repo || "") + "#" + p.number + " on GitHub"}
-        >
-          {(p.repo || "") + "#" + p.number}
-        </a>
-        <span className="pr-open-title">{p.title || ""}</span>
-      </div>
-      <div className="pr-open-meta">
-        <span>
-          by {p.author || "?"} · {prAgeText(p.created_at)} · into {p.base_ref || "?"}
-        </span>
-        {p.has_session ? (
-          <span className="pr-open-chip on">session open</span>
-        ) : p.eligible ? (
-          <span className="pr-open-chip ok">queued for auto review</span>
-        ) : (
-          (p.reasons || []).map((reason) => (
-            <span className="pr-open-chip" key={reason}>
-              {reason}
-            </span>
-          ))
-        )}
-      </div>
-      {p.has_session ? (
-        <button type="button" className="btn-primary pr-review-btn" disabled>
-          Session open
-        </button>
-      ) : (
-        <button
-          type="button"
-          className="btn-primary pr-review-btn"
-          disabled={state !== "idle"}
-          onClick={async () => {
-            setState("starting");
-            try {
-              const r = await api<{ title?: string }>("/api/github/prs/review", {
-                json: { repo: p.repo, number: p.number },
-              });
-              toast("Review session " + (r?.title || "") + " — provisioning, see the sidebar");
-              setState("started");
-              // The server already has a provisioning row for it: pull it now
-              // instead of leaving the sidebar blank through the PR clone.
-              refreshInstances();
-              setTimeout(onStarted, 5000);
-            } catch (err) {
-              toast("Begin review failed: " + ((err as Error).message || "error"));
-              setState("idle");
-            }
-          }}
-        >
-          {state === "starting" ? "Starting…" : state === "started" ? "Started" : "Begin review"}
-        </button>
-      )}
-    </div>
   );
 }

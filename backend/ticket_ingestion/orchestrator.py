@@ -418,6 +418,11 @@ class PipelineOrchestrator:
             )
             return
         story = issue_to_ticket(issue, comments)
+        # An issue has no ticketing source to inherit an agent from, so stamp
+        # issue handling's own choice onto the ticket here — every downstream
+        # launch path already reads `story.agent` first. Blank leaves the
+        # existing fallback chain untouched.
+        story.agent = self.config.issue_agent()
         try:
             if self._cs_runner is not None:
                 await self._cs_runner.run(story)

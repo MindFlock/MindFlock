@@ -221,7 +221,12 @@ def test_app_js_wires_pr_review_repos_and_toggle():
     assert "skip_authors" in js
     # Multi-repo add/remove: renders chips and persists the whole array.
     assert "repo-chip" in js
-    assert "addRepo" in js
+    # The add flow moved into the shared RepoListField (screens/automation.tsx)
+    # when PR review, Git issues and Ticketing were unified, so assert on its
+    # two guards rather than on the old local `addRepo` identifier. Exactly one
+    # copy of each IS the point: PR review and Git issues had their own before.
+    assert js.count("Use owner/name") == 1  # owner/name format guard
+    assert js.count("is already in the list") == 1  # duplicate guard
     assert "repos:" in js  # POST { github: { repos: [...] } }
     # Explicit pause toggle owns github.enabled; a 3-state status line reflects it.
     assert "Paused —" in js

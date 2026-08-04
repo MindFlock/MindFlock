@@ -6,10 +6,15 @@
 
 .wt-card {
   position: relative;
-  width: min(460px, calc(100vw - 40px));
+  width: min(520px, calc(100vw - 40px));
   /* Constant size across every slide — the body flexes to absorb length
-     differences so the card never resizes as you page through. */
-  height: 440px;
+     differences so the card never resizes as you page through. Sized off the
+     tallest slide ("3. PR review", the only one with both a long body and a
+     Set up now button) with ~20px to spare: at 440px it needed 394px of a
+     320px content box and scrolled. Widening the body to 48ch did most of the
+     work — it took that slide from 394px to 350px — so if a future slide
+     overflows, re-measure before reaching for more height. */
+  height: 490px;
   max-height: calc(100vh - 40px);
   display: flex;
   flex-direction: column;
@@ -92,7 +97,7 @@
 
 .wt-body {
   margin: 0;
-  max-width: 42ch;
+  max-width: 48ch;
   font-size: 13.5px;
   line-height: 1.6;
   color: var(--muted);

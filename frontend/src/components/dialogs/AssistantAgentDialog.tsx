@@ -5,12 +5,15 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
+import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
 
 export function AssistantAgentDialog() {
   const open = useUi((s) => s.openDialog === "assistant-agent");
   const closeDialog = useUi((s) => s.closeDialog);
   const [text, setText] = useState("");
   const [status, setStatus] = useState("");
+  const [agent, setAgent] = useState("");
+  const agentChoices = useAgentChoices();
   const taRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
@@ -22,6 +25,14 @@ export function AssistantAgentDialog() {
         setText(r?.text || "");
       } catch {
         setText("");
+      }
+      try {
+        const st = await api<{
+          settings?: { coding_cli?: { assistant_provider?: string } };
+        }>("/api/settings");
+        setAgent(String(st?.settings?.coding_cli?.assistant_provider || ""));
+      } catch {
+        setAgent("");
       }
       setTimeout(() => taRef.current?.focus(), 0);
     })();
@@ -72,6 +83,30 @@ export function AssistantAgentDialog() {
           manages your todo list), so nothing here can break those. Describe how it should
           behave, what it knows, tone, etc. Applies the next time it starts.
         </p>
+        <AgentPicker
+          label="Agent CLI"
+          value={agent}
+          choices={agentChoices}
+          onChange={async (v) => {
+            setAgent(v);
+            try {
+              await api("/api/settings", {
+                method: "PUT",
+                json: { coding_cli: { assistant_provider: v } },
+              });
+              setStatus("Agent saved — Save & restart to switch the running assistant.");
+            } catch (err) {
+              setStatus("Could not save agent: " + ((err as Error).message || ""));
+            }
+          }}
+          hint={
+            <>
+              Which coding CLI powers the assistant. It does not have to be the one your
+              coding sessions use. Changing it takes effect the next time the assistant
+              starts — <b>Save &amp; restart</b> below does that now.
+            </>
+          }
+        />
         <textarea
           id="assistant-agent-text"
           ref={taRef}

@@ -105,6 +105,30 @@ def _atomic_write(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
+def _assistant_program() -> str:
+    """The CLI the Assistant runs.
+
+    ``coding_cli.assistant_provider`` (Settings → Agent) first, so the Assistant
+    can be a different CLI from the one doing the coding, then the same default
+    everything else resolves to. This was hardcoded to ``claude``, which made
+    the Assistant unusable for anyone who hadn't set Claude up.
+    """
+    try:
+        from backend.config.settings import load_settings
+
+        chosen = (load_settings().coding_cli.assistant_provider or "").strip()
+        if chosen:
+            return chosen
+    except Exception:  # noqa: BLE001 — settings are optional
+        pass
+    try:
+        from backend.config.program import resolve_default_program
+
+        return resolve_default_program() or "claude"
+    except Exception:  # noqa: BLE001 — never block the chat on config
+        return "claude"
+
+
 def _seed_assistant_dir() -> None:
     """Ensure the assistant's dir, the user-instructions file, CLAUDE.md and
     todos.json exist and are coherent.
@@ -161,11 +185,12 @@ def _ensure_assistant_session():
     if exists:
         return name, None
     _seed_assistant_dir()  # re-seed defensively in case the dir was wiped
-    provider = providers.resolve("claude")
+    program = _assistant_program()
+    provider = providers.resolve(program)
     # Natural quit -> fresh; unnatural death -> resume the conversation.
     resume = not provider.is_natural_exit(_read_exit_marker(name))
     cmd = provider.build_launch_command(
-        providers.LaunchContext(program="claude", resume=resume, session_name=name)
+        providers.LaunchContext(program=program, resume=resume, session_name=name)
     )
     _clear_exit_marker(name)
     wrapped = _wrap_launch_cmd(cmd, name)

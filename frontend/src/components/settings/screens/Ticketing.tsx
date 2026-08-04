@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../../api/client";
+import { AutomationSwitch } from "./automation";
 import { refreshConfig, refreshInstances, usePanelQuery } from "../../../state/queries";
 import { toast } from "../../../lib/toast";
 import type { ScreenProps } from "../SettingsDialog";
@@ -40,7 +41,7 @@ interface AgentChoices {
  * desired state, POST /api/mindflock/{start,stop} to flip it) and the same
  * ["mindflock-status"] query key, so the two switches stay in lock-step.
  * Clicking the row text does nothing — only the switch itself flips it. */
-function IngestionToggle() {
+function IngestionToggle({ sourceCount }: { sourceCount: number }) {
   const [busy, setBusy] = useState(false);
   const [optimistic, setOptimistic] = useState<boolean | null>(null);
   const { data: status, refetch } = useQuery({
@@ -72,25 +73,25 @@ function IngestionToggle() {
     }
   };
 
+  const n = sourceCount;
   return (
-    <div
-      className="set-row set-switch-row"
-      id="tk-ingestion-toggle-row"
+    <AutomationSwitch
+      label="Automated ingestion"
       title="Run or stop ticket ingestion — polls your connected sources and auto-creates a coding session for each assigned ticket. Stays in this state across restarts."
-    >
-      <span className="set-label">Automated ingestion</span>
-      {/* label wraps only the switch, so clicking the row text no longer flips it */}
-      <label className="ca-switch">
-        <input
-          type="checkbox"
-          id="tk-ingestion-enabled"
-          checked={desired}
-          disabled={busy}
-          onChange={(e) => toggle(e.target.checked)}
-        />
-        <span className="ca-slider" />
-      </label>
-    </div>
+      rowId="tk-ingestion-toggle-row"
+      inputId="tk-ingestion-enabled"
+      statusId="tk-ingestion-status"
+      checked={desired}
+      onChange={(next) => { if (!busy) toggle(next); }}
+      tone={n > 0 && desired ? "on" : n > 0 ? "paused" : ""}
+      status={
+        !n
+          ? "○ Add a ticketing source below to start turning tickets into sessions"
+          : desired
+            ? `● Active — polling ${n} ${n === 1 ? "source" : "sources"} for tickets assigned to you`
+            : `‖ Paused — ${n} ${n === 1 ? "source" : "sources"} kept; turn Automated ingestion on to resume`
+      }
+    />
   );
 }
 
@@ -206,7 +207,7 @@ export function Ticketing(_: ScreenProps) {
         two Jira sites) — each with its own credentials. Stored in ~/.mindflock/settings.json
         (never committed).
       </p>
-      <IngestionToggle />
+      <IngestionToggle sourceCount={(sources || []).length} />
       <div id="ticketing-sources">
         {sources.map((src) => (
           <SourceCard
@@ -665,9 +666,13 @@ function SourceCard({
   const provName = meta?.label || source.provider;
   const detail = (source.label || source.member_id || source.repo_url || "").trim();
   const base = detail ? provName + " — " + detail : provName;
-  // A non-default agent is worth seeing without expanding the card: it is the
-  // difference between this queue running on a cloud CLI and on a local model.
-  const summary = source.agent ? base + " · " + source.agent : base;
+  // Always show which CLI this queue runs, not just when it is overridden.
+  // Saved sources render collapsed, so an agent shown only when explicitly set
+  // made the common case — "it's on the app default" — indistinguishable from
+  // "this source has no agent setting at all", which is what sent people
+  // looking for the picker in the first place.
+  const summary =
+    base + " · " + (source.agent || (agents.fallback ? agents.fallback + " (default)" : "app default"));
   const repoMissing = !(source.repo_url || "").trim();
 
   const testPayload = () => {
@@ -763,7 +768,7 @@ function SourceCard({
           <span className="set-hint">Required — tickets from this source clone into this repo.</span>
         </label>
         <label className="set-row">
-          <span className="set-label">Agent</span>
+          <span className="set-label">Agent CLI</span>
           <select
             className="tk-agent"
             data-tk-field="agent"
