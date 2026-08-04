@@ -24209,7 +24209,6 @@ function TopBar() {
             className: "tb-item",
             type: "button",
             title: "Intake — tickets, pull requests and issues waiting to become sessions (Alt+I)",
-            "aria-label": "Open work",
             onClick: () => ui.openDialogFor("intake"),
             children: "Intake"
           }
@@ -29327,26 +29326,25 @@ function AutomationSwitch({
   statusId,
   checked,
   onChange,
-  status,
-  tone
+  note
 }) {
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row set-switch-row", id: rowId, title, children: [
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ik-switch", id: rowId, title, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ik-switch-text", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: label }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "input",
-          {
-            type: "checkbox",
-            id: inputId,
-            checked,
-            onChange: (e) => onChange(e.target.checked)
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
-      ] })
+      note ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", id: statusId, children: note }) : null
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: statusId, className: "pr-status" + (tone ? " " + tone : ""), children: status })
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          type: "checkbox",
+          id: inputId,
+          checked,
+          onChange: (e) => onChange(e.target.checked)
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
+    ] })
   ] });
 }
 function SourceCard({
@@ -29613,7 +29611,6 @@ function IngestionToggle({ sourceCount }) {
       refetch();
     }
   };
-  const n = sourceCount;
   return /* @__PURE__ */ jsxRuntimeExports.jsx(
     AutomationSwitch,
     {
@@ -29626,8 +29623,7 @@ function IngestionToggle({ sourceCount }) {
       onChange: (next) => {
         if (!busy) toggle(next);
       },
-      tone: n > 0 && desired ? "on" : n > 0 ? "paused" : "",
-      status: !n ? "○ Add a ticketing source below to start turning tickets into sessions" : desired ? `● Active — polling ${n} ${n === 1 ? "source" : "sources"} for tickets assigned to you` : `‖ Paused — ${n} ${n === 1 ? "source" : "sources"} kept; turn Automated ingestion on to resume`
+      note: sourceCount ? void 0 : "Add a ticketing source below and this starts polling it"
     }
   );
 }
@@ -30609,8 +30605,7 @@ function PullRequestsTab({ gotoTab }) {
           { enabled: next },
           next ? "Automated review on" : "Automated review paused"
         ),
-        tone: n > 0 && enabled ? "on" : n > 0 ? "paused" : "",
-        status: !n ? "○ Add a repository below to start reviewing your PRs" : enabled ? `● Active — reviewing PRs in ${n} ${n === 1 ? "repository" : "repositories"}` : `‖ Paused — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated review on to resume`
+        note: n ? void 0 : "Add a repository below and this starts reviewing your PRs on it"
       }
     ),
     /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -30880,8 +30875,7 @@ function IssuesTab({ gotoTab }) {
           { issues_enabled: next },
           next ? "Automated issue handling on" : "Automated issue handling off"
         ),
-        tone: n > 0 && enabled ? "on" : n > 0 ? "paused" : "",
-        status: !n ? "○ Add a repository below, then turn Automated handling on" : enabled ? `● Active — handling new issues in ${n} ${n === 1 ? "repository" : "repositories"}` : `‖ Off — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated handling on to start`
+        note: n ? void 0 : "Add a repository below and this starts handling its new issues"
       }
     ),
     /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -30920,7 +30914,7 @@ function IssuesTab({ gotoTab }) {
         noteId: "gh-issues-note",
         listId: "gh-issues-list",
         hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-          "Every open issue on the repositories above , grouped by repository, with why auto handling has or hasn't picked it up. ",
+          "Every open issue on the repositories above, grouped by repository, with why auto handling has or hasn't picked it up. ",
           /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Start work" }),
           " spins up a session for that issue right now, bypassing the age / already-handled filters."
         ] }),

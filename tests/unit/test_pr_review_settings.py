@@ -240,9 +240,15 @@ def test_app_js_wires_pr_review_repos_and_toggle():
     # …and the per-repo override map saved alongside it, which is what makes a
     # card's own agent / base branch / grace period mean anything.
     assert "repo_settings:" in js
-    # Explicit pause toggle owns github.enabled; a 3-state status line reflects it.
-    assert "Paused —" in js
+    # Explicit pause toggle owns github.enabled, and pausing is what it says in
+    # the toast. There is deliberately no "● Active / ‖ Paused" status line under
+    # the switch any more: with the switch itself right there and the repos it
+    # counts listed below, it only restated what was already on screen (see
+    # AutomationSwitch in intake/kit.tsx). The switch's only subtitle is the one
+    # state a switch can't show — nothing connected yet.
+    assert "Paused —" not in js
     assert "Automated review paused" in js
+    assert "Add a repository below and this starts reviewing your PRs on it" in js
 
 
 def test_style_has_feature_and_repo_rules():

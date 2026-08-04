@@ -156,14 +156,7 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
             next ? "Automated review on" : "Automated review paused"
           )
         }
-        tone={n > 0 && enabled ? "on" : n > 0 ? "paused" : ""}
-        status={
-          !n
-            ? "○ Add a repository below to start reviewing your PRs"
-            : enabled
-              ? `● Active — reviewing PRs in ${n} ${n === 1 ? "repository" : "repositories"}`
-              : `‖ Paused — ${n} ${n === 1 ? "repository" : "repositories"} kept; turn Automated review on to resume`
-        }
+        note={n ? undefined : "Add a repository below and this starts reviewing your PRs on it"}
       />
 
       <RepoSourceList

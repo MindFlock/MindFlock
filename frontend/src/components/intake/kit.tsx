@@ -58,11 +58,19 @@ export function panelNote(opts: {
   return opts.loaded ? "Refreshing…" : "Loading…";
 }
 
-/** Master on/off switch plus the one-line status underneath it.
+/** The master on/off switch at the top of a tab: one banded row, the automation
+ * named on the left and the switch on the right.
  *
- * The two are one component because the status is only ever a readout of the
- * switch and the source count; keeping them together is what stops the three
- * tabs from describing the same three states in three ways. */
+ * There used to be a status sentence under it — "● Active — polling 1 source for
+ * tickets assigned to you", "‖ Paused — 1 source kept; turn Automated ingestion
+ * on to resume" — and it has been dropped. With the switch a finger-width to the
+ * right and the sources it counts listed directly below, the line restated two
+ * things already on screen, in a third colour, and cost a full row of panel
+ * height in each of the three tabs.
+ *
+ * The one state a switch genuinely cannot show is "there is nothing to turn on
+ * yet", so that survives as `note` — and it sits *inside* the row as a subtitle,
+ * where it reads as part of the control rather than as a stray line of copy. */
 export function AutomationSwitch({
   label,
   title,
@@ -71,8 +79,7 @@ export function AutomationSwitch({
   statusId,
   checked,
   onChange,
-  status,
-  tone,
+  note,
 }: {
   label: string;
   title: string;
@@ -81,30 +88,31 @@ export function AutomationSwitch({
   statusId?: string;
   checked: boolean;
   onChange(next: boolean): void;
-  /** The status sentence. Convention: "● " active, "‖ " paused, "○ " not set up. */
-  status: string;
-  /** "on" tints it live, "paused" tints it muted, "" is the not-yet-set-up grey. */
-  tone: "on" | "paused" | "";
+  /** Subtitle inside the row, for what the switch can't say itself. Pass it only
+   * when the tab has no sources yet — never to narrate on/off. */
+  note?: string;
 }) {
   return (
-    <>
-      <div className="set-row set-switch-row" id={rowId} title={title}>
+    <div className="ik-switch" id={rowId} title={title}>
+      <span className="ik-switch-text">
         <span className="set-label">{label}</span>
-        {/* label wraps only the switch, so clicking the row text never flips it */}
-        <label className="ca-switch">
-          <input
-            type="checkbox"
-            id={inputId}
-            checked={checked}
-            onChange={(e) => onChange(e.target.checked)}
-          />
-          <span className="ca-slider" />
-        </label>
-      </div>
-      <div id={statusId} className={"pr-status" + (tone ? " " + tone : "")}>
-        {status}
-      </div>
-    </>
+        {note ? (
+          <span className="set-hint" id={statusId}>
+            {note}
+          </span>
+        ) : null}
+      </span>
+      {/* label wraps only the switch, so clicking the row text never flips it */}
+      <label className="ca-switch">
+        <input
+          type="checkbox"
+          id={inputId}
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        <span className="ca-slider" />
+      </label>
+    </div>
   );
 }
 
