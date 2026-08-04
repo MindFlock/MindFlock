@@ -285,3 +285,25 @@ def test_mobile_js_offers_a_link_not_a_raw_gh_error():
     assert "j.ok === false" in js
     assert "j.compare_url" in js
     assert "j.pr_url" in js
+
+
+def test_commit_dialog_recovers_a_message_the_hooks_rejected():
+    """The dialog remembered the last message in a JS Map, which a page reload —
+    or the server restart that prompts one — empties, while the worktree file it
+    was a copy of sat right there. It now asks the server for it.
+
+    Asserting on the endpoint path, not on compiled JSX: a URL literal survives a
+    change of bundler, and the shape of emitted JSX does not."""
+    js = client.get("/app.js").text
+    assert '"/commit-message"' in js
+
+
+def test_commit_dialog_closes_on_a_backdrop_click():
+    """Clicking away dismisses, like Escape. mousedown rather than click, and only
+    when the backdrop is the event's own target, so a text selection that started
+    in the textarea and overshot cannot discard the message."""
+    js = client.get("/app.js").text
+    i = js.index('id: "commit-dialog"')
+    frag = js[i : i + 400]
+    assert "onMouseDown" in frag
+    assert "e.target === e.currentTarget" in frag

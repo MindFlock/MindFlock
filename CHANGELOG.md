@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A commit message the pre-commit hooks rejected is offered back, not retyped.**
+  It always survived on disk — `.mindflock_commit_msg` is the file
+  `git commit -F` reads, and a re-commit with no message reuses it — but the
+  dialog pre-filled from an in-memory map that a page reload empties, and a
+  server restart prompts exactly that reload. New
+  `GET /api/instances/{title}/commit-message` hands it back, gated on
+  `.mindflock_commit_status` recording a failure so a *successful* commit's
+  message never pre-fills the next one.
+
+- **Clicking outside the Commit dialog closes it**, like Escape already did,
+  instead of requiring the Cancel button. It closes on `mousedown` on the
+  backdrop itself, so a text selection that starts in the message box and
+  overshoots can't discard what you typed.
+
 ## [0.1.10] - 2026-08-04
 
 ### Added

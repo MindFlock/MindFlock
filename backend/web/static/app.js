@@ -33208,6 +33208,23 @@ function CommitDialog() {
     (_a2 = msgRef.current) == null ? void 0 : _a2.focus();
   }, [open, target]);
   reactExports.useEffect(() => {
+    if (!open || !target) return;
+    if (lastCommitMsg.get(target)) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await instApi(target, "/commit-message");
+        const saved = ((r == null ? void 0 : r.message) || "").trim();
+        if (cancelled || !saved) return;
+        setMsg((cur) => cur.trim() ? cur : saved);
+      } catch {
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, target]);
+  reactExports.useEffect(() => {
     if (!open) return;
     const onKey = (e) => {
       if (e.key === "Escape") {
@@ -33238,48 +33255,58 @@ function CommitDialog() {
     }
     setTimeout(refreshInstances, 1e3);
   }
-  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "commit-dialog", className: "modal", children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
-    "form",
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
     {
-      id: "commit-form",
-      onSubmit: (e) => {
-        e.preventDefault();
-        void submitCommit();
+      id: "commit-dialog",
+      className: "modal",
+      onMouseDown: (e) => {
+        if (e.target === e.currentTarget) closeDialog();
       },
-      children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { children: "Commit" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { children: [
-          "Message",
-          " ",
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "muted", children: "(multiline — first line is the summary; Ctrl+Enter to commit)" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "textarea",
-            {
-              id: "commit-msg",
-              ref: msgRef,
-              rows: 8,
-              autoComplete: "off",
-              spellCheck: false,
-              placeholder: "Short summary line\n\nOptional longer description…",
-              value: msg,
-              onChange: (e) => setMsg(e.target.value),
-              onKeyDown: (e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  void submitCommit();
+      children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "form",
+        {
+          id: "commit-form",
+          onSubmit: (e) => {
+            e.preventDefault();
+            void submitCommit();
+          },
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { children: "Commit" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { children: [
+              "Message",
+              " ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "muted", children: "(multiline — first line is the summary; Ctrl+Enter to commit)" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "textarea",
+                {
+                  id: "commit-msg",
+                  ref: msgRef,
+                  rows: 8,
+                  autoComplete: "off",
+                  spellCheck: false,
+                  placeholder: "Short summary line\n\nOptional longer description…",
+                  value: msg,
+                  onChange: (e) => setMsg(e.target.value),
+                  onKeyDown: (e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                      e.preventDefault();
+                      void submitCommit();
+                    }
+                  }
                 }
-              }
-            }
-          )
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "modal-actions", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "commit-cancel", onClick: closeDialog, children: "Cancel" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "submit", children: "Commit" })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { id: "commit-error", className: "error", children: error })
-      ]
+              )
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "modal-actions", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "commit-cancel", onClick: closeDialog, children: "Cancel" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "submit", children: "Commit" })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { id: "commit-error", className: "error", children: error })
+          ]
+        }
+      )
     }
-  ) });
+  );
 }
 function MakePrDialog() {
   const open = useUi((s) => s.openDialog === "make-pr");
