@@ -1,6 +1,6 @@
 [project]
 name = "mindflock"
-version = "0.1.11"
+version = "0.1.12"
 description = "MindFlock — a private flock of AI coding agents, each in its own git worktree on your own machine; started by your ticket queue (GitHub Issues, Jira, Linear, Shortcut, Asana), merged by you"
 readme = "README.md"
 license = { file = "LICENSE" }
