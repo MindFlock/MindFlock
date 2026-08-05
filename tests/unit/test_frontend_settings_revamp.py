@@ -255,9 +255,20 @@ def test_app_js_budget_lock_overlay_wired():
 
 
 def test_app_js_first_run_gate_uses_onboarded():
+    """The server's ``onboarded`` flag is the whole first-run gate.
+
+    It used to be one of three rival signals: this bundle also carried
+    ``mf_setup_done`` and ``mf_ever_created``, per-browser flags that let a
+    cleared profile or a second device replay first-run at a veteran — and whose
+    only writer had already been deleted, so the checklist's own dismissal could
+    never fire either. Both keys are gone; asserting they stay gone is what keeps
+    a browser-local flag from creeping back in beside the server's answer.
+    """
     js = client.get("/app.js").text
     assert "onboarded" in js
-    assert "mf_setup_done" in js
+    assert "shouldAutoShowSetup" in js  # the one gate, exported for its own test
+    for retired in ("mf_setup_done", "mf_ever_created"):
+        assert retired not in js, "a per-browser first-run flag is back: %s" % retired
 
 
 def test_style_has_budget_lock_rules():

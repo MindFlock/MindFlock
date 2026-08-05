@@ -40,6 +40,7 @@ short-TTL probe memo they share. Helper logic lives in focused modules under
     prompt_queue     the per-session prompt queue store
     recently_closed  the undo store behind reopen / Ctrl+Z
     remote           tailnet multi-device discovery + proxying
+    repo_picker      ranked repo suggestions for the New Session folder field
     session_stats    token/cost telemetry + transcript history rendering
     snapshot         per-session JSON descriptors (labels, diff stat)
     system_logs      log-tail sources for Settings → System logs
@@ -191,6 +192,10 @@ from backend.web.core.recently_closed import (
     _record_closed,
     _recently_closed_path,
     _save_recently_closed,
+)
+from backend.web.core.repo_picker import (
+    check_repo,
+    suggest_repos,
 )
 from backend.web.core.workspaces import (
     _base_clone_references,
@@ -2233,6 +2238,93 @@ def browse(path: str = "") -> JSONResponse:
     )
 
 
+@app.get("/api/repos/suggest")
+async def repo_suggestions() -> JSONResponse:
+    """Folders the New Session dialog can offer instead of a bare folder tree.
+
+    The dialog used to open on HOME and leave a first-time user to Browse down
+    to their own project, so this answers "which repo did you mean?" up front:
+    the repos recent sessions ran in, the repo the server was launched from, then
+    a shallow sweep of the usual code directories (see
+    :mod:`backend.web.core.repo_picker`). ``home`` rides along because the picker
+    renders paths relative to it and falls back to it when nothing is suggested.
+    """
+
+    def _touched_at(inst) -> float:
+        """Sort key for live sessions: last-touched epoch, 0 when unknown."""
+        try:
+            return inst.UpdatedAt.timestamp()
+        except Exception:  # noqa: BLE001 — an unset/odd timestamp just sorts last
+            return 0.0
+
+    def _gather() -> list:
+        # Most-recent first: the folder the last session (or wizard run) used,
+        # then live sessions newest-touched first, then the closed-session undo
+        # store — which is already newest-first. Every tier is best-effort, so a
+        # broken one costs its own suggestions and not the whole list.
+        recent: list = []
+        try:
+            from backend.config import settings as _settings
+
+            recent.append(_settings.load_settings().general.last_repo_path)
+        except Exception:  # noqa: BLE001 — no settings store yet is not an error
+            pass
+        try:
+            for inst in sorted(
+                list(ENGINE.instances.values()), key=_touched_at, reverse=True
+            ):
+                recent.append(getattr(inst, "Path", "") or "")
+        except Exception:  # noqa: BLE001 — a registry mutating mid-read just skips it
+            pass
+        try:
+            for closed in _load_recently_closed():
+                if not isinstance(closed, dict):
+                    continue
+                # The session's repo lives in the serialized instance data; the
+                # top-level "folder" is its worktree, which is only the same
+                # directory for an in-place session — hence the fallback order.
+                data = closed.get("data")
+                path = (data or {}).get("path") if isinstance(data, dict) else ""
+                recent.append(str(path or closed.get("folder") or ""))
+        except Exception:  # noqa: BLE001 — an unreadable history simply adds nothing
+            pass
+        # Blocking work (a readdir per scan root plus a git probe per surviving
+        # candidate) — threaded like paste_image's _store so a cold disk or a
+        # stalled network mount can't hold up every other request.
+        return suggest_repos(recent_paths=recent, cwd=os.getcwd())
+
+    return JSONResponse(
+        {
+            "suggestions": await asyncio.to_thread(_gather),
+            "home": os.path.expanduser("~"),
+        }
+    )
+
+
+@app.get("/api/repos/check")
+async def repo_check(path: str = "") -> JSONResponse:
+    """Report what the folder the user typed into the picker actually is.
+
+    Called on every keystroke, so a folder that does not exist yet answers 200
+    with ``exists: false`` — a 4xx per character would light the dialog up red
+    while someone is still typing ``/home/me/co``, and the folder may well be one
+    MindFlock is about to create. A blank path is the one real error: there is
+    nothing to answer about. Threaded for the same reason as
+    :func:`repo_suggestions` — the git probes are subprocesses.
+    """
+    if not (path or "").strip():
+        return JSONResponse({"error": "a path is required"}, status_code=400)
+    return JSONResponse(await asyncio.to_thread(check_repo, path))
+
+
+# There is deliberately no endpoint for the frontend to set general.onboarded.
+# The flag means "has created a session" — create_instance sets it via
+# _mark_onboarded, and backend/init_wizard.py pointedly does not — so letting a
+# UI surface flip it from outside that one event destroyed both first-run helpers
+# (the grid's setup card and the auto-opening dependency checklist) for a user
+# who had created nothing yet and still had, say, no tmux to create it with.
+
+
 # MindFlock automation control (/api/mindflock/*) moved to the MindFlock addon.
 
 
@@ -2434,6 +2526,18 @@ async def create_instance(payload: dict) -> JSONResponse:
     with ENGINE.lock:
         ENGINE.instances[title] = inst
     _mark_onboarded()  # first-ever session ends first-run; setup card won't auto-show again
+    # Remember the folder this session chose so the NEXT New Session dialog opens
+    # on it and the repo suggestions rank it first — the second session in a repo
+    # should not be another walk down the folder tree. "." is the server's own
+    # cwd (a provisioned session with no chosen repo), which the user never
+    # picked, so it isn't worth remembering.
+    if plain_path and plain_path != ".":
+        try:
+            from backend.config import settings as _settings
+
+            _settings.update_settings(general={"last_repo_path": plain_path})
+        except Exception:  # noqa: BLE001 — a convenience hint never fails a create
+            pass
 
     async def _bg_start() -> None:
         try:

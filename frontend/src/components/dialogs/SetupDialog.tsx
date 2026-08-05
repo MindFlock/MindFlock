@@ -4,44 +4,15 @@
  *   SetupChecklist  — the ①②③ checklist (also used by the grid empty state)
  *   DoctorList      — the check list (also used by Settings → Doctor)
  *   useDoctorWarn   — F8 warn-chip state (sidebar chip reads it)
- *   useDoctorAutoShow — headless: load + 5-min doctor probe, auto-open rules */
+ *   useDoctorAutoShow — headless: load + 5-min doctor probe, auto-open rules
+ *   shouldAutoShowSetup — the auto-open rule itself (pure, so it is tested) */
 
 import { useCallback, useEffect, useState } from "react";
 import { create } from "zustand";
 import { api } from "../../api/client";
+import { useConfig } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
-
-// --- localStorage flags (same keys as vanilla) -------------------------------
-
-export function setupDismissed(): boolean {
-  try {
-    return localStorage.getItem("mf_setup_done") === "1";
-  } catch {
-    return false;
-  }
-}
-function dismissSetup() {
-  try {
-    localStorage.setItem("mf_setup_done", "1");
-  } catch {
-    /* storage unavailable */
-  }
-}
-function everCreated(): boolean {
-  try {
-    return localStorage.getItem("mf_ever_created") === "1";
-  } catch {
-    return false;
-  }
-}
-export function markEverCreated() {
-  try {
-    localStorage.setItem("mf_ever_created", "1");
-  } catch {
-    /* storage unavailable */
-  }
-}
 
 // --- Doctor model -------------------------------------------------------------
 
@@ -84,9 +55,44 @@ export function useDoctorWarn() {
 
 let setupAutoShown = false; // auto-open the setup dialog at most once per load
 
+/** Should a failing doctor probe pop the first-run checklist at this user?
+ *
+ * Only at one nothing knows to be past first-run. The checklist is a first-run
+ * surface, and a veteran was getting ambushed by it on load because some
+ * optional check went to warn — an agent CLI that declares no credential
+ * locations, say. For her the sidebar's doctor chip is the right amount of noise,
+ * and it is untouched by this.
+ *
+ * The server's flag is the entire rule. `onboarded` is undefined until
+ * /api/config lands, and an unknown flag opens nothing: the honest reading is
+ * "ask again in a moment", which is why the caller re-evaluates instead of
+ * latching on the first probe. There is deliberately no per-browser "already saw
+ * it" override — the two localStorage keys that used to sit here (mf_setup_done,
+ * mf_ever_created) had no writer left in this app, and the only thing a working
+ * one could have bought is a user with a missing tmux never being shown the
+ * checklist again. It should keep opening every load until either the tools are
+ * installed or a session exists. */
+export function shouldAutoShowSetup(opts: {
+  failing: boolean;
+  onboarded: boolean | undefined;
+}): boolean {
+  return opts.failing && opts.onboarded === false;
+}
+
 /** Headless doctor probe: on load + every 5 minutes (never on the 4s poll).
- * Failing required tools auto-open the setup checklist once per load. */
+ * Failing required tools auto-open the setup checklist once per load, for a
+ * first-run user only — see shouldAutoShowSetup.
+ *
+ * The onboarded flag comes from the shared config query rather than an argument
+ * because this hook is called from the app shell's very first render, before
+ * /api/config has resolved: a value handed in there would be `undefined` for the
+ * life of the probe, and so would a getQueryData() read inside the mount-once
+ * effect below. Subscribing costs no extra request (same query key, 60s
+ * staleTime) and makes the decision reactive, which is what the race needs. */
 export function useDoctorAutoShow() {
+  const { data: config } = useConfig();
+  const failing = useDoctorWarnStore((s) => s.failing);
+
   useEffect(() => {
     const check = async () => {
       try {
@@ -96,10 +102,6 @@ export function useDoctorAutoShow() {
       } catch {
         /* unreachable backend is the conn-banner's job */
       }
-      if (useDoctorWarnStore.getState().failing && !setupAutoShown) {
-        setupAutoShown = true;
-        useUi.getState().openDialogFor("setup");
-      }
     };
     check();
     const t = setInterval(() => {
@@ -107,10 +109,22 @@ export function useDoctorAutoShow() {
     }, 300000);
     return () => clearInterval(t);
   }, []);
+
+  // Whichever of the probe and the config query lands second decides. Doing it
+  // here rather than inside check() is what stops a genuinely new user from
+  // waiting five minutes for the next probe just because doctor answered before
+  // the onboarded flag did.
+  useEffect(() => {
+    if (setupAutoShown) return;
+    const show = shouldAutoShowSetup({ failing, onboarded: config?.onboarded });
+    if (!show) return;
+    setupAutoShown = true;
+    useUi.getState().openDialogFor("setup");
+  }, [failing, config?.onboarded]);
 }
 
 /** The doctor check list (setup panel + Settings → Doctor). */
-export function DoctorList({ reprobeKey, autoCollapse }: { reprobeKey?: number; autoCollapse?: boolean }) {
+export function DoctorList({ reprobeKey }: { reprobeKey?: number }) {
   const [doctor, setDoctor] = useState<DoctorPayload | null>(lastDoctor);
   const [error, setError] = useState("");
 
@@ -124,7 +138,6 @@ export function DoctorList({ reprobeKey, autoCollapse }: { reprobeKey?: number; 
         lastDoctor = d;
         setDoctor(d);
         setError("");
-        if (autoCollapse && d.ok && everCreated()) dismissSetup();
       } catch (e) {
         if (live) setError((e as Error).message);
       }
@@ -132,7 +145,7 @@ export function DoctorList({ reprobeKey, autoCollapse }: { reprobeKey?: number; 
     return () => {
       live = false;
     };
-  }, [reprobeKey, autoCollapse]);
+  }, [reprobeKey]);
 
   if (error) return <p className="error">doctor failed: {error}</p>;
   if (!doctor) return <p className="muted">Checking dependencies…</p>;
@@ -202,8 +215,15 @@ export async function runGithubTest(): Promise<TestState> {
   }
 }
 
-/** The ①②③ checklist (empty-state card + the Setup dialog). */
-export function SetupChecklist({ standalone }: { standalone?: boolean }) {
+/** The ①②③ checklist (empty-state card + the Setup dialog).
+ *
+ * `standalone` is the grid's first-run card identifying itself, and nothing
+ * renders differently for it: it used to switch on a self-dismissal that could
+ * never fire, since the card exists only for a user the server calls not
+ * onboarded and the dismissal asked for the opposite. The prop is still accepted
+ * because TerminalGrid passes it, and an unknown prop there is a type error that
+ * would take the whole "Three steps to a running agent" card down. */
+export function SetupChecklist(_props: { standalone?: boolean }) {
   const [reprobeKey, setReprobeKey] = useState(0);
   const [gh, setGh] = useState<TestState>(idleTest);
   const [sc, setSc] = useState<TestState>(idleTest);
@@ -277,7 +297,7 @@ export function SetupChecklist({ standalone }: { standalone?: boolean }) {
           <span className="setup-num">①</span> Dependencies
         </h3>
         <div className="setup-doctor">
-          <DoctorList reprobeKey={reprobeKey} autoCollapse={!!standalone} />
+          <DoctorList reprobeKey={reprobeKey} />
         </div>
         <div className="setup-actions">
           <button type="button" className="setup-recheck" onClick={(e) => { e.stopPropagation(); setReprobeKey((k) => k + 1); }}>

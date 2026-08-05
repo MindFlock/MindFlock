@@ -24,12 +24,17 @@
   background: rgba(0, 0, 0, 0.05);
 }
 
-/* Light-accent text is too faint on white — use the deeper accent variant. */
+/* Light-accent text is too faint on white — use the deeper accent variant. The
+   folder-suggestion chips take it for both states: a git chip and the chip that
+   filled the field read the same colour on light, and the picked one is told
+   apart by its accent border and tinted fill instead. */
 .light .stagechip.s-agent,
 .light .split-diff .sd-file,
 .light .diff-toolbar .diffstat.file,
 .light .rb-item.is-git,
 .light .rb-use.is-git,
+.light .nf-suggest .nt-chip.is-git,
+.light .nf-suggest .nt-chip.active,
 .light .ws-badge.active {
   color: var(--accent-deep);
 }

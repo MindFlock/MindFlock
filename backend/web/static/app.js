@@ -22557,6 +22557,11 @@ const useUi = create((set, get) => ({
     set({ prBaseByRepo: next });
   }
 }));
+function tourDecision(opts) {
+  if (opts.tourDone || !opts.hintsEnabled) return "skip";
+  if (opts.onboarded === void 0) return "wait";
+  return opts.onboarded ? "skip" : "open";
+}
 function errMsg(err) {
   return (err == null ? void 0 : err.message) || "error";
 }
@@ -26008,19 +26013,6 @@ function FooterCustomize() {
     ] })
   ] });
 }
-function dismissSetup() {
-  try {
-    localStorage.setItem("mf_setup_done", "1");
-  } catch {
-  }
-}
-function everCreated() {
-  try {
-    return localStorage.getItem("mf_ever_created") === "1";
-  } catch {
-    return false;
-  }
-}
 const DOCTOR_ICON = { ok: "✓", info: "ℹ", warn: "!", fail: "✗" };
 let lastDoctor = null;
 const useDoctorWarnStore = create((set) => ({
@@ -26034,7 +26026,12 @@ function useDoctorWarn() {
   return useDoctorWarnStore();
 }
 let setupAutoShown = false;
+function shouldAutoShowSetup(opts) {
+  return opts.failing && opts.onboarded === false;
+}
 function useDoctorAutoShow() {
+  const { data: config } = useConfig();
+  const failing = useDoctorWarnStore((s) => s.failing);
   reactExports.useEffect(() => {
     const check = async () => {
       try {
@@ -26043,10 +26040,6 @@ function useDoctorAutoShow() {
         useDoctorWarnStore.getState()._setFailing(!(d && d.ok));
       } catch {
       }
-      if (useDoctorWarnStore.getState().failing && !setupAutoShown) {
-        setupAutoShown = true;
-        useUi.getState().openDialogFor("setup");
-      }
     };
     check();
     const t = setInterval(() => {
@@ -26054,8 +26047,15 @@ function useDoctorAutoShow() {
     }, 3e5);
     return () => clearInterval(t);
   }, []);
+  reactExports.useEffect(() => {
+    if (setupAutoShown) return;
+    const show = shouldAutoShowSetup({ failing, onboarded: config == null ? void 0 : config.onboarded });
+    if (!show) return;
+    setupAutoShown = true;
+    useUi.getState().openDialogFor("setup");
+  }, [failing, config == null ? void 0 : config.onboarded]);
 }
-function DoctorList({ reprobeKey, autoCollapse }) {
+function DoctorList({ reprobeKey }) {
   const [doctor, setDoctor] = reactExports.useState(lastDoctor);
   const [error, setError] = reactExports.useState("");
   reactExports.useEffect(() => {
@@ -26068,7 +26068,6 @@ function DoctorList({ reprobeKey, autoCollapse }) {
         lastDoctor = d;
         setDoctor(d);
         setError("");
-        if (autoCollapse && d.ok && everCreated()) dismissSetup();
       } catch (e) {
         if (live) setError(e.message);
       }
@@ -26076,7 +26075,7 @@ function DoctorList({ reprobeKey, autoCollapse }) {
     return () => {
       live = false;
     };
-  }, [reprobeKey, autoCollapse]);
+  }, [reprobeKey]);
   if (error) return /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "error", children: [
     "doctor failed: ",
     error
@@ -26118,7 +26117,7 @@ async function runGithubTest() {
     return { testing: false, ok: false, msg: e.message };
   }
 }
-function SetupChecklist({ standalone }) {
+function SetupChecklist(_props) {
   const [reprobeKey, setReprobeKey] = reactExports.useState(0);
   const [gh, setGh] = reactExports.useState(idleTest);
   const [sc, setSc] = reactExports.useState(idleTest);
@@ -26185,7 +26184,7 @@ function SetupChecklist({ standalone }) {
         /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "setup-num", children: "①" }),
         " Dependencies"
       ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "setup-doctor", children: /* @__PURE__ */ jsxRuntimeExports.jsx(DoctorList, { reprobeKey, autoCollapse: !!standalone }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "setup-doctor", children: /* @__PURE__ */ jsxRuntimeExports.jsx(DoctorList, { reprobeKey }) }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "setup-actions", children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "setup-recheck", onClick: (e) => {
         e.stopPropagation();
         setReprobeKey((k) => k + 1);
@@ -28591,13 +28590,67 @@ function FlagChips({
     );
   }) });
 }
+const SUGGEST_SOURCES = [
+  { key: "recent", label: "Recent", hint: "folders your recent sessions ran in" },
+  { key: "cwd", label: "Here", hint: "the folder MindFlock itself was started in" },
+  { key: "nearby", label: "Nearby", hint: "repos and folders sitting under your home directory" }
+];
+const CHECK_DEBOUNCE_MS = 400;
+function leafName(path) {
+  return path.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || path;
+}
+const FOLDER_INIT = {
+  path: "",
+  browsing: false,
+  undo: null,
+  touched: false
+};
+function prefillUndo(s, path) {
+  if (!s.browsing) return s.undo;
+  if (s.undo && s.undo.path) return s.undo;
+  return { path, touched: false };
+}
+function folderReducer(s, a) {
+  switch (a.t) {
+    case "reopen":
+      return { ...s, browsing: false, undo: null, touched: false };
+    case "suggested":
+      if (!a.path || s.touched && s.path) return s;
+      return { ...s, path: a.path, undo: prefillUndo(s, a.path) };
+    case "fallback":
+      if (!a.path || s.path) return s;
+      return { ...s, path: a.path, undo: prefillUndo(s, a.path) };
+    case "user-set":
+      return {
+        ...s,
+        path: a.path,
+        touched: true,
+        undo: s.browsing ? { path: a.path, touched: true } : null
+      };
+    case "browse-open":
+      return { ...s, browsing: true, undo: { path: s.path, touched: s.touched } };
+    case "browse-select":
+      return { ...s, path: a.path, touched: true };
+    case "browse-commit":
+      return { path: a.path, browsing: false, undo: null, touched: true };
+    case "browse-cancel":
+      return {
+        path: s.undo ? s.undo.path : s.path,
+        browsing: false,
+        undo: null,
+        touched: s.undo ? s.undo.touched : s.touched
+      };
+  }
+}
+function mayTakeOpeningFocus(where) {
+  return where.activeIsTarget || !where.activeInsideDialog;
+}
 function NewSessionDialog() {
   const open = useUi((s) => s.openDialog === "new-session");
   const closeDialog = useUi((s) => s.closeDialog);
   const [title, setTitle] = reactExports.useState("");
   const [program, setProgram] = reactExports.useState("");
   const [providers, setProviders] = reactExports.useState([]);
-  const [repoPath, setRepoPath] = reactExports.useState("");
   const [prompt, setPrompt] = reactExports.useState("");
   const [launchArgs, setLaunchArgs] = reactExports.useState("");
   const [provision, setProvision] = reactExports.useState(false);
@@ -28606,16 +28659,21 @@ function NewSessionDialog() {
   const [initRepo, setInitRepo] = reactExports.useState(false);
   const [error, setError] = reactExports.useState("");
   const [advancedOpen, setAdvancedOpen] = reactExports.useState(false);
-  const [browserOpen, setBrowserOpen] = reactExports.useState(false);
   const [templates, setTemplates] = reactExports.useState([]);
   const [activeTemplate, setActiveTemplate] = reactExports.useState("");
   const [provisioningAvailable, setProvisioningAvailable] = reactExports.useState(false);
   const [homePath, setHomePath] = reactExports.useState("");
+  const [suggestions, setSuggestions] = reactExports.useState([]);
+  const [folderCheck, setFolderCheck] = reactExports.useState(null);
   const [presetValue, setPresetValue] = reactExports.useState("");
   const [savedPresets, setSavedPresets] = reactExports.useState([]);
   const launchDefaults = reactExports.useRef({});
   const titleRef = reactExports.useRef(null);
   const launchRef = reactExports.useRef(null);
+  const rootRef = reactExports.useRef(null);
+  const [folder, folderDo] = reactExports.useReducer(folderReducer, FOLDER_INIT);
+  const repoPath = folder.path;
+  const browserOpen = folder.browsing;
   reactExports.useEffect(() => {
     if (!open) return;
     setTitle("");
@@ -28626,10 +28684,23 @@ function NewSessionDialog() {
     setInPlace(true);
     setInitRepo(false);
     setAdvancedOpen(false);
-    setBrowserOpen(false);
+    folderDo({ t: "reopen" });
     setActiveTemplate("");
     setPresetValue("");
     setSavedPresets(loadUserPresets());
+    let live = true;
+    (async () => {
+      var _a2;
+      try {
+        const d = await api("/api/repos/suggest");
+        if (!live) return;
+        const sug = d.suggestions || [];
+        setSuggestions(sug);
+        folderDo({ t: "suggested", path: ((_a2 = sug[0]) == null ? void 0 : _a2.path) || "" });
+      } catch {
+        if (live) setSuggestions([]);
+      }
+    })();
     (async () => {
       var _a2, _b2, _c2, _d2;
       const [cfgR, setR, tplR] = await Promise.allSettled([
@@ -28639,9 +28710,10 @@ function NewSessionDialog() {
         ),
         api("/api/templates")
       ]);
+      if (!live) return;
       const cfg = cfgR.status === "fulfilled" ? cfgR.value : void 0;
       setHomePath((cfg == null ? void 0 : cfg.home) || "");
-      setRepoPath((cfg == null ? void 0 : cfg.home) || "");
+      folderDo({ t: "fallback", path: (cfg == null ? void 0 : cfg.home) || "" });
       setProvisioningAvailable(!!(cfg == null ? void 0 : cfg.provisioning_available));
       let provs = [];
       try {
@@ -28649,6 +28721,7 @@ function NewSessionDialog() {
         provs = d.providers || [];
       } catch {
       }
+      if (!live) return;
       setProviders(provs);
       const prev = (cfg == null ? void 0 : cfg.default_program) || "";
       const lower = prev.toLowerCase();
@@ -28663,12 +28736,44 @@ function NewSessionDialog() {
         launchDefaults.current[k.toLowerCase()] = String(raw[k] || "");
       setLaunchArgs((launchDefaults.current[agent.trim().toLowerCase()] || "").trim());
       setTemplates(tplR.status === "fulfilled" ? ((_d2 = tplR.value) == null ? void 0 : _d2.templates) || [] : []);
-      setTimeout(() => {
-        var _a3;
-        return (_a3 = titleRef.current) == null ? void 0 : _a3.focus();
-      }, 0);
     })();
+    return () => {
+      live = false;
+    };
   }, [open]);
+  reactExports.useEffect(() => {
+    var _a2;
+    if (!open) return;
+    const el = titleRef.current;
+    const active = document.activeElement;
+    if (el && mayTakeOpeningFocus({
+      activeIsTarget: active === el,
+      activeInsideDialog: !!active && !!((_a2 = rootRef.current) == null ? void 0 : _a2.contains(active))
+    }))
+      el.focus();
+  }, [open]);
+  reactExports.useEffect(() => {
+    const asked = repoPath.trim();
+    if (!open || !asked) {
+      setFolderCheck(null);
+      return;
+    }
+    let live = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const r = await api(
+          "/api/repos/check?path=" + encodeURIComponent(asked)
+        );
+        if (live) setFolderCheck({ asked, plain: !!r.exists && !!r.is_dir && !r.is_git });
+      } catch {
+        if (live) setFolderCheck(null);
+      }
+    }, CHECK_DEBOUNCE_MS);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [open, repoPath]);
   const setAgent = reactExports.useCallback((value) => {
     const v = (value || "").trim();
     setProgram(v);
@@ -28677,7 +28782,7 @@ function NewSessionDialog() {
   const fillFromTemplate = (t) => {
     var _a2;
     if (t.program) setAgent(t.program);
-    if (t.repo_path) setRepoPath(t.repo_path);
+    if (t.repo_path) folderDo({ t: "user-set", path: t.repo_path });
     if (t.prompt) setPrompt(t.prompt);
     setProvision(!!t.provisioned);
     if (t.workspace_strategy) setStrategy(t.workspace_strategy);
@@ -28688,8 +28793,19 @@ function NewSessionDialog() {
     if (!title.trim()) setTitle(t.name || "");
     (_a2 = titleRef.current) == null ? void 0 : _a2.focus();
   };
+  const armInitRepo = () => {
+    setInitRepo(true);
+    setInPlace(false);
+    setAdvancedOpen(true);
+  };
   if (!open) return null;
-  const offerProvision = provisioningAvailable || !!repoPath.trim();
+  const folderPath = repoPath.trim();
+  const offerProvision = provisioningAvailable || !!folderPath;
+  const plainFolder = (folderCheck == null ? void 0 : folderCheck.asked) === folderPath && !!(folderCheck == null ? void 0 : folderCheck.plain);
+  const suggestRows = SUGGEST_SOURCES.map((g) => ({
+    ...g,
+    items: suggestions.filter((s) => s.source === g.key)
+  })).filter((g) => g.items.length > 0);
   const submit = async () => {
     setError("Creating…");
     const body = {
@@ -28741,13 +28857,14 @@ function NewSessionDialog() {
     {
       id: "new-dialog",
       className: "modal",
+      ref: rootRef,
       onClick: (e) => {
         if (e.target === e.currentTarget) closeDialog();
       },
       onKeyDown: (e) => {
         if (e.key === "Escape") {
           e.preventDefault();
-          if (browserOpen) setBrowserOpen(false);
+          if (browserOpen) folderDo({ t: "browse-cancel" });
           else closeDialog();
         } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
           e.preventDefault();
@@ -28836,7 +28953,7 @@ function NewSessionDialog() {
                             autoComplete: "off",
                             placeholder: "/home/me/projects/foo",
                             value: repoPath,
-                            onChange: (e) => setRepoPath(e.target.value)
+                            onChange: (e) => folderDo({ t: "user-set", path: e.target.value })
                           }
                         ),
                         /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -28844,8 +28961,15 @@ function NewSessionDialog() {
                           {
                             type: "button",
                             id: "repo-browse-btn",
-                            title: "Browse local folders",
-                            onClick: () => setBrowserOpen((v) => !v),
+                            title: browserOpen ? "Close the browser and keep this folder (Esc puts the old one back)" : "Browse local folders",
+                            onClick: () => (
+                              // Toggling the panel shut keeps whatever the field now holds:
+                              // it is on screen, the user has been looking at it, and only
+                              // Escape claims to undo anything.
+                              folderDo(
+                                browserOpen ? { t: "browse-commit", path: repoPath } : { t: "browse-open" }
+                              )
+                            ),
                             children: "Browse…"
                           }
                         )
@@ -28887,14 +29011,55 @@ function NewSessionDialog() {
                 ] })
               ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("datalist", { id: "provider-list" }),
+              plainFolder && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "nf-git-nudge", children: initRepo ? /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: "A git repo will be created here — diff, commit and PR will work." }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                "No git repo in this folder, so diff, commit and PR stay off.",
+                " ",
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "button",
+                  {
+                    type: "button",
+                    className: "linklike",
+                    title: "Ticks “Create a git repo in this folder” under More options",
+                    onClick: armInitRepo,
+                    children: "Create one"
+                  }
+                )
+              ] }) }),
+              suggestRows.length > 0 && /* Wears .new-templates as well as its own class on purpose: this is
+              the same chip strip as Templates, filled from a different source,
+              and sharing the class is what stops the two from drifting apart. */
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "new-suggest", className: "new-templates nf-suggest", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "nt-head", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: "Folders" }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "nf-suggest-legend", children: "📦 git repo · 📁 plain folder" })
+                ] }),
+                suggestRows.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "nf-suggest-row", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "nf-suggest-label", title: g.hint, children: g.label }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "nt-list", children: g.items.map((s) => {
+                    const active = folderPath === s.path;
+                    return /* @__PURE__ */ jsxRuntimeExports.jsx(
+                      "button",
+                      {
+                        type: "button",
+                        className: "nt-chip" + (s.is_git ? " is-git" : "") + (active ? " active" : ""),
+                        "data-path": s.path,
+                        "aria-pressed": active,
+                        title: s.path + (s.is_git ? "" : "\nno git repo here yet"),
+                        onClick: () => folderDo({ t: "user-set", path: s.path }),
+                        children: (s.is_git ? "📦 " : "📁 ") + s.name
+                      },
+                      s.path
+                    );
+                  }) })
+                ] }, g.key))
+              ] }),
               browserOpen && /* @__PURE__ */ jsxRuntimeExports.jsx(
                 FolderBrowser,
                 {
-                  initialPath: repoPath.trim() || homePath || "",
-                  onPick: (p) => {
-                    setRepoPath(p);
-                    setBrowserOpen(false);
-                  }
+                  initialPath: folderPath || homePath || "",
+                  selected: folderPath,
+                  onSelect: (p) => folderDo({ t: "browse-select", path: p }),
+                  onPick: (p) => folderDo({ t: "browse-commit", path: p })
                 }
               ),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { children: [
@@ -29098,24 +29263,48 @@ function NewSessionDialog() {
     }
   );
 }
+function focusRowIndex(paths, leaving) {
+  if (!paths.length) return -1;
+  const i = paths.indexOf(leaving);
+  return i >= 0 ? i : 0;
+}
 function FolderBrowser({
   initialPath,
+  selected,
+  onSelect,
   onPick
 }) {
   const [data, setData] = reactExports.useState(null);
   const [error, setError] = reactExports.useState("");
+  const listRef = reactExports.useRef(null);
+  const leaving = reactExports.useRef(null);
   const load2 = reactExports.useCallback(async (path) => {
     setError("");
     try {
       const q = path ? "?path=" + encodeURIComponent(path) : "";
       setData(await api("/api/browse" + q));
     } catch (err) {
+      leaving.current = null;
       setError(err.message);
     }
   }, []);
   reactExports.useEffect(() => {
     load2(initialPath);
   }, []);
+  reactExports.useEffect(() => {
+    var _a2, _b2;
+    const from = leaving.current;
+    if (from === null || !data) return;
+    leaving.current = null;
+    const idx = focusRowIndex((data.entries || []).map((e) => e.path), from);
+    const rows = (_a2 = listRef.current) == null ? void 0 : _a2.querySelectorAll(".rb-item:not(.rb-use)");
+    const row = idx >= 0 ? rows == null ? void 0 : rows[idx] : (_b2 = listRef.current) == null ? void 0 : _b2.querySelector(".rb-use");
+    row == null ? void 0 : row.focus();
+  }, [data]);
+  const keyLoad = (to) => {
+    leaving.current = (data == null ? void 0 : data.path) || "";
+    load2(to);
+  };
   const mkdir = async () => {
     if (!(data == null ? void 0 : data.path)) return;
     const name = window.prompt("New folder name (created in " + data.path + "):", "");
@@ -29126,7 +29315,6 @@ function FolderBrowser({
         json: { path: data.path, name: name.trim() }
       });
       onPick(r.path);
-      load2(r.path);
     } catch (err) {
       setError(err.message);
     }
@@ -29147,31 +29335,56 @@ function FolderBrowser({
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: "rb-cwd", className: "rb-cwd", title: (data == null ? void 0 : data.path) || "", children: (data == null ? void 0 : data.path) || "" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "rb-mkdir", title: "Create a new folder here", onClick: mkdir, children: "+ Folder" })
     ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "rb-list", children: [
-      data && /* @__PURE__ */ jsxRuntimeExports.jsx(
-        "div",
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "rb-list", ref: listRef, children: [
+      data && /* Names the folder it means. Child rows are selectable now, so "use
+      this folder" on its own would be ambiguous about which folder — the
+      one you're standing in, or the one you just highlighted. */
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
         {
-          className: "rb-item rb-use" + (data.is_git ? " is-git" : ""),
+          type: "button",
+          className: "rb-item rb-use" + (data.is_git ? " is-git" : "") + (selected === data.path ? " rb-sel" : ""),
+          title: "Use " + data.path + " and close the browser",
           onClick: () => onPick(data.path),
-          children: data.is_git ? "✓ use this repo" : "use this folder"
+          children: (data.is_git ? "✓ use this repo — " : "use this folder — ") + leafName(data.path)
         }
       ),
-      ((data == null ? void 0 : data.entries) || []).map((e) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "rb-item" + (e.is_git ? " is-git" : ""), children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rb-name", onClick: () => load2(e.path), children: (e.is_git ? "📦 " : "📁 ") + e.name }),
+      ((data == null ? void 0 : data.entries) || []).map((e) => (
+        // Rows are real buttons: they're the primary control now, so keyboard
+        // reach, Enter/Space activation and a focus ring should come from the
+        // platform rather than a div wearing tabIndex and a key handler.
+        // Selecting is idempotent, which is what makes the double click safe —
+        // its first click writes the same path the second one would, so there
+        // is no second visible effect to notice.
         /* @__PURE__ */ jsxRuntimeExports.jsx(
           "button",
           {
             type: "button",
-            className: "rb-pick",
-            onClick: (ev) => {
-              ev.stopPropagation();
-              onPick(e.path);
+            className: "rb-item" + (e.is_git ? " is-git" : "") + (selected === e.path ? " rb-sel" : ""),
+            "aria-pressed": selected === e.path,
+            title: e.path,
+            onClick: () => onSelect(e.path),
+            onDoubleClick: () => {
+              onSelect(e.path);
+              load2(e.path);
             },
-            children: "select"
-          }
+            onKeyDown: (ev) => {
+              if (ev.key === "ArrowRight") {
+                ev.preventDefault();
+                onSelect(e.path);
+                keyLoad(e.path);
+              } else if (ev.key === "ArrowLeft" && (data == null ? void 0 : data.parent)) {
+                ev.preventDefault();
+                keyLoad(data.parent);
+              }
+            },
+            children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "rb-name", children: (e.is_git ? "📦 " : "📁 ") + e.name })
+          },
+          e.path
         )
-      ] }, e.path))
+      ))
     ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "rb-hint", children: "Click selects · double-click or → opens · ← up · Esc cancels" }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("p", { id: "rb-error", className: "error", children: error })
   ] });
 }
@@ -34086,6 +34299,11 @@ function TodoDialog() {
   const [editingId, setEditingId] = reactExports.useState(null);
   const [editDraft, setEditDraft] = reactExports.useState("");
   const editCancelled = reactExports.useRef(false);
+  const editingRef = reactExports.useRef(null);
+  const setEditing = reactExports.useCallback((id) => {
+    editingRef.current = id;
+    setEditingId(id);
+  }, []);
   const save2 = reactExports.useCallback(async (next) => {
     setTodos(next);
     setState("saving…");
@@ -34101,7 +34319,7 @@ function TodoDialog() {
     }
   }, []);
   const load2 = reactExports.useCallback(async () => {
-    if (dragging.current || document.activeElement === addRef.current || editingId) return;
+    if (dragging.current || document.activeElement === addRef.current || editingRef.current) return;
     try {
       const r = await api("/api/assistant/todos");
       setTodos(r.todos || []);
@@ -34109,17 +34327,21 @@ function TodoDialog() {
     } catch {
       setState("load failed");
     }
-  }, [editingId]);
+  }, []);
+  reactExports.useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => {
+      var _a2;
+      return (_a2 = addRef.current) == null ? void 0 : _a2.focus();
+    }, 0);
+    return () => clearTimeout(t);
+  }, [open]);
   reactExports.useEffect(() => {
     if (!open) return;
     load2();
     const poll = setInterval(() => {
       if (!document.hidden) load2();
     }, 4e3);
-    setTimeout(() => {
-      var _a2;
-      return (_a2 = addRef.current) == null ? void 0 : _a2.focus();
-    }, 0);
     const onKey = (e) => {
       if (e.key === "Escape") closeDialog();
     };
@@ -34137,13 +34359,13 @@ function TodoDialog() {
     save2([...todos, { id: rid(), text, done: false }]);
   };
   const startEdit = (t) => {
-    setEditingId(t.id);
+    setEditing(t.id);
     setEditDraft(t.text);
     editCancelled.current = false;
   };
   const commitEdit = (id) => {
     if (editCancelled.current) return;
-    setEditingId(null);
+    setEditing(null);
     const text = editDraft.trim();
     const cur = todos.find((x) => x.id === id);
     if (!cur || !text || text === cur.text) return;
@@ -34151,7 +34373,7 @@ function TodoDialog() {
   };
   const cancelEdit = () => {
     editCancelled.current = true;
-    setEditingId(null);
+    setEditing(null);
   };
   return /* @__PURE__ */ jsxRuntimeExports.jsx(
     "div",
@@ -34669,9 +34891,18 @@ function App() {
   const { data: instances2 } = useInstances();
   const ui = useUi();
   useDoctorAutoShow();
+  const tourDecided = reactExports.useRef(false);
   reactExports.useEffect(() => {
-    if (!ui.tourDone && ui.hintsEnabled) ui.openTour();
-  }, []);
+    if (tourDecided.current) return;
+    const decision = tourDecision({
+      tourDone: ui.tourDone,
+      hintsEnabled: ui.hintsEnabled,
+      onboarded: config == null ? void 0 : config.onboarded
+    });
+    if (decision === "wait") return;
+    tourDecided.current = true;
+    if (decision === "open") ui.openTour();
+  }, [config == null ? void 0 : config.onboarded, ui.tourDone, ui.hintsEnabled, ui.openTour]);
   reactExports.useEffect(() => {
     const caps2 = config == null ? void 0 : config.caps;
     document.body.classList.toggle("no-git", caps2 ? !caps2.git : false);

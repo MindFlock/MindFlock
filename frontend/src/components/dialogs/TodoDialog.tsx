@@ -27,6 +27,14 @@ export function TodoDialog() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
   const editCancelled = useRef(false);
+  // Mirrored in a ref so `load` can stay identity-stable: if it changed on every
+  // edit, the polling effect below would re-run and re-focus the Add box, which
+  // blurs (and so commits) the inline edit the instant it opens.
+  const editingRef = useRef<string | null>(null);
+  const setEditing = useCallback((id: string | null) => {
+    editingRef.current = id;
+    setEditingId(id);
+  }, []);
 
   const save = useCallback(async (next: Todo[]) => {
     setTodos(next);
@@ -46,7 +54,7 @@ export function TodoDialog() {
   const load = useCallback(async () => {
     // Don't clobber a drag in flight, text being typed into the Add box, or an
     // inline edit in progress.
-    if (dragging.current || document.activeElement === addRef.current || editingId) return;
+    if (dragging.current || document.activeElement === addRef.current || editingRef.current) return;
     try {
       const r = await api<{ todos?: Todo[] }>("/api/assistant/todos");
       setTodos(r.todos || []);
@@ -54,7 +62,15 @@ export function TodoDialog() {
     } catch {
       setState("load failed");
     }
-  }, [editingId]);
+  }, []);
+
+  // Focus the Add box once per opening — never on an unrelated re-render, or it
+  // would yank focus out of an inline edit.
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => addRef.current?.focus(), 0);
+    return () => clearTimeout(t);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -62,7 +78,6 @@ export function TodoDialog() {
     const poll = setInterval(() => {
       if (!document.hidden) load();
     }, 4000);
-    setTimeout(() => addRef.current?.focus(), 0);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") closeDialog();
     };
@@ -83,14 +98,14 @@ export function TodoDialog() {
   };
 
   const startEdit = (t: Todo) => {
-    setEditingId(t.id);
+    setEditing(t.id);
     setEditDraft(t.text);
     editCancelled.current = false;
   };
 
   const commitEdit = (id: string) => {
     if (editCancelled.current) return;
-    setEditingId(null);
+    setEditing(null);
     const text = editDraft.trim();
     const cur = todos.find((x) => x.id === id);
     if (!cur || !text || text === cur.text) return;
@@ -99,7 +114,7 @@ export function TodoDialog() {
 
   const cancelEdit = () => {
     editCancelled.current = true;
-    setEditingId(null);
+    setEditing(null);
   };
 
   return (

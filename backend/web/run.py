@@ -6,6 +6,7 @@
     python backend/web/run.py tailscale    # bind 0.0.0.0 for phone/tailnet access
     python backend/web/run.py 9000         # custom port (still local mode)
     python backend/web/run.py tailscale 9000   # tailnet access, custom port
+    python backend/web/run.py --setup      # guided first-run setup, then serve
 
 Mode and port may be given in either order; env vars also work
 (``CS_WEB_MODE=tailscale``, ``PORT=9000``).
@@ -27,6 +28,7 @@ gets 401.
 
 from __future__ import annotations
 
+import io
 import os
 import sys
 import threading
@@ -146,12 +148,17 @@ def main(argv: Optional[List[str]] = None) -> None:
     # auto-enables the auth gate.
     mode = _norm_mode(os.environ.get("CS_WEB_MODE"))
     port = int(os.environ.get("PORT") or os.environ.get("UVICORN_PORT") or 8765)
+    setup = False
     for arg in (sys.argv[1:] if argv is None else argv):
         a = arg.strip().lower()
         if a in ("local", "localhost"):
             mode = "local"
         elif a in ("tailscale", "ts", "all"):
             mode = "tailscale"
+        elif a in ("--setup", "setup"):
+            # Accepted bare as well as flagged, like the mode words above:
+            # this parser has never insisted on dashes.
+            setup = True
         elif a.isdigit():
             port = int(a)
         # anything else is ignored (keeps the launcher forgiving)
@@ -178,6 +185,23 @@ def main(argv: Optional[List[str]] = None) -> None:
             file=sys.stderr,
         )
         raise SystemExit(1)
+    if setup:
+        # Guided setup before the bind: what it fixes (tmux, the agent CLI and
+        # its login) is exactly what a session can't start without, and after
+        # uvicorn.run() below there is no coming back here. It runs *after* the
+        # double-launch guard above so nobody is walked through setup for a
+        # server that then refuses the port. Its exit code is deliberately
+        # ignored — the user asked to serve, and declining an install is not a
+        # reason to refuse them a server.
+        try:
+            from backend import init_wizard
+
+            # serving=True: this process is the server the wizard would otherwise
+            # sign off by telling the user to start.
+            init_wizard.run(serving=True)
+        except Exception:  # noqa: BLE001 — setup is a courtesy, serving is the job
+            pass
+        print()
     # Export the resolved mode + port (CLI args win over the env) so the
     # server's startup banner knows local mode — skipping the tailnet URLs +
     # QR that a 127.0.0.1 bind can never serve (F7) — and prints the right
@@ -218,26 +242,44 @@ def main(argv: Optional[List[str]] = None) -> None:
             "note: managing the MindFlock repo itself — cd into your project "
             "first if this isn't what you want."
         )
-    if not _is_onboarded():
-        # First run (no session ever created): print the 3-step getting
-        # started instead of leaving a stranger staring at a bare address.
-        # The desktop app shows the same checklist as a setup card.
-        print()
-        print("First run? Three steps:")
-        print("  1. open the MindFlock desktop app — it connects to this")
-        print("     server automatically (to get it: electron/README.md)")
-        print('  2. click "+ New" — that creates a session: an isolated git')
-        print("     worktree + a tmux session running your coding agent")
-        print("  3. click the session tile and type to talk to the agent")
-        print("  (if anything is missing, `mindflock doctor` prints the fix)")
     print("Press Ctrl-C to stop.")
 
-    # Fast preflight (background thread so binding isn't delayed): the checks
-    # a session can't start without. A failure prints what's wrong, why the
-    # tool needs it, and the one command that fixes it — instead of a cryptic
-    # FileNotFoundError at first session-create.
-    def _fast_preflight() -> None:
+    # First run = no session has ever been created. Such a boot earns the
+    # wizard's *report* (what this machine is actually missing with the one-line
+    # fix for each, the folders it can see, the commands that come next) instead
+    # of leaving a stranger staring at a bare address. Deliberately the report
+    # and not the wizard: the desktop app auto-starts this server, and a serve
+    # that waited on stdin before binding its port would look like a hung app.
+    # `mindflock init` — named in the report — is the interactive door, and
+    # `mindflock serve --setup` opens it above, which is why that case is
+    # excluded here.
+    first_run = not _is_onboarded() and not setup
+
+    # Everything below runs on a background thread so binding isn't delayed: the
+    # report walks the full doctor (ten checks, each capped at a 5s subprocess)
+    # and scans for repo suggestions (a git probe per candidate, capped at 30s),
+    # and even the short check list shells out three times. On a cold box or a
+    # stalled network mount that is tens of seconds in which the desktop app is
+    # polling a port nobody has opened yet and retrying onto offline.html.
+    def _preflight() -> None:
         try:
+            if first_run:
+                from backend import init_wizard
+
+                # Rendered into a buffer and written once: the "Press Ctrl-C"
+                # line above is racing this thread, and a report printed line by
+                # line would let that line land in the middle of the block. The
+                # report's own doctor pass already covers git, tmux and the agent
+                # CLI with their fix lines, so it stands in for the short list
+                # below rather than running those probes a second time.
+                buf = io.StringIO()
+                init_wizard.report(buf, serving=True)
+                sys.stdout.write("\n" + buf.getvalue())
+                return
+            # Every other boot gets just the checks a session can't start
+            # without. A failure prints what's wrong, why the tool needs it, and
+            # the one command that fixes it — instead of a cryptic
+            # FileNotFoundError at first session-create.
             from backend import doctor
 
             for fn in (doctor.check_git, doctor.check_tmux, doctor.check_agent_cli):
@@ -247,9 +289,14 @@ def main(argv: Optional[List[str]] = None) -> None:
                     if c.fix:
                         print(f"  fix: {c.fix}", file=sys.stderr)
         except Exception:  # noqa: BLE001 — preflight must never break serving
+            # Silence, not a substitute message: init_wizard.report is the one
+            # layer that owns degrading the first-run text, and a second copy of
+            # its wording here would only rot out of sync with it. This catch is
+            # what keeps an unwritable stdout or a failed import from throwing a
+            # thread traceback across the banner.
             pass
 
-    threading.Thread(target=_fast_preflight, daemon=True).start()
+    threading.Thread(target=_preflight, daemon=True).start()
 
     # This process is now the server, and nothing else is: the only place that
     # can honestly say so is right here, one line before uvicorn takes over.

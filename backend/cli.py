@@ -5,6 +5,9 @@ Installed via ``[project.scripts]``::
     mindflock                     # serve (localhost only, port 8765)
     mindflock serve tailscale     # serve on the tailnet (phone access)
     mindflock serve --port 9000   # custom port
+    mindflock serve --setup       # …run the guided setup first, then serve
+    mindflock init                # guided first run: deps, agent login, repo
+    mindflock init --yes          # …taking every default, for scripts
     mindflock doctor              # dependency preflight (exit 1 on failures)
     mindflock doctor --fix        # …and offer to run each fix command
 
@@ -20,7 +23,10 @@ Installed via ``[project.scripts]``::
 
 ``serve`` delegates to :func:`backend.web.run.main` (the same code path as
 ``./backend/web/run.sh``); ``doctor`` runs the same checks as
-``GET /api/doctor`` and prints them with per-platform fixes. The session
+``GET /api/doctor`` and prints them with per-platform fixes; ``init``
+(:mod:`backend.init_wizard`) walks a brand-new user through those checks, offers
+the doctor's own fix commands, and remembers the repo they pick — none of the
+three needs a running server. The session
 commands (J1) are thin clients over a *running* server's HTTP API — discovery
 order is ``--host``/``--port`` → ``MINDFLOCK_HOST``/``MINDFLOCK_PORT`` →
 probe 127.0.0.1:8765 (see :mod:`backend.client`). They never spawn an
@@ -37,14 +43,14 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import TYPE_CHECKING, Callable, List, Optional
+from typing import TYPE_CHECKING, Callable, List, Optional, TextIO
 
 from backend import __version__, client
 
 if TYPE_CHECKING:
     from backend.doctor import Check
 
-__all__ = ["main"]
+__all__ = ["main", "print_checks"]
 
 # Terminal glyph per doctor status (see backend.doctor for the semantics).
 _GLYPHS = {"ok": "✓", "info": "-", "warn": "!", "fail": "✗"}
@@ -79,6 +85,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="local = bind 127.0.0.1 (default); tailscale = bind 0.0.0.0 (phone/tailnet access, auth gate on)",
     )
     serve.add_argument("--port", type=int, default=None, help="port (default 8765)")
+    serve.add_argument(
+        "--setup",
+        action="store_true",
+        help="run the guided first-run setup (see `mindflock init`) before binding the port",
+    )
+
+    init_p = sub.add_parser(
+        "init",
+        help="guided first-run setup: check dependencies, log in your agent CLI, pick your repo",
+    )
+    init_p.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="take every default without prompting (for scripts)",
+    )
 
     doctor_p = sub.add_parser(
         "doctor",
@@ -221,7 +243,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _cmd_serve(mode: Optional[str], port: Optional[int]) -> int:
+def _cmd_serve(mode: Optional[str], port: Optional[int], setup: bool = False) -> int:
     from backend.web.run import main as serve_main
 
     argv: List[str] = []
@@ -229,8 +251,38 @@ def _cmd_serve(mode: Optional[str], port: Optional[int]) -> int:
         argv.append(mode)
     if port is not None:
         argv.append(str(port))
+    if setup:
+        # run.py owns the ordering (setup runs after its double-launch guard,
+        # before the bind), so pass the intent along as one of its tokens.
+        argv.append("--setup")
     serve_main(argv)  # prints the friendly web-deps hint itself if they're missing
     return 0
+
+
+def print_checks(checks: list[Check], stream: Optional[TextIO] = None) -> None:
+    """Render doctor results the one way MindFlock renders them: a glyph column,
+    label-aligned details, and the fix line under anything that needs attention.
+
+    Shared by ``mindflock doctor`` and the first-run wizard
+    (:mod:`backend.init_wizard`) so the two can never drift into two dialects of
+    the same table. An empty list prints nothing — the wizard's report passes
+    only the checks that need attention, and on a healthy machine that is none.
+    """
+    out = stream if stream is not None else sys.stdout
+    if not checks:
+        return
+    width = max(len(c.label) for c in checks)
+    for c in checks:
+        glyph = _GLYPHS.get(c.status, "?")
+        print(f"  {glyph} {c.label.ljust(width)}  {c.detail}", file=out)
+        if c.fix and c.status in ("warn", "fail"):
+            print(f"    {' ' * width}  fix: {c.fix}", file=out)
+
+
+def _cmd_init(assume_yes: bool = False) -> int:
+    from backend import init_wizard
+
+    return init_wizard.run(assume_yes=assume_yes)
 
 
 def _cmd_doctor(fix: bool = False) -> int:
@@ -239,12 +291,7 @@ def _cmd_doctor(fix: bool = False) -> int:
     checks = doctor.run_checks()
     print("MindFlock doctor")
     print()
-    width = max(len(c.label) for c in checks)
-    for c in checks:
-        glyph = _GLYPHS.get(c.status, "?")
-        print(f"  {glyph} {c.label.ljust(width)}  {c.detail}")
-        if c.fix and c.status in ("warn", "fail"):
-            print(f"    {' ' * width}  fix: {c.fix}")
+    print_checks(checks)
     if fix:
         checks = _fix_checks(checks)
     failed = [c for c in checks if c.status == "fail"]
@@ -685,6 +732,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = _build_parser().parse_args(sys.argv[1:] if argv is None else argv)
     if args.command == "doctor":
         return _cmd_doctor(fix=args.fix)
+    if args.command == "init":
+        # Like doctor and uninstall, not a session command: init is what you run
+        # *before* there is a server, so it must never go through the
+        # ServerNotFound handler below.
+        return _cmd_init(assume_yes=args.yes)
     if args.command == "uninstall":
         # Not a session command: it works offline against state.json (and
         # refuses to run while a server is up), so it must never be wrapped in
@@ -705,7 +757,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # Default (no subcommand) = serve with defaults.
     mode = getattr(args, "mode", None)
     port = getattr(args, "port", None)
-    return _cmd_serve(mode, port)
+    return _cmd_serve(mode, port, setup=bool(getattr(args, "setup", False)))
 
 
 if __name__ == "__main__":

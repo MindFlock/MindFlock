@@ -69,6 +69,16 @@ def test_collapsed_sidebar_hides_the_handle():
     assert "display: none" in _rule(css, "body.sidebar-collapsed .sidebar-resizer")
 
 
+def test_open_dialog_hides_the_handle():
+    """The .modal backdrop is fixed with no z-index, so the handle's z-index: 40
+    painted its accent line over every open dialog and kept answering :hover (the
+    drag worked through the backdrop too). Hidden while any modal is mounted."""
+    css = client.get("/style.css").text
+    assert "display: none" in _rule(
+        css, "body:has(.modal:not(.hidden)) .sidebar-resizer"
+    )
+
+
 def test_drag_locks_the_cursor_and_selection():
     css = client.get("/style.css").text
     dragging = _rule(css, "body.sidebar-resizing,\nbody.sidebar-resizing *")
