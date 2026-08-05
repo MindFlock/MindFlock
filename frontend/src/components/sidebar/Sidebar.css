@@ -112,6 +112,16 @@ body.sidebar-collapsed .sidebar-resizer {
   display: none;
 }
 
+/* Nothing to resize while a dialog owns the screen, either. The .modal backdrop
+   is fixed with NO z-index (see Pane.css), so this handle's z-index: 40 paints
+   its accent line straight over the dimmed page and still answers :hover — and
+   the drag still works through the backdrop. Keyed off the overlay element
+   rather than a body class so every dialog is covered, including ones that
+   never touch the store's openDialog (command palette, welcome tour). */
+body:has(.modal:not(.hidden)) .sidebar-resizer {
+  display: none;
+}
+
 /* Tools row: session count on the left, a subtle keyboard-shortcuts link on
    the right (status-bar-style help affordance). */
 #sidebar-footer .foot-row.foot-tools {

@@ -2,9 +2,9 @@
  * capability body-classes, activity debounce feed, keymap installation, and
  * which special panes (logs / system logs / assistant chat) are open. */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConfig, useInstances } from "./state/queries";
-import { useUi } from "./state/store";
+import { tourDecision, useUi } from "./state/store";
 import { noteActivity } from "./lib/stage";
 import { installKeymap, type KeymapHost } from "./lib/keymap";
 import { selectSession, instances as instancesSnapshot } from "./lib/sessionActions";
@@ -38,13 +38,33 @@ export default function App() {
   const ui = useUi();
   useDoctorAutoShow();
 
-  // First-run onboarding: pop the welcome walkthrough once, for a fresh user who
-  // still has hints enabled. finishTour() flips tourDone so it never reopens on
+  // First-run onboarding: pop the welcome walkthrough once, for a user who is
+  // new by the SERVER's reckoning and still has hints enabled — tourDecision()
+  // holds the rule. Until /api/config resolves it answers "wait" and this decides
+  // nothing, which is why the flags stay in the deps while the latch is a
+  // separate ref: the config query refetches on its own and re-arming hints from
+  // Settings re-runs this effect, and neither should be able to restart the
+  // twelve slides mid-session. finishTour() flips tourDone so it never reopens on
   // its own — a replay is an explicit action from Settings.
+  //
+  // Watching the tour is deliberately NOT reported back. general.onboarded means
+  // "this user has a session", which is why the server sets it on a create and
+  // nowhere else; a POST from here wrote it for anyone who merely clicked past the
+  // slideshow, and it took both first-run surfaces down with it — the grid's setup
+  // card and the auto-opening dependency checklist — for a user who still had no
+  // tmux and so could not create a session at all.
+  const tourDecided = useRef(false);
   useEffect(() => {
-    if (!ui.tourDone && ui.hintsEnabled) ui.openTour();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (tourDecided.current) return;
+    const decision = tourDecision({
+      tourDone: ui.tourDone,
+      hintsEnabled: ui.hintsEnabled,
+      onboarded: config?.onboarded,
+    });
+    if (decision === "wait") return;
+    tourDecided.current = true;
+    if (decision === "open") ui.openTour();
+  }, [config?.onboarded, ui.tourDone, ui.hintsEnabled, ui.openTour]);
 
   // Capability gating: body classes drive the caps-gate CSS (and addon CSS).
   useEffect(() => {

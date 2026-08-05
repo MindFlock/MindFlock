@@ -1075,6 +1075,16 @@ body.sidebar-collapsed .sidebar-resizer {
   display: none;
 }
 
+/* Nothing to resize while a dialog owns the screen, either. The .modal backdrop
+   is fixed with NO z-index (see Pane.css), so this handle's z-index: 40 paints
+   its accent line straight over the dimmed page and still answers :hover — and
+   the drag still works through the backdrop. Keyed off the overlay element
+   rather than a body class so every dialog is covered, including ones that
+   never touch the store's openDialog (command palette, welcome tour). */
+body:has(.modal:not(.hidden)) .sidebar-resizer {
+  display: none;
+}
+
 /* Tools row: session count on the left, a subtle keyboard-shortcuts link on
    the right (status-bar-style help affordance). */
 #sidebar-footer .foot-row.foot-tools {
@@ -5857,6 +5867,76 @@ p.set-hint {
   border-color: var(--accent);
 }
 
+/* The folder-suggestion strip. It also carries .new-templates (see the JSX), so
+   the card, the head and the .nt-chip pills come from the Templates strip in
+   budgetNotifyTemplates.css and stay in step with it; only the per-source label
+   column and the git tint below are its own. The margin pulls it back against
+   the Folder field it belongs to, which .nf-body's 13px gap otherwise separates
+   it from. */
+.nf-suggest {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: -4px 0 0;
+}
+
+.nf-suggest .nt-head {
+  margin-bottom: 0;
+}
+
+.nf-suggest-legend {
+  font-size: 10.5px;
+}
+
+/* Label beside its own chips, in a fixed column so the three reasons line up
+   and the eye can skip whichever ones it doesn't care about. */
+.nf-suggest-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.nf-suggest-label {
+  flex: none;
+  width: 46px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: help;
+}
+
+.nf-suggest .nt-list {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Long project names would otherwise stretch one chip across the whole row. */
+.nf-suggest .nt-chip {
+  max-width: 190px;
+}
+
+.nf-suggest .nt-chip.is-git {
+  color: #c4b3ff;
+}
+
+/* Which chip filled the field matters more than what kind of folder it holds,
+   so this must stay after .is-git — they're equally specific. */
+.nf-suggest .nt-chip.active {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+/* The git-features aside. Deliberately not .error: pointing a session at a
+   plain folder is a legal thing to do, and the line is here to explain what
+   will be missing and offer the fix, not to stop anyone. The negative top
+   margin tucks it under the Folder input instead of floating a single line in
+   the middle of .nf-body's 13px gap. */
+.nf-git-nudge {
+  margin: -7px 0 -4px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
 #repo-browser {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -5865,7 +5945,9 @@ p.set-hint {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 240px;
+  /* 240px plus the .rb-hint line's height: the legend is chrome, and paying for
+     it out of the list would have cost a visible row. */
+  max-height: 262px;
 }
 
 .rb-head {
@@ -5923,6 +6005,12 @@ p.set-hint {
   gap: 2px;
 }
 
+/* Every row in the list is a <button> — a click on one is the selection, so it
+   had to become a real control. The UA chrome is stripped back so it still
+   reads as a list row, the row spans the full width (clicking the dead space
+   beside a short folder name used to do nothing), and the transparent border
+   reserves the same box .rb-use's dashed one occupies so the list doesn't shift
+   by a pixel between the two. */
 .rb-item {
   display: flex;
   align-items: center;
@@ -5932,10 +6020,24 @@ p.set-hint {
   font-size: 12px;
   color: var(--text);
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
 }
 
 .rb-item:hover {
   background: var(--panel-2);
+}
+
+.rb-item:focus-visible {
+  outline: 2px solid var(--accent);
+  /* Inset: the rows sit flush against #rb-list's scroll edge, and an outward
+     ring gets clipped by the overflow. */
+  outline-offset: -2px;
 }
 
 .rb-item.is-git {
@@ -5961,19 +6063,22 @@ p.set-hint {
   font-style: normal;
 }
 
-.rb-pick {
-  border-radius: 5px;
-  padding: 2px 9px;
-  font-size: 11px;
-  cursor: pointer;
-  flex: none;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
+/* The folder the Folder field currently points at. Carried by a tinted fill and
+   an accent edge rather than a text colour, because .is-git already owns the
+   text colour and both states have to be readable at once. Declared after
+   :hover so pointing at the selected row doesn't undo the highlight. */
+.rb-item.rb-sel {
+  background: rgba(var(--accent-rgb), 0.16);
+  border-color: var(--accent);
 }
 
-.rb-pick:hover {
-  border-color: var(--accent);
+/* Click-selects / double-click-opens is Finder's model, not a web list's, so
+   the list says so once here — cheaper than every user discovering it by
+   accident, and it's the only place the ← / → keys are written down. */
+.rb-hint {
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--muted);
 }
 
 .muted {
@@ -8387,12 +8492,17 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   background: rgba(0, 0, 0, 0.05);
 }
 
-/* Light-accent text is too faint on white — use the deeper accent variant. */
+/* Light-accent text is too faint on white — use the deeper accent variant. The
+   folder-suggestion chips take it for both states: a git chip and the chip that
+   filled the field read the same colour on light, and the picked one is told
+   apart by its accent border and tinted fill instead. */
 .light .stagechip.s-agent,
 .light .split-diff .sd-file,
 .light .diff-toolbar .diffstat.file,
 .light .rb-item.is-git,
 .light .rb-use.is-git,
+.light .nf-suggest .nt-chip.is-git,
+.light .nf-suggest .nt-chip.active,
 .light .ws-badge.active {
   color: var(--accent-deep);
 }

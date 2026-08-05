@@ -318,3 +318,35 @@ export const useUi = create<UiState>((set, get) => ({
 export function displayName(title: string): string {
   return useUi.getState().aliases[title] || title;
 }
+
+export type TourDecision = "open" | "skip" | "wait";
+
+/** Should the welcome walkthrough open itself on this load?
+ *
+ * `tourDone` alone used to answer this, which is how a returning user who
+ * cleared their browser storage — or opened the desktop app on a second machine
+ * — got the twelve slides replayed at them. The server already knows better
+ * (`general.onboarded`, from /api/config: true once a session has ever
+ * existed), so it gets the deciding vote.
+ *
+ * `onboarded` is undefined until that request resolves, and the answer then is
+ * "wait", never "open": popping the tour on a guess is the exact bug. The local
+ * flags are still consulted first, so someone who has finished the tour or
+ * turned hints off is left alone without waiting on the network.
+ *
+ * A returning user has by definition created a session, so the server's flag
+ * covers the case that matters. What it does not cover is someone who watched the
+ * slides, started nothing, and then opened a second device — they see the tour
+ * again. That is the accepted price of never reporting the tour itself: the
+ * frontend used to POST general.onboarded when the slideshow closed, and since
+ * that flag means "this user is running sessions", it silently retired the grid's
+ * setup card and the dependency checklist for a user who had neither. */
+export function tourDecision(opts: {
+  tourDone: boolean;
+  hintsEnabled: boolean;
+  onboarded: boolean | undefined;
+}): TourDecision {
+  if (opts.tourDone || !opts.hintsEnabled) return "skip";
+  if (opts.onboarded === undefined) return "wait";
+  return opts.onboarded ? "skip" : "open";
+}

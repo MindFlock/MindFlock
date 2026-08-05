@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 from backend import doctor
 from backend.doctor import Check
+from backend.providers import claude as claude_provider
+from backend.providers.base import BaseProvider
 
 
 @pytest.fixture(autouse=True)
@@ -283,10 +285,24 @@ class TestAgentCli:
 class TestAgentAuth:
     @pytest.fixture(autouse=True)
     def _isolated_home(self, monkeypatch, tmp_path):
-        # Point every credential candidate away from the real user's login.
+        # Point every credential candidate away from the real user's login. The
+        # non-Anthropic keys matter as much as ANTHROPIC_API_KEY now that the
+        # check asks each provider: aider counts any of these as a login, so a
+        # developer with OPENAI_API_KEY exported in their shell would see the
+        # "looks logged out" tests pass for the wrong reason.
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        for var in (
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "GEMINI_API_KEY",
+            "DEEPSEEK_API_KEY",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        # A Mac running the suite has a real Claude login in its Keychain, which
+        # is genuine evidence — pin it off so the verdicts under test come only
+        # from the files/env this fixture controls.
+        monkeypatch.setattr(claude_provider, "_keychain_login_evidence", lambda: False)
         monkeypatch.setattr(doctor, "_default_provider_name", lambda: "claude")
         monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "claude")
 
@@ -311,10 +327,135 @@ class TestAgentAuth:
         assert c.status == "warn"
         assert "run `claude` once" in c.fix
 
-    def test_non_claude_provider_is_info(self, monkeypatch):
+    def test_provider_with_declared_credentials_gets_a_real_verdict(self, monkeypatch):
+        # aider names the API-key env vars it authenticates with, so it is
+        # probeable: no key set and the CLI on PATH is a genuine "looks logged
+        # out" warn, not the old "no auth probe for aider — skipped" shrug.
         monkeypatch.setattr(doctor, "_default_provider_name", lambda: "aider")
         monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "aider")
-        assert doctor.check_agent_auth().status == "info"
+        monkeypatch.setattr(doctor.shutil, "which", _which({"aider": "/usr/bin/aider"}))
+        c = doctor.check_agent_auth()
+        assert c.status == "warn"
+        assert "no sign of a login" in c.detail
+
+    def test_codex_credential_file_is_ok(self, monkeypatch, tmp_path):
+        # A provider that declares credential FILES (codex: ~/.codex/auth.json)
+        # is answered by the file existing — no env key needed.
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "auth.json").write_text("{}")
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "codex")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "codex")
+        monkeypatch.setattr(doctor.shutil, "which", _which({"codex": "/usr/bin/codex"}))
+        c = doctor.check_agent_auth()
+        assert c.status == "ok"
+        assert "auth.json" in c.detail
+
+    def test_provider_declaring_no_credential_sources_never_nags(self, monkeypatch):
+        # goose keeps its credentials somewhere MindFlock does not read, so
+        # finding nothing proves nothing: info with no fix, even with the CLI off
+        # PATH, because a warn here could never be cleared.
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "goose")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "goose")
+        monkeypatch.setattr(doctor.shutil, "which", _which({}))
+        c = doctor.check_agent_auth()
+        assert c.status == "info"
+        assert "no login probe" in c.detail
+        assert c.fix == "" and c.cmd == ""
+
+    def test_login_fix_uses_the_providers_own_login_command(self, monkeypatch):
+        # codex logs in with `codex login`, so the fix says exactly that —
+        # "run `codex login` once to log in" would be redundant — and cmd carries
+        # it so `doctor --fix` can offer to run it.
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "codex")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "codex")
+        monkeypatch.setattr(doctor.shutil, "which", _which({"codex": "/usr/bin/codex"}))
+        c = doctor.check_agent_auth()
+        assert c.status == "warn"
+        assert c.fix == "run `codex login`"
+        assert c.cmd == "codex login"
+
+    def test_inherited_login_command_is_never_offered_to_run(self, monkeypatch):
+        # aider names the API keys it reads but has no login flow, so
+        # BaseProvider.login_command hands back the bare program name. Offering
+        # THAT is how `doctor --fix` and the init wizard came to print
+        # "run `aider`?" and hand their terminal to aider's own REPL, which
+        # authenticates nothing: cmd must stay empty while the fix line still
+        # says what would clear the warn.
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "aider")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "aider")
+        monkeypatch.setattr(doctor.shutil, "which", _which({"aider": "/usr/bin/aider"}))
+        c = doctor.check_agent_auth()
+        assert c.status == "warn"
+        assert c.cmd == ""
+        assert "run `aider`" not in c.fix
+        assert "ANTHROPIC_API_KEY" in c.fix
+
+    def test_claude_still_offers_its_first_run_sign_in(self, monkeypatch):
+        # The other side of the same rule: ClaudeProvider overrides
+        # login_command deliberately because `claude` prompts to sign in on
+        # first run, so running it IS the login flow and stays runnable.
+        monkeypatch.setattr(
+            doctor.shutil, "which", _which({"claude": "/usr/bin/claude"})
+        )
+        c = doctor.check_agent_auth()
+        assert c.status == "warn"
+        assert c.cmd == "claude"
+        assert "run `claude` once" in c.fix
+
+    def test_config_declared_bare_command_is_still_offered(self, monkeypatch):
+        # A config that names its login command as data means it even when the
+        # command is just the program (antigravity signs in through Google on
+        # first run), so it is offered — the gate is "declared", not "has args".
+        provider = types.SimpleNamespace(
+            cfg=types.SimpleNamespace(
+                login_command="agy", auth_env=("AGY_KEY",), auth_files=()
+            ),
+            auth_evidence=lambda: "",
+        )
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "antigravity")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "agy")
+        monkeypatch.setattr(doctor, "_agent_provider", lambda name: provider)
+        monkeypatch.setattr(doctor.shutil, "which", _which({"agy": "/usr/bin/agy"}))
+        c = doctor.check_agent_auth()
+        assert c.status == "warn"
+        assert c.fix == "run `agy` once to log in"
+        assert c.cmd == "agy"
+
+    def test_hand_written_provider_declares_by_overriding(self, monkeypatch):
+        # Classes carrying no cfg (claude's shape) declare a login flow by
+        # overriding the base method: the override is offered, and a sibling
+        # that only overrides the auth probe gets no runnable command at all.
+        class _Declares(BaseProvider):
+            name = "custom"
+            program_aliases = ("custom",)
+
+            def auth_evidence(self) -> str:
+                return ""
+
+            def login_command(self):
+                return "custom signin"
+
+        class _Inherits(BaseProvider):
+            name = "custom"
+            program_aliases = ("custom",)
+
+            def auth_evidence(self) -> str:
+                return ""
+
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "custom")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "custom")
+        monkeypatch.setattr(
+            doctor.shutil, "which", _which({"custom": "/usr/bin/custom"})
+        )
+        monkeypatch.setattr(doctor, "_agent_provider", lambda name: _Declares())
+        declared = doctor.check_agent_auth()
+        monkeypatch.setattr(doctor, "_agent_provider", lambda name: _Inherits())
+        inherited = doctor.check_agent_auth()
+        assert declared.cmd == "custom signin"
+        assert declared.fix == "run `custom signin` once to log in"
+        assert inherited.status == "warn"
+        assert inherited.cmd == ""
+        assert inherited.fix == "log `custom` in from inside the CLI itself"
 
     def test_cli_not_installed_cannot_probe_auth(self, monkeypatch):
         # claude selected but not on PATH and no credential evidence: auth is
@@ -323,6 +464,15 @@ class TestAgentAuth:
         c = doctor.check_agent_auth()
         assert c.status == "warn"
         assert "cannot probe auth" in c.detail
+
+    def test_unregistered_provider_cannot_be_probed(self, monkeypatch):
+        # A provider name left in settings after its TOML was deleted: there is
+        # nobody to ask, so say so and stay out of the way.
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "ghost-cli")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "ghost-cli")
+        c = doctor.check_agent_auth()
+        assert c.status == "info"
+        assert "not a registered provider" in c.detail
 
 
 class TestOptionalDeps:

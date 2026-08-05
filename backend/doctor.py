@@ -310,53 +310,157 @@ def check_agent_cli() -> Check:
     )
 
 
-def _claude_login_evidence() -> str:
-    """Best-effort probe for a Claude Code login. Returns a human detail string
-    when some credential source is found, else ``""``. Never raises."""
-    candidates: List[Path] = []
-    cfg = os.environ.get("CLAUDE_CONFIG_DIR")
-    if cfg:
-        candidates += [Path(cfg) / ".claude.json", Path(cfg) / ".credentials.json"]
-    home = Path.home()
-    candidates += [home / ".claude.json", home / ".claude" / ".credentials.json"]
-    for path in candidates:
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for marker in ("oauthAccount", "primaryApiKey", "claudeAiOauth"):
-            if marker in text:
-                return f"login state found in {path}"
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return "ANTHROPIC_API_KEY is set"
-    return ""
+def _agent_provider(name: str):
+    """The registered provider object for ``name``, or ``None`` when the registry
+    cannot produce one (a stale provider name in settings, a user TOML that was
+    deleted, an import that failed). Never raises — the auth check has to say
+    something useful even when the registry is unhappy."""
+    try:
+        from backend import providers
+
+        return providers.get(name)
+    except Exception:  # noqa: BLE001 — a broken registry must not break the doctor
+        return None
+
+
+def _declares_auth_sources(provider) -> bool:
+    """Whether ``provider`` has told us where its credentials could live.
+
+    This is what separates the two meanings of "no evidence". A CLI that named
+    its credential files or env vars and has none of them is probably logged
+    out, which is worth a nudge; a CLI that named nothing keeps its token
+    somewhere we never look, so its absence proves nothing and warning about it
+    would nag on every doctor run forever (antigravity, cline, goose). Config-
+    driven providers declare it as data; the hand-written ones (claude) carry no
+    ``cfg``, so overriding the base no-op probe IS their declaration.
+    """
+    cfg = getattr(provider, "cfg", None)
+    if cfg is not None:
+        return bool(getattr(cfg, "auth_files", ()) or getattr(cfg, "auth_env", ()))
+    try:
+        from backend.providers.base import BaseProvider
+
+        return type(provider).auth_evidence is not BaseProvider.auth_evidence
+    except Exception:  # noqa: BLE001 — unknowable, so claim nothing and stay quiet
+        return False
+
+
+def _auth_evidence(provider) -> str:
+    """The provider's own login evidence, or ``""``.
+
+    Same doctrine as Settings → Providers (:func:`backend.web.addons.settings.
+    _provider_status`): a probe that finds nothing — or blows up — means "login
+    status unknown", never "logged out"."""
+    try:
+        return provider.auth_evidence() or ""
+    except Exception:  # noqa: BLE001 — a broken probe is no evidence, not a 500
+        return ""
+
+
+def _declared_login_command(provider) -> str:
+    """The login command ``provider`` EXPLICITLY declares, or ``""``.
+
+    :meth:`BaseProvider.login_command` never answers nothing — with no login
+    flow to name it hands back the bare program name — and taking that at face
+    value made the doctor offer to run the agent itself: ``doctor --fix`` and
+    the ``mindflock init`` wizard printed "agent auth (aider): run `aider`?" and
+    Enter replaced the wizard with aider's own REPL in whatever directory it was
+    started in, having authenticated nothing. So a bare program name only counts
+    when a provider means it: config-driven providers declare it as data
+    (``cfg.login_command``), and the hand-written ones declare it by overriding
+    the base method — which claude does deliberately, because the ``claude`` CLI
+    really does prompt to sign in on first run.
+    """
+    cfg = getattr(provider, "cfg", None)
+    if cfg is not None:
+        return str(getattr(cfg, "login_command", "") or "")
+    try:
+        from backend.providers.base import BaseProvider
+
+        if type(provider).login_command is BaseProvider.login_command:
+            return ""
+        return provider.login_command() or ""
+    except Exception:  # noqa: BLE001 — a provider must never break the doctor
+        return ""
+
+
+def _login_fix(provider, base: str) -> Tuple[str, str]:
+    """``(fix line, runnable command)`` for a CLI that looks logged out.
+
+    The command comes from the provider itself, so each CLI is pointed at its own
+    flow instead of everyone being told to run ``claude``. One that already says
+    "login" (``codex login``) reads as an instruction on its own, while a bare
+    program name (``claude``) needs the "once to log in" tail to explain why you
+    would run it at all. A provider that declares no flow gets a human fix line
+    and no runnable command at all — naming the API keys it reads is remediation,
+    dropping the user into an agent REPL is not.
+    """
+    cmd = _declared_login_command(provider)
+    if "login" in cmd:
+        return f"run `{cmd}`", cmd
+    if cmd:
+        return f"run `{cmd}` once to log in", cmd
+    cfg = getattr(provider, "cfg", None)
+    env = [str(v) for v in (getattr(cfg, "auth_env", ()) or ())]
+    if env:
+        keys = ", ".join(env[:3])
+        return f"set one of the API keys `{base}` reads ({keys})", ""
+    return f"log `{base}` in from inside the CLI itself", ""
 
 
 def check_agent_auth() -> Check:
-    """Auth probe for the agent CLI (implemented for the claude family)."""
+    """Auth probe for the configured coding-agent CLI, asked of the provider.
+
+    Every provider already knows where its own credentials live
+    (``auth_evidence``), so routing through the registry makes this work for
+    codex/opencode/aider too. Before that, anything but claude got "no auth probe
+    — skipped" and a logged-out CLI was discovered the hard way: the first
+    session started and died silently.
+
+    The three-way verdict is the whole point. Evidence is ``ok``. No evidence
+    from a provider that DID tell us where to look is a ``warn`` carrying that
+    provider's own login command as ``cmd`` — but only a login command it
+    actually declared (see :func:`_declared_login_command`), so ``doctor --fix``
+    never offers to run an agent that has no login flow. A provider that
+    declares no credential sources at all is ``info``:
+    there is nothing to probe, so silence is the honest report rather than a
+    warning the user can never clear.
+    """
     name = _default_provider_name()
     binary = _resolve_agent_binary(name)
     base = Path(binary).name
     label = f"agent auth ({name})"
-    if base != "claude" and name != "claude":
+    provider = _agent_provider(name)
+    if provider is None:
         return Check(
-            "agent-auth", label, "info", f"no auth probe for `{name}` — skipped"
+            "agent-auth",
+            label,
+            "info",
+            f"`{name}` is not a registered provider — no login probe",
         )
-    evidence = _claude_login_evidence()
+    evidence = _auth_evidence(provider)
     if evidence:
         return Check("agent-auth", label, "ok", evidence)
+    if not _declares_auth_sources(provider):
+        return Check(
+            "agent-auth",
+            label,
+            "info",
+            f"there is no login probe for `{base}` — check its status inside the CLI itself",
+        )
     if not shutil.which(base) and os.sep not in binary:
         return Check(
             "agent-auth", label, "warn", "agent CLI not installed — cannot probe auth"
         )
+    fix, cmd = _login_fix(provider, base)
     return Check(
         "agent-auth",
         label,
         "warn",
         "CLI is installed but no sign of a login was found",
-        "run `claude` once to log in",
-        docs=_DOCS["claude"],
-        cmd="claude",
+        fix,
+        docs=_DOCS["claude"] if base == "claude" else "",
+        cmd=cmd,
     )
 
 

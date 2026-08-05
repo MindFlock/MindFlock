@@ -608,6 +608,14 @@ class GeneralSettings:
     first-run checklist). Gates the first-run setup card so it only auto-shows
     for a brand-new install, not every time the grid happens to be empty.
 
+    ``last_repo_path``: the folder the most recent session (or init-wizard run)
+    was based on, written by the create-session path. It seeds the New Session
+    dialog's folder field and tops the repo-suggestion list
+    (:mod:`backend.web.core.repo_picker`), so the second session in a repo is one
+    click instead of another walk down the folder tree. Purely a convenience
+    hint — nothing resolves through it, and a stale path is dropped rather than
+    offered once the folder is gone.
+
     ``remote_control``: whether OTHER MindFlock devices on the tailnet may
     control this one (:mod:`backend.web.core.remote`) — ``"on"`` allows it,
     ``""``/``"off"`` (the default) refuses remote-flagged requests and
@@ -642,6 +650,7 @@ class GeneralSettings:
     auth_token: str = ""  # SECRET
     auth_mode: str = ""  # "" / "auto" | "on" | "off"
     onboarded: bool = False
+    last_repo_path: str = ""
     remote_control: str = ""  # "" / "off" | "on"
     serve_mode: str = ""  # "" / "local" | "tailscale"
     ingestion_autostart: Optional[bool] = None
@@ -659,6 +668,8 @@ class GeneralSettings:
             d["auth_mode"] = self.auth_mode
         if self.onboarded:
             d["onboarded"] = True
+        if self.last_repo_path:
+            d["last_repo_path"] = self.last_repo_path
         if self.remote_control:
             d["remote_control"] = self.remote_control
         if self.serve_mode:
@@ -677,6 +688,7 @@ class GeneralSettings:
             auth_token=str(d.get("auth_token", "") or ""),
             auth_mode=str(d.get("auth_mode", "") or "").strip().lower(),
             onboarded=bool(d.get("onboarded", False)),
+            last_repo_path=str(d.get("last_repo_path", "") or ""),
             remote_control=str(d.get("remote_control", "") or "").strip().lower(),
             serve_mode=str(d.get("serve_mode", "") or "").strip().lower(),
             ingestion_autostart=_opt_bool(d.get("ingestion_autostart")),

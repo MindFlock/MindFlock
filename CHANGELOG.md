@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`mindflock init` — a guided first-run setup.** Getting to a first session
+  meant discovering and sequencing four commands from the README. `init` runs the
+  doctor, offers to run each fix for you (including logging your agent CLI in),
+  then shows the git repos it found on this machine as a numbered list and
+  remembers the one you pick, so the New Session dialog opens on it. `mindflock
+  serve --setup` runs the same wizard before binding.
+
+- **A first `serve` now prints what this machine actually needs.** It used to
+  print the same three-step blurb to everyone; it now names the dependencies that
+  are missing with their one-line fixes, lists the folders you could work in, and
+  gives you the exact next command. It builds that off the main thread — a first
+  run is the desktop app's very first launch, which is polling for the port.
+
+- **The New Session dialog offers the repos you actually use.** A new
+  `GET /api/repos/suggest` ranks the folder your last session used, the live
+  sessions' repos, the server's own working directory, and a shallow scan for git
+  repos under your home — and the dialog pre-selects the top one as a chip row
+  instead of dropping you in `$HOME` to go hunting. `GET /api/repos/check` backs a
+  quiet line that appears when the chosen folder is *not* a git repo, saying diff,
+  commit and PR will be off, with a one-click "create one here" that drives the
+  checkbox that was buried in **More options**.
+
+### Changed
+
+- **The folder browser selects like Finder.** A click used to navigate and only
+  the per-row **select** button committed a folder, which read backwards. A single
+  click now selects (and shows the folder in the field), a double click descends,
+  the redundant button is gone, and Escape cancels the whole browse rather than
+  leaving the field on the last directory you merely passed through.
+
+- **The doctor's agent-auth check now covers every coding CLI, not just Claude.**
+  It reported "no auth probe for `codex` — skipped" for anything else, so a user
+  on Codex, opencode or aider learned their CLI was logged out when their first
+  session failed. It reads each provider's own declared credential locations now.
+  A provider that declares none stays quiet — absence of evidence is not evidence
+  of absence — and it only offers to run a login command the provider actually
+  declares, so `doctor --fix` can no longer drop you into an agent REPL that
+  cannot resolve the check.
+
+- **One first-run signal instead of three.** The welcome tour and the setup
+  checklist each kept their own browser-local flag beside the server's
+  `onboarded`, so clearing a profile or opening the desktop app on a second
+  machine replayed the whole 12-slide tour at someone who plainly was not new. The
+  server's flag is the only rule now, and it still means what it always meant: you
+  have created a session.
+
+### Fixed
+
+- **A todo you clicked to edit closed again immediately.** The text box opened and
+  reverted within a frame: the poll callback's dependencies changed the moment an
+  edit began, which re-ran the effect that focuses the Add box, and that blur
+  committed the edit before you could type. The initial focus is tied to the
+  dialog opening now, not to unrelated re-renders.
+
+- **The doctor told logged-in macOS users they were logged out.** Claude Code
+  keeps its credentials in the login Keychain there rather than in
+  `~/.claude/.credentials.json`, which the probe never looked at — so every Mac
+  saw "CLI is installed but no sign of a login was found" on every run. It checks
+  the Keychain now, after the cheap file reads, so it never shells out to
+  `security` when a file already answered.
+
+- **The sidebar's resize handle painted over every open dialog.** The `.modal`
+  backdrop is fixed with no `z-index` of its own, so the handle's `z-index: 40`
+  drew its accent line across the dimmed page and kept answering `:hover` — and
+  the drag still worked through the backdrop, resizing a sidebar nobody could
+  see. It hides while any modal is mounted, keyed off the overlay element so the
+  command palette and the welcome tour are covered too.
+
 ## [0.1.11] - 2026-08-04
 
 ### Changed

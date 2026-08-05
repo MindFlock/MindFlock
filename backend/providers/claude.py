@@ -159,7 +159,18 @@ class ClaudeProvider(BaseProvider):
 
     def auth_evidence(self) -> str:
         """Probe the known Claude Code credential locations (honoring
-        ``CLAUDE_CONFIG_DIR``) for a stored login / API key. Never raises."""
+        ``CLAUDE_CONFIG_DIR``) for a stored login / API key. Never raises.
+
+        The macOS login Keychain is one of those locations: there Claude Code
+        keeps its OAuth credentials in the Keychain instead of
+        ``~/.claude/.credentials.json`` (see
+        :func:`backend.providers.claude_usage_api._keychain_doc`), so the file
+        scan below finds nothing and a fully logged-in Mac was told "no sign of a
+        login was found" by the doctor on every single run. It is consulted only
+        after the files come up empty, because that lookup shells out to
+        ``security`` and may raise a one-time keychain prompt — nobody should pay
+        for either when a file already answered the question.
+        """
         import os
         from pathlib import Path
 
@@ -177,6 +188,8 @@ class ClaudeProvider(BaseProvider):
             for marker in ("oauthAccount", "primaryApiKey", "claudeAiOauth"):
                 if marker in text:
                     return "login state found in %s" % path
+        if _keychain_login_evidence():
+            return "login state found in the macOS Keychain"
         if os.environ.get("ANTHROPIC_API_KEY"):
             return "ANTHROPIC_API_KEY is set"
         return ""
@@ -344,6 +357,25 @@ class ClaudeProvider(BaseProvider):
 
     def last_turn_snippet(self, session_name: str, workdir: str) -> Optional[str]:
         return _claude_last_turn_snippet(workdir)
+
+
+def _keychain_login_evidence() -> bool:
+    """Whether the macOS login Keychain holds Claude Code's credentials.
+
+    Delegates to the lookup :mod:`claude_usage_api` already needs for the live
+    usage token — it is darwin-only and timeout-bounded, so this costs nothing on
+    Linux/WSL — and is imported lazily so an auth probe never drags the usage/HTTP
+    module in just to answer "is this CLI logged in?". Any failure (no
+    ``security`` binary, a denied keychain prompt, a headless session where no
+    prompt can be answered) counts as no evidence: this is a hint for the doctor,
+    never a gate on anything.
+    """
+    try:
+        from . import claude_usage_api
+
+        return bool(claude_usage_api._keychain_doc())
+    except Exception:  # noqa: BLE001 — no evidence is the whole failure mode here
+        return False
 
 
 # --------------------------------------------------------------------------- #

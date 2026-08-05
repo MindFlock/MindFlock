@@ -279,6 +279,17 @@ class TestLocalModeEnvExport:
         # The double-launch guard probes the real port — a dev machine with a
         # live server on 8765 would short-circuit main() before uvicorn.run.
         monkeypatch.setattr(run, "_port_squatter", lambda host, port: "")
+        # main() also starts a preflight *daemon thread* (the first-run report /
+        # the short check list). Left alone it walks this machine for real: the
+        # settings store is a fresh tmp file, so every test here looks like a
+        # first run, and the report shells out for the whole doctor and scans the
+        # developer's real home for repo suggestions — then prints the banner to
+        # a stdout capture that has already been torn down. Give the thread
+        # nothing real to do (same isolation as tests/unit/test_init_wizard.py).
+        monkeypatch.setattr(run, "_is_onboarded", lambda: True)
+        _ok = Check(id="stub", label="stub", status="ok")
+        for _name in ("check_git", "check_tmux", "check_agent_cli"):
+            monkeypatch.setattr(doctor, _name, lambda: _ok)
         return calls
 
     def test_default_mode_is_local_bound_loopback(self, uvicorn_spy, monkeypatch):

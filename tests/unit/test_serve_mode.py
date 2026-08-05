@@ -42,12 +42,22 @@ class TestServeModeSetting:
 class TestRunModeResolution:
     @pytest.fixture()
     def run_mod(self, monkeypatch):
+        from backend import doctor
+        from backend.doctor import Check
         from backend.web import run as run_mod
 
         # Neutralize everything main() does besides resolving mode/host.
         monkeypatch.setenv("CS_WEB_MODE", "")
         monkeypatch.setenv("UVICORN_PORT", "8765")
         monkeypatch.setattr(run_mod, "_port_squatter", lambda host, port: "")
+        # …including the preflight daemon thread: with a tmp settings store every
+        # call looks like a first run, and the report walks the real doctor and
+        # scans the developer's home for repo suggestions on a thread that
+        # outlives the test.
+        monkeypatch.setattr(run_mod, "_is_onboarded", lambda: True)
+        _ok = Check(id="stub", label="stub", status="ok")
+        for _name in ("check_git", "check_tmux", "check_agent_cli"):
+            monkeypatch.setattr(doctor, _name, lambda: _ok)
         return run_mod
 
     def _captured_host(self, monkeypatch, run_mod, argv):

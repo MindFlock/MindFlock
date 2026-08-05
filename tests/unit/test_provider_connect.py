@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 import backend.web.addons.settings as settings_addon
 from backend import providers
 from backend.config import settings as S
+from backend.providers import claude_usage_api
 from backend.providers.base import BaseProvider
 from backend.providers.config import detect_auth
 from backend.web.core import provider_login
@@ -48,6 +49,11 @@ def _isolate(tmp_path, monkeypatch):
         "CLAUDE_CONFIG_DIR",
     ):
         monkeypatch.delenv(var, raising=False)
+    # A Mac running the suite has a real Claude login in its Keychain, which is
+    # genuine evidence — pin that lookup off so the file/env assertions below
+    # can't be answered by the developer's own login (the keychain tests
+    # re-patch it with what they want it to find).
+    monkeypatch.setattr(claude_usage_api, "_keychain_doc", lambda: None)
     S.invalidate()
     providers.rebuild_registry()
     yield
@@ -321,6 +327,46 @@ def test_claude_auth_evidence_prefers_config_dir_over_home(tmp_path, monkeypatch
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
     evidence = providers.get("claude").auth_evidence()
     assert str(cfg) in evidence and str(tmp_path / ".claude.json") not in evidence
+
+
+def test_claude_auth_evidence_finds_a_macos_keychain_login(tmp_path, monkeypatch):
+    # On macOS Claude Code keeps its OAuth credentials in the login Keychain and
+    # writes no .credentials.json, so a fully logged-in Mac was reported as
+    # "no sign of a login" until the keychain counted as evidence too.
+    monkeypatch.setenv("HOME", str(tmp_path))  # no credential files anywhere
+    monkeypatch.setattr(
+        claude_usage_api,
+        "_keychain_doc",
+        lambda: {"claudeAiOauth": {"accessToken": "x"}},
+    )
+    assert "Keychain" in providers.get("claude").auth_evidence()
+
+
+def test_claude_auth_evidence_skips_the_keychain_when_a_file_answered(
+    tmp_path, monkeypatch
+):
+    # The keychain lookup shells out to `security` and can raise a one-time
+    # keychain prompt, so a credential file must short-circuit it entirely.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".claude.json").write_text('{"oauthAccount": "x"}')
+
+    def _never():
+        raise AssertionError("the keychain was consulted despite a credential file")
+
+    monkeypatch.setattr(claude_usage_api, "_keychain_doc", _never)
+    assert ".claude.json" in providers.get("claude").auth_evidence()
+
+
+def test_claude_auth_evidence_survives_a_broken_keychain_lookup(tmp_path, monkeypatch):
+    # A denied keychain prompt / missing `security` binary is no evidence, never
+    # an exception into the doctor or the providers list.
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    def _boom():
+        raise OSError("security: user denied access")
+
+    monkeypatch.setattr(claude_usage_api, "_keychain_doc", _boom)
+    assert providers.get("claude").auth_evidence() == ""
 
 
 def test_claude_auth_evidence_never_raises_on_unreadable_path(tmp_path, monkeypatch):
