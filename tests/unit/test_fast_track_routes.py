@@ -258,3 +258,47 @@ def test_per_item_depth_override_accepts_merge():
     assert server._start_depth_override({}) == ""
     with pytest.raises(ValueError):
         server._start_depth_override({"depth": "teleport"})
+
+
+def test_a_clean_tree_arm_still_gets_a_message_at_commit_time(inst, wt):
+    """Arming on a CLEAN tree is the natural way to use this — arm the session, let
+    the agent work — and the route records no message then, because there is
+    nothing to describe yet. The run used to halt with "no commit message to reuse"
+    at the very moment it was finally ready to commit."""
+    resp = _post("ft-session", {"depth": "pr"})
+    assert resp.status_code == 200
+    assert ap.get("ft-session")["message"] == "", "nothing to describe yet"
+
+    # The agent has since written something; the commit step must generate a
+    # subject rather than refuse.
+    (wt / "b.txt").write_text("the agent's work\n")
+    sent = {}
+    import backend.web.server as srv
+
+    orig = srv._commit_into_shell
+
+    def _capture(t, w, m, skip=""):
+        sent["msg"] = m
+        return None  # None == success; anything else is an error string
+
+    srv._commit_into_shell = _capture
+    try:
+        fields: dict = {}
+        ok = srv._autopilot_commit(
+            "ft-session", str(wt), ap.get("ft-session"), {}, fields
+        )
+    finally:
+        srv._commit_into_shell = orig
+    assert ok is True, "must not halt for want of a message"
+    assert sent["msg"], "a subject must have been generated"
+
+
+def test_an_intake_name_survives_a_re_arm(inst, wt):
+    """All three intake paths record the ticket / PR / issue NAME. Re-arming with
+    the button used to overwrite it with a generated "Work on <slug>", throwing
+    away the one genuinely descriptive subject available."""
+    ap.arm("ft-session", "pr", source="tix", message="Add phone numbers to intake")
+    (wt / "b.txt").write_text("uncommitted\n")
+    resp = _post("ft-session", {"depth": "pr"})
+    assert resp.status_code == 200
+    assert ap.get("ft-session")["message"] == "Add phone numbers to intake"

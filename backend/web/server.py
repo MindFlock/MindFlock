@@ -1864,6 +1864,12 @@ def _autopilot_default_message(inst, wt: str) -> str:
         title = str(getattr(inst, "Title", "") or "").strip()
     except Exception:  # noqa: BLE001
         title = ""
+    if not title:
+        # Called from the commit step, where the instance may not be in hand.
+        try:
+            title = str(_current_branch(wt) or "").split("/")[-1]
+        except Exception:  # noqa: BLE001
+            title = ""
     branch = ""
     try:
         branch = _current_branch(wt) or ""
@@ -1910,6 +1916,14 @@ def _autopilot_commit(title, wt, rec, detail, fields) -> bool:
                 msg = fh.read().strip()
         except OSError:
             msg = ""
+    if not msg:
+        # GENERATE one rather than halting. Arming on a CLEAN tree is the natural
+        # way to use this — arm the session, let the agent work — and the route
+        # records no message then, because there is nothing to describe yet. By the
+        # time work exists the record still had none, so the run halted with "no
+        # commit message to reuse" at the moment it was finally ready to commit.
+        # An honest default subject beats refusing to commit the work.
+        msg = _autopilot_default_message(ENGINE.instances.get(title), wt)
     if not msg:
         _autopilot_halt(title, "no commit message to reuse")
         return False
