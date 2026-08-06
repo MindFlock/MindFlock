@@ -16,6 +16,7 @@ import {
   autopilotChipTitle,
   depthLabel,
   liveRun,
+  mergeBlockerLabel,
   normalizeDepth,
 } from "../lib/autopilot";
 import {
@@ -27,7 +28,7 @@ import {
   nextStep,
   resetFollow,
 } from "../lib/stage";
-import type { AutopilotRun, Instance } from "../api/types";
+import type { AutopilotRun, Instance, MergeState } from "../api/types";
 
 const run = (over: Partial<AutopilotRun> = {}): AutopilotRun => ({
   depth: "pr",
@@ -350,6 +351,61 @@ describe("followAutopilot (go where the run is)", () => {
     expect(
       followAutopilot(inst({ autopilot: run({ step: "commit" }) }), { live: true })
     ).toBe("commit");
+  });
+});
+
+describe("the Merge button refuses to lie", () => {
+  const ms = (o: Partial<MergeState> = {}): MergeState => ({
+    number: 1, url: "https://x.test/1", state: "clean",
+    mergeable: true, checks: "ok", can_merge: true, blockers: [], ...o,
+  });
+  const at = (o: Partial<Instance>) =>
+    nextStep({ title: "t", status: "running", stage: "pr", ...o });
+
+  it("is clickable when GitHub says the merge would go through", () => {
+    const s = at({ merge_state: ms() });
+    expect(s?.label).toBe("Merge");
+    expect(s?.disabled).toBeFalsy();
+  });
+
+  it.each([
+    ["dirty", ["the branch has merge conflicts with its base"], "conflicts"],
+    ["behind", ["the branch is behind its base and must be updated first"], "behind base"],
+    ["draft", ["the pull request is still a draft"], "draft PR"],
+  ])("is UNCLICKABLE and names the blocker: %s", (state, blockers, short) => {
+    const m = ms({ state, can_merge: false, blockers: blockers as string[] });
+    const s = at({ merge_state: m });
+    expect(s?.disabled).toBe(true);
+    expect(s?.label).toBe("Merge blocked");
+    expect(s?.title).toContain(blockers[0]);
+    // …and the header names it compactly.
+    expect(mergeBlockerLabel(m)).toBe(short);
+  });
+
+  it("distinguishes a failing required check from a missing review", () => {
+    expect(mergeBlockerLabel(ms({ state: "blocked", checks: "failed" }))).toBe("checks ✗");
+    expect(mergeBlockerLabel(ms({ state: "blocked", checks: "pending" }))).toBe("checks…");
+    expect(mergeBlockerLabel(ms({ state: "blocked", checks: "ok" }))).toBe("review needed");
+  });
+
+  it("leaves the button alone when we could not find out", () => {
+    // merge_state absent = no token / no gh / a network fault. Blocking on that
+    // would be claiming knowledge we do not have.
+    expect(at({})?.label).toBe("Merge");
+    expect(at({ merge_state: null })?.disabled).toBeFalsy();
+  });
+
+  it("says 'checking…' while GitHub is still computing mergeability", () => {
+    expect(mergeBlockerLabel(ms({ state: "unknown", mergeable: null }))).toBe("checking…");
+  });
+
+  it("shows the blocker in the header instead of a useless 'PR open'", () => {
+    const s = liveStep({
+      title: "t", status: "running", stage: "pr",
+      merge_state: ms({ state: "dirty", can_merge: false, blockers: ["conflicts"] }),
+    });
+    expect(s?.tone).toBe("blocked");
+    expect(s?.label).toBe("conflicts");
   });
 });
 

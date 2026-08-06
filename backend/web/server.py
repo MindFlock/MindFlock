@@ -1514,12 +1514,22 @@ def _autopilot_snapshot(inst, title: str, wt: str, stage: dict) -> dict:
         check_required = False
     # CI verdict on the PR, only when a merge is actually the target — it is a
     # network round trip and every other rung is indifferent to it.
+    # CI verdict + blockers on the PR, only when a merge is actually the target.
+    # Reuses the same probe the UI's merge button reads, so the driver and the
+    # button can never disagree about whether a merge would go through.
     pr_checks = ""
+    merge_blockers: list = []
     try:
         rec = _autopilot.get(title) or {}
         if rec.get("depth") == "merge" and (stage.get("stage") or "") == "pr":
             branch = _current_branch(wt) or ""
-            pr_checks = _github_pr.pr_checks_sync(wt, branch) if branch else "unknown"
+            ms = _pr_merge_state(wt, branch) if branch else None
+            if ms is None:
+                pr_checks = "unknown"
+            else:
+                pr_checks = str(ms.get("checks") or "unknown")
+                if not ms.get("can_merge"):
+                    merge_blockers = list(ms.get("blockers") or ["cannot merge yet"])
     except Exception:  # noqa: BLE001
         pr_checks = "unknown"
     return {
@@ -1534,6 +1544,7 @@ def _autopilot_snapshot(inst, title: str, wt: str, stage: dict) -> dict:
         "check": check,
         "check_required": check_required,
         "pr_checks": pr_checks,
+        "merge_blockers": merge_blockers,
         "on_base_branch": on_base,
         "branch": live_branch,
         "has_origin": _has_origin(wt),
@@ -2250,6 +2261,18 @@ def _session_snapshot(i, queues: dict) -> dict:
     # The publisher COMPUTES the stage and donates it to the memo; it must not
     # serve one the other 4s ticker filled up to 2.5s ago (see _probe_seed).
     d.update(_session_stage_fresh(i))
+    # Mergeability, ONLY at the PR rung: it is two network round trips, and every
+    # other stage is indifferent to it. None = "could not find out", which the UI
+    # must treat as "leave the button alone", never as "cannot merge".
+    d["merge_state"] = None
+    if d.get("stage") == "pr":
+        try:
+            _wt_ms = i.GetWorktreePath()
+            _br_ms = _current_branch(_wt_ms) if _wt_ms else ""
+            if _br_ms:
+                d["merge_state"] = _pr_merge_state(_wt_ms, _br_ms)
+        except Exception:  # noqa: BLE001 — a probe never fails a poll
+            d["merge_state"] = None
     d["queue"] = _queue_summary(i.Title, queues)
     # A dict read off an already-loaded store, so it is computed fresh on BOTH
     # snapshot paths and therefore never needs a _SNAPSHOT_PROBE_KEYS carry-over.
@@ -2297,6 +2320,7 @@ _SNAPSHOT_PROBE_KEYS = (
     "pr_url",
     "failed_step",
     "failed_hook",
+    "merge_state",
     "tokens",
     "tokens_in",
     "tokens_cache_read",
@@ -2331,6 +2355,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
         "provisioning" if (not i.Started() and i.Status == Loading) else "agent"
     )
     d["pr_url"] = None
+    d["merge_state"] = None
     d["queue"] = _queue_summary(i.Title, queues)
     d["autopilot"] = _autopilot_dto(i.Title)
     d["tokens"] = d["tokens_in"] = 0
@@ -4165,7 +4190,35 @@ def _configured_pr_base() -> str:
 # core.git_ops (imported above).
 
 
-_PR_CACHE: Dict[str, tuple] = {}  # branch -> (expires_epoch, info_or_None)
+_PR_CACHE: Dict[str, tuple] = {}  # branch -> (expires_epoch, info_or_None, last_good)
+#: How long a previously-seen PR survives lookups that come back empty. Long
+#: enough to ride out a rate limit or a network blip, short enough that a PR which
+#: really was deleted stops being reported within a few minutes.
+_PR_STICKY_S = 600.0
+# Mergeability is a SECOND network round trip (a single-PR read, which is also what
+# makes GitHub compute `mergeable` at all) plus the check rollup, so it gets its own
+# shorter-lived memo: blockers change while you watch — a review lands, a check goes
+# green — and a stale "cannot merge" is worse than a slightly late one.
+_MERGE_STATE_CACHE: Dict[str, tuple] = {}  # branch -> (expires_epoch, state_or_None)
+_MERGE_STATE_TTL = 20.0
+
+
+def _pr_merge_state(wt: str, branch: str, force: bool = False):
+    """Whether ``branch``'s PR can be merged and what is blocking it, memoized.
+
+    None means "could not find out" (no token, no GitHub origin, no open PR, or a
+    network fault) — never "no". The UI must leave the merge affordance alone in
+    that case rather than claim knowledge it does not have.
+    """
+    if not branch:
+        return None
+    now = time.time()
+    cached = _MERGE_STATE_CACHE.get(branch)
+    if not force and cached and cached[0] > now:
+        return cached[1]
+    state = _github_pr.pr_merge_state_sync(wt, branch)
+    _MERGE_STATE_CACHE[branch] = (now + _MERGE_STATE_TTL, state)
+    return state
 
 
 def _pr_info(wt: str, branch: str, force: bool = False):
@@ -4196,7 +4249,19 @@ def _pr_info(wt: str, branch: str, force: bool = False):
         if gh_available()
         else _github_pr.find_pr_sync(wt, branch)
     )
-    _PR_CACHE[branch] = (now + 60, info)
+    # STICKY ON FAILURE, bounded. None means BOTH "there is no PR" and "we could not
+    # ask" (a rate limit, a network blip, a slow `gh`), and caching it flapped the
+    # stage off "pr" and back every minute — which fired the "PR merged or closed"
+    # toast over and over for a PR that was open the whole time. So a previously
+    # known PR survives a failed lookup for _PR_STICKY_S, and is retried sooner than
+    # the normal TTL; only a persistent absence is finally believed. Same reasoning
+    # as _origin_branch_sha's "keep the previous answer rather than flapping".
+    if info is None and cached is not None and cached[1] is not None:
+        last_good = cached[2] if len(cached) > 2 else now
+        if now - last_good < _PR_STICKY_S:
+            _PR_CACHE[branch] = (now + 15, cached[1], last_good)
+            return cached[1]
+    _PR_CACHE[branch] = (now + 60, info, now if info is not None else 0.0)
     return info
 
 
@@ -5011,6 +5076,7 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
             rc, out, url = (0 if res.ok else 1), res.error, res.url
 
     _PR_CACHE.pop(branch, None)  # force a fresh stage read next poll
+    _MERGE_STATE_CACHE.pop(branch, None)
     _forget_probes(title)
     if handoff is not None:
         return handoff

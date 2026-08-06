@@ -411,6 +411,22 @@
   animation: none;
 }
 
+/* Blocked: the action is known to be refusable, so the button says why and does
+   nothing. Muted like the old status pill, but it keeps a border so it still reads
+   as a control that exists rather than as absent — and the tooltip carries the
+   specific blockers. */
+.pane-head .actions .nextstep.nextstep-blocked {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  cursor: not-allowed;
+  font-weight: 500;
+}
+
+.pane-head .actions .nextstep.nextstep-blocked:hover {
+  filter: none;
+}
+
 /* Fast-track (⏩): a SECONDARY control that sits beside the guided button and
    arms the rest of the stack in one press. Deliberately an accent OUTLINE, not a
    filled accent — the guided next step must stay the one obvious default action,

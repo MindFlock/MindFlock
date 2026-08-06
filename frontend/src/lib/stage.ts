@@ -19,7 +19,12 @@ import {
   startFastTrack,
   stopFastTrack,
 } from "./sessionActions";
-import { DEPTH_SHORT, autopilotChipTitle, depthLabel } from "./autopilot";
+import {
+  DEPTH_SHORT,
+  autopilotChipTitle,
+  depthLabel,
+  mergeBlockerLabel,
+} from "./autopilot";
 import { useUi } from "../state/store";
 
 /** Longest `failed_step` that still reads as a hook NAME rather than a line of
@@ -237,6 +242,10 @@ export interface NextStep {
   run: () => void;
   hint?: boolean;
   title?: string;
+  /** Rendered unclickable. Used when we KNOW the action would be refused — a merge
+   * whose PR has conflicts, a failing required check, or a missing review. Offering
+   * a button that cannot work is worse than showing why it cannot. */
+  disabled?: boolean;
   /** Rendered as an ON toggle (filled rather than outlined). Used by the ⏩
    * fast-track control while a chain is armed, so the button you pressed stays
    * visible, visibly on, and clickable to turn back off. */
@@ -373,13 +382,26 @@ export function liveStep(inst: Partial<Instance>): LiveStep | null {
   if (run && run.depth && run.state === "halted")
     return { label: "fast-track ✗", tone: "blocked", title: autopilotChipTitle(run) };
 
-  if (stage === "pr")
+  if (stage === "pr") {
+    const ms = inst.merge_state;
+    if (ms && !ms.can_merge)
+      // Say WHAT is blocking it, right in the header — "PR open" is true but
+      // useless when the thing you want to know is why Merge is greyed out.
+      return {
+        label: mergeBlockerLabel(ms),
+        tone: "blocked",
+        title:
+          "This PR cannot be merged yet:\n" +
+          (ms.blockers || []).map((b) => "• " + b).join("\n"),
+        href: inst.pr_url || ms.url || undefined,
+      };
     return {
       label: "PR open",
       tone: "ok",
       title: inst.pr_url ? "Open the pull request" : "A pull request is open for this branch.",
       href: inst.pr_url || undefined,
     };
+  }
   return null;
 }
 
@@ -569,6 +591,22 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
               run: () => window.open(inst.pr_url!, "_blank"),
             }
           : { label: "Merge ↗", hint: true, title: PR_FALLBACK_HINT, run: () => mergeSession(title) };
+      // Only offer Merge when GitHub says it would actually go through. `merge_state`
+      // absent means we could not find out (no token, no gh, a network fault) — in
+      // that case leave the button alone rather than block on a guess.
+      {
+        const ms = inst.merge_state;
+        if (ms && !ms.can_merge)
+          return {
+            label: "Merge blocked",
+            disabled: true,
+            title:
+              "This PR cannot be merged yet:\n" +
+              (ms.blockers || []).map((b) => "• " + b).join("\n") +
+              (inst.pr_url ? "\n\nOpen the PR to resolve it." : ""),
+            run: () => {},
+          };
+      }
       return { label: "Merge", run: () => mergeSession(title) };
     case "merged":
       return inst.pr_url

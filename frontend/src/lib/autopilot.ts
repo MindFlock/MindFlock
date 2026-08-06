@@ -7,7 +7,7 @@
  * of special cases.
  */
 
-import type { AutopilotRun, Instance } from "../api/types";
+import type { AutopilotRun, Instance, MergeState } from "../api/types";
 
 export const DEPTH_ORDER = ["off", "agent", "commit", "push", "pr", "merge"] as const;
 
@@ -113,6 +113,28 @@ export function autopilotChipTitle(run: AutopilotRun): string {
     ? "\nSkipped hooks: " + run.skipped.join(", ")
     : "";
   return "Fast-tracking to " + target + where + "\nClick to stop." + skipped;
+}
+
+/** A short header label naming WHY a PR cannot merge.
+ *
+ * The full sentences live in `merge_state.blockers` and go in the tooltip; this is
+ * the ≤14-char version for a pane header where "PR open" would be true but
+ * useless when what you want to know is why Merge is greyed out. */
+export function mergeBlockerLabel(ms: MergeState): string {
+  switch (ms.state) {
+    case "dirty":
+      return "conflicts";
+    case "behind":
+      return "behind base";
+    case "draft":
+      return "draft PR";
+    case "blocked":
+      if (ms.checks === "failed") return "checks ✗";
+      if (ms.checks === "pending") return "checks…";
+      return "review needed";
+    default:
+      return ms.mergeable === null ? "checking…" : "can't merge";
+  }
 }
 
 /** A running chain on this session, or null. */

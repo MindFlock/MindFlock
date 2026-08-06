@@ -67,6 +67,23 @@ export interface AutopilotRun {
   skipped?: string[];
 }
 
+/** Whether a branch's PR can actually be merged, and what is stopping it.
+ *
+ * The absence of this object (null) means "we could not find out" — no token, no
+ * GitHub behind origin, no open PR, or a network fault. It never means "no": the
+ * UI must leave the merge affordance alone rather than claim knowledge. */
+export interface MergeState {
+  number: number;
+  url: string;
+  /** GitHub's mergeable_state: clean | dirty | blocked | behind | unstable | draft
+   * | unknown. */
+  state: string;
+  mergeable: boolean | null;
+  checks: "ok" | "failed" | "pending" | "none" | "unknown" | string;
+  can_merge: boolean;
+  blockers: string[];
+}
+
 export interface Instance {
   title: string;
   branch: string;
@@ -87,6 +104,8 @@ export interface Instance {
   has_origin: boolean;
   stage: Stage | string;
   pr_url: string | null;
+  /** Present only at the "pr" stage; null = could not find out. */
+  merge_state?: MergeState | null;
   failed_step?: string | null;
   /** The failing pre-commit hook's ID (not its display name — pre-commit's
    * `name:` is free text and cannot be mapped back to an id). Keys the retry. */

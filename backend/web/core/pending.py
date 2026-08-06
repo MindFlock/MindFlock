@@ -157,6 +157,7 @@ def rows(engine=None) -> list:
                 "has_origin": False,
                 "stage": "provisioning",
                 "pr_url": None,
+                "merge_state": None,
                 "failed_step": None,
                 "failed_hook": None,
                 # A provisioning row must carry it too: intake arms BEFORE the

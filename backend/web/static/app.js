@@ -22807,6 +22807,22 @@ function autopilotChipTitle(run) {
   const skipped = ((_a2 = run.skipped) == null ? void 0 : _a2.length) ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
   return "Fast-tracking to " + target + where + "\nClick to stop." + skipped;
 }
+function mergeBlockerLabel(ms) {
+  switch (ms.state) {
+    case "dirty":
+      return "conflicts";
+    case "behind":
+      return "behind base";
+    case "draft":
+      return "draft PR";
+    case "blocked":
+      if (ms.checks === "failed") return "checks ✗";
+      if (ms.checks === "pending") return "checks…";
+      return "review needed";
+    default:
+      return ms.mergeable === null ? "checking…" : "can't merge";
+  }
+}
 function caps() {
   var _a2;
   return ((_a2 = queryClient.getQueryData(["config"])) == null ? void 0 : _a2.caps) ?? {
@@ -23368,13 +23384,22 @@ function liveStep(inst) {
     };
   if (run && run.depth && run.state === "halted")
     return { label: "fast-track ✗", tone: "blocked", title: autopilotChipTitle(run) };
-  if (stage === "pr")
+  if (stage === "pr") {
+    const ms = inst.merge_state;
+    if (ms && !ms.can_merge)
+      return {
+        label: mergeBlockerLabel(ms),
+        tone: "blocked",
+        title: "This PR cannot be merged yet:\n" + (ms.blockers || []).map((b) => "• " + b).join("\n"),
+        href: inst.pr_url || ms.url || void 0
+      };
     return {
       label: "PR open",
       tone: "ok",
       title: inst.pr_url ? "Open the pull request" : "A pull request is open for this branch.",
       href: inst.pr_url || void 0
     };
+  }
   return null;
 }
 const followed = /* @__PURE__ */ new Map();
@@ -23486,6 +23511,17 @@ function nextStep(inst) {
           title: PR_FALLBACK_HINT,
           run: () => window.open(inst.pr_url, "_blank")
         } : { label: "Merge ↗", hint: true, title: PR_FALLBACK_HINT, run: () => mergeSession(title) };
+      {
+        const ms = inst.merge_state;
+        if (ms && !ms.can_merge)
+          return {
+            label: "Merge blocked",
+            disabled: true,
+            title: "This PR cannot be merged yet:\n" + (ms.blockers || []).map((b) => "• " + b).join("\n") + (inst.pr_url ? "\n\nOpen the PR to resolve it." : ""),
+            run: () => {
+            }
+          };
+      }
       return { label: "Merge", run: () => mergeSession(title) };
     case "merged":
       return inst.pr_url ? { label: "Open PR ↗", run: () => window.open(inst.pr_url, "_blank") } : null;
@@ -27864,12 +27900,13 @@ function Pane({
             ns ? /* @__PURE__ */ jsxRuntimeExports.jsx(
               "button",
               {
-                className: "nextstep" + (ns.hint ? " nextstep-hint" : ""),
+                className: "nextstep" + (ns.hint ? " nextstep-hint" : "") + (ns.disabled ? " nextstep-blocked" : ""),
                 type: "button",
+                disabled: !!ns.disabled,
                 title: ns.title || "Do the next step",
                 onClick: (ev) => {
                   ev.stopPropagation();
-                  ns.run();
+                  if (!ns.disabled) ns.run();
                 },
                 children: ns.label
               }

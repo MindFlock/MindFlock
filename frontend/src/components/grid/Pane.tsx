@@ -284,12 +284,17 @@ export function Pane({
         <div className="actions">
           {ns ? (
             <button
-              className={"nextstep" + (ns.hint ? " nextstep-hint" : "")}
+              className={
+                "nextstep" +
+                (ns.hint ? " nextstep-hint" : "") +
+                (ns.disabled ? " nextstep-blocked" : "")
+              }
               type="button"
+              disabled={!!ns.disabled}
               title={ns.title || "Do the next step"}
               onClick={(ev) => {
                 ev.stopPropagation();
-                ns.run();
+                if (!ns.disabled) ns.run();
               }}
             >
               {ns.label}

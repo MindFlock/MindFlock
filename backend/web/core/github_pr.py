@@ -471,6 +471,97 @@ async def pr_checks(wt: str, branch: str) -> str:
     return "ok" if reported else "none"
 
 
+async def pr_merge_state(wt: str, branch: str) -> Optional[dict]:
+    """Whether ``branch``'s PR can actually be merged, and what is stopping it.
+
+    Returns ``None`` when we cannot ask at all (no token, no GitHub behind
+    ``origin``, no open PR) — the caller should then leave the merge affordance
+    alone rather than claim to know. Otherwise::
+
+        {"number": int, "url": str, "state": str, "mergeable": bool|None,
+         "checks": "ok"|"failed"|"pending"|"none"|"unknown",
+         "can_merge": bool, "blockers": [str]}
+
+    ``state`` is GitHub's ``mergeable_state``: ``clean`` (good), ``dirty``
+    (conflicts), ``blocked`` (a required review or required check is unsatisfied),
+    ``behind`` (base moved ahead and the repo requires up-to-date branches),
+    ``unstable`` (a NON-required check is failing — GitHub still allows the merge),
+    ``draft``, or ``unknown``.
+
+    ``mergeable`` is computed lazily by GitHub and comes back ``null`` on the first
+    ask for a PR it has not evaluated recently. That is reported honestly as "still
+    working it out" rather than collapsed into "no": telling someone their PR is
+    unmergeable because we asked too early is worse than saying we don't know yet.
+    """
+    ref = repo_ref(wt)
+    if ref is None or not branch:
+        return None
+    token = await _token()
+    if not token:
+        return None
+
+    status, data = await _request(
+        "GET",
+        "/repos/{}/pulls".format(ref.slug),
+        token=token,
+        params={
+            "head": "{}:{}".format(ref.owner, branch),
+            "state": "open",
+            "per_page": "1",
+        },
+    )
+    if status != 200 or not isinstance(data, list) or not data:
+        return None
+    number = (data[0] or {}).get("number")
+    if not number:
+        return None
+
+    # The LIST payload omits mergeable/mergeable_state — only the single-PR read
+    # carries them, and only that read makes GitHub compute them.
+    status, pr = await _request(
+        "GET", "/repos/{}/pulls/{}".format(ref.slug, number), token=token
+    )
+    if status != 200 or not isinstance(pr, dict):
+        return None
+
+    mergeable = pr.get("mergeable")
+    state = str(pr.get("mergeable_state") or "unknown").lower()
+    if pr.get("draft"):
+        state = "draft"
+    checks = await pr_checks(wt, branch)
+
+    blockers: list = []
+    if state == "draft":
+        blockers.append("the pull request is still a draft")
+    elif state == "dirty":
+        blockers.append("the branch has merge conflicts with its base")
+    elif state == "behind":
+        blockers.append("the branch is behind its base and must be updated first")
+    elif state == "blocked":
+        # "blocked" means a REQUIRED gate is unsatisfied. Name which one, using the
+        # check verdict to tell a failing/pending check from a missing review.
+        if checks == "failed":
+            blockers.append("a required check is failing")
+        elif checks == "pending":
+            blockers.append("required checks are still running")
+        else:
+            blockers.append("a required review has not been given")
+    elif mergeable is None:
+        blockers.append("GitHub is still working out whether this can merge")
+    elif mergeable is False:
+        blockers.append("GitHub reports this cannot be merged")
+
+    return {
+        "number": number,
+        "url": pr.get("html_url") or "",
+        "state": state,
+        "mergeable": mergeable,
+        "checks": checks,
+        "can_merge": not blockers,
+        "blockers": blockers,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Sync bridge
 # --------------------------------------------------------------------------- #
@@ -495,6 +586,17 @@ def find_pr_sync(wt: str, branch: str) -> Optional[dict]:
     try:
         return _run_sync(find_pr(wt, branch))
     except Exception:  # noqa: BLE001 — a stage probe never fails a poll
+        return None
+
+
+def pr_merge_state_sync(wt: str, branch: str) -> Optional[dict]:
+    """:func:`pr_merge_state` for synchronous callers (the snapshot probe).
+
+    Any failure answers None — "we could not find out", never a claim either way.
+    """
+    try:
+        return _run_sync(pr_merge_state(wt, branch))
+    except Exception:  # noqa: BLE001
         return None
 
 

@@ -41,6 +41,7 @@ def _snap(**over):
         "check": None,
         "check_required": False,
         "pr_checks": "ok",
+        "merge_blockers": [],
         "on_base_branch": False,
         "branch": "feature/x",
         "has_origin": True,
@@ -227,6 +228,33 @@ def test_unknown_ci_is_never_a_green_light():
         _rec(depth="merge"), _snap(stage="pr", pr_checks="unknown")
     )
     assert action == "wait"
+
+
+def test_a_named_merge_blocker_stops_the_run_and_says_which():
+    """The driver reads the same probe the merge button does, so the two can never
+    disagree about whether a merge would go through."""
+    action, detail = ap.next_action(
+        _rec(depth="merge"),
+        _snap(
+            stage="pr",
+            merge_blockers=["the branch has merge conflicts with its base"],
+        ),
+    )
+    assert action == "stop"
+    assert "merge conflicts" in detail["reason"]
+
+
+def test_a_blocker_that_is_only_a_running_check_waits():
+    action, detail = ap.next_action(
+        _rec(depth="merge"),
+        _snap(
+            stage="pr",
+            pr_checks="pending",
+            merge_blockers=["required checks are still running"],
+        ),
+    )
+    assert action == "wait"
+    assert "required checks" in detail["reason"]
 
 
 def test_a_repo_that_reports_no_checks_may_merge():

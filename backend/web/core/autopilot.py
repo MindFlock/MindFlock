@@ -460,7 +460,15 @@ def next_action(rec: dict, snap: dict) -> Tuple[str, dict]:
         # no remote, API fault) is treated as pending and eventually times out —
         # never as permission to merge. "none" means this repo reports no checks at
         # all, which is a legitimate green light rather than something to wait for.
+        # A named blocker is authoritative and specific — conflicts, a missing
+        # review, a behind branch. Conflicts and reviews need a HUMAN, so they halt;
+        # a check that is merely still running is a wait.
+        blockers = list(snap.get("merge_blockers") or [])
         ci = str(snap.get("pr_checks") or "unknown")
+        if blockers:
+            if ci == "pending":
+                return "wait", {"reason": "waiting for required checks: " + blockers[0]}
+            return "stop", {"reason": "cannot merge — " + "; ".join(blockers)}
         if ci == "failed":
             return "stop", {"reason": "CI failed on the PR — not merging"}
         if ci in ("pending", "unknown"):
