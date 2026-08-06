@@ -1869,6 +1869,16 @@ def _autopilot_default_message(inst, wt: str) -> str:
         branch = _current_branch(wt) or ""
     except Exception:  # noqa: BLE001
         branch = ""
+    # Prefer the human name of the work the session came from (a ticket title, a
+    # PR title) over the slug: "Add customer-submitted phone numbers to intake"
+    # says what landed; "Work on shortcut-21039" says nothing.
+    try:
+        rec = _autopilot.get(title) or {}
+        named = str(rec.get("message") or "").strip()
+        if named:
+            return named
+    except Exception:  # noqa: BLE001
+        pass
     subject = title or branch
     return ("Work on %s" % subject) if subject else "Work in progress"
 
@@ -5142,6 +5152,13 @@ async def instance_fast_track(
             status_code=400,
         )
     msg = str(body.get("message") or "").strip()
+    if not msg:
+        # An intake-armed run already carries the ticket / PR / issue NAME as its
+        # message. Re-arming with ⏩ used to overwrite that with a generated
+        # "Work on <slug>", throwing away the one genuinely descriptive subject
+        # available. Prefer it.
+        prev = _autopilot.get(title) or {}
+        msg = str(prev.get("message") or "").strip()
     if not msg:
         # Only adopt the on-disk message when a FAILED attempt is pending — the
         # same rule GET /commit-message applies. Reusing it unconditionally meant a

@@ -13,15 +13,17 @@ import {
 } from "../state/queries";
 import { useUi } from "../state/store";
 import { fmtUsd } from "../lib/format";
-import { dropActivity, effectiveActivity, forceActivity } from "../lib/stage";
-import { offerUrl, selectSession } from "../lib/sessionActions";
+import {
+  dropActivity,
+  effectiveActivity,
+  followAutopilot,
+  forceActivity,
+} from "../lib/stage";
+import { selectSession } from "../lib/sessionActions";
 import { toast, type ToastOpts } from "../lib/toast";
 
 const BASE_TITLE = document.title || "MindFlock";
 const clarifyUnseen = new Set<string>(); // clarify sessions not yet looked at
-/** Last autopilot step seen per session, so switching to the terminal and opening
- * the PR each happen ONCE per step rather than on every event for that step. */
-const lastStep = new Map<string, string>();
 
 function instances(): Instance[] {
   return queryClient.getQueryData<Instance[]>(["instances"]) || [];
@@ -233,25 +235,25 @@ export function EventToasts() {
             : null,
         });
         if (isReplay(env)) return;
-
-        // Bring the user to whatever the run is doing, matching what the manual
-        // buttons already do for the same steps.
-        const step = String(d.step || "");
-        if (step === "commit" && lastStep.get(env.session) !== "commit") {
-          // Same as pressing Commit… by hand: focus the window and show its shell
-          // so the pre-commit hooks are watchable while they run.
-          useUi.getState().setLastTab(env.session, "shell");
-          selectSession(env.session);
-        }
-        if (step === "pr" && lastStep.get(env.session) !== "pr") {
-          const url = String(d.url || "");
-          // Same as the manual Make PR: open the PR. offerUrl falls back to a
-          // clickable toast when the popup blocker eats it — this is not running
-          // inside a click gesture, so that fallback is the normal path.
-          if (url) offerUrl(url, "PR opened for " + env.session);
-        }
-        lastStep.set(env.session, step);
-
+        // Follow the run to whatever it is doing (terminal on commit, the PR when
+        // it opens). Shared with the per-poll reconcile in App.tsx via one guard,
+        // so it happens exactly once per step whichever path notices first.
+        followAutopilot(
+          {
+            title: env.session,
+            autopilot: {
+              depth: String(d.depth || ""),
+              state: String(env.new || d.state || "running"),
+              step: String(d.step || ""),
+              reason: String(d.reason || ""),
+              note: String(d.note || ""),
+              url: String(d.url || ""),
+              source: String(d.source || "session"),
+              item: String(d.item || ""),
+            },
+          },
+          { live: true }
+        );
         if (String(env.new || "") === "halted")
           notifyOnce(env.session, "ftstop", "fast-track stopped on " + env.session, {
             onClick: () => selectSession(env.session),

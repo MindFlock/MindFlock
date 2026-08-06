@@ -3,7 +3,7 @@
  * which stage satisfies which target, and on merge never being satisfied by an
  * observed stage. */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   DEPTHS,
   DEPTH_ORDER,
@@ -18,7 +18,15 @@ import {
   liveRun,
   normalizeDepth,
 } from "../lib/autopilot";
-import { clearStep, fastTrackStep, liveStep, markStep, nextStep } from "../lib/stage";
+import {
+  clearStep,
+  fastTrackStep,
+  followAutopilot,
+  liveStep,
+  markStep,
+  nextStep,
+  resetFollow,
+} from "../lib/stage";
 import type { AutopilotRun, Instance } from "../api/types";
 
 const run = (over: Partial<AutopilotRun> = {}): AutopilotRun => ({
@@ -287,6 +295,61 @@ describe("liveStep (the pane header's live step)", () => {
     // …and clears itself once the stage catches up.
     expect(step({ stage: "pushed" })).toBeNull();
     clearStep("t");
+  });
+});
+
+describe("followAutopilot (go where the run is)", () => {
+  const inst = (o: Partial<Instance>) => ({ title: "ft", ...o }) as Partial<Instance>;
+
+  beforeEach(() => resetFollow());
+
+  it("switches to the terminal when the run reaches the commit step", () => {
+    // Seed the prior step, then transition — that is what a real run does.
+    followAutopilot(inst({ autopilot: run({ step: "" }) }));
+    expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBe("commit");
+  });
+
+  it("fires only ONCE per step", () => {
+    followAutopilot(inst({ autopilot: run({ step: "" }) }));
+    expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBe("commit");
+    expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBeNull();
+    expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBeNull();
+  });
+
+  it("does not steal focus on a FIRST poll sighting", () => {
+    // Loading the page mid-commit must not yank you to that window.
+    expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBeNull();
+  });
+
+  it("does act on a first sighting from a LIVE event", () => {
+    // A live event IS the transition, so there is nothing stale about it.
+    expect(
+      followAutopilot(inst({ autopilot: run({ step: "commit" }) }), { live: true })
+    ).toBe("commit");
+  });
+
+  it("opens the PR when the run reaches the pr step", () => {
+    followAutopilot(inst({ autopilot: run({ step: "commit" }) }), { live: true });
+    expect(
+      followAutopilot(inst({ autopilot: run({ step: "pr", url: "https://x.test/1" }) }))
+    ).toBe("pr");
+  });
+
+  it("falls back to the session's own pr_url", () => {
+    followAutopilot(inst({ autopilot: run({ step: "push" }) }));
+    expect(
+      followAutopilot(inst({ autopilot: run({ step: "pr" }), pr_url: "https://y.test/2" }))
+    ).toBe("pr");
+  });
+
+  it("ignores runs that are not running, and re-arms cleanly after", () => {
+    expect(followAutopilot(inst({ autopilot: run({ state: "halted", step: "commit" }) }))).toBeNull();
+    expect(followAutopilot(inst({ autopilot: run({ state: "done", step: "commit" }) }))).toBeNull();
+    expect(followAutopilot(inst({}))).toBeNull();
+    // A halted run cleared the guard, so a fresh run's commit step fires again.
+    expect(
+      followAutopilot(inst({ autopilot: run({ step: "commit" }) }), { live: true })
+    ).toBe("commit");
   });
 });
 

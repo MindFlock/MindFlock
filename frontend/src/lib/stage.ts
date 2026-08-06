@@ -9,15 +9,18 @@ import { toast } from "./toast";
 import {
   PR_FALLBACK_HINT,
   commitSession,
+  offerUrl,
   hasPrSupport,
   makePrSession,
   mergeSession,
   pushSession,
   resolveDepth,
+  selectSession,
   startFastTrack,
   stopFastTrack,
 } from "./sessionActions";
 import { DEPTH_SHORT, autopilotChipTitle, depthLabel } from "./autopilot";
+import { useUi } from "../state/store";
 
 /** Longest `failed_step` that still reads as a hook NAME rather than a line of
  * output, and so still belongs in the stage pill. "Run Tests (+3)" is 14. */
@@ -377,6 +380,70 @@ export function liveStep(inst: Partial<Instance>): LiveStep | null {
       title: inst.pr_url ? "Open the pull request" : "A pull request is open for this branch.",
       href: inst.pr_url || undefined,
     };
+  return null;
+}
+
+/* --- Follow an autopilot run ------------------------------------------------
+ * When the driver reaches a step, do what pressing that button by hand would do:
+ * the commit step focuses the window and shows its shell (so the pre-commit hooks
+ * are watchable), and the PR step opens the pull request.
+ *
+ * Driven from BOTH the `session.autopilot_changed` event (sub-second) and the 4s
+ * poll (guaranteed). Relying on the event alone made this depend on catching one
+ * transient message: the socket can be disconnected, the server's per-client queue
+ * drops events when full, and a page can load mid-commit. Both paths share the
+ * guard below, so it still happens exactly once per step.
+ */
+
+const followed = new Map<string, string>();
+
+export function resetFollow(title?: string) {
+  if (title) followed.delete(title);
+  else followed.clear();
+}
+
+/** React to an autopilot run reaching a new step. `live` marks a real-time event,
+ * where firing on a first sighting is correct; a poll seeds silently instead, so
+ * loading the page during a commit does not yank focus. */
+export function followAutopilot(
+  inst: Partial<Instance>,
+  opts?: { live?: boolean }
+): string | null {
+  const title = inst.title;
+  const run = inst.autopilot;
+  if (!title) return null;
+  if (!run || !run.depth || run.state !== "running") {
+    followed.delete(title);
+    return null;
+  }
+  const step = String(run.step || "");
+  const seen = followed.get(title);
+  if (seen === step) return null;
+  const first = seen === undefined;
+  followed.set(title, step);
+  if (first && !opts?.live) return null; // seed only — never steal focus on load
+  if (step === "commit") {
+    // Side effects are guarded: this runs once per session per poll, so a DOM
+    // hiccup here must never break the loop for every other session.
+    try {
+      useUi.getState().setLastTab(title, "shell");
+      selectSession(title);
+    } catch {
+      /* following is a courtesy — never let it break the poll */
+    }
+    return "commit";
+  }
+  if (step === "pr") {
+    const url = String(run.url || "") || inst.pr_url || "";
+    if (url) {
+      try {
+        offerUrl(url, "PR opened for " + title);
+      } catch {
+        /* a blocked/absent window must not break the loop */
+      }
+    }
+    return "pr";
+  }
   return null;
 }
 
