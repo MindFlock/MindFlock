@@ -2266,6 +2266,14 @@ p.set-hint {
 #git-issue-bar .dc-dot {
   width: 9px;
   height: 9px;
+  /* Pin the box so no inherited or globally-scoped rule can deform the circle.
+     The red state used to carry a bare `error` class, and the app-wide
+     `.error { min-height: 16px }` (meant for error TEXT) beat an unset min-height
+     — producing a 9x16 oval in exactly one state. The state class is scoped now,
+     but stating these makes the shape robust rather than merely currently-correct. */
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
   border-radius: 50%;
   flex: none;
 }
@@ -2290,10 +2298,12 @@ p.set-hint {
   background: var(--gold);
 }
 
-/* Browser offline, or the ingestion log shows recent connection failures. */
-#mindflock-bar .dc-dot.error,
-#pr-review-bar .dc-dot.error,
-#git-issue-bar .dc-dot.error {
+/* Browser offline, or the ingestion log shows recent connection failures.
+   Named `dc-error` rather than `error` so it cannot pick up the app-wide
+   error-TEXT rule (see the shape comment above). */
+#mindflock-bar .dc-dot.dc-error,
+#pr-review-bar .dc-dot.dc-error,
+#git-issue-bar .dc-dot.dc-error {
   background: var(--red);
   box-shadow: 0 0 6px var(--red);
 }

@@ -89,8 +89,13 @@ export function AutomationBar() {
           // `active` outranks the switch: a ticket forced from Intake is
           // genuinely being brought in even with auto ingestion switched off,
           // and "off" would be a lie about the work in flight.
+          // "dc-error", NOT a bare "error": `.error` is a GLOBAL class for error
+          // TEXT (`.error { min-height: 16px }`), and this element is a 9px circle.
+          // `.dc-dot` sets height but never min-height, so the global won
+          // uncontested and rendered the red state as a 9x16 OVAL — the one state
+          // that looked malformed, because it was the only one borrowing that name.
           "dc-dot " +
-          (netIssue ? "error" : active ? "on" : !desired ? "off" : "idle")
+          (netIssue ? "dc-error" : active ? "on" : !desired ? "off" : "idle")
         }
         title={
           active

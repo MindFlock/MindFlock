@@ -217,3 +217,23 @@ def _rule(css: str, selector: str) -> str:
     got = _rules(css, selector)
     assert got, "no rule found for " + selector
     return got[0]
+
+
+def test_the_ingestion_dot_cannot_be_deformed_by_the_global_error_rule():
+    """The red state used to carry a bare `error` class. `.error` is the app-wide
+    rule for error TEXT and sets `min-height: 16px`; `.dc-dot` sets `height: 9px`
+    but no min-height, so the global won uncontested and rendered a 9x16 OVAL — in
+    exactly one state, because it was the only one borrowing that name."""
+    js = client.get("/app.js").text
+    css = client.get("/style.css").text
+    # The state class is scoped, and no bar emits a bare "error" state any more.
+    assert "dc-error" in js
+    assert '"dc-dot " + (netIssue ? "error"' not in js
+    # The styled selector matches the scoped name.
+    assert ".dc-dot.dc-error" in css
+    # And the circle pins its own box, so a future global leak cannot deform it.
+    dot = _rule(
+        css, "#mindflock-bar .dc-dot,\n#pr-review-bar .dc-dot,\n#git-issue-bar .dc-dot"
+    )
+    for decl in ("min-height: 0", "min-width: 0", "border-radius: 50%"):
+        assert decl in dot, decl
