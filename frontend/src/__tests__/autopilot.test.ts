@@ -29,6 +29,7 @@ import {
   resetFollow,
 } from "../lib/stage";
 import type { AutopilotRun, Instance, MergeState } from "../api/types";
+import { useUi } from "../state/store";
 
 const run = (over: Partial<AutopilotRun> = {}): AutopilotRun => ({
   depth: "pr",
@@ -315,10 +316,14 @@ describe("followAutopilot (go where the run is)", () => {
 
   beforeEach(() => resetFollow());
 
-  it("switches to the terminal when the run reaches the commit step", () => {
-    // Seed the prior step, then transition — that is what a real run does.
+  it("switches that window to its terminal tab WITHOUT taking focus", () => {
+    // Autopilot runs unattended, often on a window you are not looking at, so
+    // yanking the view away from whatever you ARE doing is wrong. Setting the tab
+    // does the useful half.
     followAutopilot(inst({ autopilot: run({ step: "" }) }));
     expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBe("commit");
+    expect(useUi.getState().lastTab["ft"]).toBe("shell");
+    expect(useUi.getState().focused).not.toBe("ft");
   });
 
   it("fires only ONCE per step", () => {
@@ -328,19 +333,20 @@ describe("followAutopilot (go where the run is)", () => {
     expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBeNull();
   });
 
-  it("does not steal focus on a FIRST poll sighting", () => {
-    // Loading the page mid-commit must not yank you to that window.
-    expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBeNull();
+  it("switches the tab even on a FIRST poll sighting", () => {
+    // Setting a tab takes no focus, so there is nothing to protect against — and a
+    // page loaded mid-commit should still find the terminal tab selected.
+    expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBe("commit");
   });
 
-  it("does act on a first sighting from a LIVE event", () => {
-    // A live event IS the transition, so there is nothing stale about it.
+  it("never opens a browser tab on a first POLL sighting", () => {
+    // Opening a PR IS intrusive: a page load must not re-open one already seen.
     expect(
-      followAutopilot(inst({ autopilot: run({ step: "commit" }) }), { live: true })
-    ).toBe("commit");
+      followAutopilot(inst({ autopilot: run({ step: "pr", url: "https://x.test/1" }) }))
+    ).toBeNull();
   });
 
-  it("opens the PR when the run reaches the pr step", () => {
+  it("opens the PR on a real live transition", () => {
     followAutopilot(inst({ autopilot: run({ step: "commit" }) }), { live: true });
     expect(
       followAutopilot(inst({ autopilot: run({ step: "pr", url: "https://x.test/1" }) }))

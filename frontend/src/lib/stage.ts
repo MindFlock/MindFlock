@@ -15,7 +15,6 @@ import {
   mergeSession,
   pushSession,
   resolveDepth,
-  selectSession,
   startFastTrack,
   stopFastTrack,
 } from "./sessionActions";
@@ -443,19 +442,28 @@ export function followAutopilot(
   if (seen === step) return null;
   const first = seen === undefined;
   followed.set(title, step);
-  if (first && !opts?.live) return null; // seed only — never steal focus on load
+
   if (step === "commit") {
-    // Side effects are guarded: this runs once per session per poll, so a DOM
-    // hiccup here must never break the loop for every other session.
+    // SWITCH THE TAB, DO NOT TAKE FOCUS. Autopilot runs unattended and often on a
+    // window you are not looking at, so yanking the view away from whatever you
+    // ARE doing is wrong. Setting the tab is harmless and does the useful half:
+    // whenever you next look at that window, it is already showing the hooks.
+    // (The manual Commit dialog still focuses, because you asked for it there.)
+    //
+    // Fires even on a first sighting, including from a poll: with no focus theft
+    // there is nothing to protect against, and a page loaded mid-commit should
+    // still find the right tab selected.
     try {
       useUi.getState().setLastTab(title, "shell");
-      selectSession(title);
     } catch {
       /* following is a courtesy — never let it break the poll */
     }
     return "commit";
   }
   if (step === "pr") {
+    // Opening a browser tab IS intrusive, so this one stays limited to a real live
+    // transition: a page load must not re-open a PR you have already seen.
+    if (first && !opts?.live) return null;
     const url = String(run.url || "") || inst.pr_url || "";
     if (url) {
       try {

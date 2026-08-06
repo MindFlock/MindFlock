@@ -23417,16 +23417,15 @@ function followAutopilot(inst, opts) {
   if (seen === step) return null;
   const first = seen === void 0;
   followed.set(title, step);
-  if (first && !(opts == null ? void 0 : opts.live)) return null;
   if (step === "commit") {
     try {
       useUi.getState().setLastTab(title, "shell");
-      selectSession(title);
     } catch {
     }
     return "commit";
   }
   if (step === "pr") {
+    if (first && !(opts == null ? void 0 : opts.live)) return null;
     const url = String(run.url || "") || inst.pr_url || "";
     if (url) {
       try {
