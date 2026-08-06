@@ -23030,6 +23030,7 @@ function rememberDepth(depth) {
   }
 }
 async function startFastTrack(title, depth, message, base) {
+  var _a2;
   if (!title || !requireGit()) return;
   const d = normalizeDepth(depth) || "pr";
   if (d === "merge") {
@@ -23037,29 +23038,44 @@ async function startFastTrack(title, depth, message, base) {
     if (!confirm("Fast-track will commit, push, open a PR and MERGE it" + where + ".\nContinue?"))
       return;
   }
+  const before = ((_a2 = instances$1().find((i) => i.title === title)) == null ? void 0 : _a2.autopilot) ?? null;
+  patchInstance(title, {
+    autopilot: {
+      depth: d,
+      state: "running",
+      step: "",
+      reason: "",
+      source: "session",
+      item: ""
+    }
+  });
   try {
-    await instApi(title, "/fast-track", {
+    const r = await instApi(title, "/fast-track", {
       json: {
         depth: d,
         ...message ? { message } : {},
         ...base ? { base } : {}
       }
     });
+    if (r == null ? void 0 : r.autopilot) patchInstance(title, { autopilot: r.autopilot });
     toast("Fast-tracking to " + depthLabel(d), { duration: 4e3 });
   } catch (err) {
+    patchInstance(title, { autopilot: before });
     toast("Fast-track failed: " + errMsg(err), { duration: 6e3 });
   }
-  void freshStage(title);
 }
 async function stopFastTrack(title) {
+  var _a2;
   if (!title) return;
+  const before = ((_a2 = instances$1().find((i) => i.title === title)) == null ? void 0 : _a2.autopilot) ?? null;
+  patchInstance(title, { autopilot: null });
   try {
     await instApi(title, "/fast-track", { method: "DELETE" });
     toast("Fast-track stopped");
   } catch (err) {
+    patchInstance(title, { autopilot: before });
     toast("Could not stop fast-track: " + errMsg(err), { duration: 6e3 });
   }
-  void freshStage(title);
 }
 async function ideSession(title, quiet = false) {
   if (!title) return;

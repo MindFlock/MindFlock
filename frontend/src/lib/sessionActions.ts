@@ -5,9 +5,9 @@
  * dialog components own their submit logic. */
 
 import { api, instApi } from "../api/client";
-import type { Caps, Config, Instance } from "../api/types";
+import type { AutopilotRun, Caps, Config, Instance } from "../api/types";
 import { computeVisible } from "../components/grid/layout";
-import { queryClient, refreshInstances } from "../state/queries";
+import { patchInstance, queryClient, refreshInstances } from "../state/queries";
 import { freshStage } from "./stageWatch";
 import { useUi } from "../state/store";
 import { toast } from "./toast";
@@ -375,32 +375,53 @@ export async function startFastTrack(
     if (!confirm("Fast-track will commit, push, open a PR and MERGE it" + where + ".\nContinue?"))
       return;
   }
+  // Flip the toggle NOW. The button's appearance is derived from the cached
+  // `autopilot` block, so waiting for the round trip made a local, instant action
+  // feel like a laggy one. The server's answer settles it a moment later; a
+  // failure rolls it back and says so.
+  const before = instances().find((i) => i.title === title)?.autopilot ?? null;
+  patchInstance(title, {
+    autopilot: {
+      depth: d,
+      state: "running",
+      step: "",
+      reason: "",
+      source: "session",
+      item: "",
+    },
+  });
   try {
-    await instApi(title, "/fast-track", {
+    const r = await instApi<{ autopilot?: AutopilotRun | null }>(title, "/fast-track", {
       json: {
         depth: d,
         ...(message ? { message } : {}),
         ...(base ? { base } : {}),
       },
     });
+    // Reconcile with the authoritative record the route already returns — no
+    // follow-up read needed, and arming changes no git state, so the old
+    // freshStage() call here was a full row recompute for nothing.
+    if (r?.autopilot) patchInstance(title, { autopilot: r.autopilot });
     toast("Fast-tracking to " + depthLabel(d), { duration: 4000 });
   } catch (err) {
+    patchInstance(title, { autopilot: before });
     toast("Fast-track failed: " + errMsg(err), { duration: 6000 });
   }
-  void freshStage(title);
 }
 
 /** Disarm. Anything already typed into the shell keeps running — this only stops
  * the driver from taking the NEXT step, which is all it controls. */
 export async function stopFastTrack(title: string) {
   if (!title) return;
+  const before = instances().find((i) => i.title === title)?.autopilot ?? null;
+  patchInstance(title, { autopilot: null }); // toggle off immediately
   try {
     await instApi(title, "/fast-track", { method: "DELETE" });
     toast("Fast-track stopped");
   } catch (err) {
+    patchInstance(title, { autopilot: before });
     toast("Could not stop fast-track: " + errMsg(err), { duration: 6000 });
   }
-  void freshStage(title);
 }
 
 export async function ideSession(title: string, quiet = false) {

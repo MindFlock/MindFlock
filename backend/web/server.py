@@ -1735,8 +1735,34 @@ def _resp_json(resp) -> dict:
         return {}
 
 
-def _emit_autopilot(title: str) -> None:
-    """Tell the UI a run changed, and refresh the session's published row."""
+def _publish_autopilot(title: str) -> None:
+    """Announce an autopilot change WITHOUT recomputing anything.
+
+    For arming and disarming, which change no git state whatsoever — only a field
+    in a small JSON file. The full :func:`_republish_session` was costing ~700ms
+    on a cold cache (an ``ls-remote`` network round trip plus a ``gh`` call) and,
+    because the routes call this on the event loop, it stalled every other request
+    with it. Recording a target depth has no business paying for a PR lookup.
+
+    So: emit the event, then patch JUST the ``autopilot`` block into the published
+    row. That last part is what stops the next 4s poll — which serves the stored
+    tick snapshot — from reverting the UI's optimistic toggle. Cost is a dict read
+    and a short list scan.
+    """
+    try:
+        _emit_autopilot_event(title)
+        rows = _events.sessions_snapshot()
+        for row in rows:
+            if row.get("title") == title:
+                row["autopilot"] = _autopilot_dto(title)
+                _events.patch_session_snapshot(title, row)
+                return
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _emit_autopilot_event(title: str) -> None:
+    """The cheap half of :func:`_emit_autopilot`: the event only, no probes."""
     try:
         rec = _autopilot.get(title) or {}
         _events.BUS.emit(
@@ -1752,9 +1778,22 @@ def _emit_autopilot(title: str) -> None:
                 "skipped": list(rec.get("skipped") or []),
             },
         )
-        _republish_session(title)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _emit_autopilot(title: str) -> None:
+    """Announce an autopilot change AND rebuild the session's published row.
+
+    For the driver, after it has actually done something (a commit, push, PR or
+    merge): the git-derived stage really did change, so the full recompute earns
+    its cost. Blocking — the driver already calls it from a worker thread.
+
+    Arm/disarm must use :func:`_publish_autopilot` instead; they change no git
+    state and the routes that serve them run on the event loop.
+    """
+    _emit_autopilot_event(title)
+    _republish_session(title)
 
 
 async def _autopilot_pass() -> None:
@@ -4904,7 +4943,11 @@ async def instance_fast_track(
     )
     if rec is None:
         return JSONResponse({"error": "could not arm fast-track"}, status_code=500)
-    _emit_autopilot(title)
+    # Cheap: no probes, no network. Arming changes a field in a JSON file, so the
+    # press must not wait on a PR lookup (that cost ~700ms on a cold cache, ON the
+    # event loop). The response carries the authoritative record so the client can
+    # settle its toggle without a follow-up read.
+    _publish_autopilot(title)
     return JSONResponse({"ok": True, "autopilot": _autopilot_dto(title)})
 
 
@@ -4917,7 +4960,7 @@ async def instance_fast_track_cancel(title: str) -> JSONResponse:
     if err is not None:
         return err
     stopped = await asyncio.to_thread(_autopilot.disarm, title)
-    _republish_session(title)
+    _publish_autopilot(title)
     return JSONResponse({"ok": True, "stopped": bool(stopped)})
 
 
