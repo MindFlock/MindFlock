@@ -171,3 +171,49 @@ def test_provisioning_placeholder_hint_is_repo_neutral():
     js = client.get("/app.js").text
     assert "The first provisioned run clones the base repo" in js
     assert "sitecheck-bot" not in js
+
+
+# --------------------------------------------------------------------------- #
+# Pane header: a long session title must cost its OWN characters, never the
+# controls beside it.
+# --------------------------------------------------------------------------- #
+
+
+def test_pane_header_shrinks_the_title_not_the_controls():
+    """A 60-character session name used to slice the Commit button, the fast-track
+    toggle and the live-step indicator off the right edge, because `.actions` was
+    made shrinkable so a verbose step label could not push the usage chip out. The
+    title is a LABEL whose full text is one hover away; those are CONTROLS."""
+    css = client.get("/style.css").text
+    # The title is the designated shrink target — factor 3 against the context
+    # line's 1 — and may truncate hard rather than hold its width.
+    title = _rule(css, ".pane-head .title")
+    assert "flex: 0 3 auto" in title, title
+    assert "text-overflow: ellipsis" in title
+    # EVERY .pane-head .actions rule must refuse to shrink; one that yields is
+    # what clipped the controls.
+    blocks = _rules(css, ".pane-head .actions")
+    assert blocks, "expected .pane-head .actions rules in the built CSS"
+    for b in blocks:
+        assert "flex: none" in b, b
+        assert "flex: 0 1 auto" not in b, b
+    # Its container can no longer shrink, so the step label bounds itself.
+    assert "max-width: 15ch" in _rule(css, ".pane-head .actions .stepnow-text")
+
+
+def _rules(css: str, selector: str) -> list:
+    """Every top-level rule body for an exact selector in the (unminified) CSS."""
+    out = []
+    needle = "\n" + selector + " {"
+    at = css.find(needle)
+    while at != -1:
+        end = css.find("\n}", at)
+        out.append(css[at : end + 2])
+        at = css.find(needle, end)
+    return out
+
+
+def _rule(css: str, selector: str) -> str:
+    got = _rules(css, selector)
+    assert got, "no rule found for " + selector
+    return got[0]

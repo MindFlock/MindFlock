@@ -4699,6 +4699,10 @@ p.set-hint {
 
 .pane-head {
   flex-wrap: nowrap;
+  /* Backstop only. With the title able to shrink to 2.5rem and the container
+     queries below shedding the optional bits, this should never engage — but a
+     header that spills past the pane's rounded corner looks broken, so clip. */
+  overflow: hidden;
 }
 
 /* Normal right padding. (The old 54px gutter reserved room for the floating
@@ -4707,10 +4711,16 @@ p.set-hint {
   padding-right: 12px;
 }
 
+/* The title is the ONE thing in this header that yields.
+   `flex-shrink: 3` against the context line's 1 makes it absorb most of any
+   reduction, and the small floor lets it truncate hard — a 60-character session
+   name should cost its own characters, never the Commit button, the fast-track
+   toggle or the live-step indicator. Those are controls; the title is a label
+   whose full text is one hover away (title= carries it). */
 .pane-head .title {
   font-weight: 600;
-  flex: 0 1 auto;
-  min-width: 40px;
+  flex: 0 3 auto;
+  min-width: 2.5rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4887,12 +4897,12 @@ p.set-hint {
   align-items: center;
   gap: 6px;
   margin-left: 10px;
-  /* Was `flex: none` via `.tabs, .actions`. Now that this group can hold a text
-     label it has to be able to YIELD, or a verbose step pushes the usage chip and
-     the copy-history button out of the pane. */
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
+  /* NEVER shrinks. Making this yield (so a verbose step label could not push the
+     usage chip out) meant a long session title clipped the controls instead —
+     the Commit button, the ⏩ toggle and the step indicator were sliced off the
+     right edge. The label is bounded by its own max-width and the container
+     queries below, so the group's width stays predictable without shrinking. */
+  flex: none;
 }
 
 .pane-head .actions .nextstep {
@@ -4937,7 +4947,10 @@ p.set-hint {
 .pane-head .actions .stepnow-text {
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 22ch;
+  /* Bounded because `.actions` no longer shrinks: the group's width has to be
+     predictable. The server's wait sentences run long ("waiting for CI to pass
+     before merging"), and the full text is in the tooltip. */
+  max-width: 15ch;
 }
 
 .pane-head .actions .stepnow-target {
