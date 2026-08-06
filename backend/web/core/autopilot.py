@@ -758,13 +758,18 @@ def halt(title: str, reason: str) -> Optional[dict]:
 
     A silently stopped chain is the one failure mode that destroys trust in the
     feature, so the reason is required and always surfaced.
+
+    Clears ``note`` — it holds what the run was WAITING on, which is history the
+    moment the run stops. Left behind, a finished record still read "pre-commit
+    hooks are running" next to its own completion.
     """
-    return update(title, state="halted", reason=str(reason or "stopped"))
+    return update(title, state="halted", reason=str(reason or "stopped"), note="")
 
 
 def finish(title: str) -> Optional[dict]:
-    """Mark a run complete (its target rung was reached)."""
-    return update(title, state="done", reason="")
+    """Mark a run complete (its target rung was reached). Clears the wait note —
+    see :func:`halt`."""
+    return update(title, state="done", reason="", note="")
 
 
 def disarm(title: str) -> bool:

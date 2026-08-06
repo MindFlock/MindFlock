@@ -490,10 +490,25 @@ def test_halt_records_a_reason_and_stops_the_run():
     assert ap.next_action(got, _snap())[0] == "stop"
 
 
-def test_finish_marks_done():
+def test_finish_marks_done_and_clears_the_wait_note():
+    """`note` holds what the run was WAITING on, which is history the moment it
+    stops. Left behind, a finished record still read "pre-commit hooks are
+    running" right next to its own completion."""
     ap.arm("s1", "pr")
+    ap.update("s1", note="pre-commit hooks are running")
     ap.finish("s1")
-    assert ap.get("s1")["state"] == "done"
+    got = ap.get("s1")
+    assert got["state"] == "done"
+    assert got["note"] == ""
+
+
+def test_halt_clears_the_wait_note_too():
+    ap.arm("s1", "pr")
+    ap.update("s1", note="waiting for checks to finish")
+    ap.halt("s1", "checks failed")
+    got = ap.get("s1")
+    assert got["reason"] == "checks failed", "the halt reason is what a human reads"
+    assert got["note"] == "", "the stale wait reason must not sit beside it"
 
 
 def test_prune_drops_records_for_dead_sessions():
