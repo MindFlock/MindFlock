@@ -1409,26 +1409,12 @@ _AUTOPILOT_DEADLINES = {
 
 
 def _autopilot_dto(title: str):
-    """The compact autopilot block on a session's /api/instances row, or None.
+    """The session row's autopilot block — see :func:`autopilot.dto`.
 
-    Only what the UI renders: enough to say "auto → Open PR, waiting on the
-    agent" and, when a run has halted, exactly why.
+    Kept as a thin alias because it is referenced from both snapshot paths and by
+    tests; the shaping itself is shared with ``core.pending``.
     """
-    rec = _autopilot.get(title)
-    if rec is None:
-        return None
-    return {
-        "depth": rec.get("depth") or "",
-        "state": rec.get("state") or "",
-        "step": rec.get("step") or "",
-        "reason": rec.get("reason") or "",
-        # What this pass is waiting on, in the driver's own words. Without it the
-        # UI had to guess, and every deliberate wait read as "waiting on the agent".
-        "note": rec.get("note") or "",
-        "source": rec.get("source") or "session",
-        "item": rec.get("item") or "",
-        "skipped": list(rec.get("skipped") or []),
-    }
+    return _autopilot.dto(title)
 
 
 def _fasttrack_depth() -> str:
@@ -1802,6 +1788,10 @@ async def _autopilot_act(title, wt, rec, snap, action, detail) -> None:
                 )
                 return
             fields["step"] = "pr"
+            # Remember the PR so the client can open it exactly once, the same
+            # courtesy the manual "Make PR" button does.
+            if body.get("url"):
+                fields["url"] = str(body["url"])
         elif action == "merge":
             resp = await instance_merge_pr(title)
             if resp.status_code >= 400:
@@ -1990,6 +1980,7 @@ def _emit_autopilot_event(title: str) -> None:
                 "state": rec.get("state") or "",
                 "reason": rec.get("reason") or "",
                 "note": rec.get("note") or "",
+                "url": rec.get("url") or "",
                 "item": rec.get("item") or "",
                 "skipped": list(rec.get("skipped") or []),
             },

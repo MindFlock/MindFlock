@@ -142,6 +142,7 @@ class SessionRunner:
         agent = self._agent_for(story)
         self._arm_autopilot(
             title,
+            "tix",
             getattr(story, "provider", "") or "",
             str(getattr(story, "id", "") or story.slug),
             str(getattr(story, "name", "") or ""),
@@ -198,6 +199,7 @@ class SessionRunner:
         title = f"pr-{pr_slug(pr)}"
         self._arm_autopilot(
             title,
+            "pr",
             str(getattr(pr, "repo", "") or ""),
             "%s#%s" % (getattr(pr, "repo", ""), pr.number),
             str(getattr(pr, "title", "") or ""),
@@ -258,7 +260,9 @@ class SessionRunner:
         provider = getattr(story, "provider", "")
         return fresh_agent(lambda c: c.agent_for(provider), self.config)
 
-    def _arm_autopilot(self, title: str, source: str, item: str, message: str) -> None:
+    def _arm_autopilot(
+        self, title: str, kind: str, lookup: str, item: str, message: str
+    ) -> None:
         """Record how far an AUTO-ingested item should carry itself.
 
         The auto path runs in a separate OS process from the web server, so this
@@ -281,14 +285,32 @@ class SessionRunner:
         try:
             from backend.web.core import autopilot as _autopilot
 
-            depth = _autopilot.normalize_depth(self._depth_for(source))
+            depth = _autopilot.normalize_depth(self._depth_for(lookup))
             if depth in ("", "off") or depth not in _autopilot.SOURCE_DEPTHS:
+                logger.info(
+                    "No autopilot depth configured for %s (%s) — %s will not "
+                    "fast-track itself",
+                    lookup,
+                    kind,
+                    title,
+                )
                 return
-            _autopilot.arm(
-                title, depth, source=source, item=item, message=message or ""
-            )
+            # `kind` is the record's own vocabulary (tix/pr/iss); `lookup` is the
+            # provider or repo slug the DEPTH is configured against. Passing the
+            # lookup as the source silently coerced it to "session", losing which
+            # surface the run came from.
+            _autopilot.arm(title, depth, source=kind, item=item, message=message or "")
+            logger.info("Autopilot armed for %s: will carry it to %s", title, depth)
         except Exception:  # noqa: BLE001
-            logger.debug("autopilot arm skipped for %s", title, exc_info=True)
+            # WARNING, not debug. This used to fail invisibly: a long-running
+            # pipeline predating the feature simply never armed anything, and the
+            # only symptom was the fast-track toggle sitting off with no
+            # explanation anywhere.
+            logger.warning(
+                "Could not arm autopilot for %s — it will not fast-track itself",
+                title,
+                exc_info=True,
+            )
 
     def _depth_for(self, source: str) -> str:
         """The configured autopilot depth for a ticketing source / repo slug.

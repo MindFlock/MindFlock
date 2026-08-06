@@ -74,6 +74,7 @@ __all__ = [
     "all_titles",
     "prune",
     "snapshot",
+    "dto",
 ]
 
 _FileName = "autopilot.json"
@@ -221,6 +222,9 @@ def _blank() -> dict:
         "source": "session",
         "item": "",
         "message": "",
+        # The PR this run opened, so the UI can bring it up exactly once — the same
+        # courtesy the manual "Make PR" button does.
+        "url": "",
         "base": "",
         "branch": "",
         "retryable": [],
@@ -274,6 +278,7 @@ def _normalize(entry) -> dict:
     e["source"] = src if src in ("session", "tix", "pr", "iss") else "session"
     e["item"] = str(entry.get("item", "") or "")
     e["message"] = str(entry.get("message", "") or "")
+    e["url"] = str(entry.get("url", "") or "")
     e["base"] = str(entry.get("base", "") or "")
     e["branch"] = str(entry.get("branch", "") or "")
     raw = entry.get("retryable")
@@ -577,6 +582,31 @@ def get(title: str) -> Optional[dict]:
     with _LOCK:
         entry = _load().get(title)
     return _normalize(entry) if entry is not None else None
+
+
+def dto(title: str):
+    """The compact block a session's ``/api/instances`` row carries, or None.
+
+    Lives here rather than in ``server.py`` because TWO callers need it and one of
+    them (``core.pending``, which renders provisioning rows) cannot import the
+    server without a cycle. A provisioning row that omitted this showed the
+    fast-track toggle OFF for the whole clone window — exactly when you would want
+    to change your mind — because intake arms BEFORE the session exists.
+    """
+    rec = get(title)
+    if rec is None:
+        return None
+    return {
+        "depth": rec.get("depth") or "",
+        "state": rec.get("state") or "",
+        "step": rec.get("step") or "",
+        "reason": rec.get("reason") or "",
+        "note": rec.get("note") or "",
+        "url": rec.get("url") or "",
+        "source": rec.get("source") or "session",
+        "item": rec.get("item") or "",
+        "skipped": list(rec.get("skipped") or []),
+    }
 
 
 def snapshot() -> dict:

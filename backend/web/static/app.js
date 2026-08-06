@@ -24092,6 +24092,7 @@ function NotifToggle({ state, onChange }) {
 }
 const BASE_TITLE = document.title || "MindFlock";
 const clarifyUnseen = /* @__PURE__ */ new Set();
+const lastStep = /* @__PURE__ */ new Map();
 function instances() {
   return queryClient.getQueryData(["instances"]) || [];
 }
@@ -24265,6 +24266,16 @@ function EventToasts() {
           } : null
         });
         if (isReplay(env)) return;
+        const step = String(d.step || "");
+        if (step === "commit" && lastStep.get(env.session) !== "commit") {
+          useUi.getState().setLastTab(env.session, "shell");
+          selectSession(env.session);
+        }
+        if (step === "pr" && lastStep.get(env.session) !== "pr") {
+          const url = String(d.url || "");
+          if (url) offerUrl(url, "PR opened for " + env.session);
+        }
+        lastStep.set(env.session, step);
         if (String(env.new || "") === "halted")
           notifyOnce(env.session, "ftstop", "fast-track stopped on " + env.session, {
             onClick: () => selectSession(env.session)

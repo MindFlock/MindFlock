@@ -62,6 +62,8 @@ export interface AutopilotRun {
   /** What the current pass is waiting on, in the server's own words ("waiting for
    * checks to finish", "prompt queue still has work"). */
   note?: string;
+  /** The PR this run opened, so the client can bring it up exactly once. */
+  url?: string;
   skipped?: string[];
 }
 

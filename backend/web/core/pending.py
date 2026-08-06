@@ -29,6 +29,7 @@ from typing import Dict, Optional, Set
 
 from backend import providers
 from backend.session.storage import Loading
+from backend.web.core import autopilot as _autopilot
 from backend.web.core.engine import get_engine
 
 # title -> {"kind": "pr"|"iss"|"tix", "since": epoch, **display meta}
@@ -158,6 +159,11 @@ def rows(engine=None) -> list:
                 "pr_url": None,
                 "failed_step": None,
                 "failed_hook": None,
+                # A provisioning row must carry it too: intake arms BEFORE the
+                # session exists, so without this the fast-track toggle showed OFF
+                # for the whole clone+provision window — exactly when you would
+                # want to change your mind and turn it off.
+                "autopilot": _autopilot.dto(title),
                 "queue": None,
                 "tokens": 0,
                 "tokens_in": 0,

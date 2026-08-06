@@ -112,7 +112,7 @@ export function hasPrSupport(c?: Partial<Caps>): boolean {
 /** Open `url` in a new tab, and if the popup blocker ate it (we are in an
  * async continuation, not a click handler) fall back to a clickable toast —
  * the user's click then counts as the gesture. Never blocks the UI. */
-function offerUrl(url: string, msg: string) {
+export function offerUrl(url: string, msg: string) {
   const win = window.open(url, "_blank");
   if (win) {
     toast(msg, { duration: 6000 });
