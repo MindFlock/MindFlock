@@ -461,20 +461,44 @@
   background: var(--bg);
 }
 
+/* Two lines: the branch on its own, then the identity/badges/timestamp beneath.
+   Stacking is what lets a 60-character branch name actually be READ — on one line
+   next to badges and a timestamp it just ellipsised away, which is the whole thing
+   the row exists to tell you. */
 .recent-info {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
 }
 
 .recent-name {
   font-size: 13px;
   font-weight: 600;
+  /* min-width:0 alongside overflow:hidden — a nowrap flex item's default
+     min-width:auto refuses to shrink below its content, so the ellipsis never
+     engages without it. */
+  min-width: 0;
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.recent-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.recent-slug {
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
 .recent-when {

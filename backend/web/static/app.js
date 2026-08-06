@@ -34567,11 +34567,25 @@ function RecentDialog() {
           const gone = !e.exists;
           return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "recent-row", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "recent-info", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-name", title: e.folder || "", children: e.title || "(untitled)" }),
-              e.in_place && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "in-place" }),
-              e.provisioned && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "provisioned" }),
-              gone && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge gone", children: "worktree gone" }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-when muted", children: fmtClosedAt(e.closed_at) })
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "span",
+                {
+                  className: "recent-name",
+                  title: [
+                    e.branch ? "Branch: " + e.branch : "",
+                    e.title ? "Session: " + e.title : "",
+                    e.folder || ""
+                  ].filter(Boolean).join("\n"),
+                  children: e.branch || e.title || "(untitled)"
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "recent-sub", children: [
+                e.branch && e.title && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-slug muted", children: e.title }),
+                e.in_place && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "in-place" }),
+                e.provisioned && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "provisioned" }),
+                gone && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge gone", children: "worktree gone" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-when muted", children: fmtClosedAt(e.closed_at) })
+              ] })
             ] }),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "recent-actions", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(
