@@ -75,6 +75,7 @@ __all__ = [
     "prune",
     "snapshot",
     "dto",
+    "claim",
 ]
 
 _FileName = "autopilot.json"
@@ -151,6 +152,11 @@ ARM_GRACE_S = 1800.0
 #: gives up. Generous — you may arm a ticket and let it sit — but bounded, so a
 #: session that never gets an agent does not stay armed forever. 2 hours.
 ARM_WAIT_DEADLINE_S = 7200.0
+#: How long an unrefreshed driver lease is honoured before another server may take
+#: over. The driver passes every 5s, so this is many missed passes — long enough
+#: that a slow pass never loses the lease, short enough that a crashed server does
+#: not strand a chain.
+LEASE_STALE_S = 45.0
 #: Branch names autopilot will never push or PR from, whatever the configured base
 #: resolves to. Defence in depth: the base-branch guard relies on
 #: `_session_base_branch`, and if that resolves to "" (a detached probe, a repo with
@@ -241,6 +247,14 @@ def _blank() -> dict:
         "step_since": 0.0,
         "acted_at": 0.0,
         "boot": "",
+        # WHICH SERVER IS DRIVING THIS CHAIN, and when it last said so. Two servers
+        # sharing one store (a dev instance on another port, say) both ran the
+        # driver: they saw each other's boot id, each treated it as a restart, and
+        # reset the idle dwell every pass — so the 30s settle could never elapse and
+        # a chain sat at "agent just went idle" forever. Both would also have ACTED,
+        # double-committing and double-pushing. One lease, one driver.
+        "owner": "",
+        "owner_at": 0.0,
         "started": 0.0,
         "updated": 0.0,
     }
@@ -310,12 +324,20 @@ def _normalize(entry) -> dict:
             e[key] = 0
     idle = entry.get("idle_since")
     e["idle_since"] = float(idle) if isinstance(idle, (int, float)) else None
-    for key in ("step_since", "acted_at", "started", "updated", "worked_at"):
+    for key in (
+        "step_since",
+        "acted_at",
+        "started",
+        "updated",
+        "worked_at",
+        "owner_at",
+    ):
         try:
             e[key] = float(entry.get(key, 0.0) or 0.0)
         except (TypeError, ValueError):
             e[key] = 0.0
     e["boot"] = str(entry.get("boot", "") or "")
+    e["owner"] = str(entry.get("owner", "") or "")
     return e
 
 
@@ -582,6 +604,42 @@ def get(title: str) -> Optional[dict]:
     with _LOCK:
         entry = _load().get(title)
     return _normalize(entry) if entry is not None else None
+
+
+def claim(title: str, owner: str, now: Optional[float] = None):
+    """Take or refresh the driver lease for ``title``.
+
+    Returns ``(rec, took_over)`` when this ``owner`` may drive the chain, or
+    ``(None, False)`` when a DIFFERENT server holds a live lease. ``took_over`` is
+    True when the lease changed hands (a restart, or a crashed owner), which is the
+    signal to re-earn the idle dwell rather than trusting a stale one.
+
+    Read-modify-write under the module lock, so the last writer wins within a
+    process; across processes the staleness window is what keeps exactly one
+    driver acting.
+    """
+    if not title or not owner:
+        return None, False
+    ts = float(now if now is not None else time.time())
+    with _LOCK:
+        data = _load()
+        if title not in data:
+            return None, False
+        rec = _normalize(data[title])
+        held = rec.get("owner") or ""
+        fresh = ts - float(rec.get("owner_at") or 0.0) <= LEASE_STALE_S
+        if held and held != owner and fresh:
+            return None, False  # another live server is driving this one
+        took = held != owner
+        rec["owner"] = owner
+        rec["owner_at"] = ts
+        if took:
+            # A new driver must not inherit a dwell it never observed.
+            rec["idle_since"] = None
+        rec["updated"] = ts
+        data[title] = rec
+        _save(data)
+    return dict(rec), took
 
 
 def dto(title: str):

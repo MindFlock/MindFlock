@@ -1590,10 +1590,20 @@ def _autopilot_observe(title: str):
         _autopilot_halt(title, "workspace setup failed — fix it and re-arm")
         return
 
-    # A restart re-earns the idle dwell: the boot id changes, so a chain cannot
-    # shortcut the "is the agent really done" wait by being resumed mid-turn.
-    if rec.get("boot") != _SERVER_BOOT_ID:
-        rec = _autopilot.update(title, boot=_SERVER_BOOT_ID, idle_since=None) or rec
+    # ONE DRIVER PER CHAIN. Take (or refresh) the lease before deciding anything.
+    # Two servers sharing this store — a dev instance on another port, say — both
+    # ran the driver: each saw the other's boot id, treated it as a restart, and
+    # reset the idle dwell every pass, so the 30s settle could never elapse and a
+    # chain sat at "agent just went idle" indefinitely. Both would also have ACTED,
+    # double-committing and double-pushing the same worktree. Taking the lease also
+    # re-earns the dwell on a genuine handover (a restart, or a crashed owner), so
+    # a chain cannot shortcut the "is the agent really done" wait.
+    claimed, took_over = _autopilot.claim(title, _SERVER_BOOT_ID, now=time.time())
+    if claimed is None:
+        return  # another live server owns this chain
+    rec = claimed
+    if took_over and rec.get("boot") != _SERVER_BOOT_ID:
+        rec = _autopilot.update(title, boot=_SERVER_BOOT_ID) or rec
 
     # Branch drift: the push/PR/merge routes all resolve the LIVE branch, so a
     # switch mid-run would retarget the chain at different work.

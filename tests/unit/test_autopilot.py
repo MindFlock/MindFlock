@@ -537,3 +537,42 @@ def test_store_survives_a_corrupt_file(monkeypatch):
     # And a write repairs it.
     ap.arm("s1", "pr")
     assert ap.get("s1")["depth"] == "pr"
+
+
+# --- One driver per chain ----------------------------------------------------
+def test_two_servers_cannot_both_drive_one_chain():
+    """THE "stuck at agent just went idle" BUG. Two servers sharing this store (a
+    dev instance on another port) both ran the driver: each saw the other's boot id,
+    treated it as a restart, and reset the idle dwell EVERY pass, so the 30s settle
+    could never elapse. Both would also have acted — double-committing and
+    double-pushing the same worktree."""
+    ap.arm("s1", "pr", now=1_000.0)
+    a, took_a = ap.claim("s1", "server-A", now=1_000.0)
+    assert a is not None and took_a is True
+
+    # B is locked out while A's lease is fresh.
+    b, took_b = ap.claim("s1", "server-B", now=1_010.0)
+    assert b is None and took_b is False
+
+    # A keeps it, and holding it does NOT keep resetting the dwell.
+    ap.update("s1", idle_since=1_005.0)
+    again, took_again = ap.claim("s1", "server-A", now=1_020.0)
+    assert again is not None and took_again is False
+    assert again["idle_since"] == 1_005.0, "an owner must not reset its own dwell"
+
+
+def test_a_stale_lease_is_taken_over_and_the_dwell_re_earned():
+    ap.arm("s1", "pr", now=1_000.0)
+    ap.claim("s1", "server-A", now=1_000.0)
+    ap.update("s1", idle_since=1_005.0)
+    # A went away; past the staleness window B may take over.
+    b, took = ap.claim("s1", "server-B", now=1_000.0 + ap.LEASE_STALE_S + 1)
+    assert b is not None and took is True
+    assert b["idle_since"] is None, "a new driver must not inherit a dwell it never saw"
+
+
+def test_claiming_an_unknown_or_nameless_chain_is_refused():
+    assert ap.claim("nope", "server-A") == (None, False)
+    ap.arm("s1", "pr")
+    assert ap.claim("s1", "") == (None, False)
+    assert ap.claim("", "server-A") == (None, False)
