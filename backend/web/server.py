@@ -1561,8 +1561,28 @@ def _autopilot_observe(title: str):
     session on this pass.
     """
     rec = _autopilot.get(title)
-    if rec is None or rec.get("state") != "running":
+    if rec is None:
         return
+    if rec.get("state") == "done":
+        # STANDING INSTRUCTION, not a one-shot. A branch that already has an open PR
+        # reads as stage "pr", so arming satisfied the target at once and the run
+        # went done — then the agent did more work and nothing carried it anywhere,
+        # because a done record is inert. Wake it when there is new uncommitted work:
+        # after a finished cycle the tree is clean (the commit consumed it), so dirt
+        # means the agent has been busy again.
+        try:
+            _wt_rearm = ENGINE.instances[title].GetWorktreePath()
+        except Exception:  # noqa: BLE001
+            return
+        if not _wt_rearm or not _is_dirty(_wt_rearm):
+            return
+        woken = _autopilot.rearm(title)
+        if woken is None:
+            return
+        rec = woken
+        _emit_autopilot_event(title)
+    elif rec.get("state") != "running":
+        return  # halted: a human has to look at it before it moves again
     if not _autopilot.normalize_depth(rec.get("depth")) in _autopilot.DEPTHS:
         return
     inst = ENGINE.instances.get(title)

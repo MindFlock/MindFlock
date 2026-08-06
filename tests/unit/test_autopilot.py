@@ -619,3 +619,49 @@ def test_claiming_an_unknown_or_nameless_chain_is_refused():
     ap.arm("s1", "pr")
     assert ap.claim("s1", "") == (None, False)
     assert ap.claim("", "server-A") == (None, False)
+
+
+# --- A standing instruction, not a one-shot ----------------------------------
+def test_a_branch_that_already_has_a_pr_finishes_immediately():
+    """This is the situation that made fast-track feel impossible to keep on: the
+    stage already reads "pr", so the target is satisfied the moment you arm it."""
+    assert ap.next_action(_rec(depth="pr"), _snap(stage="pr"))[0] == "done"
+
+
+def test_rearm_starts_a_fresh_cycle_and_keeps_the_instruction():
+    ap.arm("s1", "pr", source="tix", item="sc-1", message="Fix the thing", now=1_000.0)
+    ap.update(
+        "s1", commits=3, step="pr", url="http://pr/1", skipped=["h"], issues={"push": 2}
+    )
+    ap.finish("s1")
+
+    woken = ap.rearm("s1", now=2_000.0)
+    assert woken is not None
+    # Per-CYCLE state is cleared, so a new pass cannot inherit a spent budget.
+    assert woken["state"] == "running"
+    assert woken["step"] == "" and woken["commits"] == 0
+    assert woken["url"] == "" and woken["skipped"] == [] and woken["issues"] == {}
+    assert woken["idle_since"] is None and woken["worked_at"] == 0.0
+    assert woken["step_since"] == 2_000.0
+    # Per-INSTRUCTION state survives.
+    assert woken["depth"] == "pr" and woken["message"] == "Fix the thing"
+    assert woken["source"] == "tix" and woken["item"] == "sc-1"
+
+
+def test_rearm_refuses_a_halted_run():
+    """A halt means a human has to look. Quietly resuming would bury the reason —
+    pressing the button is how you say you have dealt with it."""
+    ap.arm("s1", "pr")
+    ap.halt("s1", "the branch has merge conflicts")
+    assert ap.rearm("s1") is None
+    assert ap.get("s1")["state"] == "halted"
+
+
+def test_rearm_refuses_a_still_running_run():
+    ap.arm("s1", "pr")
+    assert ap.rearm("s1") is None, "a live run must not be reset under itself"
+
+
+def test_rearm_of_an_unknown_chain_is_refused():
+    assert ap.rearm("nope") is None
+    assert ap.rearm("") is None

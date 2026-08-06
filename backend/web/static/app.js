@@ -22802,7 +22802,8 @@ function autopilotChipTitle(run) {
   const target = depthLabel(run.depth);
   if (run.state === "halted")
     return "Fast-track stopped: " + (run.reason || "unknown reason");
-  if (run.state === "done") return "Fast-track finished at " + target;
+  if (run.state === "done")
+    return "Fast-track finished at " + target + " — still on, and will pick up new work automatically.";
   const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
   const skipped = ((_a2 = run.skipped) == null ? void 0 : _a2.length) ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
   return "Fast-tracking to " + target + where + "\nClick to stop." + skipped;
@@ -23444,7 +23445,7 @@ function fastTrackStep(inst) {
   if (caps2 && !caps2.git) return null;
   if (!title) return null;
   const run = inst.autopilot;
-  const armed = !!(run && run.depth && (run.state === "running" || run.state === "halted"));
+  const armed = !!(run && run.depth && (run.state === "running" || run.state === "halted" || run.state === "done"));
   if (!armed) {
     if (inst.status === "loading" || inst.status === "paused") return null;
     if (inst.workspace_missing) return null;
@@ -23464,6 +23465,13 @@ function fastTrackStep(inst) {
       hint: true,
       title: autopilotChipTitle(run) + "\n\nClick ⏩✗ to start fast-track again.",
       run: () => startFastTrack(title, run.depth)
+    };
+  if (run && run.depth && run.state === "done")
+    return {
+      label: "⏩",
+      active: true,
+      title: "Fast-track finished at " + depthLabel(run.depth) + " and is still on: it picks up again as soon as the agent changes\nanything more.\n\nClick ⏩ to turn fast-track off.",
+      run: () => stopFastTrack(title)
     };
   const depth = resolveDepth();
   return {

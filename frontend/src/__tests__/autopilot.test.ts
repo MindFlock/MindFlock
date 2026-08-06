@@ -210,6 +210,17 @@ describe("the ⏩ control is a toggle", () => {
     }
   });
 
+  it("reads a FINISHED run as still armed", () => {
+    // Fast-track is a standing instruction: a done run wakes itself when the agent
+    // produces more work. Showing it OFF is why keeping it on felt impossible —
+    // a branch with an existing PR finishes instantly, every time.
+    const s = fastTrackStep({
+      title: "t", status: "running", stage: "pr", autopilot: run({ state: "done" }),
+    });
+    expect(s?.active).toBe(true);
+    expect(s?.title).toContain("picks up again");
+  });
+
   it("still surfaces a halted run while provisioning", () => {
     const s = fastTrackStep({
       title: "t",
