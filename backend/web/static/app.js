@@ -23382,11 +23382,15 @@ function fastTrackStep(inst) {
   const title = inst.title;
   const caps2 = (_a2 = queryClient.getQueryData(["config"])) == null ? void 0 : _a2.caps;
   if (caps2 && !caps2.git) return null;
-  if (!title || inst.status === "loading" || inst.status === "paused") return null;
-  if (inst.workspace_missing) return null;
-  const stage = guidedStage(inst);
-  if (stage === "provisioning" || stage === "precommit") return null;
+  if (!title) return null;
   const run = inst.autopilot;
+  const armed = !!(run && run.depth && (run.state === "running" || run.state === "halted"));
+  if (!armed) {
+    if (inst.status === "loading" || inst.status === "paused") return null;
+    if (inst.workspace_missing) return null;
+    const stage = guidedStage(inst);
+    if (stage === "provisioning" || stage === "precommit") return null;
+  }
   if (run && run.depth && run.state === "running")
     return {
       label: "⏩",

@@ -179,6 +179,36 @@ describe("the ⏩ control is a toggle", () => {
         fastTrackStep({ title: "t", status: "running", stage: "agent", ...o })
       ).toBeNull();
   });
+
+  it("stays cancellable even while provisioning or committing", () => {
+    // An intake-armed session spends its first minutes provisioning, which is
+    // precisely when you might change your mind — and the guards above used to
+    // hide the toggle there entirely, leaving no way to stop it at all.
+    for (const o of [
+      { status: "loading" },
+      { stage: "provisioning" },
+      { stage: "precommit" },
+    ]) {
+      const s = fastTrackStep({
+        title: "t",
+        status: "running",
+        stage: "agent",
+        autopilot: run(),
+        ...o,
+      });
+      expect(s, JSON.stringify(o)).not.toBeNull();
+      expect(s!.active).toBe(true);
+    }
+  });
+
+  it("still surfaces a halted run while provisioning", () => {
+    const s = fastTrackStep({
+      title: "t",
+      status: "loading",
+      autopilot: run({ state: "halted", reason: "checks failed" }),
+    });
+    expect(s?.label).toBe("⏩✗");
+  });
 });
 
 describe("the guided button keeps working while armed", () => {

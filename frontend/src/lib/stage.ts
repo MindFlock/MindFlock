@@ -393,12 +393,22 @@ export function fastTrackStep(inst: Partial<Instance>): NextStep | null {
   const title = inst.title;
   const caps = queryClient.getQueryData<Config>(["config"])?.caps;
   if (caps && !caps.git) return null;
-  if (!title || inst.status === "loading" || inst.status === "paused") return null;
-  if (inst.workspace_missing) return null;
-  const stage = guidedStage(inst);
-  if (stage === "provisioning" || stage === "precommit") return null;
+  if (!title) return null;
 
   const run = inst.autopilot;
+  const armed = !!(run && run.depth && (run.state === "running" || run.state === "halted"));
+  // AN ARMED RUN IS ALWAYS CANCELLABLE. The guards below hide the OFF state where
+  // a press would be meaningless (still provisioning, a commit in flight), but
+  // they must never hide the ON state: an intake-armed session spends its first
+  // minutes provisioning, and that is precisely when you might change your mind.
+  // Hiding the toggle there left no way to stop it at all.
+  if (!armed) {
+    if (inst.status === "loading" || inst.status === "paused") return null;
+    if (inst.workspace_missing) return null;
+    const stage = guidedStage(inst);
+    if (stage === "provisioning" || stage === "precommit") return null;
+  }
+
   // Armed: show it ON and make the click turn it off.
   if (run && run.depth && run.state === "running")
     return {
