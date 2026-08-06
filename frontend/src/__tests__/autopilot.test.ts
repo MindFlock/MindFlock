@@ -18,8 +18,8 @@ import {
   liveRun,
   normalizeDepth,
 } from "../lib/autopilot";
-import { fastTrackStep, nextStep } from "../lib/stage";
-import type { AutopilotRun } from "../api/types";
+import { clearStep, fastTrackStep, liveStep, markStep, nextStep } from "../lib/stage";
+import type { AutopilotRun, Instance } from "../api/types";
 
 const run = (over: Partial<AutopilotRun> = {}): AutopilotRun => ({
   depth: "pr",
@@ -193,6 +193,70 @@ describe("the guided button keeps working while armed", () => {
       autopilot: run(),
     });
     expect(s?.label).toBe("Push");
+  });
+});
+
+describe("liveStep (the pane header's live step)", () => {
+  const step = (o: Partial<Instance>) => liveStep({ title: "t", status: "running", ...o });
+
+  it("reads as ACTIVE while pre-commit hooks run", () => {
+    // Regression: this state used to render as a DISABLED grey pill reading
+    // "pre-commit" — the busiest moment in the workflow looked broken.
+    const s = step({ stage: "precommit" });
+    expect(s?.label).toBe("pre-commit");
+    expect(s?.tone).toBe("work");
+  });
+
+  it("marks a blocked commit as blocked, naming the hook", () => {
+    const s = step({ stage: "interrupt", failed_step: "Run Tests" });
+    expect(s?.tone).toBe("blocked");
+    expect(s?.title).toContain("Run Tests");
+  });
+
+  it("surfaces worktree setup above everything else", () => {
+    // Queued prompts are HELD during setup and the driver refuses to act, so it
+    // has to be visible.
+    expect(step({ stage: "agent", setup: { state: "running" } })?.label).toBe("setting up");
+    expect(step({ stage: "agent", setup: { state: "failed" } })?.tone).toBe("blocked");
+  });
+
+  it("shows running and failed verification checks", () => {
+    expect(step({ stage: "committed", check: { state: "running" } })?.label).toBe("checks");
+    expect(step({ stage: "committed", check: { state: "failed" } })?.tone).toBe("blocked");
+  });
+
+  it("says what an armed chain is waiting on, in the server's words", () => {
+    const s = step({
+      stage: "agent",
+      autopilot: run({ note: "prompt queue still has work" }),
+    });
+    expect(s?.label).toBe("prompt queue still has work");
+    expect(s?.target).toBe("→ PR");
+  });
+
+  it("reports a halted chain as blocked", () => {
+    const s = step({ stage: "agent", autopilot: run({ state: "halted", reason: "checks failed" }) });
+    expect(s?.tone).toBe("blocked");
+    expect(s?.title).toContain("checks failed");
+  });
+
+  it("offers an open PR as a link", () => {
+    const s = step({ stage: "pr", pr_url: "https://example.test/pr/1" });
+    expect(s?.tone).toBe("ok");
+    expect(s?.href).toBe("https://example.test/pr/1");
+  });
+
+  it("is null when nothing is happening", () => {
+    expect(step({ stage: "agent" })).toBeNull();
+    expect(step({ stage: "committed" })).toBeNull();
+  });
+
+  it("shows in-flight push/PR/merge, which have no stage of their own", () => {
+    markStep("t", "push");
+    expect(step({ stage: "committed" })?.label).toBe("pushing");
+    // …and clears itself once the stage catches up.
+    expect(step({ stage: "pushed" })).toBeNull();
+    clearStep("t");
   });
 });
 

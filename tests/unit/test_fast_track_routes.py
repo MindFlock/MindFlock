@@ -111,11 +111,18 @@ def test_the_agent_rung_is_intake_only(inst):
     assert "intake" in _body(resp)["error"]
 
 
-def test_a_dirty_tree_needs_a_message(inst, wt):
+def test_a_dirty_tree_gets_a_generated_message_rather_than_a_refusal(inst, wt):
+    """THE ⏩ REGRESSION. The button presses with no message, and
+    .mindflock_commit_msg only exists once something has committed THROUGH
+    MindFlock — so the single most common press ("I have work, carry it to a PR")
+    was rejected outright with a red toast. A generated subject beats a chain that
+    refuses to start."""
     (wt / "b.txt").write_text("uncommitted\n")
     resp = _post("ft-session", {"depth": "pr"})
-    assert resp.status_code == 400
-    assert _body(resp)["error"] == "commit message required"
+    assert resp.status_code == 200
+    msg = ap.get("ft-session")["message"]
+    assert msg, "a message must have been generated"
+    assert "ft-session" in msg
 
 
 def test_a_clean_tree_needs_no_message(inst):
@@ -124,12 +131,27 @@ def test_a_clean_tree_needs_no_message(inst):
     assert resp.status_code == 200
 
 
-def test_a_message_on_disk_is_reused(inst, wt):
+def test_a_message_from_a_BLOCKED_commit_is_reused(inst, wt):
+    """Reuse is for retrying a commit the hooks blocked, so it requires a pending
+    FAILURE — not merely a message file lying around."""
     (wt / "b.txt").write_text("uncommitted\n")
     (wt / server._COMMIT_MSG_FILE).write_text("recovered subject\n")
+    (wt / server._COMMIT_STATUS_FILE).write_text("1\n")
     resp = _post("ft-session", {"depth": "pr"})
     assert resp.status_code == 200
     assert ap.get("ft-session")["message"] == "recovered subject"
+
+
+def test_a_message_left_by_UNRELATED_work_is_not_adopted(inst, wt):
+    """The hazard this rule exists for: a message file survived earlier work and
+    the next thing armed silently inherited its subject. Caught in the wild about
+    to record one feature's files under a message describing a DB migration."""
+    (wt / "b.txt").write_text("uncommitted\n")
+    (wt / server._COMMIT_MSG_FILE).write_text("Refactor database schema\n")
+    (wt / server._COMMIT_STATUS_FILE).write_text("0\n")  # that commit SUCCEEDED
+    resp = _post("ft-session", {"depth": "pr"})
+    assert resp.status_code == 200
+    assert "Refactor database schema" not in ap.get("ft-session")["message"]
 
 
 def test_arming_captures_the_branch_for_drift_detection(inst):

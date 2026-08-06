@@ -417,6 +417,9 @@ async def lifespan(app: FastAPI):
     # unattended and resumes them the moment usage returns after an outage).
     _register_task(_prompt_queue_drain_loop())
     _register_task(_autopilot_loop())
+    # So the autopilot driver, which runs its blocking half in worker threads, can
+    # still start an edge watcher (asyncio.create_task needs the loop).
+    _live_stage.set_loop(asyncio.get_running_loop())
     _register_task(_window_refresh_loop())
     # Tailnet device discovery + remote session snapshots (multi-device mode).
     _register_task(_remote.discovery_loop(_server_port()))
@@ -1395,9 +1398,13 @@ _AUTOPILOT_ACTION_COOLDOWN = 15.0
 _AUTOPILOT_DEADLINES = {
     "agent": 5400.0,  # 90min: an agent working a whole ticket
     "commit": 1800.0,  # 30min: hook stacks can include tests and doc passes
-    "push": 300.0,
-    "pr": 180.0,
-    "merge": 900.0,  # includes waiting for required checks to report
+    "check": 1800.0,  # 30min: a verification command may run the whole suite
+    # These three were far too tight. A slow remote, a rate-limited API or a
+    # required-check queue must read as "still going", not as a failure — the
+    # deadline exists to stop a WEDGED chain, not to race the network.
+    "push": 900.0,
+    "pr": 600.0,
+    "merge": 5400.0,  # 90min: the merge rung genuinely waits for CI now
 }
 
 
@@ -1415,6 +1422,9 @@ def _autopilot_dto(title: str):
         "state": rec.get("state") or "",
         "step": rec.get("step") or "",
         "reason": rec.get("reason") or "",
+        # What this pass is waiting on, in the driver's own words. Without it the
+        # UI had to guess, and every deliberate wait read as "waiting on the agent".
+        "note": rec.get("note") or "",
         "source": rec.get("source") or "session",
         "item": rec.get("item") or "",
         "skipped": list(rec.get("skipped") or []),
@@ -1484,15 +1494,48 @@ def _autopilot_snapshot(inst, title: str, wt: str, stage: dict) -> dict:
     # countdown; probing for it here would only add a tmux round-trip (and
     # `_ensure_agent_session`'s reboot side effect) to get a boolean we have.
     limited = activity == "limit"
+    # None means "could not measure", which must never be read as "nothing has
+    # been committed" — that mistake produced a false "the agent finished without
+    # changing anything" on sessions whose work was already committed and pushed.
+    beyond = None
+    base = ""
+    live_branch = ""
     try:
         base = _session_base_branch(inst) or ""
-        beyond = _commits_beyond_base(wt, base) if base else 0
+        if base:
+            beyond = _commits_beyond_base(wt, base)
     except Exception:  # noqa: BLE001
-        beyond = 0
+        beyond = None
+    try:
+        live_branch = _current_branch(wt) or ""
+    except Exception:  # noqa: BLE001
+        live_branch = ""
+    # Sitting ON the base branch means there is no feature branch: pushing would
+    # push the trunk and a PR has nothing to target. Compared case-sensitively
+    # against the resolved base, and only when BOTH are known — an unknown base
+    # must not be guessed into a refusal.
+    on_base = bool(base and live_branch and base == live_branch)
     try:
         check = _wt_setup.check_summary(wt)
     except Exception:  # noqa: BLE001
         check = None
+    # Whether this repo GATES the push on a verification run. The push route 409s
+    # when a declared check has not passed, so the ladder has to know about the
+    # gate up front rather than discovering it as a fatal error.
+    try:
+        check_required = bool(_wt_setup.load_config(wt).check_command)
+    except Exception:  # noqa: BLE001
+        check_required = False
+    # CI verdict on the PR, only when a merge is actually the target — it is a
+    # network round trip and every other rung is indifferent to it.
+    pr_checks = ""
+    try:
+        rec = _autopilot.get(title) or {}
+        if rec.get("depth") == "merge" and (stage.get("stage") or "") == "pr":
+            branch = _current_branch(wt) or ""
+            pr_checks = _github_pr.pr_checks_sync(wt, branch) if branch else "unknown"
+    except Exception:  # noqa: BLE001
+        pr_checks = "unknown"
     return {
         "stage": stage.get("stage") or "",
         "failed_step": stage.get("failed_step") or "",
@@ -1503,6 +1546,10 @@ def _autopilot_snapshot(inst, title: str, wt: str, stage: dict) -> dict:
         "limited": limited,
         "queue_pending": queue_pending,
         "check": check,
+        "check_required": check_required,
+        "pr_checks": pr_checks,
+        "on_base_branch": on_base,
+        "branch": live_branch,
         "has_origin": _has_origin(wt),
         "now": now,
     }
@@ -1523,22 +1570,38 @@ def _autopilot_observe(title: str):
         return
     inst = ENGINE.instances.get(title)
     if inst is None:
-        return  # not adopted yet (intake) — a later pass picks it up
+        # Not adopted yet — the normal intake case, since arming happens before the
+        # session exists. Say so rather than looking wedged.
+        _autopilot_note(title, rec, "waiting for the workspace to be created")
+        return
+    # Every hold below is a WAIT, not a halt — but it must be VISIBLE. These used
+    # to be bare `return`s, so a chain held by a paused session, a budget lock or a
+    # failed worktree setup looked identical to one that had silently died.
     try:
-        if not inst.Started() or inst.Status == session.Paused:
+        if not inst.Started():
+            _autopilot_note(title, rec, "waiting for the session to start")
+            return
+        if inst.Status == session.Paused:
+            _autopilot_note(title, rec, "session is paused — resume it to continue")
             return
     except Exception:  # noqa: BLE001
         return
     if _budget_locked(title):
-        return  # over budget — hold, don't halt; the user may raise it
+        _autopilot_note(title, rec, "over the cost budget — raise it to continue")
+        return
     try:
         wt = inst.GetWorktreePath()
     except Exception:  # noqa: BLE001
         wt = ""
     if not wt:
+        _autopilot_note(title, rec, "waiting for the workspace")
         return
     setup_st = _wt_setup.setup_status(wt)
-    if setup_st and setup_st.get("state") in ("running", "failed"):
+    if setup_st and setup_st.get("state") == "running":
+        _autopilot_note(title, rec, "workspace setup is running")
+        return
+    if setup_st and setup_st.get("state") == "failed":
+        _autopilot_halt(title, "workspace setup failed — fix it and re-arm")
         return
 
     # A restart re-earns the idle dwell: the boot id changes, so a chain cannot
@@ -1550,16 +1613,46 @@ def _autopilot_observe(title: str):
     # switch mid-run would retarget the chain at different work.
     live_branch = _current_branch(wt) or ""
     armed_branch = rec.get("branch") or ""
-    if armed_branch and live_branch and live_branch != armed_branch:
-        _autopilot.halt(
-            title,
-            "the workspace switched from %s to %s mid-run"
-            % (armed_branch, live_branch),
+    acted = int(rec.get("commits") or 0) > 0 or rec.get("step") in (
+        "commit",
+        "push",
+        "pr",
+    )
+    if armed_branch and not live_branch:
+        # Detached HEAD (a rebase, a bisect, `checkout <sha>`). Pushing from here
+        # would target something nobody asked for.
+        _autopilot_note(
+            title, rec, "workspace is on a detached HEAD — check out a branch"
         )
-        _emit_autopilot(title)
         return
-    if not armed_branch and live_branch:
+    if armed_branch and live_branch and live_branch != armed_branch:
+        if acted:
+            _autopilot_halt(
+                title,
+                "the workspace switched from %s to %s mid-run"
+                % (armed_branch, live_branch),
+            )
+            return
+        # Nothing has been done on the armed branch yet, so this is not "drift" —
+        # it is the agent creating its working branch, which is the NORMAL intake
+        # sequence. Follow it instead of refusing to work.
+        rec = (
+            _autopilot.update(
+                title,
+                branch=live_branch,
+                note="following the agent onto " + live_branch,
+            )
+            or rec
+        )
+    elif not armed_branch and live_branch:
         rec = _autopilot.update(title, branch=live_branch) or rec
+
+    # The retry allowlist is re-read EVERY pass, never frozen at arm time: intake
+    # arms hours before the commit step runs, and a hook id added in Settings must
+    # take effect on the next pass rather than needing a disarm/re-arm.
+    fresh_hooks = _precommit_retry_hooks()
+    if list(rec.get("retryable") or []) != fresh_hooks:
+        rec = _autopilot.update(title, retryable=fresh_hooks) or rec
 
     stage = _session_stage(inst)  # uncached on purpose
     return rec, inst, wt, _autopilot_snapshot(inst, title, wt, stage)
@@ -1594,19 +1687,44 @@ async def _autopilot_step(title: str) -> None:
     await _autopilot_act(title, wt, rec, snap, action, detail)
 
 
+def _autopilot_note(title: str, rec: dict, note: str) -> None:
+    """Record WHY a pass did nothing, write-on-change.
+
+    The store's whole design is to avoid a write per 5s pass, so this only writes
+    when the sentence actually changes — one write per phase transition. Without
+    it every hold looked the same to the UI (and to the user) as a dead chain.
+    """
+    try:
+        if (rec or {}).get("note") != note:
+            _autopilot.update(title, note=note)
+            _emit_autopilot_event(title)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _autopilot_wait(title, rec, snap, detail, now) -> None:
     """Book-keeping for a pass that decided to do nothing: keep the idle dwell
-    honest, and halt if this step has outlived its deadline."""
+    honest, publish the reason, and halt if this step outlived its deadline."""
     if detail.get("mark_idle") and rec.get("idle_since") is None:
         _autopilot.update(title, idle_since=now)
     elif snap["activity"] != "idle" and rec.get("idle_since") is not None:
         _autopilot.update(title, idle_since=None)
+    # Remember that the agent was seen doing something: a clean tree only means
+    # "finished with nothing to show" AFTER that, and means "not started yet"
+    # before it. Throttled so a working agent costs at most one write per 30s.
+    if str(snap.get("activity") or "") in ("working", "clarify"):
+        worked = float(rec.get("worked_at") or 0.0)
+        if now - worked > 30.0:
+            _autopilot.update(title, worked_at=now)
+    _autopilot_note(title, rec, detail.get("reason") or "")
     step = rec.get("step") or "agent"
     deadline = _AUTOPILOT_DEADLINES.get(step, _AUTOPILOT_DEADLINES["agent"])
     since = float(rec.get("step_since") or 0.0)
     if since and now - since > deadline:
         _autopilot_halt(
-            title, "gave up waiting at %s after %dmin" % (step, deadline // 60)
+            title,
+            "gave up waiting at %s after %d min — %s"
+            % (step, deadline // 60, detail.get("reason") or "no progress"),
         )
 
 
@@ -1633,8 +1751,29 @@ async def _autopilot_act(title, wt, rec, snap, action, detail) -> None:
     """
     now = snap["now"]
     fields = {"acted_at": now, "step_since": now}
+    # Per-verb attempt cap. Without it a push the remote keeps refusing (protected
+    # branch, non-fast-forward, an auth prompt) was re-typed every 15s forever: the
+    # stage never moves, so next_action keeps saying "push", and acting re-stamps
+    # step_since so the deadline can never fire either.
+    issues = dict(rec.get("issues") or {})
+    tries = int(issues.get(action) or 0)
+    if tries >= _autopilot.MAX_ACTIONS_PER_VERB:
+        await asyncio.to_thread(
+            _autopilot_halt,
+            title,
+            "%s did not take after %d attempts — do it by hand"
+            % (action.replace("_", " "), tries),
+        )
+        return
+    issues[action] = tries + 1
+    fields["issues"] = issues
     try:
-        if action == "commit":
+        if action == "run_check":
+            started = await asyncio.to_thread(_autopilot_run_check, title, wt)
+            if not started:
+                return
+            fields["step"] = "check"
+        elif action == "commit":
             done = await asyncio.to_thread(
                 _autopilot_commit, title, wt, rec, detail, fields
             )
@@ -1666,7 +1805,26 @@ async def _autopilot_act(title, wt, rec, snap, action, detail) -> None:
         elif action == "merge":
             resp = await instance_merge_pr(title)
             if resp.status_code >= 400:
-                await asyncio.to_thread(_autopilot_halt, title, _resp_error(resp))
+                msg = _resp_error(resp)
+                low = msg.lower()
+                # GitHub says "not mergeable" while required checks are still
+                # queued. That is a WAIT — halting there raced the CI we are
+                # deliberately waiting for.
+                if any(
+                    k in low
+                    for k in (
+                        "not mergeable",
+                        "required status check",
+                        "pending",
+                        "waiting",
+                        "in progress",
+                    )
+                ):
+                    await asyncio.to_thread(
+                        _autopilot_note, title, rec, "GitHub is not ready: " + msg
+                    )
+                    return
+                await asyncio.to_thread(_autopilot_halt, title, msg)
                 return
             body = _resp_json(resp)
             if body.get("ok") is False:
@@ -1684,6 +1842,63 @@ async def _autopilot_act(title, wt, rec, snap, action, detail) -> None:
         return
     _autopilot.update(title, **fields)
     await asyncio.to_thread(_emit_autopilot, title)
+
+
+def _pending_commit_message(wt: str) -> str:
+    """The on-disk commit message, but ONLY when the last attempt failed.
+
+    After a success there is nothing to retry, so a lingering message is stale and
+    must not be adopted by the next thing that commits without one.
+    """
+    try:
+        with open(os.path.join(wt, _COMMIT_STATUS_FILE)) as fh:
+            if fh.read().strip() in ("", "0"):
+                return ""
+    except OSError:
+        return ""  # no attempt recorded — nothing is pending
+    try:
+        with open(os.path.join(wt, _COMMIT_MSG_FILE)) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def _autopilot_default_message(inst, wt: str) -> str:
+    """A commit subject for a fast-track press that carried none.
+
+    Prefers the session's own identity, which for an intake session IS the item
+    ("sc-1421-fix-login" / "issue-owner-repo-42"), so the commit reads as the work
+    it is rather than as boilerplate.
+    """
+    try:
+        title = str(getattr(inst, "Title", "") or "").strip()
+    except Exception:  # noqa: BLE001
+        title = ""
+    branch = ""
+    try:
+        branch = _current_branch(wt) or ""
+    except Exception:  # noqa: BLE001
+        branch = ""
+    subject = title or branch
+    return ("Work on %s" % subject) if subject else "Work in progress"
+
+
+def _autopilot_run_check(title: str, wt: str) -> bool:
+    """Start the worktree's verification check. Returns whether one is now running.
+
+    The push route soft-gates on this check, so the driver has to RUN it rather
+    than discover the gate as a 409 and halt. Idempotent: an already-running check
+    counts as started.
+    """
+    try:
+        if _wt_setup.is_running(wt, "check"):
+            return True
+        cfg = _wt_setup.load_config(wt)
+        if not cfg.check_command:
+            return False
+        return bool(_wt_setup.start_check(title, wt, cfg.check_command))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _autopilot_commit(title, wt, rec, detail, fields) -> bool:
@@ -1774,6 +1989,7 @@ def _emit_autopilot_event(title: str) -> None:
                 "step": rec.get("step") or "",
                 "state": rec.get("state") or "",
                 "reason": rec.get("reason") or "",
+                "note": rec.get("note") or "",
                 "item": rec.get("item") or "",
                 "skipped": list(rec.get("skipped") or []),
             },
@@ -2695,6 +2911,11 @@ def get_config() -> JSONResponse:
             # Auth gate state so Settings can show the current effective mode.
             "auth_mode": _auth.effective_mode(),
             "auth_enabled": _auth.auth_enabled(),
+            # The resolved fast-track rung, so the ⏩ button can NAME where it will
+            # stop. Display only — the server still decides the actual depth when a
+            # request omits one, which is what keeps this setting authoritative
+            # instead of shadowed by a sticky client value.
+            "fasttrack_depth": _fasttrack_depth(),
         }
     )
 
@@ -4391,6 +4612,15 @@ def _commit_shell_command(skip: str = "") -> str:
         "git add -A; n=$((n+1)); "
         "done; "
         'echo $rc > {status}; rm -f "$L"'
+        # Drop the message file once the commit LANDED. It exists only so a
+        # blocked commit can be retried (and re-offered in the dialog) with the
+        # same message — but it used to survive success and unrelated work, so the
+        # next commit that arrived without a message silently adopted a stale
+        # subject. That is not theoretical: a run was caught about to record 19
+        # files of one feature under a message describing a database migration.
+        # Now a leftover message can only exist while a failure is genuinely
+        # pending, which is exactly the case reuse is for.
+        "; [ $rc -eq 0 ] && rm -f {msgf} || true"
     ).format(
         msgf=shlex.quote(_COMMIT_MSG_FILE),
         status=_COMMIT_STATUS_FILE,
@@ -4922,13 +5152,19 @@ async def instance_fast_track(
         )
     msg = str(body.get("message") or "").strip()
     if not msg:
-        try:
-            with open(os.path.join(wt, _COMMIT_MSG_FILE)) as fh:
-                msg = fh.read().strip()
-        except OSError:
-            msg = ""
+        # Only adopt the on-disk message when a FAILED attempt is pending — the
+        # same rule GET /commit-message applies. Reusing it unconditionally meant a
+        # message left by unrelated work became the subject of whatever was armed
+        # next.
+        msg = await asyncio.to_thread(_pending_commit_message, wt)
     if not msg and await asyncio.to_thread(_is_dirty, wt):
-        return JSONResponse({"error": "commit message required"}, status_code=400)
+        # The ⏩ button presses with no message, and `.mindflock_commit_msg` only
+        # exists once something has committed THROUGH MindFlock — so the single most
+        # common press ("I have work, carry it to a PR") used to be rejected
+        # outright. Generate a subject instead of refusing: a chain that halts
+        # because nobody typed a sentence is worse than an honest default one, and
+        # the user can always amend it afterwards.
+        msg = await asyncio.to_thread(_autopilot_default_message, inst, wt)
     rec = await asyncio.to_thread(
         lambda: _autopilot.arm(
             title,

@@ -9,7 +9,7 @@ import { instApi } from "../../api/client";
 import { freshStage } from "../../lib/stageWatch";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
-import { rememberDepth, selectSession, startFastTrack } from "../../lib/sessionActions";
+import { selectSession, startFastTrack } from "../../lib/sessionActions";
 import { DEPTH_STEP_LABELS, SESSION_DEPTHS, normalizeDepth } from "../../lib/autopilot";
 
 /** Last commit message per session (pre-fills the prompt on retry).
@@ -105,16 +105,14 @@ export function CommitDialog() {
     // pane and show its shell tab).
     useUi.getState().setLastTab(title, "shell");
     selectSession(title);
-    if (chosen !== "commit") {
-      // Arm the chain instead of committing directly. The driver issues the very
-      // same commit (through the same shell one-liner) and then carries on, so
-      // the visible behaviour of this press is a superset of the plain path.
-      await startFastTrack(title, chosen, m);
-      void freshStage(title);
-      return;
-    }
+    // COMMIT NOW, then arm the rest. The earlier version only armed for a deeper
+    // rung and never POSTed /commit — but arming is arm-and-wait, so pressing
+    // "Commit & push" did nothing for 30s and then committed whatever the agent
+    // had written in the meantime, under the message typed before all of it. You
+    // pressed Commit; the commit has to happen.
     try {
       await instApi(title, "/commit", { json: { message: m } });
+      if (chosen !== "commit") await startFastTrack(title, chosen, m);
     } catch (err) {
       alert("Commit failed: " + errMsg(err));
     }
@@ -178,10 +176,11 @@ export function CommitDialog() {
           <select
             id="commit-depth"
             value={depth}
-            onChange={(e) => {
-              setDepth(e.target.value);
-              rememberDepth(e.target.value);
-            }}
+            // Deliberately NOT persisted: this pick applies to THIS commit. The
+            // previous version wrote a shared localStorage key that outranked
+            // Settings, so touching this dropdown once silently re-targeted every
+            // ⏩ button on the machine with no way to see or undo it.
+            onChange={(e) => setDepth(e.target.value)}
           >
             {SESSION_DEPTHS.map((d) => (
               <option key={d} value={d}>

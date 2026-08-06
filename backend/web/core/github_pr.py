@@ -396,6 +396,81 @@ async def find_pr(wt: str, branch: str) -> Optional[dict]:
     return {"url": item.get("html_url"), "state": state, "number": item.get("number")}
 
 
+async def pr_checks(wt: str, branch: str) -> str:
+    """Verdict on the CI checks for ``branch``'s head commit.
+
+    Returns one of:
+
+    ``"ok"``       every check that reported has succeeded (or was neutral/skipped)
+    ``"failed"``   at least one check failed, errored, timed out, or was cancelled
+    ``"pending"``  something is still queued or in progress
+    ``"none"``     nothing reports checks for this commit at all
+    ``"unknown"``  we could not find out (no token, no remote, API/network fault)
+
+    Both surfaces are consulted, because a repo can use either or both: the Checks
+    API (GitHub Actions and most Apps) and the older combined Status API (many
+    external CI providers still only post statuses). "unknown" is deliberately
+    distinct from "none" — an autopilot must not read "I could not ask" as "there
+    is nothing to wait for", which is exactly the class of mistake that merges
+    unverified work.
+    """
+    ref = repo_ref(wt)
+    if ref is None or not branch:
+        return "unknown"
+    token = await _token()
+    if not token:
+        return "unknown"
+
+    failed = pending = reported = False
+
+    status, data = await _request(
+        "GET",
+        "/repos/{}/commits/{}/check-runs".format(ref.slug, branch),
+        token=token,
+        params={"per_page": "100"},
+    )
+    if status == 200 and isinstance(data, dict):
+        for run in data.get("check_runs") or []:
+            if not isinstance(run, dict):
+                continue
+            reported = True
+            if str(run.get("status") or "") != "completed":
+                pending = True
+                continue
+            if str(run.get("conclusion") or "") in (
+                "failure",
+                "timed_out",
+                "cancelled",
+                "action_required",
+                "startup_failure",
+                "stale",
+            ):
+                failed = True
+    elif status not in (200, 404):
+        return "unknown"
+
+    status, data = await _request(
+        "GET", "/repos/{}/commits/{}/status".format(ref.slug, branch), token=token
+    )
+    if status == 200 and isinstance(data, dict):
+        total = int(data.get("total_count") or 0)
+        combined = str(data.get("state") or "")
+        if total:
+            reported = True
+            if combined == "failure":
+                failed = True
+            elif combined == "pending":
+                pending = True
+    elif status not in (200, 404):
+        return "unknown"
+
+    if failed:
+        return "failed"
+    if pending:
+        return "pending"
+    return "ok" if reported else "none"
+
+
 # --------------------------------------------------------------------------- #
 # Sync bridge
 # --------------------------------------------------------------------------- #
@@ -421,3 +496,15 @@ def find_pr_sync(wt: str, branch: str) -> Optional[dict]:
         return _run_sync(find_pr(wt, branch))
     except Exception:  # noqa: BLE001 — a stage probe never fails a poll
         return None
+
+
+def pr_checks_sync(wt: str, branch: str) -> str:
+    """:func:`pr_checks` for synchronous callers (the autopilot snapshot).
+
+    Any failure answers ``"unknown"``, never ``"ok"`` — the caller uses this to
+    decide whether to MERGE, so an error must never be mistaken for a green light.
+    """
+    try:
+        return _run_sync(pr_checks(wt, branch))
+    except Exception:  # noqa: BLE001
+        return "unknown"

@@ -59,6 +59,9 @@ export interface AutopilotRun {
   reason: string;
   source: string;
   item: string;
+  /** What the current pass is waiting on, in the server's own words ("waiting for
+   * checks to finish", "prompt queue still has work"). */
+  note?: string;
   skipped?: string[];
 }
 
@@ -125,6 +128,9 @@ export interface Caps {
 }
 
 export interface Config {
+  /** The resolved fast-track rung, for LABELLING the ⏩ button. The server still
+   * decides the actual depth when a request omits one. */
+  fasttrack_depth?: string;
   default_program: string;
   provisioning_available: boolean;
   caps: Caps;

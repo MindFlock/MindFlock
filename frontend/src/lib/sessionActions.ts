@@ -12,7 +12,7 @@ import { freshStage } from "./stageWatch";
 import { useUi } from "../state/store";
 import { toast } from "./toast";
 import { errMsg } from "./format";
-import { markLoopReset } from "./stage";
+import { clearStep, markLoopReset, markStep } from "./stage";
 import { depthLabel, normalizeDepth } from "./autopilot";
 import { focusTerm, releaseTerms } from "./terminals";
 
@@ -304,6 +304,10 @@ export function commitSession(title: string) {
 export async function pushSession(title: string, force = false) {
   if (!title || !requireGit()) return;
   selectSession(title, { noKeyboard: true });
+  // Push/PR/merge have no stage of their own until the RESULT is observable, so
+  // without this marker the header showed the previous step for seconds and people
+  // pressed the button twice.
+  markStep(title, "push");
   try {
     await instApi(title, "/push-branch", { json: force ? { force: true } : {} });
   } catch (err) {
@@ -313,8 +317,10 @@ export async function pushSession(title: string, force = false) {
         confirm("Checks haven't passed for this commit (see the ✗ checks chip).\nPush anyway?")
       )
         return pushSession(title, true);
+      clearStep(title);
       return;
     }
+    clearStep(title);
     toast("Push failed: " + errMsg(err), { duration: 6000 });
   }
   // The old `setTimeout(refreshInstances, 1000)` could not observe anything: the
@@ -332,43 +338,33 @@ export async function pushSession(title: string, force = false) {
  * The cost is that the effect is not instant, so the pane must show the armed
  * chip immediately or the press reads as broken. */
 
-const DEPTH_KEY = "mf_fasttrack_depth";
-
-/** The rung to use when the caller didn't pick one: last local choice, then the
- * server setting, then "pr". */
+/** The rung the ⏩ button will stop at, for LABELLING only.
+ *
+ * Display-only on purpose. There used to be a sticky `localStorage` value that
+ * outranked the server setting — and the commit dialog wrote it on every dropdown
+ * change — so browsing that dropdown once pinned every ⏩ button on the machine
+ * forever and Settings appeared to do nothing. There is now exactly one
+ * authority: the server. It resolves the depth whenever a request omits one, and
+ * reports the resolved value on /api/config purely so the UI can name it. */
 export function resolveDepth(): string {
-  try {
-    const local = normalizeDepth(localStorage.getItem(DEPTH_KEY));
-    if (local && local !== "off") return local;
-  } catch {
-    /* private mode / disabled storage — fall through to the server setting */
-  }
   const cfg = queryClient.getQueryData<Config>(["config"]);
-  const fromSettings = normalizeDepth(
-    (cfg as { repository?: { fasttrack_depth?: string } } | undefined)?.repository
-      ?.fasttrack_depth
-  );
-  return fromSettings && fromSettings !== "off" ? fromSettings : "pr";
-}
-
-export function rememberDepth(depth: string) {
-  try {
-    localStorage.setItem(DEPTH_KEY, normalizeDepth(depth) || "");
-  } catch {
-    /* not worth surfacing — the server setting still applies next time */
-  }
+  return normalizeDepth(cfg?.fasttrack_depth) || "pr";
 }
 
 /** Arm the chain. `message` is only needed when there is uncommitted work and
  * nothing is on disk to reuse — the same rule POST /commit applies. */
 export async function startFastTrack(
   title: string,
-  depth: string,
+  depth?: string,
   message?: string,
   base?: string
 ) {
   if (!title || !requireGit()) return;
-  const d = normalizeDepth(depth) || "pr";
+  // An explicit pick (the commit dialog, an intake row) is honoured; otherwise the
+  // body carries NO depth and the server applies the configured rung. That is what
+  // makes changing Settings take effect on every open window immediately.
+  const chosen = normalizeDepth(depth || "");
+  const d = chosen || resolveDepth();
   // One up-front confirm for the irreversible rung, before anything is armed.
   if (d === "merge") {
     const where = base ? " into " + base : "";
@@ -393,7 +389,7 @@ export async function startFastTrack(
   try {
     const r = await instApi<{ autopilot?: AutopilotRun | null }>(title, "/fast-track", {
       json: {
-        depth: d,
+        ...(chosen ? { depth: chosen } : {}),
         ...(message ? { message } : {}),
         ...(base ? { base } : {}),
       },
@@ -451,6 +447,7 @@ export function makePrSession(title: string) {
  * showing them a modal about a CLI they never asked for. */
 export async function submitMakePr(title: string, base: string) {
   if (!title || !requireGit()) return;
+  markStep(title, "pr");
   try {
     const r = await instApi<MakePrResult>(title, "/make-pr", {
       json: base ? { base } : {},
@@ -467,6 +464,7 @@ export async function submitMakePr(title: string, base: string) {
       markLoopReset(title);
     }
   } catch (err) {
+    clearStep(title);
     toast("Make PR failed: " + errMsg(err), { duration: 6000 });
   }
   await freshStage(title);
@@ -477,6 +475,7 @@ export async function submitMakePr(title: string, base: string) {
 export async function mergeSession(title: string) {
   if (!title || !requireGit()) return;
   if (!confirm("Merge this branch's PR into staging?")) return;
+  markStep(title, "merge");
   try {
     const r = await instApi<MergePrResult>(title, "/merge-pr", { method: "POST" });
     if (r && r.ok === false) {
@@ -485,6 +484,7 @@ export async function mergeSession(title: string) {
       else toast(msg, { duration: 9000 });
     }
   } catch (err) {
+    clearStep(title);
     toast("Merge failed: " + errMsg(err), { duration: 6000 });
   }
   await freshStage(title);

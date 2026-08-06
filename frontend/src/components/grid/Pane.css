@@ -164,6 +164,23 @@
   .pane-head .tok {
     display: none;
   }
+
+  .pane-head .actions .stepnow-target {
+    display: none;
+  }
+
+  .pane-head .actions .stepnow-text {
+    max-width: 12ch;
+  }
+}
+
+/* Tightest layout: the dot alone still says "running / blocked", and the tooltip
+   still carries the detail. Deliberately NOT hidden with .nextstep at 420px —
+   once the action button is gone this is the only signal left. */
+@container (max-width: 360px) {
+  .pane-head .actions .stepnow-text {
+    display: none;
+  }
 }
 
 /* Between the fixed breakpoints a header can still overflow (long titles,
@@ -255,6 +272,12 @@
   align-items: center;
   gap: 6px;
   margin-left: 10px;
+  /* Was `flex: none` via `.tabs, .actions`. Now that this group can hold a text
+     label it has to be able to YIELD, or a verbose step pushes the usage chip and
+     the copy-history button out of the pane. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .pane-head .actions .nextstep {
@@ -274,20 +297,105 @@
   filter: brightness(1.12);
 }
 
-/* Status-pill variant: shown in the same slot when there's no actionable next
-   step (provisioning / pre-commit running / paused / workspace gone), so the
-   action area is never an empty gap. Non-clickable, muted — clearly not the
-   primary accent button. */
-.pane-head .actions .nextstep.nextstep-status {
-  background: var(--panel-2);
-  color: var(--muted);
+/* Live step indicator — what is happening RIGHT NOW.
+   Replaces the old `.nextstep-status` pill, which filled the primary button's
+   slot with DISABLED GREY TEXT whenever there was no actionable next step. That
+   meant the busiest moment in the workflow (pre-commit hooks running) rendered as
+   a dead greyed-out button reading "pre-commit". This is deliberately NOT
+   button-shaped: it is a status line, so it never competes with the real action.
+   Colour and fill carry the meaning; motion is only ever a bonus. */
+.pane-head .actions .stepnow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  /* Same yield-then-clip contract the context line uses, so a long label can
+     never push the cost chip or the copy button out of the header. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
   font-weight: 500;
-  cursor: default;
-  filter: none;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
-.pane-head .actions .nextstep.nextstep-status:hover {
-  filter: none;
+.pane-head .actions .stepnow-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 22ch;
+}
+
+.pane-head .actions .stepnow-target {
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.pane-head .actions .stepnow-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* work: something is running. Accent + the house pulse cadence. */
+.pane-head .actions .stepnow.is-work {
+  color: var(--accent);
+}
+
+.pane-head .actions .stepnow.is-work .stepnow-dot {
+  animation: step-ping 1.4s ease-in-out infinite;
+}
+
+/* blocked: it needs a human. */
+.pane-head .actions .stepnow.is-blocked {
+  color: var(--red);
+}
+
+/* ok: a finished, good state (a PR is open). */
+.pane-head .actions .stepnow.is-ok {
+  color: var(--green, #3fb950);
+}
+
+/* quiet: true but inert (paused). Hollow dot, so "not running" is legible
+   without relying on colour or motion. */
+.pane-head .actions .stepnow.is-quiet .stepnow-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+
+.pane-head .actions .stepnow.is-link {
+  cursor: pointer;
+}
+
+.pane-head .actions .stepnow.is-link:hover {
+  text-decoration: underline;
+}
+
+/* Matches the shape of the existing mic-pulse ring, accent-tokenised, at the
+   house 1.4s ease-in-out cadence (see cs-pulse). */
+@keyframes step-ping {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0.55);
+  }
+
+  50% {
+    box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0);
+  }
+}
+
+/* Motion is decoration here — the dot's colour and fill already carry the state,
+   so removing it loses nothing. Honour both the OS setting and the app's own
+   reduce-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  .pane-head .actions .stepnow.is-work .stepnow-dot {
+    animation: none;
+  }
+}
+
+.no-motion .pane-head .actions .stepnow.is-work .stepnow-dot {
+  animation: none;
 }
 
 /* Fast-track (⏩): a SECONDARY control that sits beside the guided button and

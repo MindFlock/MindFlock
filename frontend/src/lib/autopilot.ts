@@ -33,15 +33,24 @@ export const DEPTH_LABELS: Record<string, string> = {
   merge: "Merge",
 };
 
-/** How the ladder reads in a dropdown, where each option continues the sentence
- * "take this…". The first rung names itself; the rest are "…then X". */
+/** How the ladder reads in a dropdown. No leading "…": inside a CLOSED select a
+ * leading ellipsis reads as text that has been clipped. */
 export const DEPTH_STEP_LABELS: Record<string, string> = {
   off: "Off",
   agent: "Agent only",
   commit: "Commit only",
-  push: "…then push",
-  pr: "…then open PR",
-  merge: "…then merge",
+  push: "Then push",
+  pr: "Then open PR",
+  merge: "Then merge",
+};
+
+/** Ultra-short target suffix for the pane header, where width is scarce. */
+export const DEPTH_SHORT: Record<string, string> = {
+  agent: "→ agent",
+  commit: "→ commit",
+  push: "→ push",
+  pr: "→ PR",
+  merge: "→ merge",
 };
 
 /** Which rung a given session stage PROVES is complete. Stages that mean "still
@@ -91,7 +100,15 @@ export function autopilotChipTitle(run: AutopilotRun): string {
   if (run.state === "halted")
     return "Fast-track stopped: " + (run.reason || "unknown reason");
   if (run.state === "done") return "Fast-track finished at " + target;
-  const where = run.step ? " (last step: " + run.step + ")" : " (waiting on the agent)";
+  // Prefer the server's own sentence for what this pass is waiting on — it knows
+  // whether it is the agent, the prompt queue, checks or a usage limit. Guessing
+  // from an empty `step` made every legitimate pause read as "waiting on the
+  // agent", so a deliberate wait looked like a hang.
+  const where = run.note
+    ? " — " + run.note
+    : run.step
+      ? " (last step: " + run.step + ")"
+      : " (waiting to start)";
   const skipped = run.skipped?.length
     ? "\nSkipped hooks: " + run.skipped.join(", ")
     : "";

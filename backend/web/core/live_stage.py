@@ -64,6 +64,22 @@ _MAX_WATCHERS = 4
 _DEFAULT_SECONDS = 180.0
 
 _WATCH: Dict[str, dict] = {}
+#: The server's event loop, so a worker thread can hand work back to it. Set once
+#: by the lifespan via :func:`set_loop`.
+_MAIN_LOOP = None
+
+
+def set_loop(loop) -> None:
+    """Record the running event loop (called once from the server lifespan)."""
+    global _MAIN_LOOP
+    _MAIN_LOOP = loop
+
+
+def _alive(rec: dict) -> bool:
+    """Whether a watcher record has a live task. Tolerates a missing/None task so
+    a malformed entry can never wedge the module."""
+    task = (rec or {}).get("task")
+    return task is not None and not task.done()
 
 
 def watch(title: str, wt: str, reason: str, seconds: float = _DEFAULT_SECONDS) -> None:
@@ -77,14 +93,30 @@ def watch(title: str, wt: str, reason: str, seconds: float = _DEFAULT_SECONDS) -
     if not title or not wt:
         return
     try:
-        live = _WATCH.get(title)
+        # WHERE ARE WE? A route calls this ON the event loop; the autopilot driver
+        # calls it from a worker thread, where `asyncio.create_task` raises
+        # RuntimeError. Hop to the loop in that case rather than failing: the
+        # earlier version stored the record BEFORE creating the task, so a
+        # thread-side call left a task=None entry behind and every subsequent
+        # watch() in the whole process then died on `live["task"].done()` — which
+        # silently returned the entire app to 4s stage latency after the first
+        # autopilot commit.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            loop = _MAIN_LOOP
+            if loop is None or loop.is_closed():
+                return
+            loop.call_soon_threadsafe(watch, title, wt, reason, seconds)
+            return
         now = time.monotonic()
-        if live is not None and not live["task"].done():
+        live = _WATCH.get(title)
+        if live is not None and _alive(live):
             live["until"] = max(live["until"], now + seconds)
             live["reason"] = reason
             live["settle_since"] = None
             return
-        if len([w for w in _WATCH.values() if not w["task"].done()]) >= _MAX_WATCHERS:
+        if len([w for w in _WATCH.values() if _alive(w)]) >= _MAX_WATCHERS:
             return
         rec: dict = {
             "wt": wt,
@@ -97,8 +129,11 @@ def watch(title: str, wt: str, reason: str, seconds: float = _DEFAULT_SECONDS) -
             "origin_sha": None,
             "task": None,
         }
+        # Create the task FIRST: a record without one is a landmine for every
+        # later call, so it must never be reachable.
+        task = asyncio.create_task(_loop(title, rec))
+        rec["task"] = task
         _WATCH[title] = rec
-        rec["task"] = asyncio.create_task(_loop(title, rec))
     except Exception:  # noqa: BLE001
         pass
 
@@ -117,7 +152,7 @@ def stop(title: str) -> bool:
 
 def active_titles() -> list:
     """Titles with a live watcher (diagnostics/tests)."""
-    return [t for t, w in _WATCH.items() if w.get("task") and not w["task"].done()]
+    return [t for t, w in _WATCH.items() if _alive(w)]
 
 
 def _signature(title: str, rec: dict) -> tuple:

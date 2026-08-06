@@ -132,12 +132,31 @@ NEVER_SKIP = frozenset(
 # plain retry, then one with the hook skipped), and a run makes at most this many
 # commit attempts overall however the retries are distributed.
 MAX_COMMIT_ATTEMPTS = 4
+#: Cap on how many times the driver will issue the SAME verb. A push the remote
+#: keeps refusing must stop being re-typed; the stage never moves, so nothing else
+#: would ever end that loop.
+MAX_ACTIONS_PER_VERB = 3
 #: Consecutive-idle dwell before the FIRST commit of a chain. Longer than the
 #: prompt queue's 12s settle on purpose: feeding a prompt to an agent that turns
 #: out to be mid-thought is recoverable, committing and opening a PR for it is
 #: not. Costs ~18s more latency and removes the whole "committed mid-thought"
 #: class of failure.
 IDLE_SETTLE_S = 30.0
+#: How long a record survives with no matching session before :func:`prune`
+#: drops it. Must comfortably exceed a cold clone plus worktree provisioning,
+#: because intake arms BEFORE the session exists. 30 minutes.
+ARM_GRACE_S = 1800.0
+#: How long the "waiting for the agent to start" state may last before the run
+#: gives up. Generous — you may arm a ticket and let it sit — but bounded, so a
+#: session that never gets an agent does not stay armed forever. 2 hours.
+ARM_WAIT_DEADLINE_S = 7200.0
+#: Branch names autopilot will never push or PR from, whatever the configured base
+#: resolves to. Defence in depth: the base-branch guard relies on
+#: `_session_base_branch`, and if that resolves to "" (a detached probe, a repo with
+#: no upstream, an exception swallowed upstream) the comparison silently passes and
+#: the trunk gets pushed. A remote whose ruleset is bypass-silent then accepts it
+#: and merely NOTES that a PR was required — which is exactly what happened, twice.
+TRUNK_BRANCHES = frozenset({"main", "master", "trunk", "develop", "development"})
 
 
 def autopilot_path() -> str:
@@ -195,6 +214,10 @@ def _blank() -> dict:
         "state": "running",
         "step": "",
         "reason": "",
+        # The server's own sentence for what this pass is waiting on ("waiting for
+        # checks to finish", "prompt queue still has work"). next_action already
+        # produces one for every wait; without a home for it the UI had to guess.
+        "note": "",
         "source": "session",
         "item": "",
         "message": "",
@@ -204,7 +227,13 @@ def _blank() -> dict:
         "attempts": {},
         "skipped": [],
         "commits": 0,
+        # Per-verb action counter, e.g. {"push": 2} — the backstop for a step that
+        # keeps being attempted because the observed stage never changes.
+        "issues": {},
         "idle_since": None,
+        # When this run last SAW the agent working. Until it is set, a clean tree
+        # means "not started yet", not "finished with nothing to show".
+        "worked_at": 0.0,
         "step_since": 0.0,
         "acted_at": 0.0,
         "boot": "",
@@ -240,6 +269,7 @@ def _normalize(entry) -> dict:
     e["state"] = state if state in ("running", "halted", "done") else "running"
     e["step"] = str(entry.get("step", "") or "")
     e["reason"] = str(entry.get("reason", "") or "")
+    e["note"] = str(entry.get("note", "") or "")
     src = str(entry.get("source", "") or "session")
     e["source"] = src if src in ("session", "tix", "pr", "iss") else "session"
     e["item"] = str(entry.get("item", "") or "")
@@ -257,6 +287,15 @@ def _normalize(entry) -> dict:
             except (TypeError, ValueError):
                 continue
         e["attempts"] = out
+    iss = entry.get("issues")
+    if isinstance(iss, dict):
+        out2: Dict[str, int] = {}
+        for k, v in list(iss.items())[:32]:
+            try:
+                out2[str(k)] = max(0, int(v))
+            except (TypeError, ValueError):
+                continue
+        e["issues"] = out2
     sk = entry.get("skipped")
     e["skipped"] = [str(h) for h in sk][:16] if isinstance(sk, list) else []
     for key in ("commits",):
@@ -266,7 +305,7 @@ def _normalize(entry) -> dict:
             e[key] = 0
     idle = entry.get("idle_since")
     e["idle_since"] = float(idle) if isinstance(idle, (int, float)) else None
-    for key in ("step_since", "acted_at", "started", "updated"):
+    for key in ("step_since", "acted_at", "started", "updated", "worked_at"):
         try:
             e[key] = float(entry.get(key, 0.0) or 0.0)
         except (TypeError, ValueError):
@@ -333,6 +372,11 @@ def next_action(rec: dict, snap: dict) -> Tuple[str, dict]:
         return "done", {}
 
     # A blocked commit: retry, skip, or halt.
+    # A target of "agent only" must never run git commit — dispatch it before the
+    # interrupt branch, which would otherwise re-commit on an allowlisted hook.
+    if depth == "agent":
+        return _agent_action(rec, snap, depth)
+
     if stage == "interrupt":
         return _interrupt_action(rec, snap)
 
@@ -345,14 +389,38 @@ def next_action(rec: dict, snap: dict) -> Tuple[str, dict]:
     if stage == "committed":
         if depth == "commit":  # defensive: reaches() already covered this
             return "done", {}
+        # NEVER push the base branch. A session sitting on main/master has no
+        # feature branch, so "push" means pushing the trunk itself and "open a PR"
+        # is meaningless — there is nothing to open one against. This is not
+        # hypothetical: a run on `main` pushed 20 files straight to origin/main and
+        # the remote reported "Bypassed rule violations … Changes must be made
+        # through a pull request". Committing is fine and already happened; going
+        # further needs a branch, so stop and say exactly that.
+        live = str(snap.get("branch") or "")
+        if snap.get("on_base_branch") or live.lower() in TRUNK_BRANCHES:
+            return "stop", {
+                "reason": "committed, but this session is on %s — make a branch to push or PR"
+                % (live or "the base branch")
+            }
         if snap.get("has_origin") is False:
             return "stop", {"reason": "no origin remote — add one to push"}
-        check = snap.get("check") or {}
-        state = str(check.get("state") or "")
+        check = snap.get("check")
+        state = str((check or {}).get("state") or "")
         if state == "failed":
             return "stop", {"reason": "checks failed — fix them and re-run"}
         if state == "running":
             return "wait", {"reason": "waiting for checks to finish"}
+        # The push route SOFT-GATES on the verification check: in a repo that
+        # declares a `check_command` it answers 409 "checks haven't passed for this
+        # commit" whenever the result is missing, not-ok, or stale. Discovering
+        # that by pushing turned into a permanent halt, so ask for the check here
+        # instead. Never force past it — the gate is the owner's "if tests fail,
+        # stop", and it is the one thing that must keep working.
+        if snap.get("check_required"):
+            if check is None or check.get("stale"):
+                return "run_check", {"reason": "starting the verification check"}
+            if state != "ok":
+                return "wait", {"reason": "waiting for checks to finish"}
         return "push", {}
 
     if stage == "pushed":
@@ -361,6 +429,15 @@ def next_action(rec: dict, snap: dict) -> Tuple[str, dict]:
     if stage == "pr":
         if depth != "merge":
             return "done", {}
+        # Merge is the one irreversible rung, so CI gates it. "unknown" (no token,
+        # no remote, API fault) is treated as pending and eventually times out —
+        # never as permission to merge. "none" means this repo reports no checks at
+        # all, which is a legitimate green light rather than something to wait for.
+        ci = str(snap.get("pr_checks") or "unknown")
+        if ci == "failed":
+            return "stop", {"reason": "CI failed on the PR — not merging"}
+        if ci in ("pending", "unknown"):
+            return "wait", {"reason": "waiting for CI to pass before merging"}
         return "merge", {}
 
     return "wait", {"reason": "stage %s" % (stage or "unknown")}
@@ -386,6 +463,16 @@ def _interrupt_action(rec: dict, snap: dict) -> Tuple[str, dict]:
     step = str(snap.get("failed_step") or "")
     named = step or hook or "a hook"
     retryable = [h for h in (rec.get("retryable") or []) if h not in NEVER_SKIP]
+
+    # THIS RUN HAS NOT COMMITTED YET. The "interrupt" it is looking at therefore
+    # belongs to an EARLIER attempt — very often a manual commit whose
+    # .mindflock_commit_status is still on disk — so halting here would abort the
+    # press within seconds, blaming a failure the user pressed the button to get
+    # past. Spend our own first attempt instead: that is byte-for-byte what the
+    # manual "Re-commit" button does (re-stage the hooks' auto-fixes, same
+    # message), and the policy below then governs everything after it.
+    if int(rec.get("commits") or 0) == 0:
+        return "commit", {"skip": list(rec.get("skipped") or [])}
 
     if not hook:
         # No parseable hook id (a raw git hook, or the pane scrolled away).
@@ -424,10 +511,16 @@ def _agent_action(rec: dict, snap: dict, depth: str) -> Tuple[str, dict]:
       autopilot waits for the queue to drain before it commits;
     * the tree is actually dirty, so an agent that died before writing anything
       halts loudly instead of committing an empty tree.
+
+    CRUCIALLY, a clean tree is only a FAILURE once this run has actually seen the
+    agent do something (``worked_at``) or produce a commit. Arming is normally the
+    FIRST thing you do — before the agent has written a line, or between turns, or
+    while it is still starting up — and ``_agent_activity`` reports "idle" 8s after
+    a static pane and instantly when a Stop hook fires. Halting then said "the
+    agent finished without changing anything" about an agent that had not begun,
+    roughly 35 seconds after every press. That was the single worst bug in the
+    feature. Now it waits, bounded by the arm deadline.
     """
-    if depth == "agent":
-        # Target is "let the agent work": reaching idle IS completion.
-        pass
     activity = str(snap.get("activity") or "")
     if snap.get("limited"):
         return "wait", {"reason": "usage limit — waiting for the window to reopen"}
@@ -444,10 +537,34 @@ def _agent_action(rec: dict, snap: dict, depth: str) -> Tuple[str, dict]:
     if depth == "agent":
         return "done", {}
     if not snap.get("dirty"):
-        if int(snap.get("beyond_base") or 0) > 0:
-            # Committed already but the stage still reads "agent": nothing to
-            # commit, let the next pass see the real stage.
-            return "wait", {"reason": "nothing uncommitted"}
+        beyond = snap.get("beyond_base")
+        if beyond is None:
+            # Could not MEASURE how far ahead we are (no base branch resolved, or
+            # the count failed). That is not evidence of "nothing happened", so it
+            # must never be read as one — wait and re-measure.
+            return "wait", {"reason": "working out what has already been committed"}
+        if int(beyond) > 0:
+            # Work is already committed; the stage just still reads "agent".
+            return "done", {}
+        # HAS THIS RUN ALREADY DONE SOMETHING? If so, the sentence below is a lie
+        # and must never be reached. A session on its BASE branch lands here
+        # permanently — `_session_stage` collapses to "agent" whenever
+        # `origin/<base>..HEAD` is 0, which it always is once the base branch has
+        # been pushed — so a run that had committed AND pushed reported "the agent
+        # finished without changing anything", with commits=1 and step="push"
+        # recorded right next to it.
+        if int(rec.get("commits") or 0) > 0 or rec.get("step"):
+            live = str(snap.get("branch") or "")
+            if snap.get("on_base_branch") or live.lower() in TRUNK_BRANCHES:
+                return "stop", {
+                    "reason": "committed on %s — make a branch to push or PR"
+                    % (live or "the base branch")
+                }
+            return "done", {}
+        if not rec.get("worked_at"):
+            # Armed before the agent got going. Wait for it, bounded by the arm
+            # deadline — see the docstring.
+            return "wait", {"reason": "waiting for the agent to start"}
         return "stop", {"reason": "the agent finished without changing anything"}
     return "commit", {"skip": list(rec.get("skipped") or [])}
 
@@ -575,18 +692,44 @@ def disarm(title: str) -> bool:
     return True
 
 
-def prune(live_titles) -> int:
-    """Drop records for sessions that no longer exist.
+def prune(live_titles, now: Optional[float] = None) -> int:
+    """Drop records for sessions that no longer exist AND are past the arm grace.
 
     Mandatory, not housekeeping: titles are REUSED after a delete, so without
     this a recreated session would inherit the previous one's target and attempt
     counters. Finished/halted records are kept (the UI shows them) until their
     session goes away.
+
+    THE GRACE WINDOW IS LOAD-BEARING, not politeness. Every intake entry point
+    arms BEFORE its session exists — that is the whole point of keying the store
+    by title (a forced start arms, then clones; the ingestion pipeline arms from a
+    separate OS process and its session only reaches this engine after a save and
+    an adopt). A prune that required the title to be live right now deleted every
+    such record within one 5s pass, which silently disabled the entire intake half
+    of the feature: you picked "take this to a PR", and nothing ever happened,
+    with no halt reason because there was no record left to hold one.
+
+    So a record younger than :data:`ARM_GRACE_S` is never dropped for being
+    unknown — a cold clone plus provisioning can legitimately take that long. The
+    reuse hazard is covered where it actually arises: the session-delete path
+    disarms explicitly.
     """
     live = set(live_titles or [])
+    ts = float(now if now is not None else time.time())
     with _LOCK:
         data = _load()
-        dead = [t for t in data if t not in live]
+        dead = []
+        for t, raw in data.items():
+            if t in live:
+                continue
+            started = 0.0
+            if isinstance(raw, dict):
+                try:
+                    started = float(raw.get("started") or 0.0)
+                except (TypeError, ValueError):
+                    started = 0.0
+            if ts - started > ARM_GRACE_S:
+                dead.append(t)
         if not dead:
             return 0
         for t in dead:

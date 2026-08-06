@@ -143,6 +143,34 @@ def test_commit_command_is_byte_identical_without_a_skip():
     assert 'echo $rc > .mindflock_commit_status; rm -f "$L"' in cmd
 
 
+def test_a_landed_commit_clears_its_message_file():
+    """A leftover message must only survive a FAILURE. It used to survive success
+    and unrelated work, so the next commit arriving without a message silently
+    adopted a stale subject — a run was caught about to record one feature's files
+    under a message describing a database migration."""
+    cmd = server._commit_shell_command()
+    assert "[ $rc -eq 0 ] && rm -f .mindflock_commit_msg" in cmd
+    # …and only on success: the retry path still needs the message.
+    assert cmd.index("echo $rc") < cmd.index("rm -f .mindflock_commit_msg")
+
+
+def test_a_stale_message_is_not_adopted_after_a_success(tmp_path):
+    """`_pending_commit_message` mirrors GET /commit-message: offer the saved
+    message only while a failure is pending."""
+    (tmp_path / server._COMMIT_MSG_FILE).write_text("subject from other work\n")
+    # Last attempt SUCCEEDED -> nothing pending, so nothing to adopt.
+    (tmp_path / server._COMMIT_STATUS_FILE).write_text("0\n")
+    assert server._pending_commit_message(str(tmp_path)) == ""
+    # Last attempt FAILED -> the retry legitimately reuses it.
+    (tmp_path / server._COMMIT_STATUS_FILE).write_text("1\n")
+    assert server._pending_commit_message(str(tmp_path)) == "subject from other work"
+
+
+def test_no_recorded_attempt_means_no_message_to_adopt(tmp_path):
+    (tmp_path / server._COMMIT_MSG_FILE).write_text("orphan\n")
+    assert server._pending_commit_message(str(tmp_path)) == ""
+
+
 def test_commit_command_prefixes_skip_as_a_one_shot_env():
     cmd = server._commit_shell_command("gitnexus-index")
     assert "SKIP=gitnexus-index git commit -F .mindflock_commit_msg" in cmd

@@ -17,7 +17,7 @@ import {
   startFastTrack,
   stopFastTrack,
 } from "./sessionActions";
-import { autopilotChipTitle, depthLabel } from "./autopilot";
+import { DEPTH_SHORT, autopilotChipTitle, depthLabel } from "./autopilot";
 
 /** Longest `failed_step` that still reads as a hook NAME rather than a line of
  * output, and so still belongs in the stage pill. "Run Tests (+3)" is 14. */
@@ -238,6 +238,146 @@ export interface NextStep {
    * fast-track control while a chain is armed, so the button you pressed stays
    * visible, visibly on, and clickable to turn back off. */
   active?: boolean;
+}
+
+/* --- Live step indicator ----------------------------------------------------
+ * What the top of a window says while work is actually happening.
+ *
+ * The header used to fill the primary button's slot with a DISABLED grey pill
+ * whenever `nextStep()` returned null — so the single busiest moment in the
+ * workflow (pre-commit hooks running) rendered as dead greyed-out text reading
+ * "pre-commit". This replaces it with a small indicator that reads as active,
+ * names the step, and — when a chain is armed — says what it is waiting on and
+ * where it is heading.
+ */
+
+export type StepTone = "work" | "blocked" | "ok" | "quiet";
+
+export interface LiveStep {
+  label: string;
+  tone: StepTone;
+  title: string;
+  /** Short "→ PR" target suffix while a chain is armed. */
+  target?: string;
+  /** Click opens the PR (only set when there is one to open). */
+  href?: string;
+}
+
+/** Verbs that are in flight but have no stage of their own.
+ *
+ * Push, make-PR and merge all type a command / call a route and return; the stage
+ * only moves once the RESULT is observable (origin matches, a PR exists). Between
+ * the click and that flip the header would otherwise still show the previous
+ * step, which is what made people press Push twice. Same self-clearing pattern as
+ * `reconcileLoopReset`: the entry dies when the stage moves past it or on TTL. */
+const inflight = new Map<string, { verb: "push" | "pr" | "merge"; at: number }>();
+const INFLIGHT_TTL_MS = 120_000;
+
+export function markStep(title: string, verb: "push" | "pr" | "merge") {
+  if (title) inflight.set(title, { verb, at: Date.now() });
+}
+
+export function clearStep(title: string) {
+  inflight.delete(title);
+}
+
+function inflightVerb(inst: Partial<Instance>): "push" | "pr" | "merge" | null {
+  const title = inst.title;
+  if (!title) return null;
+  const rec = inflight.get(title);
+  if (!rec) return null;
+  if (Date.now() - rec.at > INFLIGHT_TTL_MS) {
+    inflight.delete(title);
+    return null;
+  }
+  // The stage has caught up — the verb is done.
+  const stage = inst.stage || "";
+  if (
+    (rec.verb === "push" && (stage === "pushed" || stage === "pr")) ||
+    (rec.verb === "pr" && stage === "pr") ||
+    (rec.verb === "merge" && stage !== "pr")
+  ) {
+    inflight.delete(title);
+    return null;
+  }
+  return rec.verb;
+}
+
+/** The current step for a session, or null when nothing is happening. */
+export function liveStep(inst: Partial<Instance>): LiveStep | null {
+  const stage = guidedStage(inst);
+
+  if (inst.workspace_missing)
+    return { label: "workspace gone", tone: "blocked", title: "The workspace directory no longer exists." };
+  if (inst.status === "paused")
+    return { label: "paused", tone: "quiet", title: "Session paused — resume it to continue." };
+
+  // Worktree setup outranks everything: queued prompts are HELD while it runs,
+  // and the autopilot refuses to act at all, so it must be visible.
+  const setup = inst.setup;
+  if (setup?.state === "running")
+    return { label: "setting up", tone: "work", title: "Running the workspace setup commands." };
+  if (setup?.state === "failed")
+    return {
+      label: "setup failed",
+      tone: "blocked",
+      title:
+        "Workspace setup failed" +
+        (setup.failed_step ? " at " + setup.failed_step : "") +
+        ". Queued prompts are held until it succeeds.",
+    };
+
+  if (stage === "provisioning")
+    return { label: "provisioning", tone: "work", title: "Creating the workspace." };
+  if (stage === "precommit")
+    return { label: "pre-commit", tone: "work", title: "Running the pre-commit hooks." };
+  if (stage === "interrupt")
+    return {
+      label: "pre-commit ✗",
+      tone: "blocked",
+      title:
+        "A pre-commit hook blocked the commit" +
+        (inst.failed_step ? " at " + inst.failed_step : "") +
+        ".",
+    };
+
+  const verb = inflightVerb(inst);
+  if (verb === "push") return { label: "pushing", tone: "work", title: "Pushing the branch to origin." };
+  if (verb === "pr") return { label: "opening PR", tone: "work", title: "Opening the pull request." };
+  if (verb === "merge") return { label: "merging", tone: "work", title: "Merging the pull request." };
+
+  // Verification checks run while the stage still reads "committed", and the push
+  // route soft-rejects a push until they pass — so say so before Push is pressed.
+  const check = inst.check;
+  if (check?.state === "running")
+    return { label: "checks", tone: "work", title: "Running the verification check." };
+  if (check?.state === "failed")
+    return {
+      label: "checks ✗",
+      tone: "blocked",
+      title: "The verification check failed" + (check.failed_step ? " at " + check.failed_step : "") + ".",
+    };
+
+  // An armed chain: say what it is waiting on and where it is going.
+  const run = inst.autopilot;
+  if (run && run.depth && run.state === "running")
+    return {
+      label: run.note || "fast-tracking",
+      tone: "work",
+      title: autopilotChipTitle(run),
+      target: DEPTH_SHORT[run.depth] || "",
+    };
+  if (run && run.depth && run.state === "halted")
+    return { label: "fast-track ✗", tone: "blocked", title: autopilotChipTitle(run) };
+
+  if (stage === "pr")
+    return {
+      label: "PR open",
+      tone: "ok",
+      title: inst.pr_url ? "Open the pull request" : "A pull request is open for this branch.",
+      href: inst.pr_url || undefined,
+    };
+  return null;
 }
 
 /** The ⏩ sibling of the guided button: a per-session TOGGLE for autopilot.

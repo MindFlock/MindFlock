@@ -209,6 +209,34 @@ export function EventToasts() {
       })
     );
     unsubs.push(
+      // Autopilot steps reached the UI only on the next 4s poll, so "pushing" could
+      // be over before it appeared. Patch the cache from the socket instead — same
+      // shape and same before-the-replay-guard reasoning as stage_changed below.
+      ev.subscribe("session.autopilot_changed", (env) => {
+        const d = (env.data || {}) as Record<string, unknown>;
+        const depth = String(d.depth || "");
+        patchInstance(env.session, {
+          autopilot: depth
+            ? {
+                depth,
+                state: String(env.new || d.state || "running"),
+                step: String(d.step || ""),
+                reason: String(d.reason || ""),
+                note: String(d.note || ""),
+                source: String(d.source || "session"),
+                item: String(d.item || ""),
+                skipped: Array.isArray(d.skipped) ? (d.skipped as string[]) : [],
+              }
+            : null,
+        });
+        if (isReplay(env)) return;
+        if (String(env.new || "") === "halted")
+          notifyOnce(env.session, "ftstop", "fast-track stopped on " + env.session, {
+            onClick: () => selectSession(env.session),
+          });
+      })
+    );
+    unsubs.push(
       ev.subscribe("session.stage_changed", (env) => {
         // Patch the cache BEFORE the replay guard: a replayed stage is still the
         // truth for the cache (only the toast must be suppressed). This is the
