@@ -845,6 +845,20 @@ class TestIntakeDialogShell:
         # Sent only when picked, so an unpicked row keeps the old payload shape.
         assert "agent ? { agent } : {}" in js
 
+    def test_each_row_can_choose_how_far_it_goes(self):
+        """The intake half of the autopilot: a per-item depth override that rides
+        the same way the per-item CLI override does."""
+        js = client.get("/app.js").text
+        assert '"ik-item-depth"' in js
+        # Same emit-when-picked shape, so an unpicked row's payload is unchanged.
+        assert "depth ? { depth } : {}" in js
+        # The two per-launch pickers share one line — a third stacked control
+        # would make every row in the list taller (see IntakeDialog.css).
+        assert '"ik-item-picks"' in js
+        css = client.get("/style.css").text
+        assert ".ik-item-depth" in css
+        assert ".ik-item-picks" in css
+
     def test_a_long_failure_reason_cannot_widen_the_row(self):
         """A recorded failure reason is a sentence of git output carrying a branch
         name and an absolute worktree path. The chip capped itself at

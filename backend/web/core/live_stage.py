@@ -1,0 +1,209 @@
+"""Short-lived, per-session edge watchers that make a finished commit/push
+observable in ~250ms instead of at the next 4s snapshot tick.
+
+WHY THIS EXISTS. ``POST /commit`` and ``POST /push-branch`` type a shell
+one-liner into the session's interactive tmux (so the user can watch the hooks
+run live) and return immediately. There is no exit code and no completion
+callback — the ONLY evidence a commit finished is on disk: the lock file in the
+private git dir disappears, ``.mindflock_commit_status`` appears, HEAD moves.
+Nothing reads that evidence except ``_session_stage``, which the snapshot tick
+calls every 4 seconds. So "commit done" took up to a tick to become visible, and
+the client's own poll added a second unsynchronised 4s window on top — which is
+the multi-second lag between a commit finishing and the guided button offering
+"Push".
+
+WHAT IT DOES. For a bounded window after an action, poll a CHEAP local signature
+(a file stat, a rev-parse, a status --porcelain — about 10ms total) four times a
+second, and when the signature CHANGES, call ``server._republish_session`` once.
+The split matters: the signature is cheap and polled often, the republish is
+expensive (it can reach a ``gh pr list``) and happens only on an edge. Polling
+the expensive thing four times a second would be indefensible; polling the cheap
+thing is not.
+
+Every client benefits, including /m and any addon reading the published
+snapshot, because the fix lands at the publisher rather than in one client's
+poll loop. Nothing here fast-polls on behalf of a browser.
+
+SCOPE AND SELF-LIMITING. At most ``_MAX_WATCHERS`` run at once; each expires on
+its own deadline, and each stops early the moment its reason is satisfied (the
+commit landed, the push reached origin). A watcher is idempotent per title:
+watching again extends the deadline and updates the reason instead of starting a
+second task. Nothing here is required for correctness — if every watcher were
+deleted the workflow would still advance, just at the old 4s cadence.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+from typing import Dict, Optional
+
+
+def _server():
+    """The ``backend.web.server`` module, imported lazily (it imports this
+    module at startup, so a top-level import would be circular)."""
+    from backend.web import server
+
+    return server
+
+
+# Poll the cheap signature 4x/s while an action is settling, then back off: a
+# commit whose hooks run for minutes does not need sub-second resolution for its
+# whole life, only around the moment it finishes.
+_POLL = 0.25
+_BACKOFF_AFTER_S = 60.0
+_BACKOFF_POLL = 1.0
+# A commit is "done" when the lock is gone AND the status marker is present —
+# but the one-liner writes the status and drops the lock in separate statements,
+# so require the pair to hold still briefly before believing it.
+_SETTLE_S = 2.0
+# ls-remote is a NETWORK round-trip; it must not ride the 250ms cadence.
+_ORIGIN_EVERY_S = 1.5
+_MAX_WATCHERS = 4
+_DEFAULT_SECONDS = 180.0
+
+_WATCH: Dict[str, dict] = {}
+
+
+def watch(title: str, wt: str, reason: str, seconds: float = _DEFAULT_SECONDS) -> None:
+    """Start (or extend) a bounded edge watcher for one session.
+
+    ``reason`` is ``"commit"`` or ``"push"`` and only decides which extra signal
+    is sampled and when the watcher may stop early. Safe to call from a request
+    handler: it creates an asyncio task and returns immediately. Never raises —
+    a freshness nicety must not be able to fail an action that already happened.
+    """
+    if not title or not wt:
+        return
+    try:
+        live = _WATCH.get(title)
+        now = time.monotonic()
+        if live is not None and not live["task"].done():
+            live["until"] = max(live["until"], now + seconds)
+            live["reason"] = reason
+            live["settle_since"] = None
+            return
+        if len([w for w in _WATCH.values() if not w["task"].done()]) >= _MAX_WATCHERS:
+            return
+        rec: dict = {
+            "wt": wt,
+            "reason": reason,
+            "until": now + seconds,
+            "lock_path": None,
+            "last_sig": None,
+            "settle_since": None,
+            "origin_at": 0.0,
+            "origin_sha": None,
+            "task": None,
+        }
+        _WATCH[title] = rec
+        rec["task"] = asyncio.create_task(_loop(title, rec))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def stop(title: str) -> bool:
+    """Cancel a live watcher. Returns whether one was running."""
+    rec = _WATCH.pop(title, None)
+    if rec is None:
+        return False
+    task = rec.get("task")
+    if task is not None and not task.done():
+        task.cancel()
+        return True
+    return False
+
+
+def active_titles() -> list:
+    """Titles with a live watcher (diagnostics/tests)."""
+    return [t for t, w in _WATCH.items() if w.get("task") and not w["task"].done()]
+
+
+def _signature(title: str, rec: dict) -> tuple:
+    """The cheap local evidence that a commit/push moved, as a comparable tuple.
+
+    Runs in a worker thread. Resolves the lock path ONCE per watcher and caches
+    it: ``_precommit_lock_path`` shells out to ``git rev-parse
+    --absolute-git-dir`` on every call, which at a 250ms cadence would be four
+    subprocesses a second spent deciding where to stat a file.
+    """
+    srv = _server()
+    wt = rec["wt"]
+    if rec["lock_path"] is None:
+        try:
+            rec["lock_path"] = srv._precommit_lock_path(wt)
+        except Exception:  # noqa: BLE001
+            rec["lock_path"] = os.path.join(wt, ".mindflock_precommit.lock")
+    lock_live = os.path.exists(rec["lock_path"])
+    status: Optional[bytes] = None
+    try:
+        with open(os.path.join(wt, srv._COMMIT_STATUS_FILE), "rb") as fh:
+            status = fh.read(32).strip()
+    except OSError:
+        status = None
+    head = srv._git_head_sha(wt)
+    dirty = srv._is_dirty(wt)
+    origin = rec["origin_sha"]
+    if rec["reason"] == "push":
+        now = time.monotonic()
+        if now - rec["origin_at"] >= _ORIGIN_EVERY_S:
+            rec["origin_at"] = now
+            try:
+                branch = srv._current_branch(wt)
+                origin = srv._origin_branch_sha(wt, branch) if branch else None
+            except Exception:  # noqa: BLE001
+                origin = rec["origin_sha"]
+            rec["origin_sha"] = origin
+    return (lock_live, status, head, dirty, origin)
+
+
+def _satisfied(rec: dict, sig: tuple) -> bool:
+    """Whether this watcher's reason has been met, so it can stop early."""
+    lock_live, status, head, _dirty, origin = sig
+    if rec["reason"] == "commit":
+        done = (not lock_live) and status is not None
+        if not done:
+            rec["settle_since"] = None
+            return False
+        now = time.monotonic()
+        if rec["settle_since"] is None:
+            rec["settle_since"] = now
+            return False
+        return now - rec["settle_since"] >= _SETTLE_S
+    if rec["reason"] == "push":
+        return bool(origin) and origin == head
+    return False
+
+
+async def _loop(title: str, rec: dict) -> None:
+    """Watch one session until its reason is met or its deadline passes."""
+    started = time.monotonic()
+    try:
+        while True:
+            now = time.monotonic()
+            if now >= rec["until"]:
+                return
+            if _server().ENGINE.instances.get(title) is None:
+                return
+            try:
+                sig = await asyncio.to_thread(_signature, title, rec)
+            except Exception:  # noqa: BLE001 — a bad sample is not fatal
+                sig = rec["last_sig"]
+            if sig is not None and sig != rec["last_sig"]:
+                rec["last_sig"] = sig
+                try:
+                    await asyncio.to_thread(_server()._republish_session, title)
+                except Exception:  # noqa: BLE001
+                    pass
+            if sig is not None and _satisfied(rec, sig):
+                return
+            elapsed = now - started
+            await asyncio.sleep(_POLL if elapsed < _BACKOFF_AFTER_S else _BACKOFF_POLL)
+    except asyncio.CancelledError:  # pragma: no cover — cooperative stop
+        raise
+    except Exception:  # noqa: BLE001 — the watcher must never surface an error
+        pass
+    finally:
+        if _WATCH.get(title) is rec:
+            _WATCH.pop(title, None)

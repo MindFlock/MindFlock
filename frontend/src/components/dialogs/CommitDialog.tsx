@@ -6,10 +6,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { instApi } from "../../api/client";
-import { refreshInstances } from "../../state/queries";
+import { freshStage } from "../../lib/stageWatch";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
-import { selectSession } from "../../lib/sessionActions";
+import { rememberDepth, selectSession, startFastTrack } from "../../lib/sessionActions";
+import { DEPTH_STEP_LABELS, SESSION_DEPTHS, normalizeDepth } from "../../lib/autopilot";
 
 /** Last commit message per session (pre-fills the prompt on retry).
  * In-memory only, like the vanilla Map. */
@@ -21,6 +22,9 @@ export function CommitDialog() {
   const closeDialog = useUi((s) => s.closeDialog);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  // How far this commit should carry the session. "commit" keeps the historical
+  // behaviour (commit and stop), and is what the plain path still does.
+  const [depth, setDepth] = useState("commit");
   const msgRef = useRef<HTMLTextAreaElement | null>(null);
 
   // On open: clear the error, pre-fill from the per-title memory, focus.
@@ -28,6 +32,7 @@ export function CommitDialog() {
     if (!open) return;
     setError("");
     setMsg((target && lastCommitMsg.get(target)) || "");
+    setDepth("commit");
     msgRef.current?.focus();
   }, [open, target]);
 
@@ -73,6 +78,16 @@ export function CommitDialog() {
 
   if (!open) return null;
 
+  // The button says what the press will actually do, so the chosen rung is never
+  // a hidden setting.
+  const submitLabel =
+    {
+      commit: "Commit",
+      push: "Commit & push",
+      pr: "Commit & open PR",
+      merge: "Commit & merge",
+    }[depth] || "Commit";
+
   async function submitCommit() {
     const title = target;
     const m = msg.trim();
@@ -82,17 +97,33 @@ export function CommitDialog() {
     }
     if (!title) return;
     lastCommitMsg.set(title, m);
+    // The merge rung's confirm has to happen while the dialog is still up —
+    // closeDialog() below is what makes "abort the whole submit" meaningful.
+    const chosen = normalizeDepth(depth) || "commit";
     closeDialog();
     // Watch the pre-commit hooks run (vanilla switchToTerminal: focus the
     // pane and show its shell tab).
     useUi.getState().setLastTab(title, "shell");
     selectSession(title);
+    if (chosen !== "commit") {
+      // Arm the chain instead of committing directly. The driver issues the very
+      // same commit (through the same shell one-liner) and then carries on, so
+      // the visible behaviour of this press is a superset of the plain path.
+      await startFastTrack(title, chosen, m);
+      void freshStage(title);
+      return;
+    }
     try {
       await instApi(title, "/commit", { json: { message: m } });
     } catch (err) {
       alert("Commit failed: " + errMsg(err));
     }
-    setTimeout(refreshInstances, 1000);
+    // One fresh read so the pill flips to "pre-commit" the moment the hooks start
+    // (the old 1s invalidate provably observed nothing — GET /api/instances serves
+    // the tick snapshot for up to 10s — and it reset the 4s poll timer on the way
+    // out, pushing the first useful poll ~1s later). The server's commit watcher
+    // republishes again when the hooks finish, so "Push" needs no further poll.
+    void freshStage(title);
   }
 
   return (
@@ -141,11 +172,29 @@ export function CommitDialog() {
             }}
           />
         </label>
+        <label id="commit-depth-row">
+          Then keep going{" "}
+          <span className="muted">(fast-track — stops at the rung you pick)</span>
+          <select
+            id="commit-depth"
+            value={depth}
+            onChange={(e) => {
+              setDepth(e.target.value);
+              rememberDepth(e.target.value);
+            }}
+          >
+            {SESSION_DEPTHS.map((d) => (
+              <option key={d} value={d}>
+                {DEPTH_STEP_LABELS[d]}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="modal-actions">
           <button type="button" id="commit-cancel" onClick={closeDialog}>
             Cancel
           </button>
-          <button type="submit">Commit</button>
+          <button type="submit">{submitLabel}</button>
         </div>
         <p id="commit-error" className="error">
           {error}

@@ -101,6 +101,20 @@ export function refreshInstances() {
   return queryClient.invalidateQueries({ queryKey: ["instances"] });
 }
 
+/** Merge new fields into ONE cached session row, with no round trip.
+ *
+ * The zero-latency half of the freshness story. `refreshInstances()` cannot make
+ * a stage change appear sooner no matter when it is called: GET /api/instances
+ * serves the server's published tick snapshot for up to 10s and never recomputes
+ * probes inline, so an invalidate inside that window returns the identical row.
+ * Patching writes what we already learned (from `/stage`, or from a
+ * `session.stage_changed` event) straight into the cache the UI renders. */
+export function patchInstance(title: string, patch: Partial<Instance>) {
+  queryClient.setQueryData<Instance[]>(["instances"], (rows) =>
+    rows?.map((r) => (r.title === title ? { ...r, ...patch } : r))
+  );
+}
+
 /* --------------------------------------------------------------------------
  * Intake panels: assigned tickets, open PRs, open issues.
  *

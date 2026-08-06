@@ -5,7 +5,12 @@
 
 import { useEffect } from "react";
 import type { Instance } from "../api/types";
-import { queryClient, refreshInstances, type EventEnvelope } from "../state/queries";
+import {
+  patchInstance,
+  queryClient,
+  refreshInstances,
+  type EventEnvelope,
+} from "../state/queries";
 import { useUi } from "../state/store";
 import { fmtUsd } from "../lib/format";
 import { dropActivity, effectiveActivity, forceActivity } from "../lib/stage";
@@ -205,6 +210,12 @@ export function EventToasts() {
     );
     unsubs.push(
       ev.subscribe("session.stage_changed", (env) => {
+        // Patch the cache BEFORE the replay guard: a replayed stage is still the
+        // truth for the cache (only the toast must be suppressed). This is the
+        // 0-round-trip half of the freshness fix — the socket is already open and
+        // this subscriber already exists; the new stage was simply discarded
+        // after toasting, leaving the UI to wait for its next 4s poll.
+        if (env.new) patchInstance(env.session, { stage: String(env.new) as Instance["stage"] });
         if (isReplay(env)) return; // toast-only subscriber — skip stale history
         const title = env.session;
         if (env.new === "pr") {

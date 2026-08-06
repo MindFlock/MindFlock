@@ -100,10 +100,12 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 
 # Core modules the monolith was split into (see backend.web/core/).
 from backend.web.core import auth as _auth
+from backend.web.core import autopilot as _autopilot
 from backend.web.core import events as _events
 from backend.web.core import ports as _ports
 from backend.web.core import issue_start as _issue_start
 from backend.web.core import github_pr as _github_pr
+from backend.web.core import live_stage as _live_stage
 from backend.web.core import pr_review as _pr_review
 from backend.web.core import worktree_reclaim as _worktree_reclaim
 from backend.web.core import ticket_start as _ticket_start
@@ -135,13 +137,16 @@ from backend.web.core.agent_state import (
     _TRUST_GATE_STARTUP_WINDOW_S,
     _agent_activity,
     _agent_exited,
+    _capture_shell_pane,
     _clear_precommit_locks,
     _dismiss_trust_prompt,
+    _failed_precommit_hook,
     _failed_precommit_step,
     _normalized_pane_hash,
     _pane_cpu_jiffies,
     _pane_has_agent_process,
     _pane_meta,
+    _parse_failed_hook_id,
     _parse_failed_step,
     _parse_progress_tokens,
     _precommit_lock_is_live,
@@ -411,6 +416,7 @@ async def lifespan(app: FastAPI):
     # Prompt-queue drain: feed queued prompts to idle agents (keeps runs going
     # unattended and resumes them the moment usage returns after an outage).
     _register_task(_prompt_queue_drain_loop())
+    _register_task(_autopilot_loop())
     _register_task(_window_refresh_loop())
     # Tailnet device discovery + remote session snapshots (multi-device mode).
     _register_task(_remote.discovery_loop(_server_port()))
@@ -723,6 +729,33 @@ def _probe_cached(probe: str, inst, compute):
     return value
 
 
+def _probe_seed(probe: str, inst, value):
+    """Publish an already-computed probe result into the memo.
+
+    The counterpart to :func:`_probe_cached`, for the caller that computed the
+    value ITSELF and wants everyone else to reuse it. Same key, same TTL, same
+    weakref guard — a non-weakref-able stand-in (tests) is simply not memoized,
+    exactly as on the read path.
+
+    This exists because the memo is shared by two 4s tickers that are NOT
+    phase-locked (``_tick_state_changes`` and ``_instances_tick``). Whichever
+    ran first filled the entry, so the *publishing* tick could SERVE a stage up
+    to ``_PROBE_TTL`` (2.5s) older than the moment it published it — injecting a
+    whole extra publish period into a stage flip, systematically, for the life
+    of a server run depending on the startup offset. Seeding inverts that: the
+    publisher computes and donates, every other reader still gets the memo's
+    cost collapse.
+    """
+    title = getattr(inst, "Title", "") or ""
+    try:
+        ref = weakref.ref(inst)
+    except TypeError:  # non-weakref-able stand-in (tests): don't memoize
+        return value
+    with _PROBE_CACHE_LOCK:
+        _PROBE_CACHE[(probe, title)] = (time.monotonic() + _PROBE_TTL, ref, value)
+    return value
+
+
 def _forget_probes(title: str) -> None:
     """Drop every memoized probe result for one session (kill/delete paths),
     so a session recreated under the same title starts from fresh probes —
@@ -739,6 +772,17 @@ def _forget_probes(title: str) -> None:
 def _session_stage_cached(inst) -> dict:
     """``_session_stage(inst)`` memoized per session (see ``_probe_cached``)."""
     return _probe_cached("stage", inst, lambda: _session_stage(inst))
+
+
+def _session_stage_fresh(inst) -> dict:
+    """``_session_stage(inst)`` computed NOW, then donated to the memo.
+
+    For the snapshot PUBLISHER (and the on-demand single-session read), which
+    must never hand out a stage older than the publish it stamps. Everyone else
+    keeps using :func:`_session_stage_cached`. See :func:`_probe_seed` for why
+    the distinction is worth a second function.
+    """
+    return _probe_seed("stage", inst, _session_stage(inst))
 
 
 def _agent_activity_cached(inst, title: str) -> str:
@@ -1338,6 +1382,413 @@ async def _prompt_queue_drain_loop() -> None:
         await asyncio.sleep(_QUEUE_DRAIN_INTERVAL)
 
 
+# --- Autopilot: advance armed sessions toward their target rung -------------- #
+# The impure half of backend.web.core.autopilot (the store and the decision
+# function live there). Structured exactly like the prompt-queue drain above: a
+# 5s pass, one decision per armed session, every step wrapped so a single bad
+# session cannot stop the pass.
+_AUTOPILOT_INTERVAL = 5.0
+#: Floor between two actions on one session, so a stage that has not yet caught
+#: up cannot cause a double-push.
+_AUTOPILOT_ACTION_COOLDOWN = 15.0
+#: Per-step wall clock. Expiry HALTS with a reason — it never silently retries.
+_AUTOPILOT_DEADLINES = {
+    "agent": 5400.0,  # 90min: an agent working a whole ticket
+    "commit": 1800.0,  # 30min: hook stacks can include tests and doc passes
+    "push": 300.0,
+    "pr": 180.0,
+    "merge": 900.0,  # includes waiting for required checks to report
+}
+
+
+def _autopilot_dto(title: str):
+    """The compact autopilot block on a session's /api/instances row, or None.
+
+    Only what the UI renders: enough to say "auto → Open PR, waiting on the
+    agent" and, when a run has halted, exactly why.
+    """
+    rec = _autopilot.get(title)
+    if rec is None:
+        return None
+    return {
+        "depth": rec.get("depth") or "",
+        "state": rec.get("state") or "",
+        "step": rec.get("step") or "",
+        "reason": rec.get("reason") or "",
+        "source": rec.get("source") or "session",
+        "item": rec.get("item") or "",
+        "skipped": list(rec.get("skipped") or []),
+    }
+
+
+def _fasttrack_depth() -> str:
+    """The configured default rung for the fast-track button.
+
+    Read fresh at decision time (never memoized at startup) so changing it in
+    Settings takes effect on the next press with no restart — the house rule for
+    every settings consumer.
+    """
+    try:
+        from backend.config import settings as _settings
+
+        d = _autopilot.normalize_depth(
+            _settings.load_settings().repository.fasttrack_depth
+        )
+        return d if d in _autopilot.DEPTHS else "pr"
+    except Exception:  # noqa: BLE001
+        return "pr"
+
+
+def _precommit_retry_hooks() -> list:
+    """Pre-commit hook IDs whose failure the driver may retry, then skip.
+
+    Sourced from settings, never from a client: the value ends up inside a shell
+    command, so it is charset-filtered here and anything in
+    :data:`autopilot.NEVER_SKIP` (tests, secret scanners) is dropped whatever the
+    settings file says.
+    """
+    try:
+        from backend.config import settings as _settings
+
+        raw = _settings.load_settings().repository.precommit_retry_hooks or ""
+    except Exception:  # noqa: BLE001
+        return []
+    out = []
+    for part in str(raw).split(","):
+        h = part.strip()
+        if not h or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", h):
+            continue
+        if h in _autopilot.NEVER_SKIP or h in out:
+            continue
+        out.append(h)
+    return out[:8]
+
+
+def _autopilot_snapshot(inst, title: str, wt: str, stage: dict) -> dict:
+    """The observation :func:`autopilot.next_action` decides from.
+
+    Every probe here is deliberately UNCACHED for the same reason the drain reads
+    activity uncached: a 2.5s-stale "committed" immediately after a push would
+    make the driver push again.
+    """
+    now = time.time()
+    try:
+        queue_st = _prompt_queue.get_state(title)
+        queue_pending = bool(queue_st.get("enabled") and queue_st.get("items"))
+    except Exception:  # noqa: BLE001
+        queue_pending = False
+    activity = _agent_activity(inst, title)
+    # `_agent_activity` already reports "limit" for a pane parked on a usage-limit
+    # screen, which is all this gate needs. The drain loop calls
+    # `_refresh_limit_state` instead because it needs the reset TIMESTAMP for the
+    # countdown; probing for it here would only add a tmux round-trip (and
+    # `_ensure_agent_session`'s reboot side effect) to get a boolean we have.
+    limited = activity == "limit"
+    try:
+        base = _session_base_branch(inst) or ""
+        beyond = _commits_beyond_base(wt, base) if base else 0
+    except Exception:  # noqa: BLE001
+        beyond = 0
+    try:
+        check = _wt_setup.check_summary(wt)
+    except Exception:  # noqa: BLE001
+        check = None
+    return {
+        "stage": stage.get("stage") or "",
+        "failed_step": stage.get("failed_step") or "",
+        "failed_hook": stage.get("failed_hook") or "",
+        "dirty": _is_dirty(wt),
+        "beyond_base": beyond,
+        "activity": activity,
+        "limited": limited,
+        "queue_pending": queue_pending,
+        "check": check,
+        "has_origin": _has_origin(wt),
+        "now": now,
+    }
+
+
+def _autopilot_observe(title: str):
+    """Gather everything a decision needs, in a worker thread.
+
+    Split from the decision + action so the blocking half (git, tmux, gh) never
+    runs on the event loop while the action half can ``await`` the existing route
+    coroutines directly. Returns ``(rec, inst, wt, snap)``, or None to skip this
+    session on this pass.
+    """
+    rec = _autopilot.get(title)
+    if rec is None or rec.get("state") != "running":
+        return
+    if not _autopilot.normalize_depth(rec.get("depth")) in _autopilot.DEPTHS:
+        return
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        return  # not adopted yet (intake) — a later pass picks it up
+    try:
+        if not inst.Started() or inst.Status == session.Paused:
+            return
+    except Exception:  # noqa: BLE001
+        return
+    if _budget_locked(title):
+        return  # over budget — hold, don't halt; the user may raise it
+    try:
+        wt = inst.GetWorktreePath()
+    except Exception:  # noqa: BLE001
+        wt = ""
+    if not wt:
+        return
+    setup_st = _wt_setup.setup_status(wt)
+    if setup_st and setup_st.get("state") in ("running", "failed"):
+        return
+
+    # A restart re-earns the idle dwell: the boot id changes, so a chain cannot
+    # shortcut the "is the agent really done" wait by being resumed mid-turn.
+    if rec.get("boot") != _SERVER_BOOT_ID:
+        rec = _autopilot.update(title, boot=_SERVER_BOOT_ID, idle_since=None) or rec
+
+    # Branch drift: the push/PR/merge routes all resolve the LIVE branch, so a
+    # switch mid-run would retarget the chain at different work.
+    live_branch = _current_branch(wt) or ""
+    armed_branch = rec.get("branch") or ""
+    if armed_branch and live_branch and live_branch != armed_branch:
+        _autopilot.halt(
+            title,
+            "the workspace switched from %s to %s mid-run"
+            % (armed_branch, live_branch),
+        )
+        _emit_autopilot(title)
+        return
+    if not armed_branch and live_branch:
+        rec = _autopilot.update(title, branch=live_branch) or rec
+
+    stage = _session_stage(inst)  # uncached on purpose
+    return rec, inst, wt, _autopilot_snapshot(inst, title, wt, stage)
+
+
+async def _autopilot_step(title: str) -> None:
+    """One autopilot decision for a single session. Never raises.
+
+    Async so the action half can ``await`` the existing route coroutines; every
+    blocking probe happens inside :func:`_autopilot_observe`'s worker thread.
+    """
+    seen = await asyncio.to_thread(_autopilot_observe, title)
+    if seen is None:
+        return
+    rec, inst, wt, snap = seen
+    now = snap["now"]
+    action, detail = _autopilot.next_action(rec, snap)
+
+    if action == "wait":
+        await asyncio.to_thread(_autopilot_wait, title, rec, snap, detail, now)
+        return
+    if action == "done":
+        await asyncio.to_thread(_autopilot_finish, title)
+        return
+    if action == "stop":
+        await asyncio.to_thread(
+            _autopilot_halt, title, detail.get("reason") or "stopped"
+        )
+        return
+    if now - float(rec.get("acted_at") or 0.0) < _AUTOPILOT_ACTION_COOLDOWN:
+        return
+    await _autopilot_act(title, wt, rec, snap, action, detail)
+
+
+def _autopilot_wait(title, rec, snap, detail, now) -> None:
+    """Book-keeping for a pass that decided to do nothing: keep the idle dwell
+    honest, and halt if this step has outlived its deadline."""
+    if detail.get("mark_idle") and rec.get("idle_since") is None:
+        _autopilot.update(title, idle_since=now)
+    elif snap["activity"] != "idle" and rec.get("idle_since") is not None:
+        _autopilot.update(title, idle_since=None)
+    step = rec.get("step") or "agent"
+    deadline = _AUTOPILOT_DEADLINES.get(step, _AUTOPILOT_DEADLINES["agent"])
+    since = float(rec.get("step_since") or 0.0)
+    if since and now - since > deadline:
+        _autopilot_halt(
+            title, "gave up waiting at %s after %dmin" % (step, deadline // 60)
+        )
+
+
+def _autopilot_halt(title: str, reason: str) -> None:
+    _autopilot.halt(title, reason)
+    _emit_autopilot(title)
+
+
+def _autopilot_finish(title: str) -> None:
+    _autopilot.finish(title)
+    _emit_autopilot(title)
+
+
+async def _autopilot_act(title, wt, rec, snap, action, detail) -> None:
+    """Perform one autopilot action by invoking the very code the buttons use.
+
+    Push/PR/merge call the existing route coroutines rather than a second
+    implementation of each, so gate order, verbatim error strings and the
+    browser-handoff response shapes stay literally one implementation (the repo's
+    own tests already drive these coroutines directly, so this is an established
+    seam). Only the commit differs: it goes through ``_commit_into_shell`` so a
+    SKIP list can be passed — a list that always comes from settings and never
+    from a client.
+    """
+    now = snap["now"]
+    fields = {"acted_at": now, "step_since": now}
+    try:
+        if action == "commit":
+            done = await asyncio.to_thread(
+                _autopilot_commit, title, wt, rec, detail, fields
+            )
+            if not done:
+                return
+        elif action == "push":
+            resp = await instance_push_branch(title)
+            if resp.status_code >= 400:
+                await asyncio.to_thread(_autopilot_halt, title, _resp_error(resp))
+                return
+            fields["step"] = "push"
+        elif action == "make_pr":
+            base = detail.get("base") or ""
+            resp = await instance_make_pr(title, {"base": base} if base else {})
+            if resp.status_code >= 400:
+                await asyncio.to_thread(_autopilot_halt, title, _resp_error(resp))
+                return
+            body = _resp_json(resp)
+            if body.get("ok") is False:
+                # The branch is pushed but the PR needs a human click (no gh, no
+                # token) — a stop with a link, not a failure to retry.
+                await asyncio.to_thread(
+                    _autopilot_halt,
+                    title,
+                    body.get("message") or "needs gh or a GitHub token to file the PR",
+                )
+                return
+            fields["step"] = "pr"
+        elif action == "merge":
+            resp = await instance_merge_pr(title)
+            if resp.status_code >= 400:
+                await asyncio.to_thread(_autopilot_halt, title, _resp_error(resp))
+                return
+            body = _resp_json(resp)
+            if body.get("ok") is False:
+                await asyncio.to_thread(
+                    _autopilot_halt, title, body.get("message") or "merge it on GitHub"
+                )
+                return
+            _autopilot.update(title, step="merge", **fields)
+            await asyncio.to_thread(_autopilot_finish, title)
+            return
+        else:
+            return
+    except Exception as err:  # noqa: BLE001 — a failed step halts, never crashes
+        await asyncio.to_thread(_autopilot_halt, title, "%s failed: %s" % (action, err))
+        return
+    _autopilot.update(title, **fields)
+    await asyncio.to_thread(_emit_autopilot, title)
+
+
+def _autopilot_commit(title, wt, rec, detail, fields) -> bool:
+    """Issue an autopilot commit (blocking). Returns whether to record success."""
+    msg = rec.get("message") or ""
+    if not msg:
+        try:
+            with open(os.path.join(wt, _COMMIT_MSG_FILE)) as fh:
+                msg = fh.read().strip()
+        except OSError:
+            msg = ""
+    if not msg:
+        _autopilot_halt(title, "no commit message to reuse")
+        return False
+    skip = [h for h in (detail.get("skip") or []) if h not in _autopilot.NEVER_SKIP]
+    hook = detail.get("hook") or ""
+    err = _commit_into_shell(title, wt, msg, ",".join(skip))
+    if err is not None:
+        _autopilot_halt(title, "could not start the commit: %s" % err)
+        return False
+    attempts = dict(rec.get("attempts") or {})
+    if hook:
+        attempts[hook] = int(attempts.get(hook) or 0) + 1
+    fields.update(
+        step="commit",
+        attempts=attempts,
+        commits=int(rec.get("commits") or 0) + 1,
+        skipped=skip,
+        idle_since=None,
+    )
+    if detail.get("skipping"):
+        fields["reason"] = "skipped %s to get the commit through" % detail["skipping"]
+    _forget_probes(title)
+    _live_stage.watch(title, wt, "commit")
+    return True
+
+
+def _resp_error(resp) -> str:
+    """The server's own error sentence out of a JSONResponse."""
+    body = _resp_json(resp)
+    return str(body.get("error") or "step failed")
+
+
+def _resp_json(resp) -> dict:
+    try:
+        data = json.loads(resp.body)
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _emit_autopilot(title: str) -> None:
+    """Tell the UI a run changed, and refresh the session's published row."""
+    try:
+        rec = _autopilot.get(title) or {}
+        _events.BUS.emit(
+            "session.autopilot_changed",
+            session=title,
+            new=rec.get("state") or "",
+            data={
+                "depth": rec.get("depth") or "",
+                "step": rec.get("step") or "",
+                "state": rec.get("state") or "",
+                "reason": rec.get("reason") or "",
+                "item": rec.get("item") or "",
+                "skipped": list(rec.get("skipped") or []),
+            },
+        )
+        _republish_session(title)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _autopilot_pass() -> None:
+    """One pass over every armed session.
+
+    Sessions are stepped one at a time rather than concurrently: the steps commit
+    and push into a shared worktree, and serialising them is what keeps two chains
+    on a copied session (which share one worktree) from racing.
+    """
+    titles = await asyncio.to_thread(_autopilot.all_titles)
+    if not titles:
+        return  # a flock with nothing armed costs one file read
+    await asyncio.to_thread(_autopilot.prune, list(ENGINE.instances.keys()))
+    for title in titles:
+        try:
+            await _autopilot_step(title)
+        except Exception:  # noqa: BLE001 — one bad chain can't stop the pass
+            pass
+
+
+async def _autopilot_loop() -> None:
+    """Drive the autopilot forever (started by the lifespan).
+
+    Work first, sleep after — so an armed chain resumes within one interval of a
+    server restart rather than idling through the first sleep.
+    """
+    while True:
+        try:
+            await _autopilot_pass()
+        except Exception:  # noqa: BLE001 — the pass must never die
+            pass
+        await asyncio.sleep(_AUTOPILOT_INTERVAL)
+
+
 # --- Window-refresh keepalive (roadmap E) ------------------------------------
 # When enabled, sends a 1-token ping to a dedicated, connection-free (no-MCP)
 # session per provider every N hours, to anchor that provider's rolling usage
@@ -1516,8 +1967,13 @@ def _session_snapshot(i, queues: dict) -> dict:
     shell-outs plus a PR lookup when GitHub is reachable, transcript scans),
     each behind its ~2.5s memo."""
     d = _instance_json(i)
-    d.update(_session_stage_cached(i))
+    # The publisher COMPUTES the stage and donates it to the memo; it must not
+    # serve one the other 4s ticker filled up to 2.5s ago (see _probe_seed).
+    d.update(_session_stage_fresh(i))
     d["queue"] = _queue_summary(i.Title, queues)
+    # A dict read off an already-loaded store, so it is computed fresh on BOTH
+    # snapshot paths and therefore never needs a _SNAPSHOT_PROBE_KEYS carry-over.
+    d["autopilot"] = _autopilot_dto(i.Title)
     tok = _session_tokens(i)
     d["tokens"] = tok.get("out", 0)  # output tokens
     d["tokens_in"] = tok.get("in", 0)  # real input only (no cache)
@@ -1560,6 +2016,7 @@ _SNAPSHOT_PROBE_KEYS = (
     "stage",
     "pr_url",
     "failed_step",
+    "failed_hook",
     "tokens",
     "tokens_in",
     "tokens_cache_read",
@@ -1595,6 +2052,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     )
     d["pr_url"] = None
     d["queue"] = _queue_summary(i.Title, queues)
+    d["autopilot"] = _autopilot_dto(i.Title)
     d["tokens"] = d["tokens_in"] = 0
     d["tokens_cache_read"] = d["tokens_cache_write"] = 0
     d["tokens_ctx"] = d["tokens_ctx_window"] = 0
@@ -1768,6 +2226,39 @@ def _instances_tick() -> None:
     _events.set_sessions_snapshot(out)
     global _SNAPSHOT_AT
     _SNAPSHOT_AT = time.time()
+
+
+def _republish_session(title: str):
+    """Recompute ONE session's row, publish it through, and emit its changes.
+
+    The freshness escape hatch for the moments right after an action (commit,
+    push, PR, merge), where waiting out the 4s tick is exactly the lag the
+    guided workflow was criticised for. Bounded to a single worktree, so it
+    never pays the whole flock's probe cost.
+
+    Publish BEFORE emit is load-bearing: ``_instances_tick`` emits state changes
+    and only then publishes, so a client that reacts to ``session.stage_changed``
+    by re-reading races the publish and sees the PREVIOUS snapshot. Here the row
+    is in place before anyone is told to look.
+
+    Deliberately does NOT call :func:`_forget_probes`. That would pop
+    ``_ACTIVITY_CACHE[title]`` — the only source of ``activity_since``, which
+    feeds attention ordering and the wedged-session watchdog — and drop the
+    token memo, for no benefit: ``_session_stage_fresh`` already guarantees the
+    stage is current. Do not re-add it.
+
+    Returns the fresh row, or None if the session is gone. Never raises.
+    """
+    try:
+        inst = ENGINE.instances.get(title)
+        if inst is None:
+            return None
+        d = _session_snapshot(inst, _prompt_queue.snapshot())
+        _events.patch_session_snapshot(title, d)
+        _emit_state_changes(title, d["status"], d["activity"], d["stage"])
+        return d
+    except Exception:  # noqa: BLE001 — a freshness nicety must never 500
+        return None
 
 
 async def _instances_tick_loop() -> None:
@@ -2024,6 +2515,105 @@ def _start_agent_override(payload: dict) -> str:
             "unknown agent %r — pick one of: %s" % (name, ", ".join(sorted(known)))
         )
     return name
+
+
+def _start_depth_override(payload: dict) -> str:
+    """A validated per-start autopilot depth from a force-start body, or ``""``.
+
+    The intake twin of :func:`_start_agent_override`, and deliberately the same
+    shape: ``""`` means "use the configured chain", so an old client that sends
+    nothing behaves exactly as before, and an unknown rung is rejected rather
+    than silently downgraded — an item that quietly stopped at the wrong rung is
+    worse than a refused request.
+
+    Unlike a per-SOURCE default, an individual item MAY choose ``merge``: the
+    person picking it is looking at the one thing it will merge.
+    """
+    raw = str((payload or {}).get("depth", "") or "").strip()
+    if not raw:
+        return ""
+    depth = _autopilot.normalize_depth(raw)
+    if depth == "off":
+        return "off"
+    if depth not in _autopilot.DEPTHS:
+        raise ValueError(
+            "unknown depth %r — pick one of: %s" % (raw, ", ".join(_autopilot.DEPTHS))
+        )
+    return depth
+
+
+def _cap_source_depth(depth: str) -> str:
+    """Clamp a per-SOURCE default to the rungs a source may choose.
+
+    A source default applies to every future item with no human in the loop, so
+    it may not be ``merge`` however the settings file was edited. An individual
+    item can still choose it — the person picking it is looking at the one thing
+    it will merge.
+    """
+    d = _autopilot.normalize_depth(depth)
+    if d in ("", "off"):
+        return ""
+    return d if d in _autopilot.SOURCE_DEPTHS else "pr"
+
+
+def _source_intake_depth(source_id: str) -> str:
+    """The configured autopilot depth for a ticketing source, or ``""``."""
+    try:
+        from backend.config import settings as _settings
+
+        for src in _settings.load_settings().ticketing.sources:
+            if (
+                getattr(src, "id", "") == source_id
+                or getattr(src, "provider", "") == source_id
+            ):
+                return _cap_source_depth(getattr(src, "depth", ""))
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def _repo_intake_depth(repo: str, kind: str) -> str:
+    """The configured autopilot depth for a GitHub repo's PRs or issues.
+
+    ``kind`` is ``"prs"`` or ``"issues"`` — the two have separate override maps
+    because a repo whose PRs you want reviewed automatically is not necessarily
+    one whose issues you want carried to a PR.
+    """
+    try:
+        from backend.config import settings as _settings
+
+        gh = _settings.load_settings().github
+        table = gh.issue_repo_settings if kind == "issues" else gh.repo_settings
+        block = (table or {}).get(repo) or {}
+        return _cap_source_depth(block.get("depth", ""))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _arm_intake_autopilot(
+    title: str, depth: str, source: str, item: str, message: str = ""
+) -> None:
+    """Arm the autopilot for a session an intake start is about to create.
+
+    Called BEFORE the launch task, on purpose: the record is keyed by title, and
+    the title an ingested item produces is deterministic, so arming first means
+    the target survives a provisioning crash or a server restart mid-launch. A
+    record whose session never appears is dropped by the driver's prune.
+    """
+    if not title or not depth or depth == "off":
+        return
+    try:
+        _autopilot.arm(
+            title,
+            depth,
+            source=source,
+            item=item,
+            message=message,
+            retryable=_precommit_retry_hooks(),
+            boot=_SERVER_BOOT_ID,
+        )
+    except Exception:  # noqa: BLE001 — never fail a launch over the autopilot
+        pass
 
 
 def _no_git_response() -> JSONResponse:
@@ -3699,9 +4289,28 @@ _COMMIT_MSG_FILE = ".mindflock_commit_msg"
 _COMMIT_STATUS_FILE = ".mindflock_commit_status"
 
 
-def _commit_shell_command() -> str:
+def _commit_shell_command(skip: str = "") -> str:
     """The POSIX shell one-liner the commit endpoint types into the session's
     interactive shell (so the user watches the pre-commit hooks run live).
+
+    ``skip`` is a comma-separated list of pre-commit hook IDs to bypass on this
+    attempt, rendered as a one-shot ``SKIP=<ids>`` environment prefix. When it is
+    empty this function returns the ORIGINAL string byte for byte — the retry
+    feature must not perturb the ordinary commit path, and several tests pin
+    literal substrings of it.
+
+    Only the environment prefix is added: no ``tee``, no log file, no extra
+    markers. Piping the commit through ``tee`` to let the shell inspect hook
+    output would strip the tty (changing pytest/black colour behaviour and
+    breaking any interactive GPG or credential prompt for ``commit.gpgsign``
+    users) and would make ``rc`` depend on parsing a stream the hooks also write
+    to. The retry decision is made in Python instead, which already reads the
+    pane; see :func:`_failed_precommit_hook`.
+
+    ``SKIP`` is pre-commit's own mechanism, read once per run as a comma-separated
+    set matched against each hook's id or alias. A wrapper hook script that
+    composes an inbound value (``export SKIP="${SKIP:+$SKIP,}<id>"``) keeps
+    working, because this prefix is what it sees on the way in.
 
     lock (stage=precommit) -> stage all -> commit (runs hooks) -> record the
     exit code (non-zero => pre-commit interrupt) -> drop the lock.
@@ -3737,7 +4346,7 @@ def _commit_shell_command() -> str:
         # Refresh the lock each round so a multi-round retry (each hook pass
         # can outlast the liveness grace) can't be self-healed mid-flight.
         'touch "$L"; '
-        "git commit -F {msgf}; rc=$?; "
+        "{sk}git commit -F {msgf}; rc=$?; "
         "[ $rc -eq 0 ] && break; "
         "git diff --quiet && break; "  # no auto-fix -> real failure
         "git add -A; n=$((n+1)); "
@@ -3746,7 +4355,39 @@ def _commit_shell_command() -> str:
     ).format(
         msgf=shlex.quote(_COMMIT_MSG_FILE),
         status=_COMMIT_STATUS_FILE,
+        # Empty by default, so the rendered command is unchanged. shlex.quote
+        # leaves a plain id list (letters, digits, '.', '_', '-', ',') unquoted,
+        # so `git commit -F .mindflock_commit_msg` survives verbatim as a suffix.
+        sk=("SKIP=%s " % shlex.quote(skip)) if skip else "",
     )
+
+
+def _commit_into_shell(title: str, wt: str, msg: str, skip: str = "") -> Optional[str]:
+    """Write the message file and type the commit one-liner into the session's
+    shell. Returns an error string, or None on success. Blocking — call it in a
+    worker thread.
+
+    Extracted from ``instance_commit`` so the fast-track driver can issue a
+    commit with a ``skip`` list WITHOUT the list ever coming from a client: the
+    route always passes ``skip=""``, and the driver resolves it from settings.
+    """
+    # Keep our scratch files out of `git add -A`. Works for ANY session
+    # type (plain / in-place / provisioned) — a neutral util, no
+    # provisioning involved.
+    try:
+        _exclude_artifacts(Path(wt))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        with open(os.path.join(wt, _COMMIT_MSG_FILE), "w") as f:
+            f.write(msg)
+    except OSError:
+        pass
+    name, err = _ensure_shell_session(title, wt)
+    if err is not None:
+        return err
+    _send_to_shell(name, _commit_shell_command(skip))
+    return None
 
 
 @app.post("/api/instances/{title}/commit")
@@ -3775,31 +4416,15 @@ async def instance_commit(title: str, payload: dict) -> JSONResponse:
     if not msg:
         return JSONResponse({"error": "commit message required"}, status_code=400)
 
-    def _do():
-        # Keep our scratch files out of `git add -A`. Works for ANY session
-        # type (plain / in-place / provisioned) — a neutral util, no
-        # provisioning involved.
-        try:
-            _exclude_artifacts(Path(wt))
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            with open(msg_file, "w") as f:
-                f.write(msg)
-        except OSError:
-            pass
-        name, err = _ensure_shell_session(title, wt)
-        if err is not None:
-            return err
-        _send_to_shell(name, _commit_shell_command())
-        return None
-
-    err = await asyncio.to_thread(_do)
+    err = await asyncio.to_thread(_commit_into_shell, title, wt, msg)
     if err is not None:
         return JSONResponse({"error": err}, status_code=500)
     # The commit is about to change the stage — drop the probe memo so the
     # client's follow-up refresh sees fresh data instead of the 2.5s cache.
     _forget_probes(title)
+    # …and watch for the hooks finishing, so "committed" is published the moment
+    # it is true instead of at the next 4s tick.
+    _live_stage.watch(title, wt, "commit")
     return JSONResponse({"ok": True, "tmux_name": _shell_tmux_name(title)})
 
 
@@ -3841,6 +4466,36 @@ async def instance_commit_message(title: str) -> JSONResponse:
             return ""
 
     return JSONResponse({"message": await asyncio.to_thread(_read)})
+
+
+@app.get("/api/instances/{title}/stage")
+async def instance_stage(title: str) -> JSONResponse:
+    """ONE session's row, recomputed right now and published through.
+
+    The freshness escape hatch ``GET /api/instances`` structurally cannot be:
+    that route serves the tick's published snapshot for as long as
+    ``time.time() - _SNAPSHOT_AT <= _INSTANCES_TICK_INTERVAL * 2.5`` (10s) and
+    deliberately never rebuilds the expensive probes inline, because a cold full
+    build blocks for seconds per big worktree and made server boot look hung. So
+    a client invalidate within 10s of a publish provably returns the identical
+    stale row — which is why the old post-action ``refreshInstances()`` could not
+    make "Push" appear any sooner.
+
+    Bounded to a single worktree and on-demand ONLY: never called on a schedule.
+    Returns the same shape as one element of ``GET /api/instances``, so a client
+    can merge it wholesale into its cached list.
+    """
+    if not git_available():
+        return _no_git_response()
+    _inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    row = await asyncio.to_thread(_republish_session, title)
+    if row is None:
+        return JSONResponse(
+            {"error": "instance not found: %s" % title}, status_code=404
+        )
+    return JSONResponse(row)
 
 
 @app.post("/api/instances/{title}/push-branch")
@@ -3902,6 +4557,9 @@ async def instance_push_branch(
     if err is not None:
         return JSONResponse({"error": err}, status_code=500)
     _forget_probes(title)
+    # Watch for the branch reaching origin, so "pushed" (and with it the Make PR
+    # step) appears as soon as it is true.
+    _live_stage.watch(title, wt, "push")
     return JSONResponse({"ok": True, "tmux_name": _shell_tmux_name(title)})
 
 
@@ -4188,6 +4846,81 @@ async def instance_merge_pr(title: str) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@app.post("/api/instances/{title}/fast-track")
+async def instance_fast_track(
+    title: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Arm the autopilot for this session: carry it to ``depth`` and stop.
+
+    Arm-and-WAIT, deliberately: pressing this while the agent is still working
+    records the target and lets the driver commit once the agent is verifiably
+    done, rather than committing a half-written tree. That is also what makes this
+    button and the intake option the same mechanism — the only difference is
+    whether the session exists yet.
+
+    ``depth`` defaults to the configured rung (Settings → Workspace, itself
+    defaulting to "pr"). A commit message is required only when there is
+    uncommitted work AND nothing is on disk to reuse — the same rule
+    ``POST /commit`` already applies.
+    """
+    if not git_available():
+        return _no_git_response()
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    wt = inst.GetWorktreePath()
+    if not wt:
+        return JSONResponse({"error": "workspace not ready"}, status_code=409)
+    body = payload or {}
+    raw_depth = body.get("depth") or _fasttrack_depth()
+    depth = _autopilot.normalize_depth(raw_depth)
+    if depth not in _autopilot.DEPTHS:
+        return JSONResponse({"error": "unknown depth: %s" % raw_depth}, status_code=400)
+    if depth == "agent":
+        return JSONResponse(
+            {"error": "the agent rung is for intake — this session already exists"},
+            status_code=400,
+        )
+    msg = str(body.get("message") or "").strip()
+    if not msg:
+        try:
+            with open(os.path.join(wt, _COMMIT_MSG_FILE)) as fh:
+                msg = fh.read().strip()
+        except OSError:
+            msg = ""
+    if not msg and await asyncio.to_thread(_is_dirty, wt):
+        return JSONResponse({"error": "commit message required"}, status_code=400)
+    rec = await asyncio.to_thread(
+        lambda: _autopilot.arm(
+            title,
+            depth,
+            source="session",
+            message=msg,
+            base=str(body.get("base") or ""),
+            branch=_current_branch(wt) or "",
+            retryable=_precommit_retry_hooks(),
+            boot=_SERVER_BOOT_ID,
+        )
+    )
+    if rec is None:
+        return JSONResponse({"error": "could not arm fast-track"}, status_code=500)
+    _emit_autopilot(title)
+    return JSONResponse({"ok": True, "autopilot": _autopilot_dto(title)})
+
+
+@app.delete("/api/instances/{title}/fast-track")
+async def instance_fast_track_cancel(title: str) -> JSONResponse:
+    """Disarm the autopilot. Anything already typed into the shell keeps running —
+    this stops the driver from taking the NEXT step, which is the only thing it
+    controls."""
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    stopped = await asyncio.to_thread(_autopilot.disarm, title)
+    _republish_session(title)
+    return JSONResponse({"ok": True, "stopped": bool(stopped)})
+
+
 # --- Forced PR review (Intake → Pull requests) ----------------------------------
 # The automated monitor silently skips PRs that are already in the processed
 # ledger, not yours, or too young. These endpoints let the Settings screen show
@@ -4318,6 +5051,7 @@ async def github_force_review(payload: dict) -> JSONResponse:
         return JSONResponse({"error": "number must be an integer"}, status_code=400)
     try:
         agent_override = _start_agent_override(payload)
+        depth_override = _start_depth_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
 
@@ -4366,6 +5100,13 @@ async def github_force_review(payload: dict) -> JSONResponse:
             )
     # Re-registered with the branch now that it's known (add() keeps `since`).
     _pending_add(title, "pr", branch=pr.head_ref, repo=repo)
+    _arm_intake_autopilot(
+        title,
+        depth_override or _repo_intake_depth(repo, "prs"),
+        "pr",
+        "%s#%s" % (repo, number),
+        message=str(getattr(pr, "title", "") or ""),
+    )
 
     async def _bg_review() -> None:
         # Provision first (slow: clone/fetch of the PR head), then register the
@@ -4475,6 +5216,7 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
         return JSONResponse({"error": "source and id are required"}, status_code=400)
     try:
         agent_override = _start_agent_override(payload)
+        depth_override = _start_depth_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
 
@@ -4530,6 +5272,13 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
         "tix",
         branch=_ticket_start.branch_for(story),
         workspace_strategy=_ticket_start.workspace_mode(),
+    )
+    _arm_intake_autopilot(
+        title,
+        depth_override or _source_intake_depth(source),
+        "tix",
+        str(getattr(story, "id", "") or ticket_id),
+        message=str(getattr(story, "name", "") or ""),
     )
 
     async def _bg_start() -> None:
@@ -4655,6 +5404,7 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
         return JSONResponse({"error": "number must be an integer"}, status_code=400)
     try:
         agent_override = _start_agent_override(payload)
+        depth_override = _start_depth_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
 
@@ -4701,6 +5451,13 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
         branch=_issue_start.branch_for(issue),
         repo=repo,
         workspace_strategy=_issue_start.workspace_mode(),
+    )
+    _arm_intake_autopilot(
+        title,
+        depth_override or _repo_intake_depth(repo, "issues"),
+        "iss",
+        "%s#%s" % (repo, number),
+        message=str(getattr(issue, "title", "") or ""),
     )
 
     async def _bg_start() -> None:

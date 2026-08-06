@@ -383,6 +383,36 @@
   font-family: inherit;
 }
 
+/* The per-launch pickers sit side by side on one line, so adding the depth
+   control did not make every row in the list a line taller. */
+.ik-item-start .ik-item-picks {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+/* Same quiet treatment as the CLI picker, and the same two-classes-deep
+   specificity for the same reason (`.set-row select` is (0,1,1)). The floor is
+   smaller because the labels are shorter and the two now share a row. */
+.ik-item-start .ik-item-depth {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  min-width: 96px;
+  max-width: 150px;
+  font-family: inherit;
+  flex: 1 1 auto;
+}
+
+.ik-item-start .ik-item-depth:hover:not(:disabled),
+.ik-item-start .ik-item-depth[data-picked] {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .ik-item-start .ik-item-agent:hover:not(:disabled) {
   color: var(--text);
   border-color: var(--accent);

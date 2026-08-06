@@ -230,6 +230,11 @@ class TicketingSource:
     # Coding-CLI provider name this source's tickets run ("claude", "codex",
     # "aider", …). Empty = fall back to engine.agent, then the engine default.
     agent: str = ""
+    # How far autopilot carries a ticket ingested from this source. Blank =
+    # inherit (ultimately "off"). Never "merge" — a per-source default applies to
+    # every future ticket with no human in the loop, and merging cannot be
+    # undone; the consumer enforces that.
+    depth: str = ""
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -245,6 +250,7 @@ class TicketingSource:
             "label",
             "repo_url",
             "agent",
+            "depth",
         ):
             v = getattr(self, k)
             if v:
@@ -271,6 +277,7 @@ class TicketingSource:
             label=str(d.get("label", "") or ""),
             repo_url=str(d.get("repo_url", "") or ""),
             agent=str(d.get("agent", "") or ""),
+            depth=str(d.get("depth", "") or ""),
         )
 
 
@@ -319,6 +326,16 @@ class RepositorySettings:
     # blank = unset, which falls through the resolution chain to "auto".
     # NOT a rewrite of `url` — that spelling is always used verbatim.
     git_transport: str = ""
+    # How far the fast-track button carries a session by default: one of
+    # "commit" / "push" / "pr" / "merge". Blank = the built-in default ("pr").
+    fasttrack_depth: str = ""
+    # Comma-separated pre-commit hook IDs (NOT display names) whose failure the
+    # fast-track driver may retry, and then skip via ``SKIP=`` on a final
+    # attempt. Exists because the hooks that fail spuriously live in the repos
+    # being worked on, not in this one — an index-rebuilding hook with a corrupt
+    # index blocks a commit forever, while a test hook failing must always stop.
+    # Test and secret-scanning hooks are refused at the consumer (NEVER_SKIP).
+    precommit_retry_hooks: str = ""
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -332,6 +349,12 @@ class RepositorySettings:
             d["pr_base_branch"] = self.pr_base_branch
         if self.git_transport:
             d["git_transport"] = self.git_transport
+        # Emit-on-deviation, like every field above: writing a blank would PIN
+        # the blank and stop the config.toml layer from supplying a value.
+        if self.fasttrack_depth:
+            d["fasttrack_depth"] = self.fasttrack_depth
+        if self.precommit_retry_hooks:
+            d["precommit_retry_hooks"] = self.precommit_retry_hooks
         return d
 
     @classmethod
@@ -342,6 +365,8 @@ class RepositorySettings:
             base_branch=str(d.get("base_branch", "") or ""),
             pr_base_branch=str(d.get("pr_base_branch", "") or ""),
             git_transport=_git_transport(d.get("git_transport")),
+            fasttrack_depth=str(d.get("fasttrack_depth", "") or ""),
+            precommit_retry_hooks=str(d.get("precommit_retry_hooks", "") or ""),
         )
 
 
@@ -933,7 +958,17 @@ def _group(d: dict, key: str) -> dict:
 #: :attr:`GithubSettings.repo_settings`). Scoped names, not the flat field's
 #: ``issue_`` prefixed ones: the map it lives in already says which surface it
 #: belongs to, so ``min_age_minutes`` means the same thing in both.
-REPO_OVERRIDE_KEYS = ("agent", "base_branch", "min_age_minutes", "skip_authors")
+REPO_OVERRIDE_KEYS = (
+    "agent",
+    "base_branch",
+    "min_age_minutes",
+    "skip_authors",
+    # How far autopilot carries an item ingested from this repo. Blank/absent =
+    # inherit. Never "merge": a per-repo default applies to every future item
+    # with no human in the loop, and merging cannot be undone. The consumer
+    # enforces that; this list only decides what round-trips.
+    "depth",
+)
 
 
 def _repo_overrides(v: Any) -> Dict[str, dict]:

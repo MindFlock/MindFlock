@@ -11,7 +11,7 @@ import { refreshInstances, useConfig } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { copyText } from "../../lib/clipboard";
 import { fmtUsd, displayBranch } from "../../lib/format";
-import { chipState, nextStep } from "../../lib/stage";
+import { chipState, fastTrackStep, nextStep } from "../../lib/stage";
 import { cleanupMissing, selectSession } from "../../lib/sessionActions";
 import { getTerm, peekTerm, type TermHandle } from "../../lib/terminals";
 import { toast } from "../../lib/toast";
@@ -219,6 +219,7 @@ export function Pane({
 
   const chip = chipState(inst);
   const ns = nextStep(inst);
+  const ft = fastTrackStep(inst);
   const q = inst.queue;
   const pending = q?.pending || 0;
   const limitedMs = q?.limited_until ? q.limited_until * 1000 - Date.now() : 0;
@@ -295,6 +296,24 @@ export function Pane({
           ) : (
             <button className="nextstep nextstep-status" type="button" disabled title={chip.title}>
               {chip.label}
+            </button>
+          )}
+          {ft && (
+            <button
+              className={
+                "nextstep nextstep-fast" +
+                (ft.active ? " is-on" : "") +
+                (ft.hint ? " nextstep-fast-halted" : "")
+              }
+              type="button"
+              aria-pressed={!!ft.active}
+              title={ft.title}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                ft.run();
+              }}
+            >
+              {ft.label}
             </button>
           )}
           <span

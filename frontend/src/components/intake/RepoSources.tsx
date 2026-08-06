@@ -20,12 +20,17 @@ import { api } from "../../api/client";
 import { toast } from "../../lib/toast";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
 import { SourceCard, TestButton } from "./kit";
+import { DEPTH_LABELS, SOURCE_DEPTHS } from "../../lib/autopilot";
 
 export const REPO_RE = /^[^\s/]+\/[^\s/]+$/;
 
 /** A card's own values. Absent/blank = inherit the screen-wide default. */
 export interface RepoOverride {
   agent?: string;
+  /** How far autopilot carries an item ingested from this repo ("" = inherit).
+   * Never "merge" — a per-repo default applies to every future item with nobody
+   * watching, and a merge cannot be undone. */
+  depth?: string;
   base_branch?: string;
   min_age_minutes?: number | string;
   skip_authors?: string[] | string;
@@ -224,6 +229,7 @@ export function RepoSourceList({
           cards.map((card) => {
             const o = ov[card.repo];
             const agent = o?.agent || "";
+            const depth = o?.depth || "";
             const summary =
               (card.repo || "New repository") +
               " · " +
@@ -324,6 +330,27 @@ export function RepoSourceList({
                     Which coding CLI this repository's sessions run. Route one repo to a
                     cloud CLI and another to a local model — pick a provider whose
                     Connections row is green, or inherit the tab's default.
+                  </span>
+                </label>
+                <label className="set-row">
+                  <span className="set-label">Take them as far as</span>
+                  <select
+                    data-repo-field="depth"
+                    value={depth}
+                    disabled={!card.repo}
+                    onChange={(e) => patch(card.repo, "depth", e.target.value)}
+                  >
+                    <option value="">Off — stop after the agent works</option>
+                    {SOURCE_DEPTHS.map((d) => (
+                      <option key={d} value={d}>
+                        {DEPTH_LABELS[d]}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="set-hint">
+                    How far each item from this repo carries itself once the agent
+                    finishes: commit, push, open a PR. Merge is not offered for a whole
+                    repo — pick it on an individual row instead.
                   </span>
                 </label>
                 {surface === "pr" && (

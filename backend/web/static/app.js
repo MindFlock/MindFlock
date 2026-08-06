@@ -21559,6 +21559,12 @@ function useUsage(enabled = true) {
 function refreshInstances() {
   return queryClient.invalidateQueries({ queryKey: ["instances"] });
 }
+function patchInstance(title, patch) {
+  queryClient.setQueryData(
+    ["instances"],
+    (rows) => rows == null ? void 0 : rows.map((r) => r.title === title ? { ...r, ...patch } : r)
+  );
+}
 const PANEL_STALE_MS = 2e4;
 const PANEL_STALE_RETRY_MS = 2e3;
 const PANEL_GC_MS = 60 * 6e4;
@@ -22743,6 +22749,57 @@ function dropSideFor(rect, clientX, clientY) {
   if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? "left" : "right";
   return dy < 0 ? "top" : "bottom";
 }
+const inflight = /* @__PURE__ */ new Map();
+function freshStage(title) {
+  if (!title) return Promise.resolve(null);
+  const live = inflight.get(title);
+  if (live) return live;
+  const p = instApi(title, "/stage").then((row) => {
+    if (row && row.title) patchInstance(title, row);
+    return row ?? null;
+  }).catch(() => null).finally(() => {
+    inflight.delete(title);
+  });
+  inflight.set(title, p);
+  return p;
+}
+const DEPTHS = ["agent", "commit", "push", "pr", "merge"];
+const SESSION_DEPTHS = ["commit", "push", "pr", "merge"];
+const SOURCE_DEPTHS = ["agent", "commit", "push", "pr"];
+const DEPTH_LABELS = {
+  off: "Off",
+  agent: "Agent only",
+  commit: "Commit",
+  push: "Push",
+  pr: "Open PR",
+  merge: "Merge"
+};
+const DEPTH_STEP_LABELS = {
+  off: "Off",
+  agent: "Agent only",
+  commit: "Commit only",
+  push: "…then push",
+  pr: "…then open PR",
+  merge: "…then merge"
+};
+function depthLabel(depth) {
+  return DEPTH_LABELS[depth] || depth || "Off";
+}
+function normalizeDepth(value) {
+  const d = String(value || "").trim().toLowerCase();
+  if (d === "off") return "off";
+  return DEPTHS.includes(d) ? d : "";
+}
+function autopilotChipTitle(run) {
+  var _a2;
+  const target = depthLabel(run.depth);
+  if (run.state === "halted")
+    return "Fast-track stopped: " + (run.reason || "unknown reason");
+  if (run.state === "done") return "Fast-track finished at " + target;
+  const where = run.step ? " (last step: " + run.step + ")" : " (waiting on the agent)";
+  const skipped = ((_a2 = run.skipped) == null ? void 0 : _a2.length) ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
+  return "Fast-tracking to " + target + where + "\nClick to stop." + skipped;
+}
 function caps() {
   var _a2;
   return ((_a2 = queryClient.getQueryData(["config"])) == null ? void 0 : _a2.caps) ?? {
@@ -22950,7 +23007,59 @@ async function pushSession(title, force = false) {
     }
     toast("Push failed: " + errMsg(err), { duration: 6e3 });
   }
-  setTimeout(refreshInstances, 1e3);
+  void freshStage(title);
+}
+const DEPTH_KEY = "mf_fasttrack_depth";
+function resolveDepth() {
+  var _a2;
+  try {
+    const local = normalizeDepth(localStorage.getItem(DEPTH_KEY));
+    if (local && local !== "off") return local;
+  } catch {
+  }
+  const cfg = queryClient.getQueryData(["config"]);
+  const fromSettings = normalizeDepth(
+    (_a2 = cfg == null ? void 0 : cfg.repository) == null ? void 0 : _a2.fasttrack_depth
+  );
+  return fromSettings && fromSettings !== "off" ? fromSettings : "pr";
+}
+function rememberDepth(depth) {
+  try {
+    localStorage.setItem(DEPTH_KEY, normalizeDepth(depth) || "");
+  } catch {
+  }
+}
+async function startFastTrack(title, depth, message, base) {
+  if (!title || !requireGit()) return;
+  const d = normalizeDepth(depth) || "pr";
+  if (d === "merge") {
+    const where = "";
+    if (!confirm("Fast-track will commit, push, open a PR and MERGE it" + where + ".\nContinue?"))
+      return;
+  }
+  try {
+    await instApi(title, "/fast-track", {
+      json: {
+        depth: d,
+        ...message ? { message } : {},
+        ...base ? { base } : {}
+      }
+    });
+    toast("Fast-tracking to " + depthLabel(d), { duration: 4e3 });
+  } catch (err) {
+    toast("Fast-track failed: " + errMsg(err), { duration: 6e3 });
+  }
+  void freshStage(title);
+}
+async function stopFastTrack(title) {
+  if (!title) return;
+  try {
+    await instApi(title, "/fast-track", { method: "DELETE" });
+    toast("Fast-track stopped");
+  } catch (err) {
+    toast("Could not stop fast-track: " + errMsg(err), { duration: 6e3 });
+  }
+  void freshStage(title);
 }
 async function ideSession(title, quiet = false) {
   if (!title) return;
@@ -22982,7 +23091,7 @@ async function submitMakePr(title, base) {
   } catch (err) {
     toast("Make PR failed: " + errMsg(err), { duration: 6e3 });
   }
-  await refreshInstances();
+  await freshStage(title);
 }
 async function mergeSession(title) {
   if (!title || !requireGit()) return;
@@ -22997,7 +23106,7 @@ async function mergeSession(title) {
   } catch (err) {
     toast("Merge failed: " + errMsg(err), { duration: 6e3 });
   }
-  await refreshInstances();
+  await freshStage(title);
 }
 function hideSession(title) {
   if (!title) return;
@@ -23050,6 +23159,10 @@ function stageMeta(stage) {
 const loopReset = /* @__PURE__ */ new Set();
 function markLoopReset(title) {
   if (title) loopReset.add(title);
+}
+function reconcileLoopReset(inst) {
+  if (loopReset.has(inst.title) && (inst.stage || "agent") !== "pr")
+    loopReset.delete(inst.title);
 }
 function guidedStage(inst) {
   if (inst.title && loopReset.has(inst.title)) return "agent";
@@ -23168,6 +23281,37 @@ function checkChip(inst) {
 }
 const NO_ORIGIN_CMD = "git remote add origin git@github.com:owner/repo.git";
 const NO_ORIGIN_ALT = "git remote add origin https://github.com/owner/repo.git";
+function fastTrackStep(inst) {
+  var _a2;
+  const title = inst.title;
+  const caps2 = (_a2 = queryClient.getQueryData(["config"])) == null ? void 0 : _a2.caps;
+  if (caps2 && !caps2.git) return null;
+  if (!title || inst.status === "loading" || inst.status === "paused") return null;
+  if (inst.workspace_missing) return null;
+  const stage = guidedStage(inst);
+  if (stage === "provisioning" || stage === "precommit") return null;
+  const run = inst.autopilot;
+  if (run && run.depth && run.state === "running")
+    return {
+      label: "⏩",
+      active: true,
+      title: autopilotChipTitle(run) + "\n\nClick ⏩ to turn fast-track off.",
+      run: () => stopFastTrack(title)
+    };
+  if (run && run.depth && run.state === "halted")
+    return {
+      label: "⏩✗",
+      hint: true,
+      title: autopilotChipTitle(run) + "\n\nClick ⏩✗ to start fast-track again.",
+      run: () => startFastTrack(title, run.depth)
+    };
+  const depth = resolveDepth();
+  return {
+    label: "⏩",
+    title: "Fast-track: carry this session to " + depthLabel(depth) + " on its own.\nWaits for the agent to finish, then commits, pushes and stops at your\nchosen rung. Click again to turn it off.\nChange the default in Settings → Workspace.",
+    run: () => startFastTrack(title, depth)
+  };
+}
 function nextStep(inst) {
   var _a2;
   const title = inst.title;
@@ -24007,6 +24151,7 @@ function EventToasts() {
     );
     unsubs.push(
       ev.subscribe("session.stage_changed", (env) => {
+        if (env.new) patchInstance(env.session, { stage: String(env.new) });
         if (isReplay(env)) return;
         const title = env.session;
         if (env.new === "pr") {
@@ -27486,6 +27631,7 @@ function Pane({
   }
   const chip = chipState(inst);
   const ns = nextStep(inst);
+  const ft = fastTrackStep(inst);
   const q = inst.queue;
   const pending = (q == null ? void 0 : q.pending) || 0;
   const limitedMs = (q == null ? void 0 : q.limited_until) ? q.limited_until * 1e3 - Date.now() : 0;
@@ -27550,6 +27696,20 @@ function Pane({
                 children: ns.label
               }
             ) : /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "nextstep nextstep-status", type: "button", disabled: true, title: chip.title, children: chip.label }),
+            ft && /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                className: "nextstep nextstep-fast" + (ft.active ? " is-on" : "") + (ft.hint ? " nextstep-fast-halted" : ""),
+                type: "button",
+                "aria-pressed": !!ft.active,
+                title: ft.title,
+                onClick: (ev) => {
+                  ev.stopPropagation();
+                  ft.run();
+                },
+                children: ft.label
+              }
+            ),
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "span",
               {
@@ -29696,10 +29856,12 @@ function WorkItemRow({
   failPrefix,
   linkTitle,
   agents,
-  configuredAgent
+  configuredAgent,
+  configuredDepth
 }) {
   const [state, setState] = reactExports.useState("idle");
   const [agent, setAgent] = reactExports.useState("");
+  const [depth, setDepth] = reactExports.useState("");
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-item", title: tooltip, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-main", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -29726,22 +29888,40 @@ function WorkItemRow({
       ))
     ] }),
     hasSession ? /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "btn-primary pr-review-btn", disabled: true, children: "Session open" }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ik-item-start", children: [
-      agents && agents.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(
-        "select",
-        {
-          className: "ik-item-agent",
-          value: agent,
-          "data-picked": agent || void 0,
-          disabled: state !== "idle",
-          title: "Coding CLI to run this one on — just this start, not the whole queue" + (configuredAgent ? " (configured: " + configuredAgent + ")" : ""),
-          "aria-label": "Coding CLI for " + reference,
-          onChange: (e) => setAgent(e.target.value),
-          children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: configuredAgent ? "Configured (" + configuredAgent + ")" : "Configured" }),
-            agents.map((n) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: n, children: n }, n))
-          ]
-        }
-      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ik-item-picks", children: [
+        agents && agents.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "select",
+          {
+            className: "ik-item-agent",
+            value: agent,
+            "data-picked": agent || void 0,
+            disabled: state !== "idle",
+            title: "Coding CLI to run this one on — just this start, not the whole queue" + (configuredAgent ? " (configured: " + configuredAgent + ")" : ""),
+            "aria-label": "Coding CLI for " + reference,
+            onChange: (e) => setAgent(e.target.value),
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "Configured (" + (configuredAgent || "app default") + ")" }),
+              agents.map((n) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: n, children: n }, n))
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "select",
+          {
+            className: "ik-item-depth",
+            value: depth,
+            "data-picked": depth || void 0,
+            disabled: state !== "idle",
+            title: "How far to take this one on its own — just this start, not the whole queue" + (configuredDepth ? " (configured: " + DEPTH_LABELS[configuredDepth] + ")" : ""),
+            "aria-label": "How far to take " + reference,
+            onChange: (e) => setDepth(e.target.value),
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "Configured (" + DEPTH_LABELS[configuredDepth || "off"] + ")" }),
+              DEPTHS.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: d, children: DEPTH_LABELS[d] }, d))
+            ]
+          }
+        )
+      ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
@@ -29751,7 +29931,7 @@ function WorkItemRow({
           onClick: async () => {
             setState("starting");
             try {
-              const created = await onStart(agent);
+              const created = await onStart({ agent, depth });
               toast(created + " — provisioning, see the sidebar");
               setState("started");
             } catch (err) {
@@ -29958,7 +30138,10 @@ function TicketsTab(_) {
         sourceAgents: Object.fromEntries(
           sources.map((s) => [s.id, s.agent || agents.fallback || ""])
         ),
-        defaultAgent: agents.fallback
+        defaultAgent: agents.fallback,
+        sourceDepths: Object.fromEntries(
+          sources.map((s) => [s.id, s.depth || ""])
+        )
       }
     )
   ] });
@@ -30025,7 +30208,8 @@ const WORKFLOWS_CLOSED_LS_KEY = "mf_intake_ticket_workflows";
 function AssignedTickets({
   agents,
   sourceAgents,
-  defaultAgent
+  defaultAgent,
+  sourceDepths
 }) {
   var _a2, _b2, _c2, _d2, _e2, _f2, _g2, _h2;
   const ticketsQuery = usePanelQuery("tickets");
@@ -30189,6 +30373,7 @@ function AssignedTickets({
                   t,
                   agents,
                   configuredAgent: sourceAgents[t.source] || defaultAgent,
+                  configuredDepth: sourceDepths[t.source] || "",
                   onStarted: relistTickets
                 },
                 t.source + ":" + t.id
@@ -30240,6 +30425,7 @@ function AssignedTicketRow({
   t,
   agents,
   configuredAgent,
+  configuredDepth,
   onStarted
 }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -30247,6 +30433,7 @@ function AssignedTicketRow({
     {
       agents,
       configuredAgent,
+      configuredDepth,
       reference: t.slug,
       url: t.url,
       title: t.name,
@@ -30259,9 +30446,14 @@ function AssignedTicketRow({
       reasons: t.reasons,
       actionLabel: "Begin work",
       failPrefix: "Begin work failed",
-      onStart: async (agent) => {
+      onStart: async ({ agent, depth }) => {
         const r = await api("/api/tickets/start", {
-          json: { source: t.source, id: t.id, ...agent ? { agent } : {} }
+          json: {
+            source: t.source,
+            id: t.id,
+            ...agent ? { agent } : {},
+            ...depth ? { depth } : {}
+          }
         });
         refreshInstances();
         setTimeout(onStarted, 5e3);
@@ -30396,6 +30588,27 @@ function TicketSourceCard({
             }
           ),
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Which coding CLI runs the sessions this source starts. Route one queue to a cloud CLI and another to a local model — pick a provider whose Connections row is green, or leave it on the app default." })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Take tickets as far as" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "select",
+            {
+              className: "tk-depth",
+              "data-tk-field": "depth",
+              value: source.depth || "",
+              onChange: (e) => onChange({ depth: e.target.value }),
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "Off — stop after the agent works" }),
+                SOURCE_DEPTHS.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: d, children: DEPTH_LABELS[d] }, d))
+              ]
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+            "How far every ticket from this source carries itself once the agent finishes: commit, push, open a PR. Merging is ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "not" }),
+            " offered here — a source default applies to every future ticket with nobody watching, and a merge cannot be undone. You can still pick Merge on one ticket's row."
+          ] })
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "tk-fields", children: ((meta == null ? void 0 : meta.fields) || []).map(
           (f) => f.type === "state" ? /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -30586,6 +30799,7 @@ function RepoSourceList({
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: listId, className: "ik-cards", children: !cards.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: emptyText }) : cards.map((card) => {
       const o = ov[card.repo];
       const agent = (o == null ? void 0 : o.agent) || "";
+      const depth = (o == null ? void 0 : o.depth) || "";
       const summary = (card.repo || "New repository") + " · " + (agent || (defaults.agent ? defaults.agent + " (default)" : "app default"));
       return /* @__PURE__ */ jsxRuntimeExports.jsxs(
         SourceCard,
@@ -30662,6 +30876,23 @@ function RepoSourceList({
                 }
               ),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Which coding CLI this repository's sessions run. Route one repo to a cloud CLI and another to a local model — pick a provider whose Connections row is green, or inherit the tab's default." })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Take them as far as" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "select",
+                {
+                  "data-repo-field": "depth",
+                  value: depth,
+                  disabled: !card.repo,
+                  onChange: (e) => patch(card.repo, "depth", e.target.value),
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "Off — stop after the agent works" }),
+                    SOURCE_DEPTHS.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: d, children: DEPTH_LABELS[d] }, d))
+                  ]
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "How far each item from this repo carries itself once the agent finishes: commit, push, open a PR. Merge is not offered for a whole repo — pick it on an individual row instead." })
             ] }),
             surface === "pr" && /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Base branch" }),
@@ -30864,7 +31095,7 @@ function PullRequestsTab({ gotoTab }) {
         children: prsError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: prsError }) : prs === null ? null : !prsRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open PRs." }) : !prs.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open pull requests on the watched repositories." }) : groupOrder.map((repo) => {
           const rows = byRepo.get(repo) || [];
           const body = !rows.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open pull requests in this repository." }) : rows.map((p) => {
-            var _a3;
+            var _a3, _b3;
             return /* @__PURE__ */ jsxRuntimeExports.jsx(
               WorkItemRow,
               {
@@ -30881,12 +31112,14 @@ function PullRequestsTab({ gotoTab }) {
                 failPrefix: "Begin review failed",
                 agents: agentChoices.names,
                 configuredAgent: ((_a3 = overrides[repo]) == null ? void 0 : _a3.agent) || String(gh.agent || agentChoices.fallback || ""),
-                onStart: async (agent) => {
+                configuredDepth: ((_b3 = overrides[repo]) == null ? void 0 : _b3.depth) || "",
+                onStart: async ({ agent, depth }) => {
                   const r = await api("/api/github/prs/review", {
                     json: {
                       repo: p.repo,
                       number: p.number,
-                      ...agent ? { agent } : {}
+                      ...agent ? { agent } : {},
+                      ...depth ? { depth } : {}
                     }
                   });
                   refreshInstances();
@@ -31134,7 +31367,7 @@ function IssuesTab({ gotoTab }) {
         children: issuesError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: issuesError }) : issues === null ? null : !issuesRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open issues." }) : !issues.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open issues on the watched repositories." }) : groupOrder.map((repo) => {
           const rows = byRepo.get(repo) || [];
           const body = !rows.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open issues in this repository." }) : rows.map((i) => {
-            var _a3;
+            var _a3, _b2;
             return /* @__PURE__ */ jsxRuntimeExports.jsx(
               WorkItemRow,
               {
@@ -31151,12 +31384,14 @@ function IssuesTab({ gotoTab }) {
                 failPrefix: "Start work failed",
                 agents: agentChoices.names,
                 configuredAgent: ((_a3 = overrides[repo]) == null ? void 0 : _a3.agent) || String(gh.issue_agent || agentChoices.fallback || ""),
-                onStart: async (agent) => {
+                configuredDepth: ((_b2 = overrides[repo]) == null ? void 0 : _b2.depth) || "",
+                onStart: async ({ agent, depth }) => {
                   const r = await api("/api/github/issues/start", {
                     json: {
                       repo: i.repo,
                       number: i.number,
-                      ...agent ? { agent } : {}
+                      ...agent ? { agent } : {},
+                      ...depth ? { depth } : {}
                     }
                   });
                   refreshInstances();
@@ -32603,6 +32838,59 @@ function Workspace({ gotoScreen }) {
         " ",
         "to always PR there. Blank = PR into whatever branch the session was created from."
       ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Fast-track goes as far as" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        SettingField,
+        {
+          group: "repository",
+          field: "fasttrack_depth",
+          options: [
+            { value: "", label: "Open PR (default)" },
+            { value: "commit", label: "Commit only" },
+            { value: "push", label: "…then push" },
+            { value: "pr", label: "…then open PR" },
+            { value: "merge", label: "…then merge" }
+          ]
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+        "Where the ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "⏩" }),
+        " button stops. It waits for the agent to finish, then commits, pushes and carries on to this rung. Merging is irreversible, so it is never the default and an intake ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "source" }),
+        " can't default to it — only an individual item."
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Retryable pre-commit hooks" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        SettingField,
+        {
+          group: "repository",
+          field: "precommit_retry_hooks",
+          placeholder: "gitnexus-index"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+        "Comma-separated pre-commit hook ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "IDs" }),
+        " (not display names — pre-commit's",
+        " ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "name:" }),
+        " is free text, so ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "Black format" }),
+        " is the hook",
+        " ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "black" }),
+        "). When one of these fails ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "without changing any files" }),
+        ", fast-track retries the commit once and then re-runs it with",
+        " ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "SKIP=<id>" }),
+        " so the commit can land, and says which hook it skipped. Test and secret-scanning hooks are refused here — a failing test always stops the run."
+      ] })
     ] })
   ] });
 }
@@ -33406,12 +33694,14 @@ function CommitDialog() {
   const closeDialog = useUi((s) => s.closeDialog);
   const [msg, setMsg] = reactExports.useState("");
   const [error, setError] = reactExports.useState("");
+  const [depth, setDepth] = reactExports.useState("commit");
   const msgRef = reactExports.useRef(null);
   reactExports.useEffect(() => {
     var _a2;
     if (!open) return;
     setError("");
     setMsg(target && lastCommitMsg.get(target) || "");
+    setDepth("commit");
     (_a2 = msgRef.current) == null ? void 0 : _a2.focus();
   }, [open, target]);
   reactExports.useEffect(() => {
@@ -33443,6 +33733,12 @@ function CommitDialog() {
     return () => document.removeEventListener("keydown", onKey);
   }, [open, closeDialog]);
   if (!open) return null;
+  const submitLabel = {
+    commit: "Commit",
+    push: "Commit & push",
+    pr: "Commit & open PR",
+    merge: "Commit & merge"
+  }[depth] || "Commit";
   async function submitCommit() {
     const title = target;
     const m = msg.trim();
@@ -33452,15 +33748,21 @@ function CommitDialog() {
     }
     if (!title) return;
     lastCommitMsg.set(title, m);
+    const chosen = normalizeDepth(depth) || "commit";
     closeDialog();
     useUi.getState().setLastTab(title, "shell");
     selectSession(title);
+    if (chosen !== "commit") {
+      await startFastTrack(title, chosen, m);
+      void freshStage(title);
+      return;
+    }
     try {
       await instApi(title, "/commit", { json: { message: m } });
     } catch (err) {
       alert("Commit failed: " + errMsg(err));
     }
-    setTimeout(refreshInstances, 1e3);
+    void freshStage(title);
   }
   return /* @__PURE__ */ jsxRuntimeExports.jsx(
     "div",
@@ -33504,9 +33806,26 @@ function CommitDialog() {
                 }
               )
             ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { id: "commit-depth-row", children: [
+              "Then keep going",
+              " ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "muted", children: "(fast-track — stops at the rung you pick)" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "select",
+                {
+                  id: "commit-depth",
+                  value: depth,
+                  onChange: (e) => {
+                    setDepth(e.target.value);
+                    rememberDepth(e.target.value);
+                  },
+                  children: SESSION_DEPTHS.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: d, children: DEPTH_STEP_LABELS[d] }, d))
+                }
+              )
+            ] }),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "modal-actions", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "commit-cancel", onClick: closeDialog, children: "Cancel" }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "submit", children: "Commit" })
+              /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "submit", children: submitLabel })
             ] }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("p", { id: "commit-error", className: "error", children: error })
           ]
@@ -34918,7 +35237,10 @@ function App() {
     document.body.style.setProperty("--sidebar-w", ui.sidebarWidth + "px");
   }, [ui.sidebarWidth]);
   reactExports.useEffect(() => {
-    for (const inst of instances2 || []) noteActivity(inst);
+    for (const inst of instances2 || []) {
+      noteActivity(inst);
+      reconcileLoopReset(inst);
+    }
   }, [instances2]);
   const [openSpecial, setOpenSpecial] = reactExports.useState(/* @__PURE__ */ new Set());
   const toggleSpecial = reactExports.useCallback((kind) => {

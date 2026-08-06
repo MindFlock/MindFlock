@@ -157,6 +157,7 @@ def rows(engine=None) -> list:
                 "stage": "provisioning",
                 "pr_url": None,
                 "failed_step": None,
+                "failed_hook": None,
                 "queue": None,
                 "tokens": 0,
                 "tokens_in": 0,

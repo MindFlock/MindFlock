@@ -47,6 +47,41 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           to always PR there. Blank = PR into whatever branch the session was created from.
         </span>
       </label>
+      <label className="set-row">
+        <span className="set-label">Fast-track goes as far as</span>
+        <SettingField
+          group="repository"
+          field="fasttrack_depth"
+          options={[
+            { value: "", label: "Open PR (default)" },
+            { value: "commit", label: "Commit only" },
+            { value: "push", label: "…then push" },
+            { value: "pr", label: "…then open PR" },
+            { value: "merge", label: "…then merge" },
+          ]}
+        />
+        <span className="set-hint">
+          Where the <strong>⏩</strong> button stops. It waits for the agent to finish, then
+          commits, pushes and carries on to this rung. Merging is irreversible, so it is never
+          the default and an intake <em>source</em> can't default to it — only an individual item.
+        </span>
+      </label>
+      <label className="set-row">
+        <span className="set-label">Retryable pre-commit hooks</span>
+        <SettingField
+          group="repository"
+          field="precommit_retry_hooks"
+          placeholder="gitnexus-index"
+        />
+        <span className="set-hint">
+          Comma-separated pre-commit hook <strong>IDs</strong> (not display names — pre-commit's{" "}
+          <code>name:</code> is free text, so <code>Black format</code> is the hook{" "}
+          <code>black</code>). When one of these fails <em>without changing any files</em>,
+          fast-track retries the commit once and then re-runs it with{" "}
+          <code>SKIP=&lt;id&gt;</code> so the commit can land, and says which hook it skipped.
+          Test and secret-scanning hooks are refused here — a failing test always stops the run.
+        </span>
+      </label>
     </>
   );
 }

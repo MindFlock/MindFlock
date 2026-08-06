@@ -219,12 +219,14 @@ export function IssuesTab({ gotoTab }: TabProps) {
                         overrides[repo]?.agent ||
                         String(gh.issue_agent || agentChoices.fallback || "")
                       }
-                      onStart={async (agent) => {
+                      configuredDepth={overrides[repo]?.depth || ""}
+                      onStart={async ({ agent, depth }) => {
                         const r = await api<{ title?: string }>("/api/github/issues/start", {
                           json: {
                             repo: i.repo,
                             number: i.number,
                             ...(agent ? { agent } : {}),
+                            ...(depth ? { depth } : {}),
                           },
                         });
                         // The server already has a provisioning row for it: pull it now

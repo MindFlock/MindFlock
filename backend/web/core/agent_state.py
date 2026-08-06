@@ -814,6 +814,79 @@ def _parse_failed_step(text: str) -> Optional[str]:
     return last if len(last) <= 80 else last[:77] + "..."
 
 
+_HOOK_ID_RE = re.compile(r"^\s*-\s*hook id:\s*(\S+)\s*$")
+_HOOK_FAILED_RE = re.compile(r"^(.*?)\.{3,}.*\bFailed\s*$")
+
+
+def _parse_failed_hook_id(text: str) -> Optional[str]:
+    """The pre-commit hook ID that failed, from captured shell-pane ``text``.
+
+    A SEPARATE parse from :func:`_parse_failed_step`, and not a refinement of it,
+    because the two answer different questions and only one of them can key a
+    decision. ``failed_step`` is the hook's user-editable display ``name:`` — for
+    real configs that is "Black format", "Secret scan", "GitNexus index" against
+    the IDs ``black``, ``detect-secrets``, ``gitnexus-index``. "Black format"
+    does not slugify to ``black``, so a display name can never be matched against
+    an allowlist of IDs or handed to ``SKIP=``.
+
+    The ``- hook id:`` line is the reliable key: pre-commit prints it on every
+    failure regardless of the hook's ``verbose`` setting (its run.py emits it
+    when ``verbose or hook.verbose or retcode or files_modified``, and a failure
+    means a non-zero retcode).
+
+    Anchored at or after the last ``name.....Failed`` line so a hook id printed
+    earlier in the run — by a hook that passed verbosely — is never mistaken for
+    the failing one. Returns None when the pane holds no usable id (raw git hooks
+    print none at all).
+    """
+    lines = text.splitlines()
+    anchor = -1
+    for i, line in enumerate(lines):
+        if _HOOK_FAILED_RE.match(line):
+            anchor = i
+    if anchor < 0:
+        return None
+    found = None
+    for line in lines[anchor:]:
+        m = _HOOK_ID_RE.match(line)
+        if m:
+            found = m.group(1)
+    return found
+
+
+def _capture_shell_pane(title: str, lines: int = 400) -> Optional[str]:
+    """The session's shell tmux pane as text, or None.
+
+    ``-J`` joins tmux's wrapped lines (a long error captured one-line-per-pane-row
+    breaks every tail heuristic downstream). Never raises.
+    """
+    try:
+        name = _server()._shell_tmux_name(title)
+        cp = subprocess.run(
+            ["tmux", "capture-pane", "-p", "-J", "-S", "-%d" % int(lines), "-t", name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        if cp.returncode != 0:
+            return None
+        return cp.stdout.decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _failed_precommit_hook(title: str) -> Optional[str]:
+    """The failing pre-commit hook's ID (see :func:`_parse_failed_hook_id`).
+
+    Captures a 2000-line window rather than the 400 used for the display name:
+    the ``- hook id:`` line is printed BEFORE the hook's own output, so a long
+    pytest report or a verbose formatter can easily push it more than 400 rows
+    back. ``_ensure_shell_session`` sets tmux's history-limit to 100000, so the
+    wider window costs nothing.
+    """
+    return _parse_failed_hook_id(_capture_shell_pane(title, 2000) or "")
+
+
 def _failed_precommit_step(title: str) -> Optional[str]:
     """Best-effort detail of the commit hook that failed, from the shell pane.
 
@@ -1132,6 +1205,9 @@ def _session_stage(inst) -> dict:
                 if srv._is_dirty(wt):
                     res["stage"] = "interrupt"
                     res["failed_step"] = srv._failed_precommit_step(inst.Title)
+                    # The display name above is for humans; the hook ID is what
+                    # the fast-track retry policy can actually match on.
+                    res["failed_hook"] = srv._failed_precommit_hook(inst.Title)
                     return res
                 # Clean tree: the failure is history (the user committed or
                 # stashed past it) — self-heal so it can't re-fire later.

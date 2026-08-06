@@ -27,6 +27,7 @@
 
 import { useState } from "react";
 import { toast } from "../../lib/toast";
+import { DEPTHS, DEPTH_LABELS } from "../../lib/autopilot";
 
 /** "3h old" / "20m old" / "2d old" — one implementation, three tabs. */
 export function ageText(iso?: string): string {
@@ -333,6 +334,7 @@ export function WorkItemRow({
   linkTitle,
   agents,
   configuredAgent,
+  configuredDepth,
 }: {
   reference: string;
   url?: string;
@@ -348,7 +350,7 @@ export function WorkItemRow({
   actionLabel: string;
   /** Starts the session on `agent` ("" = the configured chain); resolve with the
    * created session's title for the toast. */
-  onStart(agent: string): Promise<string>;
+  onStart(opts: { agent: string; depth: string }): Promise<string>;
   /** e.g. "Begin review failed" */
   failPrefix: string;
   /** Tooltip on the reference link; defaults to GitHub's wording. */
@@ -359,11 +361,17 @@ export function WorkItemRow({
   /** What the empty choice resolves to — this row's source / repo card value,
    * so "Configured" is never a mystery. */
   configuredAgent?: string;
+  /** What this row's source defaults its automation depth to, so the empty
+   * choice names it. */
+  configuredDepth?: string;
 }) {
   const [state, setState] = useState<"idle" | "starting" | "started">("idle");
   // Per-start override, not persisted: it applies to THIS launch. Changing the
   // queue's CLI is a card edit; running one item elsewhere is this.
   const [agent, setAgent] = useState("");
+  // Same lifetime, same reasoning: how far THIS launch should carry itself.
+  // Unlike the source default, an individual item may choose "merge".
+  const [depth, setDepth] = useState("");
   return (
     <div className="pr-open-item" title={tooltip}>
       <div className="pr-open-main">
@@ -402,29 +410,59 @@ export function WorkItemRow({
         </button>
       ) : (
         <div className="ik-item-start">
-          {agents && agents.length > 0 && (
+          {/* The two per-launch pickers share ONE line. `.ik-item-start` is a
+              column whose children are stretched to the widest, so a third
+              stacked control would make every row in the list taller. */}
+          <div className="ik-item-picks">
+            {agents && agents.length > 0 && (
+              <select
+                className="ik-item-agent"
+                value={agent}
+                data-picked={agent || undefined}
+                disabled={state !== "idle"}
+                title={
+                  "Coding CLI to run this one on — just this start, not the whole queue" +
+                  (configuredAgent ? " (configured: " + configuredAgent + ")" : "")
+                }
+                aria-label={"Coding CLI for " + reference}
+                onChange={(e) => setAgent(e.target.value)}
+              >
+                <option value="">
+                  {"Configured (" + (configuredAgent || "app default") + ")"}
+                </option>
+                {agents.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            )}
             <select
-              className="ik-item-agent"
-              value={agent}
-              data-picked={agent || undefined}
+              className="ik-item-depth"
+              value={depth}
+              data-picked={depth || undefined}
               disabled={state !== "idle"}
               title={
-                "Coding CLI to run this one on — just this start, not the whole queue" +
-                (configuredAgent ? " (configured: " + configuredAgent + ")" : "")
+                "How far to take this one on its own — just this start, not the whole queue" +
+                (configuredDepth ? " (configured: " + DEPTH_LABELS[configuredDepth] + ")" : "")
               }
-              aria-label={"Coding CLI for " + reference}
-              onChange={(e) => setAgent(e.target.value)}
+              aria-label={"How far to take " + reference}
+              onChange={(e) => setDepth(e.target.value)}
             >
+              {/* Always NAME what the empty choice resolves to. A bare
+                  "Configured" made you open Settings to find out what pressing
+                  Start would actually do; an unset source default means no
+                  autopilot at all, which is "Off" — worth saying out loud. */}
               <option value="">
-                {configuredAgent ? "Configured (" + configuredAgent + ")" : "Configured"}
+                {"Configured (" + DEPTH_LABELS[configuredDepth || "off"] + ")"}
               </option>
-              {agents.map((n) => (
-                <option key={n} value={n}>
-                  {n}
+              {DEPTHS.map((d) => (
+                <option key={d} value={d}>
+                  {DEPTH_LABELS[d]}
                 </option>
               ))}
             </select>
-          )}
+          </div>
           <button
             type="button"
             className="btn-primary pr-review-btn"
@@ -432,7 +470,7 @@ export function WorkItemRow({
             onClick={async () => {
               setState("starting");
               try {
-                const created = await onStart(agent);
+                const created = await onStart({ agent, depth });
                 toast(created + " — provisioning, see the sidebar");
                 setState("started");
               } catch (err) {

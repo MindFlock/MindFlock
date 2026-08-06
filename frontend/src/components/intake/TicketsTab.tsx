@@ -37,6 +37,7 @@ import {
   saveShownBuckets,
   visibleBuckets,
 } from "./buckets";
+import { DEPTH_LABELS, SOURCE_DEPTHS } from "../../lib/autopilot";
 import type { TabProps } from "./IntakeDialog";
 
 interface CatalogField {
@@ -263,6 +264,11 @@ export function TicketsTab(_: TabProps) {
             sources.map((s) => [s.id, s.agent || agents.fallback || ""])
           )}
           defaultAgent={agents.fallback}
+          // Same idea for the depth picker: what "Configured" means on this
+          // source's rows is the source's own automation depth.
+          sourceDepths={Object.fromEntries(
+            sources.map((s) => [s.id, s.depth || ""])
+          )}
         />
       )}
     </>
@@ -391,9 +397,12 @@ function AssignedTickets({
   agents,
   sourceAgents,
   defaultAgent,
+  sourceDepths,
 }: {
   agents: string[];
   sourceAgents: Record<string, string>;
+  /** Per source, the automation depth its rows inherit ("" = none set). */
+  sourceDepths: Record<string, string>;
   /** What a row falls back to naming when its source isn't in the map — a
    * ticket from a source that was just removed, say. Never a bare "Configured". */
   defaultAgent: string;
@@ -627,6 +636,7 @@ function AssignedTickets({
                         // offers a bare "Configured" with nothing named — which
                         // is what a ticket from a just-removed source would show.
                         configuredAgent={sourceAgents[t.source] || defaultAgent}
+                        configuredDepth={sourceDepths[t.source] || ""}
                         onStarted={relistTickets}
                       />
                     ))}
@@ -695,18 +705,22 @@ function AssignedTicketRow({
   t,
   agents,
   configuredAgent,
+  configuredDepth,
   onStarted,
 }: {
   t: AssignedTicket;
   agents: string[];
   /** What this ticket's source is configured to run, for the picker's label. */
   configuredAgent: string;
+  /** How far this ticket's source is configured to take its items. */
+  configuredDepth: string;
   onStarted(): void;
 }) {
   return (
     <WorkItemRow
       agents={agents}
       configuredAgent={configuredAgent}
+      configuredDepth={configuredDepth}
       reference={t.slug}
       url={t.url}
       title={t.name}
@@ -719,9 +733,14 @@ function AssignedTicketRow({
       reasons={t.reasons}
       actionLabel="Begin work"
       failPrefix="Begin work failed"
-      onStart={async (agent) => {
+      onStart={async ({ agent, depth }) => {
         const r = await api<{ title?: string }>("/api/tickets/start", {
-          json: { source: t.source, id: t.id, ...(agent ? { agent } : {}) },
+          json: {
+            source: t.source,
+            id: t.id,
+            ...(agent ? { agent } : {}),
+            ...(depth ? { depth } : {}),
+          },
         });
         // The server already has a provisioning row for it: pull it now
         // instead of leaving the sidebar blank until the next poll.
@@ -882,6 +901,28 @@ function TicketSourceCard({
           Which coding CLI runs the sessions this source starts. Route one queue to a
           cloud CLI and another to a local model — pick a provider whose Connections
           row is green, or leave it on the app default.
+        </span>
+      </label>
+      <label className="set-row">
+        <span className="set-label">Take tickets as far as</span>
+        <select
+          className="tk-depth"
+          data-tk-field="depth"
+          value={source.depth || ""}
+          onChange={(e) => onChange({ depth: e.target.value })}
+        >
+          <option value="">Off — stop after the agent works</option>
+          {SOURCE_DEPTHS.map((d) => (
+            <option key={d} value={d}>
+              {DEPTH_LABELS[d]}
+            </option>
+          ))}
+        </select>
+        <span className="set-hint">
+          How far every ticket from this source carries itself once the agent finishes:
+          commit, push, open a PR. Merging is <strong>not</strong> offered here — a
+          source default applies to every future ticket with nobody watching, and a
+          merge cannot be undone. You can still pick Merge on one ticket's row.
         </span>
       </label>
       <div className="tk-fields">

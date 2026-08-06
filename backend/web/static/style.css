@@ -4905,10 +4905,61 @@ p.set-hint {
   filter: none;
 }
 
+/* Fast-track (⏩): a SECONDARY control that sits beside the guided button and
+   arms the rest of the stack in one press. Deliberately an accent OUTLINE, not a
+   filled accent — the guided next step must stay the one obvious default action,
+   and two filled accent buttons side by side would compete. Icon-only, so it
+   costs almost no width in a tiled layout. */
+.pane-head .actions .nextstep.nextstep-fast {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  font-weight: 700;
+  padding: 3px 7px;
+}
+
+.pane-head .actions .nextstep.nextstep-fast:hover {
+  background: var(--accent);
+  color: #fff;
+  filter: none;
+}
+
+/* ON: a chain is armed. Filled, so "is fast-track running on this session?" is
+   answerable at a glance across a whole grid of panes rather than by hovering.
+   The control stays put and stays clickable — clicking turns it back off. */
+.pane-head .actions .nextstep.nextstep-fast.is-on {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+/* HALTED: the run stopped and needs a human. Must be visible without a hover —
+   a chain that stopped silently is the one failure mode that kills trust in it. */
+.pane-head .actions .nextstep.nextstep-fast.nextstep-fast-halted {
+  background: transparent;
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.pane-head .actions .nextstep.nextstep-fast.nextstep-fast-halted:hover {
+  background: var(--red);
+  color: #fff;
+}
+
 /* The next-step button is the LAST header control to drop: the token/cost
    counter (and diff-stats line) hide first at 560px, so the primary action
    stays reachable in tight tiled layouts. Only at 420px, when even the button
-   no longer fits, does it hide too. */
+   no longer fits, does it hide too. Fast-track is secondary, so it goes one step
+   earlier — the primary action must never be the thing that gets squeezed out. */
+/* Fast-track is secondary, so it drops one step before the primary button —
+   EXCEPT while it carries state. Hiding an armed toggle would take away the only
+   way to turn it off, which is the bug this control was reworked to fix. */
+@container (max-width: 500px) {
+  .pane-head .actions .nextstep.nextstep-fast:not(.is-on):not(.nextstep-fast-halted) {
+    display: none !important;
+  }
+}
+
 @container (max-width: 420px) {
   .pane-head .actions .nextstep {
     display: none !important;
@@ -7944,6 +7995,36 @@ button.linklike {
   min-width: 132px;
   max-width: 170px;
   font-family: inherit;
+}
+
+/* The per-launch pickers sit side by side on one line, so adding the depth
+   control did not make every row in the list a line taller. */
+.ik-item-start .ik-item-picks {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+/* Same quiet treatment as the CLI picker, and the same two-classes-deep
+   specificity for the same reason (`.set-row select` is (0,1,1)). The floor is
+   smaller because the labels are shorter and the two now share a row. */
+.ik-item-start .ik-item-depth {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  min-width: 96px;
+  max-width: 150px;
+  font-family: inherit;
+  flex: 1 1 auto;
+}
+
+.ik-item-start .ik-item-depth:hover:not(:disabled),
+.ik-item-start .ik-item-depth[data-picked] {
+  color: var(--text);
+  border-color: var(--accent);
 }
 
 .ik-item-start .ik-item-agent:hover:not(:disabled) {

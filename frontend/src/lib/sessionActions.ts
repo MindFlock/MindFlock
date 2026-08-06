@@ -8,10 +8,12 @@ import { api, instApi } from "../api/client";
 import type { Caps, Config, Instance } from "../api/types";
 import { computeVisible } from "../components/grid/layout";
 import { queryClient, refreshInstances } from "../state/queries";
+import { freshStage } from "./stageWatch";
 import { useUi } from "../state/store";
 import { toast } from "./toast";
 import { errMsg } from "./format";
 import { markLoopReset } from "./stage";
+import { depthLabel, normalizeDepth } from "./autopilot";
 import { focusTerm, releaseTerms } from "./terminals";
 
 function caps() {
@@ -315,7 +317,90 @@ export async function pushSession(title: string, force = false) {
     }
     toast("Push failed: " + errMsg(err), { duration: 6000 });
   }
-  setTimeout(refreshInstances, 1000);
+  // The old `setTimeout(refreshInstances, 1000)` could not observe anything: the
+  // server serves GET /api/instances from its tick snapshot for up to 10s. Read
+  // the one session fresh instead — and the server's push watcher republishes the
+  // moment the branch reaches origin, so "Make PR" appears without another poll.
+  void freshStage(title);
+}
+
+/* --- Fast-track (autopilot) ------------------------------------------------
+ * Arm-and-WAIT, deliberately: a press records the target rung and the server
+ * driver takes each step as the session becomes ready for it. That is what lets
+ * you arm a session the moment you kick it off instead of babysitting it — and
+ * it is what makes this button and the intake depth option the same mechanism.
+ * The cost is that the effect is not instant, so the pane must show the armed
+ * chip immediately or the press reads as broken. */
+
+const DEPTH_KEY = "mf_fasttrack_depth";
+
+/** The rung to use when the caller didn't pick one: last local choice, then the
+ * server setting, then "pr". */
+export function resolveDepth(): string {
+  try {
+    const local = normalizeDepth(localStorage.getItem(DEPTH_KEY));
+    if (local && local !== "off") return local;
+  } catch {
+    /* private mode / disabled storage — fall through to the server setting */
+  }
+  const cfg = queryClient.getQueryData<Config>(["config"]);
+  const fromSettings = normalizeDepth(
+    (cfg as { repository?: { fasttrack_depth?: string } } | undefined)?.repository
+      ?.fasttrack_depth
+  );
+  return fromSettings && fromSettings !== "off" ? fromSettings : "pr";
+}
+
+export function rememberDepth(depth: string) {
+  try {
+    localStorage.setItem(DEPTH_KEY, normalizeDepth(depth) || "");
+  } catch {
+    /* not worth surfacing — the server setting still applies next time */
+  }
+}
+
+/** Arm the chain. `message` is only needed when there is uncommitted work and
+ * nothing is on disk to reuse — the same rule POST /commit applies. */
+export async function startFastTrack(
+  title: string,
+  depth: string,
+  message?: string,
+  base?: string
+) {
+  if (!title || !requireGit()) return;
+  const d = normalizeDepth(depth) || "pr";
+  // One up-front confirm for the irreversible rung, before anything is armed.
+  if (d === "merge") {
+    const where = base ? " into " + base : "";
+    if (!confirm("Fast-track will commit, push, open a PR and MERGE it" + where + ".\nContinue?"))
+      return;
+  }
+  try {
+    await instApi(title, "/fast-track", {
+      json: {
+        depth: d,
+        ...(message ? { message } : {}),
+        ...(base ? { base } : {}),
+      },
+    });
+    toast("Fast-tracking to " + depthLabel(d), { duration: 4000 });
+  } catch (err) {
+    toast("Fast-track failed: " + errMsg(err), { duration: 6000 });
+  }
+  void freshStage(title);
+}
+
+/** Disarm. Anything already typed into the shell keeps running — this only stops
+ * the driver from taking the NEXT step, which is all it controls. */
+export async function stopFastTrack(title: string) {
+  if (!title) return;
+  try {
+    await instApi(title, "/fast-track", { method: "DELETE" });
+    toast("Fast-track stopped");
+  } catch (err) {
+    toast("Could not stop fast-track: " + errMsg(err), { duration: 6000 });
+  }
+  void freshStage(title);
 }
 
 export async function ideSession(title: string, quiet = false) {
@@ -363,7 +448,7 @@ export async function submitMakePr(title: string, base: string) {
   } catch (err) {
     toast("Make PR failed: " + errMsg(err), { duration: 6000 });
   }
-  await refreshInstances();
+  await freshStage(title);
 }
 
 /** Merge the branch's PR. Same shape as make-pr: `ok: false` + `pr_url` means
@@ -381,7 +466,7 @@ export async function mergeSession(title: string) {
   } catch (err) {
     toast("Merge failed: " + errMsg(err), { duration: 6000 });
   }
-  await refreshInstances();
+  await freshStage(title);
 }
 
 /** Hide/show a session's pane (client-side only; the session keeps running). */

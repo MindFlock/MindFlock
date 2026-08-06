@@ -246,12 +246,14 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
                         overrides[repo]?.agent ||
                         String(gh.agent || agentChoices.fallback || "")
                       }
-                      onStart={async (agent) => {
+                      configuredDepth={overrides[repo]?.depth || ""}
+                      onStart={async ({ agent, depth }) => {
                         const r = await api<{ title?: string }>("/api/github/prs/review", {
                           json: {
                             repo: p.repo,
                             number: p.number,
                             ...(agent ? { agent } : {}),
+                            ...(depth ? { depth } : {}),
                           },
                         });
                         // The server already has a provisioning row for it: pull it now

@@ -140,6 +140,12 @@ class SessionRunner:
         branch = _branch_name_for(story)
         title = story.slug
         agent = self._agent_for(story)
+        self._arm_autopilot(
+            title,
+            getattr(story, "provider", "") or "",
+            str(getattr(story, "id", "") or story.slug),
+            str(getattr(story, "name", "") or ""),
+        )
         logger.info(
             "Launching ticket %s via MindFlock (agent=%s, mode=%s, branch=%s, session=%s)",
             story.slug,
@@ -190,6 +196,12 @@ class SessionRunner:
         workspace = await self._pr_provisioner.provision(pr, launch_cursor=False)
         prompt = build_consolidated_pr_prompt(pr, comments, workspace.directory)
         title = f"pr-{pr_slug(pr)}"
+        self._arm_autopilot(
+            title,
+            str(getattr(pr, "repo", "") or ""),
+            "%s#%s" % (getattr(pr, "repo", ""), pr.number),
+            str(getattr(pr, "title", "") or ""),
+        )
         logger.info(
             "Launching PR #%d via MindFlock (%d comments, session=%s, branch=%s)",
             pr.number,
@@ -245,6 +257,62 @@ class SessionRunner:
             return stamped
         provider = getattr(story, "provider", "")
         return fresh_agent(lambda c: c.agent_for(provider), self.config)
+
+    def _arm_autopilot(self, title: str, source: str, item: str, message: str) -> None:
+        """Record how far an AUTO-ingested item should carry itself.
+
+        The auto path runs in a separate OS process from the web server, so this
+        cannot call the server's helper — but it does not need to. The autopilot
+        store is a small, lock-guarded, atomically-written file keyed by SESSION
+        TITLE, and the title an ingested item produces here is byte-identical to
+        the one a forced start from the Intake dialog produces. So the child
+        writes the record and the server's driver picks it up on its next pass,
+        with no IPC and no shared memory.
+
+        Armed BEFORE the instance is created, deliberately: the target then
+        survives a provisioning crash or a server restart mid-launch. A record
+        whose session never appears is dropped by the driver's prune.
+
+        Depth is read from settings on every call (not cached at construction),
+        the same reason :meth:`_agent_for` re-reads: a change made in the UI must
+        apply to the NEXT item, not the next pipeline restart. Never raises — an
+        automation preference must not be able to stop an ingestion.
+        """
+        try:
+            from backend.web.core import autopilot as _autopilot
+
+            depth = _autopilot.normalize_depth(self._depth_for(source))
+            if depth in ("", "off") or depth not in _autopilot.SOURCE_DEPTHS:
+                return
+            _autopilot.arm(
+                title, depth, source=source, item=item, message=message or ""
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("autopilot arm skipped for %s", title, exc_info=True)
+
+    def _depth_for(self, source: str) -> str:
+        """The configured autopilot depth for a ticketing source / repo slug.
+
+        Reads the same ``settings.json`` the web server reads, so the per-source
+        default has exactly one definition regardless of which process acts on it.
+        """
+        try:
+            from backend.config.settings import load_settings
+
+            st = load_settings()
+            for src in st.ticketing.sources:
+                if source and source in (
+                    getattr(src, "id", ""),
+                    getattr(src, "provider", ""),
+                ):
+                    return str(getattr(src, "depth", "") or "")
+            for table in (st.github.repo_settings, st.github.issue_repo_settings):
+                block = (table or {}).get(source) or {}
+                if block.get("depth"):
+                    return str(block["depth"])
+        except Exception:  # noqa: BLE001
+            pass
+        return ""
 
     def _create_instance(
         self,

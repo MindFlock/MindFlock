@@ -38,10 +38,29 @@ export type Stage =
   | "provisioning"
   | "agent"
   | "precommit"
+  // A pre-commit hook blocked the commit. The server has always emitted this and
+  // every consumer handles it; it was simply missing from the union.
+  | "interrupt"
   | "committed"
   | "pushed"
   | "pr"
   | "merged";
+
+/** How far an armed session is being carried automatically, and where it is.
+ *
+ * One concept with two entry points: the per-session fast-track button and the
+ * per-item / per-source depth on an ingested ticket, PR or issue. `state` is
+ * "running" | "halted" | "done"; a halted run always carries a `reason`, because
+ * a chain that stops silently is the failure mode that destroys trust in it. */
+export interface AutopilotRun {
+  depth: string;
+  state: "running" | "halted" | "done" | string;
+  step: string;
+  reason: string;
+  source: string;
+  item: string;
+  skipped?: string[];
+}
 
 export interface Instance {
   title: string;
@@ -64,6 +83,10 @@ export interface Instance {
   stage: Stage | string;
   pr_url: string | null;
   failed_step?: string | null;
+  /** The failing pre-commit hook's ID (not its display name — pre-commit's
+   * `name:` is free text and cannot be mapped back to an id). Keys the retry. */
+  failed_hook?: string | null;
+  autopilot?: AutopilotRun | null;
   queue: QueueSummary | null;
   tokens: number;
   tokens_in: number;

@@ -63,6 +63,12 @@ EVENT_NAMES = (
     # Running OUT needs no event of its own: that is
     # ``session.activity_changed`` with ``new == "limit"``.
     "session.usage_restored",
+    # Autopilot: a fast-track / intake run changed state (``new`` is
+    # "running"|"halted"|"done"; data: {"depth", "step", "state", "reason",
+    # "item", "skipped"}). A halted run always carries a human-readable reason —
+    # a chain that stops silently is the one failure mode that destroys trust in
+    # the feature.
+    "session.autopilot_changed",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay
@@ -282,6 +288,29 @@ def set_sessions_snapshot(sessions: List[dict]) -> None:
     global _SESSIONS_SNAPSHOT
     with _SESSIONS_LOCK:
         _SESSIONS_SNAPSHOT = [dict(s) for s in sessions]
+
+
+def patch_session_snapshot(title: str, row: dict) -> None:
+    """Replace ONE session's published row (append it if it wasn't there).
+
+    :func:`sessions_snapshot` deliberately hands out copies, so a caller that
+    recomputes a single session cannot otherwise reach the list ``GET
+    /api/instances`` serves. Without this publish-through the UI flickers
+    BACKWARDS: the on-demand fresh read says "pushed", then the next poll serves
+    the tick's list, still saying "committed".
+
+    This is a SECOND writer to a structure that had exactly one (the instances
+    tick). Last writer wins, and the worst case is one row that is one tick
+    stale — the same staleness the tick already has.
+    """
+    if not title:
+        return
+    with _SESSIONS_LOCK:
+        for i, s in enumerate(_SESSIONS_SNAPSHOT):
+            if s.get("title") == title:
+                _SESSIONS_SNAPSHOT[i] = dict(row)
+                return
+        _SESSIONS_SNAPSHOT.append(dict(row))
 
 
 def sessions_snapshot() -> List[dict]:

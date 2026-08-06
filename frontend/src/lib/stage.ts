@@ -13,7 +13,11 @@ import {
   makePrSession,
   mergeSession,
   pushSession,
+  resolveDepth,
+  startFastTrack,
+  stopFastTrack,
 } from "./sessionActions";
+import { autopilotChipTitle, depthLabel } from "./autopilot";
 
 /** Longest `failed_step` that still reads as a hook NAME rather than a line of
  * output, and so still belongs in the stage pill. "Run Tests (+3)" is 14. */
@@ -230,6 +234,62 @@ export interface NextStep {
   run: () => void;
   hint?: boolean;
   title?: string;
+  /** Rendered as an ON toggle (filled rather than outlined). Used by the ⏩
+   * fast-track control while a chain is armed, so the button you pressed stays
+   * visible, visibly on, and clickable to turn back off. */
+  active?: boolean;
+}
+
+/** The ⏩ sibling of the guided button: a per-session TOGGLE for autopilot.
+ *
+ * It stays visible while a chain is armed and turns it off on click. It used to
+ * hide itself once armed, leaving the only off-switch on the primary button —
+ * which read as "the button I pressed disappeared and I can't undo it". A toggle
+ * is what a one-press control has to be.
+ *
+ * Returns null only when a press would be meaningless: no git, a session that
+ * isn't running, a missing workspace, or a commit already in flight. */
+export function fastTrackStep(inst: Partial<Instance>): NextStep | null {
+  const title = inst.title;
+  const caps = queryClient.getQueryData<Config>(["config"])?.caps;
+  if (caps && !caps.git) return null;
+  if (!title || inst.status === "loading" || inst.status === "paused") return null;
+  if (inst.workspace_missing) return null;
+  const stage = guidedStage(inst);
+  if (stage === "provisioning" || stage === "precommit") return null;
+
+  const run = inst.autopilot;
+  // Armed: show it ON and make the click turn it off.
+  if (run && run.depth && run.state === "running")
+    return {
+      label: "⏩",
+      active: true,
+      title: autopilotChipTitle(run) + "\n\nClick ⏩ to turn fast-track off.",
+      run: () => stopFastTrack(title),
+    };
+  // Halted: say so on the control itself, and let a click arm it again. A chain
+  // that stopped without saying why is the failure mode that kills trust here.
+  if (run && run.depth && run.state === "halted")
+    return {
+      label: "⏩✗",
+      hint: true,
+      title:
+        autopilotChipTitle(run) + "\n\nClick ⏩✗ to start fast-track again.",
+      run: () => startFastTrack(title, run.depth),
+    };
+
+  const depth = resolveDepth();
+  return {
+    label: "⏩",
+    title:
+      "Fast-track: carry this session to " +
+      depthLabel(depth) +
+      " on its own.\n" +
+      "Waits for the agent to finish, then commits, pushes and stops at your\n" +
+      "chosen rung. Click again to turn it off.\n" +
+      "Change the default in Settings → Workspace.",
+    run: () => startFastTrack(title, depth),
+  };
 }
 
 export function nextStep(inst: Partial<Instance>): NextStep | null {
@@ -238,6 +298,11 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
   if (caps && !caps.git) return null; // no git -> no commit/push/PR workflow
   if (!title || inst.status === "loading" || inst.status === "paused") return null;
   if (inst.workspace_missing) return null; // L7: Clean up lives in the row
+  // An armed chain deliberately does NOT take over this slot. It used to, which
+  // meant arming fast-track replaced your manual Commit/Push/Make PR button with
+  // a status readout and left no way to act by hand. Autopilot state lives on the
+  // ⏩ toggle beside this button (see fastTrackStep); the manual ladder below
+  // always keeps working, so you can still drive a step yourself at any time.
   switch (guidedStage(inst)) {
     case "agent":
       return { label: "Commit…", run: () => commitSession(title) };

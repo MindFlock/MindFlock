@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConfig, useInstances } from "./state/queries";
 import { tourDecision, useUi } from "./state/store";
-import { noteActivity } from "./lib/stage";
+import { noteActivity, reconcileLoopReset } from "./lib/stage";
 import { installKeymap, type KeymapHost } from "./lib/keymap";
 import { selectSession, instances as instancesSnapshot } from "./lib/sessionActions";
 import { TopBar } from "./components/TopBar";
@@ -89,9 +89,15 @@ export default function App() {
     document.body.style.setProperty("--sidebar-w", ui.sidebarWidth + "px");
   }, [ui.sidebarWidth]);
 
-  // Feed the activity debounce on every poll.
+  // Feed the activity debounce on every poll, and retire the post-Make-PR loop
+  // pin once the real stage has left "pr". Without the reconcile the pin is
+  // permanent for the life of the page: after one PR that session's guided
+  // button stays on "Commit…" and never offers Push again.
   useEffect(() => {
-    for (const inst of instances || []) noteActivity(inst);
+    for (const inst of instances || []) {
+      noteActivity(inst);
+      reconcileLoopReset(inst);
+    }
   }, [instances]);
 
   // Special panes (logs / system logs / assistant chat).

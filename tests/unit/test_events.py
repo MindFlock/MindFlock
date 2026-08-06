@@ -100,6 +100,7 @@ def test_event_names_vocabulary_is_complete():
         "session.prompt_sent",
         "session.queue_changed",
         "session.usage_restored",
+        "session.autopilot_changed",
     }
 
 
