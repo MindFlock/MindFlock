@@ -22749,18 +22749,18 @@ function dropSideFor(rect, clientX, clientY) {
   if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? "left" : "right";
   return dy < 0 ? "top" : "bottom";
 }
-const inflight = /* @__PURE__ */ new Map();
+const inflight$1 = /* @__PURE__ */ new Map();
 function freshStage(title) {
   if (!title) return Promise.resolve(null);
-  const live = inflight.get(title);
+  const live = inflight$1.get(title);
   if (live) return live;
   const p = instApi(title, "/stage").then((row) => {
     if (row && row.title) patchInstance(title, row);
     return row ?? null;
   }).catch(() => null).finally(() => {
-    inflight.delete(title);
+    inflight$1.delete(title);
   });
-  inflight.set(title, p);
+  inflight$1.set(title, p);
   return p;
 }
 const DEPTHS = ["agent", "commit", "push", "pr", "merge"];
@@ -22778,9 +22778,16 @@ const DEPTH_STEP_LABELS = {
   off: "Off",
   agent: "Agent only",
   commit: "Commit only",
-  push: "…then push",
-  pr: "…then open PR",
-  merge: "…then merge"
+  push: "Then push",
+  pr: "Then open PR",
+  merge: "Then merge"
+};
+const DEPTH_SHORT = {
+  agent: "→ agent",
+  commit: "→ commit",
+  push: "→ push",
+  pr: "→ PR",
+  merge: "→ merge"
 };
 function depthLabel(depth) {
   return DEPTH_LABELS[depth] || depth || "Off";
@@ -22795,10 +22802,27 @@ function autopilotChipTitle(run) {
   const target = depthLabel(run.depth);
   if (run.state === "halted")
     return "Fast-track stopped: " + (run.reason || "unknown reason");
-  if (run.state === "done") return "Fast-track finished at " + target;
-  const where = run.step ? " (last step: " + run.step + ")" : " (waiting on the agent)";
+  if (run.state === "done")
+    return "Fast-track finished at " + target + " — still on, and will pick up new work automatically.";
+  const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
   const skipped = ((_a2 = run.skipped) == null ? void 0 : _a2.length) ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
   return "Fast-tracking to " + target + where + "\nClick to stop." + skipped;
+}
+function mergeBlockerLabel(ms) {
+  switch (ms.state) {
+    case "dirty":
+      return "conflicts";
+    case "behind":
+      return "behind base";
+    case "draft":
+      return "draft PR";
+    case "blocked":
+      if (ms.checks === "failed") return "checks ✗";
+      if (ms.checks === "pending") return "checks…";
+      return "review needed";
+    default:
+      return ms.mergeable === null ? "checking…" : "can't merge";
+  }
 }
 function caps() {
   var _a2;
@@ -22997,42 +23021,30 @@ function commitSession(title) {
 async function pushSession(title, force = false) {
   if (!title || !requireGit()) return;
   selectSession(title, { noKeyboard: true });
+  markStep(title, "push");
   try {
     await instApi(title, "/push-branch", { json: force ? { force: true } : {} });
   } catch (err) {
     if (err.message === "checks haven't passed for this commit") {
       if (confirm("Checks haven't passed for this commit (see the ✗ checks chip).\nPush anyway?"))
         return pushSession(title, true);
+      clearStep(title);
       return;
     }
+    clearStep(title);
     toast("Push failed: " + errMsg(err), { duration: 6e3 });
   }
   void freshStage(title);
 }
-const DEPTH_KEY = "mf_fasttrack_depth";
 function resolveDepth() {
-  var _a2;
-  try {
-    const local = normalizeDepth(localStorage.getItem(DEPTH_KEY));
-    if (local && local !== "off") return local;
-  } catch {
-  }
   const cfg = queryClient.getQueryData(["config"]);
-  const fromSettings = normalizeDepth(
-    (_a2 = cfg == null ? void 0 : cfg.repository) == null ? void 0 : _a2.fasttrack_depth
-  );
-  return fromSettings && fromSettings !== "off" ? fromSettings : "pr";
-}
-function rememberDepth(depth) {
-  try {
-    localStorage.setItem(DEPTH_KEY, normalizeDepth(depth) || "");
-  } catch {
-  }
+  return normalizeDepth(cfg == null ? void 0 : cfg.fasttrack_depth) || "pr";
 }
 async function startFastTrack(title, depth, message, base) {
   var _a2;
   if (!title || !requireGit()) return;
-  const d = normalizeDepth(depth) || "pr";
+  const chosen = normalizeDepth(depth || "");
+  const d = chosen || resolveDepth();
   if (d === "merge") {
     const where = "";
     if (!confirm("Fast-track will commit, push, open a PR and MERGE it" + where + ".\nContinue?"))
@@ -23052,7 +23064,7 @@ async function startFastTrack(title, depth, message, base) {
   try {
     const r = await instApi(title, "/fast-track", {
       json: {
-        depth: d,
+        ...chosen ? { depth: chosen } : {},
         ...message ? { message } : {},
         ...base ? { base } : {}
       }
@@ -23092,6 +23104,7 @@ function makePrSession(title) {
 }
 async function submitMakePr(title, base) {
   if (!title || !requireGit()) return;
+  markStep(title, "pr");
   try {
     const r = await instApi(title, "/make-pr", {
       json: base ? { base } : {}
@@ -23105,6 +23118,7 @@ async function submitMakePr(title, base) {
       markLoopReset(title);
     }
   } catch (err) {
+    clearStep(title);
     toast("Make PR failed: " + errMsg(err), { duration: 6e3 });
   }
   await freshStage(title);
@@ -23112,6 +23126,7 @@ async function submitMakePr(title, base) {
 async function mergeSession(title) {
   if (!title || !requireGit()) return;
   if (!confirm("Merge this branch's PR into staging?")) return;
+  markStep(title, "merge");
   try {
     const r = await instApi(title, "/merge-pr", { method: "POST" });
     if (r && r.ok === false) {
@@ -23120,6 +23135,7 @@ async function mergeSession(title) {
       else toast(msg, { duration: 9e3 });
     }
   } catch (err) {
+    clearStep(title);
     toast("Merge failed: " + errMsg(err), { duration: 6e3 });
   }
   await freshStage(title);
@@ -23297,16 +23313,144 @@ function checkChip(inst) {
 }
 const NO_ORIGIN_CMD = "git remote add origin git@github.com:owner/repo.git";
 const NO_ORIGIN_ALT = "git remote add origin https://github.com/owner/repo.git";
+const inflight = /* @__PURE__ */ new Map();
+const INFLIGHT_TTL_MS = 12e4;
+function markStep(title, verb) {
+  if (title) inflight.set(title, { verb, at: Date.now() });
+}
+function clearStep(title) {
+  inflight.delete(title);
+}
+function inflightVerb(inst) {
+  const title = inst.title;
+  if (!title) return null;
+  const rec = inflight.get(title);
+  if (!rec) return null;
+  if (Date.now() - rec.at > INFLIGHT_TTL_MS) {
+    inflight.delete(title);
+    return null;
+  }
+  const stage = inst.stage || "";
+  if (rec.verb === "push" && (stage === "pushed" || stage === "pr") || rec.verb === "pr" && stage === "pr" || rec.verb === "merge" && stage !== "pr") {
+    inflight.delete(title);
+    return null;
+  }
+  return rec.verb;
+}
+function liveStep(inst) {
+  const stage = guidedStage(inst);
+  if (inst.workspace_missing)
+    return { label: "workspace gone", tone: "blocked", title: "The workspace directory no longer exists." };
+  if (inst.status === "paused")
+    return { label: "paused", tone: "quiet", title: "Session paused — resume it to continue." };
+  const setup = inst.setup;
+  if ((setup == null ? void 0 : setup.state) === "running")
+    return { label: "setting up", tone: "work", title: "Running the workspace setup commands." };
+  if ((setup == null ? void 0 : setup.state) === "failed")
+    return {
+      label: "setup failed",
+      tone: "blocked",
+      title: "Workspace setup failed" + (setup.failed_step ? " at " + setup.failed_step : "") + ". Queued prompts are held until it succeeds."
+    };
+  if (stage === "provisioning")
+    return { label: "provisioning", tone: "work", title: "Creating the workspace." };
+  if (stage === "precommit")
+    return { label: "pre-commit", tone: "work", title: "Running the pre-commit hooks." };
+  if (stage === "interrupt")
+    return {
+      label: "pre-commit ✗",
+      tone: "blocked",
+      title: "A pre-commit hook blocked the commit" + (inst.failed_step ? " at " + inst.failed_step : "") + "."
+    };
+  const verb = inflightVerb(inst);
+  if (verb === "push") return { label: "pushing", tone: "work", title: "Pushing the branch to origin." };
+  if (verb === "pr") return { label: "opening PR", tone: "work", title: "Opening the pull request." };
+  if (verb === "merge") return { label: "merging", tone: "work", title: "Merging the pull request." };
+  const check = inst.check;
+  if ((check == null ? void 0 : check.state) === "running")
+    return { label: "checks", tone: "work", title: "Running the verification check." };
+  if ((check == null ? void 0 : check.state) === "failed")
+    return {
+      label: "checks ✗",
+      tone: "blocked",
+      title: "The verification check failed" + (check.failed_step ? " at " + check.failed_step : "") + "."
+    };
+  const run = inst.autopilot;
+  if (run && run.depth && run.state === "running")
+    return {
+      label: run.note || "fast-tracking",
+      tone: "work",
+      title: autopilotChipTitle(run),
+      target: DEPTH_SHORT[run.depth] || ""
+    };
+  if (run && run.depth && run.state === "halted")
+    return { label: "fast-track ✗", tone: "blocked", title: autopilotChipTitle(run) };
+  if (stage === "pr") {
+    const ms = inst.merge_state;
+    if (ms && !ms.can_merge)
+      return {
+        label: mergeBlockerLabel(ms),
+        tone: "blocked",
+        title: "This PR cannot be merged yet:\n" + (ms.blockers || []).map((b) => "• " + b).join("\n"),
+        href: inst.pr_url || ms.url || void 0
+      };
+    return {
+      label: "PR open",
+      tone: "ok",
+      title: inst.pr_url ? "Open the pull request" : "A pull request is open for this branch.",
+      href: inst.pr_url || void 0
+    };
+  }
+  return null;
+}
+const followed = /* @__PURE__ */ new Map();
+function followAutopilot(inst, opts) {
+  const title = inst.title;
+  const run = inst.autopilot;
+  if (!title) return null;
+  if (!run || !run.depth || run.state !== "running") {
+    followed.delete(title);
+    return null;
+  }
+  const step = String(run.step || "");
+  const seen = followed.get(title);
+  if (seen === step) return null;
+  const first = seen === void 0;
+  followed.set(title, step);
+  if (step === "commit") {
+    try {
+      useUi.getState().setLastTab(title, "shell");
+    } catch {
+    }
+    return "commit";
+  }
+  if (step === "pr") {
+    if (first && !(opts == null ? void 0 : opts.live)) return null;
+    const url = String(run.url || "") || inst.pr_url || "";
+    if (url) {
+      try {
+        offerUrl(url, "PR opened for " + title);
+      } catch {
+      }
+    }
+    return "pr";
+  }
+  return null;
+}
 function fastTrackStep(inst) {
   var _a2;
   const title = inst.title;
   const caps2 = (_a2 = queryClient.getQueryData(["config"])) == null ? void 0 : _a2.caps;
   if (caps2 && !caps2.git) return null;
-  if (!title || inst.status === "loading" || inst.status === "paused") return null;
-  if (inst.workspace_missing) return null;
-  const stage = guidedStage(inst);
-  if (stage === "provisioning" || stage === "precommit") return null;
+  if (!title) return null;
   const run = inst.autopilot;
+  const armed = !!(run && run.depth && (run.state === "running" || run.state === "halted" || run.state === "done"));
+  if (!armed) {
+    if (inst.status === "loading" || inst.status === "paused") return null;
+    if (inst.workspace_missing) return null;
+    const stage = guidedStage(inst);
+    if (stage === "provisioning" || stage === "precommit") return null;
+  }
   if (run && run.depth && run.state === "running")
     return {
       label: "⏩",
@@ -23320,6 +23464,13 @@ function fastTrackStep(inst) {
       hint: true,
       title: autopilotChipTitle(run) + "\n\nClick ⏩✗ to start fast-track again.",
       run: () => startFastTrack(title, run.depth)
+    };
+  if (run && run.depth && run.state === "done")
+    return {
+      label: "⏩",
+      active: true,
+      title: "Fast-track finished at " + depthLabel(run.depth) + " and is still on: it picks up again as soon as the agent changes\nanything more.\n\nClick ⏩ to turn fast-track off.",
+      run: () => stopFastTrack(title)
     };
   const depth = resolveDepth();
   return {
@@ -23367,6 +23518,17 @@ function nextStep(inst) {
           title: PR_FALLBACK_HINT,
           run: () => window.open(inst.pr_url, "_blank")
         } : { label: "Merge ↗", hint: true, title: PR_FALLBACK_HINT, run: () => mergeSession(title) };
+      {
+        const ms = inst.merge_state;
+        if (ms && !ms.can_merge)
+          return {
+            label: "Merge blocked",
+            disabled: true,
+            title: "This PR cannot be merged yet:\n" + (ms.blockers || []).map((b) => "• " + b).join("\n") + (inst.pr_url ? "\n\nOpen the PR to resolve it." : ""),
+            run: () => {
+            }
+          };
+      }
       return { label: "Merge", run: () => mergeSession(title) };
     case "merged":
       return inst.pr_url ? { label: "Open PR ↗", run: () => window.open(inst.pr_url, "_blank") } : null;
@@ -24163,6 +24325,48 @@ function EventToasts() {
         notifyOnce(env.session, "checkfail", "checks failed on " + env.session, {
           onClick: () => selectSession(env.session)
         });
+      })
+    );
+    unsubs.push(
+      // Autopilot steps reached the UI only on the next 4s poll, so "pushing" could
+      // be over before it appeared. Patch the cache from the socket instead — same
+      // shape and same before-the-replay-guard reasoning as stage_changed below.
+      ev.subscribe("session.autopilot_changed", (env) => {
+        const d = env.data || {};
+        const depth = String(d.depth || "");
+        patchInstance(env.session, {
+          autopilot: depth ? {
+            depth,
+            state: String(env.new || d.state || "running"),
+            step: String(d.step || ""),
+            reason: String(d.reason || ""),
+            note: String(d.note || ""),
+            source: String(d.source || "session"),
+            item: String(d.item || ""),
+            skipped: Array.isArray(d.skipped) ? d.skipped : []
+          } : null
+        });
+        if (isReplay(env)) return;
+        followAutopilot(
+          {
+            title: env.session,
+            autopilot: {
+              depth: String(d.depth || ""),
+              state: String(env.new || d.state || "running"),
+              step: String(d.step || ""),
+              reason: String(d.reason || ""),
+              note: String(d.note || ""),
+              url: String(d.url || ""),
+              source: String(d.source || "session"),
+              item: String(d.item || "")
+            }
+          },
+          { live: true }
+        );
+        if (String(env.new || "") === "halted")
+          notifyOnce(env.session, "ftstop", "fast-track stopped on " + env.session, {
+            onClick: () => selectSession(env.session)
+          });
       })
     );
     unsubs.push(
@@ -25799,7 +26003,12 @@ function AutomationBar() {
               // `active` outranks the switch: a ticket forced from Intake is
               // genuinely being brought in even with auto ingestion switched off,
               // and "off" would be a lie about the work in flight.
-              "dc-dot " + (netIssue ? "error" : active ? "on" : !desired ? "off" : "idle")
+              // "dc-error", NOT a bare "error": `.error` is a GLOBAL class for error
+              // TEXT (`.error { min-height: 16px }`), and this element is a 9px circle.
+              // `.dc-dot` sets height but never min-height, so the global won
+              // uncontested and rendered the red state as a 9x16 OVAL — the one state
+              // that looked malformed, because it was the only one borrowing that name.
+              "dc-dot " + (netIssue ? "dc-error" : active ? "on" : !desired ? "off" : "idle")
             ),
             title: active ? "A ticket is being brought in right now (auto ingestion or a forced start)" : netIssue ? online ? "Connection issues in the ingestion log — see Settings → System logs" : "No network connection" : starting ? "Set to on but not running yet — starting, or the pipeline exited (flip the switch off and on to restart it)" : desired ? "Waiting for an assigned ticket — turns green while one is being brought in" : void 0
           }
@@ -27648,6 +27857,7 @@ function Pane({
   const chip = chipState(inst);
   const ns = nextStep(inst);
   const ft = fastTrackStep(inst);
+  const step = liveStep(inst);
   const q = inst.queue;
   const pending = (q == null ? void 0 : q.pending) || 0;
   const limitedMs = (q == null ? void 0 : q.limited_until) ? q.limited_until * 1e3 - Date.now() : 0;
@@ -27702,16 +27912,33 @@ function Pane({
             ns ? /* @__PURE__ */ jsxRuntimeExports.jsx(
               "button",
               {
-                className: "nextstep" + (ns.hint ? " nextstep-hint" : ""),
+                className: "nextstep" + (ns.hint ? " nextstep-hint" : "") + (ns.disabled ? " nextstep-blocked" : ""),
                 type: "button",
+                disabled: !!ns.disabled,
                 title: ns.title || "Do the next step",
                 onClick: (ev) => {
                   ev.stopPropagation();
-                  ns.run();
+                  if (!ns.disabled) ns.run();
                 },
                 children: ns.label
               }
-            ) : /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "nextstep nextstep-status", type: "button", disabled: true, title: chip.title, children: chip.label }),
+            ) : null,
+            step && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+              "span",
+              {
+                className: "stepnow is-" + step.tone + (step.href ? " is-link" : ""),
+                title: step.title,
+                onClick: step.href ? (ev) => {
+                  ev.stopPropagation();
+                  window.open(step.href, "_blank");
+                } : void 0,
+                children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "stepnow-dot", "aria-hidden": "true" }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "stepnow-text", children: step.label }),
+                  step.target && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "stepnow-target", children: step.target })
+                ]
+              }
+            ),
             ft && /* @__PURE__ */ jsxRuntimeExports.jsx(
               "button",
               {
@@ -29584,6 +29811,7 @@ function useSettingsModel(open) {
           json: { [group]: { [field]: value } }
         });
         setSettings((r == null ? void 0 : r.settings) || {});
+        void refreshConfig();
         toast("Saved " + field.replace(/_/g, " "));
       } catch (err) {
         toast("Save failed: " + (err.message || field));
@@ -29597,6 +29825,7 @@ function useSettingsModel(open) {
       try {
         const r = await api("/api/settings", { json: { [group]: patch } });
         setSettings((r == null ? void 0 : r.settings) || {});
+        void refreshConfig();
         if (okMsg) toast(okMsg);
       } catch (err) {
         toast("Save failed: " + (err.message || group));
@@ -33768,13 +33997,9 @@ function CommitDialog() {
     closeDialog();
     useUi.getState().setLastTab(title, "shell");
     selectSession(title);
-    if (chosen !== "commit") {
-      await startFastTrack(title, chosen, m);
-      void freshStage(title);
-      return;
-    }
     try {
       await instApi(title, "/commit", { json: { message: m } });
+      if (chosen !== "commit") await startFastTrack(title, chosen, m);
     } catch (err) {
       alert("Commit failed: " + errMsg(err));
     }
@@ -33831,10 +34056,7 @@ function CommitDialog() {
                 {
                   id: "commit-depth",
                   value: depth,
-                  onChange: (e) => {
-                    setDepth(e.target.value);
-                    rememberDepth(e.target.value);
-                  },
+                  onChange: (e) => setDepth(e.target.value),
                   children: SESSION_DEPTHS.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: d, children: DEPTH_STEP_LABELS[d] }, d))
                 }
               )
@@ -34350,11 +34572,25 @@ function RecentDialog() {
           const gone = !e.exists;
           return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "recent-row", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "recent-info", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-name", title: e.folder || "", children: e.title || "(untitled)" }),
-              e.in_place && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "in-place" }),
-              e.provisioned && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "provisioned" }),
-              gone && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge gone", children: "worktree gone" }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-when muted", children: fmtClosedAt(e.closed_at) })
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "span",
+                {
+                  className: "recent-name",
+                  title: [
+                    e.branch ? "Branch: " + e.branch : "",
+                    e.title ? "Session: " + e.title : "",
+                    e.folder || ""
+                  ].filter(Boolean).join("\n"),
+                  children: e.branch || e.title || "(untitled)"
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "recent-sub", children: [
+                e.branch && e.title && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-slug muted", children: e.title }),
+                e.in_place && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "in-place" }),
+                e.provisioned && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "provisioned" }),
+                gone && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge gone", children: "worktree gone" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-when muted", children: fmtClosedAt(e.closed_at) })
+              ] })
             ] }),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "recent-actions", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -35256,6 +35492,7 @@ function App() {
     for (const inst of instances2 || []) {
       noteActivity(inst);
       reconcileLoopReset(inst);
+      followAutopilot(inst);
     }
   }, [instances2]);
   const [openSpecial, setOpenSpecial] = reactExports.useState(/* @__PURE__ */ new Set());

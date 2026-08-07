@@ -13,7 +13,12 @@ import {
 } from "../state/queries";
 import { useUi } from "../state/store";
 import { fmtUsd } from "../lib/format";
-import { dropActivity, effectiveActivity, forceActivity } from "../lib/stage";
+import {
+  dropActivity,
+  effectiveActivity,
+  followAutopilot,
+  forceActivity,
+} from "../lib/stage";
 import { selectSession } from "../lib/sessionActions";
 import { toast, type ToastOpts } from "../lib/toast";
 
@@ -206,6 +211,53 @@ export function EventToasts() {
         notifyOnce(env.session, "checkfail", "checks failed on " + env.session, {
           onClick: () => selectSession(env.session),
         });
+      })
+    );
+    unsubs.push(
+      // Autopilot steps reached the UI only on the next 4s poll, so "pushing" could
+      // be over before it appeared. Patch the cache from the socket instead — same
+      // shape and same before-the-replay-guard reasoning as stage_changed below.
+      ev.subscribe("session.autopilot_changed", (env) => {
+        const d = (env.data || {}) as Record<string, unknown>;
+        const depth = String(d.depth || "");
+        patchInstance(env.session, {
+          autopilot: depth
+            ? {
+                depth,
+                state: String(env.new || d.state || "running"),
+                step: String(d.step || ""),
+                reason: String(d.reason || ""),
+                note: String(d.note || ""),
+                source: String(d.source || "session"),
+                item: String(d.item || ""),
+                skipped: Array.isArray(d.skipped) ? (d.skipped as string[]) : [],
+              }
+            : null,
+        });
+        if (isReplay(env)) return;
+        // Follow the run to whatever it is doing (terminal on commit, the PR when
+        // it opens). Shared with the per-poll reconcile in App.tsx via one guard,
+        // so it happens exactly once per step whichever path notices first.
+        followAutopilot(
+          {
+            title: env.session,
+            autopilot: {
+              depth: String(d.depth || ""),
+              state: String(env.new || d.state || "running"),
+              step: String(d.step || ""),
+              reason: String(d.reason || ""),
+              note: String(d.note || ""),
+              url: String(d.url || ""),
+              source: String(d.source || "session"),
+              item: String(d.item || ""),
+            },
+          },
+          { live: true }
+        );
+        if (String(env.new || "") === "halted")
+          notifyOnce(env.session, "ftstop", "fast-track stopped on " + env.session, {
+            onClick: () => selectSession(env.session),
+          });
       })
     );
     unsubs.push(

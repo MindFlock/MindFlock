@@ -11,6 +11,10 @@ import { selectSession } from "../../lib/sessionActions";
 interface ClosedEntry {
   id: string;
   title?: string;
+  /** The branch the session owned. The server has always sent this; the row used
+   * to show only `title`, which for an ingested session is the bare slug
+   * ("shortcut-21018") and says nothing about what the work was. */
+  branch?: string;
   folder?: string;
   closed_at?: string | number;
   exists: boolean;
@@ -79,13 +83,35 @@ export function RecentDialog() {
               return (
                 <div className="recent-row" key={e.id}>
                   <div className="recent-info">
-                    <span className="recent-name" title={e.folder || ""}>
-                      {e.title || "(untitled)"}
+                    {/* The BRANCH is the headline: it carries the descriptive tail
+                        ("…/path-expansion-never-routes-cloudflare") that says what
+                        the session was for. The bare title is the slug, which for an
+                        ingested ticket is just its number. Deliberately NOT run
+                        through displayBranch() — that strips the prefix, and here the
+                        whole name is the point. */}
+                    <span
+                      className="recent-name"
+                      title={[
+                        e.branch ? "Branch: " + e.branch : "",
+                        e.title ? "Session: " + e.title : "",
+                        e.folder || "",
+                      ]
+                        .filter(Boolean)
+                        .join("\n")}
+                    >
+                      {e.branch || e.title || "(untitled)"}
                     </span>
-                    {e.in_place && <span className="ws-badge kind">in-place</span>}
-                    {e.provisioned && <span className="ws-badge kind">provisioned</span>}
-                    {gone && <span className="ws-badge gone">worktree gone</span>}
-                    <span className="recent-when muted">{fmtClosedAt(e.closed_at)}</span>
+                    <span className="recent-sub">
+                      {/* Keep the session identity visible: it is what Reopen acts on
+                          and what the wipe confirmation names. */}
+                      {e.branch && e.title && (
+                        <span className="recent-slug muted">{e.title}</span>
+                      )}
+                      {e.in_place && <span className="ws-badge kind">in-place</span>}
+                      {e.provisioned && <span className="ws-badge kind">provisioned</span>}
+                      {gone && <span className="ws-badge gone">worktree gone</span>}
+                      <span className="recent-when muted">{fmtClosedAt(e.closed_at)}</span>
+                    </span>
                   </div>
                   <div className="recent-actions">
                     <button

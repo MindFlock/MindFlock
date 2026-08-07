@@ -42,6 +42,51 @@
   border-color: var(--accent);
 }
 
+/* Fast-track rung picker.
+   A <select> does NOT inherit the card's typography: the UA stylesheet sets the
+   `font` shorthand on form controls, so without this rule it rendered as a raw
+   Arial platform widget (square corners, ButtonFace grey) inside a rounded dark
+   card whose every other control is --bg + 1px --border + 7px radius.
+   `align-self: start` matters too: `#commit-form label` is a column flexbox with
+   the default `align-items: stretch`, which spread a four-option picker across
+   the whole 480px card with ~300px of dead space. */
+#commit-form #commit-depth {
+  align-self: start;
+  min-width: 210px;
+  max-width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#commit-form #commit-depth:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#commit-form #commit-depth:hover {
+  border-color: var(--accent);
+}
+
+/* Caption and hint on ONE line: the label is a column flexbox, so a bare text
+   node plus the hint span would otherwise stack into two rows and make this row
+   taller than the message row's caption. */
+#commit-form #commit-depth-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 4px 6px;
+}
+
+#commit-form #commit-depth-row > select {
+  grid-column: 1 / -1;
+}
+
 /* Rename dialog (single-line display name; same card style as #commit-form) */
 #rename-form {
   background: var(--panel);
@@ -416,20 +461,44 @@
   background: var(--bg);
 }
 
+/* Two lines: the branch on its own, then the identity/badges/timestamp beneath.
+   Stacking is what lets a 60-character branch name actually be READ — on one line
+   next to badges and a timestamp it just ellipsised away, which is the whole thing
+   the row exists to tell you. */
 .recent-info {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
 }
 
 .recent-name {
   font-size: 13px;
   font-weight: 600;
+  /* min-width:0 alongside overflow:hidden — a nowrap flex item's default
+     min-width:auto refuses to shrink below its content, so the ellipsis never
+     engages without it. */
+  min-width: 0;
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.recent-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.recent-slug {
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
 .recent-when {

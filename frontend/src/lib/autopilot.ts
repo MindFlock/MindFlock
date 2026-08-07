@@ -7,7 +7,7 @@
  * of special cases.
  */
 
-import type { AutopilotRun, Instance } from "../api/types";
+import type { AutopilotRun, Instance, MergeState } from "../api/types";
 
 export const DEPTH_ORDER = ["off", "agent", "commit", "push", "pr", "merge"] as const;
 
@@ -33,15 +33,24 @@ export const DEPTH_LABELS: Record<string, string> = {
   merge: "Merge",
 };
 
-/** How the ladder reads in a dropdown, where each option continues the sentence
- * "take this…". The first rung names itself; the rest are "…then X". */
+/** How the ladder reads in a dropdown. No leading "…": inside a CLOSED select a
+ * leading ellipsis reads as text that has been clipped. */
 export const DEPTH_STEP_LABELS: Record<string, string> = {
   off: "Off",
   agent: "Agent only",
   commit: "Commit only",
-  push: "…then push",
-  pr: "…then open PR",
-  merge: "…then merge",
+  push: "Then push",
+  pr: "Then open PR",
+  merge: "Then merge",
+};
+
+/** Ultra-short target suffix for the pane header, where width is scarce. */
+export const DEPTH_SHORT: Record<string, string> = {
+  agent: "→ agent",
+  commit: "→ commit",
+  push: "→ push",
+  pr: "→ PR",
+  merge: "→ merge",
 };
 
 /** Which rung a given session stage PROVES is complete. Stages that mean "still
@@ -90,12 +99,47 @@ export function autopilotChipTitle(run: AutopilotRun): string {
   const target = depthLabel(run.depth);
   if (run.state === "halted")
     return "Fast-track stopped: " + (run.reason || "unknown reason");
-  if (run.state === "done") return "Fast-track finished at " + target;
-  const where = run.step ? " (last step: " + run.step + ")" : " (waiting on the agent)";
+  if (run.state === "done")
+    return (
+      "Fast-track finished at " +
+      target +
+      " — still on, and will pick up new work automatically."
+    );
+  // Prefer the server's own sentence for what this pass is waiting on — it knows
+  // whether it is the agent, the prompt queue, checks or a usage limit. Guessing
+  // from an empty `step` made every legitimate pause read as "waiting on the
+  // agent", so a deliberate wait looked like a hang.
+  const where = run.note
+    ? " — " + run.note
+    : run.step
+      ? " (last step: " + run.step + ")"
+      : " (waiting to start)";
   const skipped = run.skipped?.length
     ? "\nSkipped hooks: " + run.skipped.join(", ")
     : "";
   return "Fast-tracking to " + target + where + "\nClick to stop." + skipped;
+}
+
+/** A short header label naming WHY a PR cannot merge.
+ *
+ * The full sentences live in `merge_state.blockers` and go in the tooltip; this is
+ * the ≤14-char version for a pane header where "PR open" would be true but
+ * useless when what you want to know is why Merge is greyed out. */
+export function mergeBlockerLabel(ms: MergeState): string {
+  switch (ms.state) {
+    case "dirty":
+      return "conflicts";
+    case "behind":
+      return "behind base";
+    case "draft":
+      return "draft PR";
+    case "blocked":
+      if (ms.checks === "failed") return "checks ✗";
+      if (ms.checks === "pending") return "checks…";
+      return "review needed";
+    default:
+      return ms.mergeable === null ? "checking…" : "can't merge";
+  }
 }
 
 /** A running chain on this session, or null. */

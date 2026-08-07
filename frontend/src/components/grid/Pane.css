@@ -84,6 +84,10 @@
 
 .pane-head {
   flex-wrap: nowrap;
+  /* Backstop only. With the title able to shrink to 2.5rem and the container
+     queries below shedding the optional bits, this should never engage — but a
+     header that spills past the pane's rounded corner looks broken, so clip. */
+  overflow: hidden;
 }
 
 /* Normal right padding. (The old 54px gutter reserved room for the floating
@@ -92,10 +96,16 @@
   padding-right: 12px;
 }
 
+/* The title is the ONE thing in this header that yields.
+   `flex-shrink: 3` against the context line's 1 makes it absorb most of any
+   reduction, and the small floor lets it truncate hard — a 60-character session
+   name should cost its own characters, never the Commit button, the fast-track
+   toggle or the live-step indicator. Those are controls; the title is a label
+   whose full text is one hover away (title= carries it). */
 .pane-head .title {
   font-weight: 600;
-  flex: 0 1 auto;
-  min-width: 40px;
+  flex: 0 3 auto;
+  min-width: 2.5rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -162,6 +172,23 @@
 
 @container (max-width: 560px) {
   .pane-head .tok {
+    display: none;
+  }
+
+  .pane-head .actions .stepnow-target {
+    display: none;
+  }
+
+  .pane-head .actions .stepnow-text {
+    max-width: 12ch;
+  }
+}
+
+/* Tightest layout: the dot alone still says "running / blocked", and the tooltip
+   still carries the detail. Deliberately NOT hidden with .nextstep at 420px —
+   once the action button is gone this is the only signal left. */
+@container (max-width: 360px) {
+  .pane-head .actions .stepnow-text {
     display: none;
   }
 }
@@ -255,6 +282,12 @@
   align-items: center;
   gap: 6px;
   margin-left: 10px;
+  /* NEVER shrinks. Making this yield (so a verbose step label could not push the
+     usage chip out) meant a long session title clipped the controls instead —
+     the Commit button, the ⏩ toggle and the step indicator were sliced off the
+     right edge. The label is bounded by its own max-width and the container
+     queries below, so the group's width stays predictable without shrinking. */
+  flex: none;
 }
 
 .pane-head .actions .nextstep {
@@ -274,19 +307,123 @@
   filter: brightness(1.12);
 }
 
-/* Status-pill variant: shown in the same slot when there's no actionable next
-   step (provisioning / pre-commit running / paused / workspace gone), so the
-   action area is never an empty gap. Non-clickable, muted — clearly not the
-   primary accent button. */
-.pane-head .actions .nextstep.nextstep-status {
-  background: var(--panel-2);
-  color: var(--muted);
+/* Live step indicator — what is happening RIGHT NOW.
+   Replaces the old `.nextstep-status` pill, which filled the primary button's
+   slot with DISABLED GREY TEXT whenever there was no actionable next step. That
+   meant the busiest moment in the workflow (pre-commit hooks running) rendered as
+   a dead greyed-out button reading "pre-commit". This is deliberately NOT
+   button-shaped: it is a status line, so it never competes with the real action.
+   Colour and fill carry the meaning; motion is only ever a bonus. */
+.pane-head .actions .stepnow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  /* Same yield-then-clip contract the context line uses, so a long label can
+     never push the cost chip or the copy button out of the header. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
   font-weight: 500;
-  cursor: default;
-  filter: none;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
-.pane-head .actions .nextstep.nextstep-status:hover {
+.pane-head .actions .stepnow-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Bounded because `.actions` no longer shrinks: the group's width has to be
+     predictable. The server's wait sentences run long ("waiting for CI to pass
+     before merging"), and the full text is in the tooltip. */
+  max-width: 15ch;
+}
+
+.pane-head .actions .stepnow-target {
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.pane-head .actions .stepnow-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* work: something is running. Accent + the house pulse cadence. */
+.pane-head .actions .stepnow.is-work {
+  color: var(--accent);
+}
+
+.pane-head .actions .stepnow.is-work .stepnow-dot {
+  animation: step-ping 1.4s ease-in-out infinite;
+}
+
+/* blocked: it needs a human. */
+.pane-head .actions .stepnow.is-blocked {
+  color: var(--red);
+}
+
+/* ok: a finished, good state (a PR is open). */
+.pane-head .actions .stepnow.is-ok {
+  color: var(--green, #3fb950);
+}
+
+/* quiet: true but inert (paused). Hollow dot, so "not running" is legible
+   without relying on colour or motion. */
+.pane-head .actions .stepnow.is-quiet .stepnow-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+
+.pane-head .actions .stepnow.is-link {
+  cursor: pointer;
+}
+
+.pane-head .actions .stepnow.is-link:hover {
+  text-decoration: underline;
+}
+
+/* Matches the shape of the existing mic-pulse ring, accent-tokenised, at the
+   house 1.4s ease-in-out cadence (see cs-pulse). */
+@keyframes step-ping {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0.55);
+  }
+
+  50% {
+    box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0);
+  }
+}
+
+/* Motion is decoration here — the dot's colour and fill already carry the state,
+   so removing it loses nothing. Honour both the OS setting and the app's own
+   reduce-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  .pane-head .actions .stepnow.is-work .stepnow-dot {
+    animation: none;
+  }
+}
+
+.no-motion .pane-head .actions .stepnow.is-work .stepnow-dot {
+  animation: none;
+}
+
+/* Blocked: the action is known to be refusable, so the button says why and does
+   nothing. Muted like the old status pill, but it keeps a border so it still reads
+   as a control that exists rather than as absent — and the tooltip carries the
+   specific blockers. */
+.pane-head .actions .nextstep.nextstep-blocked {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  cursor: not-allowed;
+  font-weight: 500;
+}
+
+.pane-head .actions .nextstep.nextstep-blocked:hover {
   filter: none;
 }
 

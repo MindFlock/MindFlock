@@ -111,11 +111,18 @@ def test_the_agent_rung_is_intake_only(inst):
     assert "intake" in _body(resp)["error"]
 
 
-def test_a_dirty_tree_needs_a_message(inst, wt):
+def test_a_dirty_tree_gets_a_generated_message_rather_than_a_refusal(inst, wt):
+    """THE ⏩ REGRESSION. The button presses with no message, and
+    .mindflock_commit_msg only exists once something has committed THROUGH
+    MindFlock — so the single most common press ("I have work, carry it to a PR")
+    was rejected outright with a red toast. A generated subject beats a chain that
+    refuses to start."""
     (wt / "b.txt").write_text("uncommitted\n")
     resp = _post("ft-session", {"depth": "pr"})
-    assert resp.status_code == 400
-    assert _body(resp)["error"] == "commit message required"
+    assert resp.status_code == 200
+    msg = ap.get("ft-session")["message"]
+    assert msg, "a message must have been generated"
+    assert "ft-session" in msg
 
 
 def test_a_clean_tree_needs_no_message(inst):
@@ -124,12 +131,27 @@ def test_a_clean_tree_needs_no_message(inst):
     assert resp.status_code == 200
 
 
-def test_a_message_on_disk_is_reused(inst, wt):
+def test_a_message_from_a_BLOCKED_commit_is_reused(inst, wt):
+    """Reuse is for retrying a commit the hooks blocked, so it requires a pending
+    FAILURE — not merely a message file lying around."""
     (wt / "b.txt").write_text("uncommitted\n")
     (wt / server._COMMIT_MSG_FILE).write_text("recovered subject\n")
+    (wt / server._COMMIT_STATUS_FILE).write_text("1\n")
     resp = _post("ft-session", {"depth": "pr"})
     assert resp.status_code == 200
     assert ap.get("ft-session")["message"] == "recovered subject"
+
+
+def test_a_message_left_by_UNRELATED_work_is_not_adopted(inst, wt):
+    """The hazard this rule exists for: a message file survived earlier work and
+    the next thing armed silently inherited its subject. Caught in the wild about
+    to record one feature's files under a message describing a DB migration."""
+    (wt / "b.txt").write_text("uncommitted\n")
+    (wt / server._COMMIT_MSG_FILE).write_text("Refactor database schema\n")
+    (wt / server._COMMIT_STATUS_FILE).write_text("0\n")  # that commit SUCCEEDED
+    resp = _post("ft-session", {"depth": "pr"})
+    assert resp.status_code == 200
+    assert "Refactor database schema" not in ap.get("ft-session")["message"]
 
 
 def test_arming_captures_the_branch_for_drift_detection(inst):
@@ -236,3 +258,47 @@ def test_per_item_depth_override_accepts_merge():
     assert server._start_depth_override({}) == ""
     with pytest.raises(ValueError):
         server._start_depth_override({"depth": "teleport"})
+
+
+def test_a_clean_tree_arm_still_gets_a_message_at_commit_time(inst, wt):
+    """Arming on a CLEAN tree is the natural way to use this — arm the session, let
+    the agent work — and the route records no message then, because there is
+    nothing to describe yet. The run used to halt with "no commit message to reuse"
+    at the very moment it was finally ready to commit."""
+    resp = _post("ft-session", {"depth": "pr"})
+    assert resp.status_code == 200
+    assert ap.get("ft-session")["message"] == "", "nothing to describe yet"
+
+    # The agent has since written something; the commit step must generate a
+    # subject rather than refuse.
+    (wt / "b.txt").write_text("the agent's work\n")
+    sent = {}
+    import backend.web.server as srv
+
+    orig = srv._commit_into_shell
+
+    def _capture(t, w, m, skip=""):
+        sent["msg"] = m
+        return None  # None == success; anything else is an error string
+
+    srv._commit_into_shell = _capture
+    try:
+        fields: dict = {}
+        ok = srv._autopilot_commit(
+            "ft-session", str(wt), ap.get("ft-session"), {}, fields
+        )
+    finally:
+        srv._commit_into_shell = orig
+    assert ok is True, "must not halt for want of a message"
+    assert sent["msg"], "a subject must have been generated"
+
+
+def test_an_intake_name_survives_a_re_arm(inst, wt):
+    """All three intake paths record the ticket / PR / issue NAME. Re-arming with
+    the button used to overwrite it with a generated "Work on <slug>", throwing
+    away the one genuinely descriptive subject available."""
+    ap.arm("ft-session", "pr", source="tix", message="Add phone numbers to intake")
+    (wt / "b.txt").write_text("uncommitted\n")
+    resp = _post("ft-session", {"depth": "pr"})
+    assert resp.status_code == 200
+    assert ap.get("ft-session")["message"] == "Add phone numbers to intake"

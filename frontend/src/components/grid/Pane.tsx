@@ -11,7 +11,7 @@ import { refreshInstances, useConfig } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { copyText } from "../../lib/clipboard";
 import { fmtUsd, displayBranch } from "../../lib/format";
-import { chipState, fastTrackStep, nextStep } from "../../lib/stage";
+import { chipState, fastTrackStep, liveStep, nextStep } from "../../lib/stage";
 import { cleanupMissing, selectSession } from "../../lib/sessionActions";
 import { getTerm, peekTerm, type TermHandle } from "../../lib/terminals";
 import { toast } from "../../lib/toast";
@@ -220,6 +220,7 @@ export function Pane({
   const chip = chipState(inst);
   const ns = nextStep(inst);
   const ft = fastTrackStep(inst);
+  const step = liveStep(inst);
   const q = inst.queue;
   const pending = q?.pending || 0;
   const limitedMs = q?.limited_until ? q.limited_until * 1000 - Date.now() : 0;
@@ -283,20 +284,39 @@ export function Pane({
         <div className="actions">
           {ns ? (
             <button
-              className={"nextstep" + (ns.hint ? " nextstep-hint" : "")}
+              className={
+                "nextstep" +
+                (ns.hint ? " nextstep-hint" : "") +
+                (ns.disabled ? " nextstep-blocked" : "")
+              }
               type="button"
+              disabled={!!ns.disabled}
               title={ns.title || "Do the next step"}
               onClick={(ev) => {
                 ev.stopPropagation();
-                ns.run();
+                if (!ns.disabled) ns.run();
               }}
             >
               {ns.label}
             </button>
-          ) : (
-            <button className="nextstep nextstep-status" type="button" disabled title={chip.title}>
-              {chip.label}
-            </button>
+          ) : null}
+          {step && (
+            <span
+              className={"stepnow is-" + step.tone + (step.href ? " is-link" : "")}
+              title={step.title}
+              onClick={
+                step.href
+                  ? (ev) => {
+                      ev.stopPropagation();
+                      window.open(step.href!, "_blank");
+                    }
+                  : undefined
+              }
+            >
+              <span className="stepnow-dot" aria-hidden="true" />
+              <span className="stepnow-text">{step.label}</span>
+              {step.target && <span className="stepnow-target">{step.target}</span>}
+            </span>
           )}
           {ft && (
             <button

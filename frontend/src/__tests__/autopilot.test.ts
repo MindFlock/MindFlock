@@ -3,7 +3,7 @@
  * which stage satisfies which target, and on merge never being satisfied by an
  * observed stage. */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   DEPTHS,
   DEPTH_ORDER,
@@ -16,10 +16,20 @@ import {
   autopilotChipTitle,
   depthLabel,
   liveRun,
+  mergeBlockerLabel,
   normalizeDepth,
 } from "../lib/autopilot";
-import { fastTrackStep, nextStep } from "../lib/stage";
-import type { AutopilotRun } from "../api/types";
+import {
+  clearStep,
+  fastTrackStep,
+  followAutopilot,
+  liveStep,
+  markStep,
+  nextStep,
+  resetFollow,
+} from "../lib/stage";
+import type { AutopilotRun, Instance, MergeState } from "../api/types";
+import { useUi } from "../state/store";
 
 const run = (over: Partial<AutopilotRun> = {}): AutopilotRun => ({
   depth: "pr",
@@ -179,6 +189,47 @@ describe("the ⏩ control is a toggle", () => {
         fastTrackStep({ title: "t", status: "running", stage: "agent", ...o })
       ).toBeNull();
   });
+
+  it("stays cancellable even while provisioning or committing", () => {
+    // An intake-armed session spends its first minutes provisioning, which is
+    // precisely when you might change your mind — and the guards above used to
+    // hide the toggle there entirely, leaving no way to stop it at all.
+    for (const o of [
+      { status: "loading" },
+      { stage: "provisioning" },
+      { stage: "precommit" },
+    ]) {
+      const s = fastTrackStep({
+        title: "t",
+        status: "running",
+        stage: "agent",
+        autopilot: run(),
+        ...o,
+      });
+      expect(s, JSON.stringify(o)).not.toBeNull();
+      expect(s!.active).toBe(true);
+    }
+  });
+
+  it("reads a FINISHED run as still armed", () => {
+    // Fast-track is a standing instruction: a done run wakes itself when the agent
+    // produces more work. Showing it OFF is why keeping it on felt impossible —
+    // a branch with an existing PR finishes instantly, every time.
+    const s = fastTrackStep({
+      title: "t", status: "running", stage: "pr", autopilot: run({ state: "done" }),
+    });
+    expect(s?.active).toBe(true);
+    expect(s?.title).toContain("picks up again");
+  });
+
+  it("still surfaces a halted run while provisioning", () => {
+    const s = fastTrackStep({
+      title: "t",
+      status: "loading",
+      autopilot: run({ state: "halted", reason: "checks failed" }),
+    });
+    expect(s?.label).toBe("⏩✗");
+  });
 });
 
 describe("the guided button keeps working while armed", () => {
@@ -193,6 +244,185 @@ describe("the guided button keeps working while armed", () => {
       autopilot: run(),
     });
     expect(s?.label).toBe("Push");
+  });
+});
+
+describe("liveStep (the pane header's live step)", () => {
+  const step = (o: Partial<Instance>) => liveStep({ title: "t", status: "running", ...o });
+
+  it("reads as ACTIVE while pre-commit hooks run", () => {
+    // Regression: this state used to render as a DISABLED grey pill reading
+    // "pre-commit" — the busiest moment in the workflow looked broken.
+    const s = step({ stage: "precommit" });
+    expect(s?.label).toBe("pre-commit");
+    expect(s?.tone).toBe("work");
+  });
+
+  it("marks a blocked commit as blocked, naming the hook", () => {
+    const s = step({ stage: "interrupt", failed_step: "Run Tests" });
+    expect(s?.tone).toBe("blocked");
+    expect(s?.title).toContain("Run Tests");
+  });
+
+  it("surfaces worktree setup above everything else", () => {
+    // Queued prompts are HELD during setup and the driver refuses to act, so it
+    // has to be visible.
+    expect(step({ stage: "agent", setup: { state: "running" } })?.label).toBe("setting up");
+    expect(step({ stage: "agent", setup: { state: "failed" } })?.tone).toBe("blocked");
+  });
+
+  it("shows running and failed verification checks", () => {
+    expect(step({ stage: "committed", check: { state: "running" } })?.label).toBe("checks");
+    expect(step({ stage: "committed", check: { state: "failed" } })?.tone).toBe("blocked");
+  });
+
+  it("says what an armed chain is waiting on, in the server's words", () => {
+    const s = step({
+      stage: "agent",
+      autopilot: run({ note: "prompt queue still has work" }),
+    });
+    expect(s?.label).toBe("prompt queue still has work");
+    expect(s?.target).toBe("→ PR");
+  });
+
+  it("reports a halted chain as blocked", () => {
+    const s = step({ stage: "agent", autopilot: run({ state: "halted", reason: "checks failed" }) });
+    expect(s?.tone).toBe("blocked");
+    expect(s?.title).toContain("checks failed");
+  });
+
+  it("offers an open PR as a link", () => {
+    const s = step({ stage: "pr", pr_url: "https://example.test/pr/1" });
+    expect(s?.tone).toBe("ok");
+    expect(s?.href).toBe("https://example.test/pr/1");
+  });
+
+  it("is null when nothing is happening", () => {
+    expect(step({ stage: "agent" })).toBeNull();
+    expect(step({ stage: "committed" })).toBeNull();
+  });
+
+  it("shows in-flight push/PR/merge, which have no stage of their own", () => {
+    markStep("t", "push");
+    expect(step({ stage: "committed" })?.label).toBe("pushing");
+    // …and clears itself once the stage catches up.
+    expect(step({ stage: "pushed" })).toBeNull();
+    clearStep("t");
+  });
+});
+
+describe("followAutopilot (go where the run is)", () => {
+  const inst = (o: Partial<Instance>) => ({ title: "ft", ...o }) as Partial<Instance>;
+
+  beforeEach(() => resetFollow());
+
+  it("switches that window to its terminal tab WITHOUT taking focus", () => {
+    // Autopilot runs unattended, often on a window you are not looking at, so
+    // yanking the view away from whatever you ARE doing is wrong. Setting the tab
+    // does the useful half.
+    followAutopilot(inst({ autopilot: run({ step: "" }) }));
+    expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBe("commit");
+    expect(useUi.getState().lastTab["ft"]).toBe("shell");
+    expect(useUi.getState().focused).not.toBe("ft");
+  });
+
+  it("fires only ONCE per step", () => {
+    followAutopilot(inst({ autopilot: run({ step: "" }) }));
+    expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBe("commit");
+    expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBeNull();
+    expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBeNull();
+  });
+
+  it("switches the tab even on a FIRST poll sighting", () => {
+    // Setting a tab takes no focus, so there is nothing to protect against — and a
+    // page loaded mid-commit should still find the terminal tab selected.
+    expect(followAutopilot(inst({ autopilot: run({ step: "commit" }) }))).toBe("commit");
+  });
+
+  it("never opens a browser tab on a first POLL sighting", () => {
+    // Opening a PR IS intrusive: a page load must not re-open one already seen.
+    expect(
+      followAutopilot(inst({ autopilot: run({ step: "pr", url: "https://x.test/1" }) }))
+    ).toBeNull();
+  });
+
+  it("opens the PR on a real live transition", () => {
+    followAutopilot(inst({ autopilot: run({ step: "commit" }) }), { live: true });
+    expect(
+      followAutopilot(inst({ autopilot: run({ step: "pr", url: "https://x.test/1" }) }))
+    ).toBe("pr");
+  });
+
+  it("falls back to the session's own pr_url", () => {
+    followAutopilot(inst({ autopilot: run({ step: "push" }) }));
+    expect(
+      followAutopilot(inst({ autopilot: run({ step: "pr" }), pr_url: "https://y.test/2" }))
+    ).toBe("pr");
+  });
+
+  it("ignores runs that are not running, and re-arms cleanly after", () => {
+    expect(followAutopilot(inst({ autopilot: run({ state: "halted", step: "commit" }) }))).toBeNull();
+    expect(followAutopilot(inst({ autopilot: run({ state: "done", step: "commit" }) }))).toBeNull();
+    expect(followAutopilot(inst({}))).toBeNull();
+    // A halted run cleared the guard, so a fresh run's commit step fires again.
+    expect(
+      followAutopilot(inst({ autopilot: run({ step: "commit" }) }), { live: true })
+    ).toBe("commit");
+  });
+});
+
+describe("the Merge button refuses to lie", () => {
+  const ms = (o: Partial<MergeState> = {}): MergeState => ({
+    number: 1, url: "https://x.test/1", state: "clean",
+    mergeable: true, checks: "ok", can_merge: true, blockers: [], ...o,
+  });
+  const at = (o: Partial<Instance>) =>
+    nextStep({ title: "t", status: "running", stage: "pr", ...o });
+
+  it("is clickable when GitHub says the merge would go through", () => {
+    const s = at({ merge_state: ms() });
+    expect(s?.label).toBe("Merge");
+    expect(s?.disabled).toBeFalsy();
+  });
+
+  it.each([
+    ["dirty", ["the branch has merge conflicts with its base"], "conflicts"],
+    ["behind", ["the branch is behind its base and must be updated first"], "behind base"],
+    ["draft", ["the pull request is still a draft"], "draft PR"],
+  ])("is UNCLICKABLE and names the blocker: %s", (state, blockers, short) => {
+    const m = ms({ state, can_merge: false, blockers: blockers as string[] });
+    const s = at({ merge_state: m });
+    expect(s?.disabled).toBe(true);
+    expect(s?.label).toBe("Merge blocked");
+    expect(s?.title).toContain(blockers[0]);
+    // …and the header names it compactly.
+    expect(mergeBlockerLabel(m)).toBe(short);
+  });
+
+  it("distinguishes a failing required check from a missing review", () => {
+    expect(mergeBlockerLabel(ms({ state: "blocked", checks: "failed" }))).toBe("checks ✗");
+    expect(mergeBlockerLabel(ms({ state: "blocked", checks: "pending" }))).toBe("checks…");
+    expect(mergeBlockerLabel(ms({ state: "blocked", checks: "ok" }))).toBe("review needed");
+  });
+
+  it("leaves the button alone when we could not find out", () => {
+    // merge_state absent = no token / no gh / a network fault. Blocking on that
+    // would be claiming knowledge we do not have.
+    expect(at({})?.label).toBe("Merge");
+    expect(at({ merge_state: null })?.disabled).toBeFalsy();
+  });
+
+  it("says 'checking…' while GitHub is still computing mergeability", () => {
+    expect(mergeBlockerLabel(ms({ state: "unknown", mergeable: null }))).toBe("checking…");
+  });
+
+  it("shows the blocker in the header instead of a useless 'PR open'", () => {
+    const s = liveStep({
+      title: "t", status: "running", stage: "pr",
+      merge_state: ms({ state: "dirty", can_merge: false, blockers: ["conflicts"] }),
+    });
+    expect(s?.tone).toBe("blocked");
+    expect(s?.label).toBe("conflicts");
   });
 });
 

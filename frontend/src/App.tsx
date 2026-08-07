@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConfig, useInstances } from "./state/queries";
 import { tourDecision, useUi } from "./state/store";
-import { noteActivity, reconcileLoopReset } from "./lib/stage";
+import { followAutopilot, noteActivity, reconcileLoopReset } from "./lib/stage";
 import { installKeymap, type KeymapHost } from "./lib/keymap";
 import { selectSession, instances as instancesSnapshot } from "./lib/sessionActions";
 import { TopBar } from "./components/TopBar";
@@ -97,6 +97,10 @@ export default function App() {
     for (const inst of instances || []) {
       noteActivity(inst);
       reconcileLoopReset(inst);
+      // Guaranteed path for following an autopilot run: the event gives
+      // sub-second response, this makes sure a dropped or missed event cannot
+      // leave the run unfollowed.
+      followAutopilot(inst);
     }
   }, [instances]);
 

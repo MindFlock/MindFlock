@@ -9,6 +9,7 @@ import { toast } from "./toast";
 import {
   PR_FALLBACK_HINT,
   commitSession,
+  offerUrl,
   hasPrSupport,
   makePrSession,
   mergeSession,
@@ -17,7 +18,13 @@ import {
   startFastTrack,
   stopFastTrack,
 } from "./sessionActions";
-import { autopilotChipTitle, depthLabel } from "./autopilot";
+import {
+  DEPTH_SHORT,
+  autopilotChipTitle,
+  depthLabel,
+  mergeBlockerLabel,
+} from "./autopilot";
+import { useUi } from "../state/store";
 
 /** Longest `failed_step` that still reads as a hook NAME rather than a line of
  * output, and so still belongs in the stage pill. "Run Tests (+3)" is 14. */
@@ -234,10 +241,240 @@ export interface NextStep {
   run: () => void;
   hint?: boolean;
   title?: string;
+  /** Rendered unclickable. Used when we KNOW the action would be refused — a merge
+   * whose PR has conflicts, a failing required check, or a missing review. Offering
+   * a button that cannot work is worse than showing why it cannot. */
+  disabled?: boolean;
   /** Rendered as an ON toggle (filled rather than outlined). Used by the ⏩
    * fast-track control while a chain is armed, so the button you pressed stays
    * visible, visibly on, and clickable to turn back off. */
   active?: boolean;
+}
+
+/* --- Live step indicator ----------------------------------------------------
+ * What the top of a window says while work is actually happening.
+ *
+ * The header used to fill the primary button's slot with a DISABLED grey pill
+ * whenever `nextStep()` returned null — so the single busiest moment in the
+ * workflow (pre-commit hooks running) rendered as dead greyed-out text reading
+ * "pre-commit". This replaces it with a small indicator that reads as active,
+ * names the step, and — when a chain is armed — says what it is waiting on and
+ * where it is heading.
+ */
+
+export type StepTone = "work" | "blocked" | "ok" | "quiet";
+
+export interface LiveStep {
+  label: string;
+  tone: StepTone;
+  title: string;
+  /** Short "→ PR" target suffix while a chain is armed. */
+  target?: string;
+  /** Click opens the PR (only set when there is one to open). */
+  href?: string;
+}
+
+/** Verbs that are in flight but have no stage of their own.
+ *
+ * Push, make-PR and merge all type a command / call a route and return; the stage
+ * only moves once the RESULT is observable (origin matches, a PR exists). Between
+ * the click and that flip the header would otherwise still show the previous
+ * step, which is what made people press Push twice. Same self-clearing pattern as
+ * `reconcileLoopReset`: the entry dies when the stage moves past it or on TTL. */
+const inflight = new Map<string, { verb: "push" | "pr" | "merge"; at: number }>();
+const INFLIGHT_TTL_MS = 120_000;
+
+export function markStep(title: string, verb: "push" | "pr" | "merge") {
+  if (title) inflight.set(title, { verb, at: Date.now() });
+}
+
+export function clearStep(title: string) {
+  inflight.delete(title);
+}
+
+function inflightVerb(inst: Partial<Instance>): "push" | "pr" | "merge" | null {
+  const title = inst.title;
+  if (!title) return null;
+  const rec = inflight.get(title);
+  if (!rec) return null;
+  if (Date.now() - rec.at > INFLIGHT_TTL_MS) {
+    inflight.delete(title);
+    return null;
+  }
+  // The stage has caught up — the verb is done.
+  const stage = inst.stage || "";
+  if (
+    (rec.verb === "push" && (stage === "pushed" || stage === "pr")) ||
+    (rec.verb === "pr" && stage === "pr") ||
+    (rec.verb === "merge" && stage !== "pr")
+  ) {
+    inflight.delete(title);
+    return null;
+  }
+  return rec.verb;
+}
+
+/** The current step for a session, or null when nothing is happening. */
+export function liveStep(inst: Partial<Instance>): LiveStep | null {
+  const stage = guidedStage(inst);
+
+  if (inst.workspace_missing)
+    return { label: "workspace gone", tone: "blocked", title: "The workspace directory no longer exists." };
+  if (inst.status === "paused")
+    return { label: "paused", tone: "quiet", title: "Session paused — resume it to continue." };
+
+  // Worktree setup outranks everything: queued prompts are HELD while it runs,
+  // and the autopilot refuses to act at all, so it must be visible.
+  const setup = inst.setup;
+  if (setup?.state === "running")
+    return { label: "setting up", tone: "work", title: "Running the workspace setup commands." };
+  if (setup?.state === "failed")
+    return {
+      label: "setup failed",
+      tone: "blocked",
+      title:
+        "Workspace setup failed" +
+        (setup.failed_step ? " at " + setup.failed_step : "") +
+        ". Queued prompts are held until it succeeds.",
+    };
+
+  if (stage === "provisioning")
+    return { label: "provisioning", tone: "work", title: "Creating the workspace." };
+  if (stage === "precommit")
+    return { label: "pre-commit", tone: "work", title: "Running the pre-commit hooks." };
+  if (stage === "interrupt")
+    return {
+      label: "pre-commit ✗",
+      tone: "blocked",
+      title:
+        "A pre-commit hook blocked the commit" +
+        (inst.failed_step ? " at " + inst.failed_step : "") +
+        ".",
+    };
+
+  const verb = inflightVerb(inst);
+  if (verb === "push") return { label: "pushing", tone: "work", title: "Pushing the branch to origin." };
+  if (verb === "pr") return { label: "opening PR", tone: "work", title: "Opening the pull request." };
+  if (verb === "merge") return { label: "merging", tone: "work", title: "Merging the pull request." };
+
+  // Verification checks run while the stage still reads "committed", and the push
+  // route soft-rejects a push until they pass — so say so before Push is pressed.
+  const check = inst.check;
+  if (check?.state === "running")
+    return { label: "checks", tone: "work", title: "Running the verification check." };
+  if (check?.state === "failed")
+    return {
+      label: "checks ✗",
+      tone: "blocked",
+      title: "The verification check failed" + (check.failed_step ? " at " + check.failed_step : "") + ".",
+    };
+
+  // An armed chain: say what it is waiting on and where it is going.
+  const run = inst.autopilot;
+  if (run && run.depth && run.state === "running")
+    return {
+      label: run.note || "fast-tracking",
+      tone: "work",
+      title: autopilotChipTitle(run),
+      target: DEPTH_SHORT[run.depth] || "",
+    };
+  if (run && run.depth && run.state === "halted")
+    return { label: "fast-track ✗", tone: "blocked", title: autopilotChipTitle(run) };
+
+  if (stage === "pr") {
+    const ms = inst.merge_state;
+    if (ms && !ms.can_merge)
+      // Say WHAT is blocking it, right in the header — "PR open" is true but
+      // useless when the thing you want to know is why Merge is greyed out.
+      return {
+        label: mergeBlockerLabel(ms),
+        tone: "blocked",
+        title:
+          "This PR cannot be merged yet:\n" +
+          (ms.blockers || []).map((b) => "• " + b).join("\n"),
+        href: inst.pr_url || ms.url || undefined,
+      };
+    return {
+      label: "PR open",
+      tone: "ok",
+      title: inst.pr_url ? "Open the pull request" : "A pull request is open for this branch.",
+      href: inst.pr_url || undefined,
+    };
+  }
+  return null;
+}
+
+/* --- Follow an autopilot run ------------------------------------------------
+ * When the driver reaches a step, do what pressing that button by hand would do:
+ * the commit step focuses the window and shows its shell (so the pre-commit hooks
+ * are watchable), and the PR step opens the pull request.
+ *
+ * Driven from BOTH the `session.autopilot_changed` event (sub-second) and the 4s
+ * poll (guaranteed). Relying on the event alone made this depend on catching one
+ * transient message: the socket can be disconnected, the server's per-client queue
+ * drops events when full, and a page can load mid-commit. Both paths share the
+ * guard below, so it still happens exactly once per step.
+ */
+
+const followed = new Map<string, string>();
+
+export function resetFollow(title?: string) {
+  if (title) followed.delete(title);
+  else followed.clear();
+}
+
+/** React to an autopilot run reaching a new step. `live` marks a real-time event,
+ * where firing on a first sighting is correct; a poll seeds silently instead, so
+ * loading the page during a commit does not yank focus. */
+export function followAutopilot(
+  inst: Partial<Instance>,
+  opts?: { live?: boolean }
+): string | null {
+  const title = inst.title;
+  const run = inst.autopilot;
+  if (!title) return null;
+  if (!run || !run.depth || run.state !== "running") {
+    followed.delete(title);
+    return null;
+  }
+  const step = String(run.step || "");
+  const seen = followed.get(title);
+  if (seen === step) return null;
+  const first = seen === undefined;
+  followed.set(title, step);
+
+  if (step === "commit") {
+    // SWITCH THE TAB, DO NOT TAKE FOCUS. Autopilot runs unattended and often on a
+    // window you are not looking at, so yanking the view away from whatever you
+    // ARE doing is wrong. Setting the tab is harmless and does the useful half:
+    // whenever you next look at that window, it is already showing the hooks.
+    // (The manual Commit dialog still focuses, because you asked for it there.)
+    //
+    // Fires even on a first sighting, including from a poll: with no focus theft
+    // there is nothing to protect against, and a page loaded mid-commit should
+    // still find the right tab selected.
+    try {
+      useUi.getState().setLastTab(title, "shell");
+    } catch {
+      /* following is a courtesy — never let it break the poll */
+    }
+    return "commit";
+  }
+  if (step === "pr") {
+    // Opening a browser tab IS intrusive, so this one stays limited to a real live
+    // transition: a page load must not re-open a PR you have already seen.
+    if (first && !opts?.live) return null;
+    const url = String(run.url || "") || inst.pr_url || "";
+    if (url) {
+      try {
+        offerUrl(url, "PR opened for " + title);
+      } catch {
+        /* a blocked/absent window must not break the loop */
+      }
+    }
+    return "pr";
+  }
+  return null;
 }
 
 /** The ⏩ sibling of the guided button: a per-session TOGGLE for autopilot.
@@ -253,12 +490,30 @@ export function fastTrackStep(inst: Partial<Instance>): NextStep | null {
   const title = inst.title;
   const caps = queryClient.getQueryData<Config>(["config"])?.caps;
   if (caps && !caps.git) return null;
-  if (!title || inst.status === "loading" || inst.status === "paused") return null;
-  if (inst.workspace_missing) return null;
-  const stage = guidedStage(inst);
-  if (stage === "provisioning" || stage === "precommit") return null;
+  if (!title) return null;
 
   const run = inst.autopilot;
+  // "done" counts as ARMED: fast-track is a standing instruction, and a finished
+  // run wakes itself for another cycle as soon as the agent produces new work. It
+  // read as OFF before, which is why keeping it on felt impossible — the toggle
+  // said off while the instruction was still in force.
+  const armed = !!(
+    run &&
+    run.depth &&
+    (run.state === "running" || run.state === "halted" || run.state === "done")
+  );
+  // AN ARMED RUN IS ALWAYS CANCELLABLE. The guards below hide the OFF state where
+  // a press would be meaningless (still provisioning, a commit in flight), but
+  // they must never hide the ON state: an intake-armed session spends its first
+  // minutes provisioning, and that is precisely when you might change your mind.
+  // Hiding the toggle there left no way to stop it at all.
+  if (!armed) {
+    if (inst.status === "loading" || inst.status === "paused") return null;
+    if (inst.workspace_missing) return null;
+    const stage = guidedStage(inst);
+    if (stage === "provisioning" || stage === "precommit") return null;
+  }
+
   // Armed: show it ON and make the click turn it off.
   if (run && run.depth && run.state === "running")
     return {
@@ -276,6 +531,19 @@ export function fastTrackStep(inst: Partial<Instance>): NextStep | null {
       title:
         autopilotChipTitle(run) + "\n\nClick ⏩✗ to start fast-track again.",
       run: () => startFastTrack(title, run.depth),
+    };
+
+  // Finished, but still watching for the next cycle.
+  if (run && run.depth && run.state === "done")
+    return {
+      label: "⏩",
+      active: true,
+      title:
+        "Fast-track finished at " +
+        depthLabel(run.depth) +
+        " and is still on: it picks up again as soon as the agent changes\n" +
+        "anything more.\n\nClick ⏩ to turn fast-track off.",
+      run: () => stopFastTrack(title),
     };
 
   const depth = resolveDepth();
@@ -352,6 +620,22 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
               run: () => window.open(inst.pr_url!, "_blank"),
             }
           : { label: "Merge ↗", hint: true, title: PR_FALLBACK_HINT, run: () => mergeSession(title) };
+      // Only offer Merge when GitHub says it would actually go through. `merge_state`
+      // absent means we could not find out (no token, no gh, a network fault) — in
+      // that case leave the button alone rather than block on a guess.
+      {
+        const ms = inst.merge_state;
+        if (ms && !ms.can_merge)
+          return {
+            label: "Merge blocked",
+            disabled: true,
+            title:
+              "This PR cannot be merged yet:\n" +
+              (ms.blockers || []).map((b) => "• " + b).join("\n") +
+              (inst.pr_url ? "\n\nOpen the PR to resolve it." : ""),
+            run: () => {},
+          };
+      }
       return { label: "Merge", run: () => mergeSession(title) };
     case "merged":
       return inst.pr_url

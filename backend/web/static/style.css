@@ -2266,6 +2266,14 @@ p.set-hint {
 #git-issue-bar .dc-dot {
   width: 9px;
   height: 9px;
+  /* Pin the box so no inherited or globally-scoped rule can deform the circle.
+     The red state used to carry a bare `error` class, and the app-wide
+     `.error { min-height: 16px }` (meant for error TEXT) beat an unset min-height
+     — producing a 9x16 oval in exactly one state. The state class is scoped now,
+     but stating these makes the shape robust rather than merely currently-correct. */
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
   border-radius: 50%;
   flex: none;
 }
@@ -2290,10 +2298,12 @@ p.set-hint {
   background: var(--gold);
 }
 
-/* Browser offline, or the ingestion log shows recent connection failures. */
-#mindflock-bar .dc-dot.error,
-#pr-review-bar .dc-dot.error,
-#git-issue-bar .dc-dot.error {
+/* Browser offline, or the ingestion log shows recent connection failures.
+   Named `dc-error` rather than `error` so it cannot pick up the app-wide
+   error-TEXT rule (see the shape comment above). */
+#mindflock-bar .dc-dot.dc-error,
+#pr-review-bar .dc-dot.dc-error,
+#git-issue-bar .dc-dot.dc-error {
   background: var(--red);
   box-shadow: 0 0 6px var(--red);
 }
@@ -4699,6 +4709,10 @@ p.set-hint {
 
 .pane-head {
   flex-wrap: nowrap;
+  /* Backstop only. With the title able to shrink to 2.5rem and the container
+     queries below shedding the optional bits, this should never engage — but a
+     header that spills past the pane's rounded corner looks broken, so clip. */
+  overflow: hidden;
 }
 
 /* Normal right padding. (The old 54px gutter reserved room for the floating
@@ -4707,10 +4721,16 @@ p.set-hint {
   padding-right: 12px;
 }
 
+/* The title is the ONE thing in this header that yields.
+   `flex-shrink: 3` against the context line's 1 makes it absorb most of any
+   reduction, and the small floor lets it truncate hard — a 60-character session
+   name should cost its own characters, never the Commit button, the fast-track
+   toggle or the live-step indicator. Those are controls; the title is a label
+   whose full text is one hover away (title= carries it). */
 .pane-head .title {
   font-weight: 600;
-  flex: 0 1 auto;
-  min-width: 40px;
+  flex: 0 3 auto;
+  min-width: 2.5rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4777,6 +4797,23 @@ p.set-hint {
 
 @container (max-width: 560px) {
   .pane-head .tok {
+    display: none;
+  }
+
+  .pane-head .actions .stepnow-target {
+    display: none;
+  }
+
+  .pane-head .actions .stepnow-text {
+    max-width: 12ch;
+  }
+}
+
+/* Tightest layout: the dot alone still says "running / blocked", and the tooltip
+   still carries the detail. Deliberately NOT hidden with .nextstep at 420px —
+   once the action button is gone this is the only signal left. */
+@container (max-width: 360px) {
+  .pane-head .actions .stepnow-text {
     display: none;
   }
 }
@@ -4870,6 +4907,12 @@ p.set-hint {
   align-items: center;
   gap: 6px;
   margin-left: 10px;
+  /* NEVER shrinks. Making this yield (so a verbose step label could not push the
+     usage chip out) meant a long session title clipped the controls instead —
+     the Commit button, the ⏩ toggle and the step indicator were sliced off the
+     right edge. The label is bounded by its own max-width and the container
+     queries below, so the group's width stays predictable without shrinking. */
+  flex: none;
 }
 
 .pane-head .actions .nextstep {
@@ -4889,19 +4932,123 @@ p.set-hint {
   filter: brightness(1.12);
 }
 
-/* Status-pill variant: shown in the same slot when there's no actionable next
-   step (provisioning / pre-commit running / paused / workspace gone), so the
-   action area is never an empty gap. Non-clickable, muted — clearly not the
-   primary accent button. */
-.pane-head .actions .nextstep.nextstep-status {
-  background: var(--panel-2);
-  color: var(--muted);
+/* Live step indicator — what is happening RIGHT NOW.
+   Replaces the old `.nextstep-status` pill, which filled the primary button's
+   slot with DISABLED GREY TEXT whenever there was no actionable next step. That
+   meant the busiest moment in the workflow (pre-commit hooks running) rendered as
+   a dead greyed-out button reading "pre-commit". This is deliberately NOT
+   button-shaped: it is a status line, so it never competes with the real action.
+   Colour and fill carry the meaning; motion is only ever a bonus. */
+.pane-head .actions .stepnow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  /* Same yield-then-clip contract the context line uses, so a long label can
+     never push the cost chip or the copy button out of the header. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
   font-weight: 500;
-  cursor: default;
-  filter: none;
+  color: var(--muted);
+  white-space: nowrap;
 }
 
-.pane-head .actions .nextstep.nextstep-status:hover {
+.pane-head .actions .stepnow-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Bounded because `.actions` no longer shrinks: the group's width has to be
+     predictable. The server's wait sentences run long ("waiting for CI to pass
+     before merging"), and the full text is in the tooltip. */
+  max-width: 15ch;
+}
+
+.pane-head .actions .stepnow-target {
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.pane-head .actions .stepnow-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* work: something is running. Accent + the house pulse cadence. */
+.pane-head .actions .stepnow.is-work {
+  color: var(--accent);
+}
+
+.pane-head .actions .stepnow.is-work .stepnow-dot {
+  animation: step-ping 1.4s ease-in-out infinite;
+}
+
+/* blocked: it needs a human. */
+.pane-head .actions .stepnow.is-blocked {
+  color: var(--red);
+}
+
+/* ok: a finished, good state (a PR is open). */
+.pane-head .actions .stepnow.is-ok {
+  color: var(--green, #3fb950);
+}
+
+/* quiet: true but inert (paused). Hollow dot, so "not running" is legible
+   without relying on colour or motion. */
+.pane-head .actions .stepnow.is-quiet .stepnow-dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+
+.pane-head .actions .stepnow.is-link {
+  cursor: pointer;
+}
+
+.pane-head .actions .stepnow.is-link:hover {
+  text-decoration: underline;
+}
+
+/* Matches the shape of the existing mic-pulse ring, accent-tokenised, at the
+   house 1.4s ease-in-out cadence (see cs-pulse). */
+@keyframes step-ping {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0.55);
+  }
+
+  50% {
+    box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0);
+  }
+}
+
+/* Motion is decoration here — the dot's colour and fill already carry the state,
+   so removing it loses nothing. Honour both the OS setting and the app's own
+   reduce-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  .pane-head .actions .stepnow.is-work .stepnow-dot {
+    animation: none;
+  }
+}
+
+.no-motion .pane-head .actions .stepnow.is-work .stepnow-dot {
+  animation: none;
+}
+
+/* Blocked: the action is known to be refusable, so the button says why and does
+   nothing. Muted like the old status pill, but it keeps a border so it still reads
+   as a control that exists rather than as absent — and the tooltip carries the
+   specific blockers. */
+.pane-head .actions .nextstep.nextstep-blocked {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  cursor: not-allowed;
+  font-weight: 500;
+}
+
+.pane-head .actions .nextstep.nextstep-blocked:hover {
   filter: none;
 }
 
@@ -6233,6 +6380,51 @@ p.set-hint {
   border-color: var(--accent);
 }
 
+/* Fast-track rung picker.
+   A <select> does NOT inherit the card's typography: the UA stylesheet sets the
+   `font` shorthand on form controls, so without this rule it rendered as a raw
+   Arial platform widget (square corners, ButtonFace grey) inside a rounded dark
+   card whose every other control is --bg + 1px --border + 7px radius.
+   `align-self: start` matters too: `#commit-form label` is a column flexbox with
+   the default `align-items: stretch`, which spread a four-option picker across
+   the whole 480px card with ~300px of dead space. */
+#commit-form #commit-depth {
+  align-self: start;
+  min-width: 210px;
+  max-width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#commit-form #commit-depth:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#commit-form #commit-depth:hover {
+  border-color: var(--accent);
+}
+
+/* Caption and hint on ONE line: the label is a column flexbox, so a bare text
+   node plus the hint span would otherwise stack into two rows and make this row
+   taller than the message row's caption. */
+#commit-form #commit-depth-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 4px 6px;
+}
+
+#commit-form #commit-depth-row > select {
+  grid-column: 1 / -1;
+}
+
 /* Rename dialog (single-line display name; same card style as #commit-form) */
 #rename-form {
   background: var(--panel);
@@ -6607,20 +6799,44 @@ p.set-hint {
   background: var(--bg);
 }
 
+/* Two lines: the branch on its own, then the identity/badges/timestamp beneath.
+   Stacking is what lets a 60-character branch name actually be READ — on one line
+   next to badges and a timestamp it just ellipsised away, which is the whole thing
+   the row exists to tell you. */
 .recent-info {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
 }
 
 .recent-name {
   font-size: 13px;
   font-weight: 600;
+  /* min-width:0 alongside overflow:hidden — a nowrap flex item's default
+     min-width:auto refuses to shrink below its content, so the ellipsis never
+     engages without it. */
+  min-width: 0;
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.recent-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.recent-slug {
+  font-size: 11px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
 .recent-when {

@@ -7,6 +7,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import { api } from "../../api/client";
 import type { Json } from "../../api/types";
 import { toast } from "../../lib/toast";
+import { refreshConfig } from "../../state/queries";
 
 export const SECRET_MASK = "•••set";
 
@@ -43,6 +44,13 @@ export function useSettingsModel(open: boolean): SettingsModel {
           json: { [group]: { [field]: value } },
         });
         setSettings(r?.settings || {});
+        // Some settings are also reported on /api/config, which the whole app
+        // reads (caps, ide_name, the resolved fast-track rung). Invalidating it
+        // here — rather than per call site — is what makes a saved setting take
+        // effect in already-open windows instead of waiting for a reload. It was
+        // hand-rolled in exactly one screen before, which is precisely how the
+        // fast-track rows shipped without it.
+        void refreshConfig();
         toast("Saved " + field.replace(/_/g, " "));
       } catch (err) {
         toast("Save failed: " + ((err as Error).message || field));
@@ -57,6 +65,7 @@ export function useSettingsModel(open: boolean): SettingsModel {
       try {
         const r = await api<{ settings?: Json }>("/api/settings", { json: { [group]: patch } });
         setSettings(r?.settings || {});
+        void refreshConfig();
         if (okMsg) toast(okMsg);
       } catch (err) {
         toast("Save failed: " + ((err as Error).message || group));
