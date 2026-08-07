@@ -76,7 +76,6 @@ __all__ = [
     "snapshot",
     "dto",
     "claim",
-    "rearm",
 ]
 
 _FileName = "autopilot.json"
@@ -395,9 +394,20 @@ def next_action(rec: dict, snap: dict) -> Tuple[str, dict]:
     if stage == "precommit":
         return "wait", {"reason": "pre-commit hooks are running"}
 
-    # Target already met?
+    # Target already met — but FINISH only if this run actually did the work.
+    #
+    # A branch that already has an open PR satisfies a "pr" target the instant you
+    # arm it, so finishing there means the press accomplished nothing and the toggle
+    # switched itself off again. A run that has not acted yet stays armed and waits
+    # for the agent instead; it completes when it has genuinely carried the work,
+    # which is the point at which turning itself off is the right thing to do.
     if reaches(stage, depth):
-        return "done", {}
+        if int(rec.get("commits") or 0) > 0 or rec.get("step"):
+            return "done", {}
+        return "wait", {
+            "reason": "already at %s — waiting for new work" % stage_achieved(stage),
+            "idle_wait": True,
+        }
 
     # A blocked commit: retry, skip, or halt.
     # A target of "agent only" must never run git commit — dispatch it before the
@@ -613,55 +623,6 @@ def get(title: str) -> Optional[dict]:
     with _LOCK:
         entry = _load().get(title)
     return _normalize(entry) if entry is not None else None
-
-
-def rearm(title: str, now: Optional[float] = None) -> Optional[dict]:
-    """Wake a FINISHED run for another cycle, keeping its target.
-
-    Fast-track is a standing instruction, not a one-shot. A branch that already has
-    an open PR reads as stage "pr", so arming it satisfied the target immediately
-    and the run went ``done`` — and a done record is inert, so when the agent then
-    did more work nothing carried it anywhere. You had to re-press the button after
-    every single cycle.
-
-    Everything per-CYCLE is cleared (step, counters, skipped hooks, the dwell, the
-    PR url) so the new pass starts clean and cannot inherit an old attempt budget.
-    Everything per-INSTRUCTION is kept: the depth, the message, where it came from,
-    the retryable hooks, the branch.
-
-    Deliberately does NOT wake a HALTED run — that one stopped because a human
-    needs to look at it, and quietly resuming would bury the reason. Pressing the
-    button is how you say you have dealt with it.
-    """
-    if not title:
-        return None
-    ts = float(now if now is not None else time.time())
-    with _LOCK:
-        data = _load()
-        if title not in data:
-            return None
-        rec = _normalize(data[title])
-        if rec.get("state") != "done":
-            return None
-        rec.update(
-            state="running",
-            step="",
-            reason="",
-            note="",
-            url="",
-            attempts={},
-            issues={},
-            skipped=[],
-            commits=0,
-            idle_since=None,
-            worked_at=0.0,
-            step_since=ts,
-            acted_at=0.0,
-            updated=ts,
-        )
-        data[title] = rec
-        _save(data)
-    return dict(rec)
 
 
 def claim(title: str, owner: str, now: Optional[float] = None):

@@ -197,9 +197,19 @@ export function Pane({
   }
 
   if (loading) {
+    // Draggable while it boots. Provisioning is the LONGEST a window is ever in
+    // one state — a cold clone runs for minutes — and it was the one state you
+    // could not move or drop onto, so you had to wait it out before arranging your
+    // grid. Nothing about the drag touches the session; it is pure layout.
     return (
-      <section className="pane loading-pane" data-title={title}>
-        <div className="pane-head">
+      <section
+        ref={paneRef as React.RefObject<HTMLElement>}
+        className={"pane loading-pane" + (dragging ? " dragging" : "")}
+        data-title={title}
+        {...paneDrag}
+      >
+        <div className="pane-head" {...headDrag}>
+          <span className="grip" title="Drag to move this window">⠿</span>
           <span className="title">{displayName}</span>
           <span className="branch">{inst.branch ? "(" + displayBranch(inst) + ")" : ""}</span>
           <span className="state">provisioning…</span>

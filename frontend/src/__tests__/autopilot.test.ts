@@ -138,6 +138,7 @@ describe("chip text", () => {
 
   it("marks a finished run", () => {
     expect(autopilotChipLabel(run({ state: "done" }))).toBe("auto ✓");
+    expect(autopilotChipTitle(run({ state: "done" }))).toContain("switched itself off");
   });
 });
 
@@ -211,15 +212,22 @@ describe("the ⏩ control is a toggle", () => {
     }
   });
 
-  it("reads a FINISHED run as still armed", () => {
-    // Fast-track is a standing instruction: a done run wakes itself when the agent
-    // produces more work. Showing it OFF is why keeping it on felt impossible —
-    // a branch with an existing PR finishes instantly, every time.
+  it("turns itself OFF once the run has finished its task", () => {
     const s = fastTrackStep({
       title: "t", status: "running", stage: "pr", autopilot: run({ state: "done" }),
     });
-    expect(s?.active).toBe(true);
-    expect(s?.title).toContain("picks up again");
+    expect(s?.active).toBeFalsy();
+    // …and offers to start a fresh one.
+    expect(s?.title).toContain("Fast-track:");
+  });
+
+  it("turns itself OFF when the run failed, but still says why", () => {
+    const s = fastTrackStep({
+      title: "t", status: "running", stage: "interrupt",
+      autopilot: run({ state: "halted", reason: "checks failed" }),
+    });
+    expect(s?.active).toBeFalsy();
+    expect(s?.title).toContain("checks failed");
   });
 
   it("still surfaces a halted run while provisioning", () => {
