@@ -493,15 +493,11 @@ export function fastTrackStep(inst: Partial<Instance>): NextStep | null {
   if (!title) return null;
 
   const run = inst.autopilot;
-  // "done" counts as ARMED: fast-track is a standing instruction, and a finished
-  // run wakes itself for another cycle as soon as the agent produces new work. It
-  // read as OFF before, which is why keeping it on felt impossible — the toggle
-  // said off while the instruction was still in force.
-  const armed = !!(
-    run &&
-    run.depth &&
-    (run.state === "running" || run.state === "halted" || run.state === "done")
-  );
+  // Only a LIVE run is armed. A run that has finished its task — or failed at it —
+  // turns itself off for this window; the outcome stays readable in the header, and
+  // pressing the button is how you start another. A halted one still shows here so
+  // its reason is one hover away rather than vanishing silently.
+  const armed = !!(run && run.depth && (run.state === "running" || run.state === "halted"));
   // AN ARMED RUN IS ALWAYS CANCELLABLE. The guards below hide the OFF state where
   // a press would be meaningless (still provisioning, a commit in flight), but
   // they must never hide the ON state: an intake-armed session spends its first
@@ -531,19 +527,6 @@ export function fastTrackStep(inst: Partial<Instance>): NextStep | null {
       title:
         autopilotChipTitle(run) + "\n\nClick ⏩✗ to start fast-track again.",
       run: () => startFastTrack(title, run.depth),
-    };
-
-  // Finished, but still watching for the next cycle.
-  if (run && run.depth && run.state === "done")
-    return {
-      label: "⏩",
-      active: true,
-      title:
-        "Fast-track finished at " +
-        depthLabel(run.depth) +
-        " and is still on: it picks up again as soon as the agent changes\n" +
-        "anything more.\n\nClick ⏩ to turn fast-track off.",
-      run: () => stopFastTrack(title),
     };
 
   const depth = resolveDepth();

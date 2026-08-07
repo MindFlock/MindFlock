@@ -100,11 +100,7 @@ export function autopilotChipTitle(run: AutopilotRun): string {
   if (run.state === "halted")
     return "Fast-track stopped: " + (run.reason || "unknown reason");
   if (run.state === "done")
-    return (
-      "Fast-track finished at " +
-      target +
-      " — still on, and will pick up new work automatically."
-    );
+    return "Fast-track finished at " + target + " and switched itself off.";
   // Prefer the server's own sentence for what this pass is waiting on — it knows
   // whether it is the agent, the prompt queue, checks or a usage limit. Guessing
   // from an empty `step` made every legitimate pause read as "waiting on the

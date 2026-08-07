@@ -194,14 +194,22 @@ def test_ladder_advances_committed_to_push_to_pr():
 
 
 def test_target_reached_is_done_not_another_step():
-    assert ap.next_action(_rec(depth="commit"), _snap(stage="committed"))[0] == "done"
-    assert ap.next_action(_rec(depth="push"), _snap(stage="pushed"))[0] == "done"
-    assert ap.next_action(_rec(depth="pr"), _snap(stage="pr"))[0] == "done"
+    """…once the run has actually carried the work (commits/step recorded)."""
+    acted = {"commits": 1, "step": "commit"}
+    assert (
+        ap.next_action(_rec(depth="commit", **acted), _snap(stage="committed"))[0]
+        == "done"
+    )
+    assert (
+        ap.next_action(_rec(depth="push", **acted), _snap(stage="pushed"))[0] == "done"
+    )
+    assert ap.next_action(_rec(depth="pr", **acted), _snap(stage="pr"))[0] == "done"
 
 
 def test_pr_stage_only_merges_at_merge_depth():
-    assert ap.next_action(_rec(depth="pr"), _snap(stage="pr"))[0] == "done"
-    assert ap.next_action(_rec(depth="merge"), _snap(stage="pr"))[0] == "merge"
+    acted = {"commits": 1, "step": "pr"}
+    assert ap.next_action(_rec(depth="pr", **acted), _snap(stage="pr"))[0] == "done"
+    assert ap.next_action(_rec(depth="merge", **acted), _snap(stage="pr"))[0] == "merge"
 
 
 # --- The merge rung waits for CI (the owner's stated requirement) -----------
@@ -291,7 +299,8 @@ def test_committing_is_still_allowed_on_the_base_branch():
     """Only pushing/PRing needs a branch — the commit itself is fine."""
     assert (
         ap.next_action(
-            _rec(depth="commit"), _snap(stage="committed", on_base_branch=True)
+            _rec(depth="commit", commits=1, step="commit"),
+            _snap(stage="committed", on_base_branch=True),
         )[0]
         == "done"
     )
@@ -622,46 +631,26 @@ def test_claiming_an_unknown_or_nameless_chain_is_refused():
 
 
 # --- A standing instruction, not a one-shot ----------------------------------
-def test_a_branch_that_already_has_a_pr_finishes_immediately():
-    """This is the situation that made fast-track feel impossible to keep on: the
-    stage already reads "pr", so the target is satisfied the moment you arm it."""
-    assert ap.next_action(_rec(depth="pr"), _snap(stage="pr"))[0] == "done"
+def test_a_branch_that_already_has_a_pr_stays_armed_and_waits():
+    """The situation that made fast-track feel impossible to keep on: the stage
+    already reads "pr", so the target is satisfied the moment you arm it. Finishing
+    there means the press accomplished nothing and the toggle switched itself back
+    off. A run that has not acted waits for work instead; it only finishes — and
+    turns itself off — once it has genuinely carried something."""
+    action, detail = ap.next_action(_rec(depth="pr"), _snap(stage="pr"))
+    assert action == "wait"
+    assert "waiting for new work" in detail["reason"]
 
 
-def test_rearm_starts_a_fresh_cycle_and_keeps_the_instruction():
-    ap.arm("s1", "pr", source="tix", item="sc-1", message="Fix the thing", now=1_000.0)
-    ap.update(
-        "s1", commits=3, step="pr", url="http://pr/1", skipped=["h"], issues={"push": 2}
-    )
+def test_a_finished_run_is_left_alone_rather_than_woken():
+    """A run that has had its go turns OFF for that window. The record stays so the
+    outcome is readable, but nothing resumes it behind your back — pressing the
+    button is how you start another."""
+    ap.arm("s1", "pr")
+    ap.update("s1", commits=1, step="pr")
     ap.finish("s1")
-
-    woken = ap.rearm("s1", now=2_000.0)
-    assert woken is not None
-    # Per-CYCLE state is cleared, so a new pass cannot inherit a spent budget.
-    assert woken["state"] == "running"
-    assert woken["step"] == "" and woken["commits"] == 0
-    assert woken["url"] == "" and woken["skipped"] == [] and woken["issues"] == {}
-    assert woken["idle_since"] is None and woken["worked_at"] == 0.0
-    assert woken["step_since"] == 2_000.0
-    # Per-INSTRUCTION state survives.
-    assert woken["depth"] == "pr" and woken["message"] == "Fix the thing"
-    assert woken["source"] == "tix" and woken["item"] == "sc-1"
-
-
-def test_rearm_refuses_a_halted_run():
-    """A halt means a human has to look. Quietly resuming would bury the reason —
-    pressing the button is how you say you have dealt with it."""
-    ap.arm("s1", "pr")
-    ap.halt("s1", "the branch has merge conflicts")
-    assert ap.rearm("s1") is None
-    assert ap.get("s1")["state"] == "halted"
-
-
-def test_rearm_refuses_a_still_running_run():
-    ap.arm("s1", "pr")
-    assert ap.rearm("s1") is None, "a live run must not be reset under itself"
-
-
-def test_rearm_of_an_unknown_chain_is_refused():
-    assert ap.rearm("nope") is None
-    assert ap.rearm("") is None
+    got = ap.get("s1")
+    assert got["state"] == "done"
+    # Inert: next_action refuses to do anything further with it.
+    assert ap.next_action(got, _snap(stage="agent", dirty=True))[0] == "done"
+    assert not hasattr(ap, "rearm"), "a finished run is not woken any more"

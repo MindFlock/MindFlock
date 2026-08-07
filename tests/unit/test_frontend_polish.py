@@ -237,3 +237,19 @@ def test_the_ingestion_dot_cannot_be_deformed_by_the_global_error_rule():
     )
     for decl in ("min-height: 0", "min-width: 0", "border-radius: 50%"):
         assert decl in dot, decl
+
+
+def test_a_booting_window_can_be_dragged():
+    """Provisioning is the LONGEST a window is ever in one state — a cold clone runs
+    for minutes — and it was the one state you could neither move nor drop onto, so
+    arranging the grid meant waiting it out. The drag is pure layout; it touches
+    nothing about the session."""
+    js = client.get("/app.js").text
+    # The loading pane renders the same grip affordance as every other pane.
+    assert "loading-pane" in js
+    # Both halves of the drag contract reach it: the header starts a drag, the
+    # section accepts a drop. Asserted via the rendered class + the shared handler
+    # names surviving into the bundle.
+    assert "Drag to move this window" in js
+    # A dragged loading pane dims like any other (the .dragging class is applied).
+    assert "pane loading-pane" in js
