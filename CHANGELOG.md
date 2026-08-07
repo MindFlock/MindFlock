@@ -7,6 +7,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-08-07
+
+### Added
+
+- **Fast-track — carry a session as far down commit → push → PR → merge as you
+  want, then stop.** A `⏩` toggle beside each window's guided button arms a
+  standing instruction; the Commit dialog gained a "Then keep going" rung so one
+  press can commit *and* continue; and **Settings → Workspace** sets where it stops
+  by default (Open PR). Pressing it while the agent is still working is the normal
+  case: it waits for the agent to genuinely finish rather than committing a
+  half-written tree. The chain is driven server-side, so it survives a tab close,
+  a page reload and a server restart — and because every step is re-derived from
+  real git state rather than replayed from a script, resuming is the same code path
+  as starting.
+
+- **The same depth on intake, so a ticket can go from ingestion to a PR
+  unattended.** Each source (tickets / PRs / issues) carries a default depth, and
+  an individual row can override it before you start it. A whole source cannot
+  default to *merge* — that default would apply to every future item with nobody
+  watching, and merging is the one rung that cannot be undone — but an individual
+  item can.
+
+- **Retryable pre-commit hooks.** Some hooks fail without changing any files and
+  will fail identically forever — an index-rebuilding hook with a corrupt index is
+  the motivating case — which blocked the commit permanently. Listing a hook **ID**
+  in **Settings → Workspace** lets fast-track retry it once and then re-run the
+  commit with `SKIP=<id>`, saying which hook it skipped. Test and secret-scanning
+  hooks are refused there and enforced in the driver, so a failing test still stops
+  the run, which is the whole point of having one.
+
+- **A live step indicator in each window's header.** It names the step that is
+  actually happening — setting up, pre-commit, checks, pushing, opening a PR,
+  merging — and, when a chain is armed, what it is waiting on in the server's own
+  words and which rung it is heading to.
+
+- **The Merge button refuses a merge GitHub would reject.** It reads real
+  mergeability and goes unclickable with the blocker named — merge conflicts, a
+  branch behind its base, a draft PR, a failing or pending required check, a
+  missing review — instead of offering a button that just produces GitHub's error.
+  When mergeability cannot be determined at all (no token, no `gh`, a network
+  fault) the button is left exactly as it was: not knowing is not the same as no.
+
+### Changed
+
+- **Stage changes show up when they happen instead of at the next poll.** `GET
+  /api/instances` serves the background tick's snapshot for up to ten seconds and
+  never rebuilds probes inline, so the post-action refresh provably could not
+  observe anything — "Push" appeared seconds after a commit finished. The publisher
+  now computes its own stage rather than serving a memo another ticker filled, a
+  new single-session read publishes through, and a bounded 250 ms watcher republishes
+  the moment a commit or push actually lands.
+
+- **Recently closed shows the whole branch name.** The row showed only the session
+  title, which for an ingested ticket is the bare slug — so the list said nothing
+  about what any of the work was.
+
+- **A long window title truncates instead of clipping the header controls.** A
+  60-character session name used to slice the Commit button, the fast-track toggle
+  and the step indicator off the right edge. The title yields first now; it is a
+  label whose full text is a hover away, and those are controls.
+
+### Fixed
+
+- **The guided button no longer sticks on "Commit…" for the rest of the session.**
+  The pin set after a successful **Make PR** had no reconcile, so once a session
+  had opened one PR its button never offered Push again for the life of the page.
+
+- **A commit no longer inherits an unrelated message.** The saved message survived
+  a *successful* commit, so anything committing without an explicit one adopted a
+  stale subject — caught about to record one feature's files under a message
+  describing a database migration. It is cleared once a commit lands, and only
+  reused while a failure is genuinely pending.
+
+- **Autopilot never pushes the base branch.** A run on `main` pushed straight to
+  `origin/main`, which a bypass-silent ruleset accepts while merely noting that a
+  PR was required. Committing there is still fine; going further needs a branch.
+
+- **Two servers sharing one machine no longer fight over a run.** Each treated the
+  other's presence as a restart and reset the "is the agent done" dwell every pass,
+  so a chain could sit forever without acting — and both would otherwise have
+  acted, double-committing and double-pushing the same worktree. One lease, one
+  driver.
+
+- **A PR no longer flaps in and out of its stage.** A failed lookup was cached as
+  "there is no PR", so a single rate limit or network blip dropped the stage and the
+  next poll restored it — re-announcing "PR merged or closed" every minute for a PR
+  that was open the whole time.
+
+- **The ticket-ingestion dot is a circle when it is red.** Its error state borrowed
+  a class name from the app-wide rule for error *text*, whose `min-height` beat the
+  dot's own height and rendered it as an oval — in exactly that one state.
+
 ## [0.1.12] - 2026-08-05
 
 ### Added
@@ -1020,7 +1112,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.12...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.13...HEAD
+[0.1.13]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.13
 [0.1.12]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.12
 [0.1.11]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.11
 [0.1.10]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.10
