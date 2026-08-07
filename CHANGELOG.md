@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-08-07
+
+### Fixed
+
+- **Fast-track switches itself off once its task ends.** A run that has succeeded
+  or failed no longer reads as armed, so the toggle tells you whether anything is
+  actually going to happen. The record is kept, so the outcome — and a halt's
+  reason — stays readable, and pressing the button starts another run.
+
+  Doing only that would have brought back the problem the run had been made to
+  survive: a branch which already has an open PR satisfies a "PR" target the
+  *instant* you arm it, so the run finished having accomplished nothing and the
+  toggle flipped straight back off. A run is now only **finished** once it has
+  actually carried the work — a commit or a step recorded — and one that has not
+  acted stays armed and waits. "Already at the target" and "the job is done" had
+  been the same state; separating them is what lets both behaviours hold at once.
+
+- **A booting window can be dragged.** Provisioning is the state a window spends
+  the longest in — a cold clone runs for minutes — and it was the only one that
+  rendered no grip and neither half of the drag contract, so it could be neither
+  moved nor dropped onto. Arranging the grid meant waiting it out.
+
 ## [0.1.13] - 2026-08-07
 
 ### Added
@@ -1112,7 +1134,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.13...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.14...HEAD
+[0.1.14]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.14
 [0.1.13]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.13
 [0.1.12]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.12
 [0.1.11]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.11
