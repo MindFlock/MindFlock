@@ -1,0 +1,167 @@
+/* Settings → Site traffic (dev shell only). Stat tiles, a single-hue click
+   chart, and two data tables — no chart library, consistent with the rest of
+   the app's hand-rolled, zero-dep components. */
+
+.traffic-warn {
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--red);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.traffic-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.traffic-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--panel, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.traffic-tile-num {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.traffic-tile-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.traffic-range-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.traffic-range {
+  width: auto;
+  min-width: 110px;
+}
+
+.traffic-chart-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.traffic-chart {
+  width: 100%;
+  height: 160px;
+  display: block;
+}
+
+/* Sequential magnitude-over-time, one series — the app's single accent hue is
+   the correct encoding (see dataviz skill: categorical color is for identity,
+   not a lone metric). Per-link identity lives in the table below instead. */
+.traffic-bar {
+  fill: var(--accent);
+  opacity: 0.72;
+  transition: opacity 0.1s;
+}
+
+.traffic-bar.hover {
+  opacity: 1;
+}
+
+.traffic-baseline {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+/* Cumulative stars line (StarsChart) — thin 2px stroke, single accent hue
+   (one series, magnitude-over-time — same "no categorical palette needed"
+   reasoning as the bar charts). Crosshair + dot track the pointer since a
+   line has no discrete mark to hover per-datapoint. */
+.traffic-line {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.traffic-crosshair {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.traffic-line-dot {
+  fill: var(--accent);
+  stroke: var(--panel, var(--bg));
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.traffic-chart-axis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.traffic-tooltip {
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.traffic-tooltip-detail {
+  color: var(--muted);
+}
+
+.traffic-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.traffic-table th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding: 4px 8px 6px 0;
+}
+
+.traffic-table td {
+  padding: 5px 8px 5px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.traffic-table th.num,
+.traffic-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  padding-right: 0;
+}
+
+.traffic-pre {
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

@@ -8,10 +8,11 @@
  * "issues")` opens Intake on the matching tab instead of a blank pane, which
  * matters because the server hands those keys back on Connections cards. */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useUi } from "../../state/store";
 import { SettingsCtx, useSettingsModel } from "./useSettings";
 import { LEGACY_SCREEN_TABS } from "../intake/IntakeDialog";
+import { isDevShell } from "../../lib/shell";
 import { General } from "./screens/General";
 import { Appearance } from "./screens/Appearance";
 import { Mobile } from "./screens/Mobile";
@@ -26,6 +27,7 @@ import { Security } from "./screens/Security";
 import { Doctor } from "./screens/Doctor";
 import { SystemLogs } from "./screens/SystemLogs";
 import { Advanced } from "./screens/Advanced";
+import { Traffic } from "./screens/Traffic";
 
 export interface ScreenProps {
   active: boolean;
@@ -50,6 +52,10 @@ const SCREENS: Array<{ key: string; label: string; el: (p: ScreenProps) => React
   { key: "doctor", label: "Doctor", el: (p) => <Doctor {...p} /> },
   { key: "logs", label: "System logs", el: (p) => <SystemLogs {...p} /> },
   { key: "advanced", label: "Advanced", el: (p) => <Advanced {...p} /> },
+  // Maintainer-only: MindFlock's own reach (stars, downloads, tracked-link
+  // clicks), not something an end user's build needs — filtered out below
+  // unless this is a --mindflock-dev shell.
+  { key: "traffic", label: "Site traffic", el: (p) => <Traffic {...p} /> },
 ];
 
 export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () => void }) {
@@ -59,6 +65,9 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
   const [screen, setScreen] = useState("general");
   const model = useSettingsModel(open);
   const openDialogFor = useUi((s) => s.openDialogFor);
+  // Site traffic is MindFlock's own maintainer dashboard — hidden from nav,
+  // deep-link and fallback resolution alike unless this is a dev-shell build.
+  const screens = useMemo(() => SCREENS.filter((s) => s.key !== "traffic" || isDevShell()), []);
 
   // A retired screen key hands off to Intake rather than selecting nothing (which
   // rendered a blank right-hand pane, since .set-screen.active would match no
@@ -66,7 +75,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
   const gotoScreen = (name: string) => {
     const tab = LEGACY_SCREEN_TABS[name];
     if (tab) openDialogFor("intake", tab);
-    else setScreen(SCREENS.some((s) => s.key === name) ? name : "general");
+    else setScreen(screens.some((s) => s.key === name) ? name : "general");
   };
 
   useEffect(() => {
@@ -77,8 +86,8 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
       openDialogFor("intake", tab);
       return;
     }
-    setScreen(target && SCREENS.some((s) => s.key === target) ? target : "general");
-  }, [open, target, openDialogFor]);
+    setScreen(target && screens.some((s) => s.key === target) ? target : "general");
+  }, [open, target, openDialogFor, screens]);
 
   useEffect(() => {
     if (!open) return;
@@ -121,7 +130,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
           </div>
           <div id="settings-body">
             <nav id="settings-nav" aria-label="Settings sections">
-              {SCREENS.map((s) => (
+              {screens.map((s) => (
                 <button
                   key={s.key}
                   type="button"
@@ -134,7 +143,7 @@ export function SettingsDialog({ onOpenSysLogsPane }: { onOpenSysLogsPane?: () =
               ))}
             </nav>
             <div id="settings-screens">
-              {SCREENS.map((s) => (
+              {screens.map((s) => (
                 <section
                   key={s.key}
                   className={"set-screen" + (screen === s.key ? " active" : "")}
