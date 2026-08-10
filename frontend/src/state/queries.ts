@@ -5,7 +5,7 @@
 
 import { QueryClient, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { Config, DevicesResponse, Instance, UsageResponse } from "../api/types";
+import type { Config, DevicesResponse, Instance, TrafficResponse, UsageResponse } from "../api/types";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -99,6 +99,34 @@ export function useUsage(enabled = true) {
 /** Imperative refresh after any action that changes the session set. */
 export function refreshInstances() {
   return queryClient.invalidateQueries({ queryKey: ["instances"] });
+}
+
+/** Settings → Site traffic (dev shell only): stars/forks, per-release
+ * download counts, and click totals for the /go/ tracked links. The backend
+ * addon already caches this for 5 minutes against GitHub's rate limit, so
+ * the query's own staleTime just avoids a redundant fetch on every dialog
+ * reopen within that window. `enabled` keeps this from ever firing for a
+ * user who can't see the screen — no point spending the addon's cache TTL on
+ * requests nobody reads. */
+export function useTraffic(enabled: boolean, days = 90) {
+  return useQuery({
+    queryKey: ["traffic", days],
+    queryFn: () => api<TrafficResponse>("/api/traffic?days=" + days),
+    enabled,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+    retry: false,
+  });
+}
+
+/** The Refresh button on Site traffic: bypass the addon's cache. */
+export function refreshTraffic(days = 90) {
+  return queryClient.fetchQuery({
+    queryKey: ["traffic", days],
+    queryFn: () => api<TrafficResponse>("/api/traffic?days=" + days + "&refresh=1"),
+    staleTime: 0,
+    retry: false,
+  });
 }
 
 /** Merge new fields into ONE cached session row, with no round trip.

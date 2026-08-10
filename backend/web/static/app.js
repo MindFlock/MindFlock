@@ -21559,6 +21559,24 @@ function useUsage(enabled = true) {
 function refreshInstances() {
   return queryClient.invalidateQueries({ queryKey: ["instances"] });
 }
+function useTraffic(enabled, days = 90) {
+  return useQuery({
+    queryKey: ["traffic", days],
+    queryFn: () => api("/api/traffic?days=" + days),
+    enabled,
+    staleTime: 6e4,
+    placeholderData: (prev) => prev,
+    retry: false
+  });
+}
+function refreshTraffic(days = 90) {
+  return queryClient.fetchQuery({
+    queryKey: ["traffic", days],
+    queryFn: () => api("/api/traffic?days=" + days + "&refresh=1"),
+    staleTime: 0,
+    retry: false
+  });
+}
 function patchInstance(title, patch) {
   queryClient.setQueryData(
     ["instances"],
@@ -24423,6 +24441,10 @@ async function isFullScreen() {
 function bridge() {
   if (typeof window === "undefined") return void 0;
   return window.mfshell;
+}
+function isDevShell() {
+  var _a2;
+  return ((_a2 = bridge()) == null ? void 0 : _a2.dev) === true;
 }
 function hasNativeWindowControls() {
   var _a2;
@@ -33838,6 +33860,361 @@ function UninstallSection() {
     }, children: isWindows ? "Open Windows uninstall…" : "Uninstall MindFlock…" })
   ] });
 }
+const DAYS_OPTIONS = [30, 90];
+const SLUG_LABEL = {
+  mac: "macOS download",
+  windows: "Windows download",
+  linux: "Linux download",
+  github: "GitHub",
+  releases: "Releases page",
+  latest: "Latest release",
+  producthunt: "Product Hunt",
+  nxgn: "NxGn Tools"
+};
+function slugLabel(slug) {
+  return SLUG_LABEL[slug] || slug;
+}
+function fmtInt(n) {
+  if (n == null) return "—";
+  return n.toLocaleString();
+}
+function fmtDate(iso) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleDateString(void 0, { year: "numeric", month: "short", day: "numeric" });
+  } catch {
+    return iso;
+  }
+}
+function dailyTotals(series) {
+  const byDay = /* @__PURE__ */ new Map();
+  for (const row of series) {
+    let bucket = byDay.get(row.day);
+    if (!bucket) {
+      bucket = { day: row.day, total: 0, bySlug: {} };
+      byDay.set(row.day, bucket);
+    }
+    bucket.total += row.clicks;
+    bucket.bySlug[row.slug] = (bucket.bySlug[row.slug] || 0) + row.clicks;
+  }
+  return Array.from(byDay.values()).sort((a, b) => a.day.localeCompare(b.day));
+}
+function StarsChart({ points }) {
+  const [hoverIdx, setHoverIdx] = reactExports.useState(null);
+  if (points.length === 0) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "No star history available — the stargazers API requires a GitHub token (Settings → Connections). The current total above still works without one." });
+  }
+  if (points.length === 1) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Only one day of star history so far — check back once there's a trend." });
+  }
+  const w = 640;
+  const h = 160;
+  const padL = 4;
+  const padB = 18;
+  const plotH = h - padB;
+  const max = Math.max(1, ...points.map((p) => p.stars));
+  const stepX = (w - padL) / (points.length - 1);
+  const xAt = (i) => padL + i * stepX;
+  const yAt = (v) => plotH - v / max * (plotH - 8);
+  const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(2)},${yAt(p.stars).toFixed(2)}`).join(" ");
+  const handleMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relX = (e.clientX - rect.left) / rect.width * w;
+    const idx = Math.max(0, Math.min(points.length - 1, Math.round((relX - padL) / stepX)));
+    setHoverIdx(idx);
+  };
+  const hovered = hoverIdx != null ? points[hoverIdx] : null;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-wrap", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "svg",
+      {
+        className: "traffic-chart",
+        viewBox: `0 0 ${w} ${h}`,
+        preserveAspectRatio: "none",
+        role: "img",
+        "aria-label": `Cumulative GitHub stars, ${fmtDate(points[0].day)} through ${fmtDate(points[points.length - 1].day)}`,
+        onMouseMove: handleMove,
+        onMouseLeave: () => setHoverIdx(null),
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: pathD, className: "traffic-line", fill: "none" }),
+          hoverIdx != null && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: xAt(hoverIdx), y1: 0, x2: xAt(hoverIdx), y2: plotH, className: "traffic-crosshair" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("circle", { cx: xAt(hoverIdx), cy: yAt(points[hoverIdx].stars), r: 4, className: "traffic-line-dot" })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: 0, y1: plotH, x2: w, y2: plotH, className: "traffic-baseline" })
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-axis", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(points[0].day) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(points[points.length - 1].day) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "traffic-tooltip", "aria-live": "polite", children: hovered ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: fmtDate(hovered.day) }),
+      " — ",
+      fmtInt(hovered.stars),
+      " star",
+      hovered.stars === 1 ? "" : "s"
+    ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Hover the line for the star count on that date." }) })
+  ] });
+}
+function releasesChronological(releases) {
+  return releases.filter((r) => r.published_at).slice().sort((a, b) => a.published_at < b.published_at ? -1 : a.published_at > b.published_at ? 1 : 0);
+}
+function ReleasesChart({ releases }) {
+  const chrono = reactExports.useMemo(() => releasesChronological(releases), [releases]);
+  const [hover, setHover] = reactExports.useState(null);
+  if (!chrono.length) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "No published releases yet." });
+  }
+  const max = Math.max(1, ...chrono.map((r) => r.total_downloads));
+  const w = 640;
+  const h = 160;
+  const padL = 4;
+  const padB = 18;
+  const plotH = h - padB;
+  const barGap = 3;
+  const barW = Math.max(1, (w - padL) / chrono.length - barGap);
+  const hovered = hover != null ? chrono[hover] : null;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-wrap", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "svg",
+      {
+        className: "traffic-chart",
+        viewBox: `0 0 ${w} ${h}`,
+        preserveAspectRatio: "none",
+        role: "img",
+        "aria-label": `Downloads per release, ${chrono[0].tag} through ${chrono[chrono.length - 1].tag}`,
+        onMouseLeave: () => setHover(null),
+        children: [
+          chrono.map((r, i) => {
+            const barH = Math.max(1, r.total_downloads / max * (plotH - 8));
+            const x = padL + i * (barW + barGap);
+            const y = plotH - barH;
+            return /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "rect",
+              {
+                x,
+                y,
+                width: barW,
+                height: barH,
+                rx: Math.min(3, barW / 2),
+                className: "traffic-bar" + (hover === i ? " hover" : ""),
+                onMouseEnter: () => setHover(i)
+              },
+              r.tag
+            );
+          }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: 0, y1: plotH, x2: w, y2: plotH, className: "traffic-baseline" })
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-axis", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(chrono[0].published_at) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(chrono[chrono.length - 1].published_at) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "traffic-tooltip", "aria-live": "polite", children: hovered ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: hovered.tag }),
+      " (",
+      fmtDate(hovered.published_at),
+      ") —",
+      " ",
+      fmtInt(hovered.total_downloads),
+      " download",
+      hovered.total_downloads === 1 ? "" : "s",
+      hovered.assets.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "traffic-tooltip-detail", children: [
+        " ",
+        "(",
+        hovered.assets.filter((a) => a.downloads > 0).sort((a, b) => b.downloads - a.downloads).map((a) => `${a.name}: ${a.downloads}`).join(", ") || "no downloads yet",
+        ")"
+      ] })
+    ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Hover a bar for that release's per-asset breakdown." }) })
+  ] });
+}
+function ClicksChart({ series }) {
+  const days = reactExports.useMemo(() => dailyTotals(series), [series]);
+  const [hover, setHover] = reactExports.useState(null);
+  if (!days.length) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "No clicks recorded in this window yet." });
+  }
+  const max = Math.max(1, ...days.map((d) => d.total));
+  const w = 640;
+  const h = 160;
+  const padL = 4;
+  const padB = 18;
+  const plotH = h - padB;
+  const barGap = 2;
+  const barW = Math.max(1, (w - padL) / days.length - barGap);
+  const hovered = hover != null ? days[hover] : null;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-wrap", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "svg",
+      {
+        className: "traffic-chart",
+        viewBox: `0 0 ${w} ${h}`,
+        preserveAspectRatio: "none",
+        role: "img",
+        "aria-label": `Daily clicks across all tracked links, ${days[0].day} through ${days[days.length - 1].day}`,
+        onMouseLeave: () => setHover(null),
+        children: [
+          days.map((d, i) => {
+            const barH = Math.max(1, d.total / max * (plotH - 8));
+            const x = padL + i * (barW + barGap);
+            const y = plotH - barH;
+            return /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "rect",
+              {
+                x,
+                y,
+                width: barW,
+                height: barH,
+                rx: Math.min(3, barW / 2),
+                className: "traffic-bar" + (hover === i ? " hover" : ""),
+                onMouseEnter: () => setHover(i)
+              },
+              d.day
+            );
+          }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: 0, y1: plotH, x2: w, y2: plotH, className: "traffic-baseline" })
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-axis", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(days[0].day) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(days[days.length - 1].day) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "traffic-tooltip", "aria-live": "polite", children: hovered ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: fmtDate(hovered.day) }),
+      " — ",
+      fmtInt(hovered.total),
+      " click",
+      hovered.total === 1 ? "" : "s",
+      Object.keys(hovered.bySlug).length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "traffic-tooltip-detail", children: [
+        " ",
+        "(",
+        Object.entries(hovered.bySlug).sort((a, b) => b[1] - a[1]).map(([slug, n]) => `${slugLabel(slug)}: ${n}`).join(", "),
+        ")"
+      ] })
+    ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Hover a bar for that day's breakdown." }) })
+  ] });
+}
+function Traffic(_) {
+  var _a2, _b2;
+  const [days, setDays] = reactExports.useState(90);
+  const [refreshing, setRefreshing] = reactExports.useState(false);
+  const q = useTraffic(true, days);
+  const data = q.data;
+  const clickTotalsSorted = reactExports.useMemo(() => {
+    if (!data) return [];
+    return Object.entries(data.clicks.totals_by_slug).sort((a, b) => b[1] - a[1]);
+  }, [data]);
+  const doRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await refreshTraffic(days);
+      await q.refetch();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Site traffic" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Reach across mindflock.ai and the GitHub repo — pulled live from GitHub's API and the click-tracking Worker on mindflock.ai/go/*. Visible in this dev build only." }),
+    q.isLoading && !data && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Loading…" }),
+    q.isError && !data && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Could not load traffic data. Check your connection and retry." }),
+    data && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+      (data.errors.github || data.errors.clicks) && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-warn", children: [
+        data.errors.github && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          "GitHub: ",
+          data.errors.github
+        ] }),
+        data.errors.clicks && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          "Click tracking: ",
+          data.errors.clicks
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-tiles", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-tile", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-num", children: fmtInt((_a2 = data.repo) == null ? void 0 : _a2.stars) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-label", children: "GitHub stars" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-tile", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-num", children: fmtInt((_b2 = data.repo) == null ? void 0 : _b2.forks) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-label", children: "Forks" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-tile", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-num", children: fmtInt(data.downloads_total) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-label", children: "Total downloads (all releases)" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-tile", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-num", children: fmtInt(clickTotalsSorted.reduce((s, [, n]) => s + n, 0)) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "traffic-tile-label", children: [
+            "Tracked link clicks (",
+            data.clicks.days,
+            "d)"
+          ] })
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "GitHub stars over time" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(StarsChart, { points: data.star_history ?? [] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row traffic-range-row", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-periods traffic-range", children: DAYS_OPTIONS.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "button",
+          {
+            type: "button",
+            className: "usage-period" + (days === d ? " active" : ""),
+            onClick: () => setDays(d),
+            children: [
+              d,
+              "d"
+            ]
+          },
+          d
+        )) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "test-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "test-btn", onClick: doRefresh, disabled: refreshing, children: refreshing ? "Refreshing…" : "Refresh" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Cached ~5 min server-side to stay under GitHub's rate limit — this bypasses it." })
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(ClicksChart, { series: data.clicks.series }),
+      clickTotalsSorted.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("h3", { className: "set-section-title", children: [
+          "Clicks by link (",
+          data.clicks.days,
+          "d)"
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { className: "traffic-table", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "Link" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "num", children: "Clicks" })
+          ] }) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("tbody", { children: clickTotalsSorted.map(([slug, n]) => /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: slugLabel(slug) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: fmtInt(n) })
+          ] }, slug)) })
+        ] })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Downloads over time" }),
+      data.releases.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "No releases found." }) : /* @__PURE__ */ jsxRuntimeExports.jsx(ReleasesChart, { releases: data.releases }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Downloads by version" }),
+      data.releases.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "No releases found." }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { className: "traffic-table", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "Version" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "Published" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "num", children: "Downloads" })
+        ] }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("tbody", { children: data.releases.map((r) => /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("td", { children: [
+            r.tag,
+            r.prerelease && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-pre", children: " pre-release" })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: fmtDate(r.published_at) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: fmtInt(r.total_downloads) })
+        ] }, r.tag)) })
+      ] })
+    ] })
+  ] });
+}
 const SCREENS = [
   { key: "general", label: "General", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(General, { ...p }) },
   { key: "connections", label: "Connections", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Connections, { ...p }) },
@@ -33852,7 +34229,11 @@ const SCREENS = [
   { key: "mobile", label: "Mobile", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Mobile, { ...p }) },
   { key: "doctor", label: "Doctor", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Doctor, { ...p }) },
   { key: "logs", label: "System logs", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(SystemLogs, { ...p }) },
-  { key: "advanced", label: "Advanced", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Advanced, { ...p }) }
+  { key: "advanced", label: "Advanced", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Advanced, { ...p }) },
+  // Maintainer-only: MindFlock's own reach (stars, downloads, tracked-link
+  // clicks), not something an end user's build needs — filtered out below
+  // unless this is a --mindflock-dev shell.
+  { key: "traffic", label: "Site traffic", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Traffic, { ...p }) }
 ];
 function SettingsDialog({ onOpenSysLogsPane }) {
   const open = useUi((s) => s.openDialog === "settings");
@@ -33861,10 +34242,11 @@ function SettingsDialog({ onOpenSysLogsPane }) {
   const [screen, setScreen] = reactExports.useState("general");
   const model = useSettingsModel(open);
   const openDialogFor = useUi((s) => s.openDialogFor);
+  const screens = reactExports.useMemo(() => SCREENS.filter((s) => s.key !== "traffic" || isDevShell()), []);
   const gotoScreen = (name) => {
     const tab = LEGACY_SCREEN_TABS[name];
     if (tab) openDialogFor("intake", tab);
-    else setScreen(SCREENS.some((s) => s.key === name) ? name : "general");
+    else setScreen(screens.some((s) => s.key === name) ? name : "general");
   };
   reactExports.useEffect(() => {
     if (!open) return;
@@ -33873,8 +34255,8 @@ function SettingsDialog({ onOpenSysLogsPane }) {
       openDialogFor("intake", tab);
       return;
     }
-    setScreen(target && SCREENS.some((s) => s.key === target) ? target : "general");
-  }, [open, target, openDialogFor]);
+    setScreen(target && screens.some((s) => s.key === target) ? target : "general");
+  }, [open, target, openDialogFor, screens]);
   reactExports.useEffect(() => {
     if (!open) return;
     const onKey = (e) => {
@@ -33909,7 +34291,7 @@ function SettingsDialog({ onOpenSysLogsPane }) {
           /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "settings-close", onClick: closeDialog, children: "Close" })
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "settings-body", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("nav", { id: "settings-nav", "aria-label": "Settings sections", children: SCREENS.map((s) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+          /* @__PURE__ */ jsxRuntimeExports.jsx("nav", { id: "settings-nav", "aria-label": "Settings sections", children: screens.map((s) => /* @__PURE__ */ jsxRuntimeExports.jsx(
             "button",
             {
               type: "button",
@@ -33920,7 +34302,7 @@ function SettingsDialog({ onOpenSysLogsPane }) {
             },
             s.key
           )) }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "settings-screens", children: SCREENS.map((s) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "settings-screens", children: screens.map((s) => /* @__PURE__ */ jsxRuntimeExports.jsx(
             "section",
             {
               className: "set-screen" + (screen === s.key ? " active" : ""),

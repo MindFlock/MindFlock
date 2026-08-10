@@ -124,6 +124,13 @@ export interface Instance {
   activity: Activity | string;
   activity_since: number;
   last_turn: string | null;
+  /** First line of the newest USER prompt (≤120 chars) — pinned above the
+   * agent terminal so you always see what the session was asked to do.
+   * Optional: an older server doesn't send it. */
+  last_prompt?: string | null;
+  /** The same prompt's whole body (capped ~4000 chars) — the pin's
+   * hover/click expansion. */
+  last_prompt_full?: string | null;
   setup: SetupSummary | null;
   check: SetupSummary | null;
   ports: { base: number; count: number } | null;
@@ -224,3 +231,47 @@ export interface DoctorCheck {
 }
 
 export type Json = Record<string, unknown>;
+
+/** GET /api/traffic (backend/web/addons/traffic.py) — GitHub stars/forks,
+ * per-release download counts, and click totals for the mindflock.ai/go/
+ * tracked links. `errors.*` is set when that ONE section's upstream failed;
+ * the rest of the payload still renders. */
+export interface TrafficReleaseAsset {
+  name: string;
+  downloads: number;
+}
+
+export interface TrafficStarPoint {
+  day: string;
+  stars: number;
+}
+
+export interface TrafficRelease {
+  tag: string;
+  published_at: string | null;
+  prerelease: boolean;
+  assets: TrafficReleaseAsset[];
+  total_downloads: number;
+}
+
+export interface TrafficClickRow {
+  day: string;
+  slug: string;
+  os: string;
+  clicks: number;
+}
+
+export interface TrafficResponse {
+  generated: number;
+  repo: { stars: number | null; forks: number | null; open_issues: number | null; url: string } | null;
+  star_history: TrafficStarPoint[];
+  releases: TrafficRelease[];
+  downloads_total: number;
+  clicks: {
+    days: number;
+    series: TrafficClickRow[];
+    totals_by_slug: Record<string, number>;
+    error: string;
+  };
+  errors: { github: string | null; clicks: string | null };
+}

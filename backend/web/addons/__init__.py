@@ -29,6 +29,7 @@ from .notify import NotifyAddon
 from .settings import SettingsAddon
 from .ticket_ingestion import TicketIngestionAddon
 from .templates import TemplatesAddon
+from .traffic import TrafficAddon
 
 __all__ = [
     "Addon",
@@ -51,6 +52,7 @@ def build_addons(ctx: AppContext) -> List[Addon]:
         ConnectionsAddon(ctx),
         TemplatesAddon(ctx),
         NotifyAddon(ctx),
+        TrafficAddon(ctx),
     ]
 
 

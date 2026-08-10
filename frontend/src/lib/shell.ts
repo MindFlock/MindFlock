@@ -47,6 +47,14 @@ export function inShell(): boolean {
   return !!bridge();
 }
 
+/** True inside a `--mindflock-dev` desktop-shell build (see electron/main.js
+ * `DEV`); false in a production shell build and in a plain browser. Gates
+ * settings that make sense for MindFlock's own maintainer but not for an end
+ * user's build — e.g. the Site traffic panel. */
+export function isDevShell(): boolean {
+  return bridge()?.dev === true;
+}
+
 /** True inside the desktop shell on macOS. Prefer
  * {@link hasNativeWindowControls} for layout decisions — see its note. */
 export function isMacShell(): boolean {

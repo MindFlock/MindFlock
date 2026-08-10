@@ -53,6 +53,7 @@
 @import "../components/capsGate.css" layer(components); /* 270 */
 @import "../components/dialogs/DeviceDialog.css" layer(components); /* 270 */
 @import "../components/settings/screens/Appearance.css" layer(components); /* 280 */
+@import "../components/settings/screens/traffic.css" layer(components); /* 290 */
 
 @import "./regions.css" layer(theme);
 @import "./theme-light.css" layer(theme); /* 190 */
