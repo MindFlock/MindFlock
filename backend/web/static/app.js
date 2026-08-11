@@ -29721,6 +29721,7 @@ function NewSessionDialog() {
   const [error, setError] = reactExports.useState("");
   const [advancedOpen, setAdvancedOpen] = reactExports.useState(true);
   const [launchOpen, setLaunchOpen] = reactExports.useState(false);
+  const [promptOpen, setPromptOpen] = reactExports.useState(false);
   const [templates, setTemplates] = reactExports.useState([]);
   const [activeTemplate, setActiveTemplate] = reactExports.useState("");
   const [provisioningAvailable, setProvisioningAvailable] = reactExports.useState(false);
@@ -29732,6 +29733,7 @@ function NewSessionDialog() {
   const launchDefaults = reactExports.useRef({});
   const titleRef = reactExports.useRef(null);
   const launchRef = reactExports.useRef(null);
+  const promptRef = reactExports.useRef(null);
   const rootRef = reactExports.useRef(null);
   const [folder, folderDo] = reactExports.useReducer(folderReducer, FOLDER_INIT);
   const repoPath = folder.path;
@@ -29747,6 +29749,7 @@ function NewSessionDialog() {
     setInitRepo(false);
     setAdvancedOpen(true);
     setLaunchOpen(false);
+    setPromptOpen(false);
     folderDo({ t: "reopen" });
     setActiveTemplate("");
     setPresetValue("");
@@ -29852,6 +29855,7 @@ function NewSessionDialog() {
     setInPlace(!!t.in_place);
     setInitRepo(!!t.init_repo);
     setAdvancedOpen(!!(t.provisioned || t.init_repo || !t.in_place));
+    if (t.prompt) setPromptOpen(true);
     setActiveTemplate(t.name);
     if (!title.trim()) setTitle(t.name || "");
     (_a2 = titleRef.current) == null ? void 0 : _a2.focus();
@@ -30082,7 +30086,7 @@ function NewSessionDialog() {
                   {
                     type: "button",
                     className: "linklike",
-                    title: "Ticks “Create a git repo in this folder” under More options",
+                    title: "Ticks “Create a git repo in this folder” under Git & workspace",
                     onClick: armInitRepo,
                     children: "Create one"
                   }
@@ -30125,63 +30129,6 @@ function NewSessionDialog() {
                   onPick: (p) => folderDo({ t: "browse-commit", path: p })
                 }
               ),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
-                  "Prompt",
-                  " ",
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "muted", children: "— optional; sent to the agent at launch · Ctrl+Enter creates" })
-                ] }),
-                /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "preset-row", children: [
-                  /* @__PURE__ */ jsxRuntimeExports.jsxs(
-                    "select",
-                    {
-                      id: "new-preset",
-                      title: "Prompt presets — pick one to fill the prompt below (editable after)",
-                      value: presetValue,
-                      onChange: (e) => {
-                        setPresetValue(e.target.value);
-                        const p = findPreset(e.target.value);
-                        if (p) setPrompt(p.prompt);
-                      },
-                      children: [
-                        /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "Preset…" }),
-                        BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("optgroup", { label: "Built-in", children: BUILTIN_PRESETS.map((p) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "b:" + p.name, title: p.prompt, children: p.name }, "b:" + p.name)) }),
-                        savedPresets.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("optgroup", { label: "Saved", children: savedPresets.map((p) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "u:" + p.name, title: p.prompt, children: p.name }, "u:" + p.name)) })
-                      ]
-                    }
-                  ),
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "preset-save", title: "Save current prompt as preset…", onClick: savePreset, children: "Save…" }),
-                  presetValue.startsWith("u:") && /* @__PURE__ */ jsxRuntimeExports.jsx(
-                    "button",
-                    {
-                      type: "button",
-                      id: "preset-del",
-                      title: "Delete the selected saved preset",
-                      onClick: () => {
-                        const p = findPreset(presetValue);
-                        if (!p) return;
-                        const list = loadUserPresets().filter((q) => q.name !== p.name);
-                        saveUserPresets(list);
-                        setSavedPresets(list);
-                        setPresetValue("");
-                      },
-                      children: "✕"
-                    }
-                  )
-                ] }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx(
-                  "textarea",
-                  {
-                    id: "new-prompt",
-                    rows: 2,
-                    autoComplete: "off",
-                    spellCheck: false,
-                    placeholder: "What should the agent do first? Leave blank if you don’t want to kick anything off just yet.",
-                    value: prompt,
-                    onChange: (e) => setPrompt(e.target.value)
-                  }
-                )
-              ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsxs(
                 "details",
                 {
@@ -30191,10 +30138,7 @@ function NewSessionDialog() {
                   open: advancedOpen,
                   onToggle: (e) => setAdvancedOpen(e.target.open),
                   children: [
-                    /* @__PURE__ */ jsxRuntimeExports.jsxs("summary", { children: [
-                      "More options ",
-                      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "muted", children: "— git & workspace" })
-                    ] }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("summary", { children: "Git & workspace" }),
                     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "nf-advanced-body", children: [
                       /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "check", children: [
                         /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -30272,6 +30216,80 @@ function NewSessionDialog() {
                         ] })
                       ] })
                     ] })
+                  ]
+                }
+              ),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "details",
+                {
+                  id: "new-prompt-fold",
+                  className: "nf-advanced",
+                  ref: promptRef,
+                  open: promptOpen,
+                  onToggle: (e) => {
+                    var _a2;
+                    const open2 = e.target.open;
+                    setPromptOpen(open2);
+                    if (open2)
+                      (_a2 = promptRef.current) == null ? void 0 : _a2.scrollIntoView({ behavior: "smooth", block: "end" });
+                  },
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsxs("summary", { children: [
+                      "Prompt ",
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "muted", children: "— sent to the agent at launch" })
+                    ] }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "nf-advanced-body", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "preset-row", children: [
+                        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                          "select",
+                          {
+                            id: "new-preset",
+                            title: "Prompt presets — pick one to fill the prompt below (editable after)",
+                            value: presetValue,
+                            onChange: (e) => {
+                              setPresetValue(e.target.value);
+                              const p = findPreset(e.target.value);
+                              if (p) setPrompt(p.prompt);
+                            },
+                            children: [
+                              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "Preset…" }),
+                              BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("optgroup", { label: "Built-in", children: BUILTIN_PRESETS.map((p) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "b:" + p.name, title: p.prompt, children: p.name }, "b:" + p.name)) }),
+                              savedPresets.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("optgroup", { label: "Saved", children: savedPresets.map((p) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "u:" + p.name, title: p.prompt, children: p.name }, "u:" + p.name)) })
+                            ]
+                          }
+                        ),
+                        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "preset-save", title: "Save current prompt as preset…", onClick: savePreset, children: "Save…" }),
+                        presetValue.startsWith("u:") && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                          "button",
+                          {
+                            type: "button",
+                            id: "preset-del",
+                            title: "Delete the selected saved preset",
+                            onClick: () => {
+                              const p = findPreset(presetValue);
+                              if (!p) return;
+                              const list = loadUserPresets().filter((q) => q.name !== p.name);
+                              saveUserPresets(list);
+                              setSavedPresets(list);
+                              setPresetValue("");
+                            },
+                            children: "✕"
+                          }
+                        )
+                      ] }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(
+                        "textarea",
+                        {
+                          id: "new-prompt",
+                          rows: 2,
+                          autoComplete: "off",
+                          spellCheck: false,
+                          placeholder: "What should the agent do first? Leave blank if you don’t want to kick anything off just yet.",
+                          value: prompt,
+                          onChange: (e) => setPrompt(e.target.value)
+                        }
+                      )
+                    ] }) })
                   ]
                 }
               ),
@@ -30393,9 +30411,10 @@ function FolderBrowser({
           type: "button",
           id: "rb-up",
           title: "Parent folder",
+          "aria-label": "Parent folder",
           disabled: !(data == null ? void 0 : data.parent),
           onClick: () => (data == null ? void 0 : data.parent) && load2(data.parent),
-          children: "↑"
+          children: "←"
         }
       ),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: "rb-cwd", className: "rb-cwd", title: (data == null ? void 0 : data.path) || "", children: (data == null ? void 0 : data.path) || "" }),

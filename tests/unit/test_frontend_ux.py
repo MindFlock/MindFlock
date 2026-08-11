@@ -127,16 +127,15 @@ def test_app_js_has_no_maximize_ui():
 # --------------------------------------------------------------------------- #
 def test_new_dialog_folds_git_workspace_options():
     html = client.get("/").text
-    # Git/workspace options live behind a "More options" fold — the defaults
-    # suit the common case, and fillFromTemplate() auto-opens the fold when a
-    # template turns any of them on. Name/folder/prompt stay up top, unfolded.
+    # Git/workspace options live behind a "Git & workspace" fold, and
+    # fillFromTemplate() opens it when a template turns any of them on.
     assert 'id: "new-advanced"' in client.get("/app.js").text
     js = client.get("/app.js").text
     assert '"new-in-place"' in js  # work-in-place toggle
     assert '"new-init-repo"' in js  # git init lives here
-    # "More options" stands OPEN by default — hiding the workspace strategy
+    # "Git & workspace" stands OPEN by default — hiding the workspace strategy
     # behind a click had people launching with the wrong one rather than
-    # finding it. The launch-flags fold below it stays closed.
+    # finding it. The prompt and launch-flags folds below it stay closed.
     assert "nf-advanced" in js
 
 
