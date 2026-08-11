@@ -15,6 +15,7 @@ from .base import (
     LauncherSpec,
     LaunchContext,
     TrustSpec,
+    oneshot_command,
     seed_prompt_expr,
 )
 from .config import ProviderConfig
@@ -193,6 +194,14 @@ class GenericProvider(BaseProvider):
         from . import activity_markers
 
         return activity_markers.read_activity_marker_age(session_name)
+
+    # --- headless one-shot ------------------------------------------------ #
+    def oneshot_argv(self, prompt: str) -> Optional[list[str]]:
+        """From the config's ``oneshot_args`` template — None when it has none
+        (aider) so the caller falls back to its no-model path."""
+        return oneshot_command(
+            self.cfg.resolved_binary(), self.cfg.oneshot_args, prompt
+        )
 
     # --- usage-limit detection (roadmap D) -------------------------------- #
     def usage_limit_patterns(self):

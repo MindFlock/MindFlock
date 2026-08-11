@@ -43,6 +43,12 @@ export function tokenize(s: string): string[] {
 
 const quote = (t: string) => (/\s/.test(t) ? '"' + t + '"' : t);
 
+/** Saved argv back into one editable line — the inverse of {@link tokenize},
+ *  for forms that round-trip a stored token list through a text input. */
+export function joinTokens(tokens: readonly string[]): string {
+  return tokens.map(quote).join(" ");
+}
+
 function seqIndex(tokens: string[], seq: string[]): number {
   if (!seq.length) return -1;
   for (let i = 0; i + seq.length <= tokens.length; i++) {

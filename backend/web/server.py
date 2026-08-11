@@ -101,6 +101,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 # Core modules the monolith was split into (see backend.web/core/).
 from backend.web.core import auth as _auth
 from backend.web.core import autopilot as _autopilot
+from backend.web.core import commit_message as _commit_message
 from backend.web.core import events as _events
 from backend.web.core import ports as _ports
 from backend.web.core import issue_start as _issue_start
@@ -1956,6 +1957,31 @@ def _autopilot_run_check(title: str, wt: str) -> bool:
         return False
 
 
+def _autopilot_written_message(title: str, wt: str, rec: dict) -> str:
+    """A model-written commit message for an autopilot commit, or ``""``.
+
+    This is the fast-track half of the ✨ button: the same generator, at the one
+    moment the diff is final. Never raises and never blocks the chain past its own
+    timeout — a subject is not worth halting a run for, so every failure is ``""``
+    and the caller falls back to the placeholder.
+    """
+    inst = ENGINE.instances.get(title)
+    return (
+        _commit_message.suggest_or_none(
+            wt,
+            program=str(getattr(inst, "Program", "") or ""),
+            timeout=_commit_message.TIMEOUT_AUTOPILOT,
+            # The intake item this run came from ("sc-1421-fix-login") is real
+            # context; the placeholder subject built from it is not, so the hint is
+            # the item and never rec["message"].
+            hint=str(rec.get("item") or ""),
+            branch=_current_branch(wt) or "",
+            fallback_program=ENGINE.default_program(),
+        )
+        or ""
+    )
+
+
 def _autopilot_commit(title, wt, rec, detail, fields) -> bool:
     """Issue an autopilot commit (blocking). Returns whether to record success."""
     msg = rec.get("message") or ""
@@ -1965,6 +1991,21 @@ def _autopilot_commit(title, wt, rec, detail, fields) -> bool:
                 msg = fh.read().strip()
         except OSError:
             msg = ""
+    # A message the ARM ROUTE invented ("Work on ft-session") is worth replacing
+    # now that the diff exists and is final — that placeholder describes the
+    # session, not the change. A message a human typed or an intake item named is
+    # not touched, and neither is the on-disk one a blocked commit left behind.
+    #
+    # On success the result is written back to the record so a pre-commit retry
+    # commits the same sentence instead of paying for a second turn. A failure
+    # leaves the flag up: retries are capped per verb, so at worst this costs one
+    # bounded attempt each, and the run still commits under the placeholder.
+    if not msg or rec.get("message_auto"):
+        written = _autopilot_written_message(title, wt, rec)
+        if written:
+            msg = written
+            fields["message"] = written
+            fields["message_auto"] = False
     if not msg:
         # GENERATE one rather than halting. Arming on a CLEAN tree is the natural
         # way to use this — arm the session, let the agent work — and the route
@@ -4863,6 +4904,52 @@ async def instance_commit_message(title: str) -> JSONResponse:
     return JSONResponse({"message": await asyncio.to_thread(_read)})
 
 
+@app.post("/api/instances/{title}/commit-message/suggest")
+async def instance_suggest_commit_message(
+    title: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Ask a model to write the commit message for this session's work (✨).
+
+    Runs the session's own coding CLI headlessly against the diff — see
+    :mod:`backend.web.core.commit_message` for why that is the model access this
+    app has. 502 with a sentence when it can't: the dialog shows the reason and
+    the message box stays exactly as the user left it, because a failed
+    suggestion must not cost anyone a typed message.
+
+    Nothing is committed, staged or written here. It reads the diff and answers.
+    """
+    if not git_available():
+        return _no_git_response()
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    wt = inst.GetWorktreePath()
+    if not wt:
+        return JSONResponse({"error": "workspace not ready"}, status_code=409)
+    body = payload or {}
+    # Whatever is already in the box travels as context, so a half-written subject
+    # ("fix the token refresh thing") shapes the answer instead of being ignored.
+    hint = str(body.get("hint") or "")[:500]
+    program = str(getattr(inst, "Program", "") or "")
+
+    def _work() -> str:
+        return _commit_message.suggest(
+            wt,
+            program=program,
+            hint=hint,
+            branch=_current_branch(wt) or "",
+            fallback_program=ENGINE.default_program(),
+        )
+
+    try:
+        message = await asyncio.to_thread(_work)
+    except _commit_message.CommitMessageError as err:  # noqa: BLE001
+        return JSONResponse({"error": str(err)}, status_code=502)
+    except Exception as err:  # noqa: BLE001 — never a 500 for a convenience
+        return JSONResponse({"error": str(err)}, status_code=502)
+    return JSONResponse({"message": message})
+
+
 @app.get("/api/instances/{title}/stage")
 async def instance_stage(title: str) -> JSONResponse:
     """ONE session's row, recomputed right now and published through.
@@ -5291,6 +5378,9 @@ async def instance_fast_track(
         # message left by unrelated work became the subject of whatever was armed
         # next.
         msg = await asyncio.to_thread(_pending_commit_message, wt)
+    # Whether ``msg`` is a placeholder this route invented, which is what lets the
+    # commit step replace it with a model-written one (see _autopilot_commit).
+    msg_auto = False
     if not msg and await asyncio.to_thread(_is_dirty, wt):
         # The ⏩ button presses with no message, and `.mindflock_commit_msg` only
         # exists once something has committed THROUGH MindFlock — so the single most
@@ -5298,13 +5388,21 @@ async def instance_fast_track(
         # outright. Generate a subject instead of refusing: a chain that halts
         # because nobody typed a sentence is worse than an honest default one, and
         # the user can always amend it afterwards.
+        #
+        # Note this stays the CHEAP default rather than asking a model here. Arming
+        # is arm-and-wait: the agent may work for another twenty minutes, so a
+        # message written from the tree as it looks right now would describe a diff
+        # that no longer exists by the time the commit happens — and the press must
+        # not wait ~10s on a CLI either. The real message is written at commit time.
         msg = await asyncio.to_thread(_autopilot_default_message, inst, wt)
+        msg_auto = bool(msg)
     rec = await asyncio.to_thread(
         lambda: _autopilot.arm(
             title,
             depth,
             source="session",
             message=msg,
+            message_auto=msg_auto,
             base=str(body.get("base") or ""),
             branch=_current_branch(wt) or "",
             retryable=_precommit_retry_hooks(),

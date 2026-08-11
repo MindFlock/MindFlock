@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **✨ writes the commit message.** The commit dialog has a button that reads the
+  diff and writes the message, and a fast-track press that carried no message now
+  gets one the same way instead of committing under "Work on `<session>`" — the
+  subject that described the session rather than the change. It asks the session's
+  own coding CLI headlessly (`claude -p`, `codex exec`, `agy --print`), so there
+  is no API key to configure and no second provider to authenticate; a CLI with no
+  text-only mode, a logged-out one, or a timeout all fall back to exactly the old
+  behaviour, because a commit that can't be described still has to be committable.
+  The dialog reports why it couldn't and leaves your message box untouched.
+
+  Generation happens at COMMIT time, never when the fast-track is armed: arming is
+  arm-and-wait, so a message written from the tree as it looked at the press would
+  describe a diff that no longer exists. A message you typed, and an intake
+  ticket's own title, are never replaced.
+
+- **Intake loads before you open it.** The tickets, PR and issue panels are warmed
+  from app startup and kept warm, so Alt+I lands on a list instead of a spinner
+  and the tab counts are already filled in. Skipped when no ticketing source is
+  connected, and paused while the window is hidden.
+
 ## [0.1.16] - 2026-08-10
 
 ### Fixed

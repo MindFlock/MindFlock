@@ -113,8 +113,11 @@ export function IntakeDialog() {
     setTab(wanted && TABS.some((t) => t.key === wanted) ? wanted : "tickets");
   }, [open, target]);
 
-  // Warm all three panels while the first tab is being read, so switching to
-  // one doesn't start with a spinner — and so the tab counts fill in.
+  // The panels are normally already warm before this dialog exists (App's
+  // useIntakeWarm), which is what makes an open land on a list rather than a
+  // spinner. This is the fallback for the case that loop deliberately skips —
+  // no ticketing source connected when the page loaded, then one gets
+  // connected — plus a top-up for anything that went stale between warms.
   useEffect(() => {
     if (open) prefetchIntakePanels();
   }, [open]);

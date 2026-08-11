@@ -125,6 +125,33 @@ def test_a_dirty_tree_gets_a_generated_message_rather_than_a_refusal(inst, wt):
     assert "ft-session" in msg
 
 
+def test_a_generated_message_is_marked_as_a_placeholder(inst, wt):
+    """ "Work on ft-session" describes the SESSION, not the change. The flag is
+    what licenses the commit step to replace it with a model-written message once
+    the diff is final — and arming stays cheap, so no model is asked here."""
+    (wt / "b.txt").write_text("uncommitted\n")
+    _post("ft-session", {"depth": "pr"})
+    assert ap.get("ft-session")["message_auto"] is True
+
+
+def test_a_typed_message_is_never_a_placeholder(inst, wt):
+    """What the user typed in the commit dialog outranks anything a model would
+    write later, so it must not be flagged as replaceable."""
+    (wt / "b.txt").write_text("uncommitted\n")
+    _post("ft-session", {"depth": "pr", "message": "Fix the login redirect"})
+    rec = ap.get("ft-session")
+    assert rec["message"] == "Fix the login redirect"
+    assert rec["message_auto"] is False
+
+
+def test_a_recovered_message_is_never_a_placeholder(inst, wt):
+    (wt / "b.txt").write_text("uncommitted\n")
+    (wt / server._COMMIT_MSG_FILE).write_text("recovered subject\n")
+    (wt / server._COMMIT_STATUS_FILE).write_text("1\n")
+    _post("ft-session", {"depth": "pr"})
+    assert ap.get("ft-session")["message_auto"] is False
+
+
 def test_a_clean_tree_needs_no_message(inst):
     """Nothing to commit means nothing to name — the chain may still push/PR."""
     resp = _post("ft-session", {"depth": "push"})
@@ -159,6 +186,107 @@ def test_arming_captures_the_branch_for_drift_detection(inst):
     # The push/PR/merge routes resolve the LIVE branch, so a mid-run switch would
     # retarget the chain; the armed branch is what makes that detectable.
     assert ap.get("ft-session")["branch"] in ("b", "master", "main")
+
+
+class TestTheCommitStepsMessage:
+    """What the autopilot actually commits UNDER — the fast-track half of ✨.
+
+    The commit step is where the diff is final, so it is the only honest place to
+    ask a model for a subject; these prove which messages it may replace and that
+    a model that can't answer never stops the commit.
+    """
+
+    @pytest.fixture
+    def committed(self, monkeypatch):
+        """Capture the message ``_autopilot_commit`` commits under."""
+        seen: list[str] = []
+
+        def fake_commit(title, wt, msg, skip=""):
+            seen.append(msg)
+            return None
+
+        monkeypatch.setattr(server, "_commit_into_shell", fake_commit)
+        monkeypatch.setattr(server, "_forget_probes", lambda *a, **k: None)
+        monkeypatch.setattr(server._live_stage, "watch", lambda *a, **k: None)
+        return seen
+
+    def _run(self, wt, rec_over, fields=None):
+        rec = ap._blank()
+        rec.update({"depth": "pr", "state": "running"})
+        rec.update(rec_over)
+        out = fields if fields is not None else {}
+        assert server._autopilot_commit("ft-session", str(wt), rec, {}, out) is True
+        return out
+
+    def test_a_placeholder_is_replaced_by_the_written_message(
+        self, inst, wt, committed, monkeypatch
+    ):
+        monkeypatch.setattr(
+            server._commit_message, "suggest_or_none", lambda *a, **k: "Add a b.txt"
+        )
+        fields = self._run(wt, {"message": "Work on ft-session", "message_auto": True})
+        assert committed == ["Add a b.txt"]
+        # Written back, so a pre-commit retry commits the same sentence instead of
+        # paying for a second turn.
+        assert fields["message"] == "Add a b.txt"
+        assert fields["message_auto"] is False
+
+    def test_a_human_message_is_left_alone(self, inst, wt, committed, monkeypatch):
+        def never(*a, **k):
+            raise AssertionError("must not ask a model about a typed message")
+
+        monkeypatch.setattr(server._commit_message, "suggest_or_none", never)
+        self._run(wt, {"message": "Fix the login redirect"})
+        assert committed == ["Fix the login redirect"]
+
+    def test_an_intake_items_own_name_is_left_alone(
+        self, inst, wt, committed, monkeypatch
+    ):
+        """An ingested ticket's title is the best subject available — better than
+        anything a model would infer from the diff alone."""
+        monkeypatch.setattr(
+            server._commit_message, "suggest_or_none", lambda *a, **k: "something else"
+        )
+        self._run(
+            wt,
+            {
+                "message": "Add customer phone numbers to intake",
+                "source": "tix",
+                "item": "sc-1421",
+            },
+        )
+        assert committed == ["Add customer phone numbers to intake"]
+
+    def test_the_placeholder_still_commits_when_no_model_answers(
+        self, inst, wt, committed, monkeypatch
+    ):
+        """THE FALLBACK. aider installed, claude logged out, a timeout — the work
+        gets committed under a duller subject, never left uncommitted."""
+        monkeypatch.setattr(
+            server._commit_message, "suggest_or_none", lambda *a, **k: None
+        )
+        self._run(wt, {"message": "Work on ft-session", "message_auto": True})
+        assert committed == ["Work on ft-session"]
+
+    def test_a_run_armed_with_no_message_gets_a_written_one(
+        self, inst, wt, committed, monkeypatch
+    ):
+        """Arming on a CLEAN tree records no message (nothing to describe yet);
+        by commit time there is a diff, and now a real subject."""
+        monkeypatch.setattr(
+            server._commit_message, "suggest_or_none", lambda *a, **k: "Written subject"
+        )
+        self._run(wt, {"message": ""})
+        assert committed == ["Written subject"]
+
+    def test_no_message_and_no_model_falls_back_to_the_default_subject(
+        self, inst, wt, committed, monkeypatch
+    ):
+        monkeypatch.setattr(
+            server._commit_message, "suggest_or_none", lambda *a, **k: None
+        )
+        self._run(wt, {"message": ""})
+        assert committed and "ft-session" in committed[0]
 
 
 def test_unknown_session_is_404():

@@ -298,6 +298,20 @@ def test_commit_dialog_recovers_a_message_the_hooks_rejected():
     assert '"/commit-message"' in js
 
 
+def test_commit_dialog_offers_a_model_written_message():
+    """✨ — the button that reads the diff and writes the message. Pinned on the
+    endpoint and the control's id, both of which the styling and the (separate)
+    route test hang off."""
+    js = client.get("/app.js").text
+    assert '"/commit-message/suggest"' in js
+    assert 'id: "commit-write"' in js
+    # Disabled while the CLI turn is in flight: the label is the only progress
+    # this dialog shows, and a second press would start a second turn.
+    assert "Writing…" in js
+    css = client.get("/style.css").text
+    assert "#commit-form #commit-write" in css
+
+
 def test_commit_dialog_closes_on_a_backdrop_click():
     """Clicking away dismisses, like Escape. mousedown rather than click, and only
     when the backdrop is the event's own target, so a text selection that started

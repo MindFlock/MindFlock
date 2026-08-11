@@ -147,6 +147,38 @@ def seed_prompt_expr(session_name: str, prompt: str) -> str:
     return '"$(cat %s)"' % shlex.quote(str(path))
 
 
+#: The token an ``oneshot_args`` template uses for the prompt text.
+ONESHOT_PROMPT_TOKEN = "{prompt}"
+
+
+def oneshot_command(
+    binary: str, args: Sequence[str], prompt: str
+) -> Optional[list[str]]:
+    """Splice ``prompt`` into a one-shot argv template, or ``None``.
+
+    ``None`` for a CLI with no template (``args`` empty) or an empty prompt —
+    "this provider can't answer a question headlessly", which callers treat as
+    "do it without a model" rather than as an error.
+
+    Only the FIRST token of ``binary`` is used: a provider's base command can
+    carry an interactive subcommand (``goose session``, ``cline -i``) that the
+    one-shot must not inherit — its own subcommand is in ``args`` (``run -t``).
+    No shell is involved anywhere; this is an argv list for
+    :func:`subprocess.run`, which is why a prompt holding a whole diff is safe.
+    """
+    import shlex
+
+    if not args or not prompt:
+        return None
+    exe = (shlex.split(binary or "") or [""])[0]
+    if not exe:
+        return None
+    return [exe] + [
+        prompt if a == ONESHOT_PROMPT_TOKEN else a.replace(ONESHOT_PROMPT_TOKEN, prompt)
+        for a in args
+    ]
+
+
 class BaseProvider:
     """Default, provider-agnostic implementation. Subclass and override only
     what differs for a specific CLI."""
@@ -359,6 +391,22 @@ class BaseProvider:
         1-token ping to anchor the usage window. Default: run the program bare."""
         prog = self.program_aliases[0] if self.program_aliases else self.name
         return prog or None
+
+    # --- headless one-shot ------------------------------------------------ #
+    def oneshot_argv(self, prompt: str) -> Optional[list[str]]:
+        """argv that asks this CLI ONE question and prints the answer, or None.
+
+        The way MindFlock uses a model for its own purposes — no tmux, no PTY, no
+        session — currently just writing commit messages
+        (:mod:`backend.web.core.commit_message`). None means "this CLI has no
+        text-only mode we trust", and every caller must have a no-model fallback
+        for that: a provider that can't answer must never block the work.
+
+        The default is None rather than a guess. Print-mode spellings genuinely
+        conflict between CLIs (``-p`` prints for claude and plans for cline), and
+        a wrong flag would launch an editing agent on the user's worktree.
+        """
+        return None
 
     # --- usage-window knowledge (roadmap E) ------------------------------- #
     def usage_window(self) -> dict:

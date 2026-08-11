@@ -52,6 +52,26 @@ def _write_transcript(home, workdir, entries, *, root_name=".claude", fname="s.j
     return proj
 
 
+#: Transcript id for tests that read through a window's thread marker. Marker
+#: ids must be ≥4 chars to be valid, so these tests name their transcript file
+#: after this instead of using _write_transcript's default.
+_WINDOW_TID = "sess-0001"
+
+
+def _bind_window(session_name, tid=_WINDOW_TID):
+    """Record ``session_name``'s thread marker — what the activity hooks do on
+    the session's first prompt. Every PER-WINDOW transcript reader resolves
+    through this marker and reads nothing without it (an unmarked window's
+    conversation is unknown, and must not be guessed from the directory), so a
+    test calling one for a named window has to bind it first, with the
+    transcript written as ``<tid>.jsonl``. Needs a fake HOME active — the marker
+    dir lives under it."""
+    from backend.providers import thread_markers as _tm
+
+    _tm.record(session_name, tid)
+    return session_name
+
+
 def _usage_entry(*, ts=None, model="claude-sonnet-4", in_=0, out=0, cw=0, cr=0):
     """Build an assistant transcript line with a nested message.usage block."""
     entry = {
@@ -1406,7 +1426,9 @@ def test_last_turn_snippet_provider_method_delegates(fake_home):
         fake_home,
         workdir,
         [{"type": "assistant", "message": {"content": "done"}}],
+        fname=_WINDOW_TID + ".jsonl",
     )
+    _bind_window("mindflock_x")
     provider = ClaudeProvider()
     assert provider.last_turn_snippet("mindflock_x", workdir) == "done"
 
@@ -1554,15 +1576,37 @@ def test_session_transcript_prefers_this_windows_thread_marker(two_windows):
     )
 
 
-def test_session_transcript_falls_back_without_a_usable_marker(two_windows):
+def test_session_transcript_falls_back_only_when_no_window_is_named(two_windows):
     workdir, proj = two_windows
     newest = str(proj / "bbbb-2222.jsonl")
-    # No session name, no marker for the name, and a marker naming a file that
-    # is gone all fall back to the newest transcript.
+    # A caller that names no window has no identity to respect -> newest wins.
     assert _claude_mod._session_transcript(workdir, "")[2] == newest
-    assert _claude_mod._session_transcript(workdir, "mindflock_hookless")[2] == newest
+
+
+def test_session_transcript_gives_a_markerless_window_nothing(two_windows):
+    """A named window with no usable marker reads NOTHING, not the newest file.
+
+    A fresh launch clears the marker and the hooks only write one when the human
+    submits a prompt, so any file in the dir at that moment belongs to someone
+    else — a sibling window, or this window's own abandoned previous run. The
+    pane used to pin that stranger's prompt over an empty splash screen.
+    """
+    workdir, proj = two_windows
+    assert _claude_mod._session_transcript(workdir, "mindflock_hookless") is None
+    # A marker naming a file that is gone is no marker at all.
     (proj / "aaaa-1111.jsonl").unlink()
-    assert _claude_mod._session_transcript(workdir, "mindflock_mine")[2] == newest
+    assert _claude_mod._session_transcript(workdir, "mindflock_mine") is None
+
+
+def test_fresh_window_pins_no_prompt_from_a_sibling(two_windows):
+    """The reported bug: a just-started session showed the OTHER window's last
+    prompt in its pinned-prompt bar (and its triage snippet)."""
+    workdir, _ = two_windows
+    provider = ClaudeProvider()
+    assert provider.last_prompt_snippet("mindflock_fresh", workdir) is None
+    assert provider.last_prompt_full("mindflock_fresh", workdir) is None
+    assert provider.last_turn_snippet("mindflock_fresh", workdir) is None
+    assert provider.find_prompt_full("mindflock_fresh", workdir, "theirs: bump") is None
 
 
 def test_last_prompt_snippet_is_per_window_not_per_workdir(two_windows):
@@ -1609,7 +1653,9 @@ def test_last_prompt_sees_a_prompt_typed_mid_turn(fake_home):
             {"type": "assistant", "message": {"content": "working on it"}},
             _enqueued("actually also make the menu bigger"),
         ],
+        fname=_WINDOW_TID + ".jsonl",
     )
+    _bind_window("s")
     provider = ClaudeProvider()
     assert provider.last_prompt_snippet("s", workdir) == (
         "actually also make the menu bigger"
@@ -1628,7 +1674,10 @@ def test_find_prompt_full_expands_a_queued_prompt(fake_home):
         "I also think i want the new menu to be much larger so i dont have to "
         "scroll. Also make the more options and launch flags open by default"
     )
-    _write_transcript(fake_home, workdir, [_enqueued(long_prompt)])
+    _write_transcript(
+        fake_home, workdir, [_enqueued(long_prompt)], fname=_WINDOW_TID + ".jsonl"
+    )
+    _bind_window("s")
     provider = ClaudeProvider()
     got = provider.find_prompt_full(
         "s", workdir, "I also think i want the new menu to be much larger…"
@@ -1652,6 +1701,7 @@ def test_queue_removals_are_not_second_copies_of_the_prompt(fake_home):
             },
             {"type": "assistant", "message": {"content": "done"}},
         ],
+        fname=_WINDOW_TID + ".jsonl",
     )
     from backend.providers.claude import _entry_text
 
@@ -1667,6 +1717,7 @@ def test_queue_removals_are_not_second_copies_of_the_prompt(fake_home):
         is None
     )
     # The newest human prompt is still the enqueue, not the assistant reply.
+    _bind_window("s")
     assert ClaudeProvider().last_prompt_snippet("s", workdir) == "do the thing"
 
 

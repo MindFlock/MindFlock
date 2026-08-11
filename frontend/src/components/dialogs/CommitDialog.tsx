@@ -22,6 +22,9 @@ export function CommitDialog() {
   const closeDialog = useUi((s) => s.closeDialog);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  // The ✨ button's in-flight latch. A generation is one CLI turn (~10s), long
+  // enough that without a visible busy state the button reads as broken.
+  const [writing, setWriting] = useState(false);
   // How far this commit should carry the session. "commit" keeps the historical
   // behaviour (commit and stop), and is what the plain path still does.
   const [depth, setDepth] = useState("commit");
@@ -33,6 +36,7 @@ export function CommitDialog() {
     setError("");
     setMsg((target && lastCommitMsg.get(target)) || "");
     setDepth("commit");
+    setWriting(false);
     msgRef.current?.focus();
   }, [open, target]);
 
@@ -87,6 +91,43 @@ export function CommitDialog() {
       pr: "Commit & open PR",
       merge: "Commit & merge",
     }[depth] || "Commit";
+
+  /** ✨ — have the session's coding CLI read the diff and write the message.
+   *
+   * Whatever is in the box travels along as a hint and is then replaced by the
+   * answer: the press means "write it", and a suggestion that appended itself to
+   * a half-finished sentence would be worse than either alone. The old text is
+   * still one Ctrl+Z away in the textarea's own undo stack.
+   *
+   * A failure leaves the box untouched and says why. The reason matters — "aider
+   * has no headless mode", "claude is not installed", "nothing to describe" all
+   * need different things from the user, and a bare "failed" would send them
+   * looking in the wrong place.
+   */
+  async function writeMessage() {
+    const title = target;
+    if (!title || writing) return;
+    setWriting(true);
+    setError("");
+    try {
+      const r = await instApi<{ message?: string }>(title, "/commit-message/suggest", {
+        json: { hint: msg.trim().slice(0, 500) },
+      });
+      const written = (r?.message || "").trim();
+      if (!written) throw new Error("no message came back");
+      setMsg(written);
+      lastCommitMsg.set(title, written);
+      const el = msgRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(written.length, written.length);
+      }
+    } catch (err) {
+      setError(errMsg(err));
+    } finally {
+      setWriting(false);
+    }
+  }
 
   async function submitCommit() {
     const title = target;
@@ -146,11 +187,32 @@ export function CommitDialog() {
         }}
       >
         <h2>Commit</h2>
-        <label>
-          Message{" "}
-          <span className="muted">
-            (multiline — first line is the summary; Ctrl+Enter to commit)
-          </span>
+        {/* The label is deliberately NOT wrapping the textarea any more: the ✨
+            button belongs on the field's own header row, and a <button> inside a
+            <label> is invalid HTML (interactive content) — so the two are
+            associated with htmlFor instead. */}
+        <div id="commit-msg-field">
+          <div className="cm-head">
+            <label htmlFor="commit-msg">
+              Message{" "}
+              <span className="muted">
+                (multiline — first line is the summary; Ctrl+Enter to commit)
+              </span>
+            </label>
+            <button
+              type="button"
+              id="commit-write"
+              onClick={() => void writeMessage()}
+              disabled={writing}
+              aria-busy={writing || undefined}
+              title={
+                "Read the diff and write the commit message, using this session's" +
+                " coding CLI. Replaces what's in the box."
+              }
+            >
+              {writing ? "Writing…" : "✨ Write it"}
+            </button>
+          </div>
           <textarea
             id="commit-msg"
             ref={msgRef}
@@ -169,7 +231,7 @@ export function CommitDialog() {
               }
             }}
           />
-        </label>
+        </div>
         <label id="commit-depth-row">
           Then keep going{" "}
           <span className="muted">(fast-track — stops at the rung you pick)</span>

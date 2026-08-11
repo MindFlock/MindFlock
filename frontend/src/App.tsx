@@ -3,7 +3,7 @@
  * which special panes (logs / system logs / assistant chat) are open. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useConfig, useInstances } from "./state/queries";
+import { useConfig, useInstances, useIntakeWarm } from "./state/queries";
 import { tourDecision, useUi } from "./state/store";
 import { followAutopilot, noteActivity, reconcileLoopReset } from "./lib/stage";
 import { installKeymap, type KeymapHost } from "./lib/keymap";
@@ -37,6 +37,11 @@ export default function App() {
   const { data: instances } = useInstances();
   const ui = useUi();
   useDoctorAutoShow();
+  // Intake's lists are upstream fan-outs, so they have to be fetched before the
+  // dialog exists or the first thing it shows is a spinner. Gated on a
+  // connected ticketing source — the same condition that decides whether the
+  // dialog has anything to show at all.
+  useIntakeWarm(!!config?.caps?.ticketing);
 
   // First-run onboarding: pop the welcome walkthrough once, for a user who is
   // new by the SERVER's reckoning and still has hints enabled — tourDecision()

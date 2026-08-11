@@ -1971,6 +1971,31 @@ p.set-hint {
   display: flex;
   gap: 8px;
 }
+
+/* Why a custom provider's CLI can't be found (usually a shell alias, which the
+   non-interactive launch shell cannot see) — shown on the row and under the
+   form after a save that won't be able to start. */
+.prov-launch-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--yellow, #d6a53c);
+}
+
+/* Save + Cancel sit side by side; the form's other children are full-width. */
+.prov-form-actions {
+  display: flex;
+  gap: 8px;
+}
+.prov-form-actions button {
+  flex: 1;
+}
+.prov-form-actions #prov-cancel-btn {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
 .prov-conn-actions .prov-login-btn {
   background: var(--accent);
   border: none;
@@ -4866,6 +4891,17 @@ p.set-hint {
 .pane-term.agent-term > .term-container {
   flex: 1 1 auto;
   min-height: 0;
+  order: 1;
+}
+
+/* The pin belongs above the terminal whichever lands in the DOM first. The
+   terminal container is appended imperatively (it is not a React child), so
+   React has no following sibling to insert before once it exists and appends
+   the pin AFTER it — a pin that shows up LATE (a fresh session's first prompt,
+   after the terminal booted) then rendered at the BOTTOM of the pane, under the
+   tmux status line. Explicit order fixes the visual column regardless. */
+.pane-term.agent-term > .prompt-pin {
+  order: 0;
 }
 
 /* Pinned prompt: first line of the session's latest user prompt. Bleeds to
@@ -6548,6 +6584,62 @@ p.set-hint {
   gap: 6px;
   font-size: 12px;
   color: var(--muted);
+}
+
+/* Message field: the label row (with the ✨ button) and the textarea it names.
+   Reproduces what wrapping the textarea in the <label> used to give for free —
+   the 6px gap — now that the button has to live outside the label. */
+#commit-form #commit-msg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#commit-form .cm-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+/* The label keeps its own column layout (caption above the parenthetical hint,
+   which is too long to share a line with a button), so `baseline` above aligns
+   the button with the word "Message" rather than with the hint under it. */
+#commit-form .cm-head label {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ✨ — a quiet accent-tinted affordance, not a second submit button: the eye
+   should still land on Commit. Sized to the label row it sits on. */
+#commit-form #commit-write {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#commit-form #commit-write:hover:enabled {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#commit-form #commit-write:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Mid-generation: still legible (the label is the only progress indicator this
+   dialog has), but plainly not pressable again. */
+#commit-form #commit-write:disabled {
+  cursor: progress;
+  opacity: 0.65;
 }
 
 #commit-form textarea {

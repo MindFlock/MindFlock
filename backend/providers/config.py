@@ -18,6 +18,7 @@ TOML shape::
     skip_perms_flag = "--yolo"  # trust/skip-permissions bypass ("" -> omitted)
     resume_fallback = true      # emit `<resume> || <fresh>` like claude
     prompt_arg = "{prompt}"     # how to pass a start prompt ("" -> can't seed one)
+    oneshot_args = ["-p", "{prompt}"]  # run one prompt headlessly and print it
 
     [exit]
     natural_codes = [0, 130]    # exit codes that mean a clean quit
@@ -87,6 +88,24 @@ class ProviderConfig:
     #: ``"--message {prompt}"``. Empty = this provider can't be seeded a start
     #: prompt, so a session created with one launches idle (the prior behaviour).
     prompt_arg: str = ""
+    #: argv tokens that run ONE prompt non-interactively and print the answer to
+    #: stdout, with ``{prompt}`` standing in for the prompt text. This is how
+    #: MindFlock asks a CLI a *question* — no tmux, no session, no PTY — which is
+    #: what writing a commit message needs (see
+    #: :mod:`backend.web.core.commit_message`).
+    #:
+    #: Deliberately NOT derived from ``prompt_arg``: that one seeds an
+    #: *interactive* session and its flag is often the opposite of this one
+    #: (antigravity's ``--prompt-interactive`` vs ``--print``), and ``-p`` means
+    #: print for claude but ``--plan`` for cline. Every value below was read off
+    #: the CLI's own ``--help``.
+    #:
+    #: These are appended to the resolved *executable*, not to ``command`` —
+    #: goose's base command is ``goose session`` while its one-shot is
+    #: ``goose run``. Empty = this CLI has no text-only mode we trust (aider's
+    #: ``--message`` edits files and can commit on its own), so callers fall back
+    #: to whatever they do without a model.
+    oneshot_args: Tuple[str, ...] = ()
     #: Extra argv tokens appended to the provider's base executable every time
     #: it starts. This is for provider-local saved launch flags such as
     #: ``--dangerously-skip-permissions``. Values are shell-quoted by
@@ -299,6 +318,17 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         # (`codex "explain this repo"`), so a session created with a prompt
         # seeds it at launch instead of starting idle.
         prompt_arg="{prompt}",
+        # `codex exec` — "Run Codex non-interactively" (from `codex --help`).
+        # `--sandbox read-only` because this asks a QUESTION about the tree and
+        # must not rewrite it, and `--skip-git-repo-check` because exec otherwise
+        # refuses to run outside a git repo (a plain in-place session's dir).
+        oneshot_args=(
+            "exec",
+            "--sandbox",
+            "read-only",
+            "--skip-git-repo-check",
+            "{prompt}",
+        ),
         idle_pattern="",  # unknown -> never auto-confirm spuriously
         trust_patterns=(),  # unknown -> don't auto-dismiss
         trust_keystroke="enter",
@@ -375,6 +405,10 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         # counterpart to --print/--prompt, which are one-shot and would exit the
         # session. Parity with codex's positional {prompt} seeding.
         prompt_arg="--prompt-interactive {prompt}",
+        # …and --print is that one-shot mode, which is what we want here (`agy
+        # --help`: "Run a single prompt non-interactively and print the
+        # response"). The two are easy to mix up — hence the separate field.
+        oneshot_args=("--print", "{prompt}"),
         # The tool-permission dialog's question line ("Do you want to
         # proceed?" with a numbered Yes/always-allow/No list).
         idle_pattern="Do you want to proceed?",
@@ -446,6 +480,9 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             "GEMINI_API_KEY",
             "DEEPSEEK_API_KEY",
         ),
+        # No oneshot_args on purpose: aider's non-interactive `--message` is an
+        # EDITING run (it applies changes and auto-commits by default), so asking
+        # it to write a commit message risks it writing the commit instead.
         install_hint="python -m pip install aider-chat",
     ),
     ProviderConfig(
@@ -472,6 +509,8 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         # The footer shows a climbing context tally during a turn, e.g.
         # "10.2K (5%)" — any increase is proof of work.
         progress_pattern=r"([\d.,]+\s*[kKmM]?)\s*\(\d+%\)",
+        # `opencode run [message..]` — "run opencode with a message" (non-TUI).
+        oneshot_args=("run", "{prompt}"),
         usage_window_kind="",
         usage_window_note="Bring-your-own provider keys/plans; no MindFlock-managed window.",
         auth_files=("~/.local/share/opencode/auth.json",),
@@ -503,6 +542,10 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             "Cline needs permission",
             "Cline is asking a question",
         ),
+        # The bare CLI (no -i) IS the one-shot mode — a positional prompt. Note
+        # `-p` here is --plan, NOT print; auto-approve is on by default, so it is
+        # turned OFF for a question that must not touch the tree.
+        oneshot_args=("--auto-approve", "false", "{prompt}"),
         usage_window_kind="",
         usage_window_note="Cline account or bring-your-own key; no MindFlock-managed window.",
     ),
@@ -529,6 +572,10 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             r"do you allow\?",
             "Allow the tool call once",
         ),
+        # `goose run -t <text>` executes one instruction and exits. NOT `goose
+        # session run` — one-shot args hang off the executable, which is why they
+        # are kept separate from `command`.
+        oneshot_args=("run", "-t", "{prompt}"),
         usage_window_kind="",
         usage_window_note="Bring-your-own provider keys; no MindFlock-managed window.",
         # `goose configure` sets up the provider + key interactively.
@@ -592,6 +639,9 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
         progress_pattern=classify.get("progress_pattern", ""),
         resume_id_flag=launch.get("resume_id_flag", ""),
         prompt_arg=launch.get("prompt_arg", ""),
+        # Validated like launch args (they end up in an argv list, not a shell),
+        # so a user CLI can opt into model-written commit messages from TOML.
+        oneshot_args=validate_launch_args(launch.get("oneshot_args", ())),
         # [usage] window knowledge (optional): kind/hours/weekly_hours/note.
         usage_window_kind=usage.get("window_kind", ""),
         usage_window_hours=float(usage.get("window_hours", 0.0) or 0.0),

@@ -24,6 +24,62 @@
   color: var(--muted);
 }
 
+/* Message field: the label row (with the ✨ button) and the textarea it names.
+   Reproduces what wrapping the textarea in the <label> used to give for free —
+   the 6px gap — now that the button has to live outside the label. */
+#commit-form #commit-msg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#commit-form .cm-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+/* The label keeps its own column layout (caption above the parenthetical hint,
+   which is too long to share a line with a button), so `baseline` above aligns
+   the button with the word "Message" rather than with the hint under it. */
+#commit-form .cm-head label {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ✨ — a quiet accent-tinted affordance, not a second submit button: the eye
+   should still land on Commit. Sized to the label row it sits on. */
+#commit-form #commit-write {
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#commit-form #commit-write:hover:enabled {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+#commit-form #commit-write:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Mid-generation: still legible (the label is the only progress indicator this
+   dialog has), but plainly not pressable again. */
+#commit-form #commit-write:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+
 #commit-form textarea {
   background: var(--bg);
   border: 1px solid var(--border);

@@ -17,6 +17,7 @@ import asyncio
 import json
 import os
 import re
+import shlex
 import shutil
 from pathlib import Path
 from typing import Optional, Tuple
@@ -216,6 +217,13 @@ def _provider_status(p, default_name: str) -> dict:
         "auth_known": bool(evidence),
         "login_command": _safe(p.login_command),
         "install_hint": _safe(p.install_hint),
+        # Why a CUSTOM provider's CLI can't be found (built-ins ship an install
+        # command instead, which is the more useful answer for them).
+        "launch_hint": (
+            ""
+            if installed or name in providers.BUILTIN_NAMES
+            else _binary_warning(binary, os.sep in binary)
+        ),
         "is_default": name == default_name,
     }
 
@@ -271,6 +279,42 @@ def _provider_body_error(body: dict) -> str:
     except ValueError as err:
         return str(err)
     return ""
+
+
+def _provider_launch_warning(body: dict) -> str:
+    """Why a saved provider won't be able to start, or ``""``.
+
+    A provider whose executable can't be resolved is accepted (the CLI may not be
+    installed yet) but is dead on arrival, and the failure surfaces far away: the
+    pane just prints "command not found" and dies. The common cause is a SHELL
+    ALIAS — sessions launch through ``sh -c``, which reads no shell rc file and
+    has no aliases or functions, so a name that works in your terminal can be
+    invisible here. Saying so at save time, next to the Binary path field that
+    fixes it, is the difference between a one-field correction and a mystery.
+    """
+    body = body or {}
+    name = str(body.get("name", "") or "").strip()
+    explicit = str(body.get("binary_path", "") or "").strip()
+    return _binary_warning(
+        explicit or str(body.get("command", "") or "").strip() or name, bool(explicit)
+    )
+
+
+def _binary_warning(binary: str, explicit: bool) -> str:
+    """The unresolvable-executable explanation for ``binary``, or ``""`` when it
+    resolves. ``explicit`` marks a binary that came from the binary-path field
+    (a wrong path, not a missing alias). See :func:`_provider_launch_warning`."""
+    binary = shlex.split(binary)[0] if binary.strip() else ""
+    if not binary or _installed_path(binary):
+        return ""
+    if explicit:
+        return f"{binary!r} is not an executable file — check the binary path."
+    return (
+        f"{binary!r} was not found on PATH. Sessions start through a "
+        "non-interactive shell, which has no aliases or shell functions — if "
+        f"{binary!r} is one of those, put the real executable it points at "
+        f"(what `type {binary}` prints) in the binary-path field."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -917,7 +961,14 @@ class SettingsAddon(Addon):
             target.write_text(_provider_toml(body), encoding="utf-8")
             providers.rebuild_registry()
             p = providers.get(name)
-            return JSONResponse({"provider": _provider_view(p) if p else None})
+            return JSONResponse(
+                {
+                    "provider": _provider_view(p) if p else None,
+                    # Saved, but it may not be launchable — say so now rather than
+                    # letting the pane die with "command not found" later.
+                    "warning": _provider_launch_warning(body),
+                }
+            )
 
         @router.put("/providers/{name}")
         def update_provider(name: str, body: dict) -> JSONResponse:
@@ -938,7 +989,12 @@ class SettingsAddon(Addon):
             target.write_text(_provider_toml(body), encoding="utf-8")
             providers.rebuild_registry()
             p = providers.get(name)
-            return JSONResponse({"provider": _provider_view(p) if p else None})
+            return JSONResponse(
+                {
+                    "provider": _provider_view(p) if p else None,
+                    "warning": _provider_launch_warning(body),
+                }
+            )
 
         @router.delete("/providers/{name}")
         def delete_provider(name: str) -> JSONResponse:

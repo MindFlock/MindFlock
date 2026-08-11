@@ -241,6 +241,17 @@
 .pane-term.agent-term > .term-container {
   flex: 1 1 auto;
   min-height: 0;
+  order: 1;
+}
+
+/* The pin belongs above the terminal whichever lands in the DOM first. The
+   terminal container is appended imperatively (it is not a React child), so
+   React has no following sibling to insert before once it exists and appends
+   the pin AFTER it — a pin that shows up LATE (a fresh session's first prompt,
+   after the terminal booted) then rendered at the BOTTOM of the pane, under the
+   tmux status line. Explicit order fixes the visual column regardless. */
+.pane-term.agent-term > .prompt-pin {
+  order: 0;
 }
 
 /* Pinned prompt: first line of the session's latest user prompt. Bleeds to

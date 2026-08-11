@@ -478,12 +478,22 @@ def test_base_provider_last_turn_snippet_defaults_to_none():
     assert BaseProvider().last_turn_snippet("s", "/tmp/x") is None
 
 
-def _write_transcript(home: Path, workdir: str, entries) -> Path:
+#: Conversation id for these transcripts. The per-window readers resolve a
+#: named window's transcript through its thread marker ONLY — an unmarked
+#: window reads nothing rather than guessing from the directory — so the file is
+#: named after the id and the marker is recorded alongside it.
+_TID = "t-0001"
+
+
+def _write_transcript(home: Path, workdir: str, entries, session_name="s") -> Path:
+    from backend.providers import thread_markers
+
     encoded = re.sub(r"[^a-zA-Z0-9]", "-", workdir)
     proj = home / ".claude" / "projects" / encoded
     proj.mkdir(parents=True)
-    p = proj / "t.jsonl"
+    p = proj / (_TID + ".jsonl")
     p.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+    thread_markers.record(session_name, _TID)  # what the activity hooks do
     return p
 
 

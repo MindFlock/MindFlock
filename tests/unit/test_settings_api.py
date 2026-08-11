@@ -211,3 +211,111 @@ class TestProviderCrudApi:
 
     def test_delete_rejects_builtin(self, client):
         assert client.delete("/api/providers/codex").status_code == 400
+
+    def test_update_round_trips_the_manage_view(self, client):
+        """The Edit form reopens a provider from /manage and PUTs it back, so
+        every field it shows has to survive the round trip — an edit that
+        silently dropped saved args would relaunch the CLI the wrong way."""
+        body = {
+            "name": "rt",
+            "program": "rt",
+            "binary_path": "/opt/rt",
+            "launch_args": ["--one", "--two"],
+            "resume_flag": "--continue",
+            "skip_perms_flag": "--yolo",
+        }
+        assert client.post("/api/providers", json=body).status_code == 200
+        view = {
+            p["name"]: p
+            for p in client.get("/api/providers/manage").json()["providers"]
+        }["rt"]
+        again = client.put(
+            "/api/providers/rt",
+            json={
+                "name": "rt",
+                "program": " ".join(view["aliases"]),
+                "binary_path": view["binary_path"],
+                "launch_args": view["launch_args"] + ["--three"],
+                "resume_flag": view["resume_flag"],
+                "skip_perms_flag": view["skip_perms_flag"],
+            },
+        )
+        assert again.status_code == 200
+        got = again.json()["provider"]
+        assert got["binary_path"] == "/opt/rt"
+        assert got["resume_flag"] == "--continue"
+        assert got["skip_perms_flag"] == "--yolo"
+        assert got["launch_args"] == ["--one", "--two", "--three"]
+        assert got["aliases"] == ["rt"]
+
+
+class TestProviderLaunchWarning:
+    """A saved provider whose executable can't be resolved is accepted but dead:
+    the pane dies with "command not found" far from the form that caused it. The
+    usual cause is a SHELL ALIAS, which the non-interactive launch shell cannot
+    see (`claudekiro` -> `ccc`)."""
+
+    def test_create_warns_when_the_program_is_not_on_path(self, client, monkeypatch):
+        import backend.web.addons.settings as settings_addon
+
+        monkeypatch.setattr(settings_addon, "_installed_path", lambda b: "")
+        r = client.post(
+            "/api/providers",
+            json={"name": "aliascli", "program": "aliascli", "launch_args": ["--kiro"]},
+        )
+        assert r.status_code == 200  # saved — the warning is advice, not an error
+        warning = r.json()["warning"]
+        assert "aliascli" in warning
+        assert "aliases" in warning and "binary-path" in warning
+
+    def test_no_warning_once_a_real_binary_is_given(self, client, monkeypatch):
+        import backend.web.addons.settings as settings_addon
+
+        monkeypatch.setattr(
+            settings_addon, "_installed_path", lambda b: b if b.startswith("/") else ""
+        )
+        r = client.post(
+            "/api/providers",
+            json={
+                "name": "pathcli",
+                "program": "pathcli",
+                "binary_path": "/home/me/bin/ccc",
+            },
+        )
+        assert r.json()["warning"] == ""
+
+    def test_a_wrong_explicit_path_says_so_instead(self, client, monkeypatch):
+        import backend.web.addons.settings as settings_addon
+
+        monkeypatch.setattr(settings_addon, "_installed_path", lambda b: "")
+        r = client.post(
+            "/api/providers",
+            json={"name": "badpath", "program": "badpath", "binary_path": "/nope/x"},
+        )
+        # An explicit path that doesn't resolve is a typo, not a missing alias.
+        assert "binary path" in r.json()["warning"]
+        assert "aliases" not in r.json()["warning"]
+
+    def test_update_warns_too(self, client, monkeypatch):
+        import backend.web.addons.settings as settings_addon
+
+        client.post("/api/providers", json={"name": "upd", "program": "upd"})
+        monkeypatch.setattr(settings_addon, "_installed_path", lambda b: "")
+        r = client.put("/api/providers/upd", json={"program": "upd"})
+        assert r.status_code == 200
+        assert "upd" in r.json()["warning"]
+
+    def test_status_row_explains_a_missing_custom_cli(self, client, monkeypatch):
+        import backend.web.addons.settings as settings_addon
+
+        client.post("/api/providers", json={"name": "ghostcli", "program": "ghostcli"})
+        monkeypatch.setattr(settings_addon, "_installed_path", lambda b: "")
+        rows = {
+            p["name"]: p
+            for p in client.get("/api/providers/status").json()["providers"]
+        }
+        assert rows["ghostcli"]["installed"] is False
+        assert "aliases" in rows["ghostcli"]["launch_hint"]
+        # Built-ins carry an install command instead — that's the useful answer
+        # for them, and two competing hints on one row is noise.
+        assert rows["claude"]["launch_hint"] == ""

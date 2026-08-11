@@ -21626,6 +21626,22 @@ function prefetchIntakePanels() {
     });
   }
 }
+const PANEL_WARM_MS = 4 * 6e4;
+function useIntakeWarm(enabled) {
+  reactExports.useEffect(() => {
+    if (!enabled) return;
+    const warm = () => {
+      if (!document.hidden) prefetchIntakePanels();
+    };
+    warm();
+    const timer = window.setInterval(warm, PANEL_WARM_MS);
+    document.addEventListener("visibilitychange", warm);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", warm);
+    };
+  }, [enabled]);
+}
 let toastTimer;
 function toast(msg, opts) {
   const o = opts || {};
@@ -29566,6 +29582,9 @@ function tokenize(s) {
   return out.filter(Boolean);
 }
 const quote = (t) => /\s/.test(t) ? '"' + t + '"' : t;
+function joinTokens(tokens) {
+  return tokens.map(quote).join(" ");
+}
 function seqIndex(tokens, seq) {
   if (!seq.length) return -1;
   for (let i = 0; i + seq.length <= tokens.length; i++) {
@@ -33927,18 +33946,32 @@ function Ide(_) {
     )
   ] });
 }
+const EMPTY_FORM = {
+  name: "",
+  program: "",
+  binary: "",
+  args: "",
+  resume: "",
+  skip: ""
+};
+function toForm(p) {
+  return {
+    name: p.name,
+    // `program` is what the CLI is called; the registry reports it as aliases.
+    program: (p.aliases || []).join(" ") || p.command || "",
+    binary: p.binary_path || "",
+    args: joinTokens(p.launch_args || []),
+    resume: p.resume_flag || "",
+    skip: p.skip_perms_flag || ""
+  };
+}
 function Providers(_) {
   const [statuses, setStatuses] = reactExports.useState([]);
   const [managed, setManaged] = reactExports.useState({});
-  const [form, setForm] = reactExports.useState({
-    name: "",
-    program: "",
-    binary: "",
-    args: "",
-    resume: "",
-    skip: ""
-  });
+  const [form, setForm] = reactExports.useState(EMPTY_FORM);
+  const [editing, setEditing] = reactExports.useState(null);
   const [error, setError] = reactExports.useState("");
+  const [warning, setWarning] = reactExports.useState("");
   const load2 = reactExports.useCallback(async () => {
     var _a2, _b2;
     const [s, m] = await Promise.allSettled([
@@ -33977,9 +34010,25 @@ function Providers(_) {
       toast("Delete failed: " + (err.message || name));
     }
   };
-  const add = async () => {
+  const edit = (p) => {
+    var _a2, _b2;
+    setError("");
+    setWarning("");
+    setEditing(p.name);
+    setForm(toForm(p));
+    (_a2 = document.getElementById("prov-add")) == null ? void 0 : _a2.setAttribute("open", "");
+    (_b2 = document.getElementById("prov-new-binary")) == null ? void 0 : _b2.focus();
+  };
+  const cancelEdit = () => {
+    setEditing(null);
+    setForm(EMPTY_FORM);
+    setError("");
+    setWarning("");
+  };
+  const save2 = async () => {
     var _a2;
     setError("");
+    setWarning("");
     const body = {
       name: form.name.trim(),
       program: form.program.trim(),
@@ -33993,13 +34042,20 @@ function Providers(_) {
       return;
     }
     try {
-      await api("/api/providers", { json: body });
-      toast("Added provider " + body.name);
-      setForm({ name: "", program: "", binary: "", args: "", resume: "", skip: "" });
+      const res = await (editing ? api("/api/providers/" + encodeURIComponent(editing), {
+        method: "PUT",
+        json: body
+      }) : api("/api/providers", { json: body }));
+      toast((editing ? "Saved provider " : "Added provider ") + body.name);
+      setWarning((res == null ? void 0 : res.warning) || "");
+      if (!(res == null ? void 0 : res.warning)) {
+        setEditing(null);
+        setForm(EMPTY_FORM);
+      }
       load2();
       (_a2 = window.reloadProviderPicker) == null ? void 0 : _a2.call(window);
     } catch (err) {
-      setError(err.message || "add failed");
+      setError(err.message || (editing ? "save failed" : "add failed"));
     }
   };
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -34029,20 +34085,28 @@ function Providers(_) {
           /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: p.install_hint }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", onClick: () => copyInstall(p.install_hint), children: "Copy" })
         ] }),
-        (mgr == null ? void 0 : mgr.editable) && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "prov-conn-actions", children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", onClick: () => del(p.name), children: "Delete" }) })
+        !p.installed && p.launch_hint && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "prov-launch-hint", children: p.launch_hint }),
+        (mgr == null ? void 0 : mgr.editable) && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "prov-conn-actions", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", onClick: () => edit(mgr), children: "Edit" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", onClick: () => del(p.name), children: "Delete" })
+        ] })
       ] }, p.name);
     }) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("details", { id: "prov-add", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("summary", { children: "+ Add a custom provider" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("details", { id: "prov-add", open: !!editing, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("summary", { children: editing ? "Edit " + editing : "+ Add a custom provider" }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "prov-form", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "text", id: "prov-new-name", placeholder: "name (e.g. mycli)", autoComplete: "off", value: form.name, onChange: set("name") }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "text", id: "prov-new-name", placeholder: "name (e.g. mycli)", autoComplete: "off", value: form.name, onChange: set("name"), disabled: !!editing }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "text", id: "prov-new-program", placeholder: "program (default: name)", autoComplete: "off", value: form.program, onChange: set("program") }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "text", id: "prov-new-binary", placeholder: "binary path (optional)", autoComplete: "off", value: form.binary, onChange: set("binary") }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "text", id: "prov-new-binary", placeholder: "binary path (optional, e.g. /home/me/bin/mycli)", autoComplete: "off", value: form.binary, onChange: set("binary") }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "text", id: "prov-new-args", placeholder: "saved args (e.g. --dangerously-skip-permissions)", autoComplete: "off", value: form.args, onChange: set("args") }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "text", id: "prov-new-resume", placeholder: "resume flag (e.g. --continue)", autoComplete: "off", value: form.resume, onChange: set("resume") }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "text", id: "prov-new-skip", placeholder: "skip-perms flag (e.g. --yolo)", autoComplete: "off", value: form.skip, onChange: set("skip") }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "prov-add-btn", onClick: add, children: "Add provider" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { id: "prov-error", className: "error", children: error })
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "prov-form-actions", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "prov-add-btn", onClick: save2, children: editing ? "Save changes" : "Add provider" }),
+          editing && /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "prov-cancel-btn", onClick: cancelEdit, children: "Cancel" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { id: "prov-error", className: "error", children: error }),
+        warning && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { id: "prov-warning", className: "prov-launch-hint", children: warning })
       ] })
     ] })
   ] });
@@ -34981,6 +35045,7 @@ function CommitDialog() {
   const closeDialog = useUi((s) => s.closeDialog);
   const [msg, setMsg] = reactExports.useState("");
   const [error, setError] = reactExports.useState("");
+  const [writing, setWriting] = reactExports.useState(false);
   const [depth, setDepth] = reactExports.useState("commit");
   const msgRef = reactExports.useRef(null);
   reactExports.useEffect(() => {
@@ -34989,6 +35054,7 @@ function CommitDialog() {
     setError("");
     setMsg(target && lastCommitMsg.get(target) || "");
     setDepth("commit");
+    setWriting(false);
     (_a2 = msgRef.current) == null ? void 0 : _a2.focus();
   }, [open, target]);
   reactExports.useEffect(() => {
@@ -35026,6 +35092,30 @@ function CommitDialog() {
     pr: "Commit & open PR",
     merge: "Commit & merge"
   }[depth] || "Commit";
+  async function writeMessage() {
+    const title = target;
+    if (!title || writing) return;
+    setWriting(true);
+    setError("");
+    try {
+      const r = await instApi(title, "/commit-message/suggest", {
+        json: { hint: msg.trim().slice(0, 500) }
+      });
+      const written = ((r == null ? void 0 : r.message) || "").trim();
+      if (!written) throw new Error("no message came back");
+      setMsg(written);
+      lastCommitMsg.set(title, written);
+      const el = msgRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(written.length, written.length);
+      }
+    } catch (err) {
+      setError(errMsg(err));
+    } finally {
+      setWriting(false);
+    }
+  }
   async function submitCommit() {
     const title = target;
     const m = msg.trim();
@@ -35065,10 +35155,26 @@ function CommitDialog() {
           },
           children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { children: "Commit" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { children: [
-              "Message",
-              " ",
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "muted", children: "(multiline — first line is the summary; Ctrl+Enter to commit)" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "commit-msg-field", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "cm-head", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { htmlFor: "commit-msg", children: [
+                  "Message",
+                  " ",
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "muted", children: "(multiline — first line is the summary; Ctrl+Enter to commit)" })
+                ] }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "button",
+                  {
+                    type: "button",
+                    id: "commit-write",
+                    onClick: () => void writeMessage(),
+                    disabled: writing,
+                    "aria-busy": writing || void 0,
+                    title: "Read the diff and write the commit message, using this session's coding CLI. Replaces what's in the box.",
+                    children: writing ? "Writing…" : "✨ Write it"
+                  }
+                )
+              ] }),
               /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "textarea",
                 {
@@ -36500,10 +36606,12 @@ function WelcomeTour() {
   );
 }
 function App() {
+  var _a2;
   const { data: config } = useConfig();
   const { data: instances2 } = useInstances();
   const ui = useUi();
   useDoctorAutoShow();
+  useIntakeWarm(!!((_a2 = config == null ? void 0 : config.caps) == null ? void 0 : _a2.ticketing));
   const tourDecided = reactExports.useRef(false);
   reactExports.useEffect(() => {
     if (tourDecided.current) return;
@@ -36575,8 +36683,8 @@ function App() {
       togglePalette: () => toggleDialog("palette"),
       toggleShortcuts: () => toggleDialog("shortcuts"),
       focusFilter: () => {
-        var _a2;
-        return (_a2 = document.getElementById("session-filter")) == null ? void 0 : _a2.focus();
+        var _a3;
+        return (_a3 = document.getElementById("session-filter")) == null ? void 0 : _a3.focus();
       },
       cycleSession: (dir) => {
         const titles = stableTitles();

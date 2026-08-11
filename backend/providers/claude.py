@@ -18,7 +18,9 @@ from .base import (
     BaseProvider,
     LauncherSpec,
     LaunchContext,
+    ONESHOT_PROMPT_TOKEN,
     TrustSpec,
+    oneshot_command,
     seed_prompt_expr,
 )
 from ._timeparse import ts_epoch
@@ -98,6 +100,36 @@ class ClaudeProvider(BaseProvider):
         return (
             "claude --strict-mcp-config --mcp-config '{\"mcpServers\":{}}' "
             "--dangerously-skip-permissions"
+        )
+
+    # --- headless one-shot ------------------------------------------------ #
+    def oneshot_argv(self, prompt: str) -> Optional[list[str]]:
+        """``claude -p <prompt>`` — "Print response and exit (useful for pipes)".
+
+        No ``--dangerously-skip-permissions``: in print mode there is nobody to
+        answer a permission prompt, so tool calls are refused rather than
+        silently approved. That is exactly the property a question about the
+        user's worktree should have.
+
+        MCP servers are stripped (the same empty ``--mcp-config`` +
+        ``--strict-mcp-config`` pair :meth:`minimal_launch_command` uses). Not an
+        optimisation — CAUGHT IN THE WILD: a one-shot run in a worktree started
+        the user's configured MCP servers, one of which wrote its logfile into the
+        working directory, and the commit that followed staged everything. A
+        question about the tree must not add a file to it.
+        """
+        from .config import resolve_provider_binary
+
+        return oneshot_command(
+            resolve_provider_binary(self.name),
+            (
+                "--strict-mcp-config",
+                "--mcp-config",
+                '{"mcpServers":{}}',
+                "-p",
+                ONESHOT_PROMPT_TOKEN,
+            ),
+            prompt,
         )
 
     # --- usage-window knowledge (roadmap E) ------------------------------- #
@@ -952,8 +984,16 @@ def _session_transcript(workdir: str, session_name: str = "") -> Optional[tuple]
     (thread_markers), and Claude names the transcript after that id, so the
     marker points straight at the right file.
 
-    Falls back to :func:`_newest_transcript` when there is no marker (hookless
-    launches, other providers' windows) or the file it names is gone."""
+    A NAMED window with no usable marker gets None, never the newest file: a
+    fresh launch clears the marker and the hooks only write one once the human
+    submits a prompt, so "newest .jsonl in this dir" there is always someone
+    else's conversation — a sibling window's, or this window's own abandoned
+    previous run. Guessing pinned a prompt nobody had typed into the session on
+    top of an empty splash screen. No marker means the window's conversation is
+    unknown, and unknown must read as empty.
+
+    Only a caller that names no window (no window identity to respect) falls
+    back to :func:`_newest_transcript`."""
     import os
 
     if session_name:
@@ -971,6 +1011,7 @@ def _session_transcript(workdir: str, session_name: str = "") -> Optional[tuple]
                 except OSError:
                     continue
                 return (st.st_mtime, st.st_size, p)
+        return None
     return _newest_transcript(workdir)
 
 

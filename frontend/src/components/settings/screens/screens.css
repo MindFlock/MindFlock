@@ -602,6 +602,31 @@
   display: flex;
   gap: 8px;
 }
+
+/* Why a custom provider's CLI can't be found (usually a shell alias, which the
+   non-interactive launch shell cannot see) — shown on the row and under the
+   form after a save that won't be able to start. */
+.prov-launch-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--yellow, #d6a53c);
+}
+
+/* Save + Cancel sit side by side; the form's other children are full-width. */
+.prov-form-actions {
+  display: flex;
+  gap: 8px;
+}
+.prov-form-actions button {
+  flex: 1;
+}
+.prov-form-actions #prov-cancel-btn {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
 .prov-conn-actions .prov-login-btn {
   background: var(--accent);
   border: none;

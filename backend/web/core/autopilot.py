@@ -183,6 +183,7 @@ def autopilot_path() -> str:
 #   {"<title>": {"depth": "pr", "state": "running"|"halted"|"done",
 #                "step": "agent", "reason": "", "source": "session"|"tix"|"pr"|"iss",
 #                "item": "sc-123", "message": "commit subject",
+#                "message_auto": false,
 #                "base": "", "branch": "", "retryable": ["gitnexus-index"],
 #                "attempts": {"<hook>": 1}, "commits": 0, "skipped": [],
 #                "idle_since": null, "step_since": 0.0, "acted_at": 0.0,
@@ -228,6 +229,12 @@ def _blank() -> dict:
         "source": "session",
         "item": "",
         "message": "",
+        # Whether ``message`` is a PLACEHOLDER this server invented (the "Work on
+        # <session>" default), rather than something a human or an intake item
+        # named. Only a placeholder may be replaced at commit time by a
+        # model-written message — an intake ticket's own title is the best subject
+        # available and must survive.
+        "message_auto": False,
         # The PR this run opened, so the UI can bring it up exactly once — the same
         # courtesy the manual "Make PR" button does.
         "url": "",
@@ -292,6 +299,7 @@ def _normalize(entry) -> dict:
     e["source"] = src if src in ("session", "tix", "pr", "iss") else "session"
     e["item"] = str(entry.get("item", "") or "")
     e["message"] = str(entry.get("message", "") or "")
+    e["message_auto"] = bool(entry.get("message_auto", False))
     e["url"] = str(entry.get("url", "") or "")
     e["base"] = str(entry.get("base", "") or "")
     e["branch"] = str(entry.get("branch", "") or "")
@@ -706,6 +714,7 @@ def arm(
     source: str = "session",
     item: str = "",
     message: str = "",
+    message_auto: bool = False,
     base: str = "",
     branch: str = "",
     retryable: Optional[List[str]] = None,
@@ -737,6 +746,7 @@ def arm(
             ),
             "item": str(item or ""),
             "message": str(message or ""),
+            "message_auto": bool(message_auto),
             "base": str(base or ""),
             "branch": str(branch or ""),
             "retryable": [

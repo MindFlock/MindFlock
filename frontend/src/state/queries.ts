@@ -3,6 +3,7 @@
  * something polls, so the cadence is a feature, not laziness). Each poll also
  * feeds window.mindflock.__setSessions so addons see the same snapshot. */
 
+import { useEffect } from "react";
 import { QueryClient, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import type { Config, DevicesResponse, Instance, TrafficResponse, UsageResponse } from "../api/types";
@@ -206,10 +207,10 @@ export function usePanelQuery<T extends { stale?: boolean }>(key: PanelKey) {
   return { ...q, refresh };
 }
 
-/** Warm all three panels when the Intake dialog opens, so switching to a tab
- * finds it loaded — and so the tab strip's counts are filled in before you get
- * there, which is the point of putting them on the strip. A no-op for panels
- * whose data is still fresh. */
+/** Warm all three panels, so opening Intake — or switching to a tab inside it —
+ * finds the list already there, and so the tab strip's counts are filled in
+ * before you get there, which is the point of putting them on the strip. A
+ * no-op for panels whose data is still fresh. */
 export function prefetchIntakePanels() {
   for (const key of Object.keys(PANELS) as PanelKey[]) {
     void queryClient.prefetchQuery({
@@ -220,4 +221,43 @@ export function prefetchIntakePanels() {
       retry: false,
     });
   }
+}
+
+/** How often to re-warm the panels in the background.
+ *
+ * Under the server's 300s stale window, so there is always a cached payload for
+ * it to hand back instantly while it revalidates — past that window the server
+ * awaits a real upstream sweep, which is the slow open this loop exists to
+ * prevent. Also well under the 1h client gcTime, so the cache never empties out
+ * from under a page that has been sitting open. */
+const PANEL_WARM_MS = 4 * 60_000;
+
+/** Keep the Intake panels warm from app startup, not from dialog open.
+ *
+ * Prefetching when the dialog opens is already too late: the fan-out starts on
+ * the same tick the panel mounts, so the first thing you see is a spinner over
+ * an empty list. Warming from the shell means the rows are in the cache before
+ * there is anything to render them into, and `placeholderData` in
+ * `usePanelQuery` puts the last known list on screen immediately on every open
+ * after that.
+ *
+ * Skipped while the page is hidden (a background tab must not spend the ticket
+ * provider's rate limit on a list nobody is about to look at), and re-warmed on
+ * the way back so returning to the window doesn't show minutes-old counts.
+ * `enabled` is what keeps this off entirely for a user with no ticketing source
+ * connected — every panel 502s for them, forever, on a four-minute timer. */
+export function useIntakeWarm(enabled: boolean) {
+  useEffect(() => {
+    if (!enabled) return;
+    const warm = () => {
+      if (!document.hidden) prefetchIntakePanels();
+    };
+    warm();
+    const timer = window.setInterval(warm, PANEL_WARM_MS);
+    document.addEventListener("visibilitychange", warm);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", warm);
+    };
+  }, [enabled]);
 }
