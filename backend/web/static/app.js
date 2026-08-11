@@ -29693,7 +29693,8 @@ function NewSessionDialog() {
   const [inPlace, setInPlace] = reactExports.useState(true);
   const [initRepo, setInitRepo] = reactExports.useState(false);
   const [error, setError] = reactExports.useState("");
-  const [advancedOpen, setAdvancedOpen] = reactExports.useState(false);
+  const [advancedOpen, setAdvancedOpen] = reactExports.useState(true);
+  const [launchOpen, setLaunchOpen] = reactExports.useState(true);
   const [templates, setTemplates] = reactExports.useState([]);
   const [activeTemplate, setActiveTemplate] = reactExports.useState("");
   const [provisioningAvailable, setProvisioningAvailable] = reactExports.useState(false);
@@ -30253,9 +30254,12 @@ function NewSessionDialog() {
                   id: "new-launch-advanced",
                   className: "nf-advanced",
                   ref: launchRef,
+                  open: launchOpen,
                   onToggle: (e) => {
                     var _a2;
-                    if (e.target.open)
+                    const open2 = e.target.open;
+                    setLaunchOpen(open2);
+                    if (open2)
                       (_a2 = launchRef.current) == null ? void 0 : _a2.scrollIntoView({ behavior: "smooth", block: "end" });
                   },
                   children: [

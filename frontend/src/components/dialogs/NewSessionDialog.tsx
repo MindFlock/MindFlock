@@ -207,7 +207,12 @@ export function NewSessionDialog() {
   const [inPlace, setInPlace] = useState(true);
   const [initRepo, setInitRepo] = useState(false);
   const [error, setError] = useState("");
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  // Both folds start OPEN: the card is tall enough to hold them, and hiding
+  // the git/workspace choices behind a click made people launch with the
+  // wrong strategy rather than discover it. Closing one is still remembered
+  // for the life of the dialog.
+  const [advancedOpen, setAdvancedOpen] = useState(true);
+  const [launchOpen, setLaunchOpen] = useState(true);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [activeTemplate, setActiveTemplate] = useState("");
   const [provisioningAvailable, setProvisioningAvailable] = useState(false);
@@ -859,11 +864,16 @@ export function NewSessionDialog() {
             id="new-launch-advanced"
             className="nf-advanced"
             ref={launchRef}
+            open={launchOpen}
             onToggle={(e) => {
+              const open = (e.target as HTMLDetailsElement).open;
+              setLaunchOpen(open);
               // The fold is the last thing in the scroll region, so its revealed
               // fields open below the fold line — scroll them into view so it's
-              // obvious the click did something and where to look.
-              if ((e.target as HTMLDetailsElement).open)
+              // obvious the click did something and where to look. Only on a
+              // real click: open-by-default fires no toggle, and scrolling the
+              // body on arrival would bury the Name field.
+              if (open)
                 launchRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
             }}
           >
