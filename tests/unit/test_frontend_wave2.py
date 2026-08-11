@@ -140,9 +140,13 @@ def test_app_js_wave3_wiring():
     js = client.get("/app.js").text
     # F3: toast published on the public extension API
     assert ".toast = toast" in js
-    # F4: merged-PR detection keys off leaving the "pr" stage; the dead
-    # new==="merged" listener branch is gone (the server never emits it).
-    assert 'env.old === "pr"' in js
+    # F4: merged-PR detection keys off the PR's OWN state, via
+    # session.pr_state_changed. It must NOT key off the stage leaving "pr" —
+    # the stage ladder does that on every edit under an open PR, which toasted
+    # "merged or closed" (then "PR open" again) for a PR that never moved.
+    assert 'ev.subscribe("session.pr_state_changed"' in js
+    assert 'env.old === "OPEN"' in js
+    assert 'env.old === "pr"' not in js
     assert 'env.new === "merged"' not in js
     # F5 retired: neither the managed-repo label nor the foreign-repo ⇄ chip remain.
     assert "repo_root" not in js

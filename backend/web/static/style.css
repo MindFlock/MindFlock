@@ -4906,10 +4906,14 @@ p.set-hint {
 
 /* Pinned prompt: first line of the session's latest user prompt. Bleeds to
    the pane edges (negative margins swallow .pane-term's padding) so it reads
-   as a header, not content. */
+   as a header, not content.
+
+   The BAR is always exactly one line tall — open or closed. That is load
+   bearing: it is the only part of the pin that is in flow, so expanding a
+   prompt cannot change the terminal's height (see .prompt-pin-body). */
 .prompt-pin {
   flex: none;
-  position: relative; /* anchors .ghost-row-mask */
+  position: relative; /* anchors .ghost-row-mask and .prompt-pin-body */
   display: flex;
   align-items: baseline;
   gap: 6px;
@@ -4961,19 +4965,66 @@ p.set-hint {
   text-overflow: ellipsis;
 }
 
-/* The whole prompt, in-flow (the terminal refits beneath it). Capped at a
-   few lines with its own scrollbar so a long prompt can't eat the pane. */
+/* Open: the panel covers this line, so hide it — but with visibility, NOT
+   display. A hidden element still occupies its line, which is what keeps the
+   bar one line tall and the terminal from moving. Removing it from flow would
+   collapse the bar to the arrow's height and reintroduce exactly the shift this
+   whole arrangement exists to avoid. (Hiding it also keeps the covered copy out
+   of drag-selection, which an opaque panel alone would not.) */
+.prompt-pin.pin-open .prompt-pin-text {
+  visibility: hidden;
+}
+
+/* Open, the pin becomes its own stacking context so the panel and the arrow
+   ride together at ONE depth against the pane's other layers: over the
+   terminal, the ghost-row mask and the boot loader (3) — an explicitly opened
+   prompt should be readable — but under file-drop (5) and the budget lock (6),
+   which are modal and must always win. Inside it the z-indexes below are local,
+   so they can be ordered freely without touching that ranking. */
+.prompt-pin.pin-open {
+  z-index: 4;
+}
+
+/* The whole prompt, as an OVERLAY over the bar — deliberately NOT in flow. In
+   flow it grew the pin, which shrank .term-container, which refit xterm and
+   resized the real tmux pane: reading a prompt reflowed the output you were
+   reading it against, and cost a PTY resize on every toggle. Out of flow, the
+   bar stays one line and the terminal never moves.
+
+   top: 0 (not 100%) so the panel replaces the bar rather than hanging beneath
+   it — its first line lands exactly where the collapsed summary was, with no
+   blank row left behind. Capped with its own scrollbar so a long prompt can't
+   blanket the pane. */
 .prompt-pin .prompt-pin-body {
-  flex: 1 1 auto;
-  min-width: 0;
-  max-height: 110px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 4; /* local (see .prompt-pin.pin-open): over the ghost-row mask */
+  max-height: 140px;
   overflow-y: auto;
+  padding: 4px 10px 8px;
+  /* First line only, clearing the arrow the panel is drawn over — so the text
+     starts on the same column it occupied collapsed, and later lines use the
+     full width. Tracks the arrow's box (2px padding + glyph + the bar's 6px
+     flex gap), which is fixed at this font-size. */
+  text-indent: 17px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
   color: var(--text);
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: text;
   cursor: text;
+}
+
+/* ...and the arrow stays above the panel it is drawn over, so the prompt can
+   still be collapsed from exactly where it was opened. */
+.prompt-pin.pin-open .prompt-pin-mark {
+  position: relative;
+  z-index: 5; /* local — see .prompt-pin.pin-open */
 }
 
 .pane-term .xterm {

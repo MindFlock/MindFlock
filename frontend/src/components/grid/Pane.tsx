@@ -188,14 +188,17 @@ export function Pane({
       ? lookup.text
       : ghost;
 
-  // The pinned prompt is in-flow, so any change to its height — appearing,
-  // collapsing, or the prompt text itself changing — resizes the terminal
-  // without touching .pane-body, and the ResizeObserver above never fires.
+  // Only the pin's APPEARING or disappearing changes the terminal's height, and
+  // it does so without touching .pane-body, so the ResizeObserver above never
+  // fires for it. Expanding is not in this list on purpose: the body is an
+  // overlay, so opening a prompt costs no refit and no tmux resize (which the
+  // backend's activity classifier would have to rebaseline anyway). The bar's
+  // own text is ellipsized to one line, so changing it can't change the height
+  // either.
   const hasPin = !!pinLine;
-  const pinLen = (pinBody || "").length;
   useEffect(() => {
     fitSoon();
-  }, [hasPin, pinOpen, pinLen, fitSoon]);
+  }, [hasPin, fitSoon]);
 
   // Ctrl+↑ / Ctrl+↓ on the focused pane opens the full-history view (at the
   // top / bottom respectively). Once it's open its own handler owns these
@@ -557,9 +560,10 @@ export function Pane({
           {/* Pinned prompt: what this session was last asked to do, always
               visible while the output scrolls beneath it (the behavior the
               mobile view's short screen gives for free). One line by default;
-              clicking the arrow — and only the arrow, no hover — expands the
-              whole prompt in-flow, capped at a few lines with its own
-              scrollbar. Rendered before the terminal container adopt()
+              clicking the arrow — and only the arrow, no hover — drops the
+              whole prompt OVER the terminal, capped at a few lines with its own
+              scrollbar. Over, not in flow: expanding must not shove the output
+              you are reading. Rendered before the terminal container adopt()
               appends, so it sits above the terminal in the flex column. */}
           {pinLine ? (
             <div className={"prompt-pin" + (pinOpen ? " pin-open" : "")}>
@@ -575,11 +579,14 @@ export function Pane({
               >
                 ❯
               </button>
-              {pinOpen ? (
-                <div className="prompt-pin-body">{pinBody}</div>
-              ) : (
-                <span className="prompt-pin-text">{pinLine}</span>
-              )}
+              {/* The one-line summary is always RENDERED, even when open — it
+                  is what holds the bar at exactly one line, so expanding never
+                  resizes the terminal. Open, the body is drawn OVER the bar and
+                  Pane.css hides this copy with visibility while it keeps
+                  occupying that line — so there is no duplicated first line and
+                  no blank row, and the terminal still never moves. */}
+              <span className="prompt-pin-text">{pinLine}</span>
+              {pinOpen ? <div className="prompt-pin-body">{pinBody}</div> : null}
               {/* While the TUI's own pinned row is being mirrored above, hide
                   the duplicate: a strip of terminal background over the top
                   row (desktop only by construction — mobile has no bar). */}
