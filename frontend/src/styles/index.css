@@ -37,6 +37,7 @@
 @import "../components/grid/Pane.css" layer(components); /* 140 */
 @import "../components/grid/DiffTab.css" layer(components); /* 150 */
 @import "../components/grid/paneOverlays.css" layer(components); /* 160 */
+@import "../components/grid/HistoryOverlay.css" layer(components); /* 160 */
 @import "../components/dialogs/NewSessionDialog.css" layer(components); /* 170 */
 @import "../components/dialogs/smallDialogs.css" layer(components); /* 180 */
 @import "../components/ConnBanner.css" layer(components); /* 200 */
