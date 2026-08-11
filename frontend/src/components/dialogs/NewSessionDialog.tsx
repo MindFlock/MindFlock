@@ -3,7 +3,14 @@
  * templates strip, prompt presets, provisioning fold, and per-session launch
  * flags live behind progressive disclosure. */
 
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import type { Config, Instance } from "../../api/types";
 import { api } from "../../api/client";
 import { refreshInstances, refreshConfig, queryClient } from "../../state/queries";
@@ -64,6 +71,47 @@ const SUGGEST_SOURCES: Array<{ key: string; label: string; hint: string }> = [
  * is. The endpoint answers 200-with-exists:false for half-typed paths, so a
  * per-keystroke call would be harmless but pointless traffic. */
 const CHECK_DEBOUNCE_MS = 400;
+
+/** A no-wrap chip row that hides whatever doesn't fit, whole chips only.
+ *
+ * The row is one line by design (see NewSessionDialog.css), and `overflow:
+ * hidden` alone cuts the last pill down the middle — a chopped-off folder name
+ * reads as a rendering fault, not as "there are more". Only measurement can
+ * tell a chip that fits from one that doesn't, so after layout each child is
+ * checked against the container's right edge and the ones past it are hidden
+ * outright. Hiding a later child never moves an earlier one in a no-wrap row,
+ * so this settles in a single pass; a ResizeObserver redoes it when the dialog
+ * is resized.
+ */
+function FitRow({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const fit = () => {
+      const kids = Array.from(el.children) as HTMLElement[];
+      // Unhide first: the row may have grown, and a chip hidden at the old
+      // width has no geometry to measure at the new one.
+      for (const k of kids) k.classList.remove("nt-clipped");
+      const limit = el.clientWidth;
+      for (const k of kids) {
+        // Half a pixel of slack: sub-pixel layout would otherwise drop a chip
+        // that lands exactly on the edge.
+        if (k.offsetLeft + k.offsetWidth > limit + 0.5) k.classList.add("nt-clipped");
+      }
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+  return (
+    <div className="nt-list" ref={ref}>
+      {children}
+    </div>
+  );
+}
+
 
 /** Last path segment, for naming the folder the confirm row would use. Keeps
  * both separators so a Windows path doesn't come back as the whole string. */
@@ -249,7 +297,11 @@ export function NewSessionDialog() {
     setProvision(false);
     setInPlace(true);
     setInitRepo(false);
-    setAdvancedOpen(false);
+    // Matches the initial state, and has to be set here too: this reset runs
+    // on EVERY open, so a useState default alone left the fold shut from the
+    // second open onward.
+    setAdvancedOpen(true);
+    setLaunchOpen(false);
     folderDo({ t: "reopen" });
     setActiveTemplate("");
     setPresetValue("");
@@ -683,7 +735,7 @@ export function NewSessionDialog() {
                   <span className="nf-suggest-label" title={g.hint}>
                     {g.label}
                   </span>
-                  <div className="nt-list">
+                  <FitRow>
                     {g.items.map((s) => {
                       const active = folderPath === s.path;
                       return (
@@ -702,7 +754,7 @@ export function NewSessionDialog() {
                         </button>
                       );
                     })}
-                  </div>
+                  </FitRow>
                 </div>
               ))}
             </div>

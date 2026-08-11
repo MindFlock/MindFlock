@@ -29631,6 +29631,26 @@ const SUGGEST_SOURCES = [
   { key: "nearby", label: "Nearby", hint: "repos and folders sitting under your home directory" }
 ];
 const CHECK_DEBOUNCE_MS = 400;
+function FitRow({ children }) {
+  const ref = reactExports.useRef(null);
+  reactExports.useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const fit = () => {
+      const kids = Array.from(el.children);
+      for (const k of kids) k.classList.remove("nt-clipped");
+      const limit = el.clientWidth;
+      for (const k of kids) {
+        if (k.offsetLeft + k.offsetWidth > limit + 0.5) k.classList.add("nt-clipped");
+      }
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "nt-list", ref, children });
+}
 function leafName(path) {
   return path.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || path;
 }
@@ -29719,7 +29739,8 @@ function NewSessionDialog() {
     setProvision(false);
     setInPlace(true);
     setInitRepo(false);
-    setAdvancedOpen(false);
+    setAdvancedOpen(true);
+    setLaunchOpen(false);
     folderDo({ t: "reopen" });
     setActiveTemplate("");
     setPresetValue("");
@@ -30071,7 +30092,7 @@ function NewSessionDialog() {
                 ] }),
                 suggestRows.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "nf-suggest-row", children: [
                   /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "nf-suggest-label", title: g.hint, children: g.label }),
-                  /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "nt-list", children: g.items.map((s) => {
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(FitRow, { children: g.items.map((s) => {
                     const active = folderPath === s.path;
                     return /* @__PURE__ */ jsxRuntimeExports.jsx(
                       "button",

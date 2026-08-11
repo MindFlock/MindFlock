@@ -6270,15 +6270,23 @@ p.set-hint {
    or four lines — pushing the fields below it off the card and making the
    whole dialog taller than the form needs.
 
-   What doesn't fit is simply clipped: no wrap, and no scrollbar either. A
-   horizontal scrollbar under a row of three chips is louder than the chips,
-   and these are a shortcut, not an index — the list arrives ranked, so the
-   folder you want is at the left, and Browse… is right there for the rest. */
+   What doesn't fit is dropped: no wrap, and no scrollbar either. A horizontal
+   scrollbar under a row of three chips is louder than the chips, and these are
+   a shortcut, not an index — the list arrives ranked, so the folder you want is
+   at the left, and Browse… is right there for the rest. Whole chips only: the
+   overflow below is just the backstop for the frame before FitRow (see the
+   TSX) has measured, since clipping a pill down the middle looks like a bug. */
 .nf-suggest .nt-list {
   flex: 1 1 auto;
   min-width: 0;
   flex-wrap: nowrap;
   overflow: hidden;
+}
+
+/* Measured out of the row by FitRow — display:none, not visibility, so the
+   chip gives its space back to the ones that did fit. */
+.nf-suggest .nt-chip.nt-clipped {
+  display: none;
 }
 
 /* Long project names would otherwise stretch one chip across the whole row;
