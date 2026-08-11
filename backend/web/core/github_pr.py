@@ -127,12 +127,17 @@ def _github_config():
     )
 
 
-async def _token() -> str:
+async def api_token() -> str:
     """A usable GitHub API token, or ``""`` — never raises.
 
     ``resolve_token`` raises a long "no token available" message when every
     layer comes up empty; here that is a routine outcome (it just means the
     browser fallback is next), so it is folded into an empty string.
+
+    Public because it is the web layer's one answer to "what token do we call
+    GitHub with": config.toml → Settings → env → ``gh auth token``. Anything
+    else in ``backend/web`` that talks to api.github.com calls this rather than
+    growing its own copy of the chain.
     """
     from backend.ticket_ingestion.github_auth import resolve_token
 
@@ -310,7 +315,7 @@ async def create_pr(wt: str, base: str, head: str) -> PRResult:
     ref = repo_ref(wt)
     if ref is None:
         return PRResult(unavailable=True)
-    token = await _token()
+    token = await api_token()
     if not token:
         return PRResult(unavailable=True)
 
@@ -346,7 +351,7 @@ async def merge_pr(wt: str, number: int) -> PRResult:
     ref = repo_ref(wt)
     if ref is None:
         return PRResult(unavailable=True)
-    token = await _token()
+    token = await api_token()
     if not token:
         return PRResult(unavailable=True)
 
@@ -373,7 +378,7 @@ async def find_pr(wt: str, branch: str) -> Optional[dict]:
     ref = repo_ref(wt)
     if ref is None or not branch:
         return None
-    token = await _token()
+    token = await api_token()
     if not token:
         return None
 
@@ -417,7 +422,7 @@ async def pr_checks(wt: str, branch: str) -> str:
     ref = repo_ref(wt)
     if ref is None or not branch:
         return "unknown"
-    token = await _token()
+    token = await api_token()
     if not token:
         return "unknown"
 
@@ -496,7 +501,7 @@ async def pr_merge_state(wt: str, branch: str) -> Optional[dict]:
     ref = repo_ref(wt)
     if ref is None or not branch:
         return None
-    token = await _token()
+    token = await api_token()
     if not token:
         return None
 
