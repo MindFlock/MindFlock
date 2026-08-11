@@ -40,19 +40,25 @@ _CACHE_TTL_S = 300.0
 
 
 async def _token() -> str:
-    """A GitHub token if one is configured, else ``""`` — never raises.
+    """A GitHub token if one is reachable, else ``""`` — never raises.
 
-    Best-effort and read-only: unlike the PR/issue integrations this addon
-    never needs write scope, so a missing token just means unauthenticated
-    GitHub calls (60/hr, plenty for a screen nobody polls in a loop).
+    The same chain the PR buttons use (config.toml → Settings → ``$GH_TOKEN``
+    → ``gh auth token``), because the ``gh auth token`` rung is where the token
+    usually IS: `gh auth login` is a normal thing to have done and pasting a
+    PAT into Settings is not. Resolving only the static layers left this screen
+    calling GitHub anonymously on a machine that was perfectly well
+    authenticated.
+
+    Anonymous is still a supported state — read-only public data needs no
+    scope, and stars/forks/downloads all answer without a token. Only the star
+    HISTORY does not: ``GET /repos/{repo}/stargazers`` is 401 "Requires
+    authentication" even for a public repo, so without this rung that one
+    section was permanently broken.
     """
     try:
-        from backend.config.secrets import resolve_secret_sync
+        from backend.web.core.github_pr import api_token
 
-        return resolve_secret_sync(
-            settings_getter=lambda s: s.github.token,
-            env_vars=("GH_TOKEN", "GITHUB_TOKEN"),
-        ).strip()
+        return (await api_token()).strip()
     except Exception:  # noqa: BLE001 — an unresolvable token is a normal state
         return ""
 

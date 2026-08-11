@@ -768,7 +768,7 @@ def _stub_rest(
         calls.append((method, path, params, body))
         return queued.pop(0) if queued else (0, "no stubbed response")
 
-    monkeypatch.setattr(github_pr, "_token", _token)
+    monkeypatch.setattr(github_pr, "api_token", _token)
     monkeypatch.setattr(github_pr, "origin_url", lambda wt: origin)
     monkeypatch.setattr(
         github_pr, "_commit_messages", lambda wt, base, head: list(commits)
