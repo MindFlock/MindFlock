@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-08-10
+
+### Added
+
+- **The prompt you last typed is pinned above every pane.** Glancing at a grid of
+  windows told you what each agent was *saying*, never what it had been *asked*;
+  the one line that explains a window is now the one line above it, with an arrow
+  that opens the whole prompt. Scroll the agent back and the bar follows the
+  section you are reading — Claude Code pins its own contextual `❯ …` row up
+  there, and the bar mirrors that instead of the latest turn.
+
+- **A pane's full history is a page you can read.** The agent TUI redraws in
+  place, so tmux keeps no usable scrollback and a drag-selection could never
+  reach past the top of the screen. `Ctrl+↑`/`Ctrl+↓`, the header's history
+  button, or simply dragging past a terminal's edge now opens the whole
+  conversation as ordinary text: scroll it, select across screenfuls, release to
+  copy. A drag that crosses the edge is continued by the page rather than
+  restarted, and it opens parked where you were looking.
+
+- **A maintainer's Site traffic dashboard** (Settings, `--mindflock-dev` shell
+  builds only) — GitHub stars over time, forks, per-release download counts, and
+  `mindflock.ai/go/*` click totals on one screen, each section degrading on its
+  own if an upstream is down.
+
+### Fixed
+
+- **Two windows on one repo no longer read each other's conversation.** Sibling
+  sessions share a transcript directory, and everything derived from it — the
+  pinned prompt, the latest-turn line, the history page — picked whichever
+  conversation had been written to last, so the pair flickered between each
+  other's work. Each window now reads the conversation its own activity hooks
+  recorded for it.
+
 ## [0.1.14] - 2026-08-07
 
 ### Fixed
@@ -1134,7 +1167,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.14...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.15...HEAD
+[0.1.15]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.15
 [0.1.14]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.14
 [0.1.13]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.13
 [0.1.12]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.12
