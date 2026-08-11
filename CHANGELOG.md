@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other's work. Each window now reads the conversation its own activity hooks
   recorded for it.
 
+- **Site traffic finds the GitHub token you already have.** It resolved only a
+  pasted token or `$GH_TOKEN`, never `gh auth token`, so a machine authenticated
+  the ordinary way (`gh auth login`) called GitHub anonymously — and the star
+  history is the one section GitHub refuses to serve anonymously, 401 even for a
+  public repo. It now uses the same resolution chain as the PR buttons.
+
 ## [0.1.14] - 2026-08-07
 
 ### Fixed
