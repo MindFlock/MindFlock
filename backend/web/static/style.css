@@ -6268,17 +6268,17 @@ p.set-hint {
 /* Exactly one row per source, however many folders came back. Recent and
    Nearby routinely return a dozen, and wrapping let a single source eat three
    or four lines — pushing the fields below it off the card and making the
-   whole dialog taller than the form needs. The overflow scrolls sideways
-   instead, so nothing is lost. */
+   whole dialog taller than the form needs.
+
+   What doesn't fit is simply clipped: no wrap, and no scrollbar either. A
+   horizontal scrollbar under a row of three chips is louder than the chips,
+   and these are a shortcut, not an index — the list arrives ranked, so the
+   folder you want is at the left, and Browse… is right there for the rest. */
 .nf-suggest .nt-list {
   flex: 1 1 auto;
   min-width: 0;
   flex-wrap: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
-  /* Room for the thin scrollbar so it can't sit on top of the chips. */
-  padding-bottom: 3px;
+  overflow: hidden;
 }
 
 /* Long project names would otherwise stretch one chip across the whole row;
