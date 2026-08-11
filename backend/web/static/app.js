@@ -22032,16 +22032,19 @@ function attachWheelScroll(host, term, getWs) {
     { capture: true, passive: true }
   );
 }
+const DRAG_EDGE_ZONE = 18;
+function dragEdgeAt(y, r, zone = DRAG_EDGE_ZONE) {
+  if (y < r.top + zone) return "top";
+  if (y > r.bottom - zone) return "bottom";
+  return null;
+}
 function attachDragHistoryGesture(host, fire) {
   const HOLD_MS = 220;
-  const MARGIN = 8;
-  const BOTTOM_ZONE = 18;
   host.addEventListener("mousedown", (down) => {
     if (down.button !== 0) return;
     let timer;
     const onMove = (ev) => {
-      const r = host.getBoundingClientRect();
-      const edge = ev.clientY < r.top - MARGIN ? "top" : ev.clientY > r.bottom - BOTTOM_ZONE ? "bottom" : null;
+      const edge = dragEdgeAt(ev.clientY, host.getBoundingClientRect());
       if (edge && timer === void 0) {
         timer = setTimeout(() => {
           cleanup();
