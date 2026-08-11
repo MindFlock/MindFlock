@@ -230,6 +230,91 @@
   position: relative;
 }
 
+/* The agent pane is a column: the pinned prompt (when present) on top, the
+   terminal filling the rest. FitAddon measures .term-container, so the flex
+   sizing is what makes the terminal shrink to make room for the pin. */
+.pane-term.agent-term {
+  display: flex;
+  flex-direction: column;
+}
+
+.pane-term.agent-term > .term-container {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Pinned prompt: first line of the session's latest user prompt. Bleeds to
+   the pane edges (negative margins swallow .pane-term's padding) so it reads
+   as a header, not content. */
+.prompt-pin {
+  flex: none;
+  position: relative; /* anchors .ghost-row-mask */
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: -6px -8px 6px;
+  padding: 4px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Covers the terminal's own pinned-prompt row (the TUI keeps drawing it in
+   the PTY, shared with mobile) while the bar above mirrors its text: the
+   6px pane gap plus one terminal row of terminal background. */
+.prompt-pin .ghost-row-mask {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 23px;
+  background: var(--term-bg, var(--bg));
+  pointer-events: none;
+  /* Above xterm's own layers (which form their own stacking contexts) but
+     below the boot loader (3) and pane overlays. */
+  z-index: 2;
+}
+
+.prompt-pin .prompt-pin-mark {
+  flex: none;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 11px;
+  line-height: inherit;
+  transition: transform 0.12s ease;
+}
+
+.prompt-pin.pin-open .prompt-pin-mark {
+  transform: rotate(90deg);
+}
+
+.prompt-pin .prompt-pin-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The whole prompt, in-flow (the terminal refits beneath it). Capped at a
+   few lines with its own scrollbar so a long prompt can't eat the pane. */
+.prompt-pin .prompt-pin-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 110px;
+  overflow-y: auto;
+  color: var(--text);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  cursor: text;
+}
+
 .pane-term .xterm {
   height: 100%;
 }

@@ -6,9 +6,10 @@ files):
 * :func:`_session_tokens` — the four token figures + estimated USD cost shown
   per session (cached ~20s, windowed by the session's creation time so copies
   sharing a worktree each get their own conversation's numbers);
-* :func:`_agent_transcript_text` — the newest conversation rendered as plain
-  text for the "Copy all" / history endpoint (the agent TUI runs on tmux's
-  alternate screen, so tmux itself accumulates no scrollback).
+* :func:`_agent_transcript_text` — one window's conversation (selected by its
+  thread marker, not by mtime) rendered as plain text for the "Copy all" /
+  history endpoint (the agent TUI runs on tmux's alternate screen, so tmux
+  itself accumulates no scrollback).
 
 Split out of ``backend.web.server`` (which re-imports these names — the
 routes, tick loops, and tests reference them through the server namespace).
@@ -17,8 +18,6 @@ routes, tick loops, and tests reference them through the server namespace).
 from __future__ import annotations
 
 import json
-import os
-import re
 import time
 from typing import Dict, Optional
 
@@ -151,50 +150,35 @@ def _session_tokens(inst) -> dict:
         return dict(zero)
 
 
-def _agent_transcript_text(workdir: str):
-    """Newest Claude Code conversation for ``workdir``, rendered as plain text.
+def _agent_transcript_text(workdir: str, session_name: str = ""):
+    """One Claude Code conversation in ``workdir``, rendered as plain text.
 
     The agent TUI sits on tmux's ALTERNATE screen, so the tmux pane accumulates
     no history (history_size stays 0) and capture-pane only sees the visible
     frame. The full conversation lives in Claude Code's transcript files:
     ``<config-root>/projects/<cwd-slug>/*.jsonl`` — the same layout the usage
-    scanner in providers/claude.py walks. Returns None when no transcript
-    exists (e.g. non-Claude provider); never raises.
+    scanner in providers/claude.py walks.
+
+    WHICH file is the window's own: several sessions can run in one directory
+    and they all write into that same project dir, so ``session_name`` (the
+    window's tmux session) selects its conversation via the recorded thread
+    marker; only without one does this fall back to the newest by mtime.
+    Returns None when no transcript exists (e.g. non-Claude provider); never
+    raises.
     """
     if not workdir:
         return None
-    encoded = re.sub(r"[^a-zA-Z0-9]", "-", workdir)
-    roots = set()
-    cfg = os.environ.get("CLAUDE_CONFIG_DIR")
-    if cfg:
-        roots.add(cfg)
-    home = os.environ.get("HOME", "")
-    if home and os.path.isdir(home):
-        for n in os.listdir(home):
-            if n.startswith(".claude"):
-                d = os.path.join(home, n)
-                if os.path.isdir(d):
-                    roots.add(d)
-    newest = None  # (mtime, path): one file is ONE conversation; take latest
-    for root in roots:
-        proj = os.path.join(root, "projects", encoded)
-        if not os.path.isdir(proj):
-            continue
-        for fn in os.listdir(proj):
-            if not fn.endswith(".jsonl"):
-                continue
-            p = os.path.join(proj, fn)
-            try:
-                mt = os.path.getmtime(p)
-            except OSError:
-                continue
-            if newest is None or mt > newest[0]:
-                newest = (mt, p)
+    try:
+        from backend.providers.claude import _session_transcript
+
+        newest = _session_transcript(workdir, session_name)
+    except Exception:  # noqa: BLE001 — history is best-effort
+        return None
     if newest is None:
         return None
     parts = []
     try:
-        with open(newest[1], errors="replace") as f:
+        with open(newest[2], errors="replace") as f:
             for line in f:
                 try:
                     obj = json.loads(line)
@@ -214,6 +198,14 @@ def _agent_transcript_text(workdir: str):
                                 texts.append(t)
                 if not texts:
                     continue  # tool_use / tool_result-only turns: skip the noise
+                if obj["type"] == "user":
+                    # Slash-command plumbing the CLI files as "user" messages
+                    # (<command-name>/model</command-name>, its
+                    # <local-command-stdout> echo, caveat banners). They are
+                    # not conversation; rendering them as prompts is noise.
+                    head = "\n".join(texts).lstrip()
+                    if head.startswith("<"):
+                        continue
                 who = "User" if obj["type"] == "user" else "Claude"
                 parts.append("## " + who + "\n" + "\n".join(texts))
     except OSError:

@@ -57,6 +57,59 @@ def _session_last_turn(inst) -> Optional[str]:
         return None
 
 
+def _session_last_prompt(inst) -> Optional[str]:
+    """One-line snippet of the newest USER prompt — what the human last asked
+    this session to do (the panes pin it above the terminal). Same sourcing
+    and caching as :func:`_session_last_turn`. None when unavailable."""
+    try:
+        if not inst.Started():
+            return None
+        wt = inst.GetWorktreePath()
+        if not wt:
+            return None
+        name = tmux.to_mindflock_tmux_name(inst.Title)
+        return providers.resolve(
+            getattr(inst, "Program", "") or ""
+        ).last_prompt_snippet(name, wt)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _session_last_prompt_full(inst) -> Optional[str]:
+    """The newest USER prompt's whole body — the pinned line's expansion.
+    Same sourcing and caching as :func:`_session_last_prompt`."""
+    try:
+        if not inst.Started():
+            return None
+        wt = inst.GetWorktreePath()
+        if not wt:
+            return None
+        name = tmux.to_mindflock_tmux_name(inst.Title)
+        return providers.resolve(getattr(inst, "Program", "") or "").last_prompt_full(
+            name, wt
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _session_find_prompt(inst, prefix: str) -> Optional[str]:
+    """Full body of the newest USER prompt starting with ``prefix`` — lets the
+    desktop prompt bar expand OLDER prompts than the latest (their full
+    bodies aren't in the snapshot). None when unavailable/unmatched."""
+    try:
+        if not inst.Started():
+            return None
+        wt = inst.GetWorktreePath()
+        if not wt:
+            return None
+        name = tmux.to_mindflock_tmux_name(inst.Title)
+        return providers.resolve(getattr(inst, "Program", "") or "").find_prompt_full(
+            name, wt, prefix
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # Layered activity detection (roadmap A1). Per-title rolling record of the
 # agent pane: {hash, changed_epoch, state, streak}. Authoritative signals (exit
 # marker, foreground process, provider hook marker) are consulted first; the

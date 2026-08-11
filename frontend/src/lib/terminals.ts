@@ -29,6 +29,14 @@ export interface TermHandle {
   /** Send raw data straight to the PTY (voice dictation etc.); false when
    * the socket isn't open. */
   send(data: string): boolean;
+  /** Re-assert this viewport's size to tmux even if unchanged on this
+   * connection. Sessions run `window-size latest`, so ANOTHER attached
+   * client (a second browser, a phone, a stale tab) can yank the window to
+   * its own size; the "only send on change" guard in doFit then leaves this
+   * pane drawing at the wrong width forever. Called when this client is the
+   * one being looked at (focus / tab visible), so the window follows the
+   * client you're using instead of the last one to attach. */
+  resync(): void;
   /** Live connection state:
    * "connecting" | "connected" | "disconnected" | "error" | "gone".
    * "connecting" is only the pre-first-open state; reconnects stay
@@ -41,6 +49,31 @@ export interface TermHandle {
    * terminal lifetime, so a pane that remounts (grid drag/reorder) must read
    * this to know the cover should already be hidden. */
   readonly booted: boolean;
+  /** Fired when a selection drag pushes past the top or bottom of the
+   * terminal — the "keep dragging and more content loads" webpage gesture.
+   * The pane answers by opening its full-history overlay (an xterm selection
+   * can't extend into tmux history: tmux repaints scrolled content in place,
+   * under the highlight's screen-cell anchors). Receives whatever the
+   * terminal had selected so far, which edge fired, and a snapshot of the
+   * visible screen (plus where the selection's anchor end sits in it), so
+   * the overlay can continue the same selection seamlessly — positioned so
+   * the content stays where the reader left it — while the button is still
+   * held. */
+  onHistoryDrag?: (selection: string, edge: "top" | "bottom", ctx?: DragScreenCtx) => void;
+  /** Fired (debounced) with the terminal's top visible row after each
+   * repaint. The pane watches it for the agent TUI's own pinned-prompt row
+   * ("❯ …" while scrolled back) so the desktop prompt bar can mirror that
+   * contextual text and mask the duplicate row. */
+  onTopRow?: (text: string) => void;
+}
+
+/** The visible screen at gesture time: its rows (right-trimmed), and the
+ * viewport row/column of the selection end the drag started from. */
+export interface DragScreenCtx {
+  screen: string[];
+  rows: number;
+  row: number;
+  col: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +364,56 @@ function attachWheelScroll(host: HTMLElement, term: Terminal, getWs: () => WebSo
   );
 }
 
+// Drag-past-the-edge → history gesture. A left-button drag that starts in
+// the terminal and holds past its top (or bottom) edge for a beat reads as
+// "keep scrolling, I want more than the screen holds" — the browser gesture
+// for extending a selection beyond the viewport. We can't honor it in xterm
+// (tmux repaints history in place, so the selection anchors point at
+// rewritten cells); instead it fires once per drag and the pane opens the
+// full-history overlay. The hold delay keeps an overshoot while selecting an
+// edge line from triggering it.
+function attachDragHistoryGesture(
+  host: HTMLElement,
+  fire: (edge: "top" | "bottom") => void
+) {
+  const HOLD_MS = 220;
+  const MARGIN = 8; // px past the top edge before the hold timer arms
+  // The bottom zone starts INSIDE the terminal: its last visible row is the
+  // tmux status bar, so a downward selection drag naturally comes to rest ON
+  // that row, never 8px past the container — requiring "outside only" made
+  // the downward gesture nearly impossible to hit in practice.
+  const BOTTOM_ZONE = 18;
+  host.addEventListener("mousedown", (down: MouseEvent) => {
+    if (down.button !== 0) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onMove = (ev: MouseEvent) => {
+      const r = host.getBoundingClientRect();
+      const edge: "top" | "bottom" | null =
+        ev.clientY < r.top - MARGIN
+          ? "top"
+          : ev.clientY > r.bottom - BOTTOM_ZONE
+            ? "bottom"
+            : null;
+      if (edge && timer === undefined) {
+        timer = setTimeout(() => {
+          cleanup();
+          fire(edge);
+        }, HOLD_MS);
+      } else if (!edge && timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    };
+    const cleanup = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      window.removeEventListener("mousemove", onMove, true);
+      window.removeEventListener("mouseup", cleanup, true);
+    };
+    window.addEventListener("mousemove", onMove, true);
+    window.addEventListener("mouseup", cleanup, true);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Terminal handle (port of mkTerm) + registry
 // ---------------------------------------------------------------------------
@@ -361,6 +444,61 @@ function makeTerm(
   term.loadAddon(fit);
   term.open(container);
   attachCopyOnSelect(container, term, { session: title });
+  // Clicking into a terminal makes this client the one in use — claim the
+  // tmux window size for it (see resync).
+  container.addEventListener("focusin", () => handle.resync());
+  attachDragHistoryGesture(container, (edge) => {
+    let ctx: DragScreenCtx | undefined;
+    try {
+      const buf = term.buffer.active;
+      const rows = term.rows || 24;
+      const screen: string[] = [];
+      for (let r = 0; r < rows; r++)
+        screen.push(buf.getLine(buf.viewportY + r)?.translateToString(true) ?? "");
+      // The anchor end of the selection — where the drag STARTED: its top
+      // end when dragging down (bottom edge), its bottom end dragging up.
+      const p = term.getSelectionPosition();
+      const side = edge === "bottom" ? p?.start : p?.end;
+      const row = side
+        ? Math.max(0, Math.min(rows - 1, side.y - buf.viewportY))
+        : edge === "bottom"
+          ? 0
+          : rows - 1;
+      ctx = { screen, rows, row, col: side?.x ?? 0 };
+    } catch {
+      /* buffer API moved: the overlay falls back to selection matching */
+    }
+    handle.onHistoryDrag?.(term.getSelection() || "", edge, ctx);
+  });
+  // Top-row watcher (see TermHandle.onTopRow). THROTTLED, not debounced: a
+  // streaming turn renders continuously, and a trailing debounce would never
+  // settle — the watcher then missed the TUI's pinned row for the whole
+  // stream. Leading edge fires immediately; the trailing timer catches the
+  // final state after a burst.
+  let topRowAt = 0;
+  let topRowTimer: ReturnType<typeof setTimeout> | undefined;
+  const emitTopRow = () => {
+    if (!handle.onTopRow) return;
+    try {
+      const buf = term.buffer.active;
+      handle.onTopRow(buf.getLine(buf.viewportY)?.translateToString(true) ?? "");
+    } catch {
+      /* buffer API moved */
+    }
+  };
+  term.onRender(() => {
+    const now = performance.now();
+    clearTimeout(topRowTimer);
+    if (now - topRowAt > 150) {
+      topRowAt = now;
+      emitTopRow();
+    } else {
+      topRowTimer = setTimeout(() => {
+        topRowAt = performance.now();
+        emitTopRow();
+      }, 160);
+    }
+  });
 
   let ws: WebSocket | null = null;
   let sentSize = "";
@@ -390,6 +528,10 @@ function makeTerm(
         return true;
       }
       return false;
+    },
+    resync() {
+      sentSize = "";
+      handle.doFit();
     },
     doFit() {
       // Skip while hidden/zero-sized — fitting then locks in a 1x1 grid.
@@ -555,6 +697,23 @@ export function fitAll() {
     entry.agent?.doFit();
     entry.shell?.doFit();
   }
+}
+
+/** Re-assert every live terminal's size (see TermHandle.resync). */
+export function resyncAll() {
+  for (const entry of registry.values()) {
+    entry.agent?.resync();
+    entry.shell?.resync();
+  }
+}
+
+// Coming back to this tab makes it the client in use: reclaim the tmux window
+// size for it. Only one tab is visible at a time, so this can't ping-pong the
+// way an unconditional periodic re-send would.
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) resyncAll();
+  });
 }
 
 /** Focus the logical terminal for a session (agent pane by default). */

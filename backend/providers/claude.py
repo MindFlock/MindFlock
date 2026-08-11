@@ -356,7 +356,18 @@ class ClaudeProvider(BaseProvider):
         return _claude_transcript_tokens(workdir, since_ts, until_ts, shared_cwd)
 
     def last_turn_snippet(self, session_name: str, workdir: str) -> Optional[str]:
-        return _claude_last_turn_snippet(workdir)
+        return _claude_last_turn_snippet(workdir, session_name)
+
+    def last_prompt_snippet(self, session_name: str, workdir: str) -> Optional[str]:
+        return _claude_last_prompt_snippet(workdir, session_name)
+
+    def last_prompt_full(self, session_name: str, workdir: str) -> Optional[str]:
+        return _claude_last_prompt_full(workdir, session_name)
+
+    def find_prompt_full(
+        self, session_name: str, workdir: str, prefix: str
+    ) -> Optional[str]:
+        return _claude_find_prompt_full(workdir, prefix, session_name)
 
 
 def _keychain_login_evidence() -> bool:
@@ -812,6 +823,9 @@ def _claude_project_dirs(workdir: str):
 # --------------------------------------------------------------------------- #
 _LAST_TURN_TTL = 10.0
 _LAST_TURN_TAIL_BYTES = 128 * 1024  # newest entries live at the file's end
+# Deeper window for user-prompt scans: the prompt sits BEFORE the whole
+# turn's tool output, which can run to megabytes (see _snippet_from_transcript).
+_LAST_PROMPT_TAIL_BYTES = 8 * 1024 * 1024
 _LAST_TURN_CACHE = (
     {}
 )  # workdir -> {"checked": epoch, "sig": (path, mtime, size), "snippet": str|None}
@@ -901,19 +915,63 @@ def _newest_transcript(workdir: str) -> Optional[tuple]:
     return newest
 
 
-def _snippet_from_transcript(path: str, size: int) -> Optional[str]:
+def _session_transcript(workdir: str, session_name: str = "") -> Optional[tuple]:
+    """THIS WINDOW's transcript for ``workdir``, as ``(mtime, size, path)``.
+
+    Several windows can run in one directory (in-place sessions and window
+    copies on the same repo), and every one of them writes into the same
+    ``projects/<cwd-slug>/`` dir — so "newest .jsonl by mtime" is whichever
+    sibling typed last, not this window's conversation. The activity hooks
+    record each window's Claude session id under its tmux session name
+    (thread_markers), and Claude names the transcript after that id, so the
+    marker points straight at the right file.
+
+    Falls back to :func:`_newest_transcript` when there is no marker (hookless
+    launches, other providers' windows) or the file it names is gone."""
+    import os
+
+    if session_name:
+        try:
+            from . import thread_markers
+
+            tid = thread_markers.read(session_name)  # validated token, path-safe
+        except Exception:  # noqa: BLE001 — markers are enrichment only
+            tid = ""
+        if tid:
+            for proj in _claude_project_dirs(workdir):
+                p = os.path.join(proj, tid + ".jsonl")
+                try:
+                    st = os.stat(p)
+                except OSError:
+                    continue
+                return (st.st_mtime, st.st_size, p)
+    return _newest_transcript(workdir)
+
+
+def _snippet_from_transcript(
+    path: str, size: int, role: Optional[str] = None, full: bool = False
+) -> Optional[str]:
     """One-line snippet of the newest conversational turn in one transcript
     ``.jsonl``, scanned tail-first (reading only the last
-    ``_LAST_TURN_TAIL_BYTES`` of a large file). None when the file is
-    unreadable or holds no conversational turn."""
+    ``_LAST_TURN_TAIL_BYTES`` of a large file). ``role`` restricts the scan to
+    that entry type ("user" → the newest human prompt); ``full`` returns the
+    accepted entry's whole body (capped) instead of its first line — the same
+    entry either way, so the pin's one-liner and its expansion always agree.
+    None when the file is unreadable or holds no matching turn."""
     import json
     import os
 
+    # A role-filtered scan (the pinned prompt) needs a much deeper window
+    # than the any-role snippet: one busy agent turn writes megabytes of
+    # tool_result entries after the human's message, and a 128K tail then
+    # holds no user prompt at all. Still tail-first — the newest matching
+    # entry is usually found long before the window is exhausted.
+    tail_bytes = _LAST_TURN_TAIL_BYTES if role is None else _LAST_PROMPT_TAIL_BYTES
     snippet = None
     try:
         with open(path, "rb") as f:
-            if size > _LAST_TURN_TAIL_BYTES:
-                f.seek(-_LAST_TURN_TAIL_BYTES, os.SEEK_END)
+            if size > tail_bytes:
+                f.seek(-tail_bytes, os.SEEK_END)
                 tail = f.read().decode("utf-8", "replace")
                 lines = tail.splitlines()[1:]  # drop the partial first line
             else:
@@ -926,33 +984,138 @@ def _snippet_from_transcript(path: str, size: int) -> Optional[str]:
                 obj = json.loads(line)
             except ValueError:
                 continue
+            if role is not None and (
+                not isinstance(obj, dict) or obj.get("type") != role
+            ):
+                continue
+            if role is not None and obj.get("toolUseResult") is not None:
+                continue  # tool output the transcript files under "user"
             text = _entry_text(obj)
             if text is None:
                 continue
-            snippet = _snippet_from_text(text)
-            if snippet:
+            if role == "user":
+                # Newer transcripts label real prompts promptSource:"typed";
+                # slash-command echoes carry null. Only a PRESENT non-typed
+                # value skips — older formats lack the field entirely.
+                ps = obj.get("promptSource")
+                if ps is not None and ps != "typed":
+                    continue
+                head = text.lstrip()
+                # Skip the ENTRY (not just the line): command/stdout echoes
+                # ("<local-command-stdout>remote: …") and interruption stubs
+                # are user-typed only in the transcript's eyes — the lines
+                # after their marker are output, never a prompt.
+                if head.startswith("<") or head.startswith("[Request interrupted"):
+                    continue
+            s = _snippet_from_text(text)
+            if s:
+                snippet = str(text).strip()[:4000] if full else s
                 break
     except OSError:
         snippet = None
     return snippet
 
 
-def _claude_last_turn_snippet(workdir: str) -> Optional[str]:
-    """One-line snippet of the newest conversational turn in ``workdir``'s
-    transcripts (newest .jsonl by mtime, scanned tail-first). Never raises."""
+def _claude_last_turn_snippet(workdir: str, session_name: str = "") -> Optional[str]:
+    """One-line snippet of the newest conversational turn in THIS window's
+    transcript (see :func:`_session_transcript`), scanned tail-first. Never
+    raises."""
+    return _cached_transcript_snippet(workdir, None, session_name=session_name)
+
+
+def _claude_last_prompt_snippet(workdir: str, session_name: str = "") -> Optional[str]:
+    """One-line snippet of the newest USER prompt in THIS window's transcript
+    — what the human last asked for, for the panes' pinned-prompt line. Never
+    raises."""
+    return _cached_transcript_snippet(workdir, "user", session_name=session_name)
+
+
+def _claude_last_prompt_full(workdir: str, session_name: str = "") -> Optional[str]:
+    """The newest USER prompt's whole body (capped at 4000 chars) — the
+    pinned-prompt line's hover/click expansion. Never raises."""
+    return _cached_transcript_snippet(
+        workdir, "user", full=True, session_name=session_name
+    )
+
+
+def _claude_find_prompt_full(
+    workdir: str, prefix: str, session_name: str = ""
+) -> Optional[str]:
+    """Full body of the newest USER prompt whose text starts with ``prefix``
+    (whitespace-normalized; a trailing … from the TUI's width truncation is
+    stripped). Backs the desktop prompt bar's expansion for OLDER prompts —
+    the snapshot only carries the latest one. Never raises."""
+    import json
+    import os
+    import re
+
+    def norm(s: str) -> str:
+        return re.sub(r"\s+", " ", s).strip()
+
+    want = norm(prefix).rstrip("…").rstrip()
+    if len(want) < 8:  # too short to identify a specific prompt
+        return None
+    try:
+        newest = _session_transcript(workdir, session_name)
+        if newest is None:
+            return None
+        path, size = newest[2], newest[1]
+        with open(path, "rb") as f:
+            if size > _LAST_PROMPT_TAIL_BYTES:
+                f.seek(-_LAST_PROMPT_TAIL_BYTES, os.SEEK_END)
+                lines = f.read().decode("utf-8", "replace").splitlines()[1:]
+            else:
+                lines = f.read().decode("utf-8", "replace").splitlines()
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(obj, dict) or obj.get("type") != "user":
+                continue
+            if obj.get("toolUseResult") is not None:
+                continue
+            ps = obj.get("promptSource")
+            if ps is not None and ps != "typed":
+                continue
+            text = _entry_text(obj)
+            if text is None:
+                continue
+            head = text.lstrip()
+            if head.startswith("<") or head.startswith("[Request interrupted"):
+                continue
+            if norm(text).startswith(want):
+                return str(text).strip()[:4000]
+    except Exception:  # noqa: BLE001 — a lookup miss, never an error
+        pass
+    return None
+
+
+def _cached_transcript_snippet(
+    workdir: str, role: Optional[str], full: bool = False, session_name: str = ""
+) -> Optional[str]:
+    """Shared mtime-guarded cache for the last-turn / last-prompt snippets.
+    The any-role slot keeps the bare-workdir key (the cache's original,
+    externally observed shape); role-filtered slots get a suffixed key, and
+    the window's session name is part of the key too — siblings sharing a
+    workdir read different transcripts and must not share a cache slot."""
     import time
 
+    key = workdir if role is None else workdir + "\n" + role + (":full" if full else "")
+    if session_name:
+        key += "\x00" + session_name
     try:
         now = time.time()
-        cached = _LAST_TURN_CACHE.get(workdir)
+        cached = _LAST_TURN_CACHE.get(key)
         if cached and now - cached["checked"] < _LAST_TURN_TTL:
             return cached["snippet"]
 
-        newest = _newest_transcript(workdir)
+        newest = _session_transcript(workdir, session_name)
         if newest is None:
-            _last_turn_cache_put(
-                workdir, {"checked": now, "sig": None, "snippet": None}
-            )
+            _last_turn_cache_put(key, {"checked": now, "sig": None, "snippet": None})
             return None
 
         sig = (newest[2], newest[0], newest[1])
@@ -960,8 +1123,8 @@ def _claude_last_turn_snippet(workdir: str) -> Optional[str]:
             cached["checked"] = now  # unchanged file — just re-arm the TTL
             return cached["snippet"]
 
-        snippet = _snippet_from_transcript(newest[2], newest[1])
-        _last_turn_cache_put(workdir, {"checked": now, "sig": sig, "snippet": snippet})
+        snippet = _snippet_from_transcript(newest[2], newest[1], role, full)
+        _last_turn_cache_put(key, {"checked": now, "sig": sig, "snippet": snippet})
         return snippet
     except Exception:  # noqa: BLE001 — triage hint only; never break the poll
         return None

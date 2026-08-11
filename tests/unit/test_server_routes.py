@@ -1409,13 +1409,19 @@ def test_pane_history_no_live_shell_session(registered, monkeypatch):
 def test_pane_history_falls_back_to_transcript(registered, monkeypatch):
     registered("ph-2", wt="/tmp/x")
     monkeypatch.setattr(server, "_live_session_name", lambda base: None)
+    seen = []
     monkeypatch.setattr(
-        server, "_agent_transcript_text", lambda wt: "recovered transcript"
+        server,
+        "_agent_transcript_text",
+        lambda wt, name="": (seen.append((wt, name)), "recovered transcript")[1],
     )
     # Agent pane, session gone -> the on-disk transcript is served instead of 404.
     r = client.get("/api/instances/ph-2/history")
     assert r.status_code == 200
     assert r.text == "recovered transcript"
+    # Looked up by THIS window's tmux session, not by the worktree alone —
+    # siblings sharing a directory each have their own conversation.
+    assert seen == [("/tmp/x", server.tmux.to_mindflock_tmux_name("ph-2"))]
 
 
 # --------------------------------------------------------------------------- #

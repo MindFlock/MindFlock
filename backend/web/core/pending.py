@@ -178,6 +178,8 @@ def rows(engine=None) -> list:
                 "activity": "offline",
                 "activity_since": 0.0,
                 "last_turn": None,
+                "last_prompt": None,
+                "last_prompt_full": None,
                 "setup": None,
                 "check": None,
                 "ports": None,

@@ -13,11 +13,18 @@ import { copyText } from "../../lib/clipboard";
 import { fmtUsd, displayBranch } from "../../lib/format";
 import { chipState, fastTrackStep, liveStep, nextStep } from "../../lib/stage";
 import { cleanupMissing, selectSession } from "../../lib/sessionActions";
-import { getTerm, peekTerm, type TermHandle } from "../../lib/terminals";
+import {
+  focusTerm,
+  getTerm,
+  peekTerm,
+  type DragScreenCtx,
+  type TermHandle,
+} from "../../lib/terminals";
 import { toast } from "../../lib/toast";
 import { dropSideFor, type DropSide } from "./layout";
 import type { DragCtx } from "./TerminalGrid";
 import { DiffTab } from "./DiffTab";
+import { HistoryOverlay } from "./HistoryOverlay";
 import { QueueTab } from "./QueueTab";
 import { SessionUsageChip } from "../usage/SessionUsageChip";
 
@@ -67,6 +74,22 @@ export function Pane({
   const [booted, setBooted] = useState(false);
   const [wsState, setWsState] = useState("connecting");
   const [shellStarted, setShellStarted] = useState(savedTab === "shell");
+  // Which pane's full-history overlay is open (null = closed). Opened by the
+  // header history button or Ctrl+↑/↓ (dragSel null), or by drag-selecting
+  // past a terminal edge — dragSel then carries the terminal's in-progress
+  // selection (and edge which end of it) so the overlay continues the same
+  // drag seamlessly. pos picks where the view opens (Ctrl+↑ starts at the
+  // very top).
+  const [histPane, setHistPane] = useState<{
+    kind: "agent" | "shell";
+    dragSel: string | null;
+    edge?: "top" | "bottom";
+    pos?: "top" | "bottom";
+    ctx?: DragScreenCtx;
+    /** The TUI's pinned-prompt row at gesture time — the anchor of last
+     * resort when the visible rows (tool output) aren't in the transcript. */
+    ghostSel?: string | null;
+  } | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const fitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -78,6 +101,20 @@ export function Pane({
       if (!el || missing || loading) return;
       const handle = getTerm(title, kind);
       if (!el.contains(handle.container)) el.appendChild(handle.container);
+      handle.onHistoryDrag = (sel, edge, ctx) =>
+        setHistPane({ kind, dragSel: sel, edge, ctx, ghostSel: ghostRef.current });
+      if (kind === "agent") {
+        // The agent TUI pins its own contextual prompt row ("❯ …") at the top
+        // while scrolled back. Lift its text into the prompt bar (so the bar
+        // tracks what you're LOOKING at, not just the latest prompt) and let
+        // the render mask the duplicate row on desktop.
+        handle.onTopRow = (t) => {
+          const m = /^\s*[❯>]\s+(.+)$/.exec(t);
+          const g = m && m[1].trim() ? m[1].trim() : null;
+          ghostRef.current = g; // adopt()'s closures are stale — ref, not state
+          setGhost(g);
+        };
+      }
       if (kind === "agent") {
         handle.onState = (s) => setWsState(s);
         handle.onBoot = () => setBooted(true);
@@ -106,6 +143,89 @@ export function Pane({
     obs.observe(bodyRef.current);
     return () => obs.disconnect();
   }, [fitSoon, missing, loading]);
+
+  // Whether the pinned prompt shows its whole body. Collapsed to one line by
+  // default; ONLY the arrow toggles it — no hover magic.
+  const [pinOpen, setPinOpen] = useState(false);
+  // The agent TUI's own pinned-prompt row text, when its top row shows one
+  // (scrolled back in Claude Code). Non-null → the bar mirrors it and the
+  // duplicate row is masked. The ref mirrors the state for adopt()'s stale
+  // closures (the gesture handler reads it at fire time).
+  const [ghost, setGhost] = useState<string | null>(null);
+  const ghostRef = useRef<string | null>(null);
+
+  // What the bar shows: the TUI's contextual prompt while scrolled back (it
+  // tracks the section you're reading), the session's latest prompt at live.
+  const ghostCore = (ghost || "").replace(/[…]+\s*$/, "").replace(/\s+/g, " ").trim();
+  const fullNorm = (inst.last_prompt_full || "").replace(/\s+/g, " ");
+  const ghostIsLatest = !ghost || (!!fullNorm && fullNorm.includes(ghostCore.slice(0, 80)));
+  const pinLine = ghost ?? inst.last_prompt;
+
+  // Expanding an OLDER prompt (the ghost isn't the latest) needs its full
+  // body looked up server-side — only the latest prompt's body rides the
+  // snapshot. The ghost's own width-truncated text shows while it loads.
+  const [lookup, setLookup] = useState<{ q: string; text: string } | null>(null);
+  useEffect(() => {
+    if (!pinOpen || ghostIsLatest || ghostCore.length < 8) return;
+    if (lookup?.q === ghostCore) return;
+    let dead = false;
+    fetch(
+      `/api/instances/${encodeURIComponent(title)}/prompt?q=${encodeURIComponent(ghostCore)}`
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { text?: string | null } | null) => {
+        if (!dead && j?.text) setLookup({ q: ghostCore, text: j.text });
+      })
+      .catch(() => {});
+    return () => {
+      dead = true;
+    };
+  }, [pinOpen, ghostIsLatest, ghostCore, title, lookup]);
+
+  const pinBody = ghostIsLatest
+    ? inst.last_prompt_full || inst.last_prompt
+    : lookup?.q === ghostCore
+      ? lookup.text
+      : ghost;
+
+  // The pinned prompt is in-flow, so any change to its height — appearing,
+  // collapsing, or the prompt text itself changing — resizes the terminal
+  // without touching .pane-body, and the ResizeObserver above never fires.
+  const hasPin = !!pinLine;
+  const pinLen = (pinBody || "").length;
+  useEffect(() => {
+    fitSoon();
+  }, [hasPin, pinOpen, pinLen, fitSoon]);
+
+  // Ctrl+↑ / Ctrl+↓ on the focused pane opens the full-history view (at the
+  // top / bottom respectively). Once it's open its own handler owns these
+  // keys for in-view jumps, so this only fires from normal mode. Capture
+  // phase so it wins over xterm; real text fields keep their arrows (the
+  // terminal's hidden textarea is exempt — that IS the normal-mode case).
+  useEffect(() => {
+    if (!focused || missing || loading || histPane) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      const a = document.activeElement;
+      const editing =
+        a &&
+        (a.tagName === "INPUT" ||
+          a.tagName === "TEXTAREA" ||
+          a.tagName === "SELECT" ||
+          (a as HTMLElement).isContentEditable === true);
+      if (editing && !a.closest(".xterm")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setHistPane({
+        kind: tab === "shell" ? "shell" : "agent",
+        dragSel: null,
+        pos: e.key === "ArrowUp" ? "top" : "bottom",
+      });
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [focused, missing, loading, histPane, tab]);
 
   const showTab = (t: Tab) => {
     setTab(t);
@@ -367,6 +487,31 @@ export function Pane({
         <button
           className="act copyhist"
           type="button"
+          title="Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)"
+          onClick={(e) => {
+            e.stopPropagation();
+            setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
+          }}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12 8v4l2 2" />
+            <path d="M3.05 11a9 9 0 1 1 .5 4" />
+            <path d="M3 22v-6h6" />
+          </svg>
+        </button>
+        <button
+          className="act copyhist"
+          type="button"
           title="Copy this pane's whole history to the clipboard"
           onClick={(e) => {
             e.stopPropagation();
@@ -409,6 +554,38 @@ export function Pane({
       </div>
       <div className="pane-body" ref={bodyRef}>
         <div className={"pane-term agent-term" + (tab !== "agent" ? " hidden" : "")} ref={adopt("agent")}>
+          {/* Pinned prompt: what this session was last asked to do, always
+              visible while the output scrolls beneath it (the behavior the
+              mobile view's short screen gives for free). One line by default;
+              clicking the arrow — and only the arrow, no hover — expands the
+              whole prompt in-flow, capped at a few lines with its own
+              scrollbar. Rendered before the terminal container adopt()
+              appends, so it sits above the terminal in the flex column. */}
+          {pinLine ? (
+            <div className={"prompt-pin" + (pinOpen ? " pin-open" : "")}>
+              <button
+                type="button"
+                className="prompt-pin-mark"
+                aria-expanded={pinOpen}
+                title={pinOpen ? "Collapse to one line" : "Show the whole prompt"}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPinOpen((v) => !v);
+                }}
+              >
+                ❯
+              </button>
+              {pinOpen ? (
+                <div className="prompt-pin-body">{pinBody}</div>
+              ) : (
+                <span className="prompt-pin-text">{pinLine}</span>
+              )}
+              {/* While the TUI's own pinned row is being mirrored above, hide
+                  the duplicate: a strip of terminal background over the top
+                  row (desktop only by construction — mobile has no bar). */}
+              {ghost ? <div className="ghost-row-mask" aria-hidden="true" /> : null}
+            </div>
+          ) : null}
           {!booted && (
             <div className="term-loading">
               <div className="spinner" />
@@ -429,6 +606,25 @@ export function Pane({
         <div className={"pane-queue" + (tab !== "queue" ? " hidden" : "")}>
           <QueueTab title={title} active={tab === "queue"} />
         </div>
+        {histPane && (
+          <HistoryOverlay
+            title={title}
+            pane={histPane.kind}
+            dragSelection={histPane.dragSel}
+            dragEdge={histPane.edge ?? "top"}
+            dragCtx={histPane.ctx ?? null}
+            dragGhost={histPane.ghostSel ?? null}
+            initialPos={histPane.pos ?? "bottom"}
+            onClose={() => {
+              const kind = histPane.kind;
+              setHistPane(null);
+              // Hand the keyboard straight back to the terminal the overlay
+              // covered — closing should feel like returning, not leaving.
+              selectSession(title, { noKeyboard: true });
+              setTimeout(() => focusTerm(title, kind), 0);
+            }}
+          />
+        )}
         {reduceMotion && chip.cls === "s-running" && tab === "agent" && (
           <RunningCover paneRef={paneRef} />
         )}
