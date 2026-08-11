@@ -871,11 +871,37 @@ def _snippet_from_text(text: str, limit: int = 120) -> Optional[str]:
     return None
 
 
+#: Transcript entry types that carry something the HUMAN said. A prompt typed
+#: while a turn is still running is filed as ``{"type": "queue-operation",
+#: "operation": "enqueue", "content": "..."}`` and NEVER becomes a "user"
+#: entry — not even once it is consumed. Readers that only knew about "user"
+#: therefore lost every queued prompt: the pinned line went stale, expanding
+#: it found nothing to expand, and the history page skipped the message
+#: entirely.
+_USER_ENTRY_TYPES = ("user", "queue-operation")
+
+
+def _is_role(obj, role: str) -> bool:
+    """Whether a transcript entry belongs to ``role``, counting a queued
+    prompt as the human speaking (see :data:`_USER_ENTRY_TYPES`)."""
+    if not isinstance(obj, dict):
+        return False
+    t = obj.get("type")
+    return t == role or (role == "user" and t in _USER_ENTRY_TYPES)
+
+
 def _entry_text(obj) -> Optional[str]:
     """The human-readable body of one transcript entry, or None to skip it
     (meta entries, tool_use/tool_result-only turns, non-conversation lines)."""
     if not isinstance(obj, dict):
         return None
+    if obj.get("type") == "queue-operation":
+        # "enqueue" is the prompt being typed; "remove" is the same text
+        # coming back off the queue, which would double every queued message.
+        if obj.get("operation") != "enqueue":
+            return None
+        content = obj.get("content")
+        return content if isinstance(content, str) and content.strip() else None
     if obj.get("type") not in ("user", "assistant"):
         return None
     if obj.get("isMeta"):
@@ -984,9 +1010,7 @@ def _snippet_from_transcript(
                 obj = json.loads(line)
             except ValueError:
                 continue
-            if role is not None and (
-                not isinstance(obj, dict) or obj.get("type") != role
-            ):
+            if role is not None and not _is_role(obj, role):
                 continue
             if role is not None and obj.get("toolUseResult") is not None:
                 continue  # tool output the transcript files under "user"
@@ -1074,7 +1098,7 @@ def _claude_find_prompt_full(
                 obj = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(obj, dict) or obj.get("type") != "user":
+            if not _is_role(obj, "user"):
                 continue
             if obj.get("toolUseResult") is not None:
                 continue

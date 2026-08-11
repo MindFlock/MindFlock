@@ -93,6 +93,43 @@ def test_transcript_text_renders_user_and_assistant(tmp_path, monkeypatch):
     assert "meta noise" not in text  # isMeta lines are dropped
 
 
+def test_transcript_text_keeps_a_prompt_typed_mid_turn(tmp_path, monkeypatch):
+    """Queued prompts are filed as queue-operation and never re-filed as
+    "user", so dropping them loses the message from the history page for
+    good — and those are exactly the follow-ups sent while the agent works."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    workdir = str(tmp_path / "wt")
+    _write_transcript(
+        str(tmp_path),
+        workdir,
+        [
+            {"type": "user", "message": {"content": "start the work"}},
+            {
+                "type": "queue-operation",
+                "operation": "enqueue",
+                "content": "and also fix the menu",
+            },
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "on it"}]},
+            },
+            # The same text coming back off the queue must not print twice.
+            {
+                "type": "queue-operation",
+                "operation": "remove",
+                "content": "and also fix the menu",
+            },
+        ],
+    )
+    text = st._agent_transcript_text(workdir)
+    assert text is not None
+    assert "## User\nstart the work" in text
+    assert "## User\nand also fix the menu" in text
+    assert text.count("and also fix the menu") == 1
+    assert "## Claude\non it" in text
+
+
 # --------------------------------------------------------------------------- #
 # _session_tokens — cache keying + invalidation
 # --------------------------------------------------------------------------- #
