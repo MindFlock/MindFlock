@@ -207,12 +207,14 @@ export function NewSessionDialog() {
   const [inPlace, setInPlace] = useState(true);
   const [initRepo, setInitRepo] = useState(false);
   const [error, setError] = useState("");
-  // Both folds start OPEN: the card is tall enough to hold them, and hiding
-  // the git/workspace choices behind a click made people launch with the
-  // wrong strategy rather than discover it. Closing one is still remembered
-  // for the life of the dialog.
+  // "More options" starts OPEN — hiding the git/workspace choices behind a
+  // click had people launch with the wrong strategy rather than discover it,
+  // and those are the settings this dialog exists to set. Launch flags stay
+  // CLOSED: extra CLI flags are a per-session rarity, and the card is sized
+  // for the form without them. Either fold's state is remembered for the life
+  // of the dialog.
   const [advancedOpen, setAdvancedOpen] = useState(true);
-  const [launchOpen, setLaunchOpen] = useState(true);
+  const [launchOpen, setLaunchOpen] = useState(false);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [activeTemplate, setActiveTemplate] = useState("");
   const [provisioningAvailable, setProvisioningAvailable] = useState(false);

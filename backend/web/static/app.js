@@ -29694,7 +29694,7 @@ function NewSessionDialog() {
   const [initRepo, setInitRepo] = reactExports.useState(false);
   const [error, setError] = reactExports.useState("");
   const [advancedOpen, setAdvancedOpen] = reactExports.useState(true);
-  const [launchOpen, setLaunchOpen] = reactExports.useState(true);
+  const [launchOpen, setLaunchOpen] = reactExports.useState(false);
   const [templates, setTemplates] = reactExports.useState([]);
   const [activeTemplate, setActiveTemplate] = reactExports.useState("");
   const [provisioningAvailable, setProvisioningAvailable] = reactExports.useState(false);

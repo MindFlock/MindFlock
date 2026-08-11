@@ -134,9 +134,9 @@ def test_new_dialog_folds_git_workspace_options():
     js = client.get("/app.js").text
     assert '"new-in-place"' in js  # work-in-place toggle
     assert '"new-init-repo"' in js  # git init lives here
-    # Both folds now stand OPEN by default (the card is sized to hold the whole
-    # form): hiding the workspace strategy behind a click had people launching
-    # with the wrong one rather than finding it.
+    # "More options" stands OPEN by default — hiding the workspace strategy
+    # behind a click had people launching with the wrong one rather than
+    # finding it. The launch-flags fold below it stays closed.
     assert "nf-advanced" in js
 
 
