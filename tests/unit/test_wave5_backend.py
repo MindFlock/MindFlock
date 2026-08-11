@@ -607,7 +607,9 @@ def test_last_turn_snippet_mtime_guarded_cache(home, tmp_path):
     )
     assert prov.last_turn_snippet("s", wd) == "first"
     # Once the TTL lapses (simulated), the changed mtime/size triggers a re-read.
-    claude._LAST_TURN_CACHE[wd]["checked"] -= claude._LAST_TURN_TTL + 1
+    # The cache is keyed per WINDOW (workdir + tmux session name): siblings
+    # sharing a directory read different transcripts.
+    claude._LAST_TURN_CACHE[wd + "\x00s"]["checked"] -= claude._LAST_TURN_TTL + 1
     assert prov.last_turn_snippet("s", wd) == "second"
 
 

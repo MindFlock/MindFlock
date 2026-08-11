@@ -1,0 +1,73 @@
+/* Full-history overlay (HistoryOverlay.tsx) — anchored to .pane-body, which
+   Pane.css already makes relative. z-index 4: above the reduce-motion cover
+   (2) and the boot loader (3), below the file-drop cue (5/6) and the budget
+   lock (6) — a spend stop must be able to paint over a history browse. */
+.hist-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  background: var(--term-bg, var(--bg));
+}
+
+.hist-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.hist-bar .hist-title {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.hist-bar .hist-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The page itself: native scrolling and selection are the whole feature.
+   overscroll-behavior keeps a fast wheel from spilling into the grid. */
+.hist-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 6px 10px;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.hist-scroll pre {
+  margin: 0;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--term-fg, var(--text));
+  /* capture-pane -J joins wrapped lines back together; wrap them here like a
+     page would rather than growing a horizontal scrollbar. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.hist-msg {
+  padding: 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hist-msg.error {
+  color: var(--red);
+}

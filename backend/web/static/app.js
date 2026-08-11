@@ -22032,6 +22032,35 @@ function attachWheelScroll(host, term, getWs) {
     { capture: true, passive: true }
   );
 }
+function attachDragHistoryGesture(host, fire) {
+  const HOLD_MS = 220;
+  const MARGIN = 8;
+  const BOTTOM_ZONE = 18;
+  host.addEventListener("mousedown", (down) => {
+    if (down.button !== 0) return;
+    let timer;
+    const onMove = (ev) => {
+      const r = host.getBoundingClientRect();
+      const edge = ev.clientY < r.top - MARGIN ? "top" : ev.clientY > r.bottom - BOTTOM_ZONE ? "bottom" : null;
+      if (edge && timer === void 0) {
+        timer = setTimeout(() => {
+          cleanup();
+          fire(edge);
+        }, HOLD_MS);
+      } else if (!edge && timer !== void 0) {
+        clearTimeout(timer);
+        timer = void 0;
+      }
+    };
+    const cleanup = () => {
+      if (timer !== void 0) clearTimeout(timer);
+      window.removeEventListener("mousemove", onMove, true);
+      window.removeEventListener("mouseup", cleanup, true);
+    };
+    window.addEventListener("mousemove", onMove, true);
+    window.addEventListener("mouseup", cleanup, true);
+  });
+}
 function makeTerm(title, wsPath, interactive, absolutePath) {
   const container = document.createElement("div");
   container.className = "term-container";
@@ -22050,6 +22079,48 @@ function makeTerm(title, wsPath, interactive, absolutePath) {
   term.loadAddon(fit);
   term.open(container);
   attachCopyOnSelect(container, term, { session: title });
+  container.addEventListener("focusin", () => handle.resync());
+  attachDragHistoryGesture(container, (edge) => {
+    var _a2, _b2;
+    let ctx;
+    try {
+      const buf = term.buffer.active;
+      const rows = term.rows || 24;
+      const screen = [];
+      for (let r = 0; r < rows; r++)
+        screen.push(((_a2 = buf.getLine(buf.viewportY + r)) == null ? void 0 : _a2.translateToString(true)) ?? "");
+      const p = term.getSelectionPosition();
+      const side = edge === "bottom" ? p == null ? void 0 : p.start : p == null ? void 0 : p.end;
+      const row = side ? Math.max(0, Math.min(rows - 1, side.y - buf.viewportY)) : edge === "bottom" ? 0 : rows - 1;
+      ctx = { screen, rows, row, col: (side == null ? void 0 : side.x) ?? 0 };
+    } catch {
+    }
+    (_b2 = handle.onHistoryDrag) == null ? void 0 : _b2.call(handle, term.getSelection() || "", edge, ctx);
+  });
+  let topRowAt = 0;
+  let topRowTimer;
+  const emitTopRow = () => {
+    var _a2;
+    if (!handle.onTopRow) return;
+    try {
+      const buf = term.buffer.active;
+      handle.onTopRow(((_a2 = buf.getLine(buf.viewportY)) == null ? void 0 : _a2.translateToString(true)) ?? "");
+    } catch {
+    }
+  };
+  term.onRender(() => {
+    const now = performance.now();
+    clearTimeout(topRowTimer);
+    if (now - topRowAt > 150) {
+      topRowAt = now;
+      emitTopRow();
+    } else {
+      topRowTimer = setTimeout(() => {
+        topRowAt = performance.now();
+        emitTopRow();
+      }, 160);
+    }
+  });
   let ws = null;
   let sentSize = "";
   let closed = false;
@@ -22078,6 +22149,10 @@ function makeTerm(title, wsPath, interactive, absolutePath) {
         return true;
       }
       return false;
+    },
+    resync() {
+      sentSize = "";
+      handle.doFit();
     },
     doFit() {
       if (!container.clientWidth || !container.clientHeight || container.offsetParent === null)
@@ -22205,6 +22280,18 @@ function releaseTerms(title) {
   (_b2 = entry.shell) == null ? void 0 : _b2.dispose();
   registry.delete(title);
   notifyTermStates();
+}
+function resyncAll() {
+  var _a2, _b2;
+  for (const entry of registry.values()) {
+    (_a2 = entry.agent) == null ? void 0 : _a2.resync();
+    (_b2 = entry.shell) == null ? void 0 : _b2.resync();
+  }
+}
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) resyncAll();
+  });
 }
 function focusTerm(title, kind = "agent") {
   var _a2;
@@ -27398,6 +27485,397 @@ function SplitDiff({ content }) {
     ] }, i);
   }) });
 }
+function caretAt(x, y) {
+  const doc = document;
+  if (doc.caretRangeFromPoint) {
+    const r = doc.caretRangeFromPoint(x, y);
+    return r ? { node: r.startContainer, offset: r.startOffset } : null;
+  }
+  if (doc.caretPositionFromPoint) {
+    const p = doc.caretPositionFromPoint(x, y);
+    return p ? { node: p.offsetNode, offset: p.offset } : null;
+  }
+  return null;
+}
+function occurrences(text, needle) {
+  const out = [];
+  let i = text.indexOf(needle);
+  while (i >= 0 && out.length < 50) {
+    out.push(i);
+    i = text.indexOf(needle, i + 1);
+  }
+  return out;
+}
+function findAnchor(text, sel, edge, ctx, ghost) {
+  if (ctx) {
+    const tLines = text.split("\n");
+    const starts = [];
+    let off = 0;
+    for (const l of tLines) {
+      starts.push(off);
+      off += l.length + 1;
+    }
+    const usable = [];
+    ctx.screen.forEach((s, r) => {
+      const t = s.trim();
+      if (t.length >= 4 && (t.match(/[A-Za-z0-9]/g) || []).length >= 4)
+        usable.push([r, t]);
+    });
+    if (usable.length >= 2) {
+      const candidates = [...usable].sort((a, b) => b[1].length - a[1].length).slice(0, 8);
+      const liveTailStart = Math.max(0, tLines.length - ctx.rows - 2);
+      let bestJ = -1, bestScore = -1, bestBase = 0;
+      for (const base of candidates) {
+        const hits = [];
+        for (let j = tLines.length - 1; j >= 0 && hits.length < 50; j--)
+          if (tLines[j].includes(base[1])) hits.push(j);
+        for (const j of hits) {
+          let score = 0;
+          for (const [r, s] of usable) {
+            if (r === base[0]) continue;
+            const at = j + (r - base[0]);
+            for (let d = -3; d <= 3; d++) {
+              const tl = tLines[at + d];
+              if (tl && tl.includes(s)) {
+                score++;
+                break;
+              }
+            }
+          }
+          const beats = score > bestScore || score === bestScore && bestJ >= liveTailStart && j < liveTailStart;
+          if (beats) {
+            bestScore = score;
+            bestJ = j;
+            bestBase = base[0];
+          }
+        }
+      }
+      if (bestJ >= 0 && bestScore >= Math.min(2, usable.length - 1)) {
+        let line = Math.max(
+          0,
+          Math.min(tLines.length - 1, bestJ + (ctx.row - bestBase))
+        );
+        const rowText = (ctx.screen[ctx.row] || "").trim();
+        if (rowText.length >= 4 && (rowText.match(/[A-Za-z0-9]/g) || []).length >= 4) {
+          for (const d of [0, -1, 1, -2, 2, -3, 3]) {
+            const tl = tLines[line + d];
+            if (tl && tl.includes(rowText)) {
+              line += d;
+              break;
+            }
+          }
+        }
+        return {
+          anchor: starts[line] + Math.min(ctx.col, tLines[line].length),
+          matched: true,
+          frac: ctx.rows > 0 ? ctx.row / ctx.rows : void 0
+        };
+      }
+    }
+  }
+  if (sel) {
+    const exact = text.lastIndexOf(sel);
+    if (exact >= 0)
+      return { anchor: edge === "bottom" ? exact : exact + sel.length, matched: true };
+    const lines = sel.split("\n").map((l) => l.trim()).filter((l) => l.length >= 4);
+    if (edge === "top") lines.reverse();
+    for (let i = 0; i < lines.length; i++) {
+      const hits = occurrences(text, lines[i]);
+      if (!hits.length) continue;
+      let hit = hits[hits.length - 1];
+      const buddy = lines[i + 1];
+      if (hits.length > 1 && buddy) {
+        for (const h of hits) {
+          const near = edge === "bottom" ? text.slice(h, h + lines[i].length + buddy.length + 400) : text.slice(Math.max(0, h - buddy.length - 400), h + lines[i].length);
+          if (near.includes(buddy)) {
+            hit = h;
+            break;
+          }
+        }
+      }
+      return {
+        anchor: edge === "bottom" ? hit : hit + lines[i].length,
+        matched: true
+      };
+    }
+  }
+  if (ghost) {
+    const want = ghost.replace(/[…]+\s*$/, "").replace(/\s+/g, "");
+    if (want.length >= 12) {
+      const map = [];
+      let stripped = "";
+      for (let i = 0; i < text.length; i++) {
+        const c = text.charCodeAt(i);
+        if (c !== 32 && c !== 10 && c !== 13 && c !== 9) {
+          stripped += text[i];
+          map.push(i);
+        }
+      }
+      const j = stripped.lastIndexOf(want);
+      if (j >= 0) {
+        return {
+          anchor: map[Math.min(j + want.length - 1, map.length - 1)] + 1,
+          matched: true,
+          frac: 0.15
+        };
+      }
+    }
+  }
+  return { anchor: text.length, matched: false };
+}
+const histCache = /* @__PURE__ */ new Map();
+const HIST_CACHE_MAX = 8;
+function HistoryOverlay({
+  title,
+  pane,
+  dragSelection,
+  dragEdge,
+  dragCtx,
+  dragGhost,
+  initialPos,
+  onClose
+}) {
+  const [text, setText] = reactExports.useState(null);
+  const [error, setError] = reactExports.useState("");
+  const scrollRef = reactExports.useRef(null);
+  const pendingScroll = reactExports.useRef(
+    initialPos
+  );
+  const load2 = reactExports.useCallback(async () => {
+    const key = title + " " + pane;
+    let t;
+    try {
+      const r = await fetch(
+        `/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`
+      );
+      if (!r.ok) throw new Error(await r.text() || "HTTP " + r.status);
+      t = await r.text();
+    } catch (e) {
+      setError(e.message || "history fetch failed");
+      return;
+    }
+    setError("");
+    histCache.delete(key);
+    histCache.set(key, t);
+    while (histCache.size > HIST_CACHE_MAX)
+      histCache.delete(histCache.keys().next().value);
+    const el = scrollRef.current;
+    if (pendingScroll.current == null) {
+      const atBottom = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+      pendingScroll.current = atBottom ? "bottom" : { fromTop: el.scrollTop };
+    }
+    setText(t);
+  }, [title, pane]);
+  reactExports.useEffect(() => {
+    pendingScroll.current = initialPos;
+    setText(histCache.get(title + " " + pane) ?? null);
+    load2();
+  }, [load2, title, pane]);
+  reactExports.useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const want = pendingScroll.current;
+    if (!el || want == null || text == null) return;
+    pendingScroll.current = null;
+    el.scrollTop = want === "top" ? 0 : want === "bottom" ? el.scrollHeight : want.fromTop;
+  }, [text]);
+  reactExports.useEffect(() => {
+    const id = setInterval(() => {
+      var _a2;
+      if (pressAt.current) return;
+      const sel = (_a2 = window.getSelection) == null ? void 0 : _a2.call(window);
+      if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+      load2();
+    }, 3e3);
+    return () => clearInterval(id);
+  }, [load2]);
+  const buttonDown = reactExports.useRef(dragSelection != null);
+  const suppressElementCopy = reactExports.useRef(false);
+  reactExports.useEffect(() => {
+    if (dragSelection == null) return;
+    const up = () => {
+      buttonDown.current = false;
+    };
+    window.addEventListener("mouseup", up, true);
+    return () => window.removeEventListener("mouseup", up, true);
+  }, [dragSelection]);
+  const contStarted = reactExports.useRef(false);
+  reactExports.useEffect(() => {
+    var _a2;
+    if (text == null || dragSelection == null || contStarted.current) return;
+    contStarted.current = true;
+    const el = scrollRef.current;
+    const node = (_a2 = el == null ? void 0 : el.querySelector("pre")) == null ? void 0 : _a2.firstChild;
+    if (!el || !node || node.nodeType !== Node.TEXT_NODE) return;
+    const { anchor, matched, frac } = findAnchor(
+      text,
+      dragSelection,
+      dragEdge,
+      dragCtx,
+      dragGhost
+    );
+    if (matched) {
+      try {
+        const r = document.createRange();
+        r.setStart(node, Math.min(anchor, text.length));
+        r.collapse(true);
+        const rr = r.getBoundingClientRect();
+        const er = el.getBoundingClientRect();
+        const park = frac ?? (dragEdge === "bottom" ? 0.3 : 0.7);
+        el.scrollTop += rr.top - (er.top + er.height * park);
+      } catch {
+      }
+    }
+    if (!buttonDown.current) return;
+    let live = true;
+    let raf = 0;
+    const rect0 = el.getBoundingClientRect();
+    let px = rect0.left + rect0.width / 2;
+    let py = dragEdge === "bottom" ? rect0.bottom + 24 : rect0.top - 24;
+    const extend = () => {
+      const r = el.getBoundingClientRect();
+      const c = caretAt(
+        Math.max(r.left + 4, Math.min(r.right - 4, px)),
+        Math.max(r.top + 4, Math.min(r.bottom - 4, py))
+      );
+      const sel = window.getSelection();
+      if (!c || !sel) return;
+      try {
+        sel.setBaseAndExtent(node, anchor, c.node, c.offset);
+      } catch {
+      }
+    };
+    const EDGE = 24;
+    const tick = () => {
+      if (!live) return;
+      const r = el.getBoundingClientRect();
+      const topZone = r.top + EDGE;
+      const bottomZone = r.bottom - EDGE;
+      if (py < topZone) el.scrollTop -= Math.min(64, 4 + (topZone - py) * 0.3);
+      else if (py > bottomZone) el.scrollTop += Math.min(64, 4 + (py - bottomZone) * 0.3);
+      extend();
+      raf = requestAnimationFrame(tick);
+    };
+    const onMove = (ev) => {
+      px = ev.clientX;
+      py = ev.clientY;
+    };
+    const stop = () => {
+      live = false;
+      cancelAnimationFrame(raf);
+      window.removeEventListener("mousemove", onMove, true);
+      window.removeEventListener("mouseup", finish, true);
+    };
+    const finish = () => {
+      stop();
+      suppressElementCopy.current = true;
+      setTimeout(() => {
+        var _a3;
+        const s = ((_a3 = window.getSelection()) == null ? void 0 : _a3.toString()) || "";
+        if (s.trim())
+          copyText(s).then((ok) => {
+            if (ok) toast("Copied " + s.length + " chars");
+          });
+        suppressElementCopy.current = false;
+      }, 0);
+    };
+    window.addEventListener("mousemove", onMove, true);
+    window.addEventListener("mouseup", finish, true);
+    raf = requestAnimationFrame(tick);
+    return stop;
+  }, [text, dragSelection, dragEdge, dragCtx, dragGhost]);
+  reactExports.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        e.preventDefault();
+        e.stopPropagation();
+        const el = scrollRef.current;
+        if (el) el.scrollTop = e.key === "ArrowUp" ? 0 : el.scrollHeight;
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  const copyOnRelease = () => {
+    if (suppressElementCopy.current) return;
+    setTimeout(() => {
+      var _a2, _b2;
+      const sel = ((_b2 = (_a2 = window.getSelection) == null ? void 0 : _a2.call(window)) == null ? void 0 : _b2.toString()) || "";
+      if (!sel.trim()) return;
+      copyText(sel).then((ok) => {
+        if (ok) toast("Copied " + sel.length + " chars");
+      });
+    }, 0);
+  };
+  const pressAt = reactExports.useRef(null);
+  const onRootMouseDown = (e) => {
+    var _a2;
+    if (e.button !== 0) {
+      pressAt.current = null;
+      return;
+    }
+    const sel = (_a2 = window.getSelection) == null ? void 0 : _a2.call(window);
+    const hadSelection = !!(sel && !sel.isCollapsed && sel.toString().trim());
+    if (e.shiftKey && hadSelection && sel) {
+      e.preventDefault();
+      const c = caretAt(e.clientX, e.clientY);
+      if (c) {
+        try {
+          sel.extend(c.node, c.offset);
+        } catch {
+        }
+      }
+      pressAt.current = null;
+      return;
+    }
+    pressAt.current = {
+      x: e.clientX,
+      y: e.clientY,
+      hadSelection
+    };
+    sel == null ? void 0 : sel.removeAllRanges();
+  };
+  const onRootMouseUp = (e) => {
+    const p = pressAt.current;
+    pressAt.current = null;
+    if (!p || e.button !== 0) return;
+    if (Math.abs(e.clientX - p.x) > 4 || Math.abs(e.clientY - p.y) > 4) return;
+    if (p.hadSelection) return;
+    setTimeout(() => {
+      var _a2;
+      const sel = (_a2 = window.getSelection) == null ? void 0 : _a2.call(window);
+      if (sel && !sel.isCollapsed && sel.toString().trim()) return;
+      onClose();
+    }, 0);
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      className: "hist-overlay",
+      role: "region",
+      "aria-label": "Full pane history",
+      onMouseDown: onRootMouseDown,
+      onMouseUp: onRootMouseUp,
+      onDragStart: (e) => e.preventDefault(),
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "hist-bar", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "hist-title", children: [
+            "Full ",
+            pane === "shell" ? "terminal" : "agent",
+            " history"
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "hist-hint", children: "drag to select · release to copy · Ctrl+↑/↓ top/bottom · click or Esc returns to live" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "hist-scroll", ref: scrollRef, onMouseUp: copyOnRelease, children: error ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "hist-msg error", children: error }) : text === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "hist-msg", children: "Loading history…" }) : text.trim() ? /* @__PURE__ */ jsxRuntimeExports.jsx("pre", { children: text }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "hist-msg", children: "No history yet." }) })
+      ]
+    }
+  );
+}
 const queueCache = /* @__PURE__ */ new Map();
 function qApi(title, path, opts) {
   return instApi(title, path, opts);
@@ -27739,6 +28217,7 @@ function Pane({
   const [booted, setBooted] = reactExports.useState(false);
   const [wsState, setWsState] = reactExports.useState("connecting");
   const [shellStarted, setShellStarted] = reactExports.useState(savedTab === "shell");
+  const [histPane, setHistPane] = reactExports.useState(null);
   const bodyRef = reactExports.useRef(null);
   const fitTimer = reactExports.useRef(void 0);
   const displayName = alias || title;
@@ -27747,6 +28226,15 @@ function Pane({
       if (!el || missing || loading) return;
       const handle = getTerm(title, kind);
       if (!el.contains(handle.container)) el.appendChild(handle.container);
+      handle.onHistoryDrag = (sel, edge, ctx) => setHistPane({ kind, dragSel: sel, edge, ctx, ghostSel: ghostRef.current });
+      if (kind === "agent") {
+        handle.onTopRow = (t) => {
+          const m = /^\s*[❯>]\s+(.+)$/.exec(t);
+          const g = m && m[1].trim() ? m[1].trim() : null;
+          ghostRef.current = g;
+          setGhost(g);
+        };
+      }
       if (kind === "agent") {
         handle.onState = (s) => setWsState(s);
         handle.onBoot = () => setBooted(true);
@@ -27770,6 +28258,53 @@ function Pane({
     obs.observe(bodyRef.current);
     return () => obs.disconnect();
   }, [fitSoon, missing, loading]);
+  const [pinOpen, setPinOpen] = reactExports.useState(false);
+  const [ghost, setGhost] = reactExports.useState(null);
+  const ghostRef = reactExports.useRef(null);
+  const ghostCore = (ghost || "").replace(/[…]+\s*$/, "").replace(/\s+/g, " ").trim();
+  const fullNorm = (inst.last_prompt_full || "").replace(/\s+/g, " ");
+  const ghostIsLatest = !ghost || !!fullNorm && fullNorm.includes(ghostCore.slice(0, 80));
+  const pinLine = ghost ?? inst.last_prompt;
+  const [lookup, setLookup] = reactExports.useState(null);
+  reactExports.useEffect(() => {
+    if (!pinOpen || ghostIsLatest || ghostCore.length < 8) return;
+    if ((lookup == null ? void 0 : lookup.q) === ghostCore) return;
+    let dead = false;
+    fetch(
+      `/api/instances/${encodeURIComponent(title)}/prompt?q=${encodeURIComponent(ghostCore)}`
+    ).then((r) => r.ok ? r.json() : null).then((j) => {
+      if (!dead && (j == null ? void 0 : j.text)) setLookup({ q: ghostCore, text: j.text });
+    }).catch(() => {
+    });
+    return () => {
+      dead = true;
+    };
+  }, [pinOpen, ghostIsLatest, ghostCore, title, lookup]);
+  const pinBody = ghostIsLatest ? inst.last_prompt_full || inst.last_prompt : (lookup == null ? void 0 : lookup.q) === ghostCore ? lookup.text : ghost;
+  const hasPin = !!pinLine;
+  const pinLen = (pinBody || "").length;
+  reactExports.useEffect(() => {
+    fitSoon();
+  }, [hasPin, pinOpen, pinLen, fitSoon]);
+  reactExports.useEffect(() => {
+    if (!focused || missing || loading || histPane) return;
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      const a = document.activeElement;
+      const editing = a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT" || a.isContentEditable === true);
+      if (editing && !a.closest(".xterm")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setHistPane({
+        kind: tab === "shell" ? "shell" : "agent",
+        dragSel: null,
+        pos: e.key === "ArrowUp" ? "top" : "bottom"
+      });
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [focused, missing, loading, histPane, tab]);
   const showTab = (t) => {
     setTab(t);
     setLastTab(title, t);
@@ -27999,6 +28534,37 @@ function Pane({
             {
               className: "act copyhist",
               type: "button",
+              title: "Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)",
+              onClick: (e) => {
+                e.stopPropagation();
+                setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
+              },
+              children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                "svg",
+                {
+                  width: "12",
+                  height: "12",
+                  viewBox: "0 0 24 24",
+                  fill: "none",
+                  stroke: "currentColor",
+                  strokeWidth: "2",
+                  strokeLinecap: "round",
+                  strokeLinejoin: "round",
+                  "aria-hidden": "true",
+                  children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M12 8v4l2 2" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M3 22v-6h6" })
+                  ]
+                }
+              )
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              className: "act copyhist",
+              type: "button",
               title: "Copy this pane's whole history to the clipboard",
               onClick: (e) => {
                 e.stopPropagation();
@@ -28041,13 +28607,51 @@ function Pane({
           )
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pane-body", ref: bodyRef, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-term agent-term" + (tab !== "agent" ? " hidden" : ""), ref: adopt("agent"), children: !booted && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "term-loading", children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "spinner" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: "Loading session…" })
-          ] }) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pane-term agent-term" + (tab !== "agent" ? " hidden" : ""), ref: adopt("agent"), children: [
+            pinLine ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "prompt-pin" + (pinOpen ? " pin-open" : ""), children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "button",
+                {
+                  type: "button",
+                  className: "prompt-pin-mark",
+                  "aria-expanded": pinOpen,
+                  title: pinOpen ? "Collapse to one line" : "Show the whole prompt",
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    setPinOpen((v) => !v);
+                  },
+                  children: "❯"
+                }
+              ),
+              pinOpen ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "prompt-pin-body", children: pinBody }) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "prompt-pin-text", children: pinLine }),
+              ghost ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "ghost-row-mask", "aria-hidden": "true" }) : null
+            ] }) : null,
+            !booted && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "term-loading", children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "spinner" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: "Loading session…" })
+            ] })
+          ] }),
           shellStarted ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-term shell-term" + (tab !== "shell" ? " hidden" : ""), ref: adopt("shell") }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-term shell-term" + (tab !== "shell" ? " hidden" : "") }),
           caps2.git && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-diff" + (tab !== "diff" ? " hidden" : ""), children: /* @__PURE__ */ jsxRuntimeExports.jsx(DiffTab, { title, active: tab === "diff" }) }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-queue" + (tab !== "queue" ? " hidden" : ""), children: /* @__PURE__ */ jsxRuntimeExports.jsx(QueueTab, { title, active: tab === "queue" }) }),
+          histPane && /* @__PURE__ */ jsxRuntimeExports.jsx(
+            HistoryOverlay,
+            {
+              title,
+              pane: histPane.kind,
+              dragSelection: histPane.dragSel,
+              dragEdge: histPane.edge ?? "top",
+              dragCtx: histPane.ctx ?? null,
+              dragGhost: histPane.ghostSel ?? null,
+              initialPos: histPane.pos ?? "bottom",
+              onClose: () => {
+                const kind = histPane.kind;
+                setHistPane(null);
+                selectSession(title, { noKeyboard: true });
+                setTimeout(() => focusTerm(title, kind), 0);
+              }
+            }
+          ),
           reduceMotion && chip.cls === "s-running" && tab === "agent" && /* @__PURE__ */ jsxRuntimeExports.jsx(RunningCover, { paneRef }),
           (budget == null ? void 0 : budget.locked) && /* @__PURE__ */ jsxRuntimeExports.jsx(BudgetLock, { title, budget })
         ] })

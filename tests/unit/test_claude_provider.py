@@ -1506,3 +1506,84 @@ def test_last_turn_cache_put_evicts_when_full():
     _last_turn_cache_put("wd-overflow", {"checked": 0.0, "sig": None, "snippet": None})
     assert len(_claude_mod._LAST_TURN_CACHE) <= maxn // 2 + 1
     assert "wd-overflow" in _claude_mod._LAST_TURN_CACHE
+
+
+# --------------------------------------------------------------------------- #
+# Per-WINDOW transcript selection: sibling sessions sharing one directory all
+# write into the same projects/<cwd-slug>/ dir, so "newest .jsonl" is whoever
+# typed last. The window's thread marker names its own conversation.
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def two_windows(fake_home, tmp_path, monkeypatch):
+    """A workdir holding two conversations, one per window, with the SECOND
+    (``other``) written last so mtime alone would always pick it."""
+    import os
+
+    monkeypatch.setenv("MINDFLOCK_THREAD_MARKER_DIR", str(tmp_path / "threads"))
+    workdir = "/work/shared"
+    _write_transcript(
+        fake_home,
+        workdir,
+        [{"type": "user", "message": {"content": "mine: fix the parser"}}],
+        fname="aaaa-1111.jsonl",
+    )
+    _write_transcript(
+        fake_home,
+        workdir,
+        [{"type": "user", "message": {"content": "theirs: bump the deps"}}],
+        fname="bbbb-2222.jsonl",
+    )
+    proj = fake_home / ".claude" / "projects" / _encode(workdir)
+    os.utime(proj / "aaaa-1111.jsonl", (1000, 1000))  # older than its sibling
+    os.utime(proj / "bbbb-2222.jsonl", (2000, 2000))
+    thread_markers.record("mindflock_mine", "aaaa-1111")
+    thread_markers.record("mindflock_theirs", "bbbb-2222")
+    return workdir, proj
+
+
+def test_session_transcript_prefers_this_windows_thread_marker(two_windows):
+    workdir, proj = two_windows
+    # Path-keyed selection always lands on the sibling that wrote last...
+    assert _claude_mod._newest_transcript(workdir)[2] == str(proj / "bbbb-2222.jsonl")
+    # ...while each window gets its OWN conversation.
+    assert _claude_mod._session_transcript(workdir, "mindflock_mine")[2] == str(
+        proj / "aaaa-1111.jsonl"
+    )
+    assert _claude_mod._session_transcript(workdir, "mindflock_theirs")[2] == str(
+        proj / "bbbb-2222.jsonl"
+    )
+
+
+def test_session_transcript_falls_back_without_a_usable_marker(two_windows):
+    workdir, proj = two_windows
+    newest = str(proj / "bbbb-2222.jsonl")
+    # No session name, no marker for the name, and a marker naming a file that
+    # is gone all fall back to the newest transcript.
+    assert _claude_mod._session_transcript(workdir, "")[2] == newest
+    assert _claude_mod._session_transcript(workdir, "mindflock_hookless")[2] == newest
+    (proj / "aaaa-1111.jsonl").unlink()
+    assert _claude_mod._session_transcript(workdir, "mindflock_mine")[2] == newest
+
+
+def test_last_prompt_snippet_is_per_window_not_per_workdir(two_windows):
+    workdir, _ = two_windows
+    provider = ClaudeProvider()
+    # Both calls happen inside the cache TTL: the session name is part of the
+    # cache key, so the first window's answer can't be served to the second.
+    assert provider.last_prompt_snippet("mindflock_mine", workdir) == (
+        "mine: fix the parser"
+    )
+    assert provider.last_prompt_snippet("mindflock_theirs", workdir) == (
+        "theirs: bump the deps"
+    )
+    assert provider.last_prompt_full("mindflock_mine", workdir) == (
+        "mine: fix the parser"
+    )
+    assert provider.last_turn_snippet("mindflock_mine", workdir) == (
+        "mine: fix the parser"
+    )
+    assert provider.find_prompt_full("mindflock_mine", workdir, "mine: fix") == (
+        "mine: fix the parser"
+    )
+    # The other window's prompt is not reachable from this window.
+    assert provider.find_prompt_full("mindflock_mine", workdir, "theirs: bump") is None

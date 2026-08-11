@@ -289,6 +289,27 @@ class BaseProvider:
         Implementations must be cheap — this is called from the UI poll."""
         return None
 
+    def last_prompt_snippet(self, session_name: str, workdir: str) -> Optional[str]:
+        """A one-line snippet of the newest USER prompt (first meaningful
+        line, ≤120 chars) — what the human last asked this session to do; the
+        panes pin it above the terminal. Same cheapness contract as
+        :meth:`last_turn_snippet`. Default: no transcript to read."""
+        return None
+
+    def last_prompt_full(self, session_name: str, workdir: str) -> Optional[str]:
+        """The newest USER prompt's whole body (capped ~4000 chars) — the
+        pinned line's hover/click expansion. Must come from the same entry
+        :meth:`last_prompt_snippet` reported. Default: no transcript."""
+        return None
+
+    def find_prompt_full(
+        self, session_name: str, workdir: str, prefix: str
+    ) -> Optional[str]:
+        """Full body of the newest USER prompt starting with ``prefix`` (a
+        width-truncated line from the terminal), for expanding OLDER prompts
+        than the latest. Default: no transcript to search."""
+        return None
+
     # --- per-session resume thread ----------------------------------------- #
     def resume_thread_id(self, session_name: str) -> str:
         """The conversation/session id recorded for THIS window, or ``""``.

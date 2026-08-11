@@ -152,6 +152,9 @@ from backend.web.core.agent_state import (
     _precommit_lock_is_live,
     _precommit_lock_path,
     _proc_cpu_snapshot,
+    _session_find_prompt,
+    _session_last_prompt,
+    _session_last_prompt_full,
     _session_last_turn,
     _session_stage,
 )
@@ -796,6 +799,18 @@ def _agent_activity_cached(inst, title: str) -> str:
 def _session_last_turn_cached(inst) -> Optional[str]:
     """``_session_last_turn(inst)`` memoized per session (last-turn timestamp)."""
     return _probe_cached("last_turn", inst, lambda: _session_last_turn(inst))
+
+
+def _session_last_prompt_cached(inst) -> Optional[str]:
+    """``_session_last_prompt(inst)`` memoized per session."""
+    return _probe_cached("last_prompt", inst, lambda: _session_last_prompt(inst))
+
+
+def _session_last_prompt_full_cached(inst) -> Optional[str]:
+    """``_session_last_prompt_full(inst)`` memoized per session."""
+    return _probe_cached(
+        "last_prompt_full", inst, lambda: _session_last_prompt_full(inst)
+    )
 
 
 # ---- /api/events state tick (F6) ------------------------------------------ #
@@ -2312,6 +2327,10 @@ def _session_snapshot(i, queues: dict) -> dict:
     d["activity_since"] = float(_act_rec.get("changed_epoch") or 0.0)
     # L3: latest-turn snippet (≤120 chars) for N-session triage, or null.
     d["last_turn"] = _session_last_turn_cached(i)
+    # The newest USER prompt (first line) — the panes pin it above the
+    # terminal — and its whole body for the pin's hover/click expansion.
+    d["last_prompt"] = _session_last_prompt_cached(i)
+    d["last_prompt_full"] = _session_last_prompt_full_cached(i)
     # O2/O3/O4: worktree setup + verification-gate state and the port block.
     try:
         wt = i.GetWorktreePath()
@@ -2346,6 +2365,8 @@ _SNAPSHOT_PROBE_KEYS = (
     "activity",
     "activity_since",
     "last_turn",
+    "last_prompt",
+    "last_prompt_full",
     "setup",
     "check",
 )
@@ -2381,6 +2402,8 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     _act_rec = _ACTIVITY_CACHE.get(i.Title) or {}
     d["activity_since"] = float(_act_rec.get("changed_epoch") or 0.0)
     d["last_turn"] = None
+    d["last_prompt"] = None
+    d["last_prompt_full"] = None
     d["setup"] = None
     d["check"] = None
     pb = _ports.get(i.Title)
@@ -6412,19 +6435,45 @@ async def shell_ws(ws: WebSocket, title: str) -> None:
 # _agent_transcript_text moved to core.session_stats (imported above).
 
 
+@app.get("/api/instances/{title}/prompt")
+def pane_prompt(title: str, q: str = "") -> JSONResponse:
+    """Full body of the newest USER prompt starting with ``q`` (the TUI's
+    width-truncated pinned row) — the desktop prompt bar's expansion for
+    prompts older than the latest. ``{"text": null}`` on no match."""
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        return JSONResponse({"error": "instance not found"}, status_code=404)
+    return JSONResponse({"text": _session_find_prompt(inst, q)})
+
+
 @app.get("/api/instances/{title}/history")
 def pane_history(title: str, pane: str = "agent") -> PlainTextResponse:
     """Full tmux scrollback of the agent/shell pane as plain text.
 
     The web terminals attach to tmux, so xterm.js only ever holds one screen —
     the real history lives in tmux on the server. The pane-header "Copy all"
-    button fetches this and puts it on the clipboard, which is how you capture
-    far more than a screenful (drag-selection can't scroll through tmux
-    history; see attachDragAutoScroll in app.js).
+    button copies this to the clipboard, and the history overlay
+    (frontend HistoryOverlay.tsx) renders it as a scrollable, selectable page
+    (drag-selection can't scroll through tmux history in the live terminal).
     """
     inst = ENGINE.instances.get(title)
     if inst is None:
         return PlainTextResponse("instance not found", status_code=404)
+    if pane != "shell":
+        # The agent TUI redraws in place, so its tmux capture holds only
+        # scroll-off fragments plus the current frame — incomplete, and laced
+        # with the TUI's chrome (input box, status rows). The provider
+        # transcript is the complete conversation; ALWAYS prefer it, falling
+        # through to the capture only when none exists (non-Claude providers,
+        # fresh sessions).
+        # By tmux session name, not just the worktree: sibling windows on the
+        # same directory share a transcript dir, and only the window's own
+        # thread marker says which conversation is THIS pane's.
+        text = _agent_transcript_text(
+            inst.GetWorktreePath(), tmux.to_mindflock_tmux_name(title)
+        )
+        if text:
+            return PlainTextResponse(text)
     base = (
         _shell_tmux_name(title)
         if pane == "shell"
@@ -6432,11 +6481,6 @@ def pane_history(title: str, pane: str = "agent") -> PlainTextResponse:
     )
     name = _live_session_name(base)
     if name is None:
-        if pane != "shell":
-            # Session gone but the provider transcript may still exist on disk.
-            text = _agent_transcript_text(inst.GetWorktreePath())
-            if text:
-                return PlainTextResponse(text)
         return PlainTextResponse("no live session", status_code=404)
     try:
         out = subprocess.run(
@@ -6453,20 +6497,6 @@ def pane_history(title: str, pane: str = "agent") -> PlainTextResponse:
         return PlainTextResponse(
             out.stderr.strip() or "capture failed", status_code=500
         )
-    if pane != "shell":
-        # Sessions whose TUI sits on tmux's alternate screen have empty
-        # history: the capture above only sees the visible frame. Prefer the
-        # provider's transcript file for those, when one exists.
-        hist = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", name, "#{history_size}"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if hist.returncode == 0 and hist.stdout.strip() == "0":
-            text = _agent_transcript_text(inst.GetWorktreePath())
-            if text:
-                return PlainTextResponse(text)
     return PlainTextResponse(out.stdout.rstrip("\n") + "\n")
 
 
