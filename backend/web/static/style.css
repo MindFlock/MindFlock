@@ -5929,18 +5929,19 @@ p.set-hint {
   border-radius: 12px;
   padding: 20px 22px;
   /* One column, quick-launch first: Name + Prompt up top, Folder+Agent in a
-     compact row, then the git/workspace fold (open by default — those are the
-     settings people come here to change) and the launch-flag fold (closed;
-     extra CLI flags are a rarity). Sized to hold exactly that without
+     compact row, then three folds: git/workspace (open by default — those are
+     the settings people come here to change), the prompt, and launch flags
+     (both closed; most sessions start with neither). Sized to hold exactly that without
      scrolling, and no larger: a modal that fills the screen to show a form
-     half its size is its own kind of wrong. The 92vh share carries as much weight
-     as the pixel cap: on a short window it was the viewport clamp, not the
-     680px, that brought the scroll shadows back. The height stays FIXED (not
-     content-driven) so toggling a fold scrolls inside .nf-body rather than
+     half its size is its own kind of wrong, and one that reaches the top bar
+     has stopped reading as a card at all. The vh share carries as much weight as
+     the pixel cap: too low and the scroll shadows return on a short window,
+     too high and the card runs into the chrome above it. The height stays FIXED
+     (not content-driven) so toggling a fold scrolls inside .nf-body rather than
      growing and re-centering the dialog under the pointer; both axes clamp to
      the viewport on small windows. */
   width: min(660px, 94vw);
-  height: min(92vh, 760px);
+  height: min(86vh, 620px);
   overflow: hidden;
   display: flex;
   flex-direction: column;

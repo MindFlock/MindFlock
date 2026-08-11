@@ -272,14 +272,20 @@ export function NewSessionDialog() {
   const [inPlace, setInPlace] = useState(true);
   const [initRepo, setInitRepo] = useState(false);
   const [error, setError] = useState("");
-  // "More options" starts OPEN — hiding the git/workspace choices behind a
-  // click had people launch with the wrong strategy rather than discover it,
-  // and those are the settings this dialog exists to set. Launch flags stay
+  // "Git & workspace" starts OPEN — hiding those choices behind a click had
+  // people launch with the wrong strategy rather than discover it, and they
+  // are the settings this dialog exists to set. Launch flags stay
   // CLOSED: extra CLI flags are a per-session rarity, and the card is sized
   // for the form without them. Either fold's state is remembered for the life
   // of the dialog.
   const [advancedOpen, setAdvancedOpen] = useState(true);
   const [launchOpen, setLaunchOpen] = useState(false);
+  // The prompt is a fold too, and a closed one: a session started with no
+  // prompt is the common case (you drive it by hand from the terminal), and
+  // the textarea plus its preset row was the tallest block on the card. It
+  // sits BELOW the git/workspace options, where the things you set before
+  // launching are grouped.
+  const [promptOpen, setPromptOpen] = useState(false);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [activeTemplate, setActiveTemplate] = useState("");
   const [provisioningAvailable, setProvisioningAvailable] = useState(false);
@@ -293,6 +299,7 @@ export function NewSessionDialog() {
   const launchDefaults = useRef<Record<string, string>>({});
   const titleRef = useRef<HTMLInputElement | null>(null);
   const launchRef = useRef<HTMLDetailsElement | null>(null);
+  const promptRef = useRef<HTMLDetailsElement | null>(null);
   // The modal's own element, so the opening focus can tell "nothing in here has
   // the caret yet" from "the user is already typing in one of these fields".
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -319,6 +326,7 @@ export function NewSessionDialog() {
     // second open onward.
     setAdvancedOpen(true);
     setLaunchOpen(false);
+    setPromptOpen(false);
     folderDo({ t: "reopen" });
     setActiveTemplate("");
     setPresetValue("");
@@ -472,6 +480,9 @@ export function NewSessionDialog() {
     setInPlace(!!t.in_place);
     setInitRepo(!!t.init_repo);
     setAdvancedOpen(!!(t.provisioned || t.init_repo || !t.in_place));
+    // A template that brings a prompt has just written into a fold that
+    // defaults shut; leaving it shut hides the text it filled in.
+    if (t.prompt) setPromptOpen(true);
     setActiveTemplate(t.name);
     if (!title.trim()) setTitle(t.name || "");
     titleRef.current?.focus();
@@ -728,7 +739,7 @@ export function NewSessionDialog() {
                   <button
                     type="button"
                     className="linklike"
-                    title="Ticks “Create a git repo in this folder” under More options"
+                    title="Ticks “Create a git repo in this folder” under Git & workspace"
                     onClick={armInitRepo}
                   >
                     Create one
@@ -786,74 +797,6 @@ export function NewSessionDialog() {
             />
           )}
 
-          <label>
-            <span>
-              Prompt{" "}
-              <span className="muted">— optional; sent to the agent at launch · Ctrl+Enter creates</span>
-            </span>
-            <span className="preset-row">
-              <select
-                id="new-preset"
-                title="Prompt presets — pick one to fill the prompt below (editable after)"
-                value={presetValue}
-                onChange={(e) => {
-                  setPresetValue(e.target.value);
-                  const p = findPreset(e.target.value);
-                  if (p) setPrompt(p.prompt);
-                }}
-              >
-                <option value="">Preset…</option>
-                {BUILTIN_PRESETS.length > 0 && (
-                  <optgroup label="Built-in">
-                    {BUILTIN_PRESETS.map((p) => (
-                      <option key={"b:" + p.name} value={"b:" + p.name} title={p.prompt}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {savedPresets.length > 0 && (
-                  <optgroup label="Saved">
-                    {savedPresets.map((p) => (
-                      <option key={"u:" + p.name} value={"u:" + p.name} title={p.prompt}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-              <button type="button" id="preset-save" title="Save current prompt as preset…" onClick={savePreset}>
-                Save…
-              </button>
-              {presetValue.startsWith("u:") && (
-                <button
-                  type="button"
-                  id="preset-del"
-                  title="Delete the selected saved preset"
-                  onClick={() => {
-                    const p = findPreset(presetValue);
-                    if (!p) return;
-                    const list = loadUserPresets().filter((q) => q.name !== p.name);
-                    saveUserPresets(list);
-                    setSavedPresets(list);
-                    setPresetValue("");
-                  }}
-                >
-                  ✕
-                </button>
-              )}
-            </span>
-            <textarea
-              id="new-prompt"
-              rows={2}
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="What should the agent do first? Leave blank if you don’t want to kick anything off just yet."
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-            />
-          </label>
-
           <details
             id="new-advanced"
             className="nf-advanced"
@@ -862,7 +805,7 @@ export function NewSessionDialog() {
             onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
           >
             <summary>
-              More options <span className="muted">— git &amp; workspace</span>
+              Git &amp; workspace
             </summary>
             <div className="nf-advanced-body">
               <label className="check">
@@ -928,6 +871,88 @@ export function NewSessionDialog() {
                   </p>
                 </div>
               )}
+            </div>
+          </details>
+
+          <details
+            id="new-prompt-fold"
+            className="nf-advanced"
+            ref={promptRef}
+            open={promptOpen}
+            onToggle={(e) => {
+              const open = (e.target as HTMLDetailsElement).open;
+              setPromptOpen(open);
+              if (open)
+                promptRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+            }}
+          >
+            <summary>
+              Prompt <span className="muted">— sent to the agent at launch</span>
+            </summary>
+            <div className="nf-advanced-body">
+              <label>
+                <span className="preset-row">
+                  <select
+                    id="new-preset"
+                    title="Prompt presets — pick one to fill the prompt below (editable after)"
+                    value={presetValue}
+                    onChange={(e) => {
+                      setPresetValue(e.target.value);
+                      const p = findPreset(e.target.value);
+                      if (p) setPrompt(p.prompt);
+                    }}
+                  >
+                    <option value="">Preset…</option>
+                    {BUILTIN_PRESETS.length > 0 && (
+                      <optgroup label="Built-in">
+                        {BUILTIN_PRESETS.map((p) => (
+                          <option key={"b:" + p.name} value={"b:" + p.name} title={p.prompt}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {savedPresets.length > 0 && (
+                      <optgroup label="Saved">
+                        {savedPresets.map((p) => (
+                          <option key={"u:" + p.name} value={"u:" + p.name} title={p.prompt}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                  <button type="button" id="preset-save" title="Save current prompt as preset…" onClick={savePreset}>
+                    Save…
+                  </button>
+                  {presetValue.startsWith("u:") && (
+                    <button
+                      type="button"
+                      id="preset-del"
+                      title="Delete the selected saved preset"
+                      onClick={() => {
+                        const p = findPreset(presetValue);
+                        if (!p) return;
+                        const list = loadUserPresets().filter((q) => q.name !== p.name);
+                        saveUserPresets(list);
+                        setSavedPresets(list);
+                        setPresetValue("");
+                      }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </span>
+                <textarea
+                  id="new-prompt"
+                  rows={2}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="What should the agent do first? Leave blank if you don’t want to kick anything off just yet."
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                />
+              </label>
             </div>
           </details>
 
@@ -1098,14 +1123,18 @@ function FolderBrowser({
   return (
     <div id="repo-browser">
       <div className="rb-head">
+        {/* ← rather than ↑: every file browser people already use — Finder,
+            Explorer, a web page — spells "out of here" as back, and the row
+            list reads as a place you stepped into, not a level you climbed. */}
         <button
           type="button"
           id="rb-up"
           title="Parent folder"
+          aria-label="Parent folder"
           disabled={!data?.parent}
           onClick={() => data?.parent && load(data.parent)}
         >
-          ↑
+          ←
         </button>
         <span id="rb-cwd" className="rb-cwd" title={data?.path || ""}>
           {data?.path || ""}

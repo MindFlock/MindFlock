@@ -373,8 +373,11 @@ def test_new_session_ctrl_enter_submits_at_dialog_level():
     # The prompt textarea carries no onKeyDown, so a plain Enter still newlines.
     prompt = js.split('id: "new-prompt"', 1)[1][:400]
     assert "onKeyDown" not in prompt
-    # The hint advertises the shortcut.
-    assert "Ctrl+Enter creates" in js
+    # The shortcut is deliberately NOT advertised in the dialog any more — the
+    # prompt summary was carrying a hint for a key nobody needed told about,
+    # and the label is worth more as a name than as a cheat sheet. It still
+    # works; that is what everything above this line pins.
+    assert "Ctrl+Enter creates" not in js
 
 
 # --------------------------------------------------------------------------- #
