@@ -72,6 +72,15 @@ const SUGGEST_SOURCES: Array<{ key: string; label: string; hint: string }> = [
  * per-keystroke call would be harmless but pointless traffic. */
 const CHECK_DEBOUNCE_MS = 400;
 
+/** Whether a child ending at ``childRight`` fits inside a row ending at
+ * ``rowRight``. Both edges must come from the SAME coordinate space — mixing
+ * an offsetParent-relative offset with a container width is what emptied the
+ * folder rows once already. Half a pixel of slack, since sub-pixel layout
+ * routinely puts a fitting child a hair past the edge. */
+export function fitsWithin(childRight: number, rowRight: number): boolean {
+  return childRight <= rowRight + 0.5;
+}
+
 /** A no-wrap chip row that hides whatever doesn't fit, whole chips only.
  *
  * The row is one line by design (see NewSessionDialog.css), and `overflow:
@@ -93,11 +102,19 @@ function FitRow({ children }: { children: React.ReactNode }) {
       // Unhide first: the row may have grown, and a chip hidden at the old
       // width has no geometry to measure at the new one.
       for (const k of kids) k.classList.remove("nt-clipped");
-      const limit = el.clientWidth;
+      // Viewport coordinates for BOTH sides. offsetLeft looked like the
+      // obvious measure and is a trap here: it is relative to offsetParent,
+      // which for these chips is .modal (position: fixed), so each chip's
+      // offset carried the whole dialog's distance from the window edge and
+      // every one of them compared as overflowing — the rows rendered empty.
+      const right = el.getBoundingClientRect().right;
+      if (!(right > 0)) return; // not laid out yet; hide nothing
       for (const k of kids) {
         // Half a pixel of slack: sub-pixel layout would otherwise drop a chip
         // that lands exactly on the edge.
-        if (k.offsetLeft + k.offsetWidth > limit + 0.5) k.classList.add("nt-clipped");
+        if (!fitsWithin(k.getBoundingClientRect().right, right)) {
+          k.classList.add("nt-clipped");
+        }
       }
     };
     fit();

@@ -29631,6 +29631,9 @@ const SUGGEST_SOURCES = [
   { key: "nearby", label: "Nearby", hint: "repos and folders sitting under your home directory" }
 ];
 const CHECK_DEBOUNCE_MS = 400;
+function fitsWithin(childRight, rowRight) {
+  return childRight <= rowRight + 0.5;
+}
 function FitRow({ children }) {
   const ref = reactExports.useRef(null);
   reactExports.useLayoutEffect(() => {
@@ -29639,9 +29642,12 @@ function FitRow({ children }) {
     const fit = () => {
       const kids = Array.from(el.children);
       for (const k of kids) k.classList.remove("nt-clipped");
-      const limit = el.clientWidth;
+      const right = el.getBoundingClientRect().right;
+      if (!(right > 0)) return;
       for (const k of kids) {
-        if (k.offsetLeft + k.offsetWidth > limit + 0.5) k.classList.add("nt-clipped");
+        if (!fitsWithin(k.getBoundingClientRect().right, right)) {
+          k.classList.add("nt-clipped");
+        }
       }
     };
     fit();
