@@ -1587,3 +1587,91 @@ def test_last_prompt_snippet_is_per_window_not_per_workdir(two_windows):
     )
     # The other window's prompt is not reachable from this window.
     assert provider.find_prompt_full("mindflock_mine", workdir, "theirs: bump") is None
+
+
+# --------------------------------------------------------------------------- #
+# Queued prompts: a message typed while the turn is still running is filed as
+# {"type": "queue-operation", "operation": "enqueue", "content": ...} and is
+# NEVER re-filed as a "user" entry, so a reader that only knows "user" loses it
+# permanently.
+# --------------------------------------------------------------------------- #
+def _enqueued(text: str) -> dict:
+    return {"type": "queue-operation", "operation": "enqueue", "content": text}
+
+
+def test_last_prompt_sees_a_prompt_typed_mid_turn(fake_home):
+    workdir = "/work/queued"
+    _write_transcript(
+        fake_home,
+        workdir,
+        [
+            {"type": "user", "message": {"content": "the first thing I asked"}},
+            {"type": "assistant", "message": {"content": "working on it"}},
+            _enqueued("actually also make the menu bigger"),
+        ],
+    )
+    provider = ClaudeProvider()
+    assert provider.last_prompt_snippet("s", workdir) == (
+        "actually also make the menu bigger"
+    )
+    assert provider.last_prompt_full("s", workdir) == (
+        "actually also make the menu bigger"
+    )
+
+
+def test_find_prompt_full_expands_a_queued_prompt(fake_home):
+    """The pinned line is width-truncated by the TUI; expanding it looks the
+    body up by prefix. Queued prompts used to return null here, so clicking
+    the arrow re-showed the same truncated text."""
+    workdir = "/work/queued2"
+    long_prompt = (
+        "I also think i want the new menu to be much larger so i dont have to "
+        "scroll. Also make the more options and launch flags open by default"
+    )
+    _write_transcript(fake_home, workdir, [_enqueued(long_prompt)])
+    provider = ClaudeProvider()
+    got = provider.find_prompt_full(
+        "s", workdir, "I also think i want the new menu to be much larger…"
+    )
+    assert got == long_prompt
+
+
+def test_queue_removals_are_not_second_copies_of_the_prompt(fake_home):
+    """Each queued message is enqueued and later removed with the SAME text;
+    only the enqueue is the human speaking."""
+    workdir = "/work/queued3"
+    _write_transcript(
+        fake_home,
+        workdir,
+        [
+            _enqueued("do the thing"),
+            {
+                "type": "queue-operation",
+                "operation": "remove",
+                "content": "do the thing",
+            },
+            {"type": "assistant", "message": {"content": "done"}},
+        ],
+    )
+    from backend.providers.claude import _entry_text
+
+    assert _entry_text(_enqueued("do the thing")) == "do the thing"
+    assert (
+        _entry_text(
+            {
+                "type": "queue-operation",
+                "operation": "remove",
+                "content": "do the thing",
+            }
+        )
+        is None
+    )
+    # The newest human prompt is still the enqueue, not the assistant reply.
+    assert ClaudeProvider().last_prompt_snippet("s", workdir) == "do the thing"
+
+
+def test_empty_queue_content_is_not_a_prompt(fake_home):
+    from backend.providers.claude import _entry_text
+
+    assert _entry_text(_enqueued("   ")) is None
+    assert _entry_text({"type": "queue-operation", "operation": "enqueue"}) is None

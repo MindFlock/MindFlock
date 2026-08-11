@@ -184,7 +184,19 @@ def _agent_transcript_text(workdir: str, session_name: str = ""):
                     obj = json.loads(line)
                 except ValueError:
                     continue
-                if obj.get("isMeta") or obj.get("type") not in ("user", "assistant"):
+                if obj.get("isMeta"):
+                    continue
+                if obj.get("type") == "queue-operation":
+                    # A prompt typed while the turn was still running. It is
+                    # never re-filed as a "user" entry, so skipping it drops
+                    # the message from the conversation for good.
+                    if obj.get("operation") != "enqueue":
+                        continue
+                    queued = obj.get("content")
+                    if isinstance(queued, str) and queued.strip():
+                        parts.append("## User\n" + queued)
+                    continue
+                if obj.get("type") not in ("user", "assistant"):
                     continue
                 content = (obj.get("message") or {}).get("content")
                 texts = []
