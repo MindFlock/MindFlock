@@ -372,28 +372,41 @@ function attachWheelScroll(host: HTMLElement, term: Terminal, getWs: () => WebSo
 // rewritten cells); instead it fires once per drag and the pane opens the
 // full-history overlay. The hold delay keeps an overshoot while selecting an
 // edge line from triggering it.
-function attachDragHistoryGesture(
+/** How far INSIDE each edge the gesture arms. Both zones reach inward, and
+ * for the same reason: a drag that runs out of screen comes to rest ON the
+ * edge row, not past the container. Downward that row is the tmux status bar;
+ * upward it is the top line, where the selection visibly stops growing —
+ * exactly the moment the reader is asking for more than the screen holds.
+ * Requiring the pointer to LEAVE the element made both gestures nearly
+ * impossible to hit; the top one, the one people actually reach for, was
+ * unreachable in practice, since nothing tells you to keep dragging up into
+ * the pane header. The hold delay is what keeps an ordinary overshoot from
+ * firing it. */
+export const DRAG_EDGE_ZONE = 18;
+
+/** Which edge zone a pointer at ``y`` is in, or null for the middle. Pure, so
+ * the geometry that decides whether the gesture is reachable at all can be
+ * tested without a DOM. */
+export function dragEdgeAt(
+  y: number,
+  r: { top: number; bottom: number },
+  zone: number = DRAG_EDGE_ZONE
+): "top" | "bottom" | null {
+  if (y < r.top + zone) return "top";
+  if (y > r.bottom - zone) return "bottom";
+  return null;
+}
+
+export function attachDragHistoryGesture(
   host: HTMLElement,
   fire: (edge: "top" | "bottom") => void
 ) {
   const HOLD_MS = 220;
-  const MARGIN = 8; // px past the top edge before the hold timer arms
-  // The bottom zone starts INSIDE the terminal: its last visible row is the
-  // tmux status bar, so a downward selection drag naturally comes to rest ON
-  // that row, never 8px past the container — requiring "outside only" made
-  // the downward gesture nearly impossible to hit in practice.
-  const BOTTOM_ZONE = 18;
   host.addEventListener("mousedown", (down: MouseEvent) => {
     if (down.button !== 0) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const onMove = (ev: MouseEvent) => {
-      const r = host.getBoundingClientRect();
-      const edge: "top" | "bottom" | null =
-        ev.clientY < r.top - MARGIN
-          ? "top"
-          : ev.clientY > r.bottom - BOTTOM_ZONE
-            ? "bottom"
-            : null;
+      const edge = dragEdgeAt(ev.clientY, host.getBoundingClientRect());
       if (edge && timer === undefined) {
         timer = setTimeout(() => {
           cleanup();
