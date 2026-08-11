@@ -848,7 +848,7 @@ export function NewSessionDialog() {
               rows={2}
               autoComplete="off"
               spellCheck={false}
-              placeholder="What should the agent do first?"
+              placeholder="What should the agent do first? Leave blank if you don’t want to kick anything off just yet."
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
             />

@@ -31,12 +31,14 @@
      settings people come here to change) and the launch-flag fold (closed;
      extra CLI flags are a rarity). Sized to hold exactly that without
      scrolling, and no larger: a modal that fills the screen to show a form
-     half its size is its own kind of wrong. The height stays FIXED (not
+     half its size is its own kind of wrong. The 92vh share carries as much weight
+     as the pixel cap: on a short window it was the viewport clamp, not the
+     680px, that brought the scroll shadows back. The height stays FIXED (not
      content-driven) so toggling a fold scrolls inside .nf-body rather than
      growing and re-centering the dialog under the pointer; both axes clamp to
      the viewport on small windows. */
-  width: min(620px, 94vw);
-  height: min(88vh, 680px);
+  width: min(660px, 94vw);
+  height: min(92vh, 760px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
