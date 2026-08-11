@@ -64,15 +64,20 @@ NOTIFY_RULES: List[dict] = [
         "tags": ["question"],
     },
     {
-        # There is no dedicated "merged" event: an open PR sets stage "pr", and
-        # merging/closing it moves the stage off "pr" (usually to "pushed").
+        # Keyed on the PR lookup's own state, NOT on the stage leaving "pr".
+        # The stage ladder drops off "pr" whenever the tree goes dirty or a
+        # commit runs (agent_state._session_stage returns "agent"/"precommit"
+        # before it ever consults the PR), so the old `stage_changed old="pr"`
+        # rule fired "PR merged or closed" on every edit of a PR that was open
+        # the whole time — then fired again as the session climbed back to "pr".
+        # `old: "OPEN"` covers both real endings (MERGED and CLOSED).
         "id": "pr_closed",
         "label": "A pull request is merged or closed",
-        "event": "session.stage_changed",
-        "old": "pr",
+        "event": "session.pr_state_changed",
+        "old": "OPEN",
         "new": None,
         "title": "{session}: PR merged or closed",
-        "body": "The pull request left the open-review stage.",
+        "body": "The pull request is no longer open.",
         "default_enabled": True,
         "priority": 3,
         "tags": ["white_check_mark"],

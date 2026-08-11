@@ -95,10 +95,13 @@ def test_app_js_toast_subscribers_skip_replays():
     assert 'typeof ev.isReplay === "function"' in js
     # Clarify toast/badge arming gated; state repaint (forceActivity) is not.
     assert 'env.new === "clarify" && !isReplay(env)' in js
-    # Stage (PR / interrupt / merged) and budget subscribers bail on replays.
-    assert js.count("if (isReplay(env)) return;") >= 2
+    # Stage (interrupt), PR-state (open / merged) and budget subscribers all
+    # bail on replays.
+    assert js.count("if (isReplay(env)) return;") >= 3
     stage = js[js.index('ev.subscribe("session.stage_changed"') :]
-    assert stage.index("isReplay(env)") < stage.index('env.new === "pr"')
+    assert stage.index("isReplay(env)") < stage.index('env.new === "interrupt"')
+    pr = js[js.index('ev.subscribe("session.pr_state_changed"') :]
+    assert pr.index("isReplay(env)") < pr.index('env.new === "OPEN"')
     budget = js[js.index('ev.subscribe("session.budget_exceeded"') :]
     assert budget.index("isReplay(env)") < budget.index("exceeded its budget")
 

@@ -57,6 +57,16 @@ EVENT_NAMES = (
     # "loop": bool}).
     "session.prompt_sent",
     "session.queue_changed",
+    # A session's pull request genuinely changed state: ``old``/``new`` are the
+    # GitHub states ("" | OPEN | MERGED | CLOSED), data: {"url": str}. This is
+    # NOT derivable from ``session.stage_changed``: the stage ladder drops off
+    # "pr" whenever the tree goes dirty or a commit runs (see
+    # ``agent_state._session_stage``), so a PR that stayed open the whole time
+    # used to look like it had closed and re-opened on every edit/commit/push
+    # cycle — firing "PR merged or closed" and then "PR open" over and over.
+    # Emitted only when the PR lookup itself reports a different state, so it
+    # fires once per real transition.
+    "session.pr_state_changed",
     # Usage limits (roadmap D): the provider's window reopened for a session
     # that had run out — emitted once per reopening, by the drain-loop watcher
     # that also nudges such a session to carry on (data: {"resumed": bool}).

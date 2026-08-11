@@ -29,6 +29,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the tab counts are already filled in. Skipped when no ticketing source is
   connected, and paused while the window is hidden.
 
+### Fixed
+
+- **"PR merged or closed" stopped crying wolf.** Both PR notifications — the
+  browser/ntfy alert and the in-app toast — were inferred from the stage pill
+  leaving or re-entering the `pr` rung. But the stage ladder drops to `agent` the
+  moment the working tree goes dirty, before it has even looked the PR up, so an
+  agent iterating on review feedback walked `pr → agent → committed → pushed → pr`
+  on every single edit. Each lap announced that the pull request had been merged
+  or closed, then that it had opened again, for a PR that never moved.
+
+  A new `session.pr_state_changed` event carries the PR's own state instead, and
+  both channels key off that, so each transition is announced once when it really
+  happens. A lookup that fails — no `gh`, a rate limit, a network blip — is never
+  read as a close; a first sighting seeds silently, so a restart cannot
+  re-announce an already-merged PR; and switching branches re-seeds rather than
+  reporting the previous branch's PR as closed.
+
+### Changed
+
+- **Expanding a pinned prompt no longer shoves the terminal.** The full prompt
+  used to open in flow, which shrank the terminal container, refit xterm and
+  resized the real tmux pane — so reading what a session was asked to do reflowed
+  the output you were reading it against, and cost a PTY resize on every toggle.
+  It now draws over the terminal instead, anchored on the bar itself so the first
+  line lands exactly where the collapsed summary was, with no blank row and no
+  duplicated line. The bar stays one line tall in both states, so the terminal
+  never moves.
+
 ## [0.1.16] - 2026-08-10
 
 ### Fixed

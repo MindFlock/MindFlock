@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import threading
 import time
 from typing import Dict, Optional
 
@@ -28,6 +29,7 @@ from backend import session
 from backend.providers.usage_limits import is_limit_screen
 from backend.session import tmux
 from backend.session.storage import Loading
+from backend.web.core import events as _events
 from backend.web.core.terminal import _exit_marker_path
 
 
@@ -136,6 +138,54 @@ _THREAD_RECORD_AT: dict = {}
 # user is actually on, not a previous task's leftovers. Dict ops are
 # GIL-atomic and every drift step is idempotent, so no lock is needed.
 _LAST_BRANCH: Dict[str, str] = {}
+
+# Last PR state observed per session title, as ``(branch, state)`` — the memory
+# behind ``session.pr_state_changed``. Kept separate from the stage ladder on
+# purpose: ``_session_stage`` drops off the "pr" rung whenever the tree goes
+# dirty, a commit runs, or pre-commit blocks one, so "the stage left pr" is NOT
+# "the PR closed". Consumers that inferred it that way announced a merge (and
+# then a re-open) on every edit/commit/push cycle of a PR that never moved.
+_LAST_PR_STATE: Dict[str, tuple] = {}
+_LAST_PR_STATE_LOCK = threading.Lock()
+
+
+def _track_pr_state(title: str, branch: str, info) -> None:
+    """Emit ``session.pr_state_changed`` when ``branch``'s PR really moved.
+
+    ``info`` is :func:`server._pr_info`'s answer — ``{"url", "state"}`` or None.
+    A missing/None ``info`` is never a transition: it means the lookup did not
+    happen (no commits beyond base, or the stage returned early), the branch has
+    no PR, or the lookup FAILED — and ``_pr_info`` cannot distinguish the last
+    two past its sticky window. Treating that as "closed" is exactly the false
+    alarm this event exists to remove, so it is dropped instead.
+
+    First sighting seeds silently (a restart must not re-announce a PR that was
+    already merged), and so does a branch change (a different branch is a
+    different PR, not a transition of this one). Never raises: a notification
+    must never break the stage probe.
+    """
+    state = str((info or {}).get("state") or "").upper()
+    if not title or not branch or not state:
+        return
+    with _LAST_PR_STATE_LOCK:
+        prev = _LAST_PR_STATE.get(title)
+        _LAST_PR_STATE[title] = (branch, state)
+        if prev is None or prev[0] != branch or prev[1] == state:
+            return
+        old = prev[1]
+    # Outside the lock: emit runs subscribers (the notify addon pushes to ntfy)
+    # on this thread, and the poll must not serialize behind them.
+    try:
+        _events.BUS.emit(
+            "session.pr_state_changed",
+            session=title,
+            old=old,
+            new=state,
+            data={"url": (info or {}).get("url") or ""},
+        )
+    except Exception:  # noqa: BLE001 — an event never breaks the stage probe
+        pass
+
 
 # Foreground commands that mean "no agent is running in this pane" — the CLI
 # exited (or its launcher dropped to a shell), so the pane can't be 'working'.
@@ -1280,6 +1330,12 @@ def _session_stage(inst) -> dict:
         # miss the real PR and wedge the chip on "pushed". `beyond` still keys
         # off the fork-point ("is there work to push"), not where the PR goes.
         info = srv._pr_info(wt, branch) if beyond > 0 else None
+        # Announce a REAL PR-state transition from the lookup itself, here where
+        # the answer is in hand and BEFORE the dirty-tree branch below returns
+        # the stage to "agent". Subscribers used to infer "merged or closed"
+        # from the stage leaving "pr", which that very return makes it do on
+        # every edit — see _track_pr_state.
+        _track_pr_state(getattr(inst, "Title", "") or "", branch, info)
         # Surface the PR's URL so the chip can link to it whatever its state
         # (open / merged / closed) — a PR-review session has one from the start.
         if info and info.get("url"):

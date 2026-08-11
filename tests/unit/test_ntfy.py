@@ -626,17 +626,31 @@ def test_dispatch_ignores_unrelated_events(pushes):
     S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
     addon = _addon()
     addon._on_event({**_clarify(), "event": "session.created", "new": None})
-    # stage_changed off "pr" matches pr_closed; onto "pr" must not.
+    # The stage ladder leaves "pr" on every edit and climbs back on every push.
+    # NEITHER direction is a PR closing, and pr_closed no longer keys off it.
     addon._on_event(
         {**_clarify(), "event": "session.stage_changed", "old": "pushed", "new": "pr"}
+    )
+    addon._on_event(
+        {**_clarify(), "event": "session.stage_changed", "old": "pr", "new": "agent"}
+    )
+    # A PR opening is not a PR closing either.
+    addon._on_event(
+        {**_clarify(), "event": "session.pr_state_changed", "old": "", "new": "OPEN"}
     )
     assert pushes == []
 
 
-def test_pr_closed_matches_leaving_the_pr_stage(pushes):
+@pytest.mark.parametrize("ending", ["MERGED", "CLOSED"])
+def test_pr_closed_matches_a_real_pr_ending(pushes, ending):
     S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
     _addon()._on_event(
-        {**_clarify(), "event": "session.stage_changed", "old": "pr", "new": "pushed"}
+        {
+            **_clarify(),
+            "event": "session.pr_state_changed",
+            "old": "OPEN",
+            "new": ending,
+        }
     )
     (push,) = pushes
     assert push["title"] == "alpha: PR merged or closed"

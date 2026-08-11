@@ -24491,19 +24491,29 @@ function EventToasts() {
         if (env.new) patchInstance(env.session, { stage: String(env.new) });
         if (isReplay(env)) return;
         const title = env.session;
-        if (env.new === "pr") {
-          notifyOnce(title, "pr", "PR open for " + title, {
-            onClick: () => {
-              const inst = instByTitle(title);
-              if (inst == null ? void 0 : inst.pr_url) window.open(inst.pr_url, "_blank");
-              else selectSession(title);
-            }
-          });
-        } else if (env.new === "interrupt") {
+        if (env.new === "interrupt") {
           notifyOnce(title, "interrupt", "pre-commit failed on " + title, {
             onClick: () => selectSession(title)
           });
-        } else if (env.old === "pr") {
+        }
+      })
+    );
+    unsubs.push(
+      ev.subscribe("session.pr_state_changed", (env) => {
+        var _a3;
+        if (isReplay(env)) return;
+        const title = env.session;
+        const url = String(((_a3 = env.data) == null ? void 0 : _a3.url) || "");
+        if (env.new === "OPEN") {
+          notifyOnce(title, "pr", "PR open for " + title, {
+            onClick: () => {
+              const inst = instByTitle(title);
+              const href = (inst == null ? void 0 : inst.pr_url) || url;
+              if (href) window.open(href, "_blank");
+              else selectSession(title);
+            }
+          });
+        } else if (env.old === "OPEN") {
           notifyOnce(title, "merged", title + ": PR merged or closed ✓", {
             onClick: () => selectSession(title)
           });
@@ -28301,10 +28311,9 @@ function Pane({
   }, [pinOpen, ghostIsLatest, ghostCore, title, lookup]);
   const pinBody = ghostIsLatest ? inst.last_prompt_full || inst.last_prompt : (lookup == null ? void 0 : lookup.q) === ghostCore ? lookup.text : ghost;
   const hasPin = !!pinLine;
-  const pinLen = (pinBody || "").length;
   reactExports.useEffect(() => {
     fitSoon();
-  }, [hasPin, pinOpen, pinLen, fitSoon]);
+  }, [hasPin, fitSoon]);
   reactExports.useEffect(() => {
     if (!focused || missing || loading || histPane) return;
     const onKey = (e) => {
@@ -28642,7 +28651,8 @@ function Pane({
                   children: "❯"
                 }
               ),
-              pinOpen ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "prompt-pin-body", children: pinBody }) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "prompt-pin-text", children: pinLine }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "prompt-pin-text", children: pinLine }),
+              pinOpen ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "prompt-pin-body", children: pinBody }) : null,
               ghost ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "ghost-row-mask", "aria-hidden": "true" }) : null
             ] }) : null,
             !booted && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "term-loading", children: [

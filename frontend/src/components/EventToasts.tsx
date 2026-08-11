@@ -270,21 +270,33 @@ export function EventToasts() {
         if (env.new) patchInstance(env.session, { stage: String(env.new) as Instance["stage"] });
         if (isReplay(env)) return; // toast-only subscriber — skip stale history
         const title = env.session;
-        if (env.new === "pr") {
-          notifyOnce(title, "pr", "PR open for " + title, {
-            onClick: () => {
-              const inst = instByTitle(title);
-              if (inst?.pr_url) window.open(inst.pr_url, "_blank");
-              else selectSession(title);
-            },
-          });
-        } else if (env.new === "interrupt") {
+        if (env.new === "interrupt") {
           notifyOnce(title, "interrupt", "pre-commit failed on " + title, {
             onClick: () => selectSession(title),
           });
-        } else if (env.old === "pr") {
-          // F4: the server never emits "merged" — a merged/closed PR moves the
-          // stage OFF "pr" (same detection as the notify addon).
+        }
+        // Both PR toasts moved to session.pr_state_changed below. The stage
+        // ladder leaves and re-enters "pr" on every edit/commit/push cycle of a
+        // PR that never moved, and notifyOnce only dedupes for 30s — so keying
+        // them here re-toasted "PR merged or closed" and then "PR open" for the
+        // rest of a review session.
+      })
+    );
+    unsubs.push(
+      ev.subscribe("session.pr_state_changed", (env) => {
+        if (isReplay(env)) return;
+        const title = env.session;
+        const url = String((env.data as { url?: string } | undefined)?.url || "");
+        if (env.new === "OPEN") {
+          notifyOnce(title, "pr", "PR open for " + title, {
+            onClick: () => {
+              const inst = instByTitle(title);
+              const href = inst?.pr_url || url;
+              if (href) window.open(href, "_blank");
+              else selectSession(title);
+            },
+          });
+        } else if (env.old === "OPEN") {
           notifyOnce(title, "merged", title + ": PR merged or closed ✓", {
             onClick: () => selectSession(title),
           });
