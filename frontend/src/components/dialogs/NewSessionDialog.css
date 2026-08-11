@@ -26,13 +26,15 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 20px 22px;
-  /* One narrow column, quick-launch first: Name + Prompt up top, Folder+Agent
-     in a compact row, git/workspace options folded behind <details>. The card
-     holds a FIXED height so opening a fold scrolls the revealed fields inside
-     .nf-body rather than growing/re-centering the dialog; clamps to the
-     viewport on short windows. */
-  width: min(540px, 94vw);
-  height: min(90vh, 480px);
+  /* One column, quick-launch first: Name + Prompt up top, Folder+Agent in a
+     compact row, then the git/workspace and launch-flag folds — which now
+     stand OPEN by default, so the card is sized to hold the whole form at
+     once instead of making you scroll for the fields you came to change. The
+     height is still FIXED (not content-driven) so toggling a fold scrolls
+     inside .nf-body rather than growing/re-centering the dialog, and both
+     axes clamp to the viewport on small windows. */
+  width: min(760px, 94vw);
+  height: min(92vh, 900px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
