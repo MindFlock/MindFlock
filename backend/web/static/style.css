@@ -5929,14 +5929,16 @@ p.set-hint {
   border-radius: 12px;
   padding: 20px 22px;
   /* One column, quick-launch first: Name + Prompt up top, Folder+Agent in a
-     compact row, then the git/workspace and launch-flag folds — which now
-     stand OPEN by default, so the card is sized to hold the whole form at
-     once instead of making you scroll for the fields you came to change. The
-     height is still FIXED (not content-driven) so toggling a fold scrolls
-     inside .nf-body rather than growing/re-centering the dialog, and both
-     axes clamp to the viewport on small windows. */
-  width: min(760px, 94vw);
-  height: min(92vh, 900px);
+     compact row, then the git/workspace fold (open by default — those are the
+     settings people come here to change) and the launch-flag fold (closed;
+     extra CLI flags are a rarity). Sized to hold exactly that without
+     scrolling, and no larger: a modal that fills the screen to show a form
+     half its size is its own kind of wrong. The height stays FIXED (not
+     content-driven) so toggling a fold scrolls inside .nf-body rather than
+     growing and re-centering the dialog under the pointer; both axes clamp to
+     the viewport on small windows. */
+  width: min(620px, 94vw);
+  height: min(88vh, 680px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -6015,7 +6017,7 @@ p.set-hint {
   }
 }
 
-/* "More options" fold — git & workspace settings, collapsed by default. */
+/* "More options" fold — git & workspace settings, open by default. */
 .nf-advanced {
   border-top: 1px solid var(--border);
   padding-top: 10px;
@@ -6263,13 +6265,27 @@ p.set-hint {
   cursor: help;
 }
 
+/* Exactly one row per source, however many folders came back. Recent and
+   Nearby routinely return a dozen, and wrapping let a single source eat three
+   or four lines — pushing the fields below it off the card and making the
+   whole dialog taller than the form needs. The overflow scrolls sideways
+   instead, so nothing is lost. */
 .nf-suggest .nt-list {
   flex: 1 1 auto;
   min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  /* Room for the thin scrollbar so it can't sit on top of the chips. */
+  padding-bottom: 3px;
 }
 
-/* Long project names would otherwise stretch one chip across the whole row. */
+/* Long project names would otherwise stretch one chip across the whole row;
+   flex: none keeps them from being squeezed to nothing in the no-wrap row
+   (the chip's own ellipsis handles the truncation). */
 .nf-suggest .nt-chip {
+  flex: none;
   max-width: 190px;
 }
 
