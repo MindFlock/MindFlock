@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-08-10
+
+### Fixed
+
+- **The full-history page was invisible.** Its stylesheet was never added to the
+  ordered `@import` list that builds the bundle's CSS, so `position: absolute;
+  inset: 0` never reached the page and the overlay opened as an unstyled,
+  zero-size block behind the terminal. Every way in — the drag gesture, the
+  header button, `Ctrl+↑` — looked broken for the same reason. A test now fails
+  on any stylesheet that nothing imports, because "invisible component, green
+  CI" should not be able to happen twice.
+
+- **Dragging up out of a terminal reaches the history.** The gesture only armed
+  once the pointer was 8px *outside* the top edge, but a drag up ends where the
+  selection stops growing — on the top row — and nothing suggests you should
+  keep dragging into the pane header. Both edges now arm from just inside, as
+  the bottom one already did; the hold delay is still what separates the
+  gesture from an ordinary overshoot.
+
+- **A prompt typed while the agent is working counts as a prompt.** Claude Code
+  files those as queued entries and never re-files them as messages, so the
+  pinned line showed an older prompt, expanding it re-showed the same truncated
+  text, and the history page dropped the message outright — exactly the
+  follow-ups you go back to read.
+
+### Changed
+
+- **New Session, rearranged.** Name and Folder up top, then three folds: **Git &
+  workspace** open — those are the settings the dialog exists to set, and hiding
+  the workspace strategy behind a click had people launch with the wrong one —
+  with **Prompt** and **Launch flags** shut, since most sessions start with
+  neither. The card is sized to hold that without scrolling and no larger.
+  Folder suggestions keep one row per source and show whole chips only, instead
+  of wrapping to three lines or clipping the last name down the middle. The
+  folder browser's parent button is `←` rather than `↑`, matching every other
+  file browser. `Ctrl+Enter` still creates; it just no longer says so.
+
 ## [0.1.15] - 2026-08-10
 
 ### Added
@@ -1173,7 +1210,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.15...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.16...HEAD
+[0.1.16]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.16
 [0.1.15]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.15
 [0.1.14]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.14
 [0.1.13]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.13
