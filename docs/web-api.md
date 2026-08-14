@@ -444,6 +444,66 @@ across reloads).
 one-call status of every external integration (GitHub, active ticketing
 provider, agent CLI, tailscale) for the Settings → Connections screen.
 
+**Traffic** (addon id `traffic`) — `GET /api/traffic?days=90&refresh=0`: the
+product's *own* public reach, for the dev-only Settings → Site traffic screen
+(see [web-ui.md](web-ui.md)). `days` is clamped to `1..90`; the whole payload is
+cached **5 minutes** per `days` value (longer than Doctor's 30 s — this hits
+GitHub's REST API and an external Worker, neither of which needs re-asking on
+every panel open), and `refresh=1` bypasses that cache. Unlike every other
+GitHub integration here it resolves no workspace remote: it always means
+`MindFlock/MindFlock`.
+
+```jsonc
+{
+  "generated": 1755100000.0,
+  "repo": {"stars": 0, "forks": 0, "open_issues": 0, "url": "…"},  // or null
+  "star_history": [{"day": "2026-08-10", "stars": 42}],            // cumulative
+  "releases": [{"tag", "published_at", "prerelease", "assets": [{"name", "downloads"}], "total_downloads"}],
+  "downloads_total": 0,
+  "clicks": {
+    "days": 90,
+    "series": [{"day", "slug", "os", "clicks"}],
+    "totals_by_slug": {"mac": 0},
+    "visitors_by_day": [{"day", "visitors", "new_visitors", "returning_visitors", "unknown_visitors"}],
+    "visitors_by_slug": [{"slug", "visitors", "new_visitors", "clicks"}],
+    "totals": {"clicks", "visitors", "new_visitors"},              // or null
+    "downloads": {"new_visitors", "new_visitors_clicked", "by_slug": [...]},  // or null
+    "error": ""
+  },
+  "errors": {"github": null, "clicks": null}
+}
+```
+
+Three contracts are worth stating outright, because a client that gets them
+wrong produces plausible, wrong numbers rather than an obvious failure:
+
+- **Per-upstream degradation.** Every call is best-effort and the endpoint
+  always answers **200**. A GitHub rate limit sets `errors.github` and costs the
+  `repo`/`releases`/`star_history` sections; an unreachable click Worker sets
+  `errors.clicks` and costs only the `clicks` section. The two share nothing, so
+  a click-tracking hiccup never hides stars the request already has.
+- **Absent ≠ zero.** `clicks.totals` and `clicks.downloads` are `null` (never
+  `0`) and `visitors_by_day`/`visitors_by_slug` are `[]` against a click Worker
+  deployed before visitor attribution, or one answering with the wrong types.
+  **`clicks.totals` is the capability marker** clients should branch on — the
+  Worker emits the visitor sections together or not at all. The failure payload
+  (`_empty_clicks`) carries every key the success payload does, so a client can
+  index the sections unconditionally.
+- **Unique counts are not additive.** Summing `visitors_by_day[].visitors` does
+  **not** give `totals.visitors` — one person visiting on ten days is ten daily
+  uniques and one window unique. Only the Worker holding the visitor ids can
+  count a grain, so the server passes these sections through rather than
+  deriving them, and so should any consumer. `new_visitors` is the one field
+  that sums across days, since a first sighting happens on exactly one date.
+
+**Cross-repo prerequisite.** The visitor sections come from the `webpage/worker`
+Cloudflare Worker in the *marketing-site* repo (it derives a pseudonymous
+per-click visitor id), and nothing in this repo can produce them. They stay
+`null`/`[]` until that Worker is redeployed with a `VISITORS` KV namespace and a
+`VISITOR_SALT` secret — see `worker/README.md` there. Counting starts at deploy
+time, so visitors trail clicks until the window fills in. The Site traffic
+screen says as much in place when `clicks.totals` is `null`.
+
 **Templates** (addon id `templates`, prefix `/api/templates`) — saved
 new-session templates (`~/.mindflock/session_templates.json`):
 
