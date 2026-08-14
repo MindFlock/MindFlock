@@ -9041,9 +9041,15 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
 }
 } /* 280 */ @layer components{
 
-/* Settings → Site traffic (dev shell only). Stat tiles, a single-hue click
-   chart, and two data tables — no chart library, consistent with the rest of
-   the app's hand-rolled, zero-dep components. */
+/* Settings → Site traffic (dev shell only). Stat tiles, single-hue charts, a
+   first-time-visitor funnel, and data tables — no chart library, consistent
+   with the rest of the app's hand-rolled, zero-dep components.
+
+   Everything chromatic here is derived from --accent, never a hand-picked
+   companion colour: Settings → Appearance repaints --accent per theme, so a
+   second fixed hue would collide with some of them. Where two things must be
+   told apart, it is done with weight (opacity + outline), which is achromatic
+   and therefore also safe for colour-vision deficiency. */
 
 .traffic-warn {
   border: 1px solid var(--red);
@@ -9079,6 +9085,14 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   color: var(--text);
 }
 
+/* The one tile the screen exists to show. Marked with an accent edge rather
+   than an accent number, so it reads as the lead without pulling the numeric
+   styling of the tiles out of alignment. */
+.traffic-tile.primary {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 .traffic-tile-label {
   font-size: 11px;
   color: var(--muted);
@@ -9089,6 +9103,13 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+.traffic-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-wrap: wrap;
 }
 
@@ -9103,10 +9124,64 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   gap: 4px;
 }
 
+/* Plot frame: y-axis gutter | plot area, with the date row beneath the plot
+   COLUMN only, so the first and last dates stay flush with the first and last
+   marks instead of being pushed right by the width of the tick labels. */
+.traffic-plot {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 6px;
+}
+
+.traffic-plot > .traffic-yaxis {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.traffic-plot > .traffic-chart {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.traffic-plot > .traffic-chart-axis {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+/* Must stay equal to CHART_H in Traffic.tsx: the y-axis ticks are placed as a
+   percentage of this height and the gridlines they label are placed in viewBox
+   units, so the two only line up while one viewBox unit is one pixel. */
 .traffic-chart {
   width: 100%;
   height: 160px;
   display: block;
+}
+
+/* The tick labels are HTML, not SVG <text> — the charts stretch horizontally to
+   fill the panel (preserveAspectRatio="none"), which would smear glyphs. Height
+   comes from stretching to the plot's grid row, hence no explicit height here. */
+.traffic-yaxis {
+  position: relative;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.traffic-ytick {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Hairline, solid, and a step quieter than the baseline: enough to read a bar's
+   value off, not enough to compete with the bars for attention. */
+.traffic-gridline {
+  stroke: var(--border);
+  stroke-width: 1;
+  stroke-opacity: 0.55;
+  vector-effect: non-scaling-stroke;
 }
 
 /* Sequential magnitude-over-time, one series — the app's single accent hue is
@@ -9125,6 +9200,181 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
 .traffic-baseline {
   stroke: var(--border);
   stroke-width: 1;
+}
+
+/* --- Visitors: first-time vs returning ------------------------------------
+   Part-to-whole with a focus, not two co-equal categories, so it is ONE hue at
+   two weights rather than a categorical pair — which also means it survives
+   Settings → Appearance repainting --accent to anything.
+
+   The returning segment is outlined at full strength because its fill alone
+   sits near 1.6:1 against the panel at every alpha that still reads as
+   recessive (checked, not guessed). The outline is what makes the mark
+   perceivable; the fill is what keeps it quiet. */
+.traffic-seg-new {
+  fill: var(--accent);
+  opacity: 0.85;
+  transition: opacity 0.1s;
+}
+
+.traffic-seg-new.hover {
+  opacity: 1;
+}
+
+.traffic-seg-returning {
+  fill: var(--accent);
+  fill-opacity: 0.3;
+  transition: fill-opacity 0.1s;
+}
+
+/* The outline is applied by Traffic.tsx only above a minimum bar width. On the
+   ~5px bars of a 90-day range a 1px stroke per side IS most of the bar, so it
+   filled the recessive segment in solid and erased the very distinction it was
+   added to make; at that density the fill difference alone carries it. */
+.traffic-seg-returning.outlined {
+  stroke: var(--accent);
+  stroke-opacity: 0.75;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.traffic-seg-returning.hover {
+  fill-opacity: 0.5;
+}
+
+/* Column-wide hover target: thin bars and zero days must still be reachable,
+   so the hit area is the whole column rather than the drawn ink. */
+.traffic-hit {
+  fill: transparent;
+}
+
+.traffic-legend {
+  display: flex;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.traffic-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.traffic-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.traffic-swatch.new {
+  background: var(--accent);
+  opacity: 0.85;
+}
+
+.traffic-swatch.returning {
+  background: rgba(var(--accent-rgb), 0.3);
+  border: 1px solid rgba(var(--accent-rgb), 0.75);
+}
+
+/* --- New user funnel ------------------------------------------------------ */
+.traffic-funnel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.traffic-funnel-row,
+.traffic-funnel-axis {
+  display: grid;
+  /* The label column fits "…who started a download" on one line; wrapping it
+     pushed the two funnel rows out of vertical rhythm with each other, which
+     is exactly the comparison the bars are there to support. The tick row
+     shares the template so its numbers stay under the track they measure. */
+  grid-template-columns: minmax(170px, auto) minmax(80px, 3fr) auto 52px;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.traffic-funnel-label {
+  color: var(--text);
+}
+
+.traffic-funnel-track {
+  position: relative;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--panel-2, var(--panel));
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.traffic-funnel-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0.85;
+  border-radius: 3px;
+}
+
+/* Interior gridlines, one per labelled tick. The end ticks are left out: the
+   track's own border already draws both, and a line on top of it would just
+   thicken the edge. They sit UNDER the fill (which follows them in the DOM), so
+   a bar covers the ticks it has passed — the same way the bar charts read. */
+.traffic-funnel-grid {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  opacity: 0.55;
+}
+
+.traffic-funnel-ticks {
+  position: relative;
+  display: block;
+  height: 12px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.traffic-funnel-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Pinned inside the track's ends instead of centred, so 0 doesn't drift under
+   the row label and the top tick doesn't collide with the count column. */
+.traffic-funnel-tick.first {
+  transform: none;
+}
+
+.traffic-funnel-tick.last {
+  transform: translateX(-100%);
+}
+
+.traffic-funnel-num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+  text-align: right;
+}
+
+.traffic-funnel-rate {
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.traffic-funnel-table {
+  margin-top: 6px;
 }
 
 /* Cumulative stars line (StarsChart) — thin 2px stroke, single accent hue

@@ -261,6 +261,47 @@ export interface TrafficClickRow {
   clicks: number;
 }
 
+/* The people-shaped click sections. Every grain is counted by the Worker at
+ * that grain and must be READ at that grain: unique visitors are not additive,
+ * so summing `TrafficVisitorDay.visitors` over a window does NOT give
+ * `TrafficClickTotals.visitors` — one person visiting on ten days is ten daily
+ * uniques and one window unique. `new_visitors` is the one field that does
+ * sum, since a first sighting happens on exactly one date.
+ *
+ * All of these are null/empty against a Worker deployed before visitor
+ * attribution existed, and against click rows written before that deploy. */
+export interface TrafficVisitorDay {
+  day: string;
+  visitors: number;
+  new_visitors: number;
+  returning_visitors: number;
+  unknown_visitors: number;
+}
+
+export interface TrafficVisitorSlug {
+  slug: string;
+  visitors: number;
+  new_visitors: number;
+  clicks: number;
+}
+
+export interface TrafficClickTotals {
+  clicks: number;
+  visitors: number;
+  new_visitors: number;
+}
+
+/** First-time visitors who went on to click a platform download button —
+ * the closest observable proxy for new-user acquisition, since GitHub's
+ * download counters carry no identity. `by_slug` can overlap (one person
+ * clicking macOS and Linux is in both), so it may sum to more than
+ * `new_visitors_clicked`; that field is the deduped one. */
+export interface TrafficDownloadFunnel {
+  new_visitors: number;
+  new_visitors_clicked: number;
+  by_slug: Array<{ slug: string; new_visitors: number; visitors: number; clicks: number }>;
+}
+
 export interface TrafficResponse {
   generated: number;
   repo: { stars: number | null; forks: number | null; open_issues: number | null; url: string } | null;
@@ -271,6 +312,10 @@ export interface TrafficResponse {
     days: number;
     series: TrafficClickRow[];
     totals_by_slug: Record<string, number>;
+    visitors_by_day: TrafficVisitorDay[];
+    visitors_by_slug: TrafficVisitorSlug[];
+    totals: TrafficClickTotals | null;
+    downloads: TrafficDownloadFunnel | null;
     error: string;
   };
   errors: { github: string | null; clicks: string | null };

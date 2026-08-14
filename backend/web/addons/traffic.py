@@ -1,10 +1,18 @@
 """Traffic addon: MindFlock's own public reach, over HTTP.
 
 Exposes ``GET /api/traffic`` — GitHub stars/forks, per-release download counts,
-and per-day click counts for the tracked ``mindflock.ai/go/<slug>`` redirects
-(see the ``webpage/worker`` Cloudflare Worker in the marketing-site repo) — so
-the desktop app's dev-only Settings → Site traffic screen has one endpoint to
-poll instead of stitching three sources together in the browser.
+and per-day click AND visitor counts for the tracked ``mindflock.ai/go/<slug>``
+redirects (see the ``webpage/worker`` Cloudflare Worker in the marketing-site
+repo) — so the desktop app's dev-only Settings → Site traffic screen has one
+endpoint to poll instead of stitching three sources together in the browser.
+
+One asymmetry runs through this module and the screen it feeds: the Worker
+knows how many distinct PEOPLE clicked and which of them were first-timers,
+because it derives a pseudonymous visitor id per click. GitHub's
+``download_count`` is an opaque tally with no identity attached — it counts
+updates and re-downloads and cannot be split into new versus returning users
+by any means. So "new user" figures come from the click side only, and the
+download side is labelled for what it is.
 
 Every upstream call is best-effort: a GitHub rate limit or the click-tracking
 worker being unreachable degrades that ONE section (``errors.github`` /
@@ -207,16 +215,38 @@ async def _fetch_star_history(token: str) -> tuple[list, str]:
     return history, ""
 
 
+def _empty_clicks(days: int, error: str) -> dict:
+    return {
+        "days": days,
+        "series": [],
+        "totals_by_slug": {},
+        "visitors_by_day": [],
+        "visitors_by_slug": [],
+        "totals": None,
+        "downloads": None,
+        "error": error,
+    }
+
+
 async def _fetch_clicks(days: int) -> dict:
+    """Per-day click counts plus, when the Worker reports them, per-day and
+    per-link VISITOR counts.
+
+    The people-shaped sections (``visitors_by_day``, ``visitors_by_slug``,
+    ``totals``, ``downloads``) are passed through rather than derived, because
+    unique counts are not additive: summing per-day unique visitors over a
+    month does not give monthly unique visitors, so only the store holding the
+    visitor ids can count a given grain. Deriving them here would produce
+    numbers that look right and are quietly wrong.
+
+    They stay ``None``/empty against a Worker that predates visitor
+    attribution, so the screen can say "not available yet" instead of drawing
+    a chart of zeros.
+    """
     status, data = await _get_json("{}?days={}".format(_CLICKS_STATS_URL, days))
     if status != 200 or not isinstance(data, dict):
         detail = data.get("error") if isinstance(data, dict) else data
-        return {
-            "days": days,
-            "series": [],
-            "totals_by_slug": {},
-            "error": str(detail or status),
-        }
+        return _empty_clicks(days, str(detail or status))
 
     series = data.get("series") or []
     totals: dict[str, int] = {}
@@ -225,7 +255,25 @@ async def _fetch_clicks(days: int) -> dict:
             continue
         slug = str(row.get("slug") or "")
         totals[slug] = totals.get(slug, 0) + int(row.get("clicks") or 0)
-    return {"days": days, "series": series, "totals_by_slug": totals, "error": ""}
+
+    def _list(key: str) -> list:
+        value = data.get(key)
+        return value if isinstance(value, list) else []
+
+    def _dict(key: str) -> Optional[dict]:
+        value = data.get(key)
+        return value if isinstance(value, dict) else None
+
+    return {
+        "days": days,
+        "series": series,
+        "totals_by_slug": totals,
+        "visitors_by_day": _list("visitors_by_day"),
+        "visitors_by_slug": _list("visitors_by_slug"),
+        "totals": _dict("totals"),
+        "downloads": _dict("downloads"),
+        "error": "",
+    }
 
 
 class TrafficAddon(Addon):

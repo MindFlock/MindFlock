@@ -28722,13 +28722,13 @@ function RunningCover({ paneRef }) {
 function CtxLine({ inst }) {
   const ds = inst.diff_stat;
   const files = ds.files || 0, additions = ds.additions || 0, deletions = ds.deletions || 0;
-  const plural = files === 1 ? " file" : " files";
+  const plural2 = files === 1 ? " file" : " files";
   const ctxNum = (n) => {
     if (n < 1e3) return String(n);
     const k = n / 1e3;
     return (k < 10 ? k.toFixed(1) : String(Math.round(k))).replace(/\.0$/, "") + "k";
   };
-  let tip = `Total change vs base: +${additions} −${deletions} across ${files}${plural}`;
+  let tip = `Total change vs base: +${additions} −${deletions} across ${files}${plural2}`;
   const un = ds.uncommitted;
   if (un) tip += ` · uncommitted +${un.additions || 0} −${un.deletions || 0}`;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ctxline", title: tip, children: [
@@ -28743,7 +28743,7 @@ function CtxLine({ inst }) {
     /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ctx-files", children: [
       "· ",
       files,
-      plural
+      plural2
     ] })
   ] });
 }
@@ -34591,6 +34591,24 @@ function UninstallSection() {
     }, children: isWindows ? "Open Windows uninstall…" : "Uninstall MindFlock…" })
   ] });
 }
+function hasVisitorData(data) {
+  var _a2;
+  return !!((_a2 = data == null ? void 0 : data.clicks) == null ? void 0 : _a2.totals);
+}
+function shownMetric(requested, data) {
+  return hasVisitorData(data) ? requested : "clicks";
+}
+function niceTicks(rawMax, targetCount = 4) {
+  const hi = Number.isFinite(rawMax) && rawMax > 0 ? Math.ceil(rawMax) : 1;
+  const intervals = Math.max(1, Math.round(targetCount));
+  const rough = hi / intervals;
+  const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * pow).filter((s) => Number.isInteger(s) && s >= 1).find((s) => s >= rough) ?? Math.max(1, Math.ceil(rough));
+  const max = Math.ceil(hi / step) * step;
+  const ticks = [];
+  for (let v = 0; v <= max; v += step) ticks.push(v);
+  return { max, ticks };
+}
 const DAYS_OPTIONS = [30, 90];
 const SLUG_LABEL = {
   mac: "macOS download",
@@ -34617,6 +34635,33 @@ function fmtDate(iso) {
     return iso;
   }
 }
+function fmtPct(part, whole) {
+  if (!whole) return "—";
+  return (part / whole * 100).toFixed(1) + "%";
+}
+function plural(n, word) {
+  return `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
+}
+const CHART_W = 640;
+const CHART_H = 160;
+const PAD_L = 4;
+const PAD_B = 18;
+const PAD_T = 10;
+const PLOT_H = CHART_H - PAD_B;
+function scaleFor(axisMax) {
+  return (v) => v / axisMax * (PLOT_H - PAD_T);
+}
+function Gridlines({ ticks, yAt }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("g", { "aria-hidden": "true", children: ticks.filter((t) => t > 0).map((t) => /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: 0, y1: yAt(t), x2: CHART_W, y2: yAt(t), className: "traffic-gridline" }, t)) });
+}
+function YAxis({ ticks, yAt }) {
+  const width = Math.max(...ticks.map((t) => fmtInt(t).length));
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "traffic-yaxis", style: { width: `${width}ch` }, "aria-hidden": "true", children: ticks.map((t) => /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-ytick", style: { top: `${yAt(t) / CHART_H * 100}%` }, children: fmtInt(t) }, t)) });
+}
+function barRadius(width, height) {
+  return Math.max(0, Math.min(3, width / 2, height / 3));
+}
+const OUTLINE_MIN_BAR_W = 8;
 function dailyTotals(series) {
   const byDay = /* @__PURE__ */ new Map();
   for (const row of series) {
@@ -34638,47 +34683,47 @@ function StarsChart({ points }) {
   if (points.length === 1) {
     return /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Only one day of star history so far — check back once there's a trend." });
   }
-  const w = 640;
-  const h = 160;
-  const padL = 4;
-  const padB = 18;
-  const plotH = h - padB;
-  const max = Math.max(1, ...points.map((p) => p.stars));
-  const stepX = (w - padL) / (points.length - 1);
-  const xAt = (i) => padL + i * stepX;
-  const yAt = (v) => plotH - v / max * (plotH - 8);
+  const { max, ticks } = niceTicks(Math.max(...points.map((p) => p.stars)));
+  const scale = scaleFor(max);
+  const stepX = (CHART_W - PAD_L) / (points.length - 1);
+  const xAt = (i) => PAD_L + i * stepX;
+  const yAt = (v) => PLOT_H - scale(v);
   const pathD = points.map((p, i) => `${i === 0 ? "M" : "L"}${xAt(i).toFixed(2)},${yAt(p.stars).toFixed(2)}`).join(" ");
   const handleMove = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const relX = (e.clientX - rect.left) / rect.width * w;
-    const idx = Math.max(0, Math.min(points.length - 1, Math.round((relX - padL) / stepX)));
+    const relX = (e.clientX - rect.left) / rect.width * CHART_W;
+    const idx = Math.max(0, Math.min(points.length - 1, Math.round((relX - PAD_L) / stepX)));
     setHoverIdx(idx);
   };
   const hovered = hoverIdx != null ? points[hoverIdx] : null;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-wrap", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "svg",
-      {
-        className: "traffic-chart",
-        viewBox: `0 0 ${w} ${h}`,
-        preserveAspectRatio: "none",
-        role: "img",
-        "aria-label": `Cumulative GitHub stars, ${fmtDate(points[0].day)} through ${fmtDate(points[points.length - 1].day)}`,
-        onMouseMove: handleMove,
-        onMouseLeave: () => setHoverIdx(null),
-        children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: pathD, className: "traffic-line", fill: "none" }),
-          hoverIdx != null && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: xAt(hoverIdx), y1: 0, x2: xAt(hoverIdx), y2: plotH, className: "traffic-crosshair" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("circle", { cx: xAt(hoverIdx), cy: yAt(points[hoverIdx].stars), r: 4, className: "traffic-line-dot" })
-          ] }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: 0, y1: plotH, x2: w, y2: plotH, className: "traffic-baseline" })
-        ]
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-axis", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(points[0].day) }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(points[points.length - 1].day) })
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-plot", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(YAxis, { ticks, yAt }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "svg",
+        {
+          className: "traffic-chart",
+          viewBox: `0 0 ${CHART_W} ${CHART_H}`,
+          preserveAspectRatio: "none",
+          role: "img",
+          "aria-label": `Cumulative GitHub stars, ${fmtDate(points[0].day)} through ${fmtDate(points[points.length - 1].day)}, on a vertical scale of 0 to ${fmtInt(max)} stars`,
+          onMouseMove: handleMove,
+          onMouseLeave: () => setHoverIdx(null),
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Gridlines, { ticks, yAt }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: pathD, className: "traffic-line", fill: "none" }),
+            hoverIdx != null && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: xAt(hoverIdx), y1: PAD_T, x2: xAt(hoverIdx), y2: PLOT_H, className: "traffic-crosshair" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("circle", { cx: xAt(hoverIdx), cy: yAt(points[hoverIdx].stars), r: 4, className: "traffic-line-dot" })
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: 0, y1: PLOT_H, x2: CHART_W, y2: PLOT_H, className: "traffic-baseline" })
+          ]
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-axis", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(points[0].day) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(points[points.length - 1].day) })
+      ] })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "traffic-tooltip", "aria-live": "polite", children: hovered ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: fmtDate(hovered.day) }),
@@ -34698,51 +34743,51 @@ function ReleasesChart({ releases }) {
   if (!chrono.length) {
     return /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "No published releases yet." });
   }
-  const max = Math.max(1, ...chrono.map((r) => r.total_downloads));
-  const w = 640;
-  const h = 160;
-  const padL = 4;
-  const padB = 18;
-  const plotH = h - padB;
+  const { max, ticks } = niceTicks(Math.max(...chrono.map((r) => r.total_downloads)));
+  const scale = scaleFor(max);
   const barGap = 3;
-  const barW = Math.max(1, (w - padL) / chrono.length - barGap);
+  const barW = Math.max(1, (CHART_W - PAD_L) / chrono.length - barGap);
   const hovered = hover != null ? chrono[hover] : null;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-wrap", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "svg",
-      {
-        className: "traffic-chart",
-        viewBox: `0 0 ${w} ${h}`,
-        preserveAspectRatio: "none",
-        role: "img",
-        "aria-label": `Downloads per release, ${chrono[0].tag} through ${chrono[chrono.length - 1].tag}`,
-        onMouseLeave: () => setHover(null),
-        children: [
-          chrono.map((r, i) => {
-            const barH = Math.max(1, r.total_downloads / max * (plotH - 8));
-            const x = padL + i * (barW + barGap);
-            const y = plotH - barH;
-            return /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "rect",
-              {
-                x,
-                y,
-                width: barW,
-                height: barH,
-                rx: Math.min(3, barW / 2),
-                className: "traffic-bar" + (hover === i ? " hover" : ""),
-                onMouseEnter: () => setHover(i)
-              },
-              r.tag
-            );
-          }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: 0, y1: plotH, x2: w, y2: plotH, className: "traffic-baseline" })
-        ]
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-axis", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(chrono[0].published_at) }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(chrono[chrono.length - 1].published_at) })
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-plot", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(YAxis, { ticks, yAt: (v) => PLOT_H - scale(v) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "svg",
+        {
+          className: "traffic-chart",
+          viewBox: `0 0 ${CHART_W} ${CHART_H}`,
+          preserveAspectRatio: "none",
+          role: "img",
+          "aria-label": `Downloads per release, ${chrono[0].tag} through ${chrono[chrono.length - 1].tag}, on a vertical scale of 0 to ${fmtInt(max)} downloads`,
+          onMouseLeave: () => setHover(null),
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Gridlines, { ticks, yAt: (v) => PLOT_H - scale(v) }),
+            chrono.map((r, i) => {
+              const barH = Math.max(1, scale(r.total_downloads));
+              const x = PAD_L + i * (barW + barGap);
+              const y = PLOT_H - barH;
+              return /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "rect",
+                {
+                  x,
+                  y,
+                  width: barW,
+                  height: barH,
+                  rx: barRadius(barW, barH),
+                  className: "traffic-bar" + (hover === i ? " hover" : ""),
+                  onMouseEnter: () => setHover(i)
+                },
+                r.tag
+              );
+            }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: 0, y1: PLOT_H, x2: CHART_W, y2: PLOT_H, className: "traffic-baseline" })
+          ]
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-axis", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(chrono[0].published_at) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(chrono[chrono.length - 1].published_at) })
+      ] })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "traffic-tooltip", "aria-live": "polite", children: hovered ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: hovered.tag }),
@@ -34762,57 +34807,223 @@ function ReleasesChart({ releases }) {
     ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Hover a bar for that release's per-asset breakdown." }) })
   ] });
 }
+function VisitorsChart({ days }) {
+  const [hover, setHover] = reactExports.useState(null);
+  if (!days.length) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "No visitors recorded in this window yet." });
+  }
+  const { max, ticks } = niceTicks(Math.max(...days.map((d) => d.visitors)));
+  const barGap = 2;
+  const barW = Math.max(1, (CHART_W - PAD_L) / days.length - barGap);
+  const SEG_GAP = 2;
+  const scale = scaleFor(max);
+  const yAt = (v) => PLOT_H - scale(v);
+  const hovered = hover != null ? days[hover] : null;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-wrap", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-legend", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "traffic-legend-item", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-swatch new", "aria-hidden": "true" }),
+        " First-time"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "traffic-legend-item", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-swatch returning", "aria-hidden": "true" }),
+        " Returning"
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-plot", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(YAxis, { ticks, yAt }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "svg",
+        {
+          className: "traffic-chart",
+          viewBox: `0 0 ${CHART_W} ${CHART_H}`,
+          preserveAspectRatio: "none",
+          role: "img",
+          "aria-label": `Daily visitors split into first-time and returning, ${days[0].day} through ${days[days.length - 1].day}, on a vertical scale of 0 to ${fmtInt(max)} visitors`,
+          onMouseLeave: () => setHover(null),
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Gridlines, { ticks, yAt }),
+            days.map((d, i) => {
+              const x = PAD_L + i * (barW + barGap);
+              const newH = scale(d.new_visitors);
+              const restH = scale(d.visitors - d.new_visitors);
+              const gap = newH > SEG_GAP && restH > SEG_GAP ? SEG_GAP : 0;
+              const outlined = barW >= OUTLINE_MIN_BAR_W ? " outlined" : "";
+              return /* @__PURE__ */ jsxRuntimeExports.jsxs("g", { onMouseEnter: () => setHover(i), className: hover === i ? "hover" : "", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("rect", { x, y: 0, width: barW + barGap, height: PLOT_H, className: "traffic-hit" }),
+                restH > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "rect",
+                  {
+                    x,
+                    y: PLOT_H - newH - gap - restH,
+                    width: barW,
+                    height: restH,
+                    rx: barRadius(barW, restH),
+                    className: "traffic-seg-returning" + outlined + (hover === i ? " hover" : "")
+                  }
+                ),
+                newH > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "rect",
+                  {
+                    x,
+                    y: PLOT_H - newH,
+                    width: barW,
+                    height: newH,
+                    rx: barRadius(barW, newH),
+                    className: "traffic-seg-new" + (hover === i ? " hover" : "")
+                  }
+                )
+              ] }, d.day);
+            }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: 0, y1: PLOT_H, x2: CHART_W, y2: PLOT_H, className: "traffic-baseline" })
+          ]
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-axis", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(days[0].day) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(days[days.length - 1].day) })
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "traffic-tooltip", "aria-live": "polite", children: hovered ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: fmtDate(hovered.day) }),
+      " — ",
+      plural(hovered.visitors, "visitor"),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "traffic-tooltip-detail", children: [
+        " ",
+        "(",
+        fmtInt(hovered.new_visitors),
+        " first-time, ",
+        fmtInt(hovered.returning_visitors),
+        " ",
+        "returning",
+        hovered.unknown_visitors > 0 && `, ${fmtInt(hovered.unknown_visitors)} unattributed`,
+        ")"
+      ] })
+    ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Hover a bar for that day's first-time / returning split." }) })
+  ] });
+}
+function DownloadFunnel({ funnel, days }) {
+  const { new_visitors: total, new_visitors_clicked: clicked } = funnel;
+  if (!total) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "No first-time visitors recorded in this window yet — the funnel fills in as the tracked links get clicked." });
+  }
+  const rows = [
+    { label: "First-time visitors", value: total },
+    { label: "…who started a download", value: clicked, rate: fmtPct(clicked, total) }
+  ];
+  const { max: axisMax, ticks } = niceTicks(total, 5);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-funnel", children: [
+    rows.map((r) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-funnel-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-funnel-label", children: r.label }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "traffic-funnel-track", children: [
+        ticks.slice(1, -1).map((t) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "span",
+          {
+            className: "traffic-funnel-grid",
+            style: { left: `${t / axisMax * 100}%` }
+          },
+          t
+        )),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "span",
+          {
+            className: "traffic-funnel-fill",
+            style: { width: `${r.value / axisMax * 100}%` }
+          }
+        )
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-funnel-num", children: fmtInt(r.value) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-funnel-rate", children: r.rate || "" })
+    ] }, r.label)),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-funnel-axis", "aria-hidden": "true", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", {}),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-funnel-ticks", children: ticks.map((t, i) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "span",
+        {
+          className: "traffic-funnel-tick" + (i === 0 ? " first" : i === ticks.length - 1 ? " last" : ""),
+          style: { left: `${t / axisMax * 100}%` },
+          children: fmtInt(t)
+        },
+        t
+      )) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { className: "traffic-table traffic-funnel-table", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "Platform" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "num", children: "First-time" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "num", children: "All visitors" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "num", children: "Clicks" })
+      ] }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("tbody", { children: funnel.by_slug.map((s) => /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: slugLabel(s.slug) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: fmtInt(s.new_visitors) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: fmtInt(s.visitors) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: fmtInt(s.clicks) })
+      ] }, s.slug)) })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint", children: [
+      "Download ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "intent" }),
+      ", not installs, over the last ",
+      days,
+      " days: someone pressing a platform button on mindflock.ai. It misses anyone who downloaded straight from the GitHub repo page, and a click is not a finished install. Per-platform first-timers can overlap (one person pressing both macOS and Linux is in both rows), so they may add up to more than the ",
+      fmtInt(clicked),
+      " above — that figure is the deduplicated one."
+    ] })
+  ] });
+}
 function ClicksChart({ series }) {
   const days = reactExports.useMemo(() => dailyTotals(series), [series]);
   const [hover, setHover] = reactExports.useState(null);
   if (!days.length) {
     return /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "No clicks recorded in this window yet." });
   }
-  const max = Math.max(1, ...days.map((d) => d.total));
-  const w = 640;
-  const h = 160;
-  const padL = 4;
-  const padB = 18;
-  const plotH = h - padB;
+  const { max, ticks } = niceTicks(Math.max(...days.map((d) => d.total)));
+  const scale = scaleFor(max);
+  const yAt = (v) => PLOT_H - scale(v);
   const barGap = 2;
-  const barW = Math.max(1, (w - padL) / days.length - barGap);
+  const barW = Math.max(1, (CHART_W - PAD_L) / days.length - barGap);
   const hovered = hover != null ? days[hover] : null;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-wrap", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "svg",
-      {
-        className: "traffic-chart",
-        viewBox: `0 0 ${w} ${h}`,
-        preserveAspectRatio: "none",
-        role: "img",
-        "aria-label": `Daily clicks across all tracked links, ${days[0].day} through ${days[days.length - 1].day}`,
-        onMouseLeave: () => setHover(null),
-        children: [
-          days.map((d, i) => {
-            const barH = Math.max(1, d.total / max * (plotH - 8));
-            const x = padL + i * (barW + barGap);
-            const y = plotH - barH;
-            return /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "rect",
-              {
-                x,
-                y,
-                width: barW,
-                height: barH,
-                rx: Math.min(3, barW / 2),
-                className: "traffic-bar" + (hover === i ? " hover" : ""),
-                onMouseEnter: () => setHover(i)
-              },
-              d.day
-            );
-          }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: 0, y1: plotH, x2: w, y2: plotH, className: "traffic-baseline" })
-        ]
-      }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-axis", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(days[0].day) }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(days[days.length - 1].day) })
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-plot", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(YAxis, { ticks, yAt }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "svg",
+        {
+          className: "traffic-chart",
+          viewBox: `0 0 ${CHART_W} ${CHART_H}`,
+          preserveAspectRatio: "none",
+          role: "img",
+          "aria-label": `Daily clicks across all tracked links, ${days[0].day} through ${days[days.length - 1].day}, on a vertical scale of 0 to ${fmtInt(max)} clicks`,
+          onMouseLeave: () => setHover(null),
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(Gridlines, { ticks, yAt }),
+            days.map((d, i) => {
+              const barH = Math.max(1, scale(d.total));
+              const x = PAD_L + i * (barW + barGap);
+              const y = PLOT_H - barH;
+              return /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "rect",
+                {
+                  x,
+                  y,
+                  width: barW,
+                  height: barH,
+                  rx: barRadius(barW, barH),
+                  className: "traffic-bar" + (hover === i ? " hover" : ""),
+                  onMouseEnter: () => setHover(i)
+                },
+                d.day
+              );
+            }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("line", { x1: 0, y1: PLOT_H, x2: CHART_W, y2: PLOT_H, className: "traffic-baseline" })
+          ]
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-chart-axis", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(days[0].day) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: fmtDate(days[days.length - 1].day) })
+      ] })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "traffic-tooltip", "aria-live": "polite", children: hovered ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: fmtDate(hovered.day) }),
@@ -34832,6 +35043,7 @@ function ClicksChart({ series }) {
 function Traffic(_) {
   var _a2, _b2;
   const [days, setDays] = reactExports.useState(90);
+  const [metric, setMetric] = reactExports.useState("people");
   const [refreshing, setRefreshing] = reactExports.useState(false);
   const q = useTraffic(true, days);
   const data = q.data;
@@ -34839,6 +35051,14 @@ function Traffic(_) {
     if (!data) return [];
     return Object.entries(data.clicks.totals_by_slug).sort((a, b) => b[1] - a[1]);
   }, [data]);
+  const visitorsBySlug = reactExports.useMemo(() => {
+    const map = /* @__PURE__ */ new Map();
+    for (const row of (data == null ? void 0 : data.clicks.visitors_by_slug) ?? []) map.set(row.slug, row);
+    return map;
+  }, [data]);
+  const people = (data == null ? void 0 : data.clicks.totals) ?? null;
+  const funnel = (data == null ? void 0 : data.clicks.downloads) ?? null;
+  const shown = shownMetric(metric, data);
   const doRefresh = async () => {
     setRefreshing(true);
     try {
@@ -34865,6 +35085,30 @@ function Traffic(_) {
         ] })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-tiles", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-tile primary", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-num", children: fmtInt(people == null ? void 0 : people.new_visitors) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "traffic-tile-label", children: [
+            "First-time visitors (",
+            data.clicks.days,
+            "d)"
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-tile", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-num", children: fmtInt(people == null ? void 0 : people.visitors) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "traffic-tile-label", children: [
+            "Unique visitors (",
+            data.clicks.days,
+            "d)"
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-tile", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-num", children: fmtInt((people == null ? void 0 : people.clicks) ?? clickTotalsSorted.reduce((s, [, n]) => s + n, 0)) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "traffic-tile-label", children: [
+            "Tracked link clicks (",
+            data.clicks.days,
+            "d)"
+          ] })
+        ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-tile", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-num", children: fmtInt((_a2 = data.repo) == null ? void 0 : _a2.stars) }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-label", children: "GitHub stars" })
@@ -34875,59 +35119,103 @@ function Traffic(_) {
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-tile", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-num", children: fmtInt(data.downloads_total) }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-label", children: "Total downloads (all releases)" })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-tile", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-num", children: fmtInt(clickTotalsSorted.reduce((s, [, n]) => s + n, 0)) }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "traffic-tile-label", children: [
-            "Tracked link clicks (",
-            data.clicks.days,
-            "d)"
-          ] })
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "traffic-tile-label", children: "Downloads (all releases, all-time)" })
         ] })
       ] }),
+      !people && !data.errors.clicks && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint", children: [
+        "Visitor counts are empty because the click Worker hasn't been redeployed with visitor attribution yet (see ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "worker/README.md" }),
+        " in the webpage repo — it needs the",
+        " ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "VISITORS" }),
+        " KV namespace and the ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "VISITOR_SALT" }),
+        " secret). Clicks below are unaffected. Numbers start accumulating at deploy time, so expect visitors to trail clicks until the window fills in."
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("h3", { className: "set-section-title", children: [
+        "New user funnel (",
+        data.clicks.days,
+        "d)"
+      ] }),
+      funnel ? /* @__PURE__ */ jsxRuntimeExports.jsx(DownloadFunnel, { funnel, days: data.clicks.days }) : /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Not available until the click Worker reports visitor attribution. GitHub's download counters can't stand in for it — they're opaque tallies that include updates and re-downloads, with no way to tell one person from another." }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "GitHub stars over time" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(StarsChart, { points: data.star_history ?? [] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: shown === "people" ? "Visitors over time" : "Clicks over time" }),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row traffic-range-row", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-periods traffic-range", children: DAYS_OPTIONS.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
-          "button",
-          {
-            type: "button",
-            className: "usage-period" + (days === d ? " active" : ""),
-            onClick: () => setDays(d),
-            children: [
-              d,
-              "d"
-            ]
-          },
-          d
-        )) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "traffic-controls", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-periods traffic-range", children: DAYS_OPTIONS.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "button",
+            {
+              type: "button",
+              className: "usage-period" + (days === d ? " active" : ""),
+              onClick: () => setDays(d),
+              children: [
+                d,
+                "d"
+              ]
+            },
+            d
+          )) }),
+          people && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "usage-periods traffic-range", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                type: "button",
+                className: "usage-period" + (shown === "people" ? " active" : ""),
+                onClick: () => setMetric("people"),
+                children: "People"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                type: "button",
+                className: "usage-period" + (shown === "clicks" ? " active" : ""),
+                onClick: () => setMetric("clicks"),
+                children: "Clicks"
+              }
+            )
+          ] })
+        ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "test-row", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "test-btn", onClick: doRefresh, disabled: refreshing, children: refreshing ? "Refreshing…" : "Refresh" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Cached ~5 min server-side to stay under GitHub's rate limit — this bypasses it." })
         ] })
       ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(ClicksChart, { series: data.clicks.series }),
+      shown === "people" ? /* @__PURE__ */ jsxRuntimeExports.jsx(VisitorsChart, { days: data.clicks.visitors_by_day }) : /* @__PURE__ */ jsxRuntimeExports.jsx(ClicksChart, { series: data.clicks.series }),
       clickTotalsSorted.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("h3", { className: "set-section-title", children: [
-          "Clicks by link (",
+          "By link (",
           data.clicks.days,
           "d)"
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { className: "traffic-table", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "Link" }),
+            people && /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "num", children: "First-time" }),
+            people && /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "num", children: "Visitors" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("th", { className: "num", children: "Clicks" })
           ] }) }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("tbody", { children: clickTotalsSorted.map(([slug, n]) => /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: slugLabel(slug) }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: fmtInt(n) })
-          ] }, slug)) })
-        ] })
+          /* @__PURE__ */ jsxRuntimeExports.jsx("tbody", { children: clickTotalsSorted.map(([slug, n]) => {
+            var _a3, _b3;
+            return /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: slugLabel(slug) }),
+              people && /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: fmtInt((_a3 = visitorsBySlug.get(slug)) == null ? void 0 : _a3.new_visitors) }),
+              people && /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: fmtInt((_b3 = visitorsBySlug.get(slug)) == null ? void 0 : _b3.visitors) }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: fmtInt(n) })
+            ] }, slug);
+          }) })
+        ] }),
+        people && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Visitor columns are deduplicated per link over the window, so they don't add up down the column — one person clicking two links is one visitor on each row and one visitor overall." })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Downloads over time" }),
       data.releases.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "No releases found." }) : /* @__PURE__ */ jsxRuntimeExports.jsx(ReleasesChart, { releases: data.releases }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Downloads by version" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint", children: [
+        "GitHub's raw asset counters. These are ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "not" }),
+        " people: they include updates and repeat downloads, and GitHub attaches no identity to them, so there is no way to split them into new versus returning users. For new-user numbers use the funnel above. Note too that MindFlock's updater opens the releases page in a browser rather than fetching the asset itself, so an update looks exactly like a first-time download here."
+      ] }),
       data.releases.length === 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "No releases found." }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("table", { className: "traffic-table", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx("thead", { children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tr", { children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("th", { children: "Version" }),
