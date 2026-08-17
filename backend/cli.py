@@ -13,6 +13,9 @@ Installed via ``[project.scripts]``::
 
     mindflock new [REPO_PATH] -p "…"   # create a session on a running server
     mindflock ls                  # list sessions (table or --json)
+    mindflock accounts            # list auth profiles (Claude accounts, OpenRouter keys)
+    mindflock accounts add work   # …add one; `login work` authenticates it
+    mindflock accounts use work   # …make it the default for new sessions
     mindflock attach TITLE        # tmux attach to a session's terminal
     mindflock rm TITLE [--yes]    # end a session (keeps the worktree)
     mindflock open TITLE          # open the session workspace in the IDE
@@ -158,6 +161,13 @@ def _build_parser() -> argparse.ArgumentParser:
     new.add_argument(
         "--program", default="", help="agent program (default: server's default)"
     )
+    new.add_argument(
+        "--account",
+        default="",
+        metavar="ID",
+        help="auth profile the session runs under (see `mindflock accounts`; "
+        "'default' = the CLI's own login; unset = the app-wide default)",
+    )
 
     ls = sub.add_parser(
         "ls", parents=[server_opts], help="list sessions on the running server"
@@ -201,6 +211,78 @@ def _build_parser() -> argparse.ArgumentParser:
     events.add_argument(
         "--follow", "-f", action="store_true", help="keep streaming new events"
     )
+
+    accounts = sub.add_parser(
+        "accounts",
+        parents=[server_opts],
+        help="manage auth profiles (multiple Claude accounts, OpenRouter keys) and hot-swap between them",
+        description=(
+            "Auth profiles let sessions run under different identities — a "
+            "personal Claude subscription next to a work one, or an OpenRouter "
+            "key with its own model — without logging the CLI out and back in. "
+            "Changes go through the running server when there is one (so the "
+            "app picks them up immediately) and fall back to "
+            "~/.mindflock/settings.json otherwise."
+        ),
+    )
+    acc_sub = accounts.add_subparsers(dest="accounts_command")
+    acc_sub.add_parser(
+        "ls", parents=[server_opts], help="list configured accounts (the default)"
+    )
+    acc_add = acc_sub.add_parser(
+        "add", parents=[server_opts], help="add an account/key profile"
+    )
+    acc_add.add_argument("id", metavar="ID", help="short slug (e.g. work, personal)")
+    acc_add.add_argument(
+        "--kind",
+        choices=("account", "api_key", "openrouter"),
+        default="account",
+        help="account = a separate CLI login (own config dir); api_key = a vendor "
+        "API key; openrouter = an OpenRouter key (default: account)",
+    )
+    acc_add.add_argument(
+        "--agent",
+        dest="provider",
+        default="",
+        metavar="CLI",
+        help="which agent CLI this profile authenticates (default: claude; "
+        "openrouter profiles apply to any CLI with an OpenRouter route)",
+    )
+    acc_add.add_argument("--label", default="", help="display name (e.g. 'Work')")
+    acc_add.add_argument(
+        "--key",
+        default="",
+        metavar="API_KEY",
+        help="API key (api_key/openrouter kinds)",
+    )
+    acc_add.add_argument(
+        "--model", default="", help="model pin (e.g. anthropic/claude-sonnet-4.5)"
+    )
+    acc_add.add_argument(
+        "--base-url", default="", dest="base_url", help="alternate endpoint URL"
+    )
+    acc_add.add_argument(
+        "--config-dir",
+        default="",
+        dest="config_dir",
+        help="account kind: explicit config dir (default: ~/.mindflock/accounts/ID)",
+    )
+    acc_login = acc_sub.add_parser(
+        "login",
+        parents=[server_opts],
+        help="run the CLI's own login for an account profile (interactive)",
+    )
+    acc_login.add_argument("id", metavar="ID")
+    acc_use = acc_sub.add_parser(
+        "use",
+        parents=[server_opts],
+        help="make an account the app-wide default ('default' = the CLI's own login)",
+    )
+    acc_use.add_argument("id", metavar="ID")
+    acc_rm = acc_sub.add_parser(
+        "rm", parents=[server_opts], help="remove an account profile"
+    )
+    acc_rm.add_argument("id", metavar="ID")
 
     uninstall = sub.add_parser(
         "uninstall",
@@ -404,6 +486,8 @@ def _cmd_new(args: argparse.Namespace) -> int:
         "program": args.program or "",
         "prompt": args.prompt or "",
     }
+    if getattr(args, "account", ""):
+        payload["profile_id"] = args.account
     if args.provision:
         payload["provisioned"] = True
         payload["workspace_strategy"] = args.strategy
@@ -710,6 +794,238 @@ def _cmd_uninstall(args: argparse.Namespace) -> int:
     return 1 if report.errors else 0
 
 
+# --------------------------------------------------------------------------- #
+# accounts — auth profiles (multiple Claude accounts / OpenRouter keys)
+# --------------------------------------------------------------------------- #
+_ACCOUNT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def _accounts_server(args) -> Optional[str]:
+    """Base URL of a running server, or None (work on the local store then).
+
+    Going through the server when one is up matters: it caches the parsed
+    settings for the life of its process, so a store edited behind its back
+    would not be seen until restart.
+    """
+    try:
+        return client.discover(getattr(args, "host", None), getattr(args, "port", None))
+    except client.ServerNotFound:
+        return None
+
+
+def _accounts_local_profiles() -> list[dict]:
+    from backend.config import settings as settings_store
+
+    settings_store.invalidate()  # another process may have written the store
+    return [p.to_dict() for p in settings_store.load_settings().auth_profiles.profiles]
+
+
+def _accounts_view(base: Optional[str]) -> dict:
+    if base is not None:
+        return client.get(base, "/api/settings/auth-profiles") or {}
+    from backend.config import settings as settings_store
+
+    settings_store.invalidate()
+    s = settings_store.load_settings().auth_profiles
+    return {
+        "profiles": [p.to_dict() for p in s.profiles],
+        "default_profile": s.default_profile,
+    }
+
+
+def _cmd_accounts_ls(args) -> int:
+    view = _accounts_view(_accounts_server(args))
+    profiles = view.get("profiles") or []
+    default = view.get("default_profile") or ""
+    if not profiles:
+        print("No accounts configured.")
+        print()
+        print("  mindflock accounts add work --label 'Work'   # a second Claude login")
+        print("  mindflock accounts login work                # authenticate it")
+        print(
+            "  mindflock accounts add or --kind openrouter --key sk-or-… --model MODEL"
+        )
+        return 0
+    width = max(len(p.get("id", "")) for p in profiles)
+    kind_w = max(len(p.get("kind", "")) for p in profiles)
+    for p in profiles:
+        marker = "*" if p.get("id") == default else " "
+        agent = p.get("provider") or (
+            "any" if p.get("kind") == "openrouter" else "claude"
+        )
+        cols = [p.get("kind", "").ljust(kind_w), agent.ljust(6)]
+        if p.get("model"):
+            cols.append(p["model"])
+        if p.get("label"):
+            cols.append(p["label"])
+        print("%s %s  %s" % (marker, p.get("id", "").ljust(width), "  ".join(cols)))
+    print()
+    print(
+        "'*' = default for new sessions. Switch with `mindflock accounts use ID` "
+        "('default' = the CLI's own login); per-session via the app or "
+        "`mindflock new --account ID`."
+    )
+    return 0
+
+
+def _cmd_accounts_add(args) -> int:
+    pid = args.id.strip().lower()
+    if not _ACCOUNT_ID_RE.match(pid):
+        print(
+            "error: id must be lowercase letters/digits/-/_ (max 64)",
+            file=sys.stderr,
+        )
+        return 1
+    if args.kind in ("api_key", "openrouter") and not args.key:
+        print("error: --kind %s needs --key" % args.kind, file=sys.stderr)
+        return 1
+    profile = {
+        "id": pid,
+        "kind": args.kind,
+        "label": args.label,
+        "provider": args.provider.strip().lower(),
+        "api_key": args.key,
+        "model": args.model,
+        "base_url": args.base_url,
+        "config_dir": args.config_dir,
+    }
+    profile = {k: v for k, v in profile.items() if v}
+    profile["kind"] = args.kind  # kind always rides along, even the default
+    base = _accounts_server(args)
+    if base is not None:
+        view = client.get(base, "/api/settings/auth-profiles") or {}
+        existing = view.get("profiles") or []
+        if any(p.get("id") == pid for p in existing):
+            print("error: account '%s' already exists" % pid, file=sys.stderr)
+            return 1
+        client.put(
+            base, "/api/settings/auth-profiles", {"profiles": existing + [profile]}
+        )
+    else:
+        from backend.config import settings as settings_store
+
+        existing = _accounts_local_profiles()
+        if any(p.get("id") == pid for p in existing):
+            print("error: account '%s' already exists" % pid, file=sys.stderr)
+            return 1
+        settings_store.set_auth_profiles(existing + [profile])
+    print("Added account '%s' (%s)." % (pid, args.kind))
+    if args.kind == "account":
+        print("Next: `mindflock accounts login %s` to authenticate it." % pid)
+    print("Make it the default with `mindflock accounts use %s`." % pid)
+    return 0
+
+
+def _cmd_accounts_login(args) -> int:
+    """Run the CLI's own login flow under the profile's isolation env, in THIS
+    terminal — OAuth login is interactive, so it cannot go through the API."""
+    from backend.providers import auth_profiles
+
+    pid = args.id.strip().lower()
+    profile = auth_profiles.get_profile(pid)
+    if profile is None:
+        print("error: no account '%s' — `mindflock accounts ls`" % pid, file=sys.stderr)
+        return 1
+    env = auth_profiles.login_env(profile)
+    if not env:
+        print(
+            "error: '%s' is a %s profile — only 'account' profiles have a "
+            "login flow (keys are injected at launch)" % (pid, profile.kind),
+            file=sys.stderr,
+        )
+        return 1
+    os.makedirs(auth_profiles.account_dir(profile), mode=0o700, exist_ok=True)
+    from backend import providers
+
+    try:
+        cmd = providers.resolve(profile.resolved_provider()).login_command()
+    except Exception:  # noqa: BLE001
+        cmd = ""
+    cmd = cmd or profile.resolved_provider()
+    print(
+        "Logging '%s' in via `%s` (%s)…"
+        % (pid, cmd, ", ".join("%s=%s" % (k, v) for k, v in sorted(env.items())))
+    )
+    # shell=True: login commands are provider-authored strings (`claude /login`);
+    # stdio is inherited so the OAuth flow is fully interactive.
+    proc = subprocess.run(cmd, shell=True, env={**os.environ, **env})
+    if proc.returncode == 0:
+        print()
+        print("Done. Run sessions on it with `mindflock accounts use %s`," % pid)
+        print("or pick it per-session in the app's New dialog / session header.")
+    return proc.returncode
+
+
+def _cmd_accounts_use(args) -> int:
+    pid = args.id.strip().lower()
+    target = "" if pid == "default" else pid
+    base = _accounts_server(args)
+    if base is not None:
+        client.post(
+            base, "/api/settings", {"auth_profiles": {"default_profile": target}}
+        )
+    else:
+        from backend.config import settings as settings_store
+
+        if target and not any(
+            p.get("id") == target for p in _accounts_local_profiles()
+        ):
+            print("error: no account '%s'" % pid, file=sys.stderr)
+            return 1
+        settings_store.update_settings(auth_profiles={"default_profile": target})
+    if target:
+        print("New sessions now run as '%s'." % target)
+    else:
+        print("New sessions now use each CLI's own login (no profile).")
+    print("Already-running sessions keep their identity until swapped or relaunched.")
+    return 0
+
+
+def _cmd_accounts_rm(args) -> int:
+    pid = args.id.strip().lower()
+    base = _accounts_server(args)
+    if base is not None:
+        view = client.get(base, "/api/settings/auth-profiles") or {}
+        existing = view.get("profiles") or []
+        kept = [p for p in existing if p.get("id") != pid]
+        if len(kept) == len(existing):
+            print("error: no account '%s'" % pid, file=sys.stderr)
+            return 1
+        client.put(base, "/api/settings/auth-profiles", {"profiles": kept})
+    else:
+        from backend.config import settings as settings_store
+
+        existing = _accounts_local_profiles()
+        kept = [p for p in existing if p.get("id") != pid]
+        if len(kept) == len(existing):
+            print("error: no account '%s'" % pid, file=sys.stderr)
+            return 1
+        settings_store.set_auth_profiles(kept)
+    print(
+        "Removed '%s'. Its config dir (if any) is kept — delete it yourself "
+        "once you're sure." % pid
+    )
+    return 0
+
+
+def _cmd_accounts(args) -> int:
+    handler = {
+        None: _cmd_accounts_ls,
+        "ls": _cmd_accounts_ls,
+        "add": _cmd_accounts_add,
+        "login": _cmd_accounts_login,
+        "use": _cmd_accounts_use,
+        "rm": _cmd_accounts_rm,
+    }.get(getattr(args, "accounts_command", None))
+    if handler is None:  # unreachable via argparse, defensive
+        return _cmd_accounts_ls(args)
+    try:
+        return handler(args)
+    except client.ClientError as err:
+        print("error: %s" % err, file=sys.stderr)
+        return 1
+
+
 _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "new": _cmd_new,
     "ls": _cmd_ls,
@@ -742,6 +1058,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         # refuses to run while a server is up), so it must never be wrapped in
         # the ServerNotFound handler below.
         return _cmd_uninstall(args)
+    if args.command == "accounts":
+        # Not a session command either: it prefers a running server but falls
+        # back to the local settings store, so ServerNotFound is a routing
+        # decision here, not an error.
+        return _cmd_accounts(args)
     handler: Optional[Callable[[argparse.Namespace], int]] = _SESSION_COMMANDS.get(
         args.command or ""
     )

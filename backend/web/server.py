@@ -3305,6 +3305,22 @@ async def repo_check(path: str = "") -> JSONResponse:
 # MindFlock automation control (/api/mindflock/*) moved to the MindFlock addon.
 
 
+def _profile_id_error(profile_id: str) -> str:
+    """Validate a session's auth-profile pin: ``""`` (inherit) and
+    ``"default"`` (explicitly none) are always fine; anything else must name a
+    configured profile. Returns an error message, or ``""`` when valid."""
+    from backend.providers import auth_profiles
+
+    if not profile_id or profile_id == auth_profiles.AMBIENT_ID:
+        return ""
+    if auth_profiles.get_profile(profile_id) is None:
+        return (
+            "unknown account '%s' — configure it under Settings → Accounts first"
+            % profile_id
+        )
+    return ""
+
+
 @app.post("/api/instances")
 async def create_instance(payload: dict) -> JSONResponse:
     """Create a session and Start it in the background (returns 202 immediately).
@@ -3331,6 +3347,9 @@ async def create_instance(payload: dict) -> JSONResponse:
     * ``init_repo`` — ``git init`` an empty folder first (ignored for in-place).
     * ``launch_args`` — per-session agent flags; absent means inherit the global
       default, present (even ``[]``) means use exactly these.
+    * ``profile_id`` — auth profile the agent runs under; absent/blank means
+      inherit the global default profile, ``"default"`` pins the CLI's own
+      ambient login, anything else must name a configured profile.
 
     The three creation modes are provisioned, plain-worktree, and in-place. A
     409 is returned when the title already exists; the instance registers as
@@ -3367,6 +3386,13 @@ async def create_instance(payload: dict) -> JSONResponse:
             return JSONResponse({"error": str(err)}, status_code=400)
     else:
         launch_args = None  # not specified -> inherit the global default
+
+    # Auth profile pin. Rejecting an unknown id HERE beats a session that
+    # launches half-authenticated and only fails when the CLI does.
+    profile_id = str(payload.get("profile_id", "") or "").strip()
+    err = _profile_id_error(profile_id)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
 
     if is_provisioned:
         # Provisioning is all git (base clone + worktree/clone per session).
@@ -3473,6 +3499,7 @@ async def create_instance(payload: dict) -> JSONResponse:
             prompt=prompt,
             launch_args=launch_args,
             in_place=in_place,
+            profile_id=profile_id,
         )
     )
     # O4: every session gets a deterministic dev-server port block, injected
@@ -4582,6 +4609,8 @@ async def copy_instance(title: str) -> JSONResponse:
             path=wt,
             program=program,
             in_place=True,
+            # A copy is "another one of THIS session" — same CLI, same identity.
+            profile_id=getattr(src, "ProfileId", "") or "",
         )
     )
     inst.SetStatus(Loading)
@@ -4606,6 +4635,84 @@ async def copy_instance(title: str) -> JSONResponse:
         data={"program": program, "copied_from": title},
     )
     return JSONResponse(_instance_json(inst), status_code=202)
+
+
+@app.post("/api/instances/{title}/profile")
+async def set_instance_profile(title: str, payload: dict) -> JSONResponse:
+    """Hot-swap which auth profile a session's agent runs under.
+
+    Body: ``{"profile_id": "<id>" | "default" | ""}`` (same tri-state as
+    session creation). The pin is persisted, the agent tmux session is killed,
+    and a fresh one is started immediately — the relaunch path re-derives the
+    profile overlay from the stored pin, so the CLI comes back as the new
+    identity. The kill reads as an unnatural death, so the relaunch takes the
+    CLI's resume path; whether there is a conversation to resume depends on
+    the new identity (transcripts live per account — swapping back finds the
+    old thread, a first swap starts fresh via the resume chain's plain-start
+    fallback). The worktree, shell pane and diff state are untouched.
+    """
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    payload = payload or {}
+    profile_id = str(payload.get("profile_id", "") or "").strip()
+    perr = _profile_id_error(profile_id)
+    if perr:
+        return JSONResponse({"error": perr}, status_code=400)
+    inst.ProfileId = profile_id
+    ENGINE.save()
+
+    # Provisioned launcher scripts carry profile launch FLAGS baked in at write
+    # time (env never is — it rides the relaunch exports). Rewrite the script so
+    # a swap also updates flag-level routing (e.g. an OpenRouter model pin).
+    # Best-effort: a rewrite failure still leaves the env swap working.
+    def _restart() -> None:
+        try:
+            wt = inst.GetWorktreePath()
+        except Exception:  # noqa: BLE001
+            wt = ""
+        if (
+            getattr(inst, "Provisioned", False)
+            and wt
+            and os.path.isfile(os.path.join(wt, provisioning.LAUNCHER_BASENAME))
+        ):
+            try:
+                prompt_path = os.path.join(wt, provisioning.PROMPT_BASENAME)
+                prompt = ""
+                if os.path.isfile(prompt_path):
+                    with open(prompt_path, encoding="utf-8") as f:
+                        prompt = f.read()
+                _, prof_args = providers.launch_script.profile_overlay(
+                    inst.Program or "", profile_id
+                )
+                provisioning.write_launcher(
+                    wt,
+                    prompt,
+                    program=inst.Program or "claude",
+                    skip_permissions=True,
+                    launch_args=tuple(prof_args)
+                    + tuple(getattr(inst, "LaunchArgs", ()) or ()),
+                )
+            except Exception:  # noqa: BLE001 — flags are secondary to env
+                pass
+        if inst.Started() and inst.Status == session.Running:
+            _kill_agent_session(title)
+            _ensure_agent_session(inst, title)
+
+    await asyncio.to_thread(_restart)
+    note = ""
+    try:
+        from backend.providers import auth_profiles
+
+        note = auth_profiles.unsupported_note(inst.Program or "", profile_id)
+    except Exception:  # noqa: BLE001 — the note is enrichment only
+        pass
+    _events.BUS.emit(
+        "session.profile_changed",
+        session=title,
+        data={"profile_id": profile_id},
+    )
+    return JSONResponse({"ok": True, "profile_id": profile_id, "note": note})
 
 
 # --- Recently-closed: list / reopen / forget ---------------------------------

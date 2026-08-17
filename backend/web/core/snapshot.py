@@ -317,6 +317,23 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         )
     except Exception:  # noqa: BLE001
         workspace_missing = False
+    # Which auth profile the session's agent runs under: the stored pin plus
+    # its resolution ("" pin -> the global default), so the UI can show the
+    # active identity without re-implementing the tri-state.
+    profile_id = getattr(inst, "ProfileId", "") or ""
+    profile_effective = ""
+    profile_label = ""
+    try:
+        from backend.providers import auth_profiles
+
+        profile_effective = auth_profiles.effective_profile_id(profile_id)
+        prof = auth_profiles.get_profile(profile_effective)
+        if prof is not None:
+            profile_label = prof.display_label()
+        else:
+            profile_effective = ""
+    except Exception:  # noqa: BLE001 — profiles are enrichment only
+        profile_effective = ""
     return {
         "title": inst.Title,
         "branch": inst.Branch,
@@ -328,6 +345,9 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         # the canonical identity behind the raw Program string, used by the UI
         # to label each window's usage with exactly who is serving it.
         "provider": providers.resolve(getattr(inst, "Program", "") or "").name,
+        "profile_id": profile_id,
+        "profile_effective": profile_effective,
+        "profile_label": profile_label,
         "path": inst.Path,
         "status": status_name,
         "started": inst.Started(),

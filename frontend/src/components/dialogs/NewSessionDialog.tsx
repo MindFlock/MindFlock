@@ -13,7 +13,12 @@ import {
 } from "react";
 import type { Config, Instance } from "../../api/types";
 import { api } from "../../api/client";
-import { refreshInstances, refreshConfig, queryClient } from "../../state/queries";
+import {
+  refreshInstances,
+  refreshConfig,
+  queryClient,
+  useAuthProfiles,
+} from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import {
@@ -296,6 +301,10 @@ export function NewSessionDialog() {
   const [folderCheck, setFolderCheck] = useState<{ asked: string; plain: boolean } | null>(null);
   const [presetValue, setPresetValue] = useState("");
   const [savedPresets, setSavedPresets] = useState<Preset[]>([]);
+  // Auth profile pin: "" = inherit the app-wide default account; "default" =
+  // explicitly the CLI's own login; anything else = a configured profile id.
+  const [profileId, setProfileId] = useState("");
+  const authProfiles = useAuthProfiles().data;
   const launchDefaults = useRef<Record<string, string>>({});
   const titleRef = useRef<HTMLInputElement | null>(null);
   const launchRef = useRef<HTMLDetailsElement | null>(null);
@@ -330,6 +339,7 @@ export function NewSessionDialog() {
     folderDo({ t: "reopen" });
     setActiveTemplate("");
     setPresetValue("");
+    setProfileId("");
     setSavedPresets(loadUserPresets());
     let live = true;
     // The folder suggestions get a request of their own rather than a place in
@@ -526,6 +536,9 @@ export function NewSessionDialog() {
     if (promptVal) body.prompt = promptVal;
     // Sent EXPLICITLY (even empty) so a toggled-off default is honored.
     body.launch_args = tokenize(launchArgs);
+    // Absent = inherit the app-wide default account (same tri-state as
+    // launch_args), so only an explicit pick rides along.
+    if (profileId) body.profile_id = profileId;
     if (provision) {
       body.provisioned = true;
       body.workspace_strategy = strategy;
@@ -725,6 +738,43 @@ export function NewSessionDialog() {
                 ))}
               </select>
             </label>
+            {(authProfiles?.profiles || []).length > 0 && (
+              <label className="nf-agent">
+                <span className="nf-agent-head">
+                  Account
+                  <button
+                    type="button"
+                    id="new-account-manage"
+                    className="linklike"
+                    title="Manage accounts in Settings"
+                    onClick={() => {
+                      closeDialog();
+                      useUi.getState().openDialogFor("settings", "accounts");
+                    }}
+                  >
+                    Manage
+                  </button>
+                </span>
+                <select
+                  id="new-account"
+                  title="Which identity this session's CLI runs as"
+                  value={profileId}
+                  onChange={(e) => setProfileId(e.target.value)}
+                >
+                  <option value="">
+                    {authProfiles?.default_profile
+                      ? `App default (${authProfiles.default_profile})`
+                      : "App default (CLI's own login)"}
+                  </option>
+                  <option value="default">CLI's own login</option>
+                  {(authProfiles?.profiles || []).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label || p.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
           {/* The datalist mount slots.js populates from /api/providers. */}
           <datalist id="provider-list"></datalist>

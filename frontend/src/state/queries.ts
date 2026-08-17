@@ -6,7 +6,14 @@
 import { useEffect } from "react";
 import { QueryClient, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { Config, DevicesResponse, Instance, TrafficResponse, UsageResponse } from "../api/types";
+import type {
+  AuthProfilesResponse,
+  Config,
+  DevicesResponse,
+  Instance,
+  TrafficResponse,
+  UsageResponse,
+} from "../api/types";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -95,6 +102,22 @@ export function useUsage(enabled = true) {
     enabled,
     placeholderData: (prev) => prev,
   });
+}
+
+/** Auth profiles (Settings → Accounts) — the identity list the New dialog and
+ * each pane's account chip render. Cheap (a settings read), so a modest
+ * staleTime keeps the pickers fresh without polling. */
+export function useAuthProfiles() {
+  return useQuery({
+    queryKey: ["auth-profiles"],
+    queryFn: () => api<AuthProfilesResponse>("/api/settings/auth-profiles"),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function refreshAuthProfiles() {
+  return queryClient.invalidateQueries({ queryKey: ["auth-profiles"] });
 }
 
 /** Imperative refresh after any action that changes the session set. */

@@ -26,10 +26,15 @@ _LOGIN_PREFIX = "mindflock_login_"
 _DN = subprocess.DEVNULL
 
 
-def login_session_name(name: str) -> str:
-    """Deterministic tmux session name for provider ``name``'s login pane."""
+def login_session_name(name: str, profile_id: str = "") -> str:
+    """Deterministic tmux session name for provider ``name``'s login pane
+    (suffixed per auth profile, so logging into a work account never reuses
+    the personal login's pane)."""
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", (name or "").strip().lower())
-    return _LOGIN_PREFIX + (safe or "cli")
+    session = _LOGIN_PREFIX + (safe or "cli")
+    if profile_id:
+        session += "_" + re.sub(r"[^A-Za-z0-9_.-]", "_", profile_id.strip().lower())
+    return session
 
 
 def _login_command_for(name: str) -> Optional[str]:
@@ -45,17 +50,50 @@ def _login_command_for(name: str) -> Optional[str]:
         return None
 
 
-def ensure_login_session(name: str) -> Tuple[str, Optional[str]]:
+def ensure_login_session(name: str, profile_id: str = "") -> Tuple[str, Optional[str]]:
     """Ensure a tmux session running ``name``'s login command exists in HOME.
 
     Returns ``(session_name, error_or_None)``. An unknown provider (or one with
     no login command) is an error, not a spawned empty shell. Idempotent: an
     already-running login session is reused.
+
+    With ``profile_id``, the login runs under that auth profile's isolation env
+    (e.g. ``CLAUDE_CONFIG_DIR`` pointed at the profile's account dir, created
+    here if needed) so the credential lands in the profile's own store instead
+    of the ambient login's.
     """
-    session = login_session_name(name)
+    session = login_session_name(name, profile_id)
     cmd = _login_command_for(name)
     if not cmd:
         return session, "no login flow for provider '%s'" % name
+    if profile_id:
+        try:
+            from backend.providers import auth_profiles
+
+            profile = auth_profiles.get_profile(profile_id)
+            if profile is None:
+                return session, "unknown account '%s'" % profile_id
+            env = auth_profiles.login_env(profile)
+            if not env:
+                return session, (
+                    "account '%s' has nothing to log into — only 'account'-kind "
+                    "profiles carry their own CLI login" % profile_id
+                )
+            if profile.kind == "account":
+                os.makedirs(
+                    auth_profiles.account_dir(profile), mode=0o700, exist_ok=True
+                )
+            import shlex
+
+            exports = "; ".join(
+                "export %s=%s" % (k, shlex.quote(v)) for k, v in sorted(env.items())
+            )
+            # Exported (not a K=V prefix) so the shell the pane drops into after
+            # login keeps the profile env — running the CLI right there to
+            # verify the login talks to the same account that just logged in.
+            cmd = "%s; %s" % (exports, cmd)
+        except Exception as err:  # noqa: BLE001 — a profile quirk must not 500
+            return session, str(err)
     try:
         if (
             subprocess.run(
@@ -133,11 +171,11 @@ def ensure_login_session(name: str) -> Tuple[str, Optional[str]]:
     return session, None
 
 
-def kill_login_session(name: str) -> None:
+def kill_login_session(name: str, profile_id: str = "") -> None:
     """Tear down provider ``name``'s login session (best-effort)."""
     try:
         subprocess.run(
-            ["tmux", "kill-session", "-t=" + login_session_name(name)],
+            ["tmux", "kill-session", "-t=" + login_session_name(name, profile_id)],
             stdout=_DN,
             stderr=_DN,
             timeout=10,

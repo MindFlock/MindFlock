@@ -30,6 +30,7 @@ import {
   type UsageAgg,
   type UsagePeriodKey,
   type UsageProviderEntry,
+  type UsageRowData,
   type UsageWindows,
 } from "./usageModel";
 
@@ -253,6 +254,23 @@ export function OverallUsage() {
                   active.mode === "windowed",
                 )}
               />
+              {/* Per-account split (auth profiles). Session totals aren't
+                  attributable per account, so the table shows only for the
+                  rolling periods. */}
+              {period !== "session" && (active.accounts?.length || 0) > 0 && (
+                <>
+                  <div className="usage-pop-head">By account</div>
+                  <UsagePopTable
+                    rows={(active.accounts || []).map((a) => {
+                      const t = a.periods && a.periods[period];
+                      return [
+                        a.label || a.id,
+                        t ? "~" + fmtUsd(t.cost || 0) : "—",
+                      ] as UsageRowData;
+                    })}
+                  />
+                </>
+              )}
               <UsagePopNote text={period === "session" ? USAGE_NOTE : USAGE_WINDOW_NOTE[period]} />
               {active.mode === "windowed" ? (
                 <>

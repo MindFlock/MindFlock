@@ -54,6 +54,17 @@ def _mask_ticketing(d: dict) -> None:
             src["api_token"] = _MASK if src.get("api_token") else ""
 
 
+def _mask_auth_profiles(d: dict) -> None:
+    """Mask the api_key of every auth profile in-place (the profiles twin of
+    :func:`_mask_ticketing` — secrets inside a list need their own walk)."""
+    ap = d.get("auth_profiles")
+    if not isinstance(ap, dict):
+        return
+    for prof in ap.get("profiles", []) or []:
+        if isinstance(prof, dict):
+            prof["api_key"] = _MASK if prof.get("api_key") else ""
+
+
 def _masked_view() -> dict:
     """The current settings as a grouped dict, with secrets masked.
 
@@ -66,6 +77,7 @@ def _masked_view() -> dict:
         d.setdefault(group, {})
         d[group][fld] = _MASK if present else ""
     _mask_ticketing(d)
+    _mask_auth_profiles(d)
     return d
 
 
@@ -110,6 +122,20 @@ def _apply_post(payload: dict) -> None:
             continue  # a list of sources — managed via the dedicated CRUD endpoints
         if not isinstance(fields, dict):
             continue
+        if group == "auth_profiles":
+            # The profiles LIST is managed via its dedicated CRUD endpoint;
+            # the group's scalars (default_profile) stay settable here.
+            fields = {k: v for k, v in fields.items() if k != "profiles"}
+            dp = fields.get("default_profile")
+            if isinstance(dp, str) and dp.strip():
+                known = {
+                    p.id for p in settings_store.load_settings().auth_profiles.profiles
+                }
+                if dp.strip() not in known:
+                    raise ValueError(
+                        "unknown account '%s' — add it under Settings → Accounts "
+                        "before making it the default" % dp.strip()
+                    )
         if group == "coding_cli":
             dp = fields.get("default_provider")
             if (
@@ -768,6 +794,151 @@ class SettingsAddon(Addon):
                 return JSONResponse({"error": str(err)}, status_code=400)
             return JSONResponse({"sources": _masked_sources()})
 
+        # --- auth profiles CRUD (multiple identities per CLI) ---------------
+        def _masked_profiles() -> list:
+            from backend.providers import auth_profiles as ap
+
+            out = []
+            for p in settings_store.load_settings().auth_profiles.profiles:
+                d = p.to_dict()
+                d["api_key"] = _MASK if d.get("api_key") else ""
+                # Read-only enrichment the Accounts screen renders: where an
+                # account profile's isolated login lives, and the command that
+                # logs its CLI in there.
+                try:
+                    cfg = ap.get_profile(p.id)
+                    if cfg is not None and p.kind == "account":
+                        d["resolved_config_dir"] = ap.account_dir(cfg)
+                        d["login_command"] = ap.login_command(cfg)
+                except Exception:  # noqa: BLE001 — enrichment only
+                    pass
+                out.append(d)
+            return out
+
+        def _auth_profiles_view() -> dict:
+            s = settings_store.load_settings().auth_profiles
+            return {
+                "profiles": _masked_profiles(),
+                "default_profile": s.default_profile,
+                "kinds": list(settings_store.AUTH_PROFILE_KINDS),
+            }
+
+        @router.get("/settings/auth-profiles")
+        def get_auth_profiles() -> JSONResponse:
+            return JSONResponse(_auth_profiles_view())
+
+        @router.put("/settings/auth-profiles")
+        def put_auth_profiles(body: dict) -> JSONResponse:
+            """Replace the whole profiles list (same contract as the ticketing
+            sources CRUD: an ``api_key`` that is empty or the mask sentinel
+            keeps the previously-stored key, matched by ``id``). A
+            ``default_profile`` key in the body updates the app-wide default in
+            the same save; account-kind profiles get their isolated config dir
+            created here so a login can land in it."""
+            body = body or {}
+            incoming = body.get("profiles")
+            if not isinstance(incoming, list):
+                return JSONResponse(
+                    {"error": 'expected {"profiles": [...]}'}, status_code=400
+                )
+            prev = {
+                p.id: p.api_key
+                for p in settings_store.load_settings().auth_profiles.profiles
+            }
+            clean: list = []
+            seen: set = set()
+            for raw in incoming:
+                if not isinstance(raw, dict):
+                    continue
+                pid = str(raw.get("id", "") or "").strip().lower()
+                if not pid:
+                    continue
+                if not _NAME_RE.match(pid):
+                    return JSONResponse(
+                        {
+                            "error": "account id '%s' must be lowercase "
+                            "letters/digits/-/_ (max 64)" % pid
+                        },
+                        status_code=400,
+                    )
+                if pid in seen:
+                    return JSONResponse(
+                        {"error": "duplicate account id '%s'" % pid},
+                        status_code=400,
+                    )
+                seen.add(pid)
+                kind = str(raw.get("kind", "") or "account").strip().lower()
+                if kind not in settings_store.AUTH_PROFILE_KINDS:
+                    return JSONResponse(
+                        {
+                            "error": "unknown account kind '%s' (expected one "
+                            "of %s)"
+                            % (kind, ", ".join(settings_store.AUTH_PROFILE_KINDS))
+                        },
+                        status_code=400,
+                    )
+                p = dict(raw)
+                p["id"] = pid
+                p["kind"] = kind
+                key = str(p.get("api_key", "") or "").strip()
+                if key in ("", _MASK):
+                    p["api_key"] = prev.get(pid, "")
+                clean.append(p)
+            try:
+                settings_store.set_auth_profiles(clean)
+                if "default_profile" in body:
+                    _apply_post(
+                        {
+                            "auth_profiles": {
+                                "default_profile": str(
+                                    body.get("default_profile", "") or ""
+                                ).strip()
+                            }
+                        }
+                    )
+            except Exception as err:  # noqa: BLE001
+                return JSONResponse({"error": str(err)}, status_code=400)
+            # Create each account profile's isolated dir now (0700, like the
+            # settings dir) so the login flow has somewhere to land.
+            try:
+                from backend.providers import auth_profiles as ap
+
+                for cfg in ap.load_profiles():
+                    if cfg.kind == "account" and ap.login_env(cfg):
+                        os.makedirs(ap.account_dir(cfg), mode=0o700, exist_ok=True)
+            except Exception:  # noqa: BLE001 — the dir is created again at login
+                pass
+            return JSONResponse(_auth_profiles_view())
+
+        @router.post("/settings/test/openrouter")
+        def test_openrouter(body: Optional[dict] = None) -> JSONResponse:
+            """Validate an OpenRouter key (request-supplied, or the one stored
+            on ``profile_id``) and report its spend + the models it can reach —
+            the account-level usage story for key profiles, and the source for
+            the model-picker dropdown. Never echoes the key."""
+            from backend.providers import auth_profiles as ap
+
+            body = body or {}
+            key = str(body.get("api_key", "") or "").strip()
+            base_url = str(body.get("base_url", "") or "").strip()
+            if key in ("", _MASK):
+                pid = str(body.get("profile_id", "") or "").strip()
+                for p in settings_store.load_settings().auth_profiles.profiles:
+                    if p.id == pid:
+                        key = p.api_key
+                        base_url = base_url or p.base_url
+                        break
+                else:
+                    key = ""
+            if not key:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "no OpenRouter key configured — paste one first",
+                    }
+                )
+            return JSONResponse(ap.probe_openrouter(key, base_url))
+
         @router.post("/settings/test/github")
         def test_github() -> JSONResponse:
             """Report where a GitHub token would come from (settings / env /
@@ -902,15 +1073,20 @@ class SettingsAddon(Addon):
             return JSONResponse({"providers": out, "default": default_name})
 
         @router.websocket("/providers/{name}/login-terminal")
-        async def provider_login_terminal(ws: WebSocket, name: str) -> None:
+        async def provider_login_terminal(
+            ws: WebSocket, name: str, profile: str = ""
+        ) -> None:
             """Open a browser terminal running provider ``name``'s login flow so
-            the user authenticates the CLI through the CLI itself."""
+            the user authenticates the CLI through the CLI itself. With
+            ``?profile=<id>`` the login runs under that auth profile's isolated
+            config dir, so a second (work) account signs in without touching
+            the first."""
             from backend.web.core import provider_login
             from backend.web.core.terminal import pump_pty, spawn_tmux_attach
 
             await ws.accept()
             session, err = await asyncio.to_thread(
-                provider_login.ensure_login_session, name
+                provider_login.ensure_login_session, name, profile
             )
             if err is not None:
                 await ws.send_text(json.dumps({"type": "error", "message": err}))
@@ -925,12 +1101,12 @@ class SettingsAddon(Addon):
             await pump_pty(ws, proc, allow_input=True)
 
         @router.post("/providers/{name}/login-close")
-        def provider_login_close(name: str) -> JSONResponse:
+        def provider_login_close(name: str, profile: str = "") -> JSONResponse:
             """Tear down a provider's login terminal (called when the UI closes
             the modal), so a completed login doesn't leave a stray tmux session."""
             from backend.web.core import provider_login
 
-            provider_login.kill_login_session(name)
+            provider_login.kill_login_session(name, profile)
             return JSONResponse({"ok": True})
 
         @router.post("/providers")

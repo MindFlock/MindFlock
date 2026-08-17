@@ -133,6 +133,44 @@ def _usage_window_for(p) -> Optional[dict]:
     return None
 
 
+def _account_usage_entries(p) -> Optional[list]:
+    """Per-ACCOUNT period totals for provider ``p``, or None.
+
+    Only claude has per-account transcript attribution today (each auth-profile
+    account dir is its own scan root), and the breakdown only appears once at
+    least one claude account profile exists — a single ambient identity has
+    nothing to break down. Entries: ``{id, label, periods}``, ambient first.
+    """
+    if p.name != "claude":
+        return None
+    from backend.providers import auth_profiles, usage_history
+
+    profiles = [
+        pr
+        for pr in auth_profiles.load_profiles()
+        if pr.kind == "account" and pr.resolved_provider() == "claude"
+    ]
+    if not profiles:
+        return None
+    per = usage_history.windows_by_account()
+    out = [
+        {
+            "id": auth_profiles.AMBIENT_ID,
+            "label": "Default login",
+            "periods": per.get(usage_history.AMBIENT_ACCOUNT) or None,
+        }
+    ]
+    for pr in profiles:
+        out.append(
+            {
+                "id": pr.id,
+                "label": pr.display_label(),
+                "periods": per.get(pr.id) or None,
+            }
+        )
+    return out
+
+
 def _provider_usage_entry(p) -> dict:
     """Per-provider usage descriptor for the ``providers`` list in /api/usage."""
     srv = _server()
@@ -154,4 +192,10 @@ def _provider_usage_entry(p) -> dict:
         entry["periods"] = p.usage_periods()
     except Exception:  # noqa: BLE001 — history is enrichment only
         entry["periods"] = None
+    try:
+        accounts = _account_usage_entries(p)
+        if accounts:
+            entry["accounts"] = accounts
+    except Exception:  # noqa: BLE001 — the breakdown is enrichment only
+        pass
     return entry

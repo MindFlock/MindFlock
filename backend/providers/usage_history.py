@@ -39,7 +39,12 @@ _CACHE_TTL = 60  # recompute the (expensive) full scan at most once/minute
 _RECENT_LOOKBACK = 36 * 60 * 60
 
 _lock = threading.Lock()
-_cache: dict = {"at": 0.0, "windows": None, "recent": None}
+_cache: dict = {"at": 0.0, "windows": None, "recent": None, "accounts": None}
+
+#: Account id the ambient ``~/.claude*`` roots fold into — every transcript
+#: that does not live in an auth-profile account dir. Matches
+#: :data:`backend.providers.auth_profiles.AMBIENT_ID`.
+AMBIENT_ACCOUNT = "default"
 
 
 def _zero() -> dict:
@@ -58,24 +63,36 @@ def _ts_epoch(s):
     return ts_epoch(s)
 
 
-def _roots() -> set:
-    """Every Claude Code config root: all ``~/.claude*`` dirs + ``$CLAUDE_CONFIG_DIR``."""
-    roots = set()
+def _roots() -> dict:
+    """Every Claude Code config root, mapped to the ACCOUNT its usage belongs
+    to: all ``~/.claude*`` dirs + ``$CLAUDE_CONFIG_DIR`` (the ambient login,
+    :data:`AMBIENT_ACCOUNT`) plus each claude auth-profile account dir (that
+    profile's id). ``{root_path: account_id}``."""
+    roots: dict = {}
     cfg = os.environ.get("CLAUDE_CONFIG_DIR")
     if cfg:
-        roots.add(cfg)
+        roots[cfg] = AMBIENT_ACCOUNT
     home = os.environ.get("HOME", "") or os.path.expanduser("~")
     if home and os.path.isdir(home):
         for name in os.listdir(home):
             if name.startswith(".claude"):
                 d = os.path.join(home, name)
                 if os.path.isdir(d):
-                    roots.add(d)
+                    roots[d] = AMBIENT_ACCOUNT
+    try:
+        from backend.providers import auth_profiles
+
+        # Profile dirs override an ambient claim on the same path (a profile
+        # pointed at ~/.claude-work must not double as "default").
+        roots.update(auth_profiles.claude_account_root_map())
+    except Exception:  # noqa: BLE001 — profiles are enrichment only
+        pass
     return roots
 
 
 def _iter_transcripts(roots):
-    """Yield every ``*.jsonl`` transcript path under ``<root>/projects/*/``."""
+    """Yield every ``*.jsonl`` transcript path under ``<root>/projects/*/``
+    as ``(root, path)`` pairs."""
     for root in roots:
         base = os.path.join(root, "projects")
         if not os.path.isdir(base):
@@ -94,7 +111,7 @@ def _iter_transcripts(roots):
                 continue
             for fn in names:
                 if fn.endswith(".jsonl"):
-                    yield os.path.join(pdir, fn)
+                    yield root, os.path.join(pdir, fn)
 
 
 def _ledger_path() -> str:
@@ -146,20 +163,29 @@ def _cost_for(tok: dict, model: str, memo: dict) -> float:
 
 
 def _compute() -> tuple:
-    """One full transcript scan -> (rolling-window totals, recent turn list).
+    """One full transcript scan -> (rolling-window totals, recent turn list,
+    per-ACCOUNT rolling-window totals).
 
     The recent list is ``[(ts, cost, tok), ...]`` (ts-sorted) for turns in the
     last :data:`_RECENT_LOOKBACK` seconds — the raw material for anchoring the
-    provider's active rolling usage window (:func:`current_window`)."""
+    provider's active rolling usage window (:func:`current_window`). The
+    account breakdown attributes each transcript to the config root it lives
+    under (auth-profile account dirs vs the ambient ``~/.claude*`` login)."""
     now = time.time()
     cutoffs = {k: now - s for k, s in _WINDOWS.items()}
     acc = {k: _zero() for k in _WINDOWS}
+    acc_accounts: dict = {}  # account id -> {window -> totals}
     day_totals: dict = {}  # "YYYY-MM-DD" (local) -> {..per-turn sums..}
+    day_accounts: dict = {}  # account id -> {day -> totals}
     earliest_day = None
     price_memo: dict = {}
     recent: list = []  # (ts, cost, tok) within _RECENT_LOOKBACK, sorted below
 
-    for path in _iter_transcripts(_roots()):
+    roots = _roots()
+    for root, path in _iter_transcripts(roots):
+        account = roots.get(root, AMBIENT_ACCOUNT)
+        acc_a = acc_accounts.setdefault(account, {k: _zero() for k in _WINDOWS})
+        days_a = day_accounts.setdefault(account, {})
         try:
             with open(path, errors="replace") as f:
                 for line in f:
@@ -191,19 +217,29 @@ def _compute() -> tuple:
                     for k, cut in cutoffs.items():
                         if ts >= cut:
                             _add(acc[k], tok, cost)
+                            _add(acc_a[k], tok, cost)
                     d = time.strftime("%Y-%m-%d", time.localtime(ts))
                     _add(day_totals.setdefault(d, _zero()), tok, cost)
+                    _add(days_a.setdefault(d, _zero()), tok, cost)
                     if earliest_day is None or d < earliest_day:
                         earliest_day = d
         except OSError:
             continue
 
     # Fold freshly-scanned days into the durable ledger (authoritative for any day
-    # still present in the transcripts), then persist.
+    # still present in the transcripts), then persist. The per-account fold rides
+    # in a sibling "accounts" key; a pre-feature ledger simply has none.
     ledger = _load_ledger()
     ledger_days = ledger.get("days", {})
     for d, t in day_totals.items():
         ledger_days[d] = t
+    ledger_accounts = ledger.get("accounts")
+    if not isinstance(ledger_accounts, dict):
+        ledger_accounts = {}
+    for account, days_a in day_accounts.items():
+        acct_days = ledger_accounts.setdefault(account, {})
+        for d, t in days_a.items():
+            acct_days[d] = t
     # Days beyond the longest rolling window can never contribute again —
     # prune them so the ledger (rewritten and re-iterated every refresh)
     # doesn't grow one entry per calendar day forever.
@@ -212,26 +248,46 @@ def _compute() -> tuple:
     )
     for d in [d for d in ledger_days if d < horizon]:
         ledger_days.pop(d, None)
+    for account in list(ledger_accounts):
+        acct_days = ledger_accounts[account]
+        if not isinstance(acct_days, dict):
+            ledger_accounts.pop(account, None)
+            continue
+        for d in [d for d in acct_days if d < horizon]:
+            acct_days.pop(d, None)
+        if not acct_days:
+            ledger_accounts.pop(account, None)
     ledger["days"] = ledger_days
+    ledger["accounts"] = ledger_accounts
     ledger["updated"] = now
     _save_ledger(ledger)
 
     # Back-fill windows from ledger days the current scan didn't see (pruned
     # transcripts) — only days older than the earliest scanned day, to avoid
     # double-counting. Day granularity is fine for these tail days.
-    for d, t in ledger_days.items():
-        if earliest_day is not None and d >= earliest_day:
-            continue
-        try:
-            d_epoch = time.mktime(time.strptime(d, "%Y-%m-%d"))
-        except ValueError:
-            continue
-        for k, cut in cutoffs.items():
-            if d_epoch + 86400 >= cut:  # any part of that day falls in the window
-                _add(acc[k], t, t.get("cost", 0.0))
+    def _backfill(target: dict, ledgered: dict) -> None:
+        for d, t in ledgered.items():
+            if earliest_day is not None and d >= earliest_day:
+                continue
+            try:
+                d_epoch = time.mktime(time.strptime(d, "%Y-%m-%d"))
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(t, dict):
+                continue
+            for k, cut in cutoffs.items():
+                if d_epoch + 86400 >= cut:  # part of that day is in the window
+                    _add(target[k], t, t.get("cost", 0.0))
+
+    _backfill(acc, ledger_days)
+    for account, acct_days in ledger_accounts.items():
+        _backfill(
+            acc_accounts.setdefault(account, {k: _zero() for k in _WINDOWS}),
+            acct_days,
+        )
 
     recent.sort(key=lambda e: e[0])
-    return acc, recent
+    return acc, recent, acc_accounts
 
 
 def _refresh() -> None:
@@ -241,11 +297,12 @@ def _refresh() -> None:
         if _cache["windows"] is not None and (now - _cache["at"]) < _CACHE_TTL:
             return
         try:
-            result, recent = _compute()
+            result, recent, accounts = _compute()
         except Exception:  # noqa: BLE001
-            result, recent = {k: _zero() for k in _WINDOWS}, []
+            result, recent, accounts = {k: _zero() for k in _WINDOWS}, [], {}
         _cache["windows"] = result
         _cache["recent"] = recent
+        _cache["accounts"] = accounts
         _cache["at"] = now
 
 
@@ -257,6 +314,18 @@ def windows() -> dict:
     _refresh()
     with _lock:
         return _cache["windows"]
+
+
+def windows_by_account() -> dict:
+    """Per-account rolling totals: ``{account_id: {"day",…,"year"}}``.
+
+    ``account_id`` is an auth-profile id, or :data:`AMBIENT_ACCOUNT` for
+    everything under the ambient ``~/.claude*`` login. Only accounts with any
+    recorded usage appear. Cached with the same ~60s scan as :func:`windows`.
+    """
+    _refresh()
+    with _lock:
+        return dict(_cache.get("accounts") or {})
 
 
 def current_window(hours: float) -> "dict | None":

@@ -102,6 +102,13 @@ export interface Instance {
   diff_stat: DiffStat | null;
   workspace_missing: boolean;
   has_origin: boolean;
+  /** Auth profile: the stored pin ("" = inherit the global default,
+   * "default" = the CLI's own login), its resolution, and the resolved
+   * profile's display label ("" when no profile applies). Optional: an older
+   * server doesn't send them. */
+  profile_id?: string;
+  profile_effective?: string;
+  profile_label?: string;
   stage: Stage | string;
   pr_url: string | null;
   /** Present only at the "pr" stage; null = could not find out. */
@@ -167,6 +174,30 @@ export interface Config {
   onboarded: boolean;
   auth_mode: string;
   auth_enabled: boolean;
+}
+
+/** One auth profile (Settings → Accounts): an identity a session's CLI can run
+ * under. `api_key` is always the mask sentinel or "" on the wire. */
+export interface AuthProfile {
+  id: string;
+  label?: string;
+  kind: "account" | "api_key" | "openrouter" | string;
+  provider?: string;
+  config_dir?: string;
+  api_key?: string;
+  base_url?: string;
+  model?: string;
+  env?: Record<string, string>;
+  /** Server-derived, read-only: where an account profile's login lives. */
+  resolved_config_dir?: string;
+  /** Server-derived, read-only: the shell command that logs its CLI in. */
+  login_command?: string;
+}
+
+export interface AuthProfilesResponse {
+  profiles: AuthProfile[];
+  default_profile: string;
+  kinds?: string[];
 }
 
 export interface Device {

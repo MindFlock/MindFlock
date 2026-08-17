@@ -138,10 +138,27 @@ def _ensure_agent_session(inst, title: str):
     # crash / no marker) -> resume the conversation. The provider owns the
     # exit-code policy (claude: 0/130 = clean).
     resume = not provider.is_natural_exit(_read_exit_marker(name))
+    # Auth-profile routing has to be re-derived HERE too, for the same reason
+    # as the local-model overlay below: the engine put the profile env on the
+    # first start's tmux session, but a relaunch builds a fresh command from
+    # inst state. Re-resolving from inst.ProfileId is also exactly what makes a
+    # profile SWAP take effect: kill the agent session, and the next ensure
+    # relaunches under the new identity. No-op when no profile applies.
+    prof_env: dict = {}
+    prof_args: tuple = ()
+    try:
+        prof_env, prof_args = providers.launch_script.profile_overlay(
+            inst.Program or "", getattr(inst, "ProfileId", "") or ""
+        )
+    except Exception:  # noqa: BLE001 — never block a relaunch over settings
+        pass
     launcher = os.path.join(wt, provisioning.LAUNCHER_BASENAME)
     use_launcher = os.path.isfile(launcher) and not getattr(inst, "InPlace", False)
     if use_launcher:
-        # The launcher handles --continue itself; just re-run it.
+        # The launcher handles --continue itself; just re-run it. The profile
+        # env is exported in front (it is never baked into the script): the
+        # exports survive the launcher's `exec bash -ilc` chain, so every link
+        # of its resume loop runs under the profile.
         cmd = launcher
     else:
         # Plain / in-place session. The provider builds the launch command
@@ -169,6 +186,7 @@ def _ensure_agent_session(inst, title: str):
                 in_place=bool(getattr(inst, "InPlace", False)),
                 session_name=name,
                 launch_args=tuple(local_args)
+                + tuple(prof_args)
                 + tuple(getattr(inst, "LaunchArgs", ()) or ()),
             )
         )
@@ -179,6 +197,8 @@ def _ensure_agent_session(inst, title: str):
         # first link of the chain.
         if local_env:
             cmd = providers.launch_script.env_exports(local_env) + cmd
+    if prof_env:
+        cmd = providers.launch_script.env_exports(prof_env) + cmd
     # (Re)install the provider's activity-reporting hooks with THIS session's
     # name right before launching, so the CLI announces working/idle/clarify
     # for the run we are about to start (Claude snapshots hook config at
