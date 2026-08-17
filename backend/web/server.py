@@ -3325,15 +3325,18 @@ def _rewrite_launcher_for_profile(inst, wt: str) -> bool:
     """Rewrite a provisioned session's launcher so a profile swap also updates
     the profile's baked-in launch FLAGS (e.g. an OpenRouter model pin).
 
-    Only when the worktree still carries its own ``_provision_settings`` — the
-    exact ``skip_permissions``/cache-env the original write used. Without them
-    those values are NOT guessable (the configured-repo flavor resolves the
-    flag from user settings, the local flavor pins it True), and a rewrite
-    that guesses could silently hand a session ``--dangerously-skip-
-    permissions`` its owner turned off. No settings, no rewrite: the env half
-    of the swap still lands via the relaunch exports, only flag-level model
-    routing stays stale. Returns whether the launcher was rewritten.
-    Best-effort: any failure is swallowed — flags are secondary to env.
+    Only when the worktree carries its own ``_provision_settings`` — the exact
+    ``skip_permissions``/cache-env the original write used. Restored sessions
+    re-attach them too (``_worktree_from_data`` → ``settings_for_workspace``),
+    so the no-settings path is rare: the provisioning config genuinely gone.
+    Without them those values are NOT guessable (the configured-repo flavor
+    resolves the flag from user settings, the local flavor pins it True), and
+    a rewrite that guesses could silently hand a session
+    ``--dangerously-skip-permissions`` its owner turned off. No settings, no
+    rewrite: the env half of the swap still lands via the relaunch exports,
+    only flag-level model routing stays stale. Returns whether the launcher
+    was rewritten. Best-effort: any failure is swallowed — flags are
+    secondary to env.
     """
     if not getattr(inst, "Provisioned", False):
         return False
@@ -4725,15 +4728,22 @@ async def set_instance_profile(title: str, payload: dict) -> JSONResponse:
     perr = _profile_id_error(profile_id)
     if perr:
         return JSONResponse({"error": perr}, status_code=400)
+    prev_profile_id = getattr(inst, "ProfileId", "") or ""
     inst.ProfileId = profile_id
-    # The model override rides along only when the caller sends the key, so a
-    # plain identity swap keeps the session's model choice.
+    # The model override rides along only when the caller sends the key — a
+    # model-only change (same identity) never has to restate the identity. An
+    # IDENTITY change without an explicit model drops the pin: it belonged to
+    # the old identity's catalog, and carrying e.g. "openai/gpt-5" onto a
+    # Claude-subscription account would launch its CLI pinned to a model its
+    # API has never heard of.
     if "profile_model" in payload:
         profile_model = str(payload.get("profile_model", "") or "").strip()
         merr = _profile_model_error(profile_model)
         if merr:
             return JSONResponse({"error": merr}, status_code=400)
         inst.ProfileModel = profile_model
+    elif profile_id != prev_profile_id:
+        inst.ProfileModel = ""
     ENGINE.save()
 
     # Provisioned launcher scripts carry profile launch FLAGS baked in at write

@@ -876,6 +876,15 @@ def _cmd_accounts_add(args) -> int:
             file=sys.stderr,
         )
         return 1
+    if pid == "default":
+        # Reserved: the AMBIENT_ID sentinel meaning "the CLI's own login" —
+        # a profile so named would resolve to no overlay at all.
+        print(
+            "error: 'default' is reserved (it means the CLI's own login) — "
+            "pick another id",
+            file=sys.stderr,
+        )
+        return 1
     if args.kind in ("api_key", "openrouter") and not args.key:
         print("error: --kind %s needs --key" % args.kind, file=sys.stderr)
         return 1

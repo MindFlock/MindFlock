@@ -659,3 +659,175 @@ def test_backfill_uses_each_accounts_own_earliest_day(tmp_path, monkeypatch):
     (tmp_path / "assistant" / "usage-history.json").write_text(_json.dumps(ledger))
     acc, _recent, accounts = uh._compute()
     assert accounts["work"]["month"]["in"] == 7  # kept, not gated away
+
+
+# --------------------------------------------------------------------------- #
+# Second review round: reserved id, stale model on swap, env-value masking,
+# and the launcher-rewrite settings fidelity
+# --------------------------------------------------------------------------- #
+class TestReservedId:
+    def test_put_rejects_the_ambient_sentinel_as_an_id(self, client):
+        r = client.put(
+            "/api/settings/auth-profiles",
+            json={"profiles": [{"id": "default", "kind": "account"}]},
+        )
+        assert r.status_code == 400
+        assert "reserved" in r.json()["error"]
+
+    def test_cli_add_rejects_it_too(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("MINDFLOCK_HOST", "127.0.0.1")
+        monkeypatch.setenv("MINDFLOCK_PORT", "1")  # no server -> local path
+        from backend.cli import main
+
+        assert main(["accounts", "add", "default"]) == 1
+        assert "reserved" in capsys.readouterr().err
+
+
+class TestSwapModelPin:
+    @pytest.fixture()
+    def fake_inst(self, client, tmp_path, monkeypatch):
+        """A minimal unstarted instance parked in ENGINE — enough for the swap
+        endpoint's field logic (Started() is False, so no tmux is touched)."""
+        monkeypatch.setenv("HOME", str(tmp_path))  # ENGINE.save -> tmp state
+        from backend import session as _session
+        from backend.web import server as _server
+
+        inst = _session.Instance()
+        inst.Title = "swap-me"
+        inst.Program = "claude"
+        with _server.ENGINE.lock:
+            _server.ENGINE.instances["swap-me"] = inst
+        yield inst
+        with _server.ENGINE.lock:
+            _server.ENGINE.instances.pop("swap-me", None)
+
+    def test_identity_swap_drops_the_old_models_pin(self, client, fake_inst):
+        client.put(
+            "/api/settings/auth-profiles",
+            json={
+                "profiles": [
+                    {"id": "or", "kind": "openrouter", "api_key": "k"},
+                    {"id": "work", "kind": "account"},
+                ]
+            },
+        )
+        fake_inst.ProfileId = "or"
+        fake_inst.ProfileModel = "openai/gpt-5"
+        r = client.post("/api/instances/swap-me/profile", json={"profile_id": "work"})
+        assert r.status_code == 200
+        # The pin belonged to the OpenRouter catalog; carrying it onto a
+        # Claude-subscription account would launch a nonexistent model.
+        assert fake_inst.ProfileModel == ""
+
+    def test_model_only_change_keeps_the_identity(self, client, fake_inst):
+        client.put(
+            "/api/settings/auth-profiles",
+            json={"profiles": [{"id": "or", "kind": "openrouter", "api_key": "k"}]},
+        )
+        fake_inst.ProfileId = "or"
+        fake_inst.ProfileModel = "openai/gpt-5"
+        r = client.post(
+            "/api/instances/swap-me/profile",
+            json={"profile_id": "or", "profile_model": "qwen/qwen3-coder"},
+        )
+        assert r.status_code == 200
+        assert fake_inst.ProfileId == "or"
+        assert fake_inst.ProfileModel == "qwen/qwen3-coder"
+
+
+class TestEnvValueMasking:
+    def test_env_values_masked_on_both_reads(self, client):
+        client.put(
+            "/api/settings/auth-profiles",
+            json={
+                "profiles": [
+                    {
+                        "id": "or",
+                        "kind": "openrouter",
+                        "api_key": "sk-or-secret",
+                        "env": {"ANTHROPIC_AUTH_TOKEN": "sk-ant-also-secret"},
+                    }
+                ]
+            },
+        )
+        for path in ("/api/settings/auth-profiles", "/api/settings"):
+            r = client.get(path)
+            assert "sk-ant-also-secret" not in r.text, path
+        view = client.get("/api/settings/auth-profiles").json()
+        assert view["profiles"][0]["env"] == {"ANTHROPIC_AUTH_TOKEN": "•••set"}
+
+    def test_masked_env_round_trips_and_edits_apply(self, client):
+        client.put(
+            "/api/settings/auth-profiles",
+            json={
+                "profiles": [
+                    {
+                        "id": "or",
+                        "kind": "openrouter",
+                        "api_key": "k",
+                        "env": {"A": "secret-a", "B": "secret-b"},
+                    }
+                ]
+            },
+        )
+        # Re-save what the UI received: A stays masked (kept), B gets a new
+        # value, C is new.
+        client.put(
+            "/api/settings/auth-profiles",
+            json={
+                "profiles": [
+                    {
+                        "id": "or",
+                        "kind": "openrouter",
+                        "api_key": "•••set",
+                        "env": {"A": "•••set", "B": "new-b", "C": "c"},
+                    }
+                ]
+            },
+        )
+        p = S.load_settings().auth_profiles.profiles[0]
+        assert p.env == {"A": "secret-a", "B": "new-b", "C": "c"}
+
+
+def test_launcher_rewrite_preserves_skip_permissions_and_caches(tmp_path):
+    """The swap-time rewrite must reuse the worktree's own provision settings —
+    guessing once silently re-enabled --dangerously-skip-permissions for a
+    session whose owner turned it off — and must refuse to rewrite without
+    them."""
+    from backend.session import provisioned as provisioning
+    from backend.web import server as _server
+
+    wt = tmp_path / "ws"
+    wt.mkdir()
+    launcher = wt / provisioning.LAUNCHER_BASENAME
+    launcher.write_text("#!/usr/bin/env bash\noriginal\n")
+
+    class _Wt:
+        pass
+
+    class _Inst:
+        Provisioned = True
+        Program = "claude"
+        ProfileId = "or"
+        ProfileModel = ""
+        LaunchArgs = ()
+        _git_worktree = _Wt()
+
+    inst = _Inst()
+    # No provision settings attached -> no rewrite, bytes untouched.
+    inst._git_worktree._provision_settings = None
+    assert _server._rewrite_launcher_for_profile(inst, str(wt)) is False
+    assert launcher.read_text() == "#!/usr/bin/env bash\noriginal\n"
+    # With settings: skip_permissions=False and a custom cache env survive.
+    inst._git_worktree._provision_settings = provisioning.ProvisionSettings(
+        repo_url=str(tmp_path),
+        workspace_dir=tmp_path,
+        base_branch="main",
+        open_cursor=False,
+        skip_permissions=False,
+        setup_commands=[],
+        caches=[],
+    )
+    assert _server._rewrite_launcher_for_profile(inst, str(wt)) is True
+    script = launcher.read_text()
+    assert "--dangerously-skip-permissions" not in script

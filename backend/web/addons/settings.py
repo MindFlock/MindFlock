@@ -54,15 +54,26 @@ def _mask_ticketing(d: dict) -> None:
             src["api_token"] = _MASK if src.get("api_token") else ""
 
 
+def _mask_profile_dict(prof: dict) -> None:
+    """Mask one auth profile's secrets in-place: ``api_key``, and every value
+    in its raw ``env`` overrides — the env map is the documented escape hatch
+    for carrying credentials the typed kinds don't know, so its VALUES are
+    secrets even though its keys are not."""
+    prof["api_key"] = _MASK if prof.get("api_key") else ""
+    env = prof.get("env")
+    if isinstance(env, dict):
+        prof["env"] = {k: _MASK for k in env}
+
+
 def _mask_auth_profiles(d: dict) -> None:
-    """Mask the api_key of every auth profile in-place (the profiles twin of
+    """Mask the secrets of every auth profile in-place (the profiles twin of
     :func:`_mask_ticketing` — secrets inside a list need their own walk)."""
     ap = d.get("auth_profiles")
     if not isinstance(ap, dict):
         return
     for prof in ap.get("profiles", []) or []:
         if isinstance(prof, dict):
-            prof["api_key"] = _MASK if prof.get("api_key") else ""
+            _mask_profile_dict(prof)
 
 
 def _masked_view() -> dict:
@@ -801,7 +812,7 @@ class SettingsAddon(Addon):
             out = []
             for p in settings_store.load_settings().auth_profiles.profiles:
                 d = p.to_dict()
-                d["api_key"] = _MASK if d.get("api_key") else ""
+                _mask_profile_dict(d)
                 # Read-only enrichment the Accounts screen renders: where an
                 # account profile's isolated login lives, the command that logs
                 # its CLI in there, and which CLIs the profile can route — what
@@ -845,10 +856,9 @@ class SettingsAddon(Addon):
                 return JSONResponse(
                     {"error": 'expected {"profiles": [...]}'}, status_code=400
                 )
-            prev = {
-                p.id: p.api_key
-                for p in settings_store.load_settings().auth_profiles.profiles
-            }
+            stored_profiles = settings_store.load_settings().auth_profiles.profiles
+            prev = {p.id: p.api_key for p in stored_profiles}
+            prev_env = {p.id: dict(p.env or {}) for p in stored_profiles}
             clean: list = []
             seen: set = set()
             for raw in incoming:
@@ -862,6 +872,19 @@ class SettingsAddon(Addon):
                         {
                             "error": "account id '%s' must be lowercase "
                             "letters/digits/-/_ (max 64)" % pid
+                        },
+                        status_code=400,
+                    )
+                if pid == "default":
+                    # Reserved: "default" is the AMBIENT_ID sentinel meaning
+                    # "the CLI's own login" (backend.providers.auth_profiles).
+                    # A profile so named would be accepted everywhere and
+                    # resolve to NO overlay — sessions silently on the ambient
+                    # login while the UI shows the profile selected.
+                    return JSONResponse(
+                        {
+                            "error": "'default' is reserved (it means the "
+                            "CLI's own login) — pick another id"
                         },
                         status_code=400,
                     )
@@ -887,6 +910,17 @@ class SettingsAddon(Addon):
                 key = str(p.get("api_key", "") or "").strip()
                 if key in ("", _MASK):
                     p["api_key"] = prev.get(pid, "")
+                # env values are masked on read (they carry credentials for
+                # CLIs the typed kinds don't know), so the mask sentinel here
+                # means "keep the stored value" — same rule as api_key, per
+                # env KEY. A key absent from the stored env resolves to ""
+                # and is dropped by the store's serializer.
+                if isinstance(p.get("env"), dict):
+                    p["env"] = {
+                        k: (prev_env.get(pid, {}).get(k, "") if v == _MASK else v)
+                        for k, v in p["env"].items()
+                        if isinstance(k, str)
+                    }
                 if kind in ("api_key", "openrouter") and not p["api_key"]:
                     # The keep-secret map is keyed by id, so this is exactly
                     # what an id RENAME with the mask sentinel produces — and a
