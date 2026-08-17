@@ -803,13 +803,17 @@ class SettingsAddon(Addon):
                 d = p.to_dict()
                 d["api_key"] = _MASK if d.get("api_key") else ""
                 # Read-only enrichment the Accounts screen renders: where an
-                # account profile's isolated login lives, and the command that
-                # logs its CLI in there.
+                # account profile's isolated login lives, the command that logs
+                # its CLI in there, and which CLIs the profile can route — what
+                # the New dialog uses to steer the Agent picker so a
+                # no-route combination is caught at selection time.
                 try:
                     cfg = ap.get_profile(p.id)
-                    if cfg is not None and p.kind == "account":
-                        d["resolved_config_dir"] = ap.account_dir(cfg)
-                        d["login_command"] = ap.login_command(cfg)
+                    if cfg is not None:
+                        d["supported_agents"] = ap.supported_agents(cfg)
+                        if p.kind == "account":
+                            d["resolved_config_dir"] = ap.account_dir(cfg)
+                            d["login_command"] = ap.login_command(cfg)
                 except Exception:  # noqa: BLE001 — enrichment only
                     pass
                 out.append(d)

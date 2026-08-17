@@ -348,6 +348,7 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         "profile_id": profile_id,
         "profile_effective": profile_effective,
         "profile_label": profile_label,
+        "profile_model": getattr(inst, "ProfileModel", "") or "",
         "path": inst.Path,
         "status": status_name,
         "started": inst.Started(),

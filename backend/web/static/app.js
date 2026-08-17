@@ -28247,27 +28247,55 @@ function AccountChip({ inst }) {
   const chipRef = reactExports.useRef(null);
   const [open, setOpen] = reactExports.useState(false);
   const [busy, setBusy] = reactExports.useState(false);
+  const [models, setModels] = reactExports.useState(null);
   const { data } = useAuthProfiles();
   const profiles = (data == null ? void 0 : data.profiles) || [];
-  if (!profiles.length) return null;
   const effective = inst.profile_effective || "";
   const label = inst.profile_label || "default";
-  const swap = async (profileId) => {
+  const effectiveProfile = profiles.find((p) => p.id === effective);
+  const modelCapable = !!effectiveProfile && effectiveProfile.kind !== "account";
+  reactExports.useEffect(() => {
+    if (!open || !modelCapable || models !== null) return;
+    if ((effectiveProfile == null ? void 0 : effectiveProfile.kind) !== "openrouter") {
+      setModels([]);
+      return;
+    }
+    let live = true;
+    (async () => {
+      try {
+        const r = await api(
+          "/api/settings/test/openrouter",
+          { json: { profile_id: effective } }
+        );
+        if (live) setModels((r == null ? void 0 : r.ok) ? r.models || [] : []);
+      } catch {
+        if (live) setModels([]);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [open, modelCapable, models, effective, effectiveProfile == null ? void 0 : effectiveProfile.kind]);
+  if (!profiles.length) return null;
+  const swap = async (profileId, profileModel) => {
     var _a2;
     setBusy(true);
     setOpen(false);
     try {
+      const body = { profile_id: profileId };
+      if (profileModel !== void 0) body.profile_model = profileModel;
       const r = await instApi(inst.title, "/profile", {
-        json: { profile_id: profileId }
+        json: body
       });
       toast(
-        (r == null ? void 0 : r.note) || "Now running as " + (profileId === "default" ? "the CLI's own login" : ((_a2 = profiles.find((p) => p.id === profileId)) == null ? void 0 : _a2.label) || profileId)
+        (r == null ? void 0 : r.note) || (profileModel !== void 0 ? "Now running " + (profileModel || "the account's default model") : "Now running as " + (profileId === "default" ? "the CLI's own login" : ((_a2 = profiles.find((p) => p.id === profileId)) == null ? void 0 : _a2.label) || profileId))
       );
       void refreshInstances();
     } catch (err) {
       toast("Swap failed: " + err.message);
     } finally {
       setBusy(false);
+      setModels(null);
     }
   };
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
@@ -28316,6 +28344,24 @@ function AccountChip({ inst }) {
           p.id
         ))
       ] }) }),
+      modelCapable && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-head", children: "Model" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "4px 8px" }, children: models && models.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "select",
+          {
+            id: "acct-chip-model",
+            style: { width: "100%" },
+            value: models.includes(inst.profile_model || "") ? inst.profile_model : "",
+            onClick: (ev) => ev.stopPropagation(),
+            onChange: (ev) => swap(inst.profile_id || "", ev.target.value),
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: (effectiveProfile == null ? void 0 : effectiveProfile.model) ? `Account default (${effectiveProfile.model})` : "Account default" }),
+              models.map((m) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: m, children: m }, m))
+            ]
+          }
+        ) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "usage-pop-note", children: models === null ? "loading models…" : inst.profile_model || (effectiveProfile == null ? void 0 : effectiveProfile.model) || "account default" }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-note", children: "Pick the model HERE for this account — the CLI's own /model menu only lists its vendor's models, never the gateway's. Changing it restarts the agent." })
+      ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-note", children: "Swapping restarts the agent under the new identity. Files, diff and terminal stay; the conversation continues only if the new account has seen it before (conversations live per account)." })
     ] })
   ] });
@@ -29865,7 +29911,10 @@ function NewSessionDialog() {
   const [presetValue, setPresetValue] = reactExports.useState("");
   const [savedPresets, setSavedPresets] = reactExports.useState([]);
   const [profileId, setProfileId] = reactExports.useState("");
+  const [profileModel, setProfileModel] = reactExports.useState("");
+  const [profileModels, setProfileModels] = reactExports.useState({});
   const authProfiles = useAuthProfiles().data;
+  const selectedProfile = ((authProfiles == null ? void 0 : authProfiles.profiles) || []).find((p) => p.id === profileId);
   const launchDefaults = reactExports.useRef({});
   const titleRef = reactExports.useRef(null);
   const launchRef = reactExports.useRef(null);
@@ -29890,6 +29939,7 @@ function NewSessionDialog() {
     setActiveTemplate("");
     setPresetValue("");
     setProfileId("");
+    setProfileModel("");
     setSavedPresets(loadUserPresets());
     let live = true;
     (async () => {
@@ -29982,6 +30032,40 @@ function NewSessionDialog() {
     setProgram(v);
     setLaunchArgs((launchDefaults.current[v.toLowerCase()] || "").trim());
   }, []);
+  const setAccount = (id) => {
+    setProfileId(id);
+    setProfileModel("");
+    const prof = ((authProfiles == null ? void 0 : authProfiles.profiles) || []).find((p) => p.id === id);
+    if (!prof) return;
+    const supported = prof.supported_agents || [];
+    const hasEnv = !!prof.env && Object.keys(prof.env).length > 0;
+    if (supported.length && !hasEnv && !supported.includes(program.trim().toLowerCase())) {
+      const preferred = prof.provider && supported.includes(prof.provider) ? prof.provider : supported[0];
+      setAgent(preferred);
+    }
+    if (prof.kind === "openrouter" && !profileModels[id]) {
+      (async () => {
+        var _a2;
+        try {
+          const r = await api(
+            "/api/settings/test/openrouter",
+            { json: { profile_id: id } }
+          );
+          if ((r == null ? void 0 : r.ok) && ((_a2 = r.models) == null ? void 0 : _a2.length))
+            setProfileModels((m) => ({ ...m, [id]: r.models || [] }));
+        } catch {
+        }
+      })();
+    }
+  };
+  const routeWarning = (() => {
+    if (!selectedProfile) return "";
+    const supported = selectedProfile.supported_agents || [];
+    const hasEnv = !!selectedProfile.env && Object.keys(selectedProfile.env).length > 0;
+    if (hasEnv || !supported.length) return "";
+    if (supported.includes(program.trim().toLowerCase())) return "";
+    return `“${selectedProfile.label || selectedProfile.id}” has no route for ${program || "this agent"} — the session would run on the CLI's own login. It works with: ${supported.join(", ")}.`;
+  })();
   const fillFromTemplate = (t) => {
     var _a2;
     if (t.program) setAgent(t.program);
@@ -30021,6 +30105,7 @@ function NewSessionDialog() {
     if (promptVal) body.prompt = promptVal;
     body.launch_args = tokenize(launchArgs);
     if (profileId) body.profile_id = profileId;
+    if (profileId && profileModel.trim()) body.profile_model = profileModel.trim();
     if (provision) {
       body.provisioned = true;
       body.workspace_strategy = strategy;
@@ -30238,7 +30323,7 @@ function NewSessionDialog() {
                       id: "new-account",
                       title: "Which identity this session's CLI runs as",
                       value: profileId,
-                      onChange: (e) => setProfileId(e.target.value),
+                      onChange: (e) => setAccount(e.target.value),
                       children: [
                         /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: (authProfiles == null ? void 0 : authProfiles.default_profile) ? `App default (${authProfiles.default_profile})` : "App default (CLI's own login)" }),
                         /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "default", children: "CLI's own login" }),
@@ -30248,6 +30333,33 @@ function NewSessionDialog() {
                   )
                 ] })
               ] }),
+              selectedProfile && selectedProfile.kind !== "account" && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "nf-quick", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "nf-agent", style: { flex: 1 }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "nf-agent-head", children: "Model" }),
+                (profileModels[profileId] || []).length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  "select",
+                  {
+                    id: "new-account-model",
+                    title: "Model this session runs on (through the selected account)",
+                    value: (profileModels[profileId] || []).includes(profileModel) ? profileModel : "",
+                    onChange: (e) => setProfileModel(e.target.value),
+                    children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: selectedProfile.model ? `Account default (${selectedProfile.model})` : "Account default" }),
+                      (profileModels[profileId] || []).map((m) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: m, children: m }, m))
+                    ]
+                  }
+                ) : /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    id: "new-account-model",
+                    type: "text",
+                    autoComplete: "off",
+                    placeholder: selectedProfile.model ? `Account default (${selectedProfile.model})` : "anthropic/claude-sonnet-4.5",
+                    value: profileModel,
+                    onChange: (e) => setProfileModel(e.target.value)
+                  }
+                )
+              ] }) }),
+              routeWarning && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "nf-git-nudge", children: routeWarning }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("datalist", { id: "provider-list" }),
               plainFolder && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "nf-git-nudge", children: initRepo ? /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: "A git repo will be created here — diff, commit and PR will work." }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
                 "No git repo in this folder, so diff, commit and PR stay off.",

@@ -466,3 +466,76 @@ def test_probe_openrouter_bad_key(monkeypatch):
 def test_probe_openrouter_no_key():
     out = ap.probe_openrouter("")
     assert out["ok"] is False and out["error"]
+
+
+# --------------------------------------------------------------------------- #
+# Per-session model override + agent routing (the New dialog's Model picker)
+# --------------------------------------------------------------------------- #
+def test_launch_overlay_model_override_beats_profile_pin():
+    _save_profiles(
+        {
+            "id": "or",
+            "kind": "openrouter",
+            "api_key": "sk-or-x",
+            "model": "anthropic/claude-4.5",
+        }
+    )
+    env, _ = ap.launch_overlay("claude", "or", "qwen/qwen3-coder")
+    assert env["ANTHROPIC_MODEL"] == "qwen/qwen3-coder"
+    # Blank override keeps the profile's own pin.
+    env, _ = ap.launch_overlay("claude", "or", "")
+    assert env["ANTHROPIC_MODEL"] == "anthropic/claude-4.5"
+    # The override reaches flag-shaped routes too.
+    _, args = ap.launch_overlay("codex", "or", "deepseek/deepseek-v3")
+    assert args == ("-m", "deepseek/deepseek-v3")
+
+
+def test_supported_agents_matrix():
+    assert ap.supported_agents(_profile(kind="openrouter", api_key="k")) == [
+        "aider",
+        "claude",
+        "codex",
+        "goose",
+    ]
+    assert ap.supported_agents(
+        _profile(kind="openrouter", provider="codex", api_key="k")
+    ) == ["codex"]
+    assert ap.supported_agents(_profile(kind="account", provider="claude")) == [
+        "claude"
+    ]
+    assert ap.supported_agents(_profile(kind="account", provider="codex")) == ["codex"]
+    # A keyless key-profile routes nowhere (it would inject nothing).
+    assert ap.supported_agents(_profile(kind="openrouter")) == []
+
+
+def test_instance_data_profile_model_round_trips():
+    assert "profile_model" not in InstanceData(title="t").to_dict()
+    d = InstanceData(title="t", profile_id="or", profile_model="x/y").to_dict()
+    assert d["profile_model"] == "x/y"
+    assert InstanceData.from_dict(d).profile_model == "x/y"
+
+
+class TestProfileModelApi:
+    def test_view_includes_supported_agents(self, client):
+        client.put(
+            "/api/settings/auth-profiles",
+            json={"profiles": [{"id": "or", "kind": "openrouter", "api_key": "k"}]},
+        )
+        view = client.get("/api/settings/auth-profiles").json()
+        assert view["profiles"][0]["supported_agents"] == [
+            "aider",
+            "claude",
+            "codex",
+            "goose",
+        ]
+
+    def test_create_instance_rejects_multiline_model(self, client):
+        client.put(
+            "/api/settings/auth-profiles",
+            json={"profiles": [{"id": "or", "kind": "openrouter", "api_key": "k"}]},
+        )
+        r = client.post(
+            "/api/instances",
+            json={"title": "x", "profile_id": "or", "profile_model": "a\nb"},
+        )
+        assert r.status_code == 400

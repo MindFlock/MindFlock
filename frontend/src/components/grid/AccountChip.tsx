@@ -2,10 +2,15 @@
  * click to hot-swap. Renders nothing until at least one profile exists, so the
  * header stays unchanged for anyone not using the feature. A swap persists the
  * pin and restarts the agent under the new identity server-side (the worktree,
- * shell pane and diff survive; the conversation resumes). */
+ * shell pane and diff survive).
+ *
+ * For OpenRouter-style profiles the popover also carries a Model picker fed by
+ * the key's own model list. This exists because the CLI's own model menu
+ * (Claude Code's /model) is hardcoded to its vendor's families and never asks
+ * the gateway what it serves — so the OpenRouter catalog has to live here. */
 
-import { useRef, useState } from "react";
-import { instApi } from "../../api/client";
+import { useEffect, useRef, useState } from "react";
+import { api, instApi } from "../../api/client";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { refreshInstances, useAuthProfiles } from "../../state/queries";
@@ -15,32 +20,66 @@ export function AccountChip({ inst }: { inst: Instance }) {
   const chipRef = useRef<HTMLSpanElement | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [models, setModels] = useState<string[] | null>(null);
   const { data } = useAuthProfiles();
   const profiles = data?.profiles || [];
-  if (!profiles.length) return null;
 
   const effective = inst.profile_effective || "";
   const label = inst.profile_label || "default";
+  const effectiveProfile = profiles.find((p) => p.id === effective);
+  const modelCapable = !!effectiveProfile && effectiveProfile.kind !== "account";
 
-  const swap = async (profileId: string) => {
+  // The OpenRouter catalog is fetched once per popover-open (the key answers
+  // in ~1s; a failure just leaves the picker out — the swap rows still work).
+  useEffect(() => {
+    if (!open || !modelCapable || models !== null) return;
+    if (effectiveProfile?.kind !== "openrouter") {
+      setModels([]);
+      return;
+    }
+    let live = true;
+    (async () => {
+      try {
+        const r = await api<{ ok?: boolean; models?: string[] }>(
+          "/api/settings/test/openrouter",
+          { json: { profile_id: effective } }
+        );
+        if (live) setModels(r?.ok ? r.models || [] : []);
+      } catch {
+        if (live) setModels([]);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [open, modelCapable, models, effective, effectiveProfile?.kind]);
+
+  if (!profiles.length) return null;
+
+  const swap = async (profileId: string, profileModel?: string) => {
     setBusy(true);
     setOpen(false);
     try {
+      const body: Record<string, unknown> = { profile_id: profileId };
+      if (profileModel !== undefined) body.profile_model = profileModel;
       const r = await instApi<{ ok: boolean; note?: string }>(inst.title, "/profile", {
-        json: { profile_id: profileId },
+        json: body,
       });
       toast(
         r?.note ||
-          "Now running as " +
-            (profileId === "default"
-              ? "the CLI's own login"
-              : profiles.find((p) => p.id === profileId)?.label || profileId)
+          (profileModel !== undefined
+            ? "Now running " + (profileModel || "the account's default model")
+            : "Now running as " +
+              (profileId === "default"
+                ? "the CLI's own login"
+                : profiles.find((p) => p.id === profileId)?.label || profileId))
       );
       void refreshInstances();
     } catch (err) {
       toast("Swap failed: " + (err as Error).message);
     } finally {
       setBusy(false);
+      setModels(null); // refetch next open (the key's catalog can change)
     }
   };
 
@@ -84,6 +123,48 @@ export function AccountChip({ inst }: { inst: Instance }) {
               ))}
             </tbody>
           </table>
+          {modelCapable && (
+            <>
+              <div className="usage-pop-head">Model</div>
+              <div style={{ padding: "4px 8px" }}>
+                {models && models.length ? (
+                  <select
+                    id="acct-chip-model"
+                    style={{ width: "100%" }}
+                    value={
+                      models.includes(inst.profile_model || "")
+                        ? inst.profile_model
+                        : ""
+                    }
+                    onClick={(ev) => ev.stopPropagation()}
+                    onChange={(ev) =>
+                      swap(inst.profile_id || "", ev.target.value)
+                    }
+                  >
+                    <option value="">
+                      {effectiveProfile?.model
+                        ? `Account default (${effectiveProfile.model})`
+                        : "Account default"}
+                    </option>
+                    {models.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="usage-pop-note">
+                    {models === null ? "loading models…" : inst.profile_model || effectiveProfile?.model || "account default"}
+                  </span>
+                )}
+              </div>
+              <div className="usage-pop-note">
+                Pick the model HERE for this account — the CLI's own /model menu
+                only lists its vendor's models, never the gateway's. Changing it
+                restarts the agent.
+              </div>
+            </>
+          )}
           <div className="usage-pop-note">
             Swapping restarts the agent under the new identity. Files, diff and
             terminal stay; the conversation continues only if the new account

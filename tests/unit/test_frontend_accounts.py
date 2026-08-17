@@ -36,6 +36,17 @@ def test_new_session_dialog_has_an_account_picker():
     assert "App default" in js
 
 
+def test_new_session_dialog_has_a_model_picker():
+    """With an OpenRouter/key account the model is the choice that matters —
+    the dialog must offer it per session, fed by the key's own model list."""
+    js = _js()
+    assert '"new-account-model"' in js, "the per-session Model field is missing"
+    assert "profile_model" in js
+    # And a no-route agent/account combination warns instead of silently
+    # launching on the CLI's own login.
+    assert "has no route for" in js
+
+
 def test_pane_header_has_the_account_swap_chip():
     js = _js()
     assert "acct-chip" in js

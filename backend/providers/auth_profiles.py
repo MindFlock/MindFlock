@@ -46,7 +46,7 @@ import os
 import shlex
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Tuple
 
 __all__ = [
@@ -59,6 +59,7 @@ __all__ = [
     "effective_profile_id",
     "overlay_for",
     "launch_overlay",
+    "supported_agents",
     "account_dir",
     "login_env",
     "login_command",
@@ -321,10 +322,14 @@ def overlay_for(
 
 
 def launch_overlay(
-    program: str, profile_id: str = ""
+    program: str, profile_id: str = "", model: str = ""
 ) -> Tuple[Dict[str, str], Tuple[str, ...]]:
     """``(env, launch_args)`` for ``program`` under the profile a session with
     ``profile_id`` resolves to (see :func:`effective_profile_id`).
+
+    ``model`` is a per-session override of the profile's own model pin (the
+    New dialog's Model picker) — blank keeps the profile's pin, which blank in
+    turn means the CLI's own default.
 
     The single entry point the launch paths call. ``({}, ())`` when no profile
     applies.
@@ -332,6 +337,8 @@ def launch_overlay(
     profile = get_profile(effective_profile_id(profile_id))
     if profile is None:
         return {}, ()
+    if (model or "").strip():
+        profile = replace(profile, model=model.strip())
     try:
         from . import resolve
 
@@ -339,6 +346,19 @@ def launch_overlay(
     except Exception:  # noqa: BLE001
         name = (program or "").strip()
     return overlay_for(name, profile)
+
+
+def supported_agents(profile: AuthProfileConfig) -> List[str]:
+    """The CLIs this profile has a verified (typed) route for — what the New
+    dialog uses to steer the Agent picker when an account is chosen, so a
+    combination that would silently fall back to the CLI's own login is caught
+    at selection time instead of at launch. A profile with raw ``env``
+    overrides applies to every CLI regardless; callers check ``profile.env``
+    for that case."""
+    known = sorted(
+        set(_ACCOUNT_DIR_ENV) | set(_API_KEY_ENV) | set(_OPENROUTER_SUPPORTED)
+    )
+    return [n for n in known if _typed_overlay(n, profile) is not None]
 
 
 def login_env(profile: AuthProfileConfig) -> Dict[str, str]:

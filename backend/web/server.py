@@ -3321,6 +3321,17 @@ def _profile_id_error(profile_id: str) -> str:
     return ""
 
 
+def _profile_model_error(model: str) -> str:
+    """Validate a per-session model override. Model ids are free-form (each
+    gateway names its own), so only shell-hostile shapes are rejected — the
+    value ends up in an env var / launch flag."""
+    if not model:
+        return ""
+    if len(model) > 200 or "\n" in model or "\x00" in model:
+        return "profile_model must be a single line under 200 chars"
+    return ""
+
+
 @app.post("/api/instances")
 async def create_instance(payload: dict) -> JSONResponse:
     """Create a session and Start it in the background (returns 202 immediately).
@@ -3350,6 +3361,8 @@ async def create_instance(payload: dict) -> JSONResponse:
     * ``profile_id`` — auth profile the agent runs under; absent/blank means
       inherit the global default profile, ``"default"`` pins the CLI's own
       ambient login, anything else must name a configured profile.
+    * ``profile_model`` — this session's model override of the profile's own
+      model pin (e.g. an OpenRouter model id); blank keeps the pin.
 
     The three creation modes are provisioned, plain-worktree, and in-place. A
     409 is returned when the title already exists; the instance registers as
@@ -3391,6 +3404,10 @@ async def create_instance(payload: dict) -> JSONResponse:
     # launches half-authenticated and only fails when the CLI does.
     profile_id = str(payload.get("profile_id", "") or "").strip()
     err = _profile_id_error(profile_id)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    profile_model = str(payload.get("profile_model", "") or "").strip()
+    err = _profile_model_error(profile_model)
     if err:
         return JSONResponse({"error": err}, status_code=400)
 
@@ -3500,6 +3517,7 @@ async def create_instance(payload: dict) -> JSONResponse:
             launch_args=launch_args,
             in_place=in_place,
             profile_id=profile_id,
+            profile_model=profile_model,
         )
     )
     # O4: every session gets a deterministic dev-server port block, injected
@@ -4611,6 +4629,7 @@ async def copy_instance(title: str) -> JSONResponse:
             in_place=True,
             # A copy is "another one of THIS session" — same CLI, same identity.
             profile_id=getattr(src, "ProfileId", "") or "",
+            profile_model=getattr(src, "ProfileModel", "") or "",
         )
     )
     inst.SetStatus(Loading)
@@ -4660,6 +4679,14 @@ async def set_instance_profile(title: str, payload: dict) -> JSONResponse:
     if perr:
         return JSONResponse({"error": perr}, status_code=400)
     inst.ProfileId = profile_id
+    # The model override rides along only when the caller sends the key, so a
+    # plain identity swap keeps the session's model choice.
+    if "profile_model" in payload:
+        profile_model = str(payload.get("profile_model", "") or "").strip()
+        merr = _profile_model_error(profile_model)
+        if merr:
+            return JSONResponse({"error": merr}, status_code=400)
+        inst.ProfileModel = profile_model
     ENGINE.save()
 
     # Provisioned launcher scripts carry profile launch FLAGS baked in at write
@@ -4683,7 +4710,9 @@ async def set_instance_profile(title: str, payload: dict) -> JSONResponse:
                     with open(prompt_path, encoding="utf-8") as f:
                         prompt = f.read()
                 _, prof_args = providers.launch_script.profile_overlay(
-                    inst.Program or "", profile_id
+                    inst.Program or "",
+                    profile_id,
+                    getattr(inst, "ProfileModel", "") or "",
                 )
                 provisioning.write_launcher(
                     wt,

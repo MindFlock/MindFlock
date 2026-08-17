@@ -148,7 +148,9 @@ def _ensure_agent_session(inst, title: str):
     prof_args: tuple = ()
     try:
         prof_env, prof_args = providers.launch_script.profile_overlay(
-            inst.Program or "", getattr(inst, "ProfileId", "") or ""
+            inst.Program or "",
+            getattr(inst, "ProfileId", "") or "",
+            getattr(inst, "ProfileModel", "") or "",
         )
     except Exception:  # noqa: BLE001 — never block a relaunch over settings
         pass

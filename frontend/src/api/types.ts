@@ -109,6 +109,8 @@ export interface Instance {
   profile_id?: string;
   profile_effective?: string;
   profile_label?: string;
+  /** The session's model override of the profile's pin ("" = the pin). */
+  profile_model?: string;
   stage: Stage | string;
   pr_url: string | null;
   /** Present only at the "pr" stage; null = could not find out. */
@@ -192,6 +194,9 @@ export interface AuthProfile {
   resolved_config_dir?: string;
   /** Server-derived, read-only: the shell command that logs its CLI in. */
   login_command?: string;
+  /** Server-derived, read-only: CLIs this profile has a verified route for.
+   * A profile with raw `env` overrides applies to every CLI regardless. */
+  supported_agents?: string[];
 }
 
 export interface AuthProfilesResponse {

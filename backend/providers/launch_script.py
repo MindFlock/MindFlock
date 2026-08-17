@@ -190,19 +190,22 @@ def local_overlay(program: str) -> tuple[dict, tuple]:
         return {}, ()
 
 
-def profile_overlay(program: str, profile_id: str = "") -> tuple[dict, tuple]:
+def profile_overlay(
+    program: str, profile_id: str = "", model: str = ""
+) -> tuple[dict, tuple]:
     """``(env, launch_args)`` running ``program`` under an auth profile.
 
     ``profile_id`` is the session's stored id (``""`` = inherit the global
     default profile; ``"default"`` = explicitly none — see
-    :mod:`backend.providers.auth_profiles`). Same contract and same defensive
+    :mod:`backend.providers.auth_profiles`); ``model`` is the session's own
+    model override of the profile's pin. Same contract and same defensive
     posture as :func:`local_overlay`: ``({}, ())`` means "behave exactly as
     before", and a settings read must never break a launch.
     """
     try:
         from . import auth_profiles
 
-        return auth_profiles.launch_overlay(program, profile_id)
+        return auth_profiles.launch_overlay(program, profile_id, model)
     except Exception:  # noqa: BLE001
         return {}, ()
 
