@@ -273,15 +273,25 @@ def _typed_overlay(
             return None
         base = (p.base_url or "").strip() or OPENROUTER_BASE_URL
         if name == "claude":
-            # OpenRouter's Anthropic-compatible endpoint; AUTH_TOKEN (a Bearer
-            # credential) is what Claude Code's gateway path expects. Gateway
-            # model discovery makes the CLI's own /model menu fetch a curated
+            # OpenRouter's Anthropic-compatible endpoint, per its own Claude
+            # Code cookbook. The SDK appends /v1/… itself, so the base must
+            # NOT carry the OpenAI-style /v1 suffix (…/api/v1/v1/messages
+            # 404s — verified) — strip it from the stored base, which the
+            # OpenAI-compatible routes below and the /key probe do need.
+            # AUTH_TOKEN (a Bearer credential) is the gateway credential;
+            # ANTHROPIC_API_KEY is pinned EMPTY per the cookbook so an
+            # ambient key can't fight the gateway auth. Gateway model
+            # discovery makes the CLI's own /model menu fetch a curated
             # picker from the gateway (refreshed at startup — which every
             # (re)launch and profile swap is). NOTE: a pinned ANTHROPIC_MODEL
             # bypasses that picker, per Claude Code's own precedence.
+            anth_base = base.rstrip("/")
+            if anth_base.endswith("/v1"):
+                anth_base = anth_base[: -len("/v1")]
             env = {
-                "ANTHROPIC_BASE_URL": base,
+                "ANTHROPIC_BASE_URL": anth_base,
                 "ANTHROPIC_AUTH_TOKEN": p.api_key,
+                "ANTHROPIC_API_KEY": "",
                 "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
             }
             if model:

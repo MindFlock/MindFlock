@@ -102,8 +102,14 @@ def test_openrouter_claude_uses_anthropic_gateway_env():
     p = _profile(kind="openrouter", api_key="sk-or-x", model="anthropic/claude-4.5")
     env, args = ap.overlay_for("claude", p)
     assert env == {
-        "ANTHROPIC_BASE_URL": ap.OPENROUTER_BASE_URL,
+        # The Anthropic SDK appends /v1/… itself, so the claude route strips
+        # the OpenAI-style /v1 the stored base carries (…/api/v1/v1/messages
+        # 404s on OpenRouter — verified against the live API).
+        "ANTHROPIC_BASE_URL": "https://openrouter.ai/api",
         "ANTHROPIC_AUTH_TOKEN": "sk-or-x",
+        # Pinned EMPTY per OpenRouter's Claude Code cookbook, so an ambient
+        # key can't fight the gateway credential.
+        "ANTHROPIC_API_KEY": "",
         "ANTHROPIC_MODEL": "anthropic/claude-4.5",
         # /model fetches the gateway's curated picker (a pinned model bypasses
         # it, per Claude Code's own precedence — asserted here to stay honest).
@@ -141,8 +147,12 @@ def test_openrouter_goose_env_only():
 
 def test_openrouter_custom_base_url_wins():
     p = _profile(kind="openrouter", api_key="k", base_url="https://or.example/v1")
+    # The claude route strips a trailing /v1 (the SDK adds its own); the
+    # OpenAI-compatible routes keep the base verbatim.
     env, _ = ap.overlay_for("claude", p)
-    assert env["ANTHROPIC_BASE_URL"] == "https://or.example/v1"
+    assert env["ANTHROPIC_BASE_URL"] == "https://or.example"
+    env, _ = ap.overlay_for("codex", p)
+    assert env["OPENAI_BASE_URL"] == "https://or.example/v1"
 
 
 def test_openrouter_provider_scoped_restricts():
