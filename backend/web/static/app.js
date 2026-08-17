@@ -28351,11 +28351,15 @@ function AccountChip({ inst }) {
           {
             id: "acct-chip-model",
             style: { width: "100%" },
-            value: models.includes(inst.profile_model || "") ? inst.profile_model : "",
+            value: inst.profile_model || "",
             onClick: (ev) => ev.stopPropagation(),
             onChange: (ev) => swap(inst.profile_id || "", ev.target.value),
             children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: (effectiveProfile == null ? void 0 : effectiveProfile.model) ? `Account default (${effectiveProfile.model})` : "Account default" }),
+              !!inst.profile_model && !models.includes(inst.profile_model) && /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: inst.profile_model, children: [
+                inst.profile_model,
+                " (pinned)"
+              ] }),
               models.map((m) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: m, children: m }, m))
             ]
           }
@@ -29940,6 +29944,7 @@ function NewSessionDialog() {
     setPresetValue("");
     setProfileId("");
     setProfileModel("");
+    setProfileModels({});
     setSavedPresets(loadUserPresets());
     let live = true;
     (async () => {
@@ -30032,6 +30037,17 @@ function NewSessionDialog() {
     setProgram(v);
     setLaunchArgs((launchDefaults.current[v.toLowerCase()] || "").trim());
   }, []);
+  const canonAgent = reactExports.useCallback(
+    (raw) => {
+      const tok = (raw.trim().split(/\s+/)[0] || "").toLowerCase();
+      const base = tok.split("/").pop() || tok;
+      const m = providers.find(
+        (p) => p.name.toLowerCase() === base || (p.aliases || []).some((a) => String(a).toLowerCase() === base) || String(p.command || "").toLowerCase() === base
+      );
+      return m ? m.name : base;
+    },
+    [providers]
+  );
   const setAccount = (id) => {
     setProfileId(id);
     setProfileModel("");
@@ -30039,7 +30055,7 @@ function NewSessionDialog() {
     if (!prof) return;
     const supported = prof.supported_agents || [];
     const hasEnv = !!prof.env && Object.keys(prof.env).length > 0;
-    if (supported.length && !hasEnv && !supported.includes(program.trim().toLowerCase())) {
+    if (supported.length && !hasEnv && !supported.includes(canonAgent(program))) {
       const preferred = prof.provider && supported.includes(prof.provider) ? prof.provider : supported[0];
       setAgent(preferred);
     }
@@ -30063,7 +30079,7 @@ function NewSessionDialog() {
     const supported = selectedProfile.supported_agents || [];
     const hasEnv = !!selectedProfile.env && Object.keys(selectedProfile.env).length > 0;
     if (hasEnv || !supported.length) return "";
-    if (supported.includes(program.trim().toLowerCase())) return "";
+    if (supported.includes(canonAgent(program))) return "";
     return `“${selectedProfile.label || selectedProfile.id}” has no route for ${program || "this agent"} — the session would run on the CLI's own login. It works with: ${supported.join(", ")}.`;
   })();
   const fillFromTemplate = (t) => {
@@ -30340,10 +30356,14 @@ function NewSessionDialog() {
                   {
                     id: "new-account-model",
                     title: "Model this session runs on (through the selected account)",
-                    value: (profileModels[profileId] || []).includes(profileModel) ? profileModel : "",
+                    value: profileModel,
                     onChange: (e) => setProfileModel(e.target.value),
                     children: [
                       /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: selectedProfile.model ? `Account default (${selectedProfile.model})` : "Account default" }),
+                      profileModel && !(profileModels[profileId] || []).includes(profileModel) && /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: profileModel, children: [
+                        profileModel,
+                        " (custom)"
+                      ] }),
                       (profileModels[profileId] || []).map((m) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: m, children: m }, m))
                     ]
                   }
@@ -34014,10 +34034,14 @@ function Accounts(_) {
             models.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
               "select",
               {
-                value: models.includes(p.model || "") ? p.model : "",
+                value: p.model || "",
                 onChange: (e) => patch(p.id, { model: e.target.value }),
                 children: [
                   /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "CLI's own default" }),
+                  !!p.model && !models.includes(p.model) && /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: p.model, children: [
+                    p.model,
+                    " (saved)"
+                  ] }),
                   models.map((m) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: m, children: m }, m))
                 ]
               }

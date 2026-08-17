@@ -178,6 +178,7 @@ def _compute() -> tuple:
     day_totals: dict = {}  # "YYYY-MM-DD" (local) -> {..per-turn sums..}
     day_accounts: dict = {}  # account id -> {day -> totals}
     earliest_day = None
+    earliest_by_account: dict = {}  # account id -> its own earliest scanned day
     price_memo: dict = {}
     recent: list = []  # (ts, cost, tok) within _RECENT_LOOKBACK, sorted below
 
@@ -223,6 +224,9 @@ def _compute() -> tuple:
                     _add(days_a.setdefault(d, _zero()), tok, cost)
                     if earliest_day is None or d < earliest_day:
                         earliest_day = d
+                    ea = earliest_by_account.get(account)
+                    if ea is None or d < ea:
+                        earliest_by_account[account] = d
         except OSError:
             continue
 
@@ -264,10 +268,14 @@ def _compute() -> tuple:
 
     # Back-fill windows from ledger days the current scan didn't see (pruned
     # transcripts) — only days older than the earliest scanned day, to avoid
-    # double-counting. Day granularity is fine for these tail days.
-    def _backfill(target: dict, ledgered: dict) -> None:
+    # double-counting. Day granularity is fine for these tail days. The cutoff
+    # day is PER TARGET: an account whose transcripts were pruned may have
+    # ledger days newer than some other account's earliest scan, and gating
+    # every account on the global earliest would drop those days from its own
+    # rows (the "By account" split then wouldn't sum to the total).
+    def _backfill(target: dict, ledgered: dict, earliest) -> None:
         for d, t in ledgered.items():
-            if earliest_day is not None and d >= earliest_day:
+            if earliest is not None and d >= earliest:
                 continue
             try:
                 d_epoch = time.mktime(time.strptime(d, "%Y-%m-%d"))
@@ -279,11 +287,12 @@ def _compute() -> tuple:
                 if d_epoch + 86400 >= cut:  # part of that day is in the window
                     _add(target[k], t, t.get("cost", 0.0))
 
-    _backfill(acc, ledger_days)
+    _backfill(acc, ledger_days, earliest_day)
     for account, acct_days in ledger_accounts.items():
         _backfill(
             acc_accounts.setdefault(account, {k: _zero() for k in _WINDOWS}),
             acct_days,
+            earliest_by_account.get(account),
         )
 
     recent.sort(key=lambda e: e[0])

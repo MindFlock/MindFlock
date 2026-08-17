@@ -552,3 +552,110 @@ class TestProfileModelApi:
             json={"title": "x", "profile_id": "or", "profile_model": "a\nb"},
         )
         assert r.status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes: atomic PUT, rename-loses-key, per-account backfill
+# --------------------------------------------------------------------------- #
+class TestPutAtomicity:
+    def test_bad_default_leaves_the_list_untouched(self, client):
+        client.put(
+            "/api/settings/auth-profiles",
+            json={
+                "profiles": [{"id": "personal", "kind": "openrouter", "api_key": "k"}]
+            },
+        )
+        r = client.put(
+            "/api/settings/auth-profiles",
+            json={
+                "profiles": [{"id": "work", "kind": "account"}],
+                "default_profile": "personal",  # not in the NEW list
+            },
+        )
+        assert r.status_code == 400
+        # 400 must mean "nothing changed": the old profile (and its key) live.
+        s = S.load_settings().auth_profiles
+        assert [p.id for p in s.profiles] == ["personal"]
+        assert s.profiles[0].api_key == "k"
+
+    def test_clearing_the_default(self, client):
+        client.put(
+            "/api/settings/auth-profiles",
+            json={
+                "profiles": [{"id": "work", "kind": "account"}],
+                "default_profile": "work",
+            },
+        )
+        r = client.put(
+            "/api/settings/auth-profiles",
+            json={
+                "profiles": [{"id": "work", "kind": "account"}],
+                "default_profile": "",
+            },
+        )
+        assert r.json()["default_profile"] == ""
+
+    def test_rename_with_masked_key_is_rejected(self, client):
+        client.put(
+            "/api/settings/auth-profiles",
+            json={"profiles": [{"id": "or", "kind": "openrouter", "api_key": "sk-1"}]},
+        )
+        r = client.put(
+            "/api/settings/auth-profiles",
+            json={
+                "profiles": [
+                    {"id": "openrouter", "kind": "openrouter", "api_key": "•••set"}
+                ]
+            },
+        )
+        assert r.status_code == 400
+        assert "re-entering" in r.json()["error"]
+        # And nothing changed: the original id still holds its key.
+        s = S.load_settings().auth_profiles
+        assert [p.id for p in s.profiles] == ["or"]
+        assert s.profiles[0].api_key == "sk-1"
+
+
+def test_backfill_uses_each_accounts_own_earliest_day(tmp_path, monkeypatch):
+    """An account whose transcripts were pruned keeps its ledger days even when
+    another account's scan reaches further back (the global-earliest gate would
+    have dropped them from the per-account rows)."""
+    import json as _json
+    import time as _time
+
+    from backend.providers import usage_history as uh
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("MINDFLOCK_ASSISTANT_DIR", str(tmp_path / "assistant"))
+    _save_profiles({"id": "work", "kind": "account", "provider": "claude"})
+    # Ambient login has a transcript 20 days ago (global earliest day).
+    now = _time.time()
+    old_ts = now - 20 * 86400
+    proj = tmp_path / ".claude" / "projects" / "p"
+    proj.mkdir(parents=True)
+    entry = {
+        "timestamp": _time.strftime("%Y-%m-%dT%H:%M:%S+00:00", _time.gmtime(old_ts)),
+        "message": {"usage": {"input_tokens": 5, "output_tokens": 0}, "model": "m"},
+    }
+    (proj / "t.jsonl").write_text(_json.dumps(entry) + "\n")
+    # The work account's transcripts are gone, but its ledger remembers a day
+    # NEWER than the ambient scan's earliest — the case the fix is for.
+    recent_day = _time.strftime("%Y-%m-%d", _time.localtime(now - 5 * 86400))
+    ledger = {
+        "days": {},
+        "accounts": {
+            "work": {
+                recent_day: {
+                    "in": 7,
+                    "out": 0,
+                    "cache_read": 0,
+                    "cache_write": 0,
+                    "cost": 0.7,
+                }
+            }
+        },
+    }
+    (tmp_path / "assistant").mkdir(exist_ok=True)
+    (tmp_path / "assistant" / "usage-history.json").write_text(_json.dumps(ledger))
+    acc, _recent, accounts = uh._compute()
+    assert accounts["work"]["month"]["in"] == 7  # kept, not gated away

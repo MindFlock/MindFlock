@@ -347,6 +347,9 @@ export function NewSessionDialog() {
     setPresetValue("");
     setProfileId("");
     setProfileModel("");
+    // Refetched per open: the dialog outlives the page's whole session, and a
+    // rotated OpenRouter key must not keep offering the old key's catalog.
+    setProfileModels({});
     setSavedPresets(loadUserPresets());
     let live = true;
     // The folder suggestions get a request of their own rather than a place in
@@ -488,6 +491,26 @@ export function NewSessionDialog() {
     setLaunchArgs((launchDefaults.current[v.toLowerCase()] || "").trim());
   }, []);
 
+  /** The canonical provider name behind whatever is in the Agent field —
+   * mirrors the backend's resolve(): basename of the executable token,
+   * matched against each provider's name/aliases/command. Without this a
+   * path ("/usr/local/bin/claude") or an alias ("agy") the backend routes
+   * fine would trip the no-route warning and get auto-overwritten. */
+  const canonAgent = useCallback(
+    (raw: string): string => {
+      const tok = (raw.trim().split(/\s+/)[0] || "").toLowerCase();
+      const base = tok.split("/").pop() || tok;
+      const m = providers.find(
+        (p) =>
+          p.name.toLowerCase() === base ||
+          (p.aliases || []).some((a) => String(a).toLowerCase() === base) ||
+          String(p.command || "").toLowerCase() === base
+      );
+      return m ? m.name : base;
+    },
+    [providers]
+  );
+
   /** Picking an account steers the Agent field: with an OpenRouter (or any
    * key) account the identity is the choice that matters, so an agent the
    * account can't route is auto-swapped to one it can — the alternative is a
@@ -500,7 +523,7 @@ export function NewSessionDialog() {
     if (!prof) return;
     const supported = prof.supported_agents || [];
     const hasEnv = !!prof.env && Object.keys(prof.env).length > 0;
-    if (supported.length && !hasEnv && !supported.includes(program.trim().toLowerCase())) {
+    if (supported.length && !hasEnv && !supported.includes(canonAgent(program))) {
       const preferred =
         prof.provider && supported.includes(prof.provider) ? prof.provider : supported[0];
       setAgent(preferred);
@@ -530,7 +553,7 @@ export function NewSessionDialog() {
     const supported = selectedProfile.supported_agents || [];
     const hasEnv = !!selectedProfile.env && Object.keys(selectedProfile.env).length > 0;
     if (hasEnv || !supported.length) return "";
-    if (supported.includes(program.trim().toLowerCase())) return "";
+    if (supported.includes(canonAgent(program))) return "";
     return (
       `“${selectedProfile.label || selectedProfile.id}” has no route for ${program || "this agent"} — ` +
       `the session would run on the CLI's own login. It works with: ${supported.join(", ")}.`
@@ -842,11 +865,7 @@ export function NewSessionDialog() {
                   <select
                     id="new-account-model"
                     title="Model this session runs on (through the selected account)"
-                    value={
-                      (profileModels[profileId] || []).includes(profileModel)
-                        ? profileModel
-                        : ""
-                    }
+                    value={profileModel}
                     onChange={(e) => setProfileModel(e.target.value)}
                   >
                     <option value="">
@@ -854,6 +873,14 @@ export function NewSessionDialog() {
                         ? `Account default (${selectedProfile.model})`
                         : "Account default"}
                     </option>
+                    {/* A value typed before the catalog landed (or absent from
+                        it) stays VISIBLE and selected — coercing the display
+                        to "Account default" while still submitting it would
+                        launch a model the form no longer shows. */}
+                    {profileModel &&
+                      !(profileModels[profileId] || []).includes(profileModel) && (
+                        <option value={profileModel}>{profileModel} (custom)</option>
+                      )}
                     {(profileModels[profileId] || []).map((m) => (
                       <option key={m} value={m}>
                         {m}

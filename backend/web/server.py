@@ -3321,6 +3321,53 @@ def _profile_id_error(profile_id: str) -> str:
     return ""
 
 
+def _rewrite_launcher_for_profile(inst, wt: str) -> bool:
+    """Rewrite a provisioned session's launcher so a profile swap also updates
+    the profile's baked-in launch FLAGS (e.g. an OpenRouter model pin).
+
+    Only when the worktree still carries its own ``_provision_settings`` — the
+    exact ``skip_permissions``/cache-env the original write used. Without them
+    those values are NOT guessable (the configured-repo flavor resolves the
+    flag from user settings, the local flavor pins it True), and a rewrite
+    that guesses could silently hand a session ``--dangerously-skip-
+    permissions`` its owner turned off. No settings, no rewrite: the env half
+    of the swap still lands via the relaunch exports, only flag-level model
+    routing stays stale. Returns whether the launcher was rewritten.
+    Best-effort: any failure is swallowed — flags are secondary to env.
+    """
+    if not getattr(inst, "Provisioned", False):
+        return False
+    if not os.path.isfile(os.path.join(wt, provisioning.LAUNCHER_BASENAME)):
+        return False
+    scs = getattr(getattr(inst, "_git_worktree", None), "_provision_settings", None)
+    if scs is None:
+        return False
+    try:
+        from backend import workspace_setup as _ws
+
+        prompt_path = os.path.join(wt, provisioning.PROMPT_BASENAME)
+        prompt = ""
+        if os.path.isfile(prompt_path):
+            with open(prompt_path, encoding="utf-8") as f:
+                prompt = f.read()
+        _, prof_args = providers.launch_script.profile_overlay(
+            inst.Program or "",
+            getattr(inst, "ProfileId", "") or "",
+            getattr(inst, "ProfileModel", "") or "",
+        )
+        provisioning.write_launcher(
+            wt,
+            prompt,
+            program=inst.Program or "claude",
+            skip_permissions=scs.skip_permissions,
+            cache_env=_ws.merged_cache_env(scs.caches),
+            launch_args=tuple(prof_args) + tuple(getattr(inst, "LaunchArgs", ()) or ()),
+        )
+        return True
+    except Exception:  # noqa: BLE001 — flags are secondary to env
+        return False
+
+
 def _profile_model_error(model: str) -> str:
     """Validate a per-session model override. Model ids are free-form (each
     gateway names its own), so only shell-hostile shapes are rejected — the
@@ -4698,32 +4745,8 @@ async def set_instance_profile(title: str, payload: dict) -> JSONResponse:
             wt = inst.GetWorktreePath()
         except Exception:  # noqa: BLE001
             wt = ""
-        if (
-            getattr(inst, "Provisioned", False)
-            and wt
-            and os.path.isfile(os.path.join(wt, provisioning.LAUNCHER_BASENAME))
-        ):
-            try:
-                prompt_path = os.path.join(wt, provisioning.PROMPT_BASENAME)
-                prompt = ""
-                if os.path.isfile(prompt_path):
-                    with open(prompt_path, encoding="utf-8") as f:
-                        prompt = f.read()
-                _, prof_args = providers.launch_script.profile_overlay(
-                    inst.Program or "",
-                    profile_id,
-                    getattr(inst, "ProfileModel", "") or "",
-                )
-                provisioning.write_launcher(
-                    wt,
-                    prompt,
-                    program=inst.Program or "claude",
-                    skip_permissions=True,
-                    launch_args=tuple(prof_args)
-                    + tuple(getattr(inst, "LaunchArgs", ()) or ()),
-                )
-            except Exception:  # noqa: BLE001 — flags are secondary to env
-                pass
+        if wt:
+            _rewrite_launcher_for_profile(inst, wt)
         if inst.Started() and inst.Status == session.Running:
             _kill_agent_session(title)
             _ensure_agent_session(inst, title)

@@ -132,11 +132,7 @@ export function AccountChip({ inst }: { inst: Instance }) {
                   <select
                     id="acct-chip-model"
                     style={{ width: "100%" }}
-                    value={
-                      models.includes(inst.profile_model || "")
-                        ? inst.profile_model
-                        : ""
-                    }
+                    value={inst.profile_model || ""}
                     onClick={(ev) => ev.stopPropagation()}
                     onChange={(ev) =>
                       swap(inst.profile_id || "", ev.target.value)
@@ -147,6 +143,15 @@ export function AccountChip({ inst }: { inst: Instance }) {
                         ? `Account default (${effectiveProfile.model})`
                         : "Account default"}
                     </option>
+                    {/* A pin outside the fetched catalog (set via the CLI, or
+                        a model this key lost access to) must stay visible —
+                        rendering it as "Account default" would show a pinned
+                        session as unpinned. */}
+                    {!!inst.profile_model && !models.includes(inst.profile_model) && (
+                      <option value={inst.profile_model}>
+                        {inst.profile_model} (pinned)
+                      </option>
+                    )}
                     {models.map((m) => (
                       <option key={m} value={m}>
                         {m}

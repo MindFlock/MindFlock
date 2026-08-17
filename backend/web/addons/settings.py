@@ -887,18 +887,39 @@ class SettingsAddon(Addon):
                 key = str(p.get("api_key", "") or "").strip()
                 if key in ("", _MASK):
                     p["api_key"] = prev.get(pid, "")
+                if kind in ("api_key", "openrouter") and not p["api_key"]:
+                    # The keep-secret map is keyed by id, so this is exactly
+                    # what an id RENAME with the mask sentinel produces — and a
+                    # keyless key-profile would later launch sessions silently
+                    # on the CLI's own login. Fail loudly instead.
+                    return JSONResponse(
+                        {
+                            "error": "account '%s' (%s) has no API key — paste "
+                            "one (renaming an id requires re-entering its key)"
+                            % (pid, kind)
+                        },
+                        status_code=400,
+                    )
                 clean.append(p)
+            # EVERYTHING is validated before ANYTHING is written: a 400 from
+            # this endpoint must mean "nothing changed", and the default has to
+            # be checked against the INCOMING list — validating after the list
+            # replacement half-applied the request (and the dangling-default
+            # cleanup could silently clear the app default on the way).
+            default = str(body.get("default_profile", "") or "").strip()
+            if "default_profile" in body and default and default not in seen:
+                return JSONResponse(
+                    {
+                        "error": "unknown account '%s' — it is not in the "
+                        "profiles list being saved" % default
+                    },
+                    status_code=400,
+                )
             try:
                 settings_store.set_auth_profiles(clean)
                 if "default_profile" in body:
-                    _apply_post(
-                        {
-                            "auth_profiles": {
-                                "default_profile": str(
-                                    body.get("default_profile", "") or ""
-                                ).strip()
-                            }
-                        }
+                    settings_store.update_settings(
+                        auth_profiles={"default_profile": default}
                     )
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=400)

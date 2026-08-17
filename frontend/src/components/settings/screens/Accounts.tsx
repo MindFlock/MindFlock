@@ -213,10 +213,15 @@ export function Accounts(_: ScreenProps) {
                     <span className="set-label">Model</span>
                     {models.length ? (
                       <select
-                        value={models.includes(p.model || "") ? p.model : ""}
+                        value={p.model || ""}
                         onChange={(e) => patch(p.id, { model: e.target.value })}
                       >
                         <option value="">CLI's own default</option>
+                        {/* A stored pin missing from the fetched catalog must
+                            stay visible, not read as "CLI's own default". */}
+                        {!!p.model && !models.includes(p.model) && (
+                          <option value={p.model}>{p.model} (saved)</option>
+                        )}
                         {models.map((m) => (
                           <option key={m} value={m}>
                             {m}
