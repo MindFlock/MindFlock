@@ -28360,7 +28360,7 @@ function AccountChip({ inst }) {
             ]
           }
         ) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "usage-pop-note", children: models === null ? "loading models…" : inst.profile_model || (effectiveProfile == null ? void 0 : effectiveProfile.model) || "account default" }) }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-note", children: "Pick the model HERE for this account — the CLI's own /model menu only lists its vendor's models, never the gateway's. Changing it restarts the agent." })
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-note", children: `Full catalog from the account's key; picking one pins it for this session (restarts the agent). On "Account default" with no pin, Claude Code's own /model shows the gateway's curated picker instead — a pinned model bypasses that menu.` })
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-note", children: "Swapping restarts the agent under the new identity. Files, diff and terminal stay; the conversation continues only if the new account has seen it before (conversations live per account)." })
     ] })

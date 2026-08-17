@@ -5,9 +5,10 @@
  * shell pane and diff survive).
  *
  * For OpenRouter-style profiles the popover also carries a Model picker fed by
- * the key's own model list. This exists because the CLI's own model menu
- * (Claude Code's /model) is hardcoded to its vendor's families and never asks
- * the gateway what it serves — so the OpenRouter catalog has to live here. */
+ * the key's own FULL model list. The overlay also enables Claude Code's
+ * gateway model discovery, so its /model menu shows the gateway's curated
+ * top-ranked set — but a model pinned here (ANTHROPIC_MODEL) bypasses that
+ * menu, and only this picker offers the whole catalog and a per-session pin. */
 
 import { useEffect, useRef, useState } from "react";
 import { api, instApi } from "../../api/client";
@@ -159,9 +160,10 @@ export function AccountChip({ inst }: { inst: Instance }) {
                 )}
               </div>
               <div className="usage-pop-note">
-                Pick the model HERE for this account — the CLI's own /model menu
-                only lists its vendor's models, never the gateway's. Changing it
-                restarts the agent.
+                Full catalog from the account's key; picking one pins it for
+                this session (restarts the agent). On "Account default" with no
+                pin, Claude Code's own /model shows the gateway's curated
+                picker instead — a pinned model bypasses that menu.
               </div>
             </>
           )}

@@ -105,6 +105,9 @@ def test_openrouter_claude_uses_anthropic_gateway_env():
         "ANTHROPIC_BASE_URL": ap.OPENROUTER_BASE_URL,
         "ANTHROPIC_AUTH_TOKEN": "sk-or-x",
         "ANTHROPIC_MODEL": "anthropic/claude-4.5",
+        # /model fetches the gateway's curated picker (a pinned model bypasses
+        # it, per Claude Code's own precedence — asserted here to stay honest).
+        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
     }
     assert args == ()
 

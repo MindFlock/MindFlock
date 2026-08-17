@@ -274,8 +274,16 @@ def _typed_overlay(
         base = (p.base_url or "").strip() or OPENROUTER_BASE_URL
         if name == "claude":
             # OpenRouter's Anthropic-compatible endpoint; AUTH_TOKEN (a Bearer
-            # credential) is what Claude Code's gateway path expects.
-            env = {"ANTHROPIC_BASE_URL": base, "ANTHROPIC_AUTH_TOKEN": p.api_key}
+            # credential) is what Claude Code's gateway path expects. Gateway
+            # model discovery makes the CLI's own /model menu fetch a curated
+            # picker from the gateway (refreshed at startup — which every
+            # (re)launch and profile swap is). NOTE: a pinned ANTHROPIC_MODEL
+            # bypasses that picker, per Claude Code's own precedence.
+            env = {
+                "ANTHROPIC_BASE_URL": base,
+                "ANTHROPIC_AUTH_TOKEN": p.api_key,
+                "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+            }
             if model:
                 env["ANTHROPIC_MODEL"] = model
             return env, ()

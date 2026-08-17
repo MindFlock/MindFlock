@@ -92,16 +92,20 @@ button (`/api/settings/test/openrouter`).
 
 ## Picking the model (OpenRouter / key accounts)
 
-The **model is chosen in MindFlock, not in the CLI**: the New dialog's Model
-field and the account chip's Model picker are both fed by the key's own live
-catalog (`/api/settings/test/openrouter`), and the pick reaches the CLI as a
+Two pickers, one catalog. The New dialog's Model field and the account chip's
+Model picker are fed by the key's own live catalog — the **full** OpenRouter
+list (`/api/settings/test/openrouter`) — and a pick reaches the CLI as a
 per-session override of the profile's pin (`ANTHROPIC_MODEL` for claude, the
-CLI's model flag elsewhere). The CLI's own model menu — e.g. Claude Code's
-`/model` — is hardcoded to its vendor's families and never asks the gateway
-what it serves, so don't expect OpenRouter models to appear there; changing
-the model from the chip restarts the agent on the new one. When an account is
-selected, the Agent picker auto-steers to a CLI the account can route and
-warns instead of silently launching on the CLI's own login.
+CLI's model flag elsewhere); changing it from the chip restarts the agent on
+the new model. For claude the overlay also sets
+`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`, so Claude Code's own `/model`
+menu shows the gateway's **curated** top-ranked set (fetched at startup —
+which every relaunch and swap is). Claude Code's own precedence applies: a
+pinned `ANTHROPIC_MODEL` bypasses that menu, so leave the session on "Account
+default" (no pin) when you want to drive the model from `/model` instead.
+When an account is selected, the Agent picker auto-steers to a CLI the
+account can route and warns instead of silently launching on the CLI's own
+login.
 
 ## Limits worth knowing
 
