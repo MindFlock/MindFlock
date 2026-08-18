@@ -109,6 +109,8 @@ class InstanceOptions:
         provision_repo: str = "",
         provision_repo_url: str = "",
         in_place: bool = False,
+        profile_id: str = "",
+        profile_model: str = "",
     ) -> None:
         self.title = title
         self.path = path
@@ -137,6 +139,15 @@ class InstanceOptions:
         # worktree and NO new branch — so several sessions share the same
         # working copy. Cleanup never deletes the directory.
         self.in_place = in_place
+        # Auth profile this session's CLI runs under. "" = inherit the global
+        # default profile; "default" = explicitly none (the CLI's own ambient
+        # login); anything else pins a configured profile id. Same tri-state
+        # convention as launch_args (see backend.providers.auth_profiles).
+        self.profile_id = profile_id
+        # Per-session model override of the profile's own model pin (the New
+        # dialog's Model picker). "" = the profile's pin, itself defaulting to
+        # the CLI's own model.
+        self.profile_model = profile_model
 
 
 class Instance:
@@ -170,6 +181,13 @@ class Instance:
         self.WorkspaceStrategy: str = "worktree"
         # In-place mode: run directly in an existing repo, no worktree.
         self.InPlace: bool = False
+        # Auth profile the agent runs under ("" = global default, "default" =
+        # explicitly the CLI's own login). Persisted; the launch paths resolve
+        # it to an (env, args) overlay on every (re)start, so a swap only needs
+        # an agent restart. ProfileModel is this session's model override of
+        # the profile's pin ("" = the pin).
+        self.ProfileId: str = ""
+        self.ProfileModel: str = ""
         # Branch this session's worktree was cut from, recorded at first Start
         # (per-session diff/stage base). "" when unrecorded — readers resolve a
         # base via a fallback chain (origin/HEAD -> main/master -> configured
@@ -212,6 +230,8 @@ class Instance:
             workspace_strategy=self.WorkspaceStrategy,
             in_place=self.InPlace,
             base_branch=self.BaseBranch,
+            profile_id=getattr(self, "ProfileId", "") or "",
+            profile_model=getattr(self, "ProfileModel", "") or "",
         )
 
         if self._git_worktree is not None:
@@ -467,6 +487,24 @@ class Instance:
             session_name=self._tmux_session.sanitized_name,
             launch_args=tuple(getattr(self, "LaunchArgs", ()) or ()),
         )
+        # Auth-profile overlay: which identity this session's CLI runs as.
+        # The env ALWAYS rides on the tmux session (ExtraEnv), never inside the
+        # provisioned launcher script, so a profile swap only needs an agent
+        # restart; the flags join the launch args like the local-model ones.
+        # No-op ({}, ()) when no profile applies.
+        from backend.providers import launch_script as _ls
+
+        _prof_env, _prof_args = _ls.profile_overlay(
+            self.Program,
+            getattr(self, "ProfileId", "") or "",
+            getattr(self, "ProfileModel", "") or "",
+        )
+        if _prof_args:
+            _ctx = _dataclasses.replace(
+                _ctx, launch_args=tuple(_prof_args) + tuple(_ctx.launch_args)
+            )
+        if _prof_env:
+            self.ExtraEnv = {**(self.ExtraEnv or {}), **_prof_env}
         if self.Provisioned:
             # Provisioned: launch via a wrapper script written into the
             # (now provisioned) workspace. The wrapper exports each
@@ -513,8 +551,6 @@ class Instance:
                 # Local-model routing: the flags join this session's launch args
                 # and the env rides on the tmux session (ExtraEnv is applied to
                 # the pane right after this returns). No-op when off.
-                from backend.providers import launch_script as _ls
-
                 _local_env, _local_args = _ls.local_overlay(self.Program)
                 if _local_args:
                     _ctx = _dataclasses.replace(
@@ -1063,6 +1099,8 @@ def new_instance(opts: InstanceOptions) -> Instance:
     inst._provision_repo = opts.provision_repo
     inst._provision_repo_url = opts.provision_repo_url
     inst.InPlace = opts.in_place
+    inst.ProfileId = getattr(opts, "profile_id", "") or ""
+    inst.ProfileModel = getattr(opts, "profile_model", "") or ""
     return inst
 
 
@@ -1214,6 +1252,8 @@ def from_instance_data(data: InstanceData, attach: bool = True) -> Instance:
     inst.WorkspaceStrategy = data.workspace_strategy or "worktree"
     inst.InPlace = data.in_place
     inst.BaseBranch = data.base_branch or ""
+    inst.ProfileId = data.profile_id or ""
+    inst.ProfileModel = data.profile_model or ""
     inst._git_worktree = _worktree_from_data(data)
     inst._diff_stats = git.DiffStats(
         added=data.diff_stats.added,

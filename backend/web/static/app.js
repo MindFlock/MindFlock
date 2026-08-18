@@ -21556,6 +21556,17 @@ function useUsage(enabled = true) {
     placeholderData: (prev) => prev
   });
 }
+function useAuthProfiles() {
+  return useQuery({
+    queryKey: ["auth-profiles"],
+    queryFn: () => api("/api/settings/auth-profiles"),
+    staleTime: 3e4,
+    placeholderData: (prev) => prev
+  });
+}
+function refreshAuthProfiles() {
+  return queryClient.invalidateQueries({ queryKey: ["auth-profiles"] });
+}
 function refreshInstances() {
   return queryClient.invalidateQueries({ queryKey: ["instances"] });
 }
@@ -25941,6 +25952,7 @@ function pillText(usage, provs, instances2, focused, agg, aggByProvider) {
   return { head, title };
 }
 function OverallUsage() {
+  var _a2;
   const { data: instancesData } = useInstances();
   const instances2 = reactExports.useMemo(() => instancesData ?? [], [instancesData]);
   const { data: usageData } = useUsage(instances2.length > 0);
@@ -26052,6 +26064,21 @@ function OverallUsage() {
               )
             }
           ),
+          period !== "session" && (((_a2 = active.accounts) == null ? void 0 : _a2.length) || 0) > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-head", children: "By account" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              UsagePopTable,
+              {
+                rows: (active.accounts || []).map((a) => {
+                  const t = a.periods && a.periods[period];
+                  return [
+                    a.label || a.id,
+                    t ? "~" + fmtUsd(t.cost || 0) : "—"
+                  ];
+                })
+              }
+            )
+          ] }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(UsagePopNote, { text: period === "session" ? USAGE_NOTE : USAGE_WINDOW_NOTE[period] }),
           active.mode === "windowed" ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
             active.window_note ? /* @__PURE__ */ jsxRuntimeExports.jsx(UsagePopNote, { text: active.window_note }) : null,
@@ -28216,6 +28243,133 @@ function SessionUsageChip({ inst }) {
     ] })
   ] });
 }
+function AccountChip({ inst }) {
+  const chipRef = reactExports.useRef(null);
+  const [open, setOpen] = reactExports.useState(false);
+  const [busy, setBusy] = reactExports.useState(false);
+  const [models, setModels] = reactExports.useState(null);
+  const { data } = useAuthProfiles();
+  const profiles = (data == null ? void 0 : data.profiles) || [];
+  const effective = inst.profile_effective || "";
+  const label = inst.profile_label || "default";
+  const effectiveProfile = profiles.find((p) => p.id === effective);
+  const modelCapable = !!effectiveProfile && effectiveProfile.kind !== "account";
+  reactExports.useEffect(() => {
+    if (!open || !modelCapable || models !== null) return;
+    if ((effectiveProfile == null ? void 0 : effectiveProfile.kind) !== "openrouter") {
+      setModels([]);
+      return;
+    }
+    let live = true;
+    (async () => {
+      try {
+        const r = await api(
+          "/api/settings/test/openrouter",
+          { json: { profile_id: effective } }
+        );
+        if (live) setModels((r == null ? void 0 : r.ok) ? r.models || [] : []);
+      } catch {
+        if (live) setModels([]);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [open, modelCapable, models, effective, effectiveProfile == null ? void 0 : effectiveProfile.kind]);
+  if (!profiles.length) return null;
+  const swap = async (profileId, profileModel) => {
+    var _a2;
+    setBusy(true);
+    setOpen(false);
+    try {
+      const body = { profile_id: profileId };
+      if (profileModel !== void 0) body.profile_model = profileModel;
+      const r = await instApi(inst.title, "/profile", {
+        json: body
+      });
+      toast(
+        (r == null ? void 0 : r.note) || (profileModel !== void 0 ? "Now running " + (profileModel || "the account's default model") : "Now running as " + (profileId === "default" ? "the CLI's own login" : ((_a2 = profiles.find((p) => p.id === profileId)) == null ? void 0 : _a2.label) || profileId))
+      );
+      void refreshInstances();
+    } catch (err) {
+      toast("Swap failed: " + err.message);
+    } finally {
+      setBusy(false);
+      setModels(null);
+    }
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "span",
+      {
+        ref: chipRef,
+        className: "tok usage-trigger acct-chip",
+        title: "Account this agent runs as — click to swap",
+        onClick: (ev) => {
+          ev.stopPropagation();
+          if (!busy) setOpen((o) => !o);
+        },
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "usage-head", children: busy ? "swapping…" : "@" + label }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "caret", children: "▾" })
+        ]
+      }
+    ),
+    open && chipRef.current && /* @__PURE__ */ jsxRuntimeExports.jsxs(UsagePopover, { anchor: chipRef.current, onClose: () => setOpen(false), children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-head", children: "Run this session as" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("table", { className: "usage-pop-tbl", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tbody", { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "tr",
+          {
+            className: "acct-pop-row",
+            style: { cursor: "pointer" },
+            onClick: () => swap("default"),
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: "CLI's own login" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: effective === "" ? "✓" : "" })
+            ]
+          }
+        ),
+        profiles.map((p) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "tr",
+          {
+            className: "acct-pop-row",
+            style: { cursor: "pointer" },
+            onClick: () => swap(p.id),
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: p.label || p.id }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: effective === p.id ? "✓" : "" })
+            ]
+          },
+          p.id
+        ))
+      ] }) }),
+      modelCapable && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-head", children: "Model" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "4px 8px" }, children: models && models.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "select",
+          {
+            id: "acct-chip-model",
+            style: { width: "100%" },
+            value: inst.profile_model || "",
+            onClick: (ev) => ev.stopPropagation(),
+            onChange: (ev) => swap(inst.profile_id || "", ev.target.value),
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: (effectiveProfile == null ? void 0 : effectiveProfile.model) ? `Account default (${effectiveProfile.model})` : "Account default" }),
+              !!inst.profile_model && !models.includes(inst.profile_model) && /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: inst.profile_model, children: [
+                inst.profile_model,
+                " (pinned)"
+              ] }),
+              models.map((m) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: m, children: m }, m))
+            ]
+          }
+        ) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "usage-pop-note", children: models === null ? "loading models…" : inst.profile_model || (effectiveProfile == null ? void 0 : effectiveProfile.model) || "account default" }) }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-note", children: `Full catalog from the account's key; picking one pins it for this session (restarts the agent). On "Account default" with no pin, Claude Code's own /model shows the gateway's curated picker instead — a pinned model bypasses that menu.` })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-note", children: "Swapping restarts the agent under the new identity. Files, diff and terminal stay; the conversation continues only if the new account has seen it before (conversations live per account)." })
+    ] })
+  ] });
+}
 function queueRelTime(ms) {
   const m = Math.ceil(ms / 6e4);
   if (m < 60) return m + "m";
@@ -28555,6 +28709,7 @@ function Pane({
               }
             )
           ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(AccountChip, { inst }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(SessionUsageChip, { inst }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state" + (wsState !== "connected" ? " state-bad" : ""), children: wsState }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -29759,6 +29914,11 @@ function NewSessionDialog() {
   const [folderCheck, setFolderCheck] = reactExports.useState(null);
   const [presetValue, setPresetValue] = reactExports.useState("");
   const [savedPresets, setSavedPresets] = reactExports.useState([]);
+  const [profileId, setProfileId] = reactExports.useState("");
+  const [profileModel, setProfileModel] = reactExports.useState("");
+  const [profileModels, setProfileModels] = reactExports.useState({});
+  const authProfiles = useAuthProfiles().data;
+  const selectedProfile = ((authProfiles == null ? void 0 : authProfiles.profiles) || []).find((p) => p.id === profileId);
   const launchDefaults = reactExports.useRef({});
   const titleRef = reactExports.useRef(null);
   const launchRef = reactExports.useRef(null);
@@ -29782,6 +29942,9 @@ function NewSessionDialog() {
     folderDo({ t: "reopen" });
     setActiveTemplate("");
     setPresetValue("");
+    setProfileId("");
+    setProfileModel("");
+    setProfileModels({});
     setSavedPresets(loadUserPresets());
     let live = true;
     (async () => {
@@ -29874,6 +30037,51 @@ function NewSessionDialog() {
     setProgram(v);
     setLaunchArgs((launchDefaults.current[v.toLowerCase()] || "").trim());
   }, []);
+  const canonAgent = reactExports.useCallback(
+    (raw) => {
+      const tok = (raw.trim().split(/\s+/)[0] || "").toLowerCase();
+      const base = tok.split("/").pop() || tok;
+      const m = providers.find(
+        (p) => p.name.toLowerCase() === base || (p.aliases || []).some((a) => String(a).toLowerCase() === base) || String(p.command || "").toLowerCase() === base
+      );
+      return m ? m.name : base;
+    },
+    [providers]
+  );
+  const setAccount = (id) => {
+    setProfileId(id);
+    setProfileModel("");
+    const prof = ((authProfiles == null ? void 0 : authProfiles.profiles) || []).find((p) => p.id === id);
+    if (!prof) return;
+    const supported = prof.supported_agents || [];
+    const hasEnv = !!prof.env && Object.keys(prof.env).length > 0;
+    if (supported.length && !hasEnv && !supported.includes(canonAgent(program))) {
+      const preferred = prof.provider && supported.includes(prof.provider) ? prof.provider : supported[0];
+      setAgent(preferred);
+    }
+    if (prof.kind === "openrouter" && !profileModels[id]) {
+      (async () => {
+        var _a2;
+        try {
+          const r = await api(
+            "/api/settings/test/openrouter",
+            { json: { profile_id: id } }
+          );
+          if ((r == null ? void 0 : r.ok) && ((_a2 = r.models) == null ? void 0 : _a2.length))
+            setProfileModels((m) => ({ ...m, [id]: r.models || [] }));
+        } catch {
+        }
+      })();
+    }
+  };
+  const routeWarning = (() => {
+    if (!selectedProfile) return "";
+    const supported = selectedProfile.supported_agents || [];
+    const hasEnv = !!selectedProfile.env && Object.keys(selectedProfile.env).length > 0;
+    if (hasEnv || !supported.length) return "";
+    if (supported.includes(canonAgent(program))) return "";
+    return `“${selectedProfile.label || selectedProfile.id}” has no route for ${program || "this agent"} — the session would run on the CLI's own login. It works with: ${supported.join(", ")}.`;
+  })();
   const fillFromTemplate = (t) => {
     var _a2;
     if (t.program) setAgent(t.program);
@@ -29912,6 +30120,8 @@ function NewSessionDialog() {
     const promptVal = prompt.trim();
     if (promptVal) body.prompt = promptVal;
     body.launch_args = tokenize(launchArgs);
+    if (profileId) body.profile_id = profileId;
+    if (profileId && profileModel.trim()) body.profile_model = profileModel.trim();
     if (provision) {
       body.provisioned = true;
       body.workspace_strategy = strategy;
@@ -30104,8 +30314,72 @@ function NewSessionDialog() {
                       ]
                     }
                   )
+                ] }),
+                ((authProfiles == null ? void 0 : authProfiles.profiles) || []).length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "nf-agent", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "nf-agent-head", children: [
+                    "Account",
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(
+                      "button",
+                      {
+                        type: "button",
+                        id: "new-account-manage",
+                        className: "linklike",
+                        title: "Manage accounts in Settings",
+                        onClick: () => {
+                          closeDialog();
+                          useUi.getState().openDialogFor("settings", "accounts");
+                        },
+                        children: "Manage"
+                      }
+                    )
+                  ] }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                    "select",
+                    {
+                      id: "new-account",
+                      title: "Which identity this session's CLI runs as",
+                      value: profileId,
+                      onChange: (e) => setAccount(e.target.value),
+                      children: [
+                        /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: (authProfiles == null ? void 0 : authProfiles.default_profile) ? `App default (${authProfiles.default_profile})` : "App default (CLI's own login)" }),
+                        /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "default", children: "CLI's own login" }),
+                        ((authProfiles == null ? void 0 : authProfiles.profiles) || []).map((p) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: p.id, children: p.label || p.id }, p.id))
+                      ]
+                    }
+                  )
                 ] })
               ] }),
+              selectedProfile && selectedProfile.kind !== "account" && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "nf-quick", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "nf-agent", style: { flex: 1 }, children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "nf-agent-head", children: "Model" }),
+                (profileModels[profileId] || []).length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  "select",
+                  {
+                    id: "new-account-model",
+                    title: "Model this session runs on (through the selected account)",
+                    value: profileModel,
+                    onChange: (e) => setProfileModel(e.target.value),
+                    children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: selectedProfile.model ? `Account default (${selectedProfile.model})` : "Account default" }),
+                      profileModel && !(profileModels[profileId] || []).includes(profileModel) && /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: profileModel, children: [
+                        profileModel,
+                        " (custom)"
+                      ] }),
+                      (profileModels[profileId] || []).map((m) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: m, children: m }, m))
+                    ]
+                  }
+                ) : /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    id: "new-account-model",
+                    type: "text",
+                    autoComplete: "off",
+                    placeholder: selectedProfile.model ? `Account default (${selectedProfile.model})` : "anthropic/claude-sonnet-4.5",
+                    value: profileModel,
+                    onChange: (e) => setProfileModel(e.target.value)
+                  }
+                )
+              ] }) }),
+              routeWarning && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "nf-git-nudge", children: routeWarning }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("datalist", { id: "provider-list" }),
               plainFolder && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "nf-git-nudge", children: initRepo ? /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: "A git repo will be created here — diff, commit and PR will work." }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
                 "No git repo in this folder, so diff, commit and PR stay off.",
@@ -33589,6 +33863,302 @@ function WindowRefresh() {
     ] })
   ] });
 }
+const KINDS = [
+  {
+    id: "account",
+    label: "CLI account",
+    hint: "A separate login of the CLI itself (e.g. a work Claude subscription) in its own config dir."
+  },
+  {
+    id: "api_key",
+    label: "API key",
+    hint: "A vendor API key injected for the session's CLI (metered, no subscription)."
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    hint: "Route the CLI through OpenRouter under its own key, with an optional model pin."
+  }
+];
+const AGENTS_BY_KIND = {
+  account: ["claude", "codex"],
+  api_key: ["claude", "codex", "aider", "goose"],
+  openrouter: ["", "claude", "codex", "aider", "goose"]
+};
+const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+function Accounts(_) {
+  var _a2;
+  const { data } = useAuthProfiles();
+  const [profiles, setProfiles] = reactExports.useState([]);
+  const [defaultId, setDefaultId] = reactExports.useState("");
+  const [addOpen, setAddOpen] = reactExports.useState(false);
+  const [draft, setDraft] = reactExports.useState({ id: "", kind: "account" });
+  const [error, setError] = reactExports.useState("");
+  const [probes, setProbes] = reactExports.useState({});
+  const [testing, setTesting] = reactExports.useState("");
+  reactExports.useEffect(() => {
+    setProfiles((data == null ? void 0 : data.profiles) || []);
+    setDefaultId((data == null ? void 0 : data.default_profile) || "");
+  }, [data]);
+  const save2 = async (next, nextDefault) => {
+    setError("");
+    try {
+      const body = { profiles: next };
+      if (nextDefault !== void 0) body.default_profile = nextDefault;
+      const r = await api(
+        "/api/settings/auth-profiles",
+        { json: body, method: "PUT" }
+      );
+      setProfiles(r.profiles || []);
+      setDefaultId(r.default_profile || "");
+      void refreshAuthProfiles();
+      toast("Accounts saved");
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+  const patch = (id, p) => save2(profiles.map((x) => x.id === id ? { ...x, ...p } : x));
+  const addDraft = () => {
+    const id = (draft.id || "").trim().toLowerCase();
+    if (!ID_RE.test(id)) {
+      setError("id must be lowercase letters/digits/-/_ (max 64)");
+      return;
+    }
+    if (profiles.some((p) => p.id === id)) {
+      setError(`'${id}' already exists`);
+      return;
+    }
+    if (draft.kind !== "account" && !(draft.api_key || "").trim()) {
+      setError("this kind needs an API key");
+      return;
+    }
+    void save2([...profiles, { ...draft, id }]);
+    setDraft({ id: "", kind: "account" });
+    setAddOpen(false);
+  };
+  const testOpenrouter = async (p) => {
+    setTesting(p.id);
+    try {
+      const r = await api("/api/settings/test/openrouter", {
+        json: { profile_id: p.id, api_key: p.api_key, base_url: p.base_url }
+      });
+      setProbes((m) => ({ ...m, [p.id]: r }));
+      toast((r == null ? void 0 : r.ok) ? "OpenRouter key works" : "OpenRouter test failed");
+    } catch (err) {
+      setProbes((m) => ({ ...m, [p.id]: { ok: false, error: err.message } }));
+    } finally {
+      setTesting("");
+    }
+  };
+  const kindMeta = reactExports.useMemo(
+    () => Object.fromEntries(KINDS.map((k) => [k.id, k])),
+    []
+  );
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Accounts" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint set-block-hint", children: "Run different sessions as different identities — a personal Claude subscription next to a work one, or an OpenRouter key with its own model — without logging any CLI out. Pick one per session in the New dialog or the pane header's account chip; swapping a live session just restarts its agent under the new identity. Each Claude account's usage is tracked separately in the cost panel." }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Default for new sessions" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "select",
+        {
+          id: "acct-default",
+          value: defaultId,
+          onChange: (e) => save2(profiles, e.target.value),
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "Each CLI's own login (no profile)" }),
+            profiles.map((p) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: p.id, children: p.label || p.id }, p.id))
+          ]
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Sessions created without an explicit account run as this identity." })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "prov-conn-list", id: "acct-list", children: profiles.map((p) => {
+      var _a3;
+      const probe = probes[p.id];
+      const models = (probe == null ? void 0 : probe.models) || [];
+      return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "prov-conn", "data-account": p.id, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "prov-conn-head", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "prov-name", children: p.label || p.id }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "prov-badge", children: ((_a3 = kindMeta[p.kind]) == null ? void 0 : _a3.label) || p.kind }),
+          p.kind !== "openrouter" && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "prov-badge prov-badge-src", children: p.provider || "claude" }),
+          p.id === defaultId && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "prov-badge", children: "default" })
+        ] }),
+        p.kind === "account" ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint", children: [
+            "Lives in ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: p.resolved_config_dir || p.config_dir || "…" }),
+            ". Log it in by running this in a terminal (the CLI's own sign-in flow, scoped to this account):"
+          ] }),
+          p.login_command && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: p.login_command }),
+            " ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                type: "button",
+                className: "linklike",
+                onClick: () => {
+                  var _a4;
+                  void ((_a4 = navigator.clipboard) == null ? void 0 : _a4.writeText(p.login_command || ""));
+                  toast("Login command copied");
+                },
+                children: "Copy"
+              }
+            ),
+            " ",
+            "— or ",
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("code", { children: [
+              "mindflock accounts login ",
+              p.id
+            ] })
+          ] })
+        ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "API key" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                type: "password",
+                autoComplete: "off",
+                placeholder: p.api_key === SECRET_MASK ? "•••set (saved)" : "paste a key",
+                defaultValue: "",
+                onBlur: (e) => {
+                  if (e.target.value.trim()) patch(p.id, { api_key: e.target.value.trim() });
+                }
+              }
+            )
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Model" }),
+            models.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
+              "select",
+              {
+                value: p.model || "",
+                onChange: (e) => patch(p.id, { model: e.target.value }),
+                children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "CLI's own default" }),
+                  !!p.model && !models.includes(p.model) && /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: p.model, children: [
+                    p.model,
+                    " (saved)"
+                  ] }),
+                  models.map((m) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: m, children: m }, m))
+                ]
+              }
+            ) : /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                type: "text",
+                autoComplete: "off",
+                placeholder: p.kind === "openrouter" ? "anthropic/claude-sonnet-4.5" : "model id",
+                defaultValue: p.model || "",
+                onBlur: (e) => {
+                  if (e.target.value !== (p.model || ""))
+                    patch(p.id, { model: e.target.value.trim() });
+                }
+              }
+            ),
+            p.kind === "openrouter" && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Test lists the models this key can reach, turning this into a picker." })
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "prov-conn-actions", children: [
+          p.kind === "openrouter" && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "test-row", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                type: "button",
+                className: "test-btn",
+                disabled: testing === p.id,
+                onClick: () => testOpenrouter(p),
+                children: "Test key"
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "test-result" + (probe ? probe.ok ? " ok" : " bad" : ""), children: testing === p.id ? "testing…" : probe ? probe.ok ? `✓ spent $${Number(probe.usage ?? 0).toFixed(2)}` + (probe.limit != null ? ` of $${probe.limit}` : "") + ` · ${models.length} models` : "✗ " + (probe.error || "failed") : "" })
+          ] }),
+          p.id !== defaultId && /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "linklike", onClick: () => save2(profiles, p.id), children: "Make default" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              type: "button",
+              className: "linklike",
+              onClick: () => save2(profiles.filter((x) => x.id !== p.id)),
+              children: "Remove"
+            }
+          )
+        ] })
+      ] }, p.id);
+    }) }),
+    addOpen ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "prov-form", id: "acct-add-form", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Kind" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "select",
+          {
+            value: draft.kind,
+            onChange: (e) => setDraft((d) => ({ ...d, kind: e.target.value, provider: "" })),
+            children: KINDS.map((k) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: k.id, children: k.label }, k.id))
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: ((_a2 = kindMeta[draft.kind]) == null ? void 0 : _a2.hint) || "" })
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Id" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            type: "text",
+            autoComplete: "off",
+            placeholder: "work",
+            value: draft.id,
+            onChange: (e) => setDraft((d) => ({ ...d, id: e.target.value }))
+          }
+        )
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Label" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            type: "text",
+            autoComplete: "off",
+            placeholder: "Work",
+            value: draft.label || "",
+            onChange: (e) => setDraft((d) => ({ ...d, label: e.target.value }))
+          }
+        )
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Agent CLI" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "select",
+          {
+            value: draft.provider || "",
+            onChange: (e) => setDraft((d) => ({ ...d, provider: e.target.value })),
+            children: (AGENTS_BY_KIND[draft.kind] || ["claude"]).map((a) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: a, children: a || "any (route by session's CLI)" }, a || "any"))
+          }
+        )
+      ] }),
+      draft.kind !== "account" && /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "API key" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            type: "password",
+            autoComplete: "off",
+            placeholder: draft.kind === "openrouter" ? "sk-or-…" : "key",
+            value: draft.api_key || "",
+            onChange: (e) => setDraft((d) => ({ ...d, api_key: e.target.value }))
+          }
+        )
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "prov-form-actions", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "test-btn", onClick: addDraft, children: "Add account" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "linklike", onClick: () => setAddOpen(false), children: "Cancel" })
+      ] })
+    ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "set-row", children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "acct-add", className: "test-btn", onClick: () => setAddOpen(true), children: "Add account" }) }),
+    error && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "error", children: error })
+  ] });
+}
 const RUNTIMES = [
   { id: "ollama", label: "Ollama", hint: "ollama serve — the default at :11434" },
   { id: "lmstudio", label: "LM Studio", hint: "Developer → Start Server, at :1234" },
@@ -35239,6 +35809,7 @@ const SCREENS = [
   { key: "connections", label: "Connections", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Connections, { ...p }) },
   { key: "notifications", label: "Notifications", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Notifications, { ...p }) },
   { key: "coding", label: "Agent CLI", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(CodingCli, { ...p }) },
+  { key: "accounts", label: "Accounts", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Accounts, { ...p }) },
   { key: "localmodel", label: "Local model", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(LocalModel, { ...p }) },
   { key: "workspace", label: "Workspace", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Workspace, { ...p }) },
   { key: "ide", label: "IDE", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Ide, { ...p }) },

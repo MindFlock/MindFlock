@@ -820,8 +820,9 @@ def _ts_epoch(s) -> Optional[float]:
 
 def _claude_project_dirs(workdir: str):
     """Claude Code transcript project dirs for ``workdir``, across every
-    ``~/.claude*`` config root (plus ``$CLAUDE_CONFIG_DIR``) — wrappers and
-    alternate installs may keep separate config dirs. Existing dirs only."""
+    ``~/.claude*`` config root (plus ``$CLAUDE_CONFIG_DIR`` and each claude
+    auth-profile account dir) — wrappers, alternate installs, and per-account
+    profiles all keep separate config dirs. Existing dirs only."""
     import os
     import re
 
@@ -839,6 +840,15 @@ def _claude_project_dirs(workdir: str):
                 d = os.path.join(home, name)
                 if os.path.isdir(d):
                     roots.add(d)
+    # Account-profile dirs live under ~/.mindflock/accounts — outside the
+    # ~/.claude* sweep — so without this a work-account session would report
+    # zero tokens.
+    try:
+        from backend.providers import auth_profiles
+
+        roots.update(auth_profiles.claude_account_roots())
+    except Exception:  # noqa: BLE001 — profiles are enrichment only
+        pass
     out = []
     for root in roots:
         proj = os.path.join(root, "projects", encoded)
