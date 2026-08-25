@@ -163,6 +163,66 @@ keep working through the browser. Live agent **activity** overlays the stage chi
 `offline`, `paused` — detected from the CLI's own activity hooks where
 available, with CPU/pane-hash fallback (see [providers.md](providers.md)).
 
+**↺ — back to idle, when the cycle is finished and you are not.** The stage is
+re-derived from git on every pass and self-heals, so "let me keep working" needs
+no help while the tree is dirty: the instant it is, the stage is `agent` again.
+The gap is the **clean-tree** window — `committed`, `pushed`, `pr` — where the
+branch is finished as far as git can tell and the header therefore insists on
+Push / Make PR / Merge. Someone who just opened a PR and wants to carry on writing
+code on that same branch has no control on the window that isn't about advancing a
+cycle they consider done. ↺, beside the guided button, says so.
+
+It is a **one-shot action, not a toggle** like ⏩ next to it: "back to idle" is
+something you do to a window, not a mode the window is in, and a control lingering
+in an ON state would assert otherwise. It appears only where the ladder has
+somewhere to be put back *from* (a clean branch at `committed` / `pushed` / `pr`,
+not one already pinned), and its tooltip names the ask it is silencing — *"the
+header just stops asking you to open a PR so you can keep working here"*.
+
+**Nothing git-facing happens.** No reset, no revert, no PR close: the commits stay
+committed and an open PR stays open. The pin (`backend/web/core/stage_reset.py`,
+`POST /api/instances/{title}/reset-stage`, surfaced as `stage_reset` on the row)
+is a display note that only the guided ladder honours — chip, primary button, live
+step. It deliberately does **not** touch the published `stage`, so the autopilot
+driver, the verification-check kicker and every `*_changed` event keep reading the
+same git-derived truth they always did; a display pin that lied to the autopilot
+could make an armed chain try to commit a clean tree.
+
+**It releases itself against the worktree, never against the stage label.** The
+pin records the HEAD sha it was set on and dies the moment the tree goes dirty
+(new work exists, so reality already agrees) or HEAD moves (a new commit landed,
+and its ladder is a real one to climb). Keying release off the label instead cannot
+work: filing a PR moves the stage `pushed → pr` a beat after the pin is set, which
+would release it immediately. The server is the authority — it has to be, so the
+pin survives a reload and so the sidebar, the pane header and `/m` cannot
+disagree — though only about a pin that already exists: `/m` reads `stage_reset`
+and puts its ladder back to **Commit**, but carries no ↺ of its own and no echo,
+so a pin is always *set* from the desktop UI. There the browser keeps a
+20-second optimistic echo so the press feels immediate, and that echo expires on
+its own, degrading a lost request to "the button did nothing" rather than to a
+pin no server agrees with.
+
+The pin lives in **server process memory** and is deliberately not persisted: it
+is a statement about this moment on this branch and costs one click to re-make,
+so losing pins to a restart is a shrug, while carrying a stale one across one —
+onto a worktree that may have moved well past the recorded sha — is worse. It is
+also pruned the moment its session stops existing, because titles are reused
+after a delete and a namesake session sitting on the same sha would otherwise
+inherit someone else's pin.
+
+Two leftovers from the finished cycle go down with it, because a "back to idle"
+that leaves the last run's badges up is not back to idle: a **halted** fast-track
+record (a live one is left strictly alone — stopping someone's running chain is
+not what this button says it does) and a **stale** verification result, whose sha
+is not HEAD (a current failure is never touched; the push gate reads it). The
+toast names them — *"Back to idle — also cleared fast-track + checks"*. A
+successful **Make PR** in this UI runs the same reset quietly, so the button
+reads **Commit…** again and the commit → push → PR loop can repeat in the same
+session. That follow-up is the browser's (`submitMakePr` in
+`frontend/src/lib/sessionActions.ts` POSTs the same route), **not** the
+`/make-pr` route's, so a PR opened from `/m` or by the autopilot at `pr` depth
+leaves the ladder still asking for **Merge** until someone presses ↺.
+
 ## Session row actions (expand a sidebar row with ›)
 
 Copy path · **Commit…** · **Push** · **Make PR** · **Merge to staging** ·
@@ -501,7 +561,9 @@ set-and-forget, while these three are somewhere you *visit* — to see what came
 in, start something by hand, or pause a queue. They now have their own top-bar
 entry (**Intake**, `Alt+I`, or the palette's Open Intake), dialog `#intake-dialog` /
 panel `#intake-panel`, built from
-`frontend/src/components/intake/{IntakeDialog,TicketsTab,PullRequestsTab,IssuesTab,RepoSources,kit}.tsx`.
+`frontend/src/components/intake/{IntakeDialog,TicketsTab,PullRequestsTab,IssuesTab,QueueTab,RepoSources,kit}.tsx`,
+with the shared rules beside them in the same folder (`search.ts`, `buckets.ts`,
+`queue.ts` — referred to below as `intake/…`).
 
 **Every work list has the same Ctrl+F filter.** Tickets, Pull requests, Issues
 and the auto-start roll-up all grow without bound — every open PR on every
@@ -520,9 +582,10 @@ The one number that ignores the filter is the **+ Add bucket…** menu's per-sta
 count, because that menu is a standing choice about which states this panel
 shows at all (`intake/search.ts` holds the four rules, one per list).
 
-**Tab strip with live counts** — **Tickets**, **Pull requests**, **Issues** (keys
-`tickets` | `prs` | `issues`), a horizontal strip rather than Settings' long left
-nav because the three are peers you flip between while reading. Each badge is the
+**Tab strip with live counts** — **Tickets**, **Pull requests**, **Issues**,
+**Auto-start** (keys `tickets` | `prs` | `issues` | `autostart`), a horizontal
+strip rather than Settings' long left nav because they are peers you flip
+between while reading. Each badge is the
 number of rows that tab will actually show you — not a total. That distinction is
 the whole of it: counting every ticket the provider ever assigned you read `1221`
 over a list of 52, because done states are parked behind **+ Add bucket…**, so
@@ -537,6 +600,53 @@ in place when either is missing. The three retired Settings screen keys
 when it is deep-linked one — so every old link keeps working, including the
 **Configure** button on a Connections card (the server's `settings_screen`
 values) and the welcome tour's setup slides.
+
+**Auto-start — what happens next without me.** The other three tabs are
+per-source workbenches: every ticket, every open PR, every open issue, grouped by
+where it lives, with the ones that will actually be taken marked by a chip. That
+leaves the roll-up question unanswered — the chips are scattered down three lists
+in three groupings, so "what is about to start" meant opening three tabs and
+reading past everything that *isn't* queued. This tab shows only those rows,
+across all three sources, **oldest first**, which is the order the pipeline draws
+in (`intake/queue.ts` holds the rule, and the tab strip's badge shares it, so the
+count and the list cannot disagree).
+
+Two things are deliberately **not** here. Work the pipeline has already accepted:
+*"queued for ingestion (pending)"* is a skip reason, so those items are no longer
+eligible — they have become sessions, which is where you watch them. And anything
+that already has a session: ticket eligibility rules those out through the ledger,
+but PR and issue eligibility only consult the processed ledger, so an item started
+by hand seconds ago can still read as eligible, and calling work that is being
+done "waiting to start" would be wrong.
+
+**One vocabulary, whichever switch is really involved.** Each of the three
+sections is headed with its count and one of three chips — **auto-start on**,
+**auto-start off**, **not set up** — regardless of the plumbing underneath.
+Tickets are switched by the ingestion engine; PR review and issue handling have
+their own toggles *inside* it. An earlier cut let that leak into the labels, so
+tickets read "ingestion paused" beside a PR reading "switched off", which invites
+you to think two different things are wrong. The difference is real, and it
+belongs in exactly one place: the sentence under the heading, which names the
+switch to flip — *"These are ready, but auto-start is off — they will not begin
+until **Automated ingestion** is switched on, on the Tickets tab (this runs inside
+it). You can still start any of them here, with **Start now**."* Which switch it
+names follows the same rule: a section whose own toggle is off names that toggle
+(**Automated PR review**, **Automated issue handling**, and no "on the Tickets
+tab" clause, because that toggle lives right there); a section stalled because the
+engine is down names the engine instead and points at the tab that owns it, since
+turning PR review on while the engine is stopped would still start nothing.
+
+Each heading also carries an **Open Tickets ›** / **Pull requests ›** /
+**Issues ›** button through to the tab that owns the setup, and a section with
+nothing in it says *"Nothing
+waiting."* on one plain line — or *"Nothing configured yet"* when it is `unset` —
+rather than in the boxed empty state the other tabs use, because three empty boxes
+make a quiet queue look like a broken app.
+
+**It doesn't only watch.** Every row is the same `WorkItemRow` the other tabs
+use, with the same per-launch agent, depth and effort pickers and a **Start now**
+button, so waiting for the sweep is the default rather than the only option — and
+when auto-start is off, starting from here is the entire point of the tab.
 
 **One anatomy, three tabs** (`components/intake/kit.tsx`): a master switch → a
 list of collapsible **source cards** with **+ Add** → a **work list grouped by
@@ -672,6 +782,44 @@ still lists work you are about to move *into* an ingest state, not only what
 already matches the source's filters — Jira, Linear and Shortcut annotate each
 ticket with its workflow state, while GitHub Issues and Asana expose no
 workflow-state model and land in `No state`.
+
+**Work that is already on this machine leads with Reopen.** A row for an item
+that has been worked once already said so in chips — *already ingested*, *a branch
+for it exists on the remote* — and then offered exactly one button, **Begin work**,
+which starts it over. But the workspace is usually still right there: ending a
+session keeps its worktree (see Recently closed), and a run whose session was lost
+to a restart leaves its worktree behind too. Starting fresh on top of that either
+collides with it or silently duplicates it.
+
+So all three panels ask the other question — *is the work still here?* — in one
+place (`backend/web/core/reopen.py`), because the three share their row rendering
+and must not disagree about what a row can do. Resolution is most-informative
+first: a **recently-closed session** for the item, whose stashed data restores the
+branch, program, prompt and provisioning flags rather than approximating them; a
+**provisioned clone directory** (`pr-<slug>`, or a clone-strategy ticket/issue
+workspace — both deterministic paths, so an `isdir` is the whole probe); or a
+**worktree still holding the item's branch**, found by asking the base clone (one
+`git worktree list` per repo per request, indexed). A directory with no `.git` in
+it does not count: a half-deleted workspace would otherwise offer a Reopen that
+lands the agent somewhere every git-backed panel then fails against.
+
+When something is found the row leads with **Reopen window** — the primary
+button, with the start demoted to the quiet one beneath it, since reopening is the
+action and starting over is the alternative. Its tooltip names which thing is
+being reopened (*session ended 2d ago* / *workspace left on this machine*), its
+branch and its path. Nothing is hidden: a leftover workspace can be one you mean
+to abandon, and **Begin work** still reclaims it when it holds no work.
+
+`POST /api/intake/reopen` takes the item's identity in the same shape its start
+route takes, never a path from the client, so a panel left open for an hour cannot
+name a directory that has since been deleted — the server re-resolves and answers
+**410** (*"no workspace for this item is left on this machine — use Begin work to
+start it fresh"*) when it is gone, **409** when the session is already open, and
+restores a closed entry in full or, for a workspace whose session is gone, opens a
+fresh **in-place** session on the directory. In-place because the directory is not
+MindFlock's to delete: ending that session must leave the work exactly where it
+was. Every part of the probe is read-only and best-effort, and any failure answers
+"nothing found", which is precisely how the panels behaved before.
 
 **Every row can be started on a different coding CLI, for that one launch** — a
 small picker beside **Begin work** / **Begin review** / **Start work**, whose
