@@ -103,6 +103,11 @@ export interface Instance {
   workspace_missing: boolean;
   has_origin: boolean;
   stage: Stage | string;
+  /** The owner pressed "back to idle" on a finished branch: show the guided
+   * ladder from the start even though `stage` (which stays git-derived truth)
+   * says committed/pushed/pr. Released server-side as soon as the worktree
+   * moves — see backend/web/core/stage_reset.py. */
+  stage_reset?: boolean;
   pr_url: string | null;
   /** Present only at the "pr" stage; null = could not find out. */
   merge_state?: MergeState | null;
@@ -232,6 +237,38 @@ export interface DoctorCheck {
 
 export type Json = Record<string, unknown>;
 
+/* --- Ticketing sources (GET /api/settings/providers/ticketing, GET/PUT
+ * /api/settings/ticketing/sources) ---------------------------------------
+ *
+ * Shared between the query cache that holds them and Intake → Tickets, which
+ * renders a form from them: two copies of these would let the cache and the
+ * form disagree about what a provider asks for. */
+
+/** One input on a provider's connection card. */
+export interface TicketingCatalogField {
+  key: string;
+  label: string;
+  secret?: boolean;
+  placeholder?: string;
+  /** "state" = workflow-state picker, "choice" = <select>. */
+  type?: string;
+  /** "choice" only. */
+  options?: { value: string; label: string }[];
+  hint?: string;
+}
+
+/** One connectable ticketing platform, and what it asks for. */
+export interface TicketingCatalogEntry {
+  id: string;
+  label: string;
+  blurb?: string;
+  fields: TicketingCatalogField[];
+}
+
+/** One connected source. Free-form beyond `id`/`provider` because each provider
+ * contributes its own fields (token, workspace, project key, …). */
+export type TicketingSource = Record<string, string> & { id: string; provider: string };
+
 /** GET /api/traffic (backend/web/addons/traffic.py) — GitHub stars/forks,
  * per-release download counts, and click totals for the mindflock.ai/go/
  * tracked links. `errors.*` is set when that ONE section's upstream failed;
@@ -319,4 +356,167 @@ export interface TrafficResponse {
     error: string;
   };
   errors: { github: string | null; clicks: string | null };
+}
+
+/** GET /api/test-plans (backend/web/core/test_plans.py) — the Verify surface.
+ *
+ * One plan per session whose branch has landed on origin: the steps a person (or
+ * an agent acting for them) walks to confirm the change really works from the
+ * outside, plus the history of every attempt. It is a local JSON file rather than
+ * an upstream fan-out, which is why it is NOT one of the intake `PANELS` — see
+ * the note above `useTestPlans` in state/queries.ts.
+ *
+ * The state names carry the whole lifecycle and the UI reads them literally:
+ * generating (the headless one-shot is still writing the steps) → generated
+ * (written, but the code has not reached the live branch yet) → due (it IS live;
+ * go check it) → running (a verify session is working the agent-checkable steps)
+ * → done. `failed` means generation itself fell over and `error` says why —
+ * which is a different thing from a run whose verdict is "fail", since that is a
+ * real and useful answer. */
+export type TestStepActor = "agent" | "human";
+export type TestStepResult = "pass" | "fail" | "blocked" | "";
+export type TestPlanState =
+  | "generating" | "generated" | "due" | "running" | "done" | "failed";
+
+export interface TestStep {
+  id: string;
+  text: string;
+  expect: string;
+  /** Who can settle this step. "agent" = checkable from a shell (a command, a
+   * file, an HTTP endpoint); "human" = visual judgement, a real browser, or an
+   * external service. The server defaults anything it doesn't recognise to
+   * "human", because a person confirming something is never wrong while an agent
+   * silently passing what it could not actually check is. */
+  actor: TestStepActor;
+  /** True when a PERSON added this step rather than the generator. It is what
+   * makes the step survive a regeneration (the model is being re-asked about
+   * the diff, and it was never asked about this) — and, because of that, the
+   * only step kind the UI offers to delete: nothing else would ever remove it. */
+  manual?: boolean;
+}
+
+export interface TestStepResultEntry {
+  result: TestStepResult;
+  note: string;
+  at: number;
+  by: string;
+}
+
+export interface TestRun {
+  /** The commit the run actually worked, and the one it was supposed to.
+   *
+   * The run prompt asks the agent to check out `origin/<live branch>`; a fetch
+   * that fails quietly leaves it working whatever HEAD the worktree was cut
+   * from, and the plan then records "it works" about a tree nobody can name. The
+   * server asks git both questions when the answers land. Either may be "" —
+   * unknown, which is never treated as a mismatch. */
+  tested_sha?: string;
+  expected_sha?: string;
+  /** Where the steps were worked: the repo's deployment when it has one, "" when
+   * a checkout was the system under test. */
+  target?: string;
+  at: number;
+  by: string;
+  session: string;
+  /** Keyed by TestStep.id. Sparse on purpose: a run that gives up half way
+   * settles only the steps it actually reached, and the missing ids are exactly
+   * what still needs a human. */
+  results: Record<string, TestStepResultEntry>;
+  verdict: "pass" | "fail" | "partial";
+}
+
+export interface TestPlan {
+  id: string;
+  title: string;
+  /** The MAIN repo, never the session's worktree: worktrees get reclaimed, and a
+   * plan outlives the session that produced it. */
+  repo_root: string;
+  branch: string;
+  sha: string;
+  live_branch: string;
+  /** What `repo_root` resolves to TODAY — this plan's repo asked the chain
+   * again, including that repo's own override. Compare `live_branch` against
+   * this, never against the response's flock-wide `live_branch`: plans are
+   * stamped per repo, so a repo with an override would otherwise read as
+   * permanently out of date against a default it was never measured by. */
+  effective_live_branch: string;
+  state: TestPlanState;
+  error: string;
+  generated_at: number;
+  /** When the CURRENT generation attempt started (epoch seconds; 0 = never, or
+   * a plan written before the server stamped it). `generated_at` is when one
+   * finished — a plan that never finishes is what this one is for: past
+   * `GENERATION_STALE_S` the attempt is abandoned, not slow, and both the server
+   * and the row stop waiting for it. */
+  gen_started: number;
+  /** Generation attempts since the last one settled. The server auto-retries a
+   * stalled generation once and then parks the plan in `failed`. */
+  gen_attempts: number;
+  /** When the work was first seen MERGED. Distinct from `live_at`, which is
+   * when it became yours to check: merged is a git fact, true the instant a PR
+   * lands, while what a checklist tests is a service a pipeline reaches minutes
+   * later. The gap between the two is the repo's deploy window. */
+  merged_at: number;
+  live_at: number;
+  /** The branch on origin this work has most recently reached — "" while it is
+   * still only on the branch it was pushed to.
+   *
+   * NOT `live_branch`, which is the branch this checklist is WAITING for. In a
+   * repo that ships from `main` through a `staging` step the two disagree for
+   * most of a change's life, and the disagreement is the interesting part: the
+   * work is merged, just not where the checklist is watching. Ancestry answers
+   * it where it can; a squash-merged branch is answered by its PR's base. */
+  merged_into: string;
+  /** When it got there (epoch seconds; 0 = the rung that answered could not say,
+   * which is the squash-merge case). */
+  merged_into_at: number;
+  /** The trail, best first and one name per landing — `["main", "staging"]` for
+   * work promoted from staging. Branches that arrived in the same merge are
+   * folded together, so this is not "every branch that contains the commit":
+   * every branch cut from `main` after a merge does. */
+  merged_into_all: string[];
+  /** One sentence, in a user's words, naming what this change lets somebody do.
+   * The model writes it alongside the steps; "" for a plan generated before the
+   * contract asked for one, which is why nothing may depend on it existing.
+   *
+   * This is what `title` should have been. `title` is the session's name — the
+   * key everything addresses the plan by — so a checklist coming due three weeks
+   * later was headed "sc-1234-fix-filters" over a list of imperatives, and the
+   * reader had to reconstruct what shipped from the steps themselves. */
+  summary: string;
+  /** What this work was ASKED to do, snapshotted at push time (ticket title,
+   * description and acceptance criteria, or the prompt somebody typed).
+   *
+   * Stored on the plan rather than read off the session, because plans outlive
+   * sessions: read live, every rewrite after the session was deleted ran with no
+   * ticket at all — i.e. the button you press because the first draft missed the
+   * point ran on strictly less evidence than the draft it replaced. */
+  intent: string;
+  /** What you said the last draft got wrong, from the rewrite box. Kept so a
+   * later push that re-reads the branch keeps honouring it. */
+  focus: string;
+  /** When the "it shipped" push went out, so it goes out once. */
+  notified_at: number;
+  /** Why this checklist is not coming due, when the answer is not "not yet".
+   *
+   * Distinct from `error`, which means an operation you asked for went wrong.
+   * Nothing failed here: the plan is waiting for a branch origin does not have,
+   * which is a configuration answer and the user's to fix. Clears itself the
+   * moment the branch shows up. */
+  live_problem: string;
+  steps: TestStep[];
+  /** Capped server-side (newest kept), so this is recent history, not all of it. */
+  runs: TestRun[];
+  /** The live run's session title; "" when nothing is running. */
+  run_session: string;
+}
+
+export interface TestPlansResponse {
+  plans: TestPlan[];
+  /** The FLOCK-WIDE default, resolved server-side (repository.live_branch,
+   * falling back through pr_base_branch / base_branch to "main") with no repo in
+   * the question, so the UI can name what a repo that overrides nothing
+   * inherits. What an individual plan waits on is its own
+   * `effective_live_branch`, which may differ. */
+  live_branch: string;
 }

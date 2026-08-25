@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { instApi } from "../../api/client";
 import { useConfig } from "../../state/queries";
-import { useUi } from "../../state/store";
+import { displayName, useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import type { KeymapHost } from "../../lib/keymap";
 import {
@@ -29,22 +29,22 @@ interface PaletteAction {
 }
 
 async function sendMessagePrompt(title: string) {
-  const text = window.prompt("Send a message to " + title + ":");
+  const text = window.prompt("Send a message to " + displayName(title) + ":");
   if (!text || !text.trim()) return;
   try {
     await instApi(title, "/send", { json: { text: text.trim() } });
-    toast("Sent to " + title);
+    toast("Sent to " + displayName(title));
   } catch (err) {
     toast("Send failed: " + ((err as Error).message || ""));
   }
 }
 
 async function queuePromptPrompt(title: string) {
-  const text = window.prompt("Queue a prompt for " + title + " (auto-runs when idle):");
+  const text = window.prompt("Queue a prompt for " + displayName(title) + " (auto-runs when idle):");
   if (!text || !text.trim()) return;
   try {
     await instApi(title, "/queue", { json: { text: text.trim() } });
-    toast("Queued for " + title);
+    toast("Queued for " + displayName(title));
   } catch (err) {
     toast("Queue failed: " + ((err as Error).message || ""));
   }
@@ -123,13 +123,25 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         });
     }
     acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host.toggleShortcuts() });
-    // The three Intake tabs get their own entries: the queue you want is the
-    // thing you have in mind, and typing "issues" should land on it directly
-    // rather than on a dialog you then have to navigate.
+    // Each Intake tab gets its own entry: the queue you want is the thing you
+    // have in mind, and typing "issues" should land on it directly rather than
+    // on a dialog you then have to navigate.
     acts.push({ label: "Open Intake", hint: "Alt+I", run: () => ui.openDialogFor("intake") });
     acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
     acts.push({ label: "Intake: Pull requests", run: () => ui.openDialogFor("intake", "prs") });
     acts.push({ label: "Intake: Issues", run: () => ui.openDialogFor("intake", "issues") });
+    acts.push({
+      label: "Intake: Auto-start",
+      hint: "what starts on its own",
+      run: () => ui.openDialogFor("intake", "autostart"),
+    });
+    // The other half of the same arc, so it sits with the Intake entries rather
+    // than down among the settings screens.
+    acts.push({
+      label: "Verify — what's waiting on you",
+      hint: "Alt+V",
+      run: () => ui.openDialogFor("verify"),
+    });
     acts.push({ label: "Open Settings", run: () => ui.openDialogFor("settings") });
     acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
     acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });

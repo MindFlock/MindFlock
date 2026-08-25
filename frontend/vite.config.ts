@@ -40,6 +40,7 @@ export default defineConfig({
         "/m",
         "/favicon.png",
         "/logo.png",
+        "/bird.png",
         "/apple-touch-icon.png",
       ].map((p) => [
         p,

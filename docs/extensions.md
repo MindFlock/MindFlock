@@ -107,7 +107,7 @@ notify-send "MindFlock: $MINDFLOCK_SESSION" "The agent needs your input"
 cat > /dev/null   # drain the JSON envelope from stdin
 curl -s -X POST -H 'Content-Type: application/json' \
   -d "{\"text\": \"PR open for *$MINDFLOCK_SESSION* ($MINDFLOCK_OLD -> $MINDFLOCK_NEW)\"}" \
-  "https://hooks.slack.com/services/T000/B000/XXXX" > /dev/null
+  "https://hooks.slack.com/services/T000/B000/XXXX" > /dev/null # pragma: allowlist secret
 ```
 
 (For merged-or-closed instead, test `[ "$MINDFLOCK_OLD" = "pr" ]`.)
@@ -327,6 +327,16 @@ test that diffs them:
 | `_matches(rule, envelope)` | `ruleMatches(rule, env)` |
 | `_fill(template, envelope)` | `fill(template, env)` |
 | `_DEDUPE_SECONDS = 5.0` | `DEDUPE_MS = 5000` |
+| `aliases.display_name(title, branch)` | `window.mindflock.displayName(title)` |
+
+`{session}` is the twin that bites hardest, because getting it wrong is silent:
+the envelope carries the session's machine slug (`shortcut-21431`) and the user
+reads the rail, which shows the rename if there is one and otherwise the
+pipeline label (`(tix) social-scan-noise/shortcut-21431`). A push naming a window
+nobody can find is worse than no push. The browser channel asks the SPA
+(`window.mindflock.displayName`, the sidebar's own resolver); the server channel
+runs a hand port of it (`core/aliases.session_label`, pinned against the
+TypeScript original's examples in `tests/unit/test_aliases.py`).
 
 Any change to rule *semantics* — a new constraint field, different `{…}`
 placeholder handling, a different dedupe key or window — must land in **both**, or
@@ -350,4 +360,5 @@ global:
 | `mindflock.events.connected` | Whether the `/api/events` socket is currently up |
 | `mindflock.events.onStatus(cb)` | Called on connect/disconnect transitions |
 | `mindflock.sessions()` | The latest instances snapshot array (same shape as `GET /api/instances`) |
+| `mindflock.displayName(title)` | What a session is **called** — its rename, else the label the rail shows (`(tix) add-dark-mode/sc-12345`), else the raw title. Published by the SPA (`lib/windowName.ts`); feature-detect it, because a non-SPA page has no rail to agree with. Use it wherever a user reads a session's name: the event envelope carries the machine slug, and naming a window nobody can find under that name is worse than saying nothing. |
 | `mindflock.toast(msg, opts?)` | Show a toast. Assigned by `app.js` (F3), so it's present whenever the SPA is loaded — still feature-detect in addon modules for non-SPA pages. `opts` is optional: `{onClick, duration}` makes the toast clickable and/or overrides its lifetime (ms). |

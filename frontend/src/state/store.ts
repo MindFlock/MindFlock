@@ -6,6 +6,13 @@
  * upgrade keeps every user's layout, order, aliases, and bindings. */
 
 import { create } from "zustand";
+import { api } from "../api/client";
+import {
+  BREAK_DEFAULT_MINUTES,
+  clampBreakMinutes,
+  clampIdleMinutes,
+  IDLE_DEFAULT_MINUTES,
+} from "../lib/breakTimer";
 import { defaultHiddenBars } from "../components/sidebar/barDefs";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
@@ -63,6 +70,7 @@ export type DialogName =
   | "new-session"
   | "settings"
   | "intake"
+  | "verify"
   | "commit"
   | "make-pr"
   | "rename"
@@ -94,6 +102,14 @@ interface UiState {
   filter: string;
   /** Titles hidden from the grid. */
   hidden: Set<string>;
+  /** Verify runs currently shown as a read-only pane, by session title.
+   *
+   * Its own list rather than a `hidden`/MRU entry because a verify run is not
+   * a session you work in: it gets a WATCH window (read-only, closable, absent
+   * from the sidebar), not a terminal you can type into. Deliberately not
+   * persisted — a run you were watching yesterday is not something to reopen on
+   * launch, and the Verify dialog can always reopen one that still exists. */
+  verifyPanes: string[];
   /** Bulk-selected titles (sidebar checkboxes). */
   bulkSelected: Set<string>;
   /** Display aliases: title -> custom label. */
@@ -108,6 +124,17 @@ interface UiState {
    * "running" panel instead of showing the live (flickering) output. Off by
    * default; the cover lifts on interaction and re-covers after a short idle. */
   reduceMotion: boolean;
+  /** Take a break: pop a full-screen reminder every `breakEveryMin` minutes.
+   * Off by default — nobody wants an app that interrupts them uninvited. */
+  breakReminder: boolean;
+  /** Minutes between break reminders (clamped, see lib/breakTimer). */
+  breakEveryMin: number;
+  /** The idle flock: birds over the grid once nobody has touched this window
+   * for `idleFlockAfterMin` minutes. On by default — unlike the break card it
+   * interrupts nothing, it only shows up in a room you have already left. */
+  idleFlock: boolean;
+  /** Minutes of no input before the idle flock appears (clamped). */
+  idleFlockAfterMin: number;
   /** Master switch for the getting-started hints. New users start with them on. */
   hintsEnabled: boolean;
   /** Hint keys the user has dismissed (hidden even while hints are enabled). */
@@ -140,6 +167,9 @@ interface UiState {
   moveInOrder(title: string, before: string | null): void;
   setFilter(f: string): void;
   setHidden(title: string, hidden: boolean): void;
+  /** Show a verify run's read-only pane (idempotent), or close it. */
+  openVerifyPane(title: string): void;
+  closeVerifyPane(title: string): void;
   toggleBulk(title: string): void;
   clearBulk(): void;
   setAlias(title: string, alias: string): void;
@@ -148,6 +178,14 @@ interface UiState {
   setBarOrder(order: string[]): void;
   /** Toggle the reduce-motion terminal cover. */
   setReduceMotion(on: boolean): void;
+  /** Turn the take-a-break reminder on/off. */
+  setBreakReminder(on: boolean): void;
+  /** Set the minutes between break reminders (clamped on the way in). */
+  setBreakEveryMin(min: number): void;
+  /** Turn the idle flock on/off. */
+  setIdleFlock(on: boolean): void;
+  /** Set the minutes of idleness before the flock appears (clamped). */
+  setIdleFlockAfterMin(min: number): void;
   /** Turn hints on/off. Turning them back on re-arms every dismissed hint. */
   setHintsEnabled(on: boolean): void;
   /** Dismiss a single hint by key (persisted). */
@@ -172,6 +210,7 @@ export const useUi = create<UiState>((set, get) => ({
   mru: load<string[]>("cs_mru", []),
   filter: "",
   hidden: new Set(load<string[]>("mf_hidden", [])),
+  verifyPanes: [],
   bulkSelected: new Set<string>(),
   aliases: load<Record<string, string>>("mf_aliases", {}),
   collapsedDevices: new Set(load<string[]>("cs_devcollapse", [])),
@@ -183,6 +222,10 @@ export const useUi = create<UiState>((set, get) => ({
   ),
   barOrder: load<string[]>("mf_barorder", []),
   reduceMotion: load<boolean>("mf_reduce_motion", false),
+  breakReminder: load<boolean>("mf_break_on", false),
+  breakEveryMin: clampBreakMinutes(load<number>("mf_break_every", BREAK_DEFAULT_MINUTES)),
+  idleFlock: load<boolean>("mf_idle_flock", true),
+  idleFlockAfterMin: clampIdleMinutes(load<number>("mf_idle_after", IDLE_DEFAULT_MINUTES)),
   hintsEnabled: load<boolean>("mf_hints", true),
   dismissedHints: new Set(load<string[]>("mf_hints_seen", [])),
   tourDone: load<boolean>("mf_tour_done", false),
@@ -240,6 +283,12 @@ export const useUi = create<UiState>((set, get) => ({
     save("mf_hidden", [...next]);
     set({ hidden: next });
   },
+  openVerifyPane: (title) => {
+    if (!title || get().verifyPanes.includes(title)) return;
+    set({ verifyPanes: [...get().verifyPanes, title] });
+  },
+  closeVerifyPane: (title) =>
+    set({ verifyPanes: get().verifyPanes.filter((t) => t !== title) }),
   toggleBulk: (title) => {
     const next = new Set(get().bulkSelected);
     if (next.has(title)) next.delete(title);
@@ -253,6 +302,12 @@ export const useUi = create<UiState>((set, get) => ({
     else delete aliases[title];
     save("mf_aliases", aliases);
     set({ aliases });
+    // Mirror the rename to the server (fire-and-forget delta): the browser
+    // stays the source of truth for rendering, but ntfy pushes are formatted
+    // server-side and would otherwise name sessions by their raw titles.
+    api("/api/aliases", { json: { title, alias: alias || "" } }).catch(() => {
+      /* offline / older server: the push just keeps the raw title */
+    });
   },
   toggleDeviceCollapsed: (device) => {
     const next = new Set(get().collapsedDevices);
@@ -275,6 +330,24 @@ export const useUi = create<UiState>((set, get) => ({
   setReduceMotion: (on) => {
     save("mf_reduce_motion", on);
     set({ reduceMotion: on });
+  },
+  setBreakReminder: (on) => {
+    save("mf_break_on", on);
+    set({ breakReminder: on });
+  },
+  setBreakEveryMin: (min) => {
+    const every = clampBreakMinutes(min);
+    save("mf_break_every", every);
+    set({ breakEveryMin: every });
+  },
+  setIdleFlock: (on) => {
+    save("mf_idle_flock", on);
+    set({ idleFlock: on });
+  },
+  setIdleFlockAfterMin: (min) => {
+    const after = clampIdleMinutes(min);
+    save("mf_idle_after", after);
+    set({ idleFlockAfterMin: after });
   },
   setHintsEnabled: (on) => {
     save("mf_hints", on);

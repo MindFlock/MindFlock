@@ -155,8 +155,14 @@ async def list_open_prs() -> dict:
         # becomes a reason instead (and stays force-reviewable).
         prs.extend(await monitor._list_prs(repo, all_bases=True))
 
+    from backend.ticket_ingestion.models import pr_slug
+
     processed = load_processed_prs(_REPO_ROOT)
     now = datetime.now(timezone.utc)
+    # The dir PR workspaces are provisioned under. Optional by design: a config
+    # that doesn't resolve one costs the rows their reopen probe, which is a
+    # missing button — never a missing PR.
+    workspace_dir = str(getattr(cfg, "workspace_dir", "") or "")
     out = []
     for pr in sorted(prs, key=lambda p: p.created_at, reverse=True):
         reasons = skip_reasons(pr, processed, login, gh, now)
@@ -171,6 +177,15 @@ async def list_open_prs() -> dict:
                 "head_ref": pr.head_ref,
                 "created_at": pr.created_at.isoformat(),
                 "session": session_title(pr),
+                # Where a review of this PR keeps its clone. Derived exactly as
+                # ``PRProvisioner`` derives it (and pure, unlike provisioning
+                # itself), so the reopen probe in server.py can tell whether an
+                # earlier review's workspace is still on this machine.
+                "workspace_path": (
+                    str(Path(workspace_dir) / f"pr-{pr_slug(pr)}")
+                    if workspace_dir
+                    else ""
+                ),
                 "eligible": not reasons,
                 "reasons": reasons,
             }

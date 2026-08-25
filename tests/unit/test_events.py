@@ -102,6 +102,12 @@ def test_event_names_vocabulary_is_complete():
         "session.queue_changed",
         "session.usage_restored",
         "session.autopilot_changed",
+        "session.pushed",
+        "session.test_plan_ready",
+        "session.test_plan_failed",
+        "session.test_plan_checked",
+        "session.test_plan_gave_up",
+        "session.test_plan_due",
     }
 
 
@@ -348,6 +354,95 @@ def test_concurrent_poll_and_tick_emit_transition_once(_state_env):
         t.join()
     activity = [e for e in got if e["event"] == "session.activity_changed"]
     assert len(activity) == 1
+
+
+@pytest.mark.parametrize("state", ["idle", "clarify", "limit"])
+def test_activity_flicker_emits_nothing(_state_env, monkeypatch, state):
+    # One tick misreads a busy pane as idle/clarify/limit; the next reads
+    # working again. The settle window must swallow the whole excursion —
+    # this is the "notifications over-trigger on a flicker" fix.
+    server, bus = _state_env
+    monkeypatch.setattr(server, "_ACTIVITY_SETTLE_SECONDS", 60.0)
+    server._emit_state_changes("f1", "running", "working", "agent")  # seed
+    got = []
+    bus.subscribe(got.append)
+    server._emit_state_changes("f1", "running", state, "agent")  # flicker in…
+    server._emit_state_changes("f1", "running", "working", "agent")  # …and out
+    assert [e for e in got if e["event"] == "session.activity_changed"] == []
+
+
+def test_activity_settles_then_emits_once(_state_env, monkeypatch):
+    # A reading that persists past the settle window emits exactly one
+    # transition, carrying the last CONFIRMED old value.
+    server, bus = _state_env
+    # 0.0 keeps the two-sighting semantics without sleeping: the first
+    # sighting parks the candidate, the second (age >= 0) settles it.
+    monkeypatch.setattr(server, "_ACTIVITY_SETTLE_SECONDS", 0.0)
+    server._emit_state_changes("f2", "running", "working", "agent")  # seed
+    got = []
+    bus.subscribe(got.append)
+    server._emit_state_changes("f2", "running", "idle", "agent")  # parks
+    assert [e for e in got if e["event"] == "session.activity_changed"] == []
+    server._emit_state_changes("f2", "running", "idle", "agent")  # settles
+    acts = [e for e in got if e["event"] == "session.activity_changed"]
+    assert len(acts) == 1
+    assert acts[0]["old"] == "working" and acts[0]["new"] == "idle"
+    server._emit_state_changes("f2", "running", "idle", "agent")  # no repeat
+    assert len([e for e in got if e["event"] == "session.activity_changed"]) == 1
+
+
+def test_activity_leaving_settled_state_is_instant(_state_env, monkeypatch):
+    # Only transitions INTO the flicker-prone states are held; the agent
+    # starting to work again announces immediately.
+    server, bus = _state_env
+    monkeypatch.setattr(server, "_ACTIVITY_SETTLE_SECONDS", 0.0)
+    server._emit_state_changes("f3", "running", "working", "agent")  # seed
+    server._emit_state_changes("f3", "running", "idle", "agent")
+    server._emit_state_changes("f3", "running", "idle", "agent")  # settled idle
+    got = []
+    bus.subscribe(got.append)
+    server._emit_state_changes("f3", "running", "working", "agent")
+    acts = [e for e in got if e["event"] == "session.activity_changed"]
+    assert len(acts) == 1
+    assert acts[0]["old"] == "idle" and acts[0]["new"] == "working"
+
+
+def test_activity_candidate_switch_restarts_settle(_state_env, monkeypatch):
+    # working -> (pending idle) -> clarify: the clarify candidate replaces the
+    # idle one and starts its own window — the abandoned idle never emits.
+    server, bus = _state_env
+    monkeypatch.setattr(server, "_ACTIVITY_SETTLE_SECONDS", 0.0)
+    server._emit_state_changes("f4", "running", "working", "agent")  # seed
+    got = []
+    bus.subscribe(got.append)
+    server._emit_state_changes("f4", "running", "idle", "agent")  # parks idle
+    server._emit_state_changes("f4", "running", "clarify", "agent")  # replaces
+    assert [e for e in got if e["event"] == "session.activity_changed"] == []
+    server._emit_state_changes("f4", "running", "clarify", "agent")  # settles
+    acts = [e for e in got if e["event"] == "session.activity_changed"]
+    assert len(acts) == 1
+    assert acts[0]["old"] == "working" and acts[0]["new"] == "clarify"
+
+
+def test_boot_quiet_window_swallows_state_events(_state_env, monkeypatch):
+    # Inside the post-launch quiet window nothing announces — the boot burst
+    # ("here is the standing state of every session") is exactly what this
+    # kills — but the snapshot still tracks the truth underneath.
+    server, bus = _state_env
+    monkeypatch.setattr(server, "_BOOT_QUIET_SECONDS", 60.0)
+    monkeypatch.setattr(server, "_BOOT_MONO", time.monotonic())
+    got = []
+    bus.subscribe(got.append)
+    server._seed_event_snapshot("b1")
+    server._emit_state_changes("b1", "running", "working", "agent")
+    assert got == []
+    # Window over: the NEXT transition announces, diffed against the state
+    # recorded (silently) during the window — old is "working", not the seed.
+    monkeypatch.setattr(server, "_BOOT_QUIET_SECONDS", 0.0)
+    server._emit_state_changes("b1", "running", "offline", "agent")
+    acts = [e for e in got if e["event"] == "session.activity_changed"]
+    assert len(acts) == 1
+    assert acts[0]["old"] == "working" and acts[0]["new"] == "offline"
 
 
 def test_events_ws_tick_streams_changes_without_http_poll(monkeypatch, tmp_path):

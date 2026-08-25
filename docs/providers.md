@@ -203,6 +203,10 @@ args = ["--dangerously-skip-permissions"] # saved flags, appended on every start
 resume_flag = "--continue"       # omit if the CLI can't resume
 skip_perms_flag = "--yolo"       # appended when the session skips permissions
 resume_fallback = true           # emit "<cmd> --continue || <cmd>"
+effort_args = ["--brain", "{level}"]      # optional: reasoning-effort flag
+effort_levels = ["low", "high"]           # the level names it accepts, cheapest first
+effort_ultra_level = "galaxybrain"        # optional: flag value for the top rung
+effort_keyword = "megathink"              # ...or a prompt keyword, when it has no flag
 
 [exit]
 natural_codes = [0, 130]         # clean-quit codes (no auto-resume)
@@ -228,6 +232,41 @@ the marker mechanism above: `hooks_file` names the repo-local hooks config
 event to the state it records (`working`/`idle`/`clarify`). An empty/omitted
 `hooks_file` means pane-inspection only (unchanged behaviour); the `[classify]`
 pane patterns remain as a fallback for CLI builds without hooks.
+
+### Reasoning effort (`EffortSpec`, `providers/effort.py`)
+
+Every modern coding CLI can be told to think harder, and no two spell it the
+same way — `claude --effort xhigh`, `codex -c model_reasoning_effort=high`,
+`agy --effort high` — while aider, goose, cline and opencode cannot do it at
+all. So MindFlock offers **one neutral ladder** and each provider translates:
+
+| Rung | `low` | `medium` | `high` | `xhigh` | `max` | `ultra` |
+|---|---|---|---|---|---|---|
+| claude | ✓ | ✓ | ✓ | ✓ | ✓ | `--effort ultracode` |
+| codex | ✓ | ✓ | ✓ | ✓ | → `xhigh` | → `xhigh` |
+| antigravity | ✓ | ✓ | ✓ | → `high` | → `high` | → `high` |
+| aider / goose / cline / opencode | — | — | — | — | — | — |
+
+Two rules make this safe. A rung **above** a CLI's ceiling *clamps* to its top
+rung instead of being forwarded: claude warns and silently runs at its default
+for an unknown level, and codex forwards the string to the API, which rejects it
+— so "as hard as this CLI goes" is the only useful reading. And `ultra` is
+whatever that CLI calls its beyond-the-ladder mode, not a sixth rung: Claude Code
+takes `ultracode` on the same `--effort` flag (xhigh effort plus standing
+multi-agent orchestration — note it is *beside* `max`, not above it), so the top
+rung asks for it by name and holds for the whole session. A CLI that recognises
+such a mode only as a word in the prompt gets that **keyword** appended to the
+seed prompt after a rule instead; it is one or the other, never both.
+
+A CLI that cannot do it says so rather than pretending: the plan carries a note
+("aider has no effort setting — started at its own default"), `/api/providers`
+publishes each CLI's real rungs so the picker can disable the control, and
+`codex`'s `minimal` is deliberately off the ladder (the API refuses it while
+codex's default web_search tool is on).
+
+Requests come from the per-item **Effort** picker on the Intake work rows; the
+resolved flags become the session's launch args, so a relaunch or a
+reboot-resume keeps the effort.
 
 ### Launch args vs. `skip_perms_flag`
 

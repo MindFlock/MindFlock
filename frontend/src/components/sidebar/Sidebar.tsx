@@ -21,6 +21,7 @@ import { FooterCustomize } from "./FooterCustomize";
 import { matchesFilter, orderedInstances, SEARCH_MIN } from "./ordering";
 import { computeVisible } from "../grid/layout";
 import { useDoctorWarn } from "../dialogs/SetupDialog";
+import { isVerifySession } from "../dialogs/verify";
 import { Hint } from "../onboarding/Hint";
 
 interface Props {
@@ -45,9 +46,19 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // owns its children.
   const addonBarsRef = useRef<HTMLDivElement | null>(null);
 
+  // Sessions the rail is FOR: the user's work. A verify run is a real session
+  // (it needs a worktree and an agent that can run commands) but it is not work
+  // — it is a window you open to watch for two minutes and close again, like
+  // the assistant. Listed here it sat among the branches someone is actually
+  // building, accumulated, and made a flock of four look like a flock of eight.
+  //
+  // Only the RAIL filters. `computeVisible` below still gets the full list,
+  // which is what gives a verify run its pane in the grid; the Verify dialog
+  // offers to open or end it, so an unlisted session is never stranded.
+  const listed = useMemo(() => instances.filter((i) => !isVerifySession(i.title)), [instances]);
   const { rows: allRows } = useMemo(
-    () => orderedInstances(instances, ui.order),
-    [instances, ui.order]
+    () => orderedInstances(listed, ui.order),
+    [listed, ui.order]
   );
   const filtered = useMemo(
     () => allRows.filter((i) => matchesFilter(i, ui.filter, ui.aliases)),
@@ -168,13 +179,17 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     });
 
   const cap = viewCap(ui.viewMode);
-  const shownCount = instances.filter((i) => !ui.hidden.has(i.title)).length;
+  // Counted off `listed`, not `instances`: the footer says how many sessions
+  // you have, and a verify run the rail deliberately does not show must not be
+  // one of them — "6 sessions" over a list of four is the bug the filter above
+  // exists to prevent, moved down a div.
+  const shownCount = listed.filter((i) => !ui.hidden.has(i.title)).length;
   const countHead =
     isFinite(cap) && shownCount > cap
       ? `${cap} of ${shownCount} shown`
-      : `${instances.length} session${instances.length === 1 ? "" : "s"}`;
+      : `${listed.length} session${listed.length === 1 ? "" : "s"}`;
 
-  const searchVisible = instances.length >= SEARCH_MIN || !!ui.filter;
+  const searchVisible = listed.length >= SEARCH_MIN || !!ui.filter;
 
   return (
     <aside id="sidebar">

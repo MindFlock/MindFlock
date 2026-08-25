@@ -108,6 +108,42 @@ class LauncherSpec:
     command: str = ""
 
 
+@dataclass(frozen=True)
+class EffortSpec:
+    """How ONE CLI spells "think harder about this".
+
+    Every coding CLI that exposes reasoning effort spells it differently — and
+    names the rungs differently too — so MindFlock keeps a single neutral ladder
+    (:mod:`backend.providers.effort`) and asks each provider to translate:
+
+    * ``args`` — argv template tokens with a ``{level}`` placeholder, appended to
+      the launch command. Claude: ``("--effort", "{level}")``; codex:
+      ``("-c", "model_reasoning_effort={level}")``; antigravity's ``agy``:
+      ``("--effort", "{level}")``. Empty = this CLI has no effort flag, so a
+      requested level adds nothing (the launch is exactly what it is today).
+    * ``levels`` — the level names THIS CLI accepts, ordered cheapest-first. Only
+      these are ever passed to it: a request above the CLI's ceiling clamps down
+      to its top rung rather than handing it a value it would reject (claude
+      warns and silently uses its default; codex forwards the string to the API,
+      which 400s).
+    * ``ultra_level`` — a level name of its own for the top ``ultra`` rung, passed
+      through ``args`` like any other level even though it is NOT in ``levels``
+      (Claude Code: ``--effort ultracode``, which is xhigh effort plus standing
+      multi-agent orchestration, i.e. a different mode rather than a higher rung).
+      Empty = ``ultra`` clamps to the CLI's highest ordinary level.
+    * ``prompt_keyword`` — a keyword the CLI recognises IN THE PROMPT ITSELF for
+      the top ``ultra`` rung, appended to the seed prompt. The fallback for a CLI
+      that has such a keyword but no flag to carry it; when ``ultra_level`` is set
+      the flag says it once, for the whole session, and the keyword is not added.
+      Empty = the top rung is just the CLI's highest level.
+    """
+
+    args: Sequence[str] = ()
+    levels: Sequence[str] = ()
+    ultra_level: str = ""
+    prompt_keyword: str = ""
+
+
 def seed_prompt_expr(session_name: str, prompt: str) -> str:
     """A shell expression that expands to ``prompt`` as ONE argument, or ``""``.
 
@@ -236,6 +272,15 @@ class BaseProvider:
         return LauncherSpec(natural_codes=_NATURAL_EXIT_CODES)
 
     # --- exit / resume policy --------------------------------------------- #
+    def effort_spec(self) -> EffortSpec:
+        """How this CLI spells reasoning effort. Default: it doesn't.
+
+        An empty spec means a requested effort adds nothing to the launch — the
+        honest answer for a CLI with no such setting (aider, goose, cline,
+        opencode and any custom program), and the reason the neutral ladder in
+        :mod:`backend.providers.effort` reports what it actually applied."""
+        return EffortSpec()
+
     def is_natural_exit(self, code) -> bool:
         """True when the agent ended the way the user asked (clean quit / Ctrl-C)
         — i.e. restart fresh rather than ``--continue`` resume."""

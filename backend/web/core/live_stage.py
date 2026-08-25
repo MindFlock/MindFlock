@@ -48,6 +48,15 @@ def _server():
     return server
 
 
+def _events():
+    """The event bus module, imported lazily for the same reason as
+    :func:`_server` — this module is reachable from the server's import graph,
+    and a top-level import here is how that graph acquires a cycle."""
+    from backend.web.core import events
+
+    return events
+
+
 # Poll the cheap signature 4x/s while an action is settling, then back off: a
 # commit whose hooks run for minutes does not need sub-second resolution for its
 # whole life, only around the moment it finishes.
@@ -127,6 +136,11 @@ def watch(title: str, wt: str, reason: str, seconds: float = _DEFAULT_SECONDS) -
             "settle_since": None,
             "origin_at": 0.0,
             "origin_sha": None,
+            # One-shot latch for the "session.pushed" announcement, declared
+            # here with every other key so the record shape stays readable in
+            # one place. Re-watching a live record keeps the latch set, which is
+            # what makes the announcement at-most-once per watcher.
+            "pushed_emitted": False,
             "task": None,
         }
         # Create the task FIRST: a record without one is a landmine for every
@@ -211,6 +225,53 @@ def _satisfied(rec: dict, sig: tuple) -> bool:
     return False
 
 
+def _announce_push(title: str, rec: dict, sig: tuple) -> None:
+    """Emit ``session.pushed`` once, at the instant a push reached origin.
+
+    THIS IS THE ONLY PLACE the process learns that a push actually LANDED.
+    Everywhere else knows only that one was *asked for*: ``POST /push-branch``
+    types a shell one-liner into the session's tmux and returns with no exit
+    code, and the stage ladder's "pushed" rung is recomputed from a snapshot —
+    it falls off again the moment the tree goes dirty, so it can neither name
+    the sha that landed nor say it exactly once. Here the push watcher has just
+    compared the remote branch head against the local one and found them equal;
+    that comparison IS the fact, and this is the edge it happens on.
+
+    Runs in a worker thread (``_current_branch`` shells out to git, and this
+    module's whole discipline is that nothing expensive rides the event loop).
+
+    Guarded twice over, because a freshness nicety must never be able to hurt
+    an action that already succeeded: a flag on the watcher record keeps it to
+    at most one emit per watcher — ``watch()`` is idempotent per title, so a
+    session that pushes twice inside one window shares this record and must not
+    re-announce the first sha — and the whole body is wrapped, so a subscriber
+    or user hook blowing up cannot escape into ``_loop``.
+    """
+    if rec["reason"] != "push" or rec.get("pushed_emitted"):
+        return
+    try:
+        # Set the flag BEFORE emitting: "at most once" is the guarantee that
+        # matters here (the consumer creates a test plan), so a failed emit must
+        # not be retried on a later tick of the same watcher.
+        rec["pushed_emitted"] = True
+        # sig is _signature's tuple: (lock_live, status, head, dirty, origin).
+        # The head is the sha we just proved equal to origin's, so it is the one
+        # that landed — not a fresh rev-parse, which could already have moved.
+        head = sig[2] if len(sig) > 2 else None
+        branch = _server()._current_branch(rec["wt"])
+        _events().BUS.emit(
+            "session.pushed",
+            session=title,
+            data={
+                "branch": branch or "",
+                "sha": head or "",
+                "wt": rec["wt"],
+            },
+        )
+    except Exception:  # noqa: BLE001 — the watcher must never surface an error
+        pass
+
+
 async def _loop(title: str, rec: dict) -> None:
     """Watch one session until its reason is met or its deadline passes."""
     started = time.monotonic()
@@ -232,6 +293,10 @@ async def _loop(title: str, rec: dict) -> None:
                 except Exception:  # noqa: BLE001
                     pass
             if sig is not None and _satisfied(rec, sig):
+                # The watcher is about to exit, and for a push this is the last
+                # moment anything holds the evidence that the sha reached
+                # origin — announce it before returning, not after.
+                await asyncio.to_thread(_announce_push, title, rec, sig)
                 return
             elapsed = now - started
             await asyncio.sleep(_POLL if elapsed < _BACKOFF_AFTER_S else _BACKOFF_POLL)

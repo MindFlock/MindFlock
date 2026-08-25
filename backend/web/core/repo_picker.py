@@ -8,6 +8,12 @@ few is the user most likely to mean? Repos their recent sessions used (most
 recent first), the repo the server itself was launched from, then a SHALLOW
 sweep of the handful of places people keep code.
 
+That sweep answers "which repo did you mean?" but not "where is the one I am
+thinking of?": it is depth-1, so a repo three levels down is invisible to it and
+the user is back to typing a full path or clicking through Browse.
+:func:`search_repos` is the answer to that second question — the same entries,
+found by NAME with a bounded depth-3 walk.
+
 Deliberately pure — no FastAPI, no engine, no state imports — so the CLI's init
 wizard (which has no server to ask) can offer the same list, and so the ranking
 is testable without a running app. The caller supplies the "recent" paths in the
@@ -23,6 +29,8 @@ an error toast in front of someone who is merely trying to start a session.
 from __future__ import annotations
 
 import os
+import time
+from collections import deque
 from typing import Iterable, Optional
 
 from backend.web.core.git_ops import _git_has_commits, _is_git_repo
@@ -56,6 +64,36 @@ _SKIP_NAMES = frozenset({"node_modules", "venv", ".venv", "__pycache__", "Librar
 _MAX_PER_ROOT = 60
 _MAX_SCANNED = 400
 
+# Bounds for the by-name SEARCH below, which is a different job from the sweep
+# above and so needs different numbers. The sweep runs unasked on every dialog
+# open and only has to surface a handful of obvious repos, which is why 400 names
+# is plenty. A search runs once, because the user asked for it, and has to reach
+# depth 3 — where the directory count multiplies — or it would find exactly what
+# the depth-1 sweep already found and be pointless. Hence a bigger cap AND a
+# wall-clock deadline beside it: a count bounds WORK, not TIME, and three thousand
+# stats are milliseconds on a warm SSD but half a minute on a cold NFS mount or a
+# spun-down external drive. Whichever bound trips first ends the walk and the
+# answer is flagged ``truncated``, so the dialog can say "there may be more"
+# instead of implying the folder isn't there.
+#
+# The cap counts DIRECTORIES EXAMINED, and the word directories is load-bearing:
+# it was once charged per name a listing returned, files included, so a Downloads
+# folder holding three thousand loose files spent the whole allowance without the
+# walk descending anywhere — and because a tripped budget ends the walk, the repo
+# already queued two cheap levels away came back as "nothing found". Files are
+# never walked; they must not be able to end a walk either.
+_MAX_SEARCH_SCANNED = 3000
+_SEARCH_DEADLINE_SECONDS = 1.5
+# Depth 3 counted from each scan root: ~/code/acme/backend is found, and the
+# fourth level down is a Browse click. The depth-1 limit of the sweep is exactly
+# what makes nested repos invisible, and undoing that is the point of the search.
+_SEARCH_MAX_DEPTH = 3
+# Two characters before we walk anything. One letter matches a large fraction of
+# any real home directory, so the "results" would be a random sample of the
+# machine delivered at the cost of the full scan budget — and the user is almost
+# certainly still typing.
+_SEARCH_MIN_QUERY = 2
+
 
 def _has_git_dir(path: str) -> bool:
     """Cheap negative filter: does ``path`` carry a ``.git`` entry at all?
@@ -68,6 +106,44 @@ def _has_git_dir(path: str) -> bool:
     price of a stat and the real check saved for the few candidates left.
     """
     return os.path.exists(os.path.join(path, ".git"))
+
+
+def _walkable_child_names(path: str) -> list:
+    """The subdirectory names under ``path`` a search may descend into, sorted.
+
+    :func:`os.scandir` rather than :func:`os.listdir` because the walk has to
+    tell a directory from a file BEFORE the name is queued, and scandir answers
+    that from the directory entry the kernel already returned, where listdir
+    would owe a stat per name. That distinction is the whole difference between a
+    search budget spent on candidate directories and one spent on the three
+    thousand loose files in somebody's Downloads folder — see the note beside
+    ``_MAX_SEARCH_SCANNED``.
+
+    Names that are never walked are dropped here, before the caller can charge
+    for them, for the reason spelled out in :func:`_nearby_candidates`: dotted
+    entries sort first and every real home directory has dozens of them.
+
+    Per the module contract this cannot raise. An unreadable directory answers
+    with an empty list, and a listing that dies part-way (a mount going away
+    under a long scandir) keeps whatever it had already read.
+    """
+    names: list = []
+    try:
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if entry.name.startswith(".") or entry.name in _SKIP_NAMES:
+                    continue
+                try:
+                    if entry.is_dir():
+                        names.append(entry.name)
+                except OSError:  # noqa: BLE001 — a dangling symlink is not a dir
+                    continue
+    except OSError:  # noqa: BLE001 — unreadable or vanished mid-walk: skip it
+        pass
+    # Sorted so the budgets truncate deterministically rather than at the mercy
+    # of directory order — the same reason _nearby_candidates sorts.
+    names.sort(key=str.lower)
+    return names
 
 
 def _entry(path: str, source: str, *, is_git: bool) -> dict:
@@ -190,6 +266,203 @@ def suggest_repos(
                 continue
             _add(full, "nearby", is_git=True)
     return out
+
+
+def _home_relative(path: str, home: str) -> str:
+    """``path`` with the ``home`` prefix removed, for matching and for display.
+
+    The weakest match tier tests the query against the folder's PATH, and it has
+    to be the home-RELATIVE path: every candidate this module ever produces sits
+    under the same ``/home/<user>`` (or ``/Users/<user>``) prefix, so a user whose
+    account is called ``code`` — or who keeps repos on a volume with a matching
+    name — would see the query match literally every folder on the machine. What
+    the user is searching within is not part of what they are searching for.
+    """
+    if home and path.startswith(home + os.sep):
+        return path[len(home) + 1 :]
+    return path
+
+
+def _search_rank(needle: str, name: str, rel_path: str) -> Optional[int]:
+    """How well one folder answers the query — lower is better, ``None`` misses.
+
+    ``needle`` is already lower-cased and stripped by the caller. The order
+    encodes what someone typing into a folder field means: they are naming a
+    folder, so the basename is the thing being searched and the path is only a
+    fallback for "I know it's under acme/ somewhere". Exact beats prefix beats
+    substring, and every basename hit beats a path hit, because ``api`` matching
+    the folder ``api`` is an answer while ``api`` matching ``.../rapid/build`` is
+    a coincidence the user has to read past.
+    """
+    low_name = name.lower()
+    if low_name == needle:
+        return 0
+    if low_name.startswith(needle):
+        return 1
+    if needle in low_name:
+        return 2
+    if needle in rel_path.lower():
+        return 3
+    return None
+
+
+def search_repos(query: str, home: str = "", limit: int = 20) -> dict:
+    """Find folders by NAME under ``home`` — the picker's "look it up" tier.
+
+    Returns ``{"matches": [<entry>], "truncated": bool}``, entries in the same
+    shape :func:`suggest_repos` produces (``source: "search"``). Both git repos
+    and plain folders come back: the folder field accepts either, and ``is_git``
+    is what lets the dialog say which one this is before the user commits to it.
+
+    This exists because the other two ways into the folder field both assume the
+    user already knows where the repo is. The suggestion list is a depth-1 sweep
+    (see :func:`_nearby_candidates` for why it must stay that shallow) and so
+    cannot see ``~/code/acme/services/api``; :func:`check_repo` only answers about
+    a path already typed in full; Browse means clicking down a tree one level at
+    a time. Searching by name is the missing third thing, and the only one of the
+    three that costs a real walk — hence the budgets below, which are the whole
+    engineering content of this function.
+
+    The walk is breadth-first on purpose. When a budget trips mid-scan, a
+    depth-first walk has spent everything inside whichever subtree it entered
+    first (alphabetically ``~/code/aardvark``) and reports nothing about the rest
+    of the machine; breadth-first has covered every root shallowly, which is
+    where the answer usually is.
+
+    Nothing here raises, per the module contract: an unreadable directory, a
+    vanished symlink or a dead mount costs its own subtree and nothing more.
+    """
+    text = str(query or "").strip()
+    # Expanduser + normpath, deliberately NOT realpath: the picker offers paths
+    # the user recognises and will see again in the folder field, and resolving
+    # symlinks here would hand back the mount-point spelling of a folder they
+    # know by another name. Symlinks are resolved once, at the end, purely to
+    # avoid listing the same folder twice.
+    base = os.path.normpath(os.path.expanduser(home or "~"))
+    if len(text) < _SEARCH_MIN_QUERY or limit <= 0:
+        # Not an error — the user is mid-word. An empty result with
+        # ``truncated`` false is the honest answer: nothing was skipped because
+        # nothing was looked at.
+        return {"matches": [], "truncated": False}
+    needle = text.lower()
+
+    deadline = time.monotonic() + _SEARCH_DEADLINE_SECONDS
+    scanned = 0
+    truncated = False
+    # (rank, path length, lowered path, path, carries a .git entry)
+    hits: list = []
+    # ~/code is both a scan root and a child of ~, so without this the whole
+    # subtree is walked twice and pays for itself twice out of the budget.
+    visited: set = set()
+    roots = [base] + [os.path.join(base, name) for name in _SCAN_SUBDIRS]
+    queue: deque = deque((root, 0) for root in roots)
+
+    while queue:
+        # The clock is read HERE, once per popped directory, and not down beside
+        # the enqueue below. Every early exit from this loop — the directory is a
+        # repo, it sits at the depth limit, it vanished, it holds no walkable
+        # children — used to return to the top without the clock ever being read,
+        # so a queue full of sibling clones (a ~/code with five hundred of them)
+        # drained itself entirely PAST an expired deadline at two stats apiece.
+        # On the cold NFS mount the deadline exists for that is a minute of a
+        # dialog that looks hung, and ``truncated`` said nothing about it. A
+        # deadline that only fires on the one path that happens to reach it is
+        # not a deadline.
+        if time.monotonic() > deadline:
+            truncated = True
+            break
+        path, depth = queue.popleft()
+        if path in visited:
+            continue
+        visited.add(path)
+        if not os.path.isdir(path):
+            continue
+        # Charged per directory EXAMINED — the stat above plus the listing below
+        # are what this budget is paying for — and charged before either the
+        # ranking or the descent, so no shape of tree can spend work without
+        # spending budget. See ``_MAX_SEARCH_SCANNED`` for the accounting this
+        # replaced, which charged per listed name and let plain files end the
+        # walk.
+        scanned += 1
+        if scanned > _MAX_SEARCH_SCANNED:
+            truncated = True
+            break
+        is_repo = _has_git_dir(path)
+        if path != base:
+            # The home directory itself is never the answer to a name search (it
+            # is named after the user, not after their project), but a scan root
+            # such as ~/work or ~/code is a perfectly good hit.
+            rank = _search_rank(
+                needle, os.path.basename(path) or path, _home_relative(path, base)
+            )
+            if rank is not None:
+                hits.append((rank, len(path), path.lower(), path, is_repo))
+        if depth >= _SEARCH_MAX_DEPTH:
+            continue
+        nested_only = is_repo and path != base
+        # A repo's own source tree is not searchable ground: inside it live
+        # node_modules, vendor/, target/ and .venv-shaped trees with tens of
+        # thousands of directories that would eat the whole budget to produce
+        # matches nobody wants. Skipping it is the correct ANSWER and not merely
+        # the cheap one.
+        #
+        # But a repo's children are not ALWAYS its source tree. An umbrella
+        # directory that happens to be a git repo — a dotfiles repo rooted at a
+        # work folder, a meta-repo, anything with a committed README and a pile
+        # of sibling checkouts under it — holds other people's repos, and those
+        # are exactly what someone is searching for. Refusing to look cost this
+        # search every repo under such a parent: a real machine had its whole
+        # day's work in ~/Work (a repo) and a name search found none of it,
+        # while the shallower suggestion tier had never reached that deep either.
+        #
+        # So a repo is descended into ONE level and only nested REPOS are kept.
+        # That is one listing plus one cheap _has_git_dir per child — bounded by
+        # the same budget as everything else — and it cannot wander into a source
+        # tree, because a src/ or a node_modules/ is not a repo and is dropped
+        # right here.
+        #
+        # Home is exempt from the rule entirely: keeping dotfiles in a git repo
+        # rooted at ~ is common enough that honouring it there would end the
+        # search before it examined a single folder.
+        for name in _walkable_child_names(path):
+            child = os.path.join(path, name)
+            if nested_only and not _has_git_dir(child):
+                continue
+            # Only directories are queued, so the budget above only ever meets
+            # things that could really have been walked, and the queue cannot be
+            # inflated by a folder full of files into something the budget has to
+            # chew through one pop at a time.
+            queue.append((child, depth + 1))
+
+    # Exact basename first, then prefix, then substring, then path; ties go to
+    # the shortest path (the parent of two equally-named folders is the one the
+    # user more likely means) and then alphabetically, so the same tree always
+    # ranks the same way.
+    hits.sort(key=lambda hit: (hit[0], hit[1], hit[2]))
+
+    matches: list = []
+    seen_real: set = set()
+    for _rank, _length, _lowered, path, has_git in hits:
+        # Deduped by realpath like suggest_repos: a symlinked ~/code/foo and its
+        # target are one folder, and offering both invites the user to pick the
+        # one their tooling does not use. The reported path is the one we walked
+        # to, not the resolved one, because that is the path the user recognises
+        # and the one that reads relative to home in the dialog.
+        real = os.path.realpath(path)
+        if real in seen_real:
+            continue
+        seen_real.add(real)
+        if len(matches) >= limit:
+            # More genuine matches than the caller asked for. Same flag as a
+            # tripped budget: what the dialog needs to know is "this list is not
+            # everything", and the fix the user needs is the same one (type more).
+            truncated = True
+            break
+        # The authoritative (subprocess) git check runs only on the handful of
+        # folders that actually made the list — see _has_git_dir for why it
+        # cannot run on every folder the walk touched.
+        matches.append(_entry(path, "search", is_git=has_git and _is_git_repo(path)))
+    return {"matches": matches, "truncated": truncated}
 
 
 def check_repo(path: str) -> dict:

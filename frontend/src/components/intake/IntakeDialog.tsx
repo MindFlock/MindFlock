@@ -18,14 +18,21 @@
 
 import { useEffect, useState } from "react";
 import { useUi } from "../../state/store";
-import { prefetchIntakePanels, useConfig, usePanelQuery } from "../../state/queries";
+import {
+  prefetchIntakeMeta,
+  prefetchIntakePanels,
+  useConfig,
+  usePanelQuery,
+} from "../../state/queries";
 import { SettingsCtx, useSettingsModel } from "../settings/useSettings";
-import { countInBuckets, loadShownBuckets, visibleBuckets } from "./buckets";
+import { countInBuckets, loadMineOnly, loadShownBuckets, visibleBuckets } from "./buckets";
 import { TicketsTab } from "./TicketsTab";
 import { PullRequestsTab } from "./PullRequestsTab";
 import { IssuesTab } from "./IssuesTab";
+import { QueueTab } from "./QueueTab";
+import { collectQueued } from "./queue";
 
-export type IntakeTabKey = "tickets" | "prs" | "issues";
+export type IntakeTabKey = "tickets" | "prs" | "issues" | "autostart";
 
 export interface TabProps {
   gotoTab(key: IntakeTabKey): void;
@@ -64,7 +71,35 @@ const TABS: Array<{
     legacyId: "git-issues-block",
     el: (p) => <IssuesTab {...p} />,
   },
+  // Last, and not the landing tab: the three tabs before it are where you set a
+  // source up, and this one only has anything to say once one of them is
+  // working. Its badge carries the answer anyway, which is the point of the
+  // counts being on the strip.
+  //
+  // "Auto-start" rather than "Queue": a queue of what, and queued behind what?
+  // The rows are here precisely because the automations would take them on their
+  // own, and the label should say that — including when the switch is off, where
+  // the tab's job is to show exactly what would go the moment you turn it on.
+  { key: "autostart", label: "Auto-start", el: (p) => <QueueTab {...p} /> },
 ];
+
+/** The Auto-start tab's badge: how many rows the roll-up will show.
+ *
+ * Its own component because it needs all three panels, and because a hook call
+ * cannot be conditional on which tab we are counting. Shares `collectQueued`
+ * with the tab body, so the badge and the list can never disagree. */
+function AutoStartCount() {
+  const tickets = usePanelQuery<{ tickets?: unknown[]; stale?: boolean }>("tickets");
+  const prs = usePanelQuery<{ prs?: unknown[]; stale?: boolean }>("github-prs");
+  const issues = usePanelQuery<{ issues?: unknown[]; stale?: boolean }>("github-issues");
+  const n = collectQueued({
+    tickets: (tickets.data ?? null) as never,
+    prs: (prs.data ?? null) as never,
+    issues: (issues.data ?? null) as never,
+  }).length;
+  if (!n) return null;
+  return <span className="ik-tab-count">{n}</span>;
+}
 
 /** The count badge on a tab: how many rows you will find when you open it.
  *
@@ -73,10 +108,10 @@ const TABS: Array<{
  * bucket filter the panel does. Without that it counted every ticket the
  * provider ever assigned you, Completed and Won't-do included, and read `1221`
  * over a list of 52. */
-function TabCount({ tab }: { tab: IntakeTabKey }) {
+function TabCount({ tab }: { tab: Exclude<IntakeTabKey, "autostart"> }) {
   const key = tab === "tickets" ? "tickets" : tab === "prs" ? "github-prs" : "github-issues";
   const q = usePanelQuery<{
-    tickets?: Array<{ bucket?: string }>;
+    tickets?: Array<{ bucket?: string; mine?: boolean }>;
     prs?: unknown[];
     issues?: unknown[];
     buckets?: string[];
@@ -88,7 +123,8 @@ function TabCount({ tab }: { tab: IntakeTabKey }) {
     tab === "tickets"
       ? countInBuckets(
           q.data.tickets || [],
-          visibleBuckets(q.data.buckets || [], q.data.done_buckets || [], loadShownBuckets())
+          visibleBuckets(q.data.buckets || [], q.data.done_buckets || [], loadShownBuckets()),
+          loadMineOnly()
         )
       : (q.data.prs || q.data.issues || []).length;
   // No badge at all on zero: a "0" that turns into "12" a second later reads as
@@ -119,7 +155,9 @@ export function IntakeDialog() {
   // no ticketing source connected when the page loaded, then one gets
   // connected — plus a top-up for anything that went stale between warms.
   useEffect(() => {
-    if (open) prefetchIntakePanels();
+    if (!open) return;
+    prefetchIntakePanels();
+    prefetchIntakeMeta();
   }, [open]);
 
   useEffect(() => {
@@ -170,7 +208,11 @@ export function IntakeDialog() {
                 onClick={() => setTab(t.key)}
               >
                 {t.label}
-                <TabCount tab={t.key} />
+                {t.key === "autostart" ? (
+                  <AutoStartCount />
+                ) : (
+                  <TabCount tab={t.key as Exclude<IntakeTabKey, "autostart">} />
+                )}
               </button>
             ))}
           </nav>

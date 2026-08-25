@@ -170,6 +170,11 @@ Copy path · **Commit…** · **Push** · **Make PR** · **Merge to staging** ·
 **Open/focus Cursor** (row double-click does the same) · **Hide/Show window**
 (session keeps running) · **Pause/Resume** · **Delete + wipe worktree** (confirmed).
 
+A copy is filed **directly beneath the one it was copied from**, not at the
+bottom of the rail — the provisioning row lands there too, so it never appears
+at the end and then jumps. It stays put after that: the sidebar order is yours,
+and nothing but a drag moves a row again.
+
 ## Send a message / prompt queue (✉ per pane)
 
 Each session pane header has an **✉** button (a badge shows the pending-queue
@@ -184,7 +189,12 @@ count). It opens a popover with two ways to drive the agent:
   usage returns** after an outage (the drain reboots a session whose agent CLI
   exited on a usage limit). **Loop** re-queues each sent prompt so a single
   self-improving prompt ("keep improving the repo") cycles forever; **Auto-run**
-  toggles draining. Items reorder (↑/↓), edit (✎), delete, or **send now (▶)** —
+  toggles draining. Items reorder by dragging the **⋮⋮** handle, edit (✎),
+  insert a new prompt above/below any item (**+↑** / **+↓** open an inline
+  composer at that slot), delete, or **send now (▶)**. Dropping a `.csv` file
+  anywhere on the tab appends one prompt per row to the end of the queue
+  (quoted fields respected, an obvious header row skipped; any other text
+  file queues one prompt per line) —
   ▶ delivers that one queued item immediately, skipping the idle wait and any
   usage-limit hold; **Clear all** empties it.
 
@@ -214,6 +224,20 @@ rule rides on. Sessions with a queued prompt are left to the drain — its promp
 is the better thing to send — and the nudge obeys the drain's own
 send-once-then-wait rule, so a menu that doesn't clear gets a bounded retry
 rather than one every five seconds.
+
+**Running out looks exactly like finishing**, which is the trap under all of the
+above. A turn the weekly cap cuts short ends the way a completed one does — the
+CLI fires its Stop hook, the pane goes quiet — so the activity badge read `idle`,
+the watcher above (which selects on `limit`) never saw the session, and
+fast-track's usage-limit gate was never armed: it counted its 30-second settle
+over a half-finished session and committed, hooks and all. An `idle` reported by
+the CLI's own hook is now re-checked against the pane for a limit screen
+(throttled per session, since that path exists to avoid a capture on every poll),
+and before fast-track commits anything it confirms an idle agent against the
+usage meter — the pane may carry no banner at all. While a limit holds, the
+settle is dropped and has to be re-earned once the window reopens, and the step
+deadline stops running: a weekly window can be shut for days, and a run that
+waits it out correctly must not then be halted for "no progress".
 
 The command palette has **Send message…** and **Queue prompt…** for the focused
 session (keyboard-only via a prompt).
@@ -340,7 +364,11 @@ Authentication section. If the token leaks, regenerate it from Settings →
 - **Rename** — give a session a friendly display label (row menu → *Rename…*,
   or the palette). It's a client-side alias shown everywhere the title appears
   (italic, real title in the tooltip); the underlying session/tmux/worktree are
-  never renamed, so nothing can break.
+  never renamed, so nothing can break. **Notifications use the name you see**:
+  a desktop notification and an ntfy push both call a session by its rename, or
+  — for the ones nobody renamed — by the label the rail shows (`(tix)
+  add-dark-mode/sc-12345`), never by the machine slug the event carries. A push
+  about a window you cannot find in the rail is worse than no push.
 - **Attention** — sessions waiting on input badge the tab **title** (`● (n)`)
   *and* the **favicon** (a red dot), so a backgrounded tab is noticeable. The
   🔔 bell keeps the durable list.
@@ -475,6 +503,23 @@ entry (**Intake**, `Alt+I`, or the palette's Open Intake), dialog `#intake-dialo
 panel `#intake-panel`, built from
 `frontend/src/components/intake/{IntakeDialog,TicketsTab,PullRequestsTab,IssuesTab,RepoSources,kit}.tsx`.
 
+**Every work list has the same Ctrl+F filter.** Tickets, Pull requests, Issues
+and the auto-start roll-up all grow without bound — every open PR on every
+watched repo, every ticket in every workflow state — so each toolbar carries the
+box Recently closed and Verify already use, with the same rule: every
+whitespace-separated token has to appear somewhere in the row, so `sitecheck
+4217` and `feature coupon` narrow without anyone remembering the separator.
+Ctrl+F focuses it; Escape clears it before it closes the dialog. What each list
+searches is the row's own words plus the two things the row shows as *shape*
+rather than text — the state/branch it is grouped under, and whether auto
+ingestion has queued it, so `queued` narrows a repo to what is about to start on
+its own and `already handled` finds what it skipped. **Filtering happens before
+grouping**, so every heading's count describes what is under it and a repo or a
+workflow state with no match drops out instead of leaving an empty group behind.
+The one number that ignores the filter is the **+ Add bucket…** menu's per-state
+count, because that menu is a standing choice about which states this panel
+shows at all (`intake/search.ts` holds the four rules, one per list).
+
 **Tab strip with live counts** — **Tickets**, **Pull requests**, **Issues** (keys
 `tickets` | `prs` | `issues`), a horizontal strip rather than Settings' long left
 nav because the three are peers you flip between while reading. Each badge is the
@@ -511,14 +556,24 @@ credential.
   `/api/mindflock/status` + `start`/`stop` contract, query key and 4 s interval as
   the sidebar's Ticket Ingestion bar, so the two never disagree), one card per
   connected source (provider, optional label, Repo URL, its own **Agent CLI**,
-  ingest-state picker, credentials, **Test connection**, **Remove**), then
+  its **Thinking effort**, ingest-state picker, credentials, **Test connection**,
+  **Remove**), then
   **Assigned tickets** — the slowest of the three fan-outs (~3 s: a provider
   search per source plus a `git ls-remote` per repo). A source's **Agent CLI**
   lists `GET /api/providers` (so a provider you defined yourself is selectable
   too), its unset option names the app default rather than showing a blank, and
   the collapsed card always states which CLI the queue runs — the difference
   between a queue on a hosted CLI and one on a local model is worth seeing
-  without expanding. Unset falls back to `[mindflock].agent`, then the app
+  without expanding. **Thinking effort** sits directly under it, because the two
+  are one decision: a rung means different things on different CLIs (each spells
+  it its own way and clamps its own ceiling), so the picker names *that* CLI's
+  ceiling and is disabled outright for a CLI with no effort control. It applies
+  to every ticket from the queue — ingested automatically or started by hand —
+  and an individual ticket can still override it on its row, where the empty
+  choice now reads **Configured (…)** naming the queue's rung. Unset means
+  whatever the CLI does on its own; there is deliberately no flock-wide default,
+  because how hard to think is a property of the work rather than of the
+  installation. Unset **Agent CLI** falls back to `[mindflock].agent`, then the app
   default (see
   [ingestion-pipeline.md](ingestion-pipeline.md#which-agent-cli-a-ticket-runs)).
 - **Pull requests** — **Automated review** (absent = on once repos exist), the
@@ -630,6 +685,31 @@ unknown name is a **400** rather than a silent fall back to the default
 (`_start_agent_override` in `server.py` — a typo that quietly ran the wrong CLI
 is worse than a rejected request).
 
+Beside it sit the other two per-launch pickers, on the same line and with the
+same "just this item" lifetime: **how far** to carry it (the autopilot depth —
+an individual item may choose *Merge*, which a source default may not) and **how
+hard to think** about it. The effort ladder is neutral — Low, Medium, High, Extra
+high, Max, Ultra — and the server translates the rung into whichever CLI the row
+launches, so the picker labels what will actually happen: a rung above that CLI's
+ceiling reads "Max (→ Extra high)", the top rung is named the way the CLI names
+it ("Ultra (ultracode)" on Claude Code, which starts the session with `--effort
+ultracode` rather than at Max), and a CLI with no effort setting disables the control
+outright ("No effort control (aider)") rather than leaving one that quietly does
+nothing. The rungs come from `GET /api/providers` (`effort.levels`); the
+translation table is in [providers.md](providers.md). All three pickers share one
+line-and-a-half above a button that hugs its label: they used to stretch the
+primary button to their own width, which turned **Begin work** into a bar.
+
+**Failures pop up bottom-right**, as a card with a red rule — the corner the
+connection-lost card already owns (`lib/errorPop.ts`), not the 1.4s bottom-centre
+confirmation strip `toast()` uses. A refused start answers with a paragraph of git
+output whose remedy is its last sentence ("… is already checked out at `<path>`.
+Kill that session first"), and it has to survive long enough to be read: the cards
+stack, newest nearest the corner, and stay until dismissed. The same card is where
+a *recorded* failure reason goes — the chip shows the front of the sentence and
+opens the rest on click, instead of wrapping three lines of git output into the
+row and reformatting the list around it.
+
 Two related fixes live behind this surface: a ticketing source's **Agent CLI is
 re-read from disk when a ticket is stamped** (`source_agent_now`), so switching
 it in the UI applies to the next ticket rather than the next pipeline restart —
@@ -674,6 +754,380 @@ Two consequences worth knowing:
   configured yet will have its `Could not list …` error ready the moment you
   first open that tab.
 
+## Verify
+
+**What shipped, and does it work?** Intake is the front of the pipeline; Verify
+is the back of it. The pipeline's last honest checkpoint is "the PR merged", and
+merged is not verified — nobody has opened the thing and looked at it. So work
+that reaches the branch you actually ship from comes back here as a **checklist**,
+an agent works the steps it can from a shell, and whatever needs a pair of eyes
+is handed to you as a short list. Top-bar entry **Verify** (`Alt+V`), dialog
+`#verify-dialog` / panel `#verify-panel`, from
+`frontend/src/components/dialogs/{VerifyDialog.tsx,verify.ts}`; the sidebar bar
+is `frontend/src/components/sidebar/VerifyBar.tsx` and the store is
+`backend/web/core/test_plans.py`.
+
+**One noun, one verb.** The feature is **Verify**, the artifact is a
+**checklist**, the act is to **check**. "Test plan" is the name in the API paths,
+the store file and the settings keys — it never appears on screen, because to a
+developer it reads as pytest.
+
+**The chain, in order.** Nothing appears here until three things have happened,
+and every "why is nothing showing up?" is a question about which one hasn't:
+
+1. **Track a repository** (Verify → **Sources**, or the repo's own committed
+   `.mindflock.toml`). Membership *is* the opt-in; there is
+   no second on/off per repo. Writing a checklist costs a real model call, so
+   nothing happens in a repo nobody named.
+2. **Push a session branch in it.** The **first** push of each session branch
+   writes a checklist — from that branch's diff, and from what the session itself
+   was doing. It sits in **Not shipped yet** while the branch is reviewed and
+   merged. A later push always records the newest commit, and — *only while
+   nobody has answered anything yet* — rewrites the checklist from the branch's
+   whole diff at that commit, at most **three** times and never within five
+   minutes of the last one. The moment you answer one step the checklist is yours
+   and nothing rewrites it under you; **Rewrite the checklist** is the button for
+   that, and it always works from the newest pushed commit.
+
+   It rewrites rather than appending, deliberately: a later commit that reverses
+   or renames what an earlier one added would otherwise leave a step that *must*
+   fail against correct shipped code, and nothing could retract it.
+3. **That commit reaches the live branch, and the deploy lands.** A background
+   pass asks `origin` whether each waiting checklist's sha is an ancestor of the
+   live branch. **Merged is not deployed**, so that starts a clock rather than
+   handing you the checklist: the row reads *"Merged 4m ago — waiting for it to
+   deploy"* until the repo's deploy window has passed, and only then does it move
+   into **Not checked yet**, raise the badge and (if ntfy is configured) push to
+   your phone.
+
+   The window is **Deploy takes (minutes)** on the repo's Sources card, inheriting
+   the flock-wide `repository.deploy_delay_minutes`, which defaults to **5**. Set
+   it to `0` where merging *is* shipping. It exists because checking too early is
+   not merely early — you see the behaviour the change replaced and record a
+   **failure against correct code**, which is the one outcome this surface cannot
+   survive, so the wait deliberately errs long. When a deploy lands sooner than
+   usual, **⋯ → It's deployed — check it now** skips the rest of it.
+
+**When the wait cannot end, the row says so.** Two things used to make a
+checklist wait for ever in silence, and both looked identical to "not merged
+yet":
+
+- **origin has no such branch.** `git fetch origin <branch>` only writes
+  `refs/remotes/origin/<branch>` when the remote's refspec covers it — and
+  MindFlock's own provisioned base clones are cloned narrow, so `origin/main`
+  never existed locally and the ancestry test failed against a ref that could not
+  be resolved. The fetch now names its destination explicitly, and a branch
+  origin genuinely does not have is reported on the row instead of waited on.
+- **the PR merged somewhere else.** A repo that PRs into `staging` but ships from
+  `main` has work that is genuinely merged and genuinely not live. The row now
+  reads *"Its pull request merged into staging, not main"* and points at the
+  repo's card.
+
+Both clear themselves the moment the branch shows up. Neither is an error — the
+row shows them where you are already looking, under the waiting sentence, because
+they are yours to fix rather than something that went wrong.
+
+**Every row says where the work actually is.** Beside the branch and the sha, a
+card carries a chip reading **merged into `staging`** — the branch on `origin`
+this work most recently reached, tinted when that branch is the one the repo
+ships from. It is the fact neither of the other two names: `branch` is where the
+work was *pushed* and the live branch is what the checklist is *waiting for*, so
+in a repo that ships through a `staging` or `develop` step a change spends most
+of its life merged somewhere the row could not say. Hovering gives when it landed
+and the trail it took (`staging` on the day it merged, `main` on the day somebody
+promoted it). No chip means it has reached nothing but the branch it was pushed
+to, which is the ordinary state of a checklist whose PR is still open.
+
+The answer comes from ancestry — every `origin` branch that contains the commit,
+ranked by which one it reached most recently, with branches that arrived in the
+*same merge* folded together (every branch cut from `main` afterwards contains
+that merge, and listing them all would answer with four names when one thing
+happened). Where a **squash merge** left no ancestry to find, the branch its pull
+request merged into is used instead. It refreshes every few minutes per plan on
+one shared fetch per repository, and stops being asked once the work has reached
+the branch its repo ships from.
+
+**A checklist nobody has answered follows its repo's live branch**, so
+re-pointing a repo from `staging` to `main` re-aims every unanswered checklist
+within a minute — including forgetting a merge it had already seen into the old
+branch, and pulling one that had gone **due** against the old branch back to
+waiting (its due-ness was a fact about a branch you just stopped shipping
+from). Once you have answered a step, or a run is in flight or finished, it
+keeps the branch its answers were measured against, and the row says so.
+Answers you clicked and clicked straight back off don't count as answers.
+
+**What "live" means is per repo**, resolved first-non-empty:
+`repository.verify_repo_settings[owner/name].live_branch` → `repository.live_branch`
+→ `pr_base_branch` → `base_branch` → `main`. The dialog header names the flock-wide
+answer and adds *· some repos differ* when any tracked repo overrides it; each row
+carries the branch it was actually measured against. A checkout with **no GitHub
+origin** cannot be named on the list (there is no slug to type) — its only opt-in
+is its own committed `.mindflock.toml`:
+
+```toml
+[workspace]
+verify_on_push = true
+```
+
+That is a team-wide, committed decision, it is OR'd with the tracked-repo list,
+and neither half can switch the other off.
+
+**The panel is Intake's anatomy, in Intake's order**: an intro line, the master
+switch, **Sources**, the work list, then a fold for what you touch once — the
+same shape as Intake → Pull requests / Issues, using the same classes, because
+it is the fourth surface of that kind. The master switch
+(`repository.verify_enabled`) pauses the **automatic** half only: no checklist
+written on a push, and nothing new moved into the list. Repositories, checklists
+and every recorded answer are kept, and writing one by hand, running one and
+answering a step all keep working — exactly as a forced PR review still runs with
+automated review switched off. **Sources** is the repository list; **Write a
+checklist by hand** is the fold under the work list, for asking for exactly one
+checklist by name with nothing configured.
+
+**It offers sessions you have already CLOSED**, labelled `(closed)`, alongside
+the open ones. A checklist outlives its session everywhere else in this feature —
+the plan stores the main repo rather than the worktree, precisely so it can be
+run and rewritten months later — and creation was the one half that still
+demanded a live window, which made the button useless at the moment people
+actually reach for it: after the work is finished and the window has been put
+away. The branch has to still exist somewhere in the repo (locally or on
+`origin`); merged-and-deleted says so rather than writing a checklist about
+nothing. The one thing a closed session cannot supply is the **intent** — the
+ticket text lives in the session's seed prompt and the transcript went with the
+reclaimed worktree — so a checklist written this way is diff-only, and the
+rewrite box is how you aim it.
+
+**Each row is headed by what shipped, not by a branch name.** The model writes a
+one-sentence summary alongside the steps — *"Search results can be filtered by
+owner"* — and it sits under the session's title. A checklist coming due three
+weeks later used to be `sc-1234-fix-filters` over a list of imperatives, leaving
+the reader to reconstruct the change from the steps.
+
+**Five groups, most urgent first.** **Not checked yet** (shipped, nobody has
+finished checking it — this is the badge, by construction), **Steps failed**,
+**Not shipped yet**, **Checked**, **Couldn't be written**. Each row carries one
+plain-English sentence saying whose turn it is and one button that does what the
+sentence says; everything rare is in the row's ⋯ menu.
+
+**Finding one, and acting on several.** The list grows by one checklist per
+session branch per repo, so it has Recently-closed's two controls, reused rather
+than re-cut: a **Ctrl+F filter** (every whitespace-separated token has to appear
+somewhere in the row — `sitecheck grafana` narrows without anyone remembering
+the separator) and a **checkbox per row** with a tri-state select-all that
+applies to what the filter is *showing*. The filter searches what the row shows
+— ticket, summary, branch, sha — plus the repo path and **what the steps say**,
+because a checklist is remembered as "the one about the Grafana collage board"
+long after its number has stopped meaning anything.
+
+Selecting rows raises the bulk bar: **Run N** (only the ones a run would
+actually take — a checklist that is still generating, one an agent is already
+working, or one with no agent step in it is counted out in the label rather than
+discovered as a wall of 409s) and **Delete selected**, which asks first and lists
+what it is about to destroy. Each acts through the same per-plan route the row
+does, so every refusal a single press would have earned still applies, and the
+bar reports the tally: *"Started 3 of 5"*, with the other two's reasons in an
+error card. Shift-click extends a range; a selection the filter is hiding is
+counted in the bar so a bulk delete can never quietly reach past the screen.
+
+**Where each checklist has got to, before you open it.** A row's sentence says
+whose turn it is; the **tally** beside its branch and sha says how far along it
+is — `✓5 ✗1 ●2 ○1`, the same glyphs and colours the step rows and the roll-up
+inside the plan use, so the three renderings cannot drift (and the whole thing
+is announced as a sentence: *"9 checks: 5 passed, 1 failed, 2 need you"*). The
+two groups that are an ask carry the same arithmetic on their **heading** —
+*"Not checked yet · 7 · 3 steps need you"* — because a collapsed group was a
+number of checklists and said nothing about how much work was in them, or
+whether any of it was red. Triage used to mean expanding all seven.
+
+**A run that died says so on the row.** Starting a run answers before anything
+has been provisioned — the worktree, the branch and tmux all happen afterwards —
+so a failure arrives minutes later, on a background task. It lands on the plan,
+and the row now carries the first sentence of it (*"The verify session couldn't
+start."*) after whatever it says next, with the raw git or tmux line kept for
+the expanded body where there is room for it. Before that, `fail_run` put the
+plan back to **Not checked yet** and the row read exactly like one nobody had
+pressed Run on. The failure is retracted when a later run reports, when the run
+is cancelled, and when the next one starts.
+
+**The sidebar bar says when something shipped broken.** The **Verify** dot goes
+red with a `✗N` count beside the due one when a checklist has a recorded
+failure. It is deliberately a separate number rather than added to the due
+count: *"3 to check"* and *"1 of them is broken"* are different questions with
+different urgencies, and a badge that answered both would answer neither. A
+failure is an answer, so it stays until the thing is fixed and re-checked.
+
+**Answering steps.** Expand a row and each step is labelled **you** or **agent**:
+`agent` is anything settleable from a shell or the agent's own tools — log
+searches, dashboard panels and metric queries included, via its Grafana MCP
+tooling — `you` is visual judgement, a real browser, or a service the agent has
+no tool for. Three answers, and all three count as *your* answer:
+
+- **Pass** — it did what's expected.
+- **Fail** — it didn't.
+- **Can't check** — you went and looked and could not get to it (staging is down,
+  you have no account on it). Recorded with a reason, and **never** counted as a
+  pass: the checklist stops asking you, but its verdict stays *partial* and the
+  **Checked** heading says so (`N you couldn't check`).
+
+Pressing an answer is idempotent; **Undo** beside it is the way back. An answer
+the *agent* recorded shows as `blocked · agent`, which is it saying "a person has
+to do this" — that one keeps the row open. You can answer your own steps while an
+agent is still running the rest: your answers win, and the plan closes when the
+agent's run lands rather than stranding it.
+
+**A checklist reads like a checks panel.** Above the steps is one roll-up line —
+`8 checks · 5 passed · 1 failed · 2 need you` — and every step carries its state
+as a mark in a fixed column on the left (`✓` passed, `✗` failed, `●` waiting on
+you, `–` you couldn't check, `○` not checked yet). The roll-up is *counted from*
+the marks rather than computed beside them, so the summary and the column cannot
+disagree.
+
+**Answering is a keyboard job.** **Answer N steps** scrolls to the first step
+that is yours *and focuses it*; on a focused step, `1`/`p` pass, `2`/`f` fail,
+`3`/`b` can't check, `u` undo, `n` note. The legend under each checklist says so,
+because none of it is discoverable. Keys typed inside the note box are left
+alone.
+
+**Running a checklist costs a real session.** **Run with an agent** provisions a
+worktree, checks out the live branch and works every step it can — minutes, not
+seconds. The row says the split before you press (`An agent can check 8 of 11;
+the rest are yours`), and a checklist whose every step is yours offers **Answer**
+instead, because an agent is forbidden from settling one. **The run is watched
+inside the checklist**: its terminal streams into the expanded row, read-only, so
+the steps it hands back are answerable on the same screen you are watching. ⋯ →
+**Open the session in its own window** puts it on the grid instead, for keeping
+it while you work elsewhere; closing either does not stop the run.
+
+**A run that cannot start, or cannot finish, ends in words.** Everything about
+this step happens after the request has been answered, which is why each of
+these used to be silent:
+
+- **A leftover from the last run of the same checklist.** The session's name is
+  derived from the plan and the commit, so its tmux session and its branch have
+  the *same* name every time — and one orphan (the app killed mid-run, a window
+  deleted while detached, a lost record) made every later run die with `tmux
+  session already exists` or `already used by worktree`, permanently, for that
+  checklist. Both are now cleared before the session is created. **Fix what
+  failed** got the same treatment with one deliberate difference: a fix
+  session's whole job is to change its tree, so its leftover is reclaimed only
+  when it is provably pristine — and when it is not, the press is **refused in
+  words naming the directory** ("reopen it from Recent to finish or discard that
+  work") rather than dying minutes later with a raw git line in the
+  notifications bell.
+- **Two presses at once.** Run and a per-step Re-check start the same request, so
+  two of them for one plan raced through a single session title: one create won,
+  the loser's failure was recorded against the winner's plan, and the winner's
+  agent was left running with nothing owning it — which is where the orphan
+  above comes from. The title is now claimed under the engine's lock, a
+  background start only ever clears *its own* record, and the buttons withhold
+  themselves while a start is in flight.
+- **A repo that has moved.** A checklist stores the main repo so it outlives its
+  session; when that path is gone the run — and **Fix what failed**, which had
+  it worse, since it would have started an agent to repair code that was not
+  there — is refused in words, rather than creating an empty folder and starting
+  a real agent in it.
+- **An open verify session whose workspace was cleared.** The record outlives the
+  worktree, so "re-check one step" answered *workspace no longer exists* for ever;
+  the husk is closed and a fresh session takes its place.
+- **A run that never comes back.** The agent's window dying (a usage limit, a
+  killed pane) is noticed within a couple of minutes instead of waiting out the
+  two-hour deadline, and either way the plan is released **with the reason on
+  it** and a `session.test_plan_gave_up` event — a billed session that ran for
+  two hours and reported nothing used to be indistinguishable from a button
+  nobody pressed. The abandoned session is then closed by the sweep like any
+  other stray.
+
+**What the agent is told about the environment** is now true, which it was not
+before. A fresh worktree has nothing running in it, so the run prompt says so and
+tells the agent to start the product (this session's own port block, or whatever
+the repo's standing instructions name). And *"I could not reach the product"* is
+**blocked**, never **fail** — a fail recorded against working code is the one
+thing that makes a checklist stop being believed.
+
+**Where "it works" is checked** is the repo's **Where it runs** field on its
+Sources card. Set it to the deployment your users reach and both the checklist
+and the agent working it are aimed at that running system. Leave it blank — the
+right answer for a library, a CLI, or anything with no environment to point at —
+and the run exercises a fresh checkout of the live branch on this machine, which
+is what a green checklist then means.
+
+**Two one-way doors**, both confirmed inline before they happen: running a
+checklist **before it ships** (⋯ → **Check it early**) checks out its own commit
+rather than what users have, and hand-answering every step of a checklist that
+has not shipped closes it. Either way it will not come back to **Not checked
+yet** when the branch does ship.
+
+**The checklist is written for what the work was ASKED to do.** The ticket — its
+title, description and acceptance criteria — is snapshotted onto the checklist at
+push time and is the thing the steps are judged against; the diff supplies the
+mechanism (the exact route, flag, button label, field). That ordering is the
+whole point: the earlier version treated the diff as the only authority, which
+made checklists that described a patch rather than testing a feature. The
+snapshot matters as much as the ordering — read live off the session, the ticket
+was gone by the time anyone pressed **Rewrite**, so the second draft ran on less
+evidence than the first.
+
+**Only the part of the change worth reading reaches the model.** The diff is
+selected rather than truncated: files are ranked by how much they actually
+changed, generated bundles and lockfiles are dropped by name, and about ten files
+are shown properly with the rest listed as omitted. Before this it was the first
+24,000 characters of `git diff` — which git emits in *path order*, so on a wide
+branch the model read the alphabetically-first handful of files and never saw the
+feature at all.
+
+**The session's own conversation is used too** — filtered hard: the most recent
+turns only, whole turns dropped if they are too big to be speech, if they carry an
+output contract (a previous MindFlock one-shot looks exactly like one), or if they
+match a credential shape. Your own turns are read as the sharpest statement of
+what mattered; none of it is treated as evidence that anything exists, so a
+feature discussed and abandoned cannot become a step. It is snapshotted with the
+checklist, so a rewrite sees what the first draft saw. Turn it off flock-wide with
+`repository.verify_use_conversation`.
+
+**Every step is an input and an output.** A step names the exact input — the
+request and its body, the values typed in, the message sent — and the exact
+observable result: a status code and body, a number on screen, a row, a log line.
+It never spends itself getting the product running: whoever works the checklist
+starts it first, and that is not a check. Where a step needs the system in a
+particular state it says so as a *condition* (“on an order that already has
+SAVE10 applied”), never as a command to run first. Before this rule, real
+checklists opened with `docker build …`, `uv run pytest …` and
+“start the service on port 8080” — environment plumbing dressed up as
+verification, and a list that asked a person to launch processes rather than to
+compare a result.
+
+**Every step is written to stand alone** — it names the endpoint, the payload,
+the URL or the account it needs, rather than saying "repeat the above". That is a
+rule in the generator's prompt, and it exists because nothing reads a checklist
+top to bottom: **Answer N steps** scrolls straight to the first step that is
+yours, **Re-check this step** runs one of them on its own months later, and a
+step that leaned on a value the agent held while it ran is not recoverable from
+the checklist at all. Checklists written before this rule keep their old steps —
+**Rewrite the checklist…** re-asks the model about the same diff.
+
+**You can add steps of your own, and fix the ones the model wrote.** ⋯ → **Edit
+this step** changes the wording in place; ⋯ → **Let the agent check this** / **I'll
+check this one** moves it between lanes. Editing a step makes it yours, so the
+next rewrite keeps your wording — and changing what a step *asks* drops any answer
+already recorded against it, while changing only who answers keeps every one.
+Before this, correcting a single wrong sentence meant rewriting the whole
+checklist: a model call, three minutes, and every answer against every step that
+changed. The actor toggle is also the only way out of a checklist an agent cannot
+run at all — an unrecognised actor is read as `human`, and a run is refused when
+every step is a person's.
+
+**Rewriting asks for a second draft, and lets you say what the first got wrong.**
+⋯ → **Rewrite the checklist** opens a box in the row — *"What should it check
+instead? — e.g. focus on the coupon flow at checkout, ignore the settings
+refactor"*. That note is stored on the checklist, so a later push keeps honouring
+it, and it outranks the model's own judgement about which part of the change
+matters; it can never change the format the model has to answer in. Steps you
+wrote or edited are kept. A rewrite **cannot un-ship a checklist** (one that has
+already gone live comes back where it was, and its "it shipped" push is never
+re-sent), **cannot destroy one** (a rewrite that fails leaves the steps you had,
+in the queue, with the reason shown above them), and is **refused while an agent
+is running it**.
+
 ## Settings (⚙)
 
 - **Cursor auto-adopt** — adopt Cursor-opened workspaces as sessions.
@@ -713,6 +1167,54 @@ Two consequences worth knowing:
   [Send a message / prompt queue](#send-a-message--prompt-queue--per-pane) for
   the gate it shares with `wait_for_limit`). Off leaves it parked; the "Usage comes back"
   notification fires either way.
+- **General → Take a break** (`mf_break_on` / `mf_break_every`, **off by
+  default**) — one switch whose whole description is the sentence it configures:
+  *Reminder to take a break every `[N]` minutes*, with N editable in place
+  (5–480, default 60). When it fires, a card asks you to get up, with the
+  murmuration from mindflock.ai flying over your grid.
+  **Snooze 5 min** pushes it back five minutes; **Resumed work** (or
+  Escape) restarts the whole interval. The clock is wall-clock and survives a
+  reload — a refresh is not a way to dodge a break — but changing the interval
+  re-arms it from now. **There is no scrim**: your grid, sidebar and panes stay
+  exactly as you left them and the flock flies over them, the same treatment the
+  idle overlay gets; the card is the only new thing on screen. The overlay still
+  swallows the pointer and the keymap stands down with it, so you can watch your
+  agents work but can't join in until you answer — a break rather than a
+  suggestion. Sessions keep running throughout, and the card hands the keyboard
+  back to whatever had it. The flock is a round trip through the logo, and a
+  lopsided one. It streams OUT of the MindFlock mark in the top bar over
+  **twenty seconds** — birds leaving one at a time, each flying its own short
+  arc and joining the live flock the moment it lands, so the window keeps
+  filling for as long as you stay away from it — and folds back INTO the mark in
+  under a second when you dismiss it. Dismissing mid-stream takes over from the
+  emergence rather than queueing behind it. The idle overlay arrives and leaves
+  the same way; birds that simply materialise everywhere read as a bug, birds
+  that come out of the logo read as the app's own.
+- **General → Idle flock** (`mf_idle_flock` / `mf_idle_after`, **on by
+  default**) — **The idle flock** is what MindFlock does when nobody is
+  looking. The row is the same sentence-with-a-field shape as the break row
+  above: *Fly the flock over your grid after `[N]` minutes with no click,
+  keystroke or scroll in this window*, with N editable in place (1–480,
+  **default 10**). Unlike the break card this one is on out of the box,
+  because it can only appear once you have already walked away from the
+  window. The flock flies across the whole
+  screen, ignoring the sidebar and pane boundaries entirely. It is
+  `pointer-events: none`, so nothing is covered or blocked, and the first click
+  or keystroke sends it home. Two things stand it down: the switch, and the
+  break card, which brings its own flock. Turning the switch off mid-flight
+  sends the birds home through the logo rather than cutting them off. Three
+  things deliberately do not count as you being present:
+  - **Moving the mouse.** `pointermove` is not in the activity list at all, so a
+    cursor drifting over the window — or parked on it while you read something
+    else — neither delays the flock nor dismisses it.
+  - **Agent output.** That is the machine working, not you.
+  - **Anything you do in another app.** Neither `focus` nor `visibilitychange`
+    resets the clock, so MindFlock idles behind you while you work elsewhere — a
+    second monitor fills with birds, which is the whole point — and the click or
+    keystroke that brings you back is what wakes it.
+
+  Under `prefers-reduced-motion` both surfaces show a settled flock rather than a
+  moving one.
 - **General → Onboarding** — the master **getting-started hints** switch and a
   **Replay tour** button (see [First-run onboarding](#first-run-onboarding)).
 - **Agent CLI → scheduled window refresh** — a keepalive that periodically

@@ -140,6 +140,7 @@ class SessionRunner:
         branch = _branch_name_for(story)
         title = story.slug
         agent = self._agent_for(story)
+        effort = self._effort_for(story)
         self._arm_autopilot(
             title,
             "tix",
@@ -148,9 +149,11 @@ class SessionRunner:
             str(getattr(story, "name", "") or ""),
         )
         logger.info(
-            "Launching ticket %s via MindFlock (agent=%s, mode=%s, branch=%s, session=%s)",
+            "Launching ticket %s via MindFlock (agent=%s, effort=%s, mode=%s, "
+            "branch=%s, session=%s)",
             story.slug,
             agent or "engine default",
+            effort or "CLI default",
             self._mode,
             branch,
             title,
@@ -165,6 +168,7 @@ class SessionRunner:
                     prompt,
                     getattr(story, "repo_url", ""),
                     agent,
+                    effort,
                 ),
                 timeout=_INSTANCE_START_TIMEOUT,
             )
@@ -260,6 +264,23 @@ class SessionRunner:
         provider = getattr(story, "provider", "")
         return fresh_agent(lambda c: c.agent_for(provider), self.config)
 
+    def _effort_for(self, story) -> str:
+        """The thinking-effort rung this story's session runs at (``""`` = the
+        CLI's own default).
+
+        Same shape and the same re-read as :meth:`_agent_for` — the ticket's own
+        stamp first, then the config as it is on disk right now — so changing a
+        source's effort in the UI applies to the next ticket rather than the next
+        pipeline restart. Unlike the agent chain there is no installation-wide
+        fallback: see ``PipelineConfig.effort_for``.
+        """
+        from backend.ticket_ingestion.config import source_effort_now
+
+        stamped = getattr(story, "effort", "")
+        if stamped:
+            return stamped
+        return source_effort_now(getattr(story, "provider", ""))
+
     def _arm_autopilot(
         self, title: str, kind: str, lookup: str, item: str, message: str
     ) -> None:
@@ -343,10 +364,21 @@ class SessionRunner:
         prompt: str,
         repo_url: str = "",
         agent: str = "",
+        effort: str = "",
     ):
         from backend import session as cs_session
+        from backend.providers import effort as _effort
 
         program = _resolve_program(agent)
+
+        # HOW HARD TO THINK, translated for the CLI that is actually going to
+        # run. The rungs the source stores are neutral; each provider spells the
+        # request differently (a launch flag, a prompt keyword, or nothing at
+        # all) and clamps anything above its own ceiling — which is why this has
+        # to happen here, after `program` is resolved, rather than where the rung
+        # was configured.
+        prompt = _effort.decorate_prompt(prompt, program, effort)
+        args = _effort.launch_args(program, effort)
 
         opts = cs_session.InstanceOptions(
             title=title,
@@ -359,6 +391,11 @@ class SessionRunner:
             # Multi-repo ingestion: provision from the ticket's own source repo
             # when set, else the engine's configured [repository].url.
             provision_repo_url=repo_url,
+            # Only when the rung contributes flags: InstanceOptions treats an
+            # explicit value — even an empty tuple — as "use these verbatim",
+            # so passing one unconditionally would strip the launch flags the
+            # user set in Settings → Coding CLI from every ingested ticket.
+            **({"launch_args": args} if args else {}),
         )
         inst = cs_session.NewInstance(opts)
         inst.Start(True)  # clone/worktree + provision + tmux + launch claude

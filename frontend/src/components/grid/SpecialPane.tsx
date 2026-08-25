@@ -2,15 +2,14 @@
  * assistant-chat panes). They hold grid slots and drag like session panes. */
 
 import { useEffect, useRef, useState } from "react";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
 import { api } from "../../api/client";
-import { termTheme } from "../../lib/terminals";
+import { useWsTerm } from "../../lib/wsTerm";
+import { useUi } from "../../state/store";
 import { dropSideFor } from "./layout";
 import { sentinel, type DragCtx, type SpecialPaneDesc } from "./TerminalGrid";
 
 export function SpecialPane({ desc, drag }: { desc: SpecialPaneDesc; drag: DragCtx }) {
-  const title = sentinel(desc.kind);
+  const title = sentinel(desc.kind, desc.session);
   const paneRef = useRef<HTMLElement | null>(null);
 
   const headDrag = {
@@ -46,11 +45,18 @@ export function SpecialPane({ desc, drag }: { desc: SpecialPaneDesc; drag: DragC
       ref={paneRef as React.RefObject<HTMLElement>}
       className={
         "pane focused " +
-        (desc.kind === "logs" ? "logs-pane" : desc.kind === "syslogs" ? "syslogs-pane" : "chat-pane")
+        (desc.kind === "logs"
+          ? "logs-pane"
+          : desc.kind === "syslogs"
+            ? "syslogs-pane"
+            : desc.kind === "verify"
+              ? "verify-pane"
+              : "chat-pane")
       }
       data-title={title}
       {...paneDrag}
     >
+      {desc.kind === "verify" && <VerifyBody desc={desc} headDrag={headDrag} />}
       {desc.kind === "logs" && <LogsBody desc={desc} headDrag={headDrag} />}
       {desc.kind === "syslogs" && <SysLogsBody desc={desc} headDrag={headDrag} />}
       {desc.kind === "chat" && <ChatBody desc={desc} headDrag={headDrag} />}
@@ -64,76 +70,66 @@ type HeadDrag = {
   onDragEnd(): void;
 };
 
-/** Read-only ws-streamed terminal over a fixed ws path. */
-function useWsTerm(hostRef: React.RefObject<HTMLDivElement | null>, wsPath: string, interactive: boolean) {
-  const [state, setState] = useState("connecting");
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    const term = new Terminal({
-      cursorBlink: interactive,
-      fontSize: 12,
-      theme: termTheme(),
-      disableStdin: !interactive,
-      fontFamily: 'ui-monospace, "Cascadia Code", Menlo, Consolas, monospace',
-      scrollback: 20000,
-      macOptionClickForcesSelection: true,
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(host);
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(proto + "://" + location.host + wsPath);
-    ws.binaryType = "arraybuffer";
-    const doFit = (sendResize: boolean) => {
-      try {
-        fit.fit();
-      } catch {
-        return;
-      }
-      if (sendResize && ws.readyState === WebSocket.OPEN)
-        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-    };
-    ws.onopen = () => {
-      setState("streaming");
-      doFit(true);
-    };
-    ws.onmessage = (ev) => {
-      if (typeof ev.data === "string") {
-        try {
-          const j = JSON.parse(ev.data);
-          if (j.type === "error") {
-            term.write("\r\n[error] " + j.message + "\r\n");
-            return;
-          }
-        } catch {
-          term.write(ev.data);
-        }
-      } else {
-        term.write(new Uint8Array(ev.data));
-      }
-    };
-    ws.onclose = () => setState("disconnected");
-    ws.onerror = () => setState("error");
-    if (interactive)
-      term.onData((d) => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(d);
-      });
-    const obs = new ResizeObserver(() => doFit(true));
-    obs.observe(host);
-    const t = setTimeout(() => doFit(true), 50);
-    return () => {
-      clearTimeout(t);
-      obs.disconnect();
-      try {
-        ws.close();
-      } catch {
-        /* closed */
-      }
-      term.dispose();
-    };
-  }, [hostRef, wsPath, interactive]);
-  return state;
+/** A verify run, watched. Read-only ON PURPOSE.
+ *
+ * `useWsTerm(..., false)` sets `disableStdin`, so this is a window you look at
+ * and not one you talk to. That is the point: the run is working a checklist it
+ * was given, and its answers are the artifact — typing at it mid-run would
+ * produce a report about a conversation nobody can reconstruct later. If you
+ * want to take over, the session is real and the pane says where it is.
+ *
+ * The same websocket an ordinary session pane uses, so what you see here is
+ * exactly what the agent is doing, live. Closing this pane does NOT stop the
+ * run: it keeps working and writes its results file, and the Verify dialog
+ * reopens the window for as long as the session exists. */
+function VerifyBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadDrag }) {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const session = desc.session || "";
+  const state = useWsTerm(
+    hostRef,
+    "/api/instances/" + encodeURIComponent(session) + "/terminal",
+    false
+  );
+  return (
+    <>
+      <div className="pane-head" {...headDrag}>
+        <span className="grip" title="Drag to move this window">⠿</span>
+        <span className="title">Verifying</span>
+        <span className="branch">{session}</span>
+        <span className="state">{state}</span>
+        <div className="actions">
+          {/* The way back. Watch is a ONE-WAY trip without it: the Verify dialog
+              has to close to open this pane (it is a full-screen modal, so a
+              pane opened behind it is a press with no visible effect), which
+              leaves somebody who was triaging three checklists with no route
+              back to the other two except remembering Alt+V. */}
+          <button
+            className="act verify-pane-back"
+            title="Back to Verify (Alt+V)"
+            onClick={(e) => {
+              e.stopPropagation();
+              useUi.getState().openDialogFor("verify");
+            }}
+          >
+            Verify
+          </button>
+          <button
+            className="act verify-pane-close"
+            title="Close this window — the run keeps going"
+            onClick={(e) => {
+              e.stopPropagation();
+              desc.onClose();
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+      <div className="pane-body">
+        <div className="pane-term" ref={hostRef} />
+      </div>
+    </>
+  );
 }
 
 function LogsBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadDrag }) {

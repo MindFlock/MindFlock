@@ -1001,6 +1001,7 @@ def test_find_pr_folds_a_merged_pr_into_ghs_vocabulary(monkeypatch):
                         "state": "closed",
                         "merged_at": "2026-07-30T00:00:00Z",
                         "number": 4,
+                        "base": {"ref": "staging"},
                     }
                 ],
             )
@@ -1011,7 +1012,28 @@ def test_find_pr_folds_a_merged_pr_into_ghs_vocabulary(monkeypatch):
         "url": "https://github.com/o/r/pull/4",
         "state": "MERGED",
         "number": 4,
+        # The branch the PR targets. Verify's squash-merge fallback needs it:
+        # "the PR merged" is only evidence that work SHIPPED if it merged into the
+        # branch the checklist is waiting for.
+        "base": "staging",
     }
+
+
+def test_find_pr_tolerates_a_payload_with_no_base(monkeypatch):
+    """`base` is additive, and every caller has to cope with "" — an older
+    cached answer, or a payload shaped differently than expected. Verify falls
+    back to its flock-wide heuristic in that case rather than guessing."""
+    _stub_rest(
+        monkeypatch,
+        responses=[
+            (
+                200,
+                [{"html_url": "u", "state": "open", "number": 7}],
+            )
+        ],
+    )
+    got = asyncio.run(github_pr.find_pr("/ws", "feat/x"))
+    assert got["base"] == "" and got["state"] == "OPEN"
 
 
 def test_create_pr_without_commits_reports_no_commits(monkeypatch):
@@ -1652,6 +1674,54 @@ def test_github_open_issues_502_on_error(monkeypatch):
         assert "issues unconfigured" in r.json()["error"]
     finally:
         server._OPEN_ISSUES_CACHE.pop("v", None)
+
+
+# --------------------------------------------------------------------------- #
+# list_workspaces (the disk manager's rows)                                    #
+# --------------------------------------------------------------------------- #
+def test_list_workspaces_carries_mtime_without_sizes(monkeypatch, tmp_path):
+    """The dialog's "sort by date" needs a timestamp on the FIRST response.
+
+    ``size_bytes`` deliberately waits for ``?sizes=1`` (a du per entry), but
+    mtime is one stat, so it ships with the instant list — otherwise sorting by
+    date would be dead until the size pass landed.
+    """
+    root = tmp_path / "workspaces"
+    root.mkdir()
+    ws = root / "some-ws"
+    ws.mkdir()
+    os.utime(ws, (1_700_000_000, 1_700_000_000))
+    monkeypatch.setattr(
+        server, "_workspace_roots", lambda: [os.path.realpath(str(root))]
+    )
+    r = client.get("/api/workspaces")
+    assert r.status_code == 200
+    rows = {w["name"]: w for w in r.json()["workspaces"]}
+    assert rows["some-ws"]["mtime"] == 1_700_000_000
+    assert rows["some-ws"]["size_bytes"] is None  # still the no-du fast path
+
+
+def test_list_workspaces_mtime_is_none_when_stat_fails(monkeypatch, tmp_path):
+    """A vanished dir must yield mtime=None, not a 500 — the UI parks nulls at
+    the bottom of a date sort."""
+    root = tmp_path / "workspaces"
+    root.mkdir()
+    (root / "ghost").mkdir()
+    monkeypatch.setattr(
+        server, "_workspace_roots", lambda: [os.path.realpath(str(root))]
+    )
+    real_stat = os.stat
+
+    def _boom(path, *a, **kw):
+        if str(path).endswith("ghost"):
+            raise OSError("gone")
+        return real_stat(path, *a, **kw)
+
+    monkeypatch.setattr(server.os, "stat", _boom)
+    r = client.get("/api/workspaces")
+    assert r.status_code == 200
+    rows = {w["name"]: w for w in r.json()["workspaces"]}
+    assert rows["ghost"]["mtime"] is None
 
 
 # --------------------------------------------------------------------------- #

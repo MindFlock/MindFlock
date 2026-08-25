@@ -74,10 +74,21 @@ class WorkspaceConfig:
         setup_commands: Optional[List[str]] = None,
         copy_untracked: Optional[List[str]] = None,
         check_command: str = "",
+        verify_on_push: bool = False,
     ) -> None:
         self.setup_commands = setup_commands  # None = not configured
         self.copy_untracked = copy_untracked or []
         self.check_command = check_command
+        # Whether a push in this repo should automatically have a Verify test
+        # plan written for it. Default False, and deliberately so: generating a
+        # plan is a real model call per push, and a Verify list that fills up on
+        # its own destroys the one number the feature exists to show — how many
+        # shipped things nobody has checked. A badge that over-counts stops being
+        # read. So the button on a session is the normal way to get a plan, and
+        # this key is how a repo whose work always warrants a manual test says
+        # "do it for me" — the same explicit-opt-in bargain ``check_command``
+        # already makes two fields up.
+        self.verify_on_push = verify_on_push
 
     @property
     def has_setup(self) -> bool:
@@ -113,10 +124,16 @@ def load_config(repo_path: str) -> WorkspaceConfig:
     check = ws.get("check_command", "")
     if not isinstance(check, str):
         check = ""
+    # Strict ``is True``: only the boolean turns this on. A repo that wrote
+    # ``verify_on_push = "no"`` or ``= 0`` meant no, and Python's truthiness
+    # would read the string as yes — spending a model call per push on the
+    # strength of a typo. Anything that is not literally ``true`` is off, which
+    # is also the safe direction for a key whose default is off.
     return WorkspaceConfig(
         setup_commands=commands,
         copy_untracked=[p.strip() for p in copy_untracked if p.strip()],
         check_command=check.strip(),
+        verify_on_push=ws.get("verify_on_push") is True,
     )
 
 
@@ -179,6 +196,20 @@ def setup_status(wt_path: str) -> Optional[dict]:
 def check_status(wt_path: str) -> Optional[dict]:
     """``{state, rc, sha, command, started, finished}`` or None."""
     return _read_status(wt_path, CHECK_STATUS)
+
+
+def clear_check(wt_path: str) -> bool:
+    """Forget the recorded check result. Returns whether a file was removed.
+
+    Only ever called for a result that is already STALE (its sha is not HEAD) —
+    the push gate reads this file, so deleting a failure that still describes the
+    current commit would silently un-gate the very push it exists to hold.
+    """
+    try:
+        os.unlink(os.path.join(wt_path, CHECK_STATUS))
+        return True
+    except Exception:  # noqa: BLE001 — absent (or unremovable) is a no-op
+        return False
 
 
 def log_tail(wt_path: str, name: str, lines: int = 200) -> str:

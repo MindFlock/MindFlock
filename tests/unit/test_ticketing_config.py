@@ -164,6 +164,100 @@ def test_settings_roundtrip_ticketing():
     assert s2.to_dict()["ticketing"] == d["ticketing"]
 
 
+def test_settings_roundtrip_assignee_scope():
+    s = Settings.from_dict(
+        {
+            "ticketing": {
+                "sources": [
+                    {
+                        "provider": "shortcut",
+                        "api_token": "t",
+                        "workflow_state": "100",
+                        "assignee_scope": "anyone",
+                    }
+                ]
+            }
+        }
+    )
+    assert s.ticketing.sources[0].assignee_scope == "anyone"
+    assert s.to_dict()["ticketing"]["sources"][0]["assignee_scope"] == "anyone"
+    # The default is blank, and blank fields are dropped — an existing config
+    # round-trips byte-identical.
+    plain = Settings.from_dict(
+        {"ticketing": {"sources": [{"provider": "asana", "api_token": "t"}]}}
+    )
+    assert "assignee_scope" not in plain.to_dict()["ticketing"]["sources"][0]
+
+
+# --------------------------------------------------------------------------- #
+# Assignee scope validation: "anyone" is only meaningful with something else
+# bounding the search.
+# --------------------------------------------------------------------------- #
+def test_anyone_without_a_state_filter_is_a_config_problem(tmp_path):
+    with pytest.raises(ConfigError, match="workflow_state"):
+        load_config(
+            _write(
+                tmp_path,
+                """
+[ticketing]
+provider = "shortcut"
+api_token = "tok"
+member_id = "m"
+assignee_scope = "anyone"
+""" + COMMON,
+            )
+        )
+
+
+def test_anyone_with_a_state_filter_parses(tmp_path):
+    cfg = load_config(
+        _write(
+            tmp_path,
+            """
+[ticketing]
+provider = "shortcut"
+api_token = "tok"
+member_id = "m"
+workflow_state = "100"
+assignee_scope = "anyone"
+""" + COMMON,
+        )
+    )
+    assert cfg.ticketing.assignee_scope == "anyone"
+
+
+def test_anyone_on_a_provider_that_cannot_do_it_is_a_problem(tmp_path):
+    with pytest.raises(ConfigError, match="not supported"):
+        load_config(
+            _write(
+                tmp_path,
+                """
+[ticketing]
+provider = "asana"
+api_token = "pat"
+project = "ws1"
+assignee_scope = "anyone"
+""" + COMMON,
+            )
+        )
+
+
+def test_unknown_assignee_scope_is_a_problem(tmp_path):
+    with pytest.raises(ConfigError, match="assignee_scope"):
+        load_config(
+            _write(
+                tmp_path,
+                """
+[ticketing]
+provider = "shortcut"
+api_token = "tok"
+member_id = "m"
+assignee_scope = "everyone"
+""" + COMMON,
+            )
+        )
+
+
 def test_settings_multiple_same_provider_sources():
     s = Settings.from_dict(
         {
@@ -260,3 +354,56 @@ api_token = "t2"
     assert len(cfg.ticketing_sources) == 2
     slugs = {get_provider(s).make_slug("PROJ-1") for s in cfg.ticketing_sources}
     assert slugs == {"jira-PROJ-1", "jira-2-PROJ-1"}
+
+
+# --------------------------------------------------------------------------- #
+# Per-source thinking effort
+#
+# The third member of the per-source launch family (agent, depth, effort): how
+# hard the agent thinks about tickets from THIS queue. A backlog of one-line copy
+# fixes and a queue of schema migrations deserve different answers, and neither
+# deserves to be set per ticket forever.
+# --------------------------------------------------------------------------- #
+def test_a_sources_effort_is_normalized_and_junk_is_refused():
+    from backend.ticket_ingestion.config import _validate_effort
+
+    problems: list = []
+    assert _validate_effort("XHigh", "s.effort", problems) == "xhigh"
+    assert _validate_effort("", "s.effort", problems) == ""
+    assert problems == []
+
+    # An unknown rung is a config the user should be TOLD about — running it at
+    # the CLI's default in silence is how somebody concludes it does nothing.
+    assert _validate_effort("turbo", "s.effort", problems) == ""
+    assert problems and "must be one of" in problems[0]
+
+
+def test_effort_for_reads_the_source_and_never_an_app_wide_default():
+    from backend.ticket_ingestion.config import PipelineConfig, TicketProviderConfig
+
+    cfg = PipelineConfig(
+        ticketing_sources=[
+            TicketProviderConfig(provider="shortcut", id="sc", effort="xhigh"),
+            TicketProviderConfig(provider="jira", id="jira"),
+        ]
+    )
+    assert cfg.effort_for("sc") == "xhigh"
+    # No `[mindflock].effort` rung exists on purpose: "how hard to think" is a
+    # property of the work, and a flock-wide default would re-price every queue.
+    assert cfg.effort_for("jira") == ""
+    assert cfg.effort_for("nope") == ""
+
+
+def test_the_settings_source_round_trips_its_effort():
+    from backend.config.settings import TicketingSource
+
+    src = TicketingSource.from_dict(
+        {"provider": "shortcut", "agent": "claude", "effort": "XHigh"}
+    )
+    assert src.effort == "xhigh"
+    assert src.to_dict()["effort"] == "xhigh"
+    # Coerced rather than stored verbatim: this is read on every settings load,
+    # and a hand-edited rung no provider knows would reach a CLI that rejects it.
+    assert TicketingSource.from_dict({"effort": "turbo"}).effort == ""
+    # Blank never appears in the stored document — an unset field means inherit.
+    assert "effort" not in TicketingSource.from_dict({"provider": "jira"}).to_dict()

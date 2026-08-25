@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import type { Instance } from "../api/types";
-import { orderedInstances, matchesFilter, attentionItems } from "../components/sidebar/ordering";
+import {
+  orderedInstances,
+  orderWithAfter,
+  matchesFilter,
+  attentionItems,
+} from "../components/sidebar/ordering";
 
 const inst = (o: Partial<Instance>): Instance => o as unknown as Instance;
 
@@ -23,6 +28,55 @@ describe("orderedInstances", () => {
     const { rows, nextOrder } = orderedInstances([], ["x", "y"]);
     expect(rows).toEqual([]);
     expect(nextOrder).toEqual(["x", "y"]);
+  });
+});
+
+describe("orderWithAfter", () => {
+  it("slots a duplicate directly beneath its source, not at the bottom", () => {
+    expect(orderWithAfter(["a", "b", "c", "b-copy"], "b-copy", "b")).toEqual([
+      "a",
+      "b",
+      "b-copy",
+      "c",
+    ]);
+  });
+
+  it("moves a title that was already listed elsewhere", () => {
+    expect(orderWithAfter(["b-copy", "a", "b", "c"], "b-copy", "b")).toEqual([
+      "a",
+      "b",
+      "b-copy",
+      "c",
+    ]);
+  });
+
+  it("lands beneath the source even when the source is last", () => {
+    expect(orderWithAfter(["a", "b", "b-copy"], "b-copy", "b")).toEqual(["a", "b", "b-copy"]);
+  });
+
+  it("stacks a second copy under the source, above the first", () => {
+    // Two duplicates of `b` in a row: each new one is the nearest to its source,
+    // the way a stack of copies reads in every other list.
+    const once = orderWithAfter(["a", "b", "c", "b-copy"], "b-copy", "b");
+    expect(orderWithAfter([...once, "b-copy-2"], "b-copy-2", "b")).toEqual([
+      "a",
+      "b",
+      "b-copy-2",
+      "b-copy",
+      "c",
+    ]);
+  });
+
+  it("leaves the order untouched when the source has gone", () => {
+    const order = ["a", "c", "b-copy"];
+    expect(orderWithAfter(order, "b-copy", "b")).toBe(order);
+  });
+
+  it("refuses the degenerate moves rather than duplicating a row", () => {
+    const order = ["a", "b"];
+    expect(orderWithAfter(order, "b", "b")).toBe(order);
+    expect(orderWithAfter(order, "", "b")).toBe(order);
+    expect(orderWithAfter(order, "b", "")).toBe(order);
   });
 });
 

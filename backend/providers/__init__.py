@@ -15,6 +15,7 @@ from .antigravity import AntigravityProvider
 from .base import (
     BaseProvider,
     CodingProvider,
+    EffortSpec,
     LauncherSpec,
     LaunchContext,
     TrustSpec,
@@ -28,7 +29,7 @@ from .generic import GenericProvider
 # ``providers.local_models`` are always bound on the package — several launch
 # paths reach them as attributes. Neither imports back into this module at
 # module scope, so there is no cycle.
-from . import launch_script, local_models  # noqa: E402
+from . import effort, launch_script, local_models  # noqa: E402
 
 # Bundled config names whose behaviour needs a dedicated GenericProvider
 # subclass (live usage / telemetry / resume-thread discovery). Anything not
@@ -38,10 +39,12 @@ _CONFIG_PROVIDER_CLASSES = {"codex": CodexProvider, "antigravity": AntigravityPr
 __all__ = [
     "BaseProvider",
     "CodingProvider",
+    "EffortSpec",
     "GenericProvider",
     "LauncherSpec",
     "LaunchContext",
     "TrustSpec",
+    "effort",
     "launch_script",
     "local_models",
     "register",

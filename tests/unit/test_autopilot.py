@@ -125,6 +125,22 @@ def test_usage_limit_holds_rather_than_halts():
     assert "usage limit" in detail["reason"]
 
 
+def test_a_limit_that_ended_the_turn_beats_an_idle_badge():
+    """The regression that shipped a half-finished session: a turn cut short by
+    the weekly cap ends with the CLI's Stop hook, so the activity probe says
+    "idle" and the dwell elapses like any finished turn. `limited` is the only
+    thing standing between that and a commit — it must be read on its own, not
+    inferred from the activity string."""
+    rec = _rec(idle_since=1.0)
+    action, detail = ap.next_action(
+        rec, _snap(activity="idle", limited=True, dirty=True, now=99_999.0)
+    )
+    assert action == "wait"
+    assert "usage limit" in detail["reason"]
+    # ...and the dwell must not be re-armed while the window is shut.
+    assert detail.get("mark_idle") is not True
+
+
 def test_prompt_queue_gates_the_commit():
     """Composing with the queue instead of racing it: queue the follow-up turns
     you want and autopilot waits for them to drain."""

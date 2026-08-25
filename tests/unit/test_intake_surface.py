@@ -574,6 +574,113 @@ class TestStartAgentOverride:
         assert "story.agent = agent_override" in src
 
 
+class TestStartEffortOverride:
+    """The third per-item override: how hard the agent thinks about THIS one.
+
+    Same shape as the agent and depth overrides — absent means "the CLI's own
+    default", junk is refused — plus one thing neither of those has: the rung is
+    neutral, so it has to be translated into whichever CLI the row launches (see
+    backend/providers/effort.py)."""
+
+    def test_absent_means_the_cli_default(self):
+        assert server._start_effort_override({}) == ""
+        assert server._start_effort_override({"effort": "  "}) == ""
+
+    def test_a_rung_is_accepted_and_junk_is_refused(self):
+        assert server._start_effort_override({"effort": "ultra"}) == "ultra"
+        with pytest.raises(ValueError) as err:
+            server._start_effort_override({"effort": "hardest"})
+        assert "unknown effort" in str(err.value)
+
+    @pytest.mark.parametrize(
+        "path,body",
+        [
+            ("/api/tickets/start", {"source": "jira", "id": "1"}),
+            ("/api/github/prs/review", {"repo": "org/a", "number": 1}),
+            ("/api/github/issues/start", {"repo": "org/a", "number": 1}),
+        ],
+    )
+    def test_every_start_route_rejects_an_unknown_effort(self, path, body):
+        r = client.post(path, json={**body, "effort": "hardest"})
+        assert r.status_code == 400, r.text
+        assert "unknown effort" in r.json()["error"]
+
+    def test_no_effort_leaves_the_session_inheriting_the_global_flags(self):
+        """``None``, not ``()``: InstanceOptions treats an explicit value — even
+        an empty one — as "use verbatim, skip the defaults", so returning a tuple
+        here would strip the user's configured launch flags off every start."""
+        assert server._start_launch_args("claude", "") is None
+        assert server._start_launch_args("aider", "max") is None, "no flag to add"
+
+    def test_effort_flags_ride_on_top_of_the_configured_defaults(self, monkeypatch):
+        monkeypatch.setattr(
+            server._instance,
+            "provider_default_launch_args",
+            lambda program: ("--model", "opus"),
+        )
+        assert server._start_launch_args("claude", "ultra") == (
+            "--model",
+            "opus",
+            "--effort",
+            "ultracode",
+        )
+
+    def test_the_capability_is_published_for_the_picker(self):
+        caps = {
+            p["name"]: p.get("effort")
+            for p in client.get("/api/providers").json()["providers"]
+        }
+        assert caps["claude"]["ultra_level"] == "ultracode"
+        assert "ultra" in caps["claude"]["levels"]
+        # codex has no mode above its ladder and stops one rung lower.
+        assert caps["codex"]["levels"][-1] == "xhigh"
+        assert caps["codex"]["ultra_level"] == ""
+        assert caps["codex"]["keyword"] == ""
+        assert caps["aider"]["levels"] == []
+
+    @pytest.mark.parametrize(
+        "route",
+        ["ticket_force_start", "github_force_review", "github_issue_force_start"],
+    )
+    def test_all_three_routes_apply_it_to_the_launch(self, route):
+        """Both halves have to be there: the flags (which persist, so a relaunch
+        or a reboot-resume keeps the effort) and the prompt keyword, for a CLI
+        whose top rung exists only as a word in the prompt.
+
+        Asserted as a CONTRACT rather than as a variable name. The name differs
+        by route on purpose — the ticket route resolves its source's configured
+        rung first, so it passes `level` where the others pass `effort_override`
+        — and the thing that actually matters is that the two halves are handed
+        the SAME value. Handing the flags one rung and the prompt another is a
+        session that runs at one effort and is told it is running at a different
+        one, which no test naming a single variable would have caught."""
+        import inspect
+        import re
+
+        src = inspect.getsource(getattr(server, route))
+        flags = re.search(r"_start_launch_args\(program, (\w+)\)", src)
+        keyword = re.search(r"decorate_prompt\(prompt, program, (\w+)\)", src)
+        assert flags, route + " does not pass an effort to the launch flags"
+        assert keyword, route + " does not put the effort in the prompt"
+        assert flags.group(1) == keyword.group(1), (
+            route
+            + " sends different efforts to the flags and the prompt: "
+            + flags.group(1)
+            + " vs "
+            + keyword.group(1)
+        )
+
+    def test_the_ticket_route_falls_back_to_its_sources_configured_effort(self):
+        """The per-item pick is an OVERRIDE; with none, a ticket runs at the rung
+        its queue is configured for. Without this the setting would only apply to
+        tickets the pipeline happened to ingest — i.e. it would work or not
+        depending on which button you pressed."""
+        import inspect
+
+        src = inspect.getsource(server.ticket_force_start)
+        assert "effort_override or _ticket_start.effort_for(story)" in src
+
+
 # --------------------------------------------------------------------------- #
 # Per-repo GitHub access test endpoint
 # --------------------------------------------------------------------------- #
@@ -859,6 +966,62 @@ class TestIntakeDialogShell:
         assert ".ik-item-depth" in css
         assert ".ik-item-picks" in css
 
+    def test_each_row_can_choose_how_hard_the_agent_thinks(self):
+        """The per-item effort override. Every CLI spells it differently and some
+        cannot do it at all, so the picker is neutral and the row says what the
+        CLI it would launch will actually do with the pick."""
+        js = client.get("/app.js").text
+        assert '"ik-item-effort"' in js
+        # Same emit-when-picked shape as the other two overrides.
+        assert "effort ? { effort } : {}" in js
+        # A CLI with no effort setting gets a disabled control that says so —
+        # never an enabled one that quietly does nothing.
+        assert "No effort (" in js
+        # Three pickers now share the line, so it has to be allowed to fold…
+        css = client.get("/style.css").text
+        picks = css.split(".ik-item-start .ik-item-picks {")[1].split("}")[0]
+        assert "flex-wrap: wrap" in picks
+        assert ".ik-item-effort:disabled" in css
+        # …and the control column is CAPPED, because its children are stretched
+        # to the widest of them: without this the third picker widened `Begin
+        # work` into a full-width banner with a word in the middle of it.
+        col = css.split(".ik-item-start {")[1].split("}")[0]
+        assert "max-width" in col
+
+    def test_the_start_button_stays_a_button(self):
+        """A control's width should say something about the control. Stretched to
+        the pickers above it (the flex column's default), `Begin work` became a
+        330px bar with two words in the middle — so it hugs its label and
+        right-aligns, keeping the list's right edge straight."""
+        css = client.get("/style.css").text
+        btn = css.split(".ik-item-start .pr-review-btn {")[1].split("}")[0]
+        assert "align-self: flex-end" in btn
+        assert "min-width" in btn
+        again = css.split(".ik-item-start .ik-start-again {")[1].split("}")[0]
+        assert "align-self: flex-end" in again
+
+    def test_a_failure_pops_up_where_failures_live(self):
+        """Bottom-right cards, the corner the connection-lost card already owns —
+        not the 1.4s bottom-centre confirmation strip. A refused start answers
+        with a paragraph of git output whose remedy is its last sentence; it has
+        to survive long enough to be read."""
+        css = client.get("/style.css").text
+        stack = css.split("#cs-errors {")[1].split("}")[0]
+        assert "position: fixed" in stack
+        assert "right: 16px" in stack
+        assert "bottom: 16px" in stack
+        # Never stacked ON the connection card: two cards in one place read as
+        # one broken card.
+        assert "body.conn-lost #cs-errors" in css
+        assert "#cs-errors .cs-error-body" in css
+
+        js = client.get("/app.js").text
+        assert '"cs-errors"' in js
+        # Both intake failure paths use it, and the success confirmation does not
+        # (a start that worked is still a toast).
+        assert "errorPop(" in js
+        assert "provisioning, see the sidebar" in js
+
     def test_a_long_failure_reason_cannot_widen_the_row(self):
         """A recorded failure reason is a sentence of git output carrying a branch
         name and an absolute worktree path. The chip capped itself at
@@ -879,9 +1042,20 @@ class TestIntakeDialogShell:
 
         chip = css.split(".pr-open-chip {")[1].split("}")[0]
         assert "overflow-wrap: anywhere" in chip
-        # Wrapping, not a one-line clip: the remedy is at the END of the reason.
         assert "white-space: normal" in chip
         assert "text-overflow" not in chip
+
+    def test_a_reason_too_long_for_a_row_opens_instead_of_wrapping(self):
+        """Wrapping kept the remedy visible but turned one row into a paragraph
+        (three lines of git output above the eligibility chips). The chip now
+        shows the front of the sentence and OPENS the rest in the error card, so
+        the remedy is one click away rather than reformatting the list."""
+        js = client.get("/app.js").text
+        assert "shortReason(" in js
+        assert "Click for the full message." in js
+        assert "why it was skipped" in js
+        css = client.get("/style.css").text
+        assert ".pr-open-chip-more" in css
 
 
 # --------------------------------------------------------------------------- #
@@ -898,3 +1072,29 @@ def _async_value(v):
         return v
 
     return _inner()
+
+
+def test_every_intake_work_list_ships_its_filter():
+    """The four lists here grow without bound — every open PR on every watched
+    repo, every ticket in every workflow state — and scrolling was the only way
+    to a particular row. One filter, four panels: the ids have to reach the
+    built bundle, because the frontend is built into backend/web/static and a
+    stale build is the one failure this cannot see from either side."""
+    from fastapi.testclient import TestClient
+
+    from backend.web import server
+
+    client = TestClient(server.app)
+    js = client.get("/app.js").text
+
+    for filter_id in (
+        "tk-tickets-filter",
+        "gh-prs-filter",
+        "gh-issues-filter",
+        "ik-queue-filter",
+    ):
+        assert '"' + filter_id + '"' in js, filter_id
+    # ...and it is Recently closed's box, not a second one: the shared component
+    # is what makes Ctrl+F and "Escape clears, then closes" the same everywhere.
+    assert "dlg-filter" in js
+    assert client.get("/style.css").text.count(".pr-open-toolbar .dlg-filter") >= 1

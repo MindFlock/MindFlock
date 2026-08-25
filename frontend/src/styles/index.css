@@ -49,12 +49,17 @@
 @import "../components/settings/screens/ticketingConnections.css" layer(components); /* 250 */
 @import "../components/intake/IntakeDialog.css" layer(components); /* 255 — after
    ticketingConnections.css, whose .tk-* card rules the Intake cards build on */
+@import "../components/dialogs/VerifyDialog.css" layer(components); /* 256 — after
+   IntakeDialog.css, whose .ik-tab / .ik-groups / .pr-open-chip rules the Verify
+   panel reuses wholesale and, in a few places, extends */
 @import "../components/settings/screens/mobileLogs.css" layer(components); /* 260 */
 @import "../components/settings/screens/notifications.css" layer(components); /* 260 */
 @import "../components/capsGate.css" layer(components); /* 270 */
 @import "../components/dialogs/DeviceDialog.css" layer(components); /* 270 */
 @import "../components/settings/screens/Appearance.css" layer(components); /* 280 */
 @import "../components/settings/screens/traffic.css" layer(components); /* 290 */
+@import "../components/breaks/breaks.css" layer(components); /* 300 — after
+   NewSessionDialog.css, whose .modal backdrop the break screen overrides */
 
 @import "./regions.css" layer(theme);
 @import "./theme-light.css" layer(theme); /* 190 */

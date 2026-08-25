@@ -7,6 +7,185 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Verify — "it merged" is not "it works".** The pipeline's last honest
+  checkpoint was the merge, and merged is not verified: nobody has opened the
+  product and looked at the thing. The agent's own green suite doesn't answer it
+  either — that ran *in a worktree*, against *its* half of the repo, before
+  anyone else's work landed on top. Nobody writes the check down, because at the
+  moment you could write it the change isn't live yet, and at the moment you
+  could run it the diff is a week old and the session has been deleted. MindFlock
+  is the one process that sees both moments.
+
+  So it writes the checklist at push time, holds it, and hands it back when the
+  work is really live: top-bar **Verify** (`Alt+V`), with a badge for what is
+  waiting on you. Track a repo (Verify → **Sources**, or its committed
+  `.mindflock.toml`), and the first push of each session branch turns that
+  branch's diff into steps. Each step carries an **actor**: `agent` for anything a
+  shell can settle, `human` for visual judgement, a real browser, or an external
+  service — and anything unrecognised becomes `human`, because an agent silently
+  passing something it had no way to observe destroys the whole point. **Run**
+  starts a real session that checks out the live branch and works its half, with
+  the stream inline in the dialog, so watching the agent and answering the steps
+  it leaves you are one screen instead of two windows and a round trip.
+
+  **Merged is not deployed**, so ancestry starts a clock rather than handing you
+  the list: the row reads *"Merged 4m ago — waiting for it to deploy"* until the
+  repo's deploy window passes (**Deploy takes (minutes)**, default 5; set it to 0
+  where merging is shipping, or skip the rest with **⋯ → It's deployed — check it
+  now**). Checking too early is not merely early — you see the behaviour the
+  change replaced and record a failure against correct code, which is the one
+  outcome this surface cannot survive.
+
+  Two model postures, deliberately opposite: writing a plan is an unattended
+  read-only one-shot through the session's own CLI (`claude -p`, `codex exec`,
+  no PTY, no skip-permissions flag — a question about the tree has no business
+  editing it), while running one is an ordinary session you can watch, interrupt
+  and take over. Plans live in their own `~/.mindflock/test_plans.json` because
+  they **outlive their sessions**, and they are keyed per session branch: five
+  pushes make one checklist, and a later push may rewrite it from the newest
+  commit only while nobody has answered anything — an append-only checklist could
+  never retract a step that a later commit made impossible to pass.
+
+- **Every Verify card says where the work actually is.** Beside the branch and
+  the sha, a checklist now carries a chip reading *merged into `staging`* — the
+  branch on `origin` this work most recently reached — tinted when that branch is
+  the one the repo ships from. It is the fact neither of the other two names:
+  `branch` is where the work was pushed and the live branch is what the checklist
+  is *waiting for*, so in a repo that ships through a `staging` or `develop` step
+  a change spends most of its life merged somewhere the row could not say, and
+  answering "is this in staging yet, or already in main?" meant leaving the app.
+
+  Ancestry answers it — every `origin` branch that contains the commit, ranked by
+  which it reached most recently, with branches that arrived in the *same merge*
+  folded together, since every branch cut from `main` afterwards contains that
+  merge and listing them all would answer with four names when one thing
+  happened. "Most recently" is measured on each branch's own first-parent chain,
+  which is what tells `staging` gaining the work at its merge from `main` gaining
+  it at the promotion. Where a **squash merge** left no ancestry to find, the
+  branch its pull request merged into is used instead. Refreshed every few
+  minutes per checklist on one shared fetch per repository, budgeted like the
+  liveness pass, and not asked again once the work has reached the branch its
+  repo ships from.
+
+- **Take a break.** Settings → General, right under Reduce motion: one switch
+  whose description is the sentence it configures — *Reminder to take a break
+  every `[N]` minutes*, with N editable in place (5–480, default 60). When it
+  fires, a card asks you to get up, with the murmuration from mindflock.ai flying
+  over your actual grid. **Snooze 5 min** pushes it back; **Resumed work** (or
+  Escape) restarts the clock. Off by default. The countdown is wall-clock and
+  survives a reload — a refresh is not a way to dodge a break — while changing
+  the interval re-arms it from now.
+
+  There is no scrim: the view stays exactly as you left it, sessions keep
+  running, and you can watch them do it. What the screen does take is the
+  pointer and the keyboard — every global shortcut stands down while it is up —
+  so it is a break rather than a suggestion. The card hands the keyboard back to
+  whatever had it.
+
+  The flock is a round trip through the logo, and a lopsided one. It streams OUT
+  of the MindFlock mark over **twenty seconds** — birds leaving the mark one at a
+  time, each flying its own short arc and joining the live flock the moment it
+  lands, so a few seconds in there is already a real murmuration by the edges and
+  a stream still pouring out of the corner — and folds back INTO the mark in
+  under a second when you dismiss it. A single twenty-second interpolation would
+  have been twenty seconds with the flocking rules switched off, which reads as
+  dead.
+
+- **The idle flock.** Ten minutes with no click, keystroke, tap or scroll in
+  the MindFlock window and the flock takes the whole screen — over the sidebar,
+  the panes and the prompt boxes, with no regard for any of their edges. It is
+  `pointer-events: none`, so nothing is covered or blocked, and the first click
+  or keystroke sends it home to the logo the same way. It arrives out of the logo
+  too, the same round trip the break card's flock makes.
+
+  Its own switch sits under Take a break in Settings → General, with the same
+  sentence-with-a-field shape — *Fly the flock over your grid after `[N]`
+  minutes* (1–480, default 10). **On** by default, which the break reminder is
+  not: this one can only ever appear in a room you have already left, so leaving
+  it on costs you no interruptions. Switching it off mid-flight sends the birds
+  home through the logo rather than cutting them off mid-air.
+
+  Three things deliberately do not count as you being at the desk: moving the
+  mouse, agent output, and anything you do in another app. So a cursor resting on
+  the window doesn't hold the birds off, and MindFlock idles behind you while you
+  work elsewhere — a second monitor fills with birds, which is the point — with
+  the click that brings you back being what wakes it. Under
+  `prefers-reduced-motion` both surfaces show a settled flock instead of a moving
+  one.
+
+- **Intake → Auto-start**, a fourth tab that answers the other question. The
+  three per-source tabs are workbenches — every ticket, every open PR, every open
+  issue, grouped by where it lives. This one is not "what is there" but *what
+  happens next without me*: only the rows the automations will pick up on their
+  own, across all three sources, oldest first, in the order the pipeline will
+  draw them. One vocabulary throughout — every section reads *auto-start on* /
+  *auto-start off* / *not set up*, whatever the underlying mechanism happens to
+  be — and its badge counts the rows it will actually show, like the other three.
+
+- **Reopen the work that is already on this machine.** A row for an item that has
+  been worked once already said so in chips (*already ingested*, *a branch for it
+  exists on the remote*) and then offered exactly one button: **Begin work**,
+  which starts over. But the workspace is usually still right there — ending a
+  session keeps its worktree, and a run lost to a restart leaves one behind — so
+  starting fresh either collided with it or silently duplicated it. All three
+  panels now lead with **Reopen** when the work is findable, resolving it
+  most-informative-first: a recently-closed session (whose stashed data restores
+  the branch, program, prompt and provisioning rather than approximating them), a
+  provisioned clone directory, or a worktree still holding the item's branch.
+  Everything about the probe is read-only and best-effort — any failure answers
+  "nothing found", which is exactly how the panels behaved before.
+
+- **Every intake row can be started three ways at once, for that one launch** —
+  which CLI runs it, how far to carry it, and **how hard to think about it**. The
+  effort ladder is neutral (Low, Medium, High, Extra high, Max, Ultra) because no
+  two coding CLIs spell it the same way, and the server translates the rung into
+  whatever the CLI that actually runs understands: `claude --effort xhigh`,
+  `codex -c model_reasoning_effort=high`, `agy --effort high`. A rung above a
+  CLI's ceiling **clamps** rather than being forwarded — claude warns and quietly
+  uses its default for a level it doesn't know, and codex forwards the string to
+  the API, which 400s — so the picker labels what will really happen ("Max (→
+  Extra high)"), names the top rung the way that CLI names it ("Ultra
+  (ultracode)"), and disables itself outright on a CLI with no effort control
+  ("No effort control (aider)") instead of leaving a control that does nothing.
+  None of the three is persisted: re-configuring a whole queue to run one item
+  differently is the wrong shape of action.
+
+- **↺ — put this window back to idle.** On a clean branch git considers finished
+  (`committed`, `pushed`, `pr`) every control in the header is about advancing a
+  cycle you may already consider done, so someone who just opened a PR and wants
+  to keep writing code on the same branch had no way to say so. ↺ says it.
+  Nothing git-facing happens — the commits stay committed, the PR stays open —
+  and the pin deliberately does not touch the published stage either, so the
+  autopilot, the check kicker and every `*_changed` event keep reading the same
+  git-derived truth (a display pin that lied to the autopilot could make an armed
+  chain try to commit a clean tree). It releases itself against the worktree
+  rather than against the stage label: the moment the tree goes dirty or HEAD
+  moves, it is gone.
+
+- **The prompt queue takes a file, and reorders by hand.** Drop a `.csv` on it to
+  queue one prompt per record (quoted fields, embedded commas and newlines, `""`
+  escapes) or any other file to queue one per line, and drag **⋮⋮** to reorder
+  what is waiting.
+
+### Fixed
+
+- **Notifications call a session what the rail calls it.** A desktop
+  notification named its window by the machine slug the event carries —
+  *"shortcut-21431 needs your input"* — while the sidebar showed either your
+  rename or the pipeline label *"(tix) social-scan-noise/shortcut-21431"*. A
+  push about a session that does not appear to exist under that name is worse
+  than no push. The browser channel now asks the app itself
+  (`window.mindflock.displayName`, the sidebar's own resolver), so the two cannot
+  drift; the ntfy channel runs the same rule server-side, pinned against the
+  TypeScript original's examples. Renames already won — the half that was missing
+  is every session nobody renamed.
+
+- **A duplicated window lands under the one it came from**, instead of at the
+  bottom of a rail of twelve. The provisioning row is placed there too, so the
+  copy never appears at the end and then jumps when the server answers.
+
 ## [0.1.17] - 2026-08-11
 
 ### Added

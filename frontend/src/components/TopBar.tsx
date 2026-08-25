@@ -11,6 +11,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useUi } from "../state/store";
+import { useTestPlans } from "../state/queries";
+import { dueCount } from "./dialogs/verify";
 import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { redrawFavicon } from "./EventToasts";
@@ -36,6 +38,14 @@ export function TopBar() {
   const [recentOpen, setRecentOpen] = useState(false);
   const [version, setVersion] = useState(engineVersion);
   const dropRef = useRef<HTMLDivElement | null>(null);
+  // How much verification is waiting on you, without opening the dialog. Same
+  // query and same helper the dialog itself uses, so the badge and the list can
+  // never disagree — the discipline the Intake tab counts follow. The top bar is
+  // mounted for the life of the page, which is deliberately what keeps this
+  // (cheap, local-file) poll running: the point of a badge is to tell you about
+  // the thing you were not already looking at.
+  const { data: testPlans } = useTestPlans();
+  const due = dueCount(testPlans?.plans || []);
   // Evaluated once: the shell can't grow or lose its title bar mid-run.
   const [mac] = useState(hasNativeWindowControls);
   // macOS hides the traffic lights in fullscreen — stop reserving their room.
@@ -185,6 +195,32 @@ export function TopBar() {
             onClick={() => ui.openDialogFor("intake")}
           >
             Intake
+          </button>
+          {/* Verify closes the loop Intake opens: work came in there, and this is
+              where it comes back once it has actually shipped. The count is the
+              whole reason it earns a slot on the bar — work that ships while you
+              are elsewhere is exactly the thing nobody remembers to go and look
+              for. It counts SHIPPED CHANGES NOBODY HAS FINISHED CHECKING, which
+              is the same rule the dialog's first heading renders (`dueCount` and
+              the "Not checked yet" group are one predicate) — deliberately not
+              "things waiting on you personally", since one of them may be an
+              agent mid-run. */}
+          <button
+            id="verify-btn"
+            className="tb-item"
+            type="button"
+            title="Verify — shipped changes nobody has checked (Alt+V)"
+            /* No aria-label, for the same reason as Intake above: the visible
+               "Verify" IS the name, and a second wording would be the one a
+               screen reader announced. */
+            onClick={() => ui.openDialogFor("verify")}
+          >
+            Verify
+            {/* Nothing at all on zero, the way the Intake tab counts do it: a "0"
+                that becomes "3" a moment later reads as "nothing to do", which is
+                the one thing this badge must never say while it is still finding
+                out. */}
+            {due > 0 && <span className="tb-count">{due}</span>}
           </button>
           <div className={"tb-drop" + (recentOpen ? " open" : "")} id="recent-menu" ref={dropRef}>
             <button

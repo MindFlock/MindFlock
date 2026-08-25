@@ -94,6 +94,48 @@ def agent_for(story) -> str:
         return ""
 
 
+def effort_for(story) -> str:
+    """The thinking-effort rung a forced ticket session should run at, or ``""``.
+
+    The effort twin of :func:`agent_for`, and it exists for the same reason: a
+    ticket started by hand from the panel should run the way its source is
+    configured to run, not at whatever the CLI happens to default to. The
+    ticket's own stamp wins (the orchestrator copies it from the source that
+    produced the ticket), then the source's setting as it is on disk now.
+
+    ``""`` = let the CLI decide. A per-start override on the row still beats this
+    — the caller applies that first.
+    """
+    if getattr(story, "effort", ""):
+        return story.effort
+    try:
+        return _load_config().effort_for(getattr(story, "provider", ""))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def effort_for(story) -> str:
+    """The thinking-effort rung a forced ticket session should run at, or ``""``.
+
+    The effort twin of :func:`agent_for`, and the same chain
+    ``SessionRunner._effort_for`` applies to a pipeline-launched ticket — the
+    ticket's own stamp, then the source's configured rung — so starting a ticket
+    by hand from the panel thinks as hard as letting the pipeline pick it up
+    would. Without this, the two paths disagreed about the one setting whose
+    whole point is "every ticket from this queue, not just the ones I remember to
+    set".
+
+    ``""`` = whatever the CLI does on its own. There is deliberately no
+    installation-wide fallback; see ``PipelineConfig.effort_for``.
+    """
+    if getattr(story, "effort", ""):
+        return story.effort
+    try:
+        return _load_config().effort_for(getattr(story, "provider", ""))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def branch_for(story) -> str:
     """The ``feature/<slug>/<name-slug>`` branch the pipeline would push for
     ``story`` — the pipeline's own naming, so a forced start and an auto ingest
@@ -188,6 +230,10 @@ async def list_assigned_tickets() -> dict:
 
     cfg = _load_config()
     sources = cfg.ticketing_sources or []
+    # One resolution for the whole listing: the strategy is app-wide, and the
+    # per-row copy is what lets the reopen probe know where a previous run's
+    # workspace would be (a worktree off the base clone, or its own clone).
+    strategy = workspace_mode()
     ledger = load_processed_story_statuses(_REPO_ROOT)
     failures = load_processed_story_failures(_REPO_ROOT)
     pending_ids = {e.get("story_id") for e in load_pending_stories(_REPO_ROOT)}
@@ -257,7 +303,10 @@ async def list_assigned_tickets() -> dict:
         # The source's configured ingest filter (one or more states), as
         # bucket names — tickets in any other bucket must not read as
         # "queued for auto ingestion".
-        from backend.ticket_ingestion.providers.base import workflow_state_list
+        from backend.ticket_ingestion.providers.base import (
+            ingests_any_assignee,
+            workflow_state_list,
+        )
 
         state_filter = workflow_state_list(src)
         if not state_filter and getattr(src, "workflow_state_id", None) is not None:
@@ -273,7 +322,10 @@ async def list_assigned_tickets() -> dict:
                 )
             except Exception:  # noqa: BLE001 — listing still works without it
                 branch_cache[repo] = set()
-        member_ids = [src.member_id] if src.member_id else []
+        # An any-assignee source's tickets belong to other people by design, so
+        # "not assigned to you" is not a reason to skip one there.
+        any_assignee = ingests_any_assignee(src)
+        member_ids = [src.member_id] if src.member_id and not any_assignee else []
         for story in stories:
             story.repo_url = src.repo_url
             story.agent = getattr(src, "agent", "")
@@ -299,9 +351,25 @@ async def list_assigned_tickets() -> dict:
                     "url": story.app_url,
                     "created_at": story.created_at.isoformat(),
                     "session": session_title(story),
+                    # What a run of this ticket owns on disk: the branch it
+                    # takes, the repo it provisions from and how. The panel
+                    # never shows them; they are what
+                    # :mod:`backend.web.core.reopen` needs to find a workspace a
+                    # previous run left behind (see the annotation in server.py).
+                    "branch": branch_for(story),
+                    "repo_url": repo,
+                    "strategy": strategy,
                     "bucket": bucket,
                     "eligible": not reasons,
                     "reasons": reasons,
+                    # Whose ticket this is. A source scoped to "anyone" lists
+                    # other people's work, and the panel has to be able to say
+                    # so — and to filter down to your own again. Anywhere else
+                    # the provider already searched by assignee, so every row is
+                    # yours whether or not a member id was ever filled in.
+                    "mine": (not any_assignee)
+                    or bool(src.member_id and src.member_id in story.owner_ids),
+                    "assignee": ", ".join(story.owner_names),
                 }
             )
     # Only buckets that actually hold tickets; No state sinks to the end.

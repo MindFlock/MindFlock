@@ -76,6 +76,15 @@ def _check_session_budget(title: str, cost: float) -> None:
     if _BUDGET_FIRED.get(title) == budget:
         return  # already announced at this budget level
     _BUDGET_FIRED[title] = budget
+    # _BUDGET_FIRED is in-memory, so a restart used to re-announce every
+    # session that was ALREADY over budget the moment its first cost computed —
+    # per session, per launch. Inside the boot quiet window, arm silently: being
+    # over at boot is old news; crossing later is still announced.
+    try:
+        if _server()._in_boot_quiet():
+            return
+    except Exception:  # noqa: BLE001 — quiet check must never block the notice
+        pass
     _events.BUS.emit(
         "session.budget_exceeded",
         session=title,

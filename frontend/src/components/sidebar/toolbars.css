@@ -161,11 +161,12 @@
   bottom: -1.5px;
 }
 
-/* MindFlock automation bar + the PR-review / issue-handling bars (same dc-*
-   anatomy) */
+/* MindFlock automation bar + the PR-review / issue-handling / verify bars
+   (same dc-* anatomy) */
 #mindflock-bar,
 #pr-review-bar,
-#git-issue-bar {
+#git-issue-bar,
+#verify-bar {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -176,7 +177,8 @@
 
 #mindflock-bar .dc-dot,
 #pr-review-bar .dc-dot,
-#git-issue-bar .dc-dot {
+#git-issue-bar .dc-dot,
+#verify-bar .dc-dot {
   width: 9px;
   height: 9px;
   /* Pin the box so no inherited or globally-scoped rule can deform the circle.
@@ -193,21 +195,24 @@
 
 #mindflock-bar .dc-dot.on,
 #pr-review-bar .dc-dot.on,
-#git-issue-bar .dc-dot.on {
+#git-issue-bar .dc-dot.on,
+#verify-bar .dc-dot.on {
   background: var(--green);
   box-shadow: 0 0 6px var(--green);
 }
 
 #mindflock-bar .dc-dot.off,
 #pr-review-bar .dc-dot.off,
-#git-issue-bar .dc-dot.off {
+#git-issue-bar .dc-dot.off,
+#verify-bar .dc-dot.off {
   background: var(--muted);
 }
 
 /* PR review enabled but ticket ingestion isn't running — armed, not active. */
 #mindflock-bar .dc-dot.idle,
 #pr-review-bar .dc-dot.idle,
-#git-issue-bar .dc-dot.idle {
+#git-issue-bar .dc-dot.idle,
+#verify-bar .dc-dot.idle {
   background: var(--gold);
 }
 
@@ -216,20 +221,23 @@
    error-TEXT rule (see the shape comment above). */
 #mindflock-bar .dc-dot.dc-error,
 #pr-review-bar .dc-dot.dc-error,
-#git-issue-bar .dc-dot.dc-error {
+#git-issue-bar .dc-dot.dc-error,
+#verify-bar .dc-dot.dc-error {
   background: var(--red);
   box-shadow: 0 0 6px var(--red);
 }
 
 #mindflock-bar .dc-label,
 #pr-review-bar .dc-label,
-#git-issue-bar .dc-label {
+#git-issue-bar .dc-label,
+#verify-bar .dc-label {
   font-weight: 600;
 }
 
 #mindflock-bar .dc-actions,
 #pr-review-bar .dc-actions,
-#git-issue-bar .dc-actions {
+#git-issue-bar .dc-actions,
+#verify-bar .dc-actions {
   margin-left: auto;
   display: flex;
   gap: 6px;
@@ -237,7 +245,8 @@
 
 #mindflock-bar .dc-toggle,
 #pr-review-bar .dc-toggle,
-#git-issue-bar .dc-toggle {
+#git-issue-bar .dc-toggle,
+#verify-bar .dc-toggle {
   cursor: pointer;
   font-size: 11px;
   padding: 4px 10px;
@@ -249,27 +258,69 @@
 
 #mindflock-bar .dc-toggle.active,
 #pr-review-bar .dc-toggle.active,
-#git-issue-bar .dc-toggle.active {
+#git-issue-bar .dc-toggle.active,
+#verify-bar .dc-toggle.active {
   border-color: var(--accent);
   color: #fff;
 }
 
 #mindflock-bar .dc-toggle:hover,
 #pr-review-bar .dc-toggle:hover,
-#git-issue-bar .dc-toggle:hover {
+#git-issue-bar .dc-toggle:hover,
+#verify-bar .dc-toggle:hover {
   border-color: var(--accent);
 }
 
 #mindflock-bar .dc-toggle:disabled,
 #pr-review-bar .dc-toggle:disabled,
-#git-issue-bar .dc-toggle:disabled {
+#git-issue-bar .dc-toggle:disabled,
+#verify-bar .dc-toggle:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
+/* The outstanding count on the Verify bar's Plans button. The SAME red-and-white
+   pill the top bar's Verify badge wears (#topbar .tb-count), from the same rule
+   in verify.ts, because they are one number in two places — a sidebar count in
+   a second colour would read as a second, subtly different question. Absent at
+   zero, for the reason the badge is: a "0" that becomes "3" on the next poll
+   reads as "nothing to do", which is the one thing this must never say while it
+   is still finding out. */
+/* The failures, beside the due count and never added to it: "3 to check" and
+   "1 of them is broken" are different questions with different urgencies.
+   Outlined rather than filled so the two pills are one glance apart at 9px —
+   the filled pill is what is being ASKED of you, the outlined one is what is
+   already known to be wrong. */
+#verify-bar .dc-count.dc-count-bad {
+  /* `border-box` because the filled pill beside it has no border: without it
+     the outlined one is 2px taller and the pair sits crooked at 14px. */
+  box-sizing: border-box;
+  background: transparent;
+  color: var(--red);
+  border: 1px solid var(--red);
+  line-height: 12px;
+}
+
+#verify-bar .dc-count {
+  margin-left: 5px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 7px;
+  background: var(--red);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  display: inline-block;
+}
+
 #mindflock-bar .dc-switch,
 #pr-review-bar .dc-switch,
-#git-issue-bar .dc-switch {
+#git-issue-bar .dc-switch,
+#verify-bar .dc-switch {
   position: relative;
   display: inline-block;
   width: 38px;
@@ -279,7 +330,8 @@
 
 #mindflock-bar .dc-switch input,
 #pr-review-bar .dc-switch input,
-#git-issue-bar .dc-switch input {
+#git-issue-bar .dc-switch input,
+#verify-bar .dc-switch input {
   opacity: 0;
   width: 0;
   height: 0;
@@ -288,7 +340,8 @@
 
 #mindflock-bar .dc-slider,
 #pr-review-bar .dc-slider,
-#git-issue-bar .dc-slider {
+#git-issue-bar .dc-slider,
+#verify-bar .dc-slider {
   position: absolute;
   inset: 0;
   cursor: pointer;
@@ -300,7 +353,8 @@
 
 #mindflock-bar .dc-slider::before,
 #pr-review-bar .dc-slider::before,
-#git-issue-bar .dc-slider::before {
+#git-issue-bar .dc-slider::before,
+#verify-bar .dc-slider::before {
   content: "";
   position: absolute;
   height: 14px;
@@ -314,21 +368,24 @@
 
 #mindflock-bar .dc-switch input:checked+.dc-slider,
 #pr-review-bar .dc-switch input:checked+.dc-slider,
-#git-issue-bar .dc-switch input:checked+.dc-slider {
+#git-issue-bar .dc-switch input:checked+.dc-slider,
+#verify-bar .dc-switch input:checked+.dc-slider {
   background: var(--green);
   border-color: var(--green);
 }
 
 #mindflock-bar .dc-switch input:checked+.dc-slider::before,
 #pr-review-bar .dc-switch input:checked+.dc-slider::before,
-#git-issue-bar .dc-switch input:checked+.dc-slider::before {
+#git-issue-bar .dc-switch input:checked+.dc-slider::before,
+#verify-bar .dc-switch input:checked+.dc-slider::before {
   transform: translateX(18px);
   background: #fff;
 }
 
 #mindflock-bar .dc-switch input:disabled+.dc-slider,
 #pr-review-bar .dc-switch input:disabled+.dc-slider,
-#git-issue-bar .dc-switch input:disabled+.dc-slider {
+#git-issue-bar .dc-switch input:disabled+.dc-slider,
+#verify-bar .dc-switch input:disabled+.dc-slider {
   opacity: 0.5;
   cursor: default;
 }

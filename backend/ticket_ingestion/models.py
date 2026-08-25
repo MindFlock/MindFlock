@@ -59,6 +59,12 @@ class Ticket:
     # flock can route (say) Jira tickets to codex and GitHub issues to a local
     # model. Empty = fall back to [mindflock].agent, then the engine default.
     agent: str = ""
+    # …and how hard it should think. Stamped from the source that produced this
+    # ticket, for the same reason `agent` is: the scanner knows which source a
+    # ticket came from and the launcher, several hops later, does not. Empty =
+    # whatever the CLI does on its own. A neutral rung — see
+    # backend/providers/effort.py — translated and clamped at launch.
+    effort: str = ""
     # Human name of the ticket's workflow state / bucket ("In Progress",
     # "Ready for Dev", …) when the provider knows it, spelled exactly the way
     # that provider's ``list_states()`` spells it — the assigned-tickets panel
@@ -66,6 +72,11 @@ class Ticket:
     # (Shortcut/Jira/Linear); the pipeline itself never reads it.
     # Empty = unknown.
     state: str = ""
+    # Display names of the ticket's assignees, best-effort and panel-only like
+    # ``state`` — ``owner_ids`` carries opaque ids, and a queue scoped to
+    # "anyone" is full of other people's tickets, which are only legible with a
+    # name on them. Empty = the provider didn't say (never an error).
+    owner_names: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.slug:

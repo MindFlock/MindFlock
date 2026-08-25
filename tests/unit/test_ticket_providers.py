@@ -22,6 +22,7 @@ from backend.ticket_ingestion.providers import (
 from backend.ticket_ingestion.providers.asana import AsanaProvider
 from backend.ticket_ingestion.providers.base import (
     extract_link_attachments,
+    ingests_any_assignee,
     parse_acceptance_criteria,
     workflow_state_list,
 )
@@ -589,6 +590,239 @@ class TestShortcutSearchAssigned:
         assert [b["workflow_state_id"] for b in bodies] == [100, 200]
         # Story 1 (present in both states) de-duped; both stories hydrated.
         assert sorted(t.id for t in out) == [1, 2]
+
+
+# --------------------------------------------------------------------------- #
+# Assignee scope: "anyone" takes tickets by state, whoever owns them (the QA
+# queue). Every case here is really one question — can this search still be
+# bounded once the assignee filter comes off?
+# --------------------------------------------------------------------------- #
+class TestIngestsAnyAssignee:
+    def test_default_is_assigned_to_me(self):
+        assert not ingests_any_assignee(
+            TicketProviderConfig(provider="shortcut", workflow_state="100")
+        )
+
+    def test_anyone_with_a_state_filter(self):
+        assert ingests_any_assignee(
+            TicketProviderConfig(
+                provider="shortcut", assignee_scope="anyone", workflow_state="100"
+            )
+        )
+
+    def test_anyone_without_a_state_filter_stays_narrow(self):
+        # The whole tracker is the alternative, so the scope quietly reverts.
+        assert not ingests_any_assignee(
+            TicketProviderConfig(
+                provider="shortcut", assignee_scope="anyone", workflow_state=""
+            )
+        )
+
+    def test_github_needs_no_state_filter(self):
+        # No workflow-state model at all; the repo is the bound.
+        assert ingests_any_assignee(
+            TicketProviderConfig(provider="github_issues", assignee_scope="anyone")
+        )
+
+    def test_asana_never_offers_it(self):
+        assert not ingests_any_assignee(
+            TicketProviderConfig(
+                provider="asana", assignee_scope="anyone", workflow_state="x"
+            )
+        )
+
+    def test_unknown_value_reads_as_mine(self):
+        assert not ingests_any_assignee(
+            TicketProviderConfig(
+                provider="shortcut", assignee_scope="everyone", workflow_state="100"
+            )
+        )
+
+    def test_asana_has_no_scope_field_in_the_catalog(self):
+        by_id = {p["id"]: p for p in PROVIDER_META}
+        keys = {f["key"] for f in by_id["asana"]["fields"]}
+        assert "assignee_scope" not in keys
+        for pid in ("shortcut", "jira", "linear", "github_issues"):
+            fields = {f["key"]: f for f in by_id[pid]["fields"]}
+            assert fields["assignee_scope"]["type"] == "choice"
+            assert [o["value"] for o in fields["assignee_scope"]["options"]] == [
+                "",
+                "anyone",
+            ]
+
+
+class TestAnyAssigneeQueries:
+    async def test_shortcut_poll_drops_owner_id(self, monkeypatch):
+        prov = ShortcutProvider(
+            TicketProviderConfig(
+                provider="shortcut",
+                api_token="t",
+                member_id="m",
+                workflow_state="100",
+                assignee_scope="anyone",
+            )
+        )
+        bodies: list[dict] = []
+
+        async def fake_search(body):
+            bodies.append(body)
+            return []
+
+        monkeypatch.setattr(prov, "_search_stories", fake_search)
+        with _patch_session(_FakeSession()):
+            await prov.search_assigned(_SINCE)
+        assert bodies == [
+            {"updated_at_start": _SINCE.isoformat(), "workflow_state_id": 100}
+        ]
+
+    async def test_shortcut_panel_keeps_the_state_filter(self, monkeypatch):
+        # The assigned-to-me listing drops it on purpose to show every bucket;
+        # without an owner filter that would be the whole organization.
+        prov = ShortcutProvider(
+            TicketProviderConfig(
+                provider="shortcut",
+                api_token="t",
+                member_id="m",
+                workflow_state="100,200",
+                assignee_scope="anyone",
+            )
+        )
+        bodies: list[dict] = []
+
+        async def fake_search(body):
+            bodies.append(body)
+            return []
+
+        monkeypatch.setattr(prov, "_search_stories", fake_search)
+        monkeypatch.setattr(prov, "list_states", lambda: _acoro([]))
+        monkeypatch.setattr(prov, "_member_names", lambda: _acoro({}))
+        await prov.search_assigned_all()
+        assert bodies == [{"workflow_state_id": 100}, {"workflow_state_id": 200}]
+
+    async def test_shortcut_panel_names_the_owners(self, monkeypatch):
+        prov = ShortcutProvider(
+            TicketProviderConfig(
+                provider="shortcut", api_token="t", member_id="m", workflow_state="100"
+            )
+        )
+        story = {
+            "id": 9,
+            "name": "n",
+            "created_at": "2025-01-01T00:00:00Z",
+            "owner_ids": ["u-1"],
+        }
+        monkeypatch.setattr(prov, "_search_stories", lambda body: _acoro([story]))
+        monkeypatch.setattr(prov, "list_states", lambda: _acoro([]))
+        monkeypatch.setattr(prov, "_member_names", lambda: _acoro({"u-1": "Mauricio"}))
+        out = await prov.search_assigned_all()
+        assert out[0].owner_names == ["Mauricio"]
+
+    async def test_shortcut_member_names_degrade_to_empty(self):
+        prov = ShortcutProvider(
+            TicketProviderConfig(provider="shortcut", api_token="t")
+        )
+        session = _FakeSession(get_responses=[_FakeResp(403, text_data="nope")])
+        with _patch_session(session):
+            assert await prov._member_names() == {}
+
+    async def test_jira_jql_drops_the_assignee_clause(self, monkeypatch):
+        prov = JiraProvider(
+            TicketProviderConfig(
+                provider="jira",
+                base_url="https://x.atlassian.net",
+                workflow_state="10001",
+                assignee_scope="anyone",
+            )
+        )
+        seen: list[str] = []
+        monkeypatch.setattr(prov, "_search", lambda jql: seen.append(jql) or _acoro([]))
+        await prov.search_assigned(_SINCE)
+        await prov.search_assigned_all()
+        assert "assignee" not in seen[0] and "status IN (10001)" in seen[0]
+        # The panel query is bounded by status alone, with no dangling AND.
+        assert seen[1] == "status IN (10001) ORDER BY updated DESC"
+
+    async def test_jira_keeps_the_assignee_clause_by_default(self, monkeypatch):
+        prov = JiraProvider(
+            TicketProviderConfig(
+                provider="jira", base_url="https://x.atlassian.net", workflow_state="1"
+            )
+        )
+        seen: list[str] = []
+        monkeypatch.setattr(prov, "_search", lambda jql: seen.append(jql) or _acoro([]))
+        await prov.search_assigned(_SINCE)
+        assert seen[0].startswith("assignee = currentUser() AND updated >=")
+
+    async def test_linear_searches_from_the_issues_root(self, monkeypatch):
+        prov = LinearProvider(
+            TicketProviderConfig(
+                provider="linear",
+                api_token="k",
+                project="QA",
+                workflow_state="s-1",
+                assignee_scope="anyone",
+            )
+        )
+        seen: list[tuple[str, dict]] = []
+
+        def fake_gql(query, variables):
+            seen.append((query, variables))
+            return _acoro({"issues": {"nodes": []}})
+
+        monkeypatch.setattr(prov, "_gql", fake_gql)
+        await prov.search_assigned(_SINCE)
+        query, variables = seen[0]
+        # viewer.assignedIssues IS the assignee filter, so scope changes the root.
+        assert "viewer" not in query and " issues(" in query
+        assert "team: { key: { eq: $team } }" in query
+        assert variables["team"] == "QA" and variables["stateIds"] == ["s-1"]
+
+    async def test_linear_panel_keeps_the_state_filter(self, monkeypatch):
+        prov = LinearProvider(
+            TicketProviderConfig(
+                provider="linear",
+                api_token="k",
+                workflow_state="s-1",
+                assignee_scope="anyone",
+            )
+        )
+        seen: list[tuple[str, dict]] = []
+
+        def fake_gql(query, variables):
+            seen.append((query, variables))
+            return _acoro({"issues": {"nodes": []}})
+
+        monkeypatch.setattr(prov, "_gql", fake_gql)
+        await prov.search_assigned_all()
+        assert seen[0][1]["stateIds"] == ["s-1"]
+
+    async def test_github_omits_the_assignee_param(self):
+        prov = GithubIssuesProvider(
+            TicketProviderConfig(
+                provider="github_issues",
+                api_token="t",
+                project="octo/repo",
+                assignee_scope="anyone",
+            )
+        )
+        session = _FakeSession(get_responses=[_FakeResp(200, json_data=[])])
+        with _patch_session(session):
+            await prov.search_assigned(_SINCE)
+        _url, kwargs = session.get_calls[0]
+        assert "assignee" not in kwargs["params"]
+
+    async def test_github_refuses_to_guess_when_scoped_to_me(self, monkeypatch):
+        # Historically this fell through to assignee="*" — an any-assignee search
+        # wearing an assigned-to-me label.
+        prov = GithubIssuesProvider(
+            TicketProviderConfig(
+                provider="github_issues", api_token="t", project="octo/repo"
+            )
+        )
+        monkeypatch.setattr(prov, "_login", lambda *a, **k: _acoro(""))
+        with _patch_session(_FakeSession()):
+            with pytest.raises(ProviderError, match="assigned to"):
+                await prov.search_assigned(_SINCE)
 
 
 class TestShortcutHydrateStory:
