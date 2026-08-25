@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-25
+
 ### Added
 
 - **Verify — "it merged" is not "it works".** The pipeline's last honest
@@ -1441,7 +1443,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.1.17...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.2.0
 [0.1.17]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.17
 [0.1.16]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.16
 [0.1.15]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.15
