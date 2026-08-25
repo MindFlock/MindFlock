@@ -385,6 +385,24 @@
   overflow-wrap: anywhere;
 }
 
+/* The same chip as a BUTTON, for a reason too long to sit in the row: it shows
+   the front of the sentence and opens the whole thing in the bottom-right error
+   card (lib/errorPop.ts). Dotted underline because "there is more here" has to be
+   visible without hovering — a chip that silently swallowed the remedy is what
+   this replaces. */
+.pr-open-chip-more {
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.pr-open-chip-more:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .pr-open-chip.ok {
   color: var(--green);
   border-color: var(--green);

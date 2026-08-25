@@ -296,7 +296,9 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 18px;
-  width: 580px;
+  /* Was 580px; the rows now carry a checkbox and a modified-date column, and
+     the header a filter and a sort picker. */
+  width: 760px;
   max-width: 92vw;
   max-height: 80vh;
   display: flex;
@@ -318,6 +320,8 @@
 .ws-head #ws-total {
   flex: 1;
   font-size: 12px;
+  /* "37 dirs · 243.80 GB" was breaking between the number and its unit. */
+  white-space: nowrap;
 }
 
 .ws-head button {
@@ -331,6 +335,142 @@
 }
 
 .ws-head button:hover {
+  border-color: var(--accent);
+}
+
+/* Ctrl+F filter row for the list dialogs (Recently closed / Workspaces on
+   disk). Its own row rather than a slot in .ws-head: the head already carries a
+   title, a count and three buttons, and at 580px there was nothing left for an
+   input you can actually read a branch name in. */
+.dlg-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+/* The select-all box sits in the filter's gutter so it lines up with the row
+   boxes below it. */
+.dlg-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Sort key + direction, sharing the filter row. */
+.dlg-sort {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-size: 11px;
+}
+
+.dlg-sort select {
+  font-size: 11px;
+  padding: 5px 6px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.dlg-sort select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.dlg-sort-dir {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 7px;
+  /* Fixed width so flipping ↑/↓ can't shuffle the row. */
+  width: 26px;
+  padding: 5px 0;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.dlg-sort-dir:hover {
+  border-color: var(--accent);
+}
+
+.ws-when {
+  font-size: 11px;
+  flex: none;
+  min-width: 58px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.row-check {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.row-check:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+/* Bulk action bar — mirrors the sidebar's #bulk-bar, scoped to a dialog. */
+.dlg-bulk {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 11px;
+}
+
+/* A picked row has to be obvious from across the list: the checkbox alone is
+   14px of signal for an action that can delete a dozen worktrees. */
+.ws-row.picked,
+.recent-row.picked {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+.dlg-filter input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.dlg-filter input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.dlg-filter-clear {
+  flex: none;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 7px;
+  font-size: 11px;
+  padding: 5px 8px;
+}
+
+.dlg-filter-clear:hover {
+  color: var(--text);
   border-color: var(--accent);
 }
 

@@ -615,6 +615,25 @@
   color: #fff;
 }
 
+/* Back to idle (↺): a TERTIARY control — it undoes nothing and starts nothing,
+   it only stops the header asking for the next rung on a branch its owner has
+   finished with. So it is the quietest thing in the group: muted, no accent, no
+   fill. It must not read as a sibling of the guided button, and it must never be
+   mistaken for a git-facing "reset". */
+.pane-head .actions .nextstep.nextstep-reset {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-weight: 600;
+  padding: 3px 7px;
+}
+
+.pane-head .actions .nextstep.nextstep-reset:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  filter: none;
+}
+
 /* The next-step button is the LAST header control to drop: the token/cost
    counter (and diff-stats line) hide first at 560px, so the primary action
    stays reachable in tight tiled layouts. Only at 420px, when even the button
@@ -625,6 +644,11 @@
    way to turn it off, which is the bug this control was reworked to fix. */
 @container (max-width: 500px) {
   .pane-head .actions .nextstep.nextstep-fast:not(.is-on):not(.nextstep-fast-halted) {
+    display: none !important;
+  }
+  /* ↺ carries no state at all — it is a one-shot action, so there is nothing to
+     lose by hiding it, and the window is still resettable from a wider layout. */
+  .pane-head .actions .nextstep.nextstep-reset {
     display: none !important;
   }
 }
@@ -680,3 +704,21 @@
   background: rgba(var(--accent-rgb), 0.45);
 }
 
+
+/* A verify run's watch window. Read-only by construction (SpecialPane's
+   VerifyBody passes interactive=false, which sets xterm's disableStdin), and
+   marked as such so it does not read as a terminal that has merely stopped
+   accepting input. Accent edge because it is transient and belongs to a plan
+   rather than to the flock: it is the one pane in the grid with no row in the
+   sidebar behind it. */
+.pane.verify-pane {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.pane.verify-pane .pane-head .title {
+  color: var(--accent);
+}
+
+.pane.verify-pane .pane-term {
+  cursor: default;
+}

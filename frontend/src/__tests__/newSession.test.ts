@@ -3,6 +3,9 @@ import {
   FOLDER_INIT,
   focusRowIndex,
   folderReducer,
+  homeRelative,
+  isNameQuery,
+  looksLikePath,
   mayTakeOpeningFocus,
   type FolderAction,
   type FolderState,
@@ -185,6 +188,80 @@ describe("folderReducer — the pre-fill racing the user", () => {
     expect(run(s, { t: "suggested", path: "/home/me/code/myrepo" }).path).toBe(
       "/home/me/code/myrepo"
     );
+  });
+});
+
+describe("looksLikePath — the one predicate that keeps a combobox a path field", () => {
+  it("leaves an absolute path, or a ~ path, on the old behaviour", () => {
+    // These never reach /api/repos/search: they go to the check_repo probe and
+    // its status line, exactly as they did before the field could search.
+    expect(looksLikePath("/home/me/code/api")).toBe(true);
+    expect(looksLikePath("~/code/api")).toBe(true);
+    expect(looksLikePath("  /srv/work  ")).toBe(true); // a stray space is not a name
+  });
+
+  it("treats anything else as a name to look up", () => {
+    expect(looksLikePath("api")).toBe(false);
+    expect(looksLikePath("acme/api")).toBe(false); // a fragment, not a location
+    expect(looksLikePath("")).toBe(false);
+  });
+
+  it("switches back and forth with the leading character, so no mode can stick", () => {
+    // Re-read from the text every keystroke: deleting the slash turns a path
+    // back into a search, typing one turns it back again.
+    expect(looksLikePath("/api")).toBe(true);
+    expect(looksLikePath("api")).toBe(false);
+  });
+});
+
+describe("isNameQuery — the text Create must not treat as a folder", () => {
+  it("calls a bare name what it is: a query, not a location", () => {
+    // The hazard this exists for: Create sends the field verbatim, and the
+    // server resolves a bare name against its OWN working directory and then
+    // creates it — so "api" typed, never picked, and submitted made a
+    // MindFlock/api directory and started a session in it, while "backend"
+    // would have found the server's own source tree.
+    expect(isNameQuery("api")).toBe(true);
+    expect(isNameQuery("notathing")).toBe(true);
+    expect(isNameQuery("acme/api")).toBe(true); // a fragment is still not a path
+  });
+
+  it("refuses relative paths too, which resolve against the server and not the user", () => {
+    expect(isNameQuery("./foo")).toBe(true);
+    expect(isNameQuery("$HOME/code")).toBe(true);
+  });
+
+  it("passes a real path straight through, so the field is the path field it was", () => {
+    expect(isNameQuery("/home/me/code/api")).toBe(false);
+    expect(isNameQuery("~/code/api")).toBe(false);
+    expect(isNameQuery("  /srv/work  ")).toBe(false);
+  });
+
+  it("says nothing about an empty field, which Create already answers for itself", () => {
+    // An empty folder is "a folder is required", not "that is a search term",
+    // and Enter in an empty field must keep submitting the way it always did.
+    expect(isNameQuery("")).toBe(false);
+    expect(isNameQuery("   ")).toBe(false);
+  });
+});
+
+describe("homeRelative — where a match is, said quietly", () => {
+  it("shortens the $HOME prefix every match shares to a ~", () => {
+    expect(homeRelative("/home/me/code/acme/api", "/home/me")).toBe("~/code/acme/api");
+  });
+
+  it("says ~ for home itself rather than an empty line", () => {
+    expect(homeRelative("/home/me", "/home/me")).toBe("~");
+  });
+
+  it("only shortens at a path boundary, so a sibling of home keeps its full path", () => {
+    // /home/mementos is not inside /home/me, and "~mentos" would be a lie.
+    expect(homeRelative("/home/mementos/code", "/home/me")).toBe("/home/mementos/code");
+  });
+
+  it("leaves a path from somewhere else alone", () => {
+    expect(homeRelative("/srv/work/project", "/home/me")).toBe("/srv/work/project");
+    expect(homeRelative("/home/me/code", "")).toBe("/home/me/code");
   });
 });
 

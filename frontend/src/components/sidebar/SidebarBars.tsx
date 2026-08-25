@@ -14,6 +14,7 @@ import { OverallUsage } from "../usage/OverallUsage";
 import { AutomationBar } from "./AutomationBar";
 import { GitIssueBar } from "./GitIssueBar";
 import { PrReviewBar } from "./PrReviewBar";
+import { VerifyBar } from "./VerifyBar";
 
 /** DataTransfer type that marks a drag as a section (bar) move. */
 export const SECTION_MIME = "application/x-mf-section";
@@ -37,6 +38,8 @@ export function barContent(key: string, cbs: ContentCbs): ReactNode {
       return <PrReviewBar />;
     case "issue-handling":
       return <GitIssueBar />;
+    case "verify":
+      return <VerifyBar />;
     case "assistant":
       return (
         <div

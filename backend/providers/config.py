@@ -19,6 +19,10 @@ TOML shape::
     resume_fallback = true      # emit `<resume> || <fresh>` like claude
     prompt_arg = "{prompt}"     # how to pass a start prompt ("" -> can't seed one)
     oneshot_args = ["-p", "{prompt}"]  # run one prompt headlessly and print it
+    effort_args = ["--effort", "{level}"]   # reasoning-effort flag ("" -> no control)
+    effort_levels = ["low", "medium", "high"]  # levels it accepts, cheapest first
+    effort_ultra_level = "ultracode"  # flag value for the top "ultra" rung
+    effort_keyword = "ultracode"  # ...or a prompt keyword, when it has no flag
 
     [exit]
     natural_codes = [0, 130]    # exit codes that mean a clean quit
@@ -112,6 +116,27 @@ class ProviderConfig:
     #: :meth:`launch_args_shell`; invalid TOML/user config is rejected while
     #: loading so a bad persisted provider never reaches command construction.
     launch_args: Tuple[str, ...] = ()
+    # --- reasoning effort (per-launch "think harder about this one") -------- #
+    #: argv template tokens that ask this CLI for a specific reasoning effort,
+    #: with ``{level}`` standing in for the level name — codex
+    #: ``("-c", "model_reasoning_effort={level}")``, antigravity
+    #: ``("--effort", "{level}")``. Appended to the launch command like
+    #: :attr:`launch_args`. Empty = this CLI has no effort control, so a
+    #: requested level adds nothing to its launch.
+    effort_args: Tuple[str, ...] = ()
+    #: The level names THIS CLI accepts, ordered cheapest-first. A neutral rung
+    #: above the last entry clamps to it rather than being passed through — see
+    #: :mod:`backend.providers.effort`.
+    effort_levels: Tuple[str, ...] = ()
+    #: The level name this CLI's effort flag takes for the top ``ultra`` rung
+    #: when that is a mode of its own rather than a higher rung (Claude Code:
+    #: ``ultracode``). Passed through :attr:`effort_args` like any other level,
+    #: though it is deliberately absent from :attr:`effort_levels`.
+    effort_ultra_level: str = ""
+    #: A keyword this CLI recognises inside the PROMPT for the top ``ultra``
+    #: rung. The fallback when there is no flag that names the mode; ignored when
+    #: :attr:`effort_ultra_level` is set. Empty = no such keyword.
+    effort_keyword: str = ""
     #: Optional absolute path / command override for the executable. When set it
     #: is the launched binary (settings/env overrides still win — see
     #: :func:`binary_override`). Empty = use ``command``/``name`` off PATH.
@@ -329,6 +354,16 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             "--skip-git-repo-check",
             "{prompt}",
         ),
+        # Reasoning effort is a config key, not a flag: `-c
+        # model_reasoning_effort=high` (verified against codex 0.146.0 — the
+        # launch banner echoes "reasoning effort: <value>"). `minimal` is
+        # deliberately absent from the ladder even though codex accepts it: the
+        # API refuses it alongside the web_search tool codex enables by default
+        # ("The following tools cannot be used with reasoning.effort 'minimal'"),
+        # so offering it would be offering a start that 400s. `xhigh` is
+        # accepted and was confirmed end-to-end against gpt-5.5.
+        effort_args=("-c", "model_reasoning_effort={level}"),
+        effort_levels=("low", "medium", "high", "xhigh"),
         idle_pattern="",  # unknown -> never auto-confirm spuriously
         trust_patterns=(),  # unknown -> don't auto-dismiss
         trust_keystroke="enter",
@@ -409,6 +444,11 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         # --help`: "Run a single prompt non-interactively and print the
         # response"). The two are easy to mix up — hence the separate field.
         oneshot_args=("--print", "{prompt}"),
+        # From `agy --help`: "--effort  Reasoning effort for the current CLI
+        # session (low|medium|high)". Three rungs, so a request for xhigh/max
+        # clamps to high.
+        effort_args=("--effort", "{level}"),
+        effort_levels=("low", "medium", "high"),
         # The tool-permission dialog's question line ("Do you want to
         # proceed?" with a numbered Yes/always-allow/No list).
         idle_pattern="Do you want to proceed?",
@@ -642,6 +682,18 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
         # Validated like launch args (they end up in an argv list, not a shell),
         # so a user CLI can opt into model-written commit messages from TOML.
         oneshot_args=validate_launch_args(launch.get("oneshot_args", ())),
+        # Reasoning effort, opt-in from TOML: the flag template, the level names
+        # this CLI accepts, and — for the top rung — either a level name of its
+        # own or a prompt keyword. Validated like the other arg lists, since they
+        # end up on a launch command.
+        effort_args=validate_launch_args(launch.get("effort_args", ())),
+        effort_levels=tuple(
+            str(x).strip().lower()
+            for x in (launch.get("effort_levels", ()) or ())
+            if str(x).strip()
+        ),
+        effort_ultra_level=str(launch.get("effort_ultra_level", "") or "").strip(),
+        effort_keyword=str(launch.get("effort_keyword", "") or "").strip(),
         # [usage] window knowledge (optional): kind/hours/weekly_hours/note.
         usage_window_kind=usage.get("window_kind", ""),
         usage_window_hours=float(usage.get("window_hours", 0.0) or 0.0),

@@ -35,7 +35,9 @@ from . import _usage_cache
 from ._timeparse import ts_epoch
 
 _FETCH_TIMEOUT = 3  # seconds per port probe; localhost, so effectively instant
-_TTL = 60.0  # matches the UI's /api/usage refresh cadence
+_TTL = 20.0  # under the UI's refresh cadence, so an event-driven refresh sees
+# new numbers (see claude_usage_api._TTL). Cheap here: the probe
+# is localhost.
 _GRACE = 3600.0  # weekly quotas move slowly — keep the last good reading
 # through an agy restart so the panel doesn't blank out
 

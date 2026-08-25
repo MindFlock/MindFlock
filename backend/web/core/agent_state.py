@@ -30,6 +30,7 @@ from backend.providers.usage_limits import is_limit_screen
 from backend.session import tmux
 from backend.session.storage import Loading
 from backend.web.core import events as _events
+from backend.web.core import stage_reset as _stage_reset
 from backend.web.core.terminal import _exit_marker_path
 
 
@@ -126,6 +127,16 @@ _ACTIVITY_NOISE_LINES = (
     2  # bottom pane lines ignored by the hash (cursor/spinner churn)
 )
 _MARKER_TRUST_WINDOW_S = 45.0  # a working/clarify hook marker older than this is re-verified against the live pane
+# An IDLE verdict from an authoritative signal (the CLI's own Stop hook) is
+# re-checked against the pane for a usage-limit screen at most this often per
+# session. A turn that ends because the account ran out is reported by the CLI
+# exactly like a turn that ends because the work is done — same Stop hook, same
+# quiet pane — so without this the limit is invisible to everything downstream
+# (the badge, the auto-resume watcher, and autopilot's "is the agent done?"
+# gate, which committed a half-finished session because of it). Throttled
+# because the marker path deliberately skips the pane capture.
+_LIMIT_RECHECK_S = 15.0
+_LIMIT_PROBE: Dict[str, dict] = {}  # title -> {"at": epoch, "limit": bool}
 # Per-window resume-thread binding (provider.record_thread) runs at most this
 # often per session — discovery stats on-disk stores and the id changes rarely.
 _THREAD_RECORD_EVERY_S = 20.0
@@ -557,6 +568,29 @@ def _limit_on_pane(srv, name: str, provider) -> bool:
         return False
 
 
+def _idle_or_limit(srv, title: str, name: str, provider) -> str:
+    """``"limit"`` when a session that LOOKS idle is really parked on a
+    usage-limit screen, else ``"idle"``.
+
+    The CLI's own idle report (a Stop-hook marker) is authoritative about the
+    turn having ENDED and says nothing about WHY — a turn cut short by the
+    weekly cap fires the same hook as a finished one. Trusting it verbatim left
+    a limited session reading "idle" forever: the badge never showed it, the
+    resume watcher (which selects on ``activity == "limit"``) never saw it, and
+    autopilot's usage-limit gate — written against exactly this state — was
+    never armed, so the ladder committed and pushed a half-finished session.
+
+    Throttled to one capture per :data:`_LIMIT_RECHECK_S` per session, because
+    the marker path exists precisely to avoid a pane capture on every poll.
+    Never raises."""
+    now = time.time()
+    rec = _LIMIT_PROBE.get(title)
+    if rec is None or now - float(rec.get("at") or 0.0) >= _LIMIT_RECHECK_S:
+        rec = {"at": now, "limit": _limit_on_pane(srv, name, provider)}
+        _LIMIT_PROBE[title] = rec
+    return "limit" if rec.get("limit") else "idle"
+
+
 def _pane_hash_activity(
     srv, inst, title: str, name: str, provider, pane_pid, pane_size
 ) -> str:
@@ -756,7 +790,10 @@ def _agent_activity(inst, title: str) -> str:
     1. provider activity marker — the CLI's own hook-reported state (Claude
        Code Stop/UserPromptSubmit/Notification hooks, A2) -> returned as-is
        (above the shell heuristic on purpose: the CLI's own report outvotes
-       what the pane's foreground command looks like);
+       what the pane's foreground command looks like). An ``idle`` marker is
+       first re-checked against the pane for a usage-limit screen: the hook
+       fires identically whether the turn ENDED or was CUT OFF by the account's
+       limit (:func:`_idle_or_limit`);
     2. process tree — a bare shell holds the pane AND no non-shell descendant
        is alive -> the agent isn't running -> idle. A wrapper shell (the
        provisioned launcher script) with a live ``claude`` child falls through
@@ -809,7 +846,11 @@ def _agent_activity(inst, title: str) -> str:
         marked = provider.activity_state(name)
         if marked == "idle":
             # Stop hook fired -> the turn definitively ended; trust at any age.
-            return "idle"
+            # WHY it ended is another question: a turn the account's usage limit
+            # cut short fires the same hook as a completed one, so the pane is
+            # checked (throttled) before this idle is passed on. See
+            # :func:`_idle_or_limit`.
+            return _idle_or_limit(srv, title, name, provider)
         if marked in ("working", "clarify"):
             # working/clarify markers only refresh on hook events (tool call,
             # prompt submit, notification). A long thinking/generating stretch
@@ -1276,8 +1317,12 @@ def _session_stage(inst) -> dict:
     provisioning -> agent -> precommit -> committed -> pushed -> pr.
     pushed/pr are exact (git upstream / gh); precommit is the UI commit lock;
     agent/committed are inferred from git. Never raises.
+
+    ``stage_reset`` rides alongside (never instead of) the stage: it is the
+    owner's "put this window back to idle" pin, which only the UI's guided
+    ladder honours — see :mod:`backend.web.core.stage_reset`.
     """
-    res = {"stage": "agent", "pr_url": None}
+    res = {"stage": "agent", "pr_url": None, "stage_reset": False}
     try:
         srv = _server()
         if not inst.Started():
@@ -1352,6 +1397,10 @@ def _session_stage(inst) -> dict:
         #   confirmed on origin + no open PR   -> pushed     (next: Make PR)
         if srv._is_dirty(wt) or beyond <= 0:
             res["stage"] = "agent"
+            # Reality is already at the start of the ladder, so a pin has nothing
+            # left to do: release it here rather than leave it to expire on a
+            # later read that may never come (this branch returns early).
+            _stage_reset.clear(getattr(inst, "Title", "") or "")
             return res
         local_head = srv._git_head_sha(wt)
         remote_sha = srv._origin_branch_sha(wt, branch)
@@ -1364,6 +1413,13 @@ def _session_stage(inst) -> dict:
             res["stage"] = "pr"
         else:
             res["stage"] = "pushed"
+        # The one place a pin can hold: a clean tree with commits beyond the base,
+        # i.e. exactly the window where git says the branch is finished. `dirty` is
+        # False by construction here (the branch above returned), and `local_head`
+        # was measured in this same pass — so the release check costs nothing.
+        res["stage_reset"] = _stage_reset.active(
+            getattr(inst, "Title", "") or "", local_head, False
+        )
         return res
     except Exception:  # noqa: BLE001
         return res

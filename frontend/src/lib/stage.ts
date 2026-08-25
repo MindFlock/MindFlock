@@ -14,6 +14,7 @@ import {
   makePrSession,
   mergeSession,
   pushSession,
+  resetStage,
   resolveDepth,
   startFastTrack,
   stopFastTrack,
@@ -47,36 +48,110 @@ export function stageMeta(stage: string) {
   return STAGE_META[stage] || STAGE_META.agent;
 }
 
-// --- "Loop reset" pin: after a successful Make PR, restart the guided cycle ---
-// The workflow stage is git-derived and would otherwise sit on "pr" (open PR)
-// until the branch is merged, leaving the pill stuck on "Merge". After Make PR
-// succeeds we pin the session's guided stage back to the start ("agent" -> chip
-// "idle", button "Commit…") so the commit→push→PR loop can repeat in the same
-// session. The pin is dropped the moment the real git-derived stage moves off
-// "pr" (new uncommitted work, a fresh commit) — at that point reality already
-// matches the reset, so the true stage takes over again.
-const loopReset = new Set<string>();
+// --- "Back to idle": restarting the guided cycle on a finished branch --------
+// The workflow stage is git-derived, so it returns to "agent" on its own the
+// moment the tree goes dirty. The gap is the CLEAN-tree window — committed,
+// pushed, pr — where git says the branch is done and the header therefore
+// insists on Push / Make PR / Merge, with no way to say "I opened the PR and I'm
+// still working on this branch". The reset pin says exactly that.
+//
+// THE AUTHORITY IS THE SERVER: `inst.stage_reset`
+// (backend/web/core/stage_reset.py). It has to be, for the two reasons a
+// browser-local pin could not cover — it must survive a reload, and the sidebar,
+// the pane header and /m must not disagree about it. The server releases it as
+// soon as the worktree moves (a new commit, or a dirty tree).
+//
+// The map below is only an OPTIMISTIC ECHO for the gap between pressing the
+// button and the row that confirms it (one round trip, or up to a poll if that
+// request is lost). It expires on its own, so a failed POST degrades to "the
+// button did nothing" rather than to a pin no server agrees with.
+const echo = new Map<string, number>();
+const ECHO_TTL_MS = 20_000;
+
+function echoing(title?: string): boolean {
+  if (!title) return false;
+  const at = echo.get(title);
+  if (at === undefined) return false;
+  if (Date.now() - at > ECHO_TTL_MS) {
+    echo.delete(title);
+    return false;
+  }
+  return true;
+}
 
 export function markLoopReset(title: string) {
-  if (title) loopReset.add(title);
+  if (title) echo.set(title, Date.now());
 }
 
 export function clearLoopReset(title: string) {
-  loopReset.delete(title);
+  echo.delete(title);
 }
 
-/** Per-poll reconcile: forget the pin once the git-derived stage has genuinely
- * left "pr", so we never override a stage the backend already agrees with. */
+/** Per-poll reconcile: drop the local echo once the server's row carries the pin
+ * itself (or once the echo has aged out), so exactly one of the two is ever in
+ * play and the server's release is never overridden by a stale echo. */
 export function reconcileLoopReset(inst: Instance) {
-  if (loopReset.has(inst.title) && (inst.stage || "agent") !== "pr")
-    loopReset.delete(inst.title);
+  if (!inst.title) return;
+  if (inst.stage_reset) echo.delete(inst.title);
+  else echoing(inst.title); // TTL sweep
 }
 
-/** The guided stage to render: the pinned "agent" while the loop-reset is
- * active, otherwise the real git-derived stage. */
+/** True when this session's guided ladder is pinned back to its start. */
+export function isStageReset(inst: Partial<Instance>): boolean {
+  return !!inst.stage_reset || echoing(inst.title);
+}
+
+/** The guided stage to render: "agent" while the reset pin holds, otherwise the
+ * real git-derived stage. */
 function guidedStage(inst: Partial<Instance>): string {
-  if (inst.title && loopReset.has(inst.title)) return "agent";
+  if (isStageReset(inst)) return "agent";
   return inst.stage || "agent";
+}
+
+/** Stages a reset can act on: git considers the branch finished, so the ladder
+ * has somewhere to be put back FROM. */
+const RESETTABLE = new Set(["committed", "pushed", "pr"]);
+
+/** What the header is currently asking for at each finished stage — named in the
+ * tooltip, because "back to idle" only means something against the ask it
+ * silences. */
+const RESET_ASK: Record<string, string> = {
+  committed: "push",
+  pushed: "open a PR",
+  pr: "merge",
+};
+
+/** The ↺ control beside the guided button: put this window back to idle.
+ *
+ * A ONE-SHOT ACTION, deliberately not a toggle like ⏩ beside it. "Back to idle"
+ * is something you do to a window, not a mode the window is in — once the header
+ * has stopped asking you to finish a cycle you consider finished, there is
+ * nothing left to turn off, and a control that lingered in an ON state would
+ * assert otherwise. So it does its job and leaves; the pin it set expires on its
+ * own the moment you commit again.
+ *
+ * Shown only where the ladder has somewhere to be put back FROM — a clean branch
+ * git considers finished, not already pinned. Returns null everywhere else. */
+export function resetStep(inst: Partial<Instance>): NextStep | null {
+  const title = inst.title;
+  const caps = queryClient.getQueryData<Config>(["config"])?.caps;
+  if (caps && !caps.git) return null;
+  if (!title || inst.status === "loading" || inst.status === "paused") return null;
+  if (inst.workspace_missing) return null;
+  if (isStageReset(inst)) return null; // done — the ladder is back at its start
+  const stage = inst.stage || "agent";
+  if (!RESETTABLE.has(stage)) return null;
+  return {
+    label: "↺",
+    title:
+      "Back to idle — restart the guided cycle on this branch.\n" +
+      "Nothing is undone: the commits stay, an open PR stays open. The header\n" +
+      "just stops asking you to " +
+      (RESET_ASK[stage] || "finish up") +
+      " so you can keep working here.\n" +
+      "It clears itself the moment you commit again.",
+    run: () => resetStage(title),
+  };
 }
 
 // --- Live agent activity, debounced across 2 polls (events push instantly) --

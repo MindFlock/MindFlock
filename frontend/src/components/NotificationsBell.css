@@ -53,8 +53,8 @@
    The hairline is in the region's text color, so an amber pill still reads on an
    amber top bar (Goldfinch, Toucan) — --gold is a global, not a region token. */
 .notif-badge.attn {
-  background: var(--gold);
-  color: #1a1a1a;
+  background: var(--gold-fill);
+  color: var(--gold-ink);
   box-shadow: 0 0 0 1px var(--text);
 }
 
@@ -204,8 +204,17 @@
 
 /* --- O1: needs-attention — surfaced in the notification-bell popover ------ */
 /* (Amber badge `.notif-badge.attn` is defined next to the base badge rule.) */
+/* The bell takes the badge's amber, not --gold, so the icon and the pill on it
+   are one object rather than two shades of yellow. --gold is the read-on-the-
+   page variant and is dark on light (#9a7400): next to an #f0b429 badge it read
+   as a brown bell wearing an amber sticker.
+   The fill token is safe here despite being a foreground: this glyph is a solid
+   filled path (fill="currentColor", no strokes), so it holds its shape at 15px
+   far better than type would — and in this state it is never the only signal,
+   since .notif-badge.attn sits on top of it wearing a 1px --text ring for
+   exactly this reason. */
 #notif-btn.has-attn {
-  color: var(--gold);
+  color: var(--gold-fill);
 }
 
 /* Pinned live section at the top of the bell popover, above the history. */
@@ -255,8 +264,11 @@
   background: var(--red);
 }
 
+/* A fill with nothing written on it, so it takes --gold-fill by the same rule
+   as the badge (see tokens.css). It also has to sit next to the bell and the
+   pill that opened this popover without being a third yellow. */
 .attn-item.p2 .attn-dot {
-  background: var(--gold);
+  background: var(--gold-fill);
 }
 
 .attn-item.p3 .attn-dot {

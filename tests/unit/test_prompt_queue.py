@@ -84,6 +84,49 @@ def test_reorder(qfile):
     assert [i["text"] for i in pq.list_queue("s")] == ["b", "a"]
 
 
+def test_enqueue_at_index(qfile):
+    pq.enqueue("s", "a")
+    pq.enqueue("s", "c")
+    pq.enqueue("s", "b", index=1)
+    assert [i["text"] for i in pq.list_queue("s")] == ["a", "b", "c"]
+    # index 0 = above everything; a huge index clamps to append.
+    pq.enqueue("s", "front", index=0)
+    pq.enqueue("s", "back", index=999)
+    assert [i["text"] for i in pq.list_queue("s")] == ["front", "a", "b", "c", "back"]
+
+
+def test_enqueue_many(qfile):
+    pq.enqueue("s", "existing")
+    entry, added, skipped = pq.enqueue_many("s", ["a", "  ", "b", None, "c"])
+    assert (added, skipped) == (3, 0)
+    assert [i["text"] for i in entry["items"]] == ["existing", "a", "b", "c"]
+    assert entry["enabled"] is True
+    # Ids are unique even though the rows share one timestamp.
+    ids = [i["id"] for i in entry["items"]]
+    assert len(set(ids)) == len(ids)
+
+
+def test_enqueue_many_respects_cap(qfile):
+    pq.enqueue_many("s", ["x%d" % i for i in range(pq._MAX_ITEMS - 1)])
+    entry, added, skipped = pq.enqueue_many("s", ["a", "b", "c"])
+    assert (added, skipped) == (1, 2)
+    assert len(entry["items"]) == pq._MAX_ITEMS
+
+
+def test_move_item_to(qfile):
+    for t in ("a", "b", "c", "d"):
+        pq.enqueue("s", t)
+    items = pq.list_queue("s")
+    # Drag "d" to the front, then "a" (now index 1) to the end (clamped).
+    pq.move_item_to("s", items[3]["id"], 0)
+    assert [i["text"] for i in pq.list_queue("s")] == ["d", "a", "b", "c"]
+    pq.move_item_to("s", items[0]["id"], 99)
+    assert [i["text"] for i in pq.list_queue("s")] == ["d", "b", "c", "a"]
+    # Unknown id is a no-op.
+    pq.move_item_to("s", "nope", 0)
+    assert [i["text"] for i in pq.list_queue("s")] == ["d", "b", "c", "a"]
+
+
 def test_update_item_text(qfile):
     e = pq.enqueue("s", "a")
     pq.enqueue("s", "b")
@@ -284,6 +327,44 @@ def test_queue_edit_via_api(client):
     assert [
         i["text"] for i in client.get("/api/instances/t1/queue").json()["items"]
     ] == ["one — edited"]
+
+
+def test_queue_insert_and_dnd_reorder_via_api(client):
+    """The drag-and-drop shapes: POST /queue with an index inserts at that
+    slot, and /queue/reorder with an index moves to an absolute position."""
+    client.post("/api/instances/t1/queue", json={"text": "a"})
+    client.post("/api/instances/t1/queue", json={"text": "c"})
+    st = client.post("/api/instances/t1/queue", json={"text": "b", "index": 1}).json()
+    assert [i["text"] for i in st["items"]] == ["a", "b", "c"]
+    # Drag "c" to the front.
+    cid = st["items"][2]["id"]
+    r = client.post("/api/instances/t1/queue/reorder", json={"id": cid, "index": 0})
+    assert [i["text"] for i in r.json()["items"]] == ["c", "a", "b"]
+    # The one-slot nudge still works (older clients).
+    r = client.post(
+        "/api/instances/t1/queue/reorder", json={"id": cid, "direction": "down"}
+    )
+    assert [i["text"] for i in r.json()["items"]] == ["a", "c", "b"]
+    # Junk index is a 400, not a crash or a silent reorder.
+    assert (
+        client.post(
+            "/api/instances/t1/queue/reorder", json={"id": cid, "index": "x"}
+        ).status_code
+        == 400
+    )
+
+
+def test_queue_bulk_add_via_api(client):
+    """The drop-a-CSV shape: ``texts`` bulk-appends and reports counts."""
+    client.post("/api/instances/t1/queue", json={"text": "existing"})
+    r = client.post("/api/instances/t1/queue", json={"texts": ["a", " ", "b"]}).json()
+    assert (r["added"], r["skipped"]) == (2, 0)
+    assert [i["text"] for i in r["items"]] == ["existing", "a", "b"]
+    # All-blank payloads are a 400, same as an empty single text.
+    assert (
+        client.post("/api/instances/t1/queue", json={"texts": ["", "  "]}).status_code
+        == 400
+    )
 
 
 def test_queue_send_now_delivers_and_pops(client):

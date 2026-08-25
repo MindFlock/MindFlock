@@ -232,8 +232,15 @@ def test_the_ingestion_dot_cannot_be_deformed_by_the_global_error_rule():
     # The styled selector matches the scoped name.
     assert ".dc-dot.dc-error" in css
     # And the circle pins its own box, so a future global leak cannot deform it.
+    # Every automation bar shares the one rule, so the selector list grows by one
+    # line each time a bar is added (Verify was the fourth). Spelled out in full
+    # rather than matched loosely: the point of the assertion is that ALL of them
+    # pin the box, and a fuzzy match would pass while a new bar's dot went
+    # unpinned.
     dot = _rule(
-        css, "#mindflock-bar .dc-dot,\n#pr-review-bar .dc-dot,\n#git-issue-bar .dc-dot"
+        css,
+        "#mindflock-bar .dc-dot,\n#pr-review-bar .dc-dot,\n"
+        "#git-issue-bar .dc-dot,\n#verify-bar .dc-dot",
     )
     for decl in ("min-height: 0", "min-width: 0", "border-radius: 50%"):
         assert decl in dot, decl

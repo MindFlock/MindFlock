@@ -10,6 +10,7 @@ eligible (no-reasons) case. No network, no config, no filesystem.
 from __future__ import annotations
 
 import types
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -369,6 +370,94 @@ async def test_list_assigned_tickets_annotates_and_orders_buckets(
     assert out["errors"] == []
 
 
+async def test_list_assigned_tickets_on_an_any_assignee_source(monkeypatch, tmp_path):
+    """A QA queue's tickets belong to whoever wrote the code, so "not assigned
+    to you" stops being a reason to skip one — and the panel has to say whose
+    each row is, since they are no longer all yours."""
+    from backend.ticket_ingestion import backfill
+    from backend.ticket_ingestion import providers as providers_mod
+
+    monkeypatch.setattr(ticket_start, "_REPO_ROOT", tmp_path)
+    src = types.SimpleNamespace(
+        id="shortcut",
+        provider="shortcut",
+        repo_url="acme/app",
+        member_id="member-123",
+        workflow_state="2",
+        workflow_state_id=None,
+        assignee_scope="anyone",
+    )
+    monkeypatch.setattr(
+        ticket_start,
+        "_load_config",
+        lambda: types.SimpleNamespace(ticketing_sources=[src], repo_url="acme/app"),
+    )
+    mine = _story(id=1, state="In Progress")
+    theirs = _story(
+        id=2, state="In Progress", owner_ids=["someone-else"], owner_names=["Mauricio"]
+    )
+    prov = types.SimpleNamespace(
+        label="Shortcut",
+        search_assigned_all=AsyncMock(return_value=[mine, theirs]),
+        list_states=AsyncMock(
+            return_value=[{"id": "2", "name": "In Progress", "type": "started"}]
+        ),
+    )
+    monkeypatch.setattr(providers_mod, "get_provider", lambda s: prov)
+
+    async def _no_branches(repo):
+        return set()
+
+    monkeypatch.setattr(backfill, "_get_existing_branches", _no_branches)
+
+    out = await ticket_start.list_assigned_tickets()
+    by_slug = {t["slug"]: t for t in out["tickets"]}
+    assert by_slug["sc-2"]["eligible"] is True
+    assert by_slug["sc-2"]["reasons"] == []
+    assert by_slug["sc-2"]["mine"] is False
+    assert by_slug["sc-2"]["assignee"] == "Mauricio"
+    assert by_slug["sc-1"]["mine"] is True
+
+
+async def test_list_assigned_tickets_marks_everything_mine_when_scoped_to_me(
+    monkeypatch, tmp_path
+):
+    """Without an any-assignee source the provider already searched by assignee,
+    so every row is yours — even when no member id was ever filled in, which
+    would otherwise make the whole panel look like other people's work."""
+    from backend.ticket_ingestion import backfill
+    from backend.ticket_ingestion import providers as providers_mod
+
+    monkeypatch.setattr(ticket_start, "_REPO_ROOT", tmp_path)
+    src = types.SimpleNamespace(
+        id="linear",
+        provider="linear",
+        repo_url="acme/app",
+        member_id="",
+        workflow_state="",
+        workflow_state_id=None,
+    )
+    monkeypatch.setattr(
+        ticket_start,
+        "_load_config",
+        lambda: types.SimpleNamespace(ticketing_sources=[src], repo_url="acme/app"),
+    )
+    prov = types.SimpleNamespace(
+        label="Linear",
+        search_assigned_all=AsyncMock(return_value=[_story(id=1, owner_ids=[])]),
+        list_states=AsyncMock(return_value=[]),
+    )
+    monkeypatch.setattr(providers_mod, "get_provider", lambda s: prov)
+
+    async def _no_branches(repo):
+        return set()
+
+    monkeypatch.setattr(backfill, "_get_existing_branches", _no_branches)
+
+    out = await ticket_start.list_assigned_tickets()
+    assert out["tickets"][0]["mine"] is True
+
+
 async def test_list_assigned_tickets_reports_per_source_errors(monkeypatch, tmp_path):
     from backend.ticket_ingestion import providers as providers_mod
 
@@ -641,3 +730,111 @@ def test_a_later_success_supersedes_an_earlier_failure_reason(tmp_path):
             ),
         )
     assert load_processed_story_failures(tmp_path) == {}
+
+
+# --------------------------------------------------------------------------- #
+# A source's thinking effort reaches BOTH launch paths
+#
+# A per-source default whose only effect is on tickets the pipeline happens to
+# pick up would be a setting that works or not depending on which button you
+# pressed. Both paths resolve the same chain: the ticket's own stamp, then the
+# source's rung.
+# --------------------------------------------------------------------------- #
+def test_a_hand_started_ticket_inherits_its_sources_effort(monkeypatch):
+    from backend.web.core import ticket_start
+    from types import SimpleNamespace
+
+    class _Cfg:
+        def effort_for(self, source_id=""):
+            return "xhigh" if source_id == "shortcut" else ""
+
+    monkeypatch.setattr(ticket_start, "_load_config", lambda: _Cfg())
+
+    assert (
+        ticket_start.effort_for(SimpleNamespace(provider="shortcut", effort=""))
+        == "xhigh"
+    )
+    assert ticket_start.effort_for(SimpleNamespace(provider="jira", effort="")) == ""
+    # The ticket's own stamp wins — the scanner copies it from the source that
+    # produced the ticket, and it is the more specific answer.
+    assert (
+        ticket_start.effort_for(SimpleNamespace(provider="jira", effort="max")) == "max"
+    )
+
+
+def test_effort_for_never_raises_when_the_config_is_unreadable(monkeypatch):
+    from backend.web.core import ticket_start
+    from types import SimpleNamespace
+
+    def _boom():
+        raise RuntimeError("no config")
+
+    monkeypatch.setattr(ticket_start, "_load_config", _boom)
+    assert (
+        ticket_start.effort_for(SimpleNamespace(provider="shortcut", effort="")) == ""
+    )
+
+
+def test_the_pipeline_launch_translates_the_rung_for_the_cli_it_resolved(monkeypatch):
+    """The rungs stored on a source are NEUTRAL. Each provider spells the request
+    differently and clamps its own ceiling, so the translation has to happen after
+    the program is resolved — not where the rung was configured."""
+    from backend.ticket_ingestion import session_runner as sr
+
+    seen: dict = {}
+
+    class _FakeOpts:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+    class _FakeInst:
+        def Start(self, *a):
+            pass
+
+    # `from backend import session as cs_session` reads the ATTRIBUTE off the
+    # package, so patching sys.modules would not intercept it.
+    from backend import session as real
+
+    monkeypatch.setattr(real, "InstanceOptions", _FakeOpts)
+    monkeypatch.setattr(real, "NewInstance", lambda opts: _FakeInst())
+    monkeypatch.setattr(sr, "_resolve_program", lambda agent: "claude")
+
+    runner = sr.SessionRunner.__new__(sr.SessionRunner)
+    runner._mode = "worktree"
+    runner._persist = lambda inst: None
+    runner._create_instance("t", "b", "do the thing", "", "claude", "ultra")
+
+    # Claude Code spells its top rung `ultracode` and takes it as a launch flag.
+    assert "launch_args" in seen and seen["launch_args"]
+    assert "ultra" in " ".join(seen["launch_args"]).lower()
+
+
+def test_no_effort_leaves_the_launch_flags_exactly_as_they_were(monkeypatch):
+    """`InstanceOptions` treats an explicit value — even an empty one — as "use
+    these verbatim", so passing one unconditionally would strip the flags the
+    user set in Settings -> Coding CLI from every ingested ticket."""
+    from backend.ticket_ingestion import session_runner as sr
+
+    seen: dict = {}
+
+    class _FakeOpts:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+    class _FakeInst:
+        def Start(self, *a):
+            pass
+
+    from backend import session as real
+
+    monkeypatch.setattr(real, "InstanceOptions", _FakeOpts)
+    monkeypatch.setattr(real, "NewInstance", lambda opts: _FakeInst())
+    monkeypatch.setattr(sr, "_resolve_program", lambda agent: "claude")
+
+    runner = sr.SessionRunner.__new__(sr.SessionRunner)
+    runner._mode = "worktree"
+    runner._persist = lambda inst: None
+    runner._create_instance("t", "b", "do the thing", "", "claude", "")
+
+    assert "launch_args" not in seen
+    assert seen["prompt"] == "do the thing"

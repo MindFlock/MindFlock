@@ -16,14 +16,18 @@ import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
 import { runGithubTest } from "../dialogs/SetupDialog";
 import {
   AutomationSwitch,
+  useListFilter,
   WorkGroup,
   WorkItemRow,
   WorkListPanel,
   ageText,
   panelNote,
+  reopenIntakeItem,
   useToggleSet,
+  type ItemWorkspace,
 } from "./kit";
 import { RepoSourceList, type RepoOverrides } from "./RepoSources";
+import { prMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
 
 interface OpenPr {
@@ -38,6 +42,8 @@ interface OpenPr {
   has_session?: boolean;
   eligible?: boolean;
   reasons?: string[];
+  /** Present when an earlier review of this PR still has its clone here. */
+  workspace?: ItemWorkspace;
 }
 
 /** Per-device: which repo groups are collapsed (membership = collapsed, so a
@@ -48,6 +54,10 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
   const s = useSettings();
   const agentChoices = useAgentChoices();
   const groups = useToggleSet(PR_GROUPS_KEY, true);
+  const filter = useListFilter(
+    "gh-prs-filter",
+    "Filter by repo, number, title, author, branch, or why…  ( Ctrl+F )",
+  );
   const gh = (s.settings.github || {}) as {
     enabled?: boolean;
     agent?: string;
@@ -105,16 +115,21 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
   // of the list above, so the groups read in the same order as the cards; a
   // repo that answered with rows but is no longer watched still gets a group
   // rather than silently dropping its PRs.
+  // FILTERED BEFORE GROUPED, so a heading's count describes what is under it,
+  // and a repo with no match drops out instead of rendering an empty group.
+  const shownPrs = (prs || []).filter((p) => prMatches(p, filter.tokens));
   const byRepo = new Map<string, OpenPr[]>();
-  for (const p of prs || []) {
+  for (const p of shownPrs) {
     const key = p.repo || "unknown";
     if (!byRepo.has(key)) byRepo.set(key, []);
     byRepo.get(key)!.push(p);
   }
-  const groupOrder = [
-    ...repos.filter((r) => prsRepos.includes(r) || byRepo.has(r)),
-    ...[...byRepo.keys()].filter((r) => !repos.includes(r)),
-  ];
+  const groupOrder = filter.active
+    ? [...byRepo.keys()]
+    : [
+        ...repos.filter((r) => prsRepos.includes(r) || byRepo.has(r)),
+        ...[...byRepo.keys()].filter((r) => !repos.includes(r)),
+      ];
 
   return (
     <>
@@ -172,6 +187,10 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
           baseBranch: String(gh.base_branch || ""),
           minAge: gh.min_age_minutes == null ? "" : String(gh.min_age_minutes),
           skipAuthors: String(skipAuthors),
+          // Verify's field. Blank here for the same reason Issues passes a blank
+          // base branch: the bag is one shape for all three surfaces, and a
+          // surface that never renders a field has nothing to seed it with.
+          liveBranch: "",
         }}
         listId="gh-repos-list"
         addId="gh-repo-add-btn"
@@ -194,6 +213,7 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
         refreshId="gh-prs-refresh"
         noteId="gh-prs-note"
         listId="gh-prs-list"
+        toolbarExtra={prs && prs.length ? filter.control : undefined}
         hint={
           <>
             Every non-draft open PR on the repositories above
@@ -209,6 +229,8 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
           <div className="repo-empty">Add a repository above to see its open PRs.</div>
         ) : !prs.length ? (
           <div className="repo-empty">No open pull requests on the watched repositories.</div>
+        ) : !groupOrder.length ? (
+          <div className="repo-empty">No open pull request matches “{filter.query}”.</div>
         ) : (
           groupOrder.map((repo) => {
             const rows = byRepo.get(repo) || [];
@@ -241,19 +263,30 @@ export function PullRequestsTab({ gotoTab }: TabProps) {
                       reasons={p.reasons}
                       actionLabel="Begin review"
                       failPrefix="Begin review failed"
+                      workspace={p.workspace}
+                      onReopen={async () => {
+                        const title = await reopenIntakeItem({
+                          kind: "prs",
+                          repo: p.repo,
+                          number: p.number,
+                        });
+                        setTimeout(relistPrs, 5000);
+                        return title;
+                      }}
                       agents={agentChoices.names}
                       configuredAgent={
                         overrides[repo]?.agent ||
                         String(gh.agent || agentChoices.fallback || "")
                       }
                       configuredDepth={overrides[repo]?.depth || ""}
-                      onStart={async ({ agent, depth }) => {
+                      onStart={async ({ agent, depth, effort }) => {
                         const r = await api<{ title?: string }>("/api/github/prs/review", {
                           json: {
                             repo: p.repo,
                             number: p.number,
                             ...(agent ? { agent } : {}),
                             ...(depth ? { depth } : {}),
+                            ...(effort ? { effort } : {}),
                           },
                         });
                         // The server already has a provisioning row for it: pull it now

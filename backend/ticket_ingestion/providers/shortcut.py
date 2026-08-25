@@ -21,6 +21,7 @@ from backend.ticket_ingestion.providers.base import (
     ProviderError,
     TicketProvider,
     extract_link_attachments,
+    ingests_any_assignee,
     parse_acceptance_criteria,
     parse_iso8601,
     workflow_state_list,
@@ -173,10 +174,12 @@ class ShortcutProvider(TicketProvider):
         return out
 
     async def search_assigned(self, since: datetime) -> list[Ticket]:
-        base_body: dict = {
-            "owner_id": self.cfg.member_id,
-            "updated_at_start": since.isoformat(),
-        }
+        base_body: dict = {"updated_at_start": since.isoformat()}
+        # "anyone" drops the owner filter so the state filter alone decides what
+        # gets picked up — a QA queue's stories are assigned to whoever wrote the
+        # code. `ingests_any_assignee` guarantees a state filter exists here.
+        if not ingests_any_assignee(self.cfg):
+            base_body["owner_id"] = self.cfg.member_id
         # The search endpoint takes ONE workflow_state_id — several configured
         # ingest states mean one search per state, concatenated and de-duped.
         state_ids = self._ingest_state_ids()
@@ -213,14 +216,28 @@ class ShortcutProvider(TicketProvider):
     async def search_assigned_all(self) -> list[Ticket]:
         """Every story currently assigned to the member, across ALL workflow
         states (the source's ``workflow_state`` ingest filter is deliberately
-        not applied) and with no age cutoff. Slim data only — the panel needs
+        not applied — unless the source ingests any assignee, where that filter
+        is the only bound there is) and with no age cutoff. Slim data only — the panel needs
         id/name/url/state, and hydrating hundreds of stories one-by-one would
         hammer the API; the force-start path re-fetches the full story anyway.
         ``Ticket.state`` carries the workflow-state name (bucket)."""
-        body: dict = {"owner_id": self.cfg.member_id}
         # Single source of the endpoint/accepted-status/error format (the guard
         # is redundant: _search_stories already returns [] for a non-list body).
-        data = await self._search_stories(body)
+        if ingests_any_assignee(self.cfg):
+            # Nothing scopes an any-assignee search but the state filter, so the
+            # panel keeps it — dropping it here (as the assigned-to-me listing
+            # does, to show every bucket) would ask for the whole organization.
+            data = []
+            seen: set = set()
+            for sid in self._ingest_state_ids():
+                for item in await self._search_stories({"workflow_state_id": sid}):
+                    key = item.get("id") if isinstance(item, dict) else None
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    data.append(item)
+        else:
+            data = await self._search_stories({"owner_id": self.cfg.member_id})
         # Workflow-state id -> display name (bucket). Best-effort: an error
         # here degrades to unlabeled buckets, never an empty panel.
         try:
@@ -228,6 +245,7 @@ class ShortcutProvider(TicketProvider):
         except Exception as err:  # noqa: BLE001
             _logger.warning("Could not resolve Shortcut workflow states: %s", err)
             state_names = {}
+        member_names = await self._member_names()
         out: list[Ticket] = []
         for item in data:
             if not isinstance(item, dict):
@@ -235,8 +253,34 @@ class ShortcutProvider(TicketProvider):
             t = self._finalize(story_from_api_response(item, self.cfg.api_token))
             sid = item.get("workflow_state_id")
             t.state = state_names.get(str(sid), "") if sid is not None else ""
+            t.owner_names = [member_names[o] for o in t.owner_ids if o in member_names]
             out.append(t)
         return out
+
+    async def _member_names(self) -> dict[str, str]:
+        """Member UUID -> display name, for the panel's assignee column.
+
+        Slim stories carry owner UUIDs only, so a listing scoped to "anyone"
+        would otherwise show a queue of other people's work with nobody's name
+        on it. One extra call per listing, and best-effort: a failure costs the
+        names, never the tickets."""
+        url = f"{_SHORTCUT_API_BASE}/members"
+        try:
+            async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+                async with session.get(url, headers=self._headers()) as resp:
+                    if resp.status != 200:
+                        return {}
+                    data = await resp.json()
+        except Exception as err:  # noqa: BLE001
+            _logger.warning("Could not resolve Shortcut member names: %s", err)
+            return {}
+        names: dict[str, str] = {}
+        for m in data if isinstance(data, list) else []:
+            profile = (m.get("profile") or {}) if isinstance(m, dict) else {}
+            name = profile.get("name") or profile.get("mention_name") or ""
+            if m.get("id") and name:
+                names[str(m["id"])] = str(name)
+        return names
 
     async def _hydrate_story(
         self, session: aiohttp.ClientSession, story_id: int | str

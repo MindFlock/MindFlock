@@ -189,6 +189,25 @@ def rows(engine=None) -> list:
     return out
 
 
+def cached_row(cache: dict, list_key: str, match) -> Optional[dict]:
+    """The cached panel row for one item, or ``None`` if nothing is cached.
+
+    The panels annotate each row with everything an action on it needs (the
+    session title it maps to, the branch it takes, where it provisions), so a
+    request that acts on a row the user just saw can read that row instead of
+    re-deriving it from the upstream — which is both slow (a provider round
+    trip) and a second implementation waiting to drift.
+    """
+    entry: Optional[tuple] = cache.get("v")
+    data = entry[1] if entry else None
+    if not isinstance(data, dict):
+        return None
+    for item in data.get(list_key) or []:
+        if isinstance(item, dict) and match(item):
+            return item
+    return None
+
+
 def cached_session_title(cache: dict, list_key: str, match) -> str:
     """The session title a settings panel's cached list already computed for an
     item, or ``""`` when nothing usable is cached.
@@ -201,11 +220,5 @@ def cached_session_title(cache: dict, list_key: str, match) -> str:
     Slug derivation is deliberately NOT reimplemented: providers set their own
     (Shortcut hardcodes ``sc-<id>``), so a second implementation would drift.
     """
-    entry: Optional[tuple] = cache.get("v")
-    data = entry[1] if entry else None
-    if not isinstance(data, dict):
-        return ""
-    for item in data.get(list_key) or []:
-        if isinstance(item, dict) and match(item):
-            return str(item.get("session") or "")
-    return ""
+    row = cached_row(cache, list_key, match)
+    return str(row.get("session") or "") if row else ""

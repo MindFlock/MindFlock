@@ -36,7 +36,30 @@ copy_untracked = [".env", ".env.local"]
 # Push is soft-gated (409 + "push anyway" override) until it passes for the
 # current HEAD. Output: .mindflock_check.log.
 check_command = "npm test"
+
+# Verify: opt this repo in to automatic checklists. The first push of each
+# session branch gets a checklist written from its diff, which turns up in
+# Verify (Alt+V) once that commit reaches the repo's live branch. See
+# web-ui.md#verify.
+#
+# This is the team-wide, committed half of the opt-in, and the ONLY one
+# available to a checkout with no GitHub origin — the other half is
+# `repository.verify_repos` in settings, which lists repos by `owner/name`.
+# The two are OR'd: neither can switch the other off. Must be a real boolean;
+# anything else is ignored rather than guessed at.
+verify_on_push = true
 ```
+
+Verify's other per-repo settings are *not* here: they are keyed by GitHub slug
+in `repository.verify_repo_settings["owner/name"]` and edited in Verify →
+**Sources**, on each repo's card.
+
+| Key | What it decides |
+| --- | --- |
+| `live_branch` | Which branch counts as shipped for this repo. A checklist goes due when its commit lands on it. Resolves first-non-empty through this override → `repository.live_branch` → `pr_base_branch` → `base_branch` → `main`. |
+| `deploy_delay_minutes` | How long after merging the change is actually running. A checklist waits this long before it turns up to be checked — merged is not deployed, and checking too early records a failure against code that is fine. `0` when merging *is* shipping. Blank inherits the flock-wide default (5). |
+| `target` | Where this repo's running product is — a URL, plus whatever is needed to reach it. **This is the key that decides what "it works" is checked against.** With it set, both the checklist and the agent that works it are aimed at that deployment. Blank is a real answer, not a missing one: a library or a CLI has no environment to point at, and its checklist is worked against a fresh checkout of the live branch on this machine. |
+| `prompt` | Standing instructions for this repo — where the app runs, what to always check, what to ignore. Folded into **both** the prompt that writes a checklist and the one the agent runs it with. Steers *what* gets tested; it can never change the format either model must answer in. |
 
 Each session also gets a **port block** (O4): 10 consecutive ports starting
 at a deterministic base (persisted in `~/.mindflock/ports.json`), exported
@@ -78,6 +101,8 @@ workflow_state_id = 500000007   # Shortcut only — restrict the story search to
 # provider = "shortcut"
 # api_token = "…"
 # member_id = "…"
+# agent = "claude"             # which coding CLI this queue's tickets run on
+# effort = "xhigh"             # how hard it thinks about them — see below
 #
 # [[ticketing.source]]
 # id = "jira-eu"
@@ -93,6 +118,22 @@ workflow_state_id = 500000007   # Shortcut only — restrict the story search to
 # base_url = "https://us.atlassian.net"
 # email = "you@company.com"
 # api_token = "…"
+
+# `effort` is a per-source THINKING EFFORT: one of low | medium | high | xhigh |
+# max | ultra, or omitted for "whatever the CLI does on its own". It applies to
+# every ticket from that source — the ones the pipeline ingests on its own and
+# the ones you start by hand from Intake — and an individual ticket can still
+# override it on its row.
+#
+# The rungs are NEUTRAL. Whichever CLI ends up running the ticket translates them
+# into its own spelling (`claude --effort ultracode`, `codex -c
+# model_reasoning_effort=high`, …) and CLAMPS anything above its own ceiling, so
+# a source may ask for more than its CLI can give without breaking the launch. A
+# rung no provider knows is refused at load with a named problem rather than
+# silently ignored. Edited in Intake → Tickets, directly under Agent CLI.
+#
+# There is deliberately no flock-wide `effort`: how hard to think is a property
+# of the work, and one global rung would quietly re-price every queue.
 
 [repository]
 # OPTIONAL fallback repo. There is no global "default repo" in the UI anymore:

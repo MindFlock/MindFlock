@@ -27,6 +27,19 @@
   --green: #51bd73;
   --red: #de613e;
   --gold: #ffd700;
+  /* Gold companions, and the reason they exist: --gold is tuned to be READ
+     — as caution text, as a status dot — so it has to contrast with the page,
+     which means it is bright on dark and necessarily DARK on light (#9a7400).
+     Used as a FILL under dark text, that light-mode value is a muddy brown with
+     near-black type on it: unreadable, and the ugliest thing in the light
+     theme. So a fill gets its own token, bright in both themes, with the ink
+     that goes on top. Same split as --accent / --accent-deep, in the other
+     direction: that one darkens for text on light, this one brightens for a
+     background on light.
+     Rule of thumb: `color: var(--gold)` and small dots take --gold; anything
+     with `background:` and text over it takes the pair. */
+  --gold-fill: #ffd700;
+  --gold-ink: #1a1a1a;
   /* Terminal canvas colors — read by app.js termTheme() so xterm follows the
      surface theme (theme.css html[data-surface=…] blocks override these). */
   --term-bg: #0f1117;
@@ -81,6 +94,11 @@
   --green: #2e9e54;
   --red: #d6451f;
   --gold: #9a7400;
+  /* A clean amber rather than the dark --gold above: this one is only ever a
+     background, so it must be light enough for --gold-ink to sit on it (about
+     9:1 here) instead of contrasting with the page. */
+  --gold-fill: #f0b429;
+  --gold-ink: #1a1a1a;
   --term-bg: #ffffff;
   --term-fg: #1b2030;
 }

@@ -293,17 +293,24 @@ class TestForcedReviewHonoursTheReviewAgent:
 
         src = inspect.getsource(server.github_force_review)
         # Compare CODE only (the comment above it names the chain in prose), and
-        # on ONE logical line: black wraps the expression across three physical
+        # on ONE logical line: black wraps the expression across several physical
         # ones, which is formatting rather than meaning.
         code = " ".join(
             line.strip()
             for line in src.splitlines()
             if not line.strip().startswith("#")
         )
+        # The chain is a named local now (the per-start effort override has to be
+        # translated into whichever CLI it picks, so the resolved program is
+        # needed before InstanceOptions is built) — pin its ORDER rather than one
+        # exact spelling of it.
+        chain = code[code.index("program = ") :]
         assert (
-            "program=agent_override or _pr_review.review_agent(repo) "
-            "or ENGINE.default_program()," in code
+            chain.index("agent_override")
+            < chain.index("_pr_review.review_agent(repo)")
+            < chain.index("ENGINE.default_program()")
         )
+        assert "program=program," in code, "…and that local is what launches"
 
 
 class TestProviderSwitchAppliesToTheNextLaunch:

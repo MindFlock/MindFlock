@@ -12,7 +12,7 @@ import {
 describe("defaultHiddenBars", () => {
   it("hides every bar that is not one of the essentials", () => {
     const hidden = defaultHiddenBars();
-    expect(hidden).toEqual(["pr-review", "issue-handling"]);
+    expect(hidden).toEqual(["pr-review", "issue-handling", "verify"]);
     // The headline feature's bar is visible out of the box.
     expect(DEFAULT_VISIBLE_BARS).toContain("ingestion");
     // The essentials are never hidden.
@@ -33,6 +33,7 @@ describe("orderedSections", () => {
       "ingestion",
       "pr-review",
       "issue-handling",
+      "verify",
       "assistant",
     ]);
   });
@@ -43,6 +44,7 @@ describe("orderedSections", () => {
       "ingestion",
       "pr-review",
       "issue-handling",
+      "verify",
       "sessions",
     ]);
   });
@@ -72,6 +74,7 @@ describe("orderedBars", () => {
       "ingestion",
       "pr-review",
       "issue-handling",
+      "verify",
     ]);
   });
 });

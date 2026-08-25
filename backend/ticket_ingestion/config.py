@@ -140,6 +140,12 @@ class TicketProviderConfig:
       Asana) ignore it.
     * ``workflow_state_id`` — Shortcut's integer status filter; honoured when
       ``workflow_state`` is empty.
+    * ``assignee_scope`` — whose tickets to ingest: ``""``/``"mine"`` (assigned to
+      ``member_id``, the historic behavior) or ``"anyone"`` (every ticket sitting
+      in ``workflow_state``, whoever owns it — a QA queue picks work up by state,
+      not by assignment). ``"anyone"`` is only honoured together with a
+      workflow-state filter; see
+      :func:`~backend.ticket_ingestion.providers.base.ingests_any_assignee`.
     * ``poll_interval_seconds`` — poll cadence.
     """
 
@@ -151,6 +157,7 @@ class TicketProviderConfig:
     project: str = ""
     workflow_state: str = ""
     workflow_state_id: int | None = None
+    assignee_scope: str = ""
     poll_interval_seconds: int = 20
     # Per-source discriminator so you can connect several sources — including
     # multiple of the SAME provider (e.g. two Jira sites) — without their
@@ -174,6 +181,17 @@ class TicketProviderConfig:
     #: to a local model) — e.g. compliance tickets to an offline Ollama-backed
     #: session while everything else stays on a hosted CLI.
     agent: str = ""
+    #: How hard the agent thinks about tickets from THIS source — a neutral rung
+    #: from :mod:`backend.providers.effort` (``low``…``ultra``). Empty = whatever
+    #: the CLI does on its own.
+    #:
+    #: Per-source for the same reason ``agent`` is: the amount of thinking a queue
+    #: deserves is a property of the queue. A backlog of one-line copy fixes and a
+    #: queue of schema migrations want different answers, and neither wants to be
+    #: set per ticket forever. The rungs are neutral — whichever CLI runs the
+    #: ticket translates and clamps them — so a source may ask for more than its
+    #: CLI can give without breaking the launch.
+    effort: str = ""
 
 
 #: Providers the pipeline knows how to ingest from. GitHub Issues leads: it is
@@ -201,6 +219,29 @@ def known_agents() -> tuple[str, ...]:
         return tuple(p.name for p in providers.all_providers() if p.name != "generic")
     except Exception:  # noqa: BLE001 — validation is a convenience, not a gate
         return ()
+
+
+def _validate_effort(value, label: str, problems: list[str]) -> str:
+    """Normalize an ``effort`` field, recording a problem for an unknown rung.
+
+    Mirrors :func:`_validate_agent`: a config that names a rung nothing
+    understands is a config the user should be TOLD about, once, at load —
+    silently running it at the CLI's default is how somebody concludes the
+    setting does nothing.
+    """
+    level = str(value or "").strip().lower()
+    if not level:
+        return ""
+    try:
+        from backend.providers import effort as _effort
+
+        ladder = _effort.EFFORTS
+    except Exception:  # noqa: BLE001 — same tolerance as known_agents()
+        return level
+    if level not in ladder:
+        problems.append(f"{label} must be one of {', '.join(ladder)} (got {level!r})")
+        return ""
+    return level
 
 
 def _validate_agent(value, label: str, problems: list[str]) -> str:
@@ -311,6 +352,20 @@ class PipelineConfig:
             if source_id and (src.id or src.provider) == source_id and src.agent:
                 return src.agent
         return self._pipeline_agent()
+
+    def effort_for(self, source_id: str = "") -> str:
+        """The thinking-effort rung a session from ``source_id`` should run at.
+
+        ``""`` = let the CLI decide, which is what every launch path did before
+        the setting existed. Deliberately NOT chained to a pipeline-wide default
+        the way :meth:`agent_for` is: there is no ``[mindflock].effort``, because
+        "how hard to think" is a property of the work rather than of the
+        installation, and a flock-wide rung would quietly re-price every queue.
+        """
+        for src in self.ticketing_sources or ():
+            if source_id and (src.id or src.provider) == source_id and src.effort:
+                return src.effort
+        return ""
 
     def _pipeline_agent(self) -> str:
         """The ingestion-wide agent (``[mindflock].agent``), or ``""``."""
@@ -457,6 +512,12 @@ def agent_now(pick, fallback: str = "") -> str:
 def source_agent_now(source_key: str, fallback: str = "") -> str:
     """The Agent CLI configured for ticketing source ``source_key`` RIGHT NOW."""
     return agent_now(lambda c: c.agent_for(source_key), fallback)
+
+
+def source_effort_now(source_key: str, fallback: str = "") -> str:
+    """The thinking effort configured for ticketing source ``source_key`` RIGHT
+    NOW — the effort twin of :func:`source_agent_now`."""
+    return agent_now(lambda c: c.effort_for(source_key), fallback)
 
 
 def fresh_agent(pick, snapshot: "PipelineConfig | None") -> str:
@@ -805,6 +866,12 @@ def _parse_source(
     src: dict, config_path: Path, idx: int
 ) -> tuple[TicketProviderConfig, list[str]]:
     """Validate one ticketing source dict; return (config, problems)."""
+    # Local: providers.base imports TicketProviderConfig from this module.
+    from backend.ticket_ingestion.providers.base import (
+        ANY_ASSIGNEE_PROVIDERS,
+        STATE_BOUNDED_PROVIDERS,
+    )
+
     label = f"ticketing.source[{idx}]" if idx is not None else "ticketing"
     problems: list[str] = []
     provider = str(src.get("provider") or "shortcut").strip().lower()
@@ -825,6 +892,27 @@ def _parse_source(
     if wsid is not None and (not isinstance(wsid, int) or isinstance(wsid, bool)):
         problems.append(f"{label}.workflow_state_id must be an integer")
         wsid = None
+    scope = str(src.get("assignee_scope", "") or "").strip().lower()
+    if scope not in ("", "mine", "anyone"):
+        problems.append(f"{label}.assignee_scope must be 'mine' or 'anyone'")
+        scope = ""
+    if scope == "anyone":
+        # Say the narrowing out loud rather than letting a source look wider
+        # than it polls. `ingests_any_assignee` enforces the same two rules.
+        if provider not in ANY_ASSIGNEE_PROVIDERS:
+            problems.append(
+                f"{label}.assignee_scope 'anyone' is not supported for "
+                f"{provider} — it can only search by assignee"
+            )
+        elif (
+            provider in STATE_BOUNDED_PROVIDERS
+            and not str(src.get("workflow_state", "") or "").strip()
+        ):
+            problems.append(
+                f"{label}.assignee_scope 'anyone' needs at least one "
+                f"workflow_state — without one it would pull every ticket in "
+                f"the tracker, so it stays assigned-to-me"
+            )
     cfg = TicketProviderConfig(
         provider=provider,
         api_token=str(src.get("api_token", "") or ""),
@@ -834,11 +922,13 @@ def _parse_source(
         project=str(src.get("project", "") or ""),
         workflow_state=str(src.get("workflow_state", "") or ""),
         workflow_state_id=int(wsid) if wsid is not None else None,
+        assignee_scope=scope,
         poll_interval_seconds=int(poll),
         id=str(src.get("id", "") or ""),
         label=str(src.get("label", "") or ""),
         repo_url=str(src.get("repo_url", "") or ""),
         agent=_validate_agent(src.get("agent"), f"{label}.agent", problems),
+        effort=_validate_effort(src.get("effort"), f"{label}.effort", problems),
     )
     return cfg, problems
 

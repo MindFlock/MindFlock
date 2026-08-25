@@ -13,14 +13,18 @@ import { AgentPicker, useAgentChoices } from "../settings/screens/AgentPicker";
 import { runGithubTest } from "../dialogs/SetupDialog";
 import {
   AutomationSwitch,
+  useListFilter,
   WorkGroup,
   WorkItemRow,
   WorkListPanel,
   ageText,
   panelNote,
+  reopenIntakeItem,
   useToggleSet,
+  type ItemWorkspace,
 } from "./kit";
 import { RepoSourceList, type RepoOverrides } from "./RepoSources";
+import { issueMatches } from "./search";
 import type { TabProps } from "./IntakeDialog";
 
 interface OpenIssue {
@@ -33,6 +37,8 @@ interface OpenIssue {
   has_session?: boolean;
   eligible?: boolean;
   reasons?: string[];
+  /** Present when an earlier run of this issue still has its workspace here. */
+  workspace?: ItemWorkspace;
 }
 
 /** Per-device: which repo groups are collapsed (membership = collapsed). */
@@ -42,6 +48,10 @@ export function IssuesTab({ gotoTab }: TabProps) {
   const s = useSettings();
   const agentChoices = useAgentChoices();
   const groups = useToggleSet(ISSUE_GROUPS_KEY, true);
+  const filter = useListFilter(
+    "gh-issues-filter",
+    "Filter by repo, number, title, author, or why…  ( Ctrl+F )",
+  );
   const gh = (s.settings.github || {}) as {
     issues_enabled?: boolean;
     issue_agent?: string;
@@ -88,16 +98,24 @@ export function IssuesTab({ gotoTab }: TabProps) {
     s.saveGroup("github", patch, okMsg);
 
   const n = repos.length;
+  // FILTERED BEFORE GROUPED, so the counts on the headings describe what is
+  // under them. A repo whose issues are all filtered out drops off entirely
+  // rather than rendering an empty group with "no open issues in this
+  // repository" — which, with a filter on, would be an answer to a question
+  // nobody asked.
+  const shown = (issues || []).filter((i) => issueMatches(i, filter.tokens));
   const byRepo = new Map<string, OpenIssue[]>();
-  for (const i of issues || []) {
+  for (const i of shown) {
     const key = i.repo || "unknown";
     if (!byRepo.has(key)) byRepo.set(key, []);
     byRepo.get(key)!.push(i);
   }
-  const groupOrder = [
-    ...repos.filter((r) => issuesRepos.includes(r) || byRepo.has(r)),
-    ...[...byRepo.keys()].filter((r) => !repos.includes(r)),
-  ];
+  const groupOrder = filter.active
+    ? [...byRepo.keys()]
+    : [
+        ...repos.filter((r) => issuesRepos.includes(r) || byRepo.has(r)),
+        ...[...byRepo.keys()].filter((r) => !repos.includes(r)),
+      ];
 
   return (
     <>
@@ -156,6 +174,9 @@ export function IssuesTab({ gotoTab }: TabProps) {
           baseBranch: "",
           minAge: gh.issue_min_age_minutes == null ? "" : String(gh.issue_min_age_minutes),
           skipAuthors: String(skipAuthors),
+          // Verify's field, blank here for the same reason baseBranch is: this
+          // surface does not render it, so there is nothing to seed.
+          liveBranch: "",
         }}
         listId="gh-issue-repos-list"
         addId="gh-issue-repo-add-btn"
@@ -178,6 +199,7 @@ export function IssuesTab({ gotoTab }: TabProps) {
         refreshId="gh-issues-refresh"
         noteId="gh-issues-note"
         listId="gh-issues-list"
+        toolbarExtra={issues && issues.length ? filter.control : undefined}
         hint={
           <>
             Every open issue on the repositories above, grouped by repository, with why
@@ -192,6 +214,8 @@ export function IssuesTab({ gotoTab }: TabProps) {
           <div className="repo-empty">Add a repository above to see its open issues.</div>
         ) : !issues.length ? (
           <div className="repo-empty">No open issues on the watched repositories.</div>
+        ) : !groupOrder.length ? (
+          <div className="repo-empty">No open issue matches “{filter.query}”.</div>
         ) : (
           groupOrder.map((repo) => {
             const rows = byRepo.get(repo) || [];
@@ -214,19 +238,30 @@ export function IssuesTab({ gotoTab }: TabProps) {
                       reasons={i.reasons}
                       actionLabel="Start work"
                       failPrefix="Start work failed"
+                      workspace={i.workspace}
+                      onReopen={async () => {
+                        const title = await reopenIntakeItem({
+                          kind: "issues",
+                          repo: i.repo,
+                          number: i.number,
+                        });
+                        setTimeout(relistIssues, 5000);
+                        return title;
+                      }}
                       agents={agentChoices.names}
                       configuredAgent={
                         overrides[repo]?.agent ||
                         String(gh.issue_agent || agentChoices.fallback || "")
                       }
                       configuredDepth={overrides[repo]?.depth || ""}
-                      onStart={async ({ agent, depth }) => {
+                      onStart={async ({ agent, depth, effort }) => {
                         const r = await api<{ title?: string }>("/api/github/issues/start", {
                           json: {
                             repo: i.repo,
                             number: i.number,
                             ...(agent ? { agent } : {}),
                             ...(depth ? { depth } : {}),
+                            ...(effort ? { effort } : {}),
                           },
                         });
                         // The server already has a provisioning row for it: pull it now

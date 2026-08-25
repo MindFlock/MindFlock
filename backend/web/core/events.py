@@ -73,6 +73,45 @@ EVENT_NAMES = (
     # Running OUT needs no event of its own: that is
     # ``session.activity_changed`` with ``new == "limit"``.
     "session.usage_restored",
+    # Verify (test plans): a session's branch genuinely REACHED origin — emitted
+    # by the live_stage push watcher at the instant the remote branch head equals
+    # the local one (data: {"branch": str, "sha": str, "wt": str}). This is not
+    # the same fact as ``session.stage_changed`` to "pushed": the stage ladder is
+    # recomputed from a snapshot and falls back off "pushed" as soon as the tree
+    # goes dirty again, so it fires repeatedly and cannot name the sha that
+    # landed. Everything else in the app knows only that a push was *asked for*
+    # (``POST /push-branch`` types a shell one-liner into tmux and returns), so
+    # this event is the only "that sha is on origin now", delivered once.
+    "session.pushed",
+    # A test plan finished generating and has steps worth showing
+    # (data: {"plan": str, "steps": int}).
+    "session.test_plan_ready",
+    # …and, later, that plan's sha became an ancestor of the live branch, so the
+    # work is in front of users and the manual checks are now worth doing
+    # (data: {"plan": str, "title": str, "live_branch": str}). Deliberately two
+    # events rather than one: "ready" is about the plan coming into existence,
+    # "due" is about the world changing underneath it — minutes or days later,
+    # from a merge this process may have had nothing to do with.
+    "session.test_plan_due",
+    # A generation FAILED (data: {"plan": str, "error": str, "refreshed": bool}).
+    # A sibling of "ready" and deliberately not a widening of it: "ready" means
+    # "there are steps worth showing" and the dialog refetches on that meaning.
+    # It exists because a rewrite that fails is otherwise completely silent — the
+    # user pressed a button, was told "up to three minutes", and then nothing
+    # happens for as long as the poll takes.
+    "session.test_plan_failed",
+    # An agent finished working a checklist (data: {"plan", "title", "failed",
+    # "needs_you"}). The other end of the run: starting one is loud (a toast, a
+    # row that changes) and finishing one was silent, so the answers landed
+    # somewhere the user had usually navigated away from.
+    "session.test_plan_checked",
+    # A run was RELEASED without ever reporting (data: {"plan", "title",
+    # "run_session", "hours", "reason"}). Two things end a run this way — an
+    # agent window that died, and the two-hour deadline — and both used to be
+    # completely silent: the plan simply went back to "not checked yet", so a
+    # session that had been started, billed and abandoned was indistinguishable
+    # from a button nobody pressed. ``reason`` is the sentence the row shows.
+    "session.test_plan_gave_up",
     # Autopilot: a fast-track / intake run changed state (``new`` is
     # "running"|"halted"|"done"; data: {"depth", "step", "state", "reason",
     # "item", "skipped"}). A halted run always carries a human-readable reason —

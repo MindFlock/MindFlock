@@ -108,6 +108,7 @@ class AsanaProvider(TicketProvider):
             description=notes,
             acceptance_criteria=parse_acceptance_criteria(notes),
             owner_ids=[str(assignee.get("gid"))] if assignee.get("gid") else [],
+            owner_names=[str(assignee.get("name"))] if assignee.get("name") else [],
             app_url=task.get("permalink_url") or "",
             created_at=parse_iso8601(task.get("created_at")),
             comments=await self._comments(session, gid),
@@ -126,7 +127,10 @@ class AsanaProvider(TicketProvider):
             "modified_since": since.isoformat(),
             "completed_since": "now",  # exclude tasks completed before now
             "limit": str(_MAX_TASKS),
-            "opt_fields": "name,notes,permalink_url,assignee.gid,created_at,completed",
+            "opt_fields": (
+                "name,notes,permalink_url,assignee.gid,assignee.name,"
+                "created_at,completed"
+            ),
         }
         async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
             tasks = await self._get(session, "/tasks", params)
@@ -139,7 +143,10 @@ class AsanaProvider(TicketProvider):
 
     async def fetch(self, ticket_id: str) -> Ticket:
         params = {
-            "opt_fields": "name,notes,permalink_url,assignee.gid,created_at,completed"
+            "opt_fields": (
+                "name,notes,permalink_url,assignee.gid,assignee.name,"
+                "created_at,completed"
+            )
         }
         async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
             task = await self._get(session, f"/tasks/{ticket_id}", params)

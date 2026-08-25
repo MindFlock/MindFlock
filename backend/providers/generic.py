@@ -12,6 +12,7 @@ from typing import Optional
 
 from .base import (
     BaseProvider,
+    EffortSpec,
     LauncherSpec,
     LaunchContext,
     TrustSpec,
@@ -112,6 +113,18 @@ class GenericProvider(BaseProvider):
             # resolved_binary() already folds in the user's binary-path override,
             # so the launcher must not apply one a second time.
             command=cfg.resolved_binary(),
+        )
+
+    def effort_spec(self) -> EffortSpec:
+        """This CLI's reasoning-effort vocabulary, straight from its config —
+        so codex/antigravity and any user TOML provider that declares
+        ``[launch] effort_args`` get per-launch effort with no code."""
+        cfg = self.cfg
+        return EffortSpec(
+            args=tuple(cfg.effort_args),
+            levels=tuple(cfg.effort_levels),
+            ultra_level=cfg.effort_ultra_level,
+            prompt_keyword=cfg.effort_keyword,
         )
 
     # --- exit / resume policy --------------------------------------------- #

@@ -6,6 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { queryClient } from "./state/queries";
 import { publishToast } from "./lib/toast";
+import { publishWindowName } from "./lib/windowName";
 import { installGlobalDropGuards } from "./lib/clipboard";
 import { applyStoredAppearance } from "./components/settings/screens/Appearance";
 import App from "./App";
@@ -21,6 +22,8 @@ Object.assign(window as unknown as Record<string, unknown>, {
 });
 
 publishToast();
+// Before the addons load: notify.js names its notifications through this.
+publishWindowName();
 installGlobalDropGuards();
 applyStoredAppearance();
 

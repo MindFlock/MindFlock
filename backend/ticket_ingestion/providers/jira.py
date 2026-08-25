@@ -26,6 +26,7 @@ from backend.ticket_ingestion.providers.base import (
     HTTP_TIMEOUT,
     ProviderError,
     TicketProvider,
+    ingests_any_assignee,
     parse_acceptance_criteria,
     parse_iso8601,
     workflow_state_list,
@@ -174,6 +175,11 @@ class JiraProvider(TicketProvider):
             owner_ids=(
                 [str(assignee.get("accountId"))] if assignee.get("accountId") else []
             ),
+            owner_names=(
+                [str(assignee.get("displayName"))]
+                if assignee.get("displayName")
+                else []
+            ),
             app_url=browse,
             created_at=parse_iso8601(fields.get("created")),
             comments=comments,
@@ -219,9 +225,18 @@ class JiraProvider(TicketProvider):
         quoted = ", ".join(s if s.isdigit() else f'"{s}"' for s in states)
         return f" AND status IN ({quoted})"
 
+    def _assignee_clause(self) -> str:
+        """The JQL assignee scope, with its trailing ``AND``.
+
+        Empty under ``assignee_scope = "anyone"``: a QA queue takes whatever sits
+        in the ingest status, whoever it belongs to. ``ingests_any_assignee``
+        guarantees a status filter is configured before that happens, so the
+        search is never unbounded."""
+        return "" if ingests_any_assignee(self.cfg) else "assignee = currentUser() AND "
+
     async def search_assigned(self, since: datetime) -> list[Ticket]:
         jql = (
-            f'assignee = currentUser() AND updated >= "{since.strftime("%Y-%m-%d %H:%M")}"'
+            f'{self._assignee_clause()}updated >= "{since.strftime("%Y-%m-%d %H:%M")}"'
             f"{self._state_clause()} ORDER BY updated DESC"
         )
         return await self._search(jql)
@@ -231,7 +246,14 @@ class JiraProvider(TicketProvider):
         ``updated`` cutoff: the source's ``workflow_state`` ingest filter is
         deliberately omitted so the panel can list — and force-start — the issue
         you are about to move INTO that status, which is precisely the case the
-        panel exists for. ``Ticket.state`` carries the status name (the bucket)."""
+        panel exists for. ``Ticket.state`` carries the status name (the bucket).
+
+        The one exception is an any-assignee source, where the status filter is
+        the only thing standing between the panel and every issue on the site —
+        there it stays applied."""
+        if ingests_any_assignee(self.cfg):
+            clause = self._state_clause().removeprefix(" AND ")
+            return await self._search(f"{clause} ORDER BY updated DESC")
         return await self._search("assignee = currentUser() ORDER BY updated DESC")
 
     async def fetch(self, ticket_id: str) -> Ticket:

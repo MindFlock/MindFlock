@@ -32,6 +32,7 @@ from backend.ticket_ingestion.providers.base import (
     HTTP_TIMEOUT,
     ProviderError,
     TicketProvider,
+    ingests_any_assignee,
     parse_acceptance_criteria,
     parse_iso8601,
 )
@@ -210,6 +211,7 @@ class GithubIssuesProvider(TicketProvider):
             description=body,
             acceptance_criteria=parse_acceptance_criteria(body),
             owner_ids=[str(a) for a in assignees],
+            owner_names=[str(a) for a in assignees],  # login is the display name
             app_url=issue.get("html_url") or "",
             created_at=parse_iso8601(issue.get("created_at")),
             comments=comments,
@@ -223,15 +225,29 @@ class GithubIssuesProvider(TicketProvider):
         owner, repo = self._repo()
         headers = await self._headers()
         async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
-            login = await self._login(session, headers)
             params = {
-                "assignee": login or "*",
                 "state": "open",
                 "sort": "updated",
                 "direction": "desc",
                 "since": since.isoformat(),
                 "per_page": str(_MAX_ISSUES),
             }
+            # "anyone" omits the assignee filter entirely — including unassigned
+            # issues, which is what a triage queue wants. There are no workflow
+            # states here to bound it, so the repo is the bound.
+            if not ingests_any_assignee(self.cfg):
+                login = await self._login(session, headers)
+                if not login:
+                    # Historically this fell through to assignee="*" — an "any
+                    # assignee" search wearing an "assigned to me" label. Now
+                    # that widening the scope is a setting, say so instead of
+                    # silently ingesting the whole repo's issues.
+                    raise ProviderError(
+                        "Could not resolve your GitHub login, so 'assigned to "
+                        "me' has nothing to match — set the source's Member ID, "
+                        "or switch it to Anyone's tickets on purpose."
+                    )
+                params["assignee"] = login
             async with session.get(
                 f"{_API}/repos/{owner}/{repo}/issues", params=params, headers=headers
             ) as resp:

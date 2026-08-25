@@ -5,7 +5,7 @@
  * /api/usage comes from useUsage() (60s poll, replacing ensureUsageWindows). */
 
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { useInstances, useUsage } from "../../state/queries";
+import { refreshUsage, useInstances, useUsage } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { fmtUsd } from "../../lib/format";
 import type { Instance } from "../../api/types";
@@ -180,7 +180,13 @@ export function OverallUsage() {
         title={title}
         onClick={(ev) => {
           ev.stopPropagation();
-          setOpen((o) => !o);
+          setOpen((o) => {
+            // Opening the breakdown is the one moment the user is deliberately
+            // reading these numbers, so it refetches rather than showing
+            // whatever the last poll left behind.
+            if (!o) refreshUsage();
+            return !o;
+          });
         }}
       >
         <span className="usage-head">{head}</span>

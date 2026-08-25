@@ -15,6 +15,8 @@ pin the JS wiring so it can't silently regress.
 
 from __future__ import annotations
 
+import re
+
 from fastapi.testclient import TestClient
 
 from backend.web import server
@@ -33,7 +35,13 @@ def test_app_js_touch_scroll_wiring():
     assert "{ capture: true, passive: false }" in js
     # The browser's own gesture handling is disabled on PTY terminals so the
     # drag reaches our handler instead of panning/zooming the page.
-    assert 'host.style.touchAction = "none"' in js
+    #
+    # Matched with the identifier left loose: the bundler renames a local when
+    # another module in the same output claims the same name (`host` became
+    # `host2` the day an unrelated component introduced its own), and the
+    # contract under test is "touch-action is turned off on the terminal host",
+    # not what esbuild decided to call the variable that day.
+    assert re.search(r'host\w*\.style\.touchAction = "none"', js)
 
 
 def test_app_js_touch_scroll_semantics():

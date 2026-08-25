@@ -45,9 +45,12 @@
   color: #0a6aa8;
 }
 
-.light .stagechip.s-precommit {
-  color: #fff;
-}
+/* `.light .stagechip.s-precommit { color: #fff }` used to live here. It was a
+   patch over the old fill: the chip painted `background: var(--gold)`, which on
+   light is the DARK #9a7400, so black-on-brown was unreadable and white was the
+   least-bad way out. The chip now takes --gold-fill / --gold-ink (a bright amber
+   with dark ink, correct in both themes), and white text on that amber is ~2:1.
+   The override has to go WITH the token change, not after it. */
 
 /* White chip text on 50%-alpha backgrounds washes out on light — go solid. */
 .light .stagechip.s-running {

@@ -7,7 +7,12 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import { api } from "../../api/client";
 import type { Json } from "../../api/types";
 import { toast } from "../../lib/toast";
-import { refreshConfig } from "../../state/queries";
+import {
+  fetchSettingsDoc,
+  putSettingsDoc,
+  refreshConfig,
+  useSettingsDoc,
+} from "../../state/queries";
 
 export const SECRET_MASK = "•••set";
 
@@ -21,21 +26,25 @@ export interface SettingsModel {
   get(group: string, field: string): unknown;
 }
 
+/** The settings document lives in the query cache rather than in this hook's
+ * state, so the three dialogs that mount this model share one copy — and, more
+ * to the point, so the shell can warm it before any of them is opened. Held in
+ * component state, every open of Intake or Settings paid for a fresh
+ * `/api/settings` round trip with the fields blank until it landed. */
+/** Stable identity for "not loaded yet", so `get`'s memo doesn't churn on every
+ * render before the document lands. */
+const EMPTY_SETTINGS: Json = {};
+
 export function useSettingsModel(open: boolean): SettingsModel {
-  const [settings, setSettings] = useState<Json>({});
+  const settings = useSettingsDoc(open).data ?? EMPTY_SETTINGS;
 
   const reload = useCallback(async () => {
     try {
-      const r = await api<{ settings?: Json }>("/api/settings");
-      setSettings(r?.settings || {});
+      await fetchSettingsDoc();
     } catch {
-      /* leave defaults on error */
+      /* leave the last known document in place on error */
     }
   }, []);
-
-  useEffect(() => {
-    if (open) reload();
-  }, [open, reload]);
 
   const saveField = useCallback(
     async (group: string, field: string, value: unknown) => {
@@ -43,7 +52,7 @@ export function useSettingsModel(open: boolean): SettingsModel {
         const r = await api<{ settings?: Json }>("/api/settings", {
           json: { [group]: { [field]: value } },
         });
-        setSettings(r?.settings || {});
+        putSettingsDoc(r?.settings || {});
         // Some settings are also reported on /api/config, which the whole app
         // reads (caps, ide_name, the resolved fast-track rung). Invalidating it
         // here — rather than per call site — is what makes a saved setting take
@@ -64,7 +73,7 @@ export function useSettingsModel(open: boolean): SettingsModel {
     async (group: string, patch: Json, okMsg?: string) => {
       try {
         const r = await api<{ settings?: Json }>("/api/settings", { json: { [group]: patch } });
-        setSettings(r?.settings || {});
+        putSettingsDoc(r?.settings || {});
         void refreshConfig();
         if (okMsg) toast(okMsg);
       } catch (err) {

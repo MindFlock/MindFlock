@@ -355,11 +355,41 @@
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
+  /* A CEILING on the whole control column, which is what keeps the primary
+     button a button. The children are stretched to the widest of them, so every
+     picker added here widened `Begin work` too — with three pickers on one line
+     the button reached ~470px, a banner with a word in the middle of it. Capped
+     at the width the first two pickers already had, the third one wraps to a
+     second line (see .ik-item-picks) instead of dragging the button wider, and
+     the row's title gets the space back. */
+  max-width: 332px;
 }
 
 .ik-item-start .pr-review-btn {
   grid-column: auto;
   grid-row: auto;
+  /* Hugs its label instead of stretching to the pickers above it. `stretch` (the
+     column default) turned a two-word button into a 330px banner once there were
+     pickers to match — a control's width should say something about the control,
+     and "Begin work" is a button, not a bar. Right-aligned so the row's right
+     edge stays a straight line down the list. */
+  align-self: flex-end;
+  min-width: 124px;
+}
+
+/* A row whose work is still on this machine leads with Reopen and demotes its
+   start button to the quiet weight the pickers wear. The two swap classes
+   rather than swapping order, so the primary action stays in the one place the
+   eye already looks — the bottom of the column is the *alternative*, which is
+   also where a wrapped chip list leaves the most room. */
+.ik-item-start .ik-start-again {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  /* Same hug-and-right-align as the primary button above, so a row with a
+     leftover workspace doesn't suddenly have a full-width secondary control. */
+  align-self: flex-end;
 }
 
 /* Deliberately quiet: it is a rarely-used override, and matching the primary
@@ -378,15 +408,22 @@
   /* Floor and ceiling: the wrapper stretches both controls to the wider of the
      two, so without a floor a short label ("Configured") shrinks the picker to
      the button's width and looks like a clipped mistake. */
-  min-width: 132px;
-  max-width: 170px;
+  /* Shares its line with the depth picker, splitting the capped column between
+     them rather than each taking a hand-tuned width — two controls of a similar
+     size read as a pair, where 170 + 150 read as two unrelated widths. */
+  flex: 1 1 auto;
+  min-width: 120px;
   font-family: inherit;
 }
 
-/* The per-launch pickers sit side by side on one line, so adding the depth
-   control did not make every row in the list a line taller. */
+/* The per-launch pickers sit side by side, so adding the depth control did not
+   make every row in the list a line taller. With the effort picker they are
+   three, which will not always fit a narrow panel — hence `wrap`: they take one
+   line when there is room and fold only when there isn't, instead of each
+   claiming a line unconditionally. */
 .ik-item-start .ik-item-picks {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   align-items: center;
 }
@@ -401,14 +438,39 @@
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--muted);
-  min-width: 96px;
-  max-width: 150px;
+  min-width: 104px;
   font-family: inherit;
   flex: 1 1 auto;
 }
 
+/* Same treatment again for the effort picker, two classes deep for the same
+   specificity reason. A CLI with no effort setting renders it disabled, and a
+   disabled control has to LOOK unavailable rather than merely unresponsive. */
+.ik-item-start .ik-item-effort {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  font-family: inherit;
+  /* Its OWN line, by basis rather than by arithmetic: three pickers at readable
+     widths do not fit the capped column, and "they happen not to fit" is a
+     layout that breaks the day a label gets a word longer. A full-basis flex
+     item always wraps, so the pair above it stays a pair. */
+  flex: 1 1 100%;
+  min-width: 104px;
+}
+
+.ik-item-start .ik-item-effort:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .ik-item-start .ik-item-depth:hover:not(:disabled),
-.ik-item-start .ik-item-depth[data-picked] {
+.ik-item-start .ik-item-depth[data-picked],
+.ik-item-start .ik-item-effort:hover:not(:disabled),
+.ik-item-start .ik-item-effort[data-picked] {
   color: var(--text);
   border-color: var(--accent);
 }
@@ -426,8 +488,21 @@
   border-color: var(--accent);
 }
 
-/* The "+ Add bucket…" picker in a panel toolbar, for the same reason. */
-.pr-open-toolbar select.tk-bucket-add {
+/* The "+ Add bucket…" and Mine/Everyone pickers in a panel toolbar, for the
+   same reason. */
+/* THE FILTER IN A WORK LIST'S TOOLBAR. `.dlg-filter` is `flex: 1` because in
+   Recently closed it owns its own row; here it shares a line with Refresh, the
+   note, and (on Tickets) two selects, so it takes the slack instead of all of
+   it — wide enough to read a query in, capped so the bucket picker beside it
+   keeps its place. The note after it is what actually needs the leftovers, so
+   the toolbar's own `gap` still separates them. */
+.pr-open-toolbar .dlg-filter {
+  flex: 1 1 200px;
+  max-width: 340px;
+}
+
+.pr-open-toolbar select.tk-bucket-add,
+.pr-open-toolbar select.tk-mine-filter {
   font-size: 12px;
   padding: 4px 8px;
   border-radius: 6px;
@@ -453,4 +528,73 @@
 .tk-body select:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* --- Queue tab -------------------------------------------------------------
+   The roll-up of what the automations will start next. Sections per kind, each
+   with its own on/paused state, then the rows grouped by source or repo.
+
+   Rows themselves are the shared WorkItemRow (.pr-open-item), the same as on the
+   three source tabs — this tab can start them too, so there is no reason for
+   them to look like a different kind of row. Only the section scaffolding
+   around them lives here. */
+.ik-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ik-queue-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ik-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ik-queue-kind {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Pushed to the far end so the section's state chips stay next to the name they
+   describe rather than drifting across the row. */
+.ik-queue-goto {
+  margin-left: auto;
+}
+
+.ik-queue-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ik-queue-group-name {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.ik-queue-empty {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+/* The "eligible but nothing will pick it up" sentence. Left-marked rather than
+   boxed: it belongs to the rows under it, and a bordered panel between the
+   heading and its list broke the section into two things that look unrelated. */
+.ik-queue-stalled {
+  font-size: 12px;
+  color: var(--text);
+  border-left: 2px solid var(--border);
+  padding: 2px 0 2px 8px;
+  margin-bottom: 2px;
 }
