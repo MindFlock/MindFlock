@@ -1321,6 +1321,28 @@ is running it**.
   (`GET /api/connections`). A card's **Configure** button opens the screen its
   `settings_screen` names — for GitHub and ticketing that is now an [Intake](#intake)
   tab, via the legacy-key hand-off.
+- **Accounts** (screen key `accounts`) — the identities sessions can run as
+  (`GET/PUT /api/settings/auth-profiles`; full guide in
+  [accounts.md](accounts.md)). One card per profile: an `account` kind is a
+  second login of the CLI itself, isolated in its own config dir, and its card
+  shows the login command to paste into a terminal (the CLI's OAuth flow is
+  interactive, so it cannot run through the API); `api_key` and `openrouter`
+  kinds inject a key at launch, and an OpenRouter card's **Test key**
+  (`POST /api/settings/test/openrouter`) reports the key's real spend and lists
+  the models it can reach, turning its model field into a picker. Keys read back
+  masked, and a save that resends the mask keeps the stored value. One profile
+  can be made the app-wide default for new sessions.
+
+  Two surfaces elsewhere depend on this screen, and both stay invisible until a
+  profile exists: the **New session** dialog grows an **Account** select (plus a
+  **Model** select for key/gateway accounts) and steers the Agent picker to a
+  CLI the chosen account can actually route; and each pane header grows an
+  **`@account` chip** that hot-swaps a *live* session
+  (`POST /api/instances/{title}/profile`) — the agent restarts under the new
+  identity while the worktree, diff and shell pane survive. The chip rides the
+  same right-hand chip group as the cost counter, and sheds with it below a
+  560px pane. A swap starts a fresh conversation; the thread does not follow the
+  session across identities.
 - **Local model** (screen key `localmodel`) — run sessions against a model served
   on this machine: an on/off switch, the server (**Ollama** / **LM Studio** /
   any OpenAI-compatible), its base URL (blank = that runtime's default) and the

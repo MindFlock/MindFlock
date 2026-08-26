@@ -272,6 +272,12 @@ class InstanceData:
     # K1). Only emitted when set; absent in pre-K1 state.json entries — readers
     # fall back to origin/HEAD -> main/master -> configured base.
     base_branch: str = ""
+    # Auth profile the session's agent runs under ("" = inherit the global
+    # default; "default" = explicitly the CLI's own login), plus the session's
+    # own model override of the profile's pin. Only emitted when set, so
+    # pre-feature entries serialize unchanged.
+    profile_id: str = ""
+    profile_model: str = ""
 
     def to_dict(self) -> dict:
         """Build the JSON-ready dict, preserving Go field order exactly."""
@@ -298,6 +304,10 @@ class InstanceData:
             d["in_place"] = True
         if self.base_branch:
             d["base_branch"] = self.base_branch
+        if self.profile_id:
+            d["profile_id"] = self.profile_id
+        if self.profile_model:
+            d["profile_model"] = self.profile_model
         return d
 
     @classmethod
@@ -328,6 +338,8 @@ class InstanceData:
             # Absent when the session has no recorded cut-point -> "" (readers
             # resolve a base via the fallback chain).
             base_branch=d.get("base_branch", "") or "",
+            profile_id=d.get("profile_id", "") or "",
+            profile_model=d.get("profile_model", "") or "",
         )
 
 

@@ -786,6 +786,7 @@ On macOS the desktop app additionally leaves `/Applications/MindFlock.app`,
 | [docs/web-api.md](docs/web-api.md) | Complete HTTP + WebSocket API reference |
 | [docs/web-ui.md](docs/web-ui.md) | Frontend guide: grid, tabs, stages, shortcuts, mobile, addons |
 | [docs/providers.md](docs/providers.md) | Provider framework, adding a CLI via TOML, pricing & usage tracking |
+| [docs/accounts.md](docs/accounts.md) | Auth profiles: multiple Claude accounts / OpenRouter keys, per-session identity, hot-swap, per-account usage |
 | [docs/ingestion-pipeline.md](docs/ingestion-pipeline.md) | Story + PR ingestion flows, state, testmon refresher |
 | [docs/development.md](docs/development.md) | Dev setup, test suite, project layout, known issues |
 

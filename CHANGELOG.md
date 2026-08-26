@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Accounts: run sessions as different identities, and hot-swap between
+  them.** A personal Claude subscription next to a work one, an OpenRouter key
+  with its own model — each is an *auth profile*, and every session runs under
+  exactly one (or under the CLI's own login, still the default). No more
+  logout/login round-trips: an `account`-kind profile is a second login of the
+  CLI itself, isolated in its own config dir (`CLAUDE_CONFIG_DIR` /
+  `CODEX_HOME`), authenticated once via `mindflock accounts login <id>`.
+  Pick the identity in the New dialog, set an app-wide default, or click the
+  pane header's new `@account` chip to swap a **live** session — the agent
+  restarts under the new identity and the worktree, diff and terminal survive
+  (and so does that account's own conversation in this window).
+  Each Claude account's usage is tracked separately (the cost panel's
+  Claude tab grows a "By account" split), and an OpenRouter profile's Test
+  button reports the key's real spend and the models it can reach. Each window
+  keeps one conversation per account, so swapping back reopens the thread you
+  left rather than a third fresh one. Credentials never pass through a process
+  argv: a session's keys go to a 0600 file it sources, so they are not readable
+  out of `ps` by other local users. Managed in
+  Settings → Accounts, `mindflock accounts` (`add`/`login`/`use`/`rm`,
+  `mindflock new --account`), or `PUT /api/settings/auth-profiles`; keys are
+  masked on every read. With no profiles configured, nothing anywhere changes
+  — launch commands and workspace scripts stay byte-identical.
+  See docs/accounts.md.
+
 ### Fixed
 
 - **"Your agent has finished" is now a claim MindFlock can back up.** The idle

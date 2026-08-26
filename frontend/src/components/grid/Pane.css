@@ -149,6 +149,31 @@
   white-space: nowrap;
 }
 
+/* `margin-left: auto` above is what pins the chip group to the right edge, and
+   it was written when there was exactly ONE .tok in the header. Flexbox splits
+   free space EQUALLY between every auto margin on the line, so the moment the
+   account chip joined the cost chip the two ended up half a header apart, with
+   a gap that slid around as the title and next-step label changed width. Only
+   the FIRST chip gets the auto margin; the rest ride along beside it.
+   Selector-scoped rather than :first-of-type so a session with no accounts
+   configured (AccountChip renders nothing) is untouched. */
+.pane-head .acct-chip + .tok {
+  margin-left: 0;
+}
+
+/* An account label is free text the user typed. The header never wraps and
+   clips its overflow, so an unbounded label would eat the title and push the
+   controls out; give it the same "truncate, full text on hover" deal the title
+   itself gets. */
+.pane-head .acct-chip .usage-head {
+  display: inline-block;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
 /* The websocket state is pure noise while healthy ("connected"/"streaming") and
    was the element overflowing narrow multi-window headers. It's now hidden
    entirely on the window — connection health is self-evident from the sidebar

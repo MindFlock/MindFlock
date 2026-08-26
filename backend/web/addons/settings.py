@@ -54,6 +54,47 @@ def _mask_ticketing(d: dict) -> None:
             src["api_token"] = _MASK if src.get("api_token") else ""
 
 
+def _mask_profile_dict(prof: dict) -> None:
+    """Mask one auth profile's secrets in-place: ``api_key``, and every value
+    in its raw ``env`` overrides — the env map is the documented escape hatch
+    for carrying credentials the typed kinds don't know, so its VALUES are
+    secrets even though its keys are not."""
+    prof["api_key"] = _MASK if prof.get("api_key") else ""
+    env = prof.get("env")
+    if isinstance(env, dict):
+        prof["env"] = {k: _MASK for k in env}
+
+
+def _sessions_pinned_to(profile_ids: set) -> list:
+    """Titles of live sessions whose stored pin names one of ``profile_ids``.
+
+    Only an EXPLICIT pin counts: a session inheriting the app-wide default
+    ("" pin) follows whatever the default becomes, which is the behaviour it
+    asked for. Best-effort — the engine is not this addon's to depend on.
+    """
+    try:
+        from backend.web import server as _srv
+
+        return sorted(
+            title
+            for title, inst in (getattr(_srv.ENGINE, "instances", {}) or {}).items()
+            if (getattr(inst, "ProfileId", "") or "") in profile_ids
+        )
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _mask_auth_profiles(d: dict) -> None:
+    """Mask the secrets of every auth profile in-place (the profiles twin of
+    :func:`_mask_ticketing` — secrets inside a list need their own walk)."""
+    ap = d.get("auth_profiles")
+    if not isinstance(ap, dict):
+        return
+    for prof in ap.get("profiles", []) or []:
+        if isinstance(prof, dict):
+            _mask_profile_dict(prof)
+
+
 def _masked_view() -> dict:
     """The current settings as a grouped dict, with secrets masked.
 
@@ -66,6 +107,7 @@ def _masked_view() -> dict:
         d.setdefault(group, {})
         d[group][fld] = _MASK if present else ""
     _mask_ticketing(d)
+    _mask_auth_profiles(d)
     return d
 
 
@@ -110,6 +152,20 @@ def _apply_post(payload: dict) -> None:
             continue  # a list of sources — managed via the dedicated CRUD endpoints
         if not isinstance(fields, dict):
             continue
+        if group == "auth_profiles":
+            # The profiles LIST is managed via its dedicated CRUD endpoint;
+            # the group's scalars (default_profile) stay settable here.
+            fields = {k: v for k, v in fields.items() if k != "profiles"}
+            dp = fields.get("default_profile")
+            if isinstance(dp, str) and dp.strip():
+                known = {
+                    p.id for p in settings_store.load_settings().auth_profiles.profiles
+                }
+                if dp.strip() not in known:
+                    raise ValueError(
+                        "unknown account '%s' — add it under Settings → Accounts "
+                        "before making it the default" % dp.strip()
+                    )
         if group == "coding_cli":
             dp = fields.get("default_provider")
             if (
@@ -771,6 +827,272 @@ class SettingsAddon(Addon):
                 return JSONResponse({"error": str(err)}, status_code=400)
             return JSONResponse({"sources": _masked_sources()})
 
+        # --- auth profiles CRUD (multiple identities per CLI) ---------------
+        def _masked_profiles() -> list:
+            from backend.providers import auth_profiles as ap
+
+            out = []
+            for p in settings_store.load_settings().auth_profiles.profiles:
+                d = p.to_dict()
+                _mask_profile_dict(d)
+                # Read-only enrichment the Accounts screen renders: where an
+                # account profile's isolated login lives, the command that logs
+                # its CLI in there, and which CLIs the profile can route — what
+                # the New dialog uses to steer the Agent picker so a
+                # no-route combination is caught at selection time.
+                try:
+                    cfg = ap.get_profile(p.id)
+                    if cfg is not None:
+                        d["supported_agents"] = ap.supported_agents(cfg)
+                        if p.kind == "account":
+                            d["resolved_config_dir"] = ap.account_dir(cfg)
+                            d["login_command"] = ap.login_command(cfg)
+                except Exception:  # noqa: BLE001 — enrichment only
+                    pass
+                out.append(d)
+            return out
+
+        def _auth_profiles_view() -> dict:
+            s = settings_store.load_settings().auth_profiles
+            view = {
+                "profiles": _masked_profiles(),
+                "default_profile": s.default_profile,
+                "kinds": list(settings_store.AUTH_PROFILE_KINDS),
+            }
+            # $MINDFLOCK_AUTH_PROFILE beats the stored default at launch time,
+            # and it is read from the server process's own env — invisible to
+            # this endpoint unless it is reported. Without this the screen and
+            # `accounts ls` name one identity while every session runs as
+            # another, and the "Make default" button appears to do nothing.
+            try:
+                from backend.providers import auth_profiles as _ap
+
+                pinned = os.environ.get("MINDFLOCK_AUTH_PROFILE")
+                if pinned:
+                    view["default_profile"] = _ap.default_profile_id()
+                    view["default_profile_env"] = pinned
+                    view["default_profile_locked"] = True
+            except Exception:  # noqa: BLE001 — enrichment only
+                pass
+            return view
+
+        @router.get("/settings/auth-profiles")
+        def get_auth_profiles() -> JSONResponse:
+            return JSONResponse(_auth_profiles_view())
+
+        @router.put("/settings/auth-profiles")
+        def put_auth_profiles(body: dict) -> JSONResponse:
+            """Replace the whole profiles list (same contract as the ticketing
+            sources CRUD: an ``api_key`` that is empty or the mask sentinel
+            keeps the previously-stored key, matched by ``id``). A
+            ``default_profile`` key in the body updates the app-wide default in
+            the same save; account-kind profiles get their isolated config dir
+            created here so a login can land in it."""
+            body = body or {}
+            incoming = body.get("profiles")
+            if not isinstance(incoming, list):
+                return JSONResponse(
+                    {"error": 'expected {"profiles": [...]}'}, status_code=400
+                )
+            stored_profiles = settings_store.load_settings().auth_profiles.profiles
+            stored_profiles_raw = [
+                {"id": getattr(p, "id", "")} for p in stored_profiles
+            ]
+            prev = {p.id: p.api_key for p in stored_profiles}
+            prev_env = {p.id: dict(p.env or {}) for p in stored_profiles}
+            clean: list = []
+            seen: set = set()
+            for raw in incoming:
+                if not isinstance(raw, dict):
+                    continue
+                pid = str(raw.get("id", "") or "").strip().lower()
+                if not pid:
+                    continue
+                if not _NAME_RE.match(pid):
+                    return JSONResponse(
+                        {
+                            "error": "account id '%s' must be lowercase "
+                            "letters/digits/-/_ (max 64)" % pid
+                        },
+                        status_code=400,
+                    )
+                if pid == "default":
+                    # Reserved: "default" is the AMBIENT_ID sentinel meaning
+                    # "the CLI's own login" (backend.providers.auth_profiles).
+                    # A profile so named would be accepted everywhere and
+                    # resolve to NO overlay — sessions silently on the ambient
+                    # login while the UI shows the profile selected.
+                    return JSONResponse(
+                        {
+                            "error": "'default' is reserved (it means the "
+                            "CLI's own login) — pick another id"
+                        },
+                        status_code=400,
+                    )
+                if pid in seen:
+                    return JSONResponse(
+                        {"error": "duplicate account id '%s'" % pid},
+                        status_code=400,
+                    )
+                seen.add(pid)
+                kind = str(raw.get("kind", "") or "account").strip().lower()
+                if kind not in settings_store.AUTH_PROFILE_KINDS:
+                    return JSONResponse(
+                        {
+                            "error": "unknown account kind '%s' (expected one "
+                            "of %s)"
+                            % (kind, ", ".join(settings_store.AUTH_PROFILE_KINDS))
+                        },
+                        status_code=400,
+                    )
+                p = dict(raw)
+                p["id"] = pid
+                p["kind"] = kind
+                key = str(p.get("api_key", "") or "").strip()
+                if key in ("", _MASK):
+                    p["api_key"] = prev.get(pid, "")
+                # env values are masked on read (they carry credentials for
+                # CLIs the typed kinds don't know), so the mask sentinel here
+                # means "keep the stored value" — same rule as api_key, per
+                # env KEY. A key absent from the stored env resolves to ""
+                # and is dropped by the store's serializer.
+                if isinstance(p.get("env"), dict):
+                    kept = prev_env.get(pid, {})
+                    lost = [
+                        k
+                        for k, v in p["env"].items()
+                        if isinstance(k, str) and v == _MASK and k not in kept
+                    ]
+                    if lost:
+                        # Same shape as the api_key rule below and for the same
+                        # reason: the keep-secret map is keyed by id, so an id
+                        # RENAME cannot resolve the mask. Blanking these
+                        # silently is worse than a key going missing — an empty
+                        # credential in the env can break the CLI's auth
+                        # outright.
+                        return JSONResponse(
+                            {
+                                "error": "account '%s': re-enter %s (renaming an "
+                                "id requires re-entering its secrets)"
+                                % (pid, ", ".join(sorted(lost))),
+                            },
+                            status_code=400,
+                        )
+                    p["env"] = {
+                        k: (kept.get(k, "") if v == _MASK else v)
+                        for k, v in p["env"].items()
+                        if isinstance(k, str)
+                    }
+                if kind in ("api_key", "openrouter") and not p["api_key"]:
+                    # The keep-secret map is keyed by id, so this is exactly
+                    # what an id RENAME with the mask sentinel produces — and a
+                    # keyless key-profile would later launch sessions silently
+                    # on the CLI's own login. Fail loudly instead.
+                    return JSONResponse(
+                        {
+                            "error": "account '%s' (%s) has no API key — paste "
+                            "one (renaming an id requires re-entering its key)"
+                            % (pid, kind)
+                        },
+                        status_code=400,
+                    )
+                clean.append(p)
+            # EVERYTHING is validated before ANYTHING is written: a 400 from
+            # this endpoint must mean "nothing changed", and the default has to
+            # be checked against the INCOMING list — validating after the list
+            # replacement half-applied the request (and the dangling-default
+            # cleanup could silently clear the app default on the way).
+            default = str(body.get("default_profile", "") or "").strip()
+            if "default_profile" in body and default and default not in seen:
+                return JSONResponse(
+                    {
+                        "error": "unknown account '%s' — it is not in the "
+                        "profiles list being saved" % default
+                    },
+                    status_code=400,
+                )
+            # Removing a profile that sessions are PINNED to is an identity
+            # change for each of them: the overlay resolves to nothing and they
+            # come back on the CLI's own login — the one thing this feature is
+            # not allowed to do quietly. Name them and refuse; `force: true`
+            # (the UI's "remove anyway") proceeds, because a user who has read
+            # the list is entitled to.
+            gone = {
+                (p.get("id") or "")
+                for p in stored_profiles_raw
+                if (p.get("id") or "") and (p.get("id") or "") not in seen
+            }
+            if gone and not bool(body.get("force")):
+                pinned = _sessions_pinned_to(gone)
+                if pinned:
+                    return JSONResponse(
+                        {
+                            "error": "still in use by %s — swap %s off it first "
+                            "(the pane's @account chip), or resend with "
+                            "force to run %s on the CLI's own login"
+                            % (
+                                ", ".join("'%s'" % t for t in pinned[:5])
+                                + (
+                                    " and %d more" % (len(pinned) - 5)
+                                    if len(pinned) > 5
+                                    else ""
+                                ),
+                                "them" if len(pinned) > 1 else "it",
+                                "them" if len(pinned) > 1 else "it",
+                            ),
+                            "in_use": pinned,
+                        },
+                        status_code=409,
+                    )
+            try:
+                settings_store.set_auth_profiles(clean)
+                if "default_profile" in body:
+                    settings_store.update_settings(
+                        auth_profiles={"default_profile": default}
+                    )
+            except Exception as err:  # noqa: BLE001
+                return JSONResponse({"error": str(err)}, status_code=400)
+            # Create each account profile's isolated dir now (0700, like the
+            # settings dir) so the login flow has somewhere to land.
+            try:
+                from backend.providers import auth_profiles as ap
+
+                for cfg in ap.load_profiles():
+                    if cfg.kind == "account" and ap.login_env(cfg):
+                        os.makedirs(ap.account_dir(cfg), mode=0o700, exist_ok=True)
+            except Exception:  # noqa: BLE001 — the dir is created again at login
+                pass
+            return JSONResponse(_auth_profiles_view())
+
+        @router.post("/settings/test/openrouter")
+        def test_openrouter(body: Optional[dict] = None) -> JSONResponse:
+            """Validate an OpenRouter key (request-supplied, or the one stored
+            on ``profile_id``) and report its spend + the models it can reach —
+            the account-level usage story for key profiles, and the source for
+            the model-picker dropdown. Never echoes the key."""
+            from backend.providers import auth_profiles as ap
+
+            body = body or {}
+            key = str(body.get("api_key", "") or "").strip()
+            base_url = str(body.get("base_url", "") or "").strip()
+            if key in ("", _MASK):
+                pid = str(body.get("profile_id", "") or "").strip()
+                for p in settings_store.load_settings().auth_profiles.profiles:
+                    if p.id == pid:
+                        key = p.api_key
+                        base_url = base_url or p.base_url
+                        break
+                else:
+                    key = ""
+            if not key:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "no OpenRouter key configured — paste one first",
+                    }
+                )
+            return JSONResponse(ap.probe_openrouter(key, base_url))
+
         @router.post("/settings/test/github")
         def test_github() -> JSONResponse:
             """Report where a GitHub token would come from (settings / env /
@@ -905,15 +1227,20 @@ class SettingsAddon(Addon):
             return JSONResponse({"providers": out, "default": default_name})
 
         @router.websocket("/providers/{name}/login-terminal")
-        async def provider_login_terminal(ws: WebSocket, name: str) -> None:
+        async def provider_login_terminal(
+            ws: WebSocket, name: str, profile: str = ""
+        ) -> None:
             """Open a browser terminal running provider ``name``'s login flow so
-            the user authenticates the CLI through the CLI itself."""
+            the user authenticates the CLI through the CLI itself. With
+            ``?profile=<id>`` the login runs under that auth profile's isolated
+            config dir, so a second (work) account signs in without touching
+            the first."""
             from backend.web.core import provider_login
             from backend.web.core.terminal import pump_pty, spawn_tmux_attach
 
             await ws.accept()
             session, err = await asyncio.to_thread(
-                provider_login.ensure_login_session, name
+                provider_login.ensure_login_session, name, profile
             )
             if err is not None:
                 await ws.send_text(json.dumps({"type": "error", "message": err}))
@@ -928,12 +1255,12 @@ class SettingsAddon(Addon):
             await pump_pty(ws, proc, allow_input=True)
 
         @router.post("/providers/{name}/login-close")
-        def provider_login_close(name: str) -> JSONResponse:
+        def provider_login_close(name: str, profile: str = "") -> JSONResponse:
             """Tear down a provider's login terminal (called when the UI closes
             the modal), so a completed login doesn't leave a stray tmux session."""
             from backend.web.core import provider_login
 
-            provider_login.kill_login_session(name)
+            provider_login.kill_login_session(name, profile)
             return JSONResponse({"ok": True})
 
         @router.post("/providers")

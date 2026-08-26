@@ -39,6 +39,9 @@ __all__ = [
     "SettingsFileName",
     "SETTINGS_SCHEMA_VERSION",
     "GIT_TRANSPORTS",
+    "AUTH_PROFILE_KINDS",
+    "AuthProfile",
+    "AuthProfilesSettings",
     "CodingCliSettings",
     "TicketingSource",
     "TicketingSettings",
@@ -55,6 +58,7 @@ __all__ = [
     "save_settings",
     "update_settings",
     "set_ticketing_sources",
+    "set_auth_profiles",
     "invalidate",
     "resolve",
     "resolve_str",
@@ -327,6 +331,139 @@ class TicketingSettings:
         else:
             sources = []
         return cls(sources=sources)
+
+
+#: Accepted :attr:`AuthProfile.kind` values. ``account`` is a separate login of
+#: the CLI itself (an isolated config dir — e.g. a second Claude subscription);
+#: ``api_key`` injects a vendor API key for the session's CLI; ``openrouter``
+#: routes the session through OpenRouter with its own key (and optional model).
+AUTH_PROFILE_KINDS = ("account", "api_key", "openrouter")
+
+
+@dataclass
+class AuthProfile:
+    """One authentication identity a session can run under.
+
+    Same list-of-records-with-a-secret shape as :class:`TicketingSource` (and
+    managed the same way: whole-list replacement via :func:`set_auth_profiles`,
+    ``api_key`` masked by the settings addon). ``id`` is the stable slug the
+    session field / CLI / UI reference; deleting and re-adding an id re-binds
+    every session that pinned it.
+    """
+
+    id: str = ""
+    label: str = ""
+    #: One of :data:`AUTH_PROFILE_KINDS`.
+    kind: str = "account"
+    #: The coding CLI this profile authenticates ("claude", "codex", …). For
+    #: ``openrouter`` profiles blank means "any CLI with an OpenRouter route".
+    provider: str = ""
+    #: ``account`` kind: the CLI's isolated config dir. Blank = the derived
+    #: default (``~/.mindflock/accounts/<id>``).
+    config_dir: str = ""
+    api_key: str = ""  # SECRET
+    #: ``openrouter`` kind: alternate endpoint. Blank = OpenRouter's default.
+    base_url: str = ""
+    #: Optional model pin (e.g. "anthropic/claude-sonnet-4.5" on OpenRouter).
+    model: str = ""
+    #: Extra env vars overlaid last, for setups the typed fields can't express.
+    env: Dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        for k in (
+            "id",
+            "label",
+            "kind",
+            "provider",
+            "config_dir",
+            "api_key",
+            "base_url",
+            "model",
+        ):
+            v = getattr(self, k)
+            if v:
+                d[k] = v
+        if self.env:
+            env = {k: v for k, v in self.env.items() if k and v}
+            if env:
+                d["env"] = env
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AuthProfile":
+        raw_env = d.get("env")
+        env = (
+            {
+                str(k): str(v)
+                for k, v in raw_env.items()
+                if isinstance(k, str) and isinstance(v, str) and k and v
+            }
+            if isinstance(raw_env, dict)
+            else {}
+        )
+        kind = str(d.get("kind", "") or "").strip().lower()
+        return cls(
+            id=str(d.get("id", "") or ""),
+            label=str(d.get("label", "") or ""),
+            # Tolerant like every coercion here: an unrecognised kind is kept
+            # VERBATIM rather than taking the store down. Keeping it is also
+            # what makes it safe — no typed overlay matches an unknown kind, so
+            # `overlay_for` applies the profile's raw ``env`` and nothing else.
+            # Coercing it to "account" would do the opposite: point the CLI at
+            # ~/.mindflock/accounts/<id> via CLAUDE_CONFIG_DIR and launch it
+            # logged out. The API rejects unknown kinds on write, so this path
+            # is only reached by a hand-edited settings.json or a store written
+            # by a newer build — both of which want preservation, not a guess.
+            kind=kind,
+            provider=str(d.get("provider", "") or ""),
+            config_dir=str(d.get("config_dir", "") or ""),
+            api_key=str(d.get("api_key", "") or ""),
+            base_url=str(d.get("base_url", "") or ""),
+            model=str(d.get("model", "") or ""),
+            env=env,
+        )
+
+
+@dataclass
+class AuthProfilesSettings:
+    """All configured auth profiles, plus which one new sessions default to.
+
+    ``default_profile`` names the profile every session with no per-session pin
+    runs under; blank = no overlay (each CLI's own ambient login — the
+    pre-feature behaviour). Stored as ``{"profiles": […], "default_profile": …}``.
+    """
+
+    profiles: list = field(default_factory=list)  # list[AuthProfile]
+    default_profile: str = ""
+
+    def get(self, profile_id: str) -> Optional[AuthProfile]:
+        """The profile with ``profile_id``, or None."""
+        for p in self.profiles:
+            if p.id and p.id == profile_id:
+                return p
+        return None
+
+    def to_dict(self) -> dict:
+        d: dict = {}
+        arr = [p.to_dict() for p in self.profiles if p.id]
+        if arr:
+            d["profiles"] = arr
+        if self.default_profile:
+            d["default_profile"] = self.default_profile
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AuthProfilesSettings":
+        raw = d.get("profiles")
+        if isinstance(raw, list) and raw:
+            profiles = [AuthProfile.from_dict(p) for p in raw if isinstance(p, dict)]
+        else:
+            profiles = []
+        return cls(
+            profiles=profiles,
+            default_profile=str(d.get("default_profile", "") or ""),
+        )
 
 
 #: Accepted ``[repository].git_transport`` values. ``"auto"`` matches the
@@ -980,6 +1117,7 @@ class Settings:
 
     coding_cli: CodingCliSettings = field(default_factory=CodingCliSettings)
     ticketing: TicketingSettings = field(default_factory=TicketingSettings)
+    auth_profiles: AuthProfilesSettings = field(default_factory=AuthProfilesSettings)
     repository: RepositorySettings = field(default_factory=RepositorySettings)
     github: GithubSettings = field(default_factory=GithubSettings)
     engine: EngineSettings = field(default_factory=EngineSettings)
@@ -1006,6 +1144,7 @@ class Settings:
         return {
             "coding_cli": self.coding_cli,
             "ticketing": self.ticketing,
+            "auth_profiles": self.auth_profiles,
             "repository": self.repository,
             "github": self.github,
             "engine": self.engine,
@@ -1044,6 +1183,7 @@ class Settings:
         return cls(
             coding_cli=CodingCliSettings.from_dict(_group(d, "coding_cli")),
             ticketing=TicketingSettings.from_dict(_group(d, "ticketing")),
+            auth_profiles=AuthProfilesSettings.from_dict(_group(d, "auth_profiles")),
             repository=RepositorySettings.from_dict(_group(d, "repository")),
             github=GithubSettings.from_dict(_group(d, "github")),
             engine=EngineSettings.from_dict(_group(d, "engine")),
@@ -1445,6 +1585,37 @@ def set_ticketing_sources(sources: list) -> Settings:
         merged["ticketing"] = {"sources": clean}
     else:
         merged.pop("ticketing", None)
+    new_settings = Settings.from_dict(merged)
+    save_settings(new_settings)
+    return new_settings
+
+
+def set_auth_profiles(profiles: list) -> Settings:
+    """Replace the whole auth-profiles list and persist.
+
+    ``profiles`` is a list of dicts (each an :class:`AuthProfile` shape). Same
+    reason :func:`set_ticketing_sources` exists: the field-merge
+    :func:`update_settings` can't express a list replacement. The group's
+    ``default_profile`` scalar is preserved — unless it names a profile that no
+    longer exists, in which case it is cleared so new sessions can't resolve to
+    a deleted identity. Returns the new state.
+    """
+    current = load_settings()
+    merged = current.to_dict()
+    clean = [p for p in (profiles or []) if isinstance(p, dict) and p.get("id")]
+    group = dict(merged.get("auth_profiles", {}))
+    if clean:
+        group["profiles"] = clean
+    else:
+        group.pop("profiles", None)
+    if group.get("default_profile") and group["default_profile"] not in {
+        p["id"] for p in clean
+    }:
+        group.pop("default_profile", None)
+    if group:
+        merged["auth_profiles"] = group
+    else:
+        merged.pop("auth_profiles", None)
     new_settings = Settings.from_dict(merged)
     save_settings(new_settings)
     return new_settings

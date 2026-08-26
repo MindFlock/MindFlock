@@ -243,12 +243,28 @@ def test_failed_hook_rides_the_snapshot_probe_keys():
 
 
 def test_pending_rows_carry_the_same_keys_as_live_rows():
-    from backend.web.core import pending
+    """The invariant this test is named for, enforced against the real dicts.
 
+    Grepping for one literal let four keys (the auth-profile block) go missing
+    while the test stayed green — a pending row that is missing keys a live row
+    has makes the SPA read `undefined` off half a provisioning row.
+    """
     import inspect
+    import re
 
-    src = inspect.getsource(pending)
-    assert '"failed_hook": None' in src
+    from backend.web.core import pending
+    from backend.web.core import snapshot
+
+    def _keys(fn):
+        src = inspect.getsource(fn)
+        # The literal keys of the single dict each function returns.
+        return set(re.findall(r'^\s{8,}"([a-z_]+)":', src, re.M))
+
+    live = _keys(snapshot._instance_json)
+    pend = _keys(pending.rows)
+    assert live, "no keys parsed from the live row builder"
+    missing = live - pend
+    assert not missing, "pending rows are missing live-row keys: %s" % sorted(missing)
 
 
 def test_stage_route_is_registered():

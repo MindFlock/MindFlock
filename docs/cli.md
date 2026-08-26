@@ -71,6 +71,29 @@ process is executing out of the venv it deletes:
 uv tool uninstall mindflock
 ```
 
+### `mindflock accounts [ls|add|login|use|rm]`
+
+Manage **auth profiles** — multiple Claude accounts, OpenRouter keys and other
+identities sessions can run under, swappable without logging any CLI out (see
+[docs/accounts.md](accounts.md)). Prefers a running server (so the app sees
+changes immediately) and falls back to `~/.mindflock/settings.json` offline,
+which is why it lives here rather than with the session commands.
+
+```bash
+mindflock accounts                     # list; '*' marks the default
+mindflock accounts add work --label 'Work'          # a second Claude login
+mindflock accounts login work          # runs the CLI's own OAuth flow, isolated
+mindflock accounts add or --kind openrouter --key sk-or-… --model MODEL
+mindflock accounts use work            # default for new sessions ('default' = none)
+mindflock accounts rm or
+```
+
+`add` flags: `--kind account|api_key|openrouter` (default `account`),
+`--agent CLI` (which CLI it authenticates; default claude), `--label`,
+`--key`, `--model`, `--base-url`, `--config-dir`. Per-session selection is
+`mindflock new --account ID`, the New dialog's Account select, or the pane
+header's `@account` chip (which hot-swaps a live session).
+
 ## Session commands
 
 All of them find the server the same way:
@@ -104,6 +127,7 @@ mindflock new --provision --strategy clone   # run repo setup / warm caches
 | `--provision` | provisioned mode (repo setup commands, warm test caches) |
 | `--strategy worktree\|clone` | workspace strategy for `--provision` |
 | `--program` | agent program (default: the server's default provider) |
+| `--account` | auth profile the session runs under (`mindflock accounts`; `default` = the CLI's own login) |
 
 The server creates the workspace in the background; `new` polls for up to ~15s
 and reports `ready (status: …)`, a start failure, or "still provisioning".

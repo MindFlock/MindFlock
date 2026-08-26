@@ -179,3 +179,56 @@
   color: #fff;
 }
 
+
+/* --- Account chip popover (AccountChip) ------------------------------------
+   Borrows the usage popover's shell — same anchor mechanics, same table — so
+   only what is genuinely different about "pick an identity" lives here. */
+
+/* Rows are the whole point of this popover: they are buttons wearing a <tr>.
+   Every other pick-one list in the app (usage periods, usage tabs, the command
+   palette) answers the pointer; without this these rows took a click and gave
+   nothing back. */
+.acct-pop-row {
+  cursor: pointer;
+}
+
+.acct-pop-row:hover td {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+/* The active row reads as a statement, not an option. */
+.acct-pop-row.acct-pop-current td {
+  color: var(--text);
+}
+
+/* A section heading that follows a table needs air above it; .usage-pop-head
+   only carries margin-bottom because in its original home it was always first.
+   Applied to the sibling case only, so the leading heading is unchanged. */
+.usage-pop-tbl + .usage-pop-head,
+.usage-pop-note + .usage-pop-head {
+  margin-top: 10px;
+}
+
+/* The model picker: the popover is a themed surface, and a bare <select>
+   renders as the platform default control on top of it. Matches .set-row
+   select, scaled to the popover's 11px type. */
+.acct-pop-model {
+  padding: 4px 8px 2px;
+}
+
+.acct-pop-model select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.acct-pop-model select:focus {
+  outline: none;
+  border-color: var(--accent);
+}

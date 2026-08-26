@@ -115,3 +115,24 @@ def test_no_component_calls_a_hook_after_an_early_return():
                         "%s:%d %s" % (path.name, j + 1, lines[j].strip()[:60])
                     )
     assert not offenders, "hook called after an early return:\n" + "\n".join(offenders)
+
+
+def test_style_css_carries_the_account_chip_rules():
+    """The account chip and its swap menu are hooks in two existing sheets.
+
+    Both `Pane.css` and `usage.css` were already imported, so the orphaned-sheet
+    guard above cannot see a class that is referenced by a component and defined
+    by nobody — which is how `.acct-chip` and `.acct-pop-row` shipped as dead
+    hooks. These are the rules that make the chip a member of the header's
+    right-hand group instead of a stranded one, and the menu's rows answer the
+    pointer.
+    """
+    css = client.get("/style.css").text
+    # Only the FIRST .tok in the header may take the auto margin; a second one
+    # splits the free space and lands the chip mid-header.
+    assert ".pane-head .acct-chip + .tok" in css.replace("\n", " ")
+    # A user-typed label cannot be allowed to grow the no-wrap header.
+    assert ".acct-chip .usage-head" in css
+    # The swap rows are buttons wearing a <tr>.
+    assert ".acct-pop-row" in css
+    assert ".acct-pop-model select" in css

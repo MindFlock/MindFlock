@@ -46,6 +46,7 @@ Core vocabulary (emitted by the server):
 | `session.queue_changed` | Any prompt-queue edit | `data: {pending, enabled, loop}` |
 | `session.usage_restored` | A provider window reopened for a session that had run out | `data: {resumed}` |
 | `session.turn_ended` | A session's work really is over — observed working, idle ever since, nothing queued | `data: {idle_for}` |
+| `session.profile_changed` | A session's auth profile (the identity its agent runs as) was hot-swapped | `data: {profile_id}` — `""` inherit app default, `"default"` the CLI's own login |
 
 Addon-originated events (see `AppContext.emit`) live under the `addon.`
 namespace, e.g. `addon.notify.ping`. Notable transitions:

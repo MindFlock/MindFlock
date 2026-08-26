@@ -247,7 +247,7 @@ def test_login_close_endpoint_kills_session(client, monkeypatch):
     monkeypatch.setattr(
         provider_login,
         "kill_login_session",
-        lambda name: killed.setdefault("name", name),
+        lambda name, profile="": killed.setdefault("name", name),
     )
     r = client.post("/api/providers/codex/login-close")
     assert r.status_code == 200 and r.json()["ok"] is True
@@ -645,7 +645,9 @@ def test_login_terminal_ws_known_provider_bridges(client, monkeypatch):
     monkeypatch.setattr(
         provider_login,
         "ensure_login_session",
-        lambda name: (calls.append(name) or ("mindflock_login_" + name, None)),
+        lambda name, profile="": (
+            calls.append(name) or ("mindflock_login_" + name, None)
+        ),
     )
     monkeypatch.setattr(
         web_terminal,

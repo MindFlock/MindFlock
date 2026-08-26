@@ -71,7 +71,13 @@ class AntigravityProvider(GenericProvider):
             return None
 
     # --- per-session resume thread ----------------------------------------- #
-    def record_thread(self, session_name: str, workdir: str, since_ts=None) -> None:
+    def record_thread(
+        self,
+        session_name: str,
+        workdir: str,
+        since_ts=None,
+        profile_id: str = "",
+    ) -> None:
         try:
             from . import thread_markers
 
@@ -79,6 +85,6 @@ class AntigravityProvider(GenericProvider):
                 since_ts, exclude=thread_markers.claimed(exclude_session=session_name)
             )
             if tid and tid != thread_markers.read(session_name):
-                thread_markers.record(session_name, tid)
+                thread_markers.record(session_name, tid, profile_id)
         except Exception:  # noqa: BLE001 — thread binding is enrichment only
             pass

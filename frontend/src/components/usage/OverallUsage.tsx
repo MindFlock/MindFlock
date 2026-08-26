@@ -30,6 +30,7 @@ import {
   type UsageAgg,
   type UsagePeriodKey,
   type UsageProviderEntry,
+  type UsageRowData,
   type UsageWindows,
 } from "./usageModel";
 
@@ -259,6 +260,29 @@ export function OverallUsage() {
                   active.mode === "windowed",
                 )}
               />
+              {/* Per-account split (auth profiles). Session totals aren't
+                  attributable per account, so the table shows only for the
+                  rolling periods. */}
+              {period !== "session" && (active.accounts?.length || 0) > 0 && (
+                <>
+                  <div className="usage-pop-head">By account</div>
+                  <UsagePopTable
+                    rows={(active.accounts || []).map((a) => {
+                      const t = a.periods && a.periods[period];
+                      return [
+                        a.label || a.id,
+                        t ? "~" + fmtUsd(t.cost || 0) : "—",
+                      ] as UsageRowData;
+                    })}
+                  />
+                  {/* These will not add up to the total above for a long
+                      period, and saying so beats letting someone hunt for the
+                      difference: days the durable ledger recorded before any
+                      account existed carry no identity, so they count in the
+                      total and in nobody's row. */}
+                  <UsagePopNote text="Split from the day accounts were configured; earlier days count in the total only." />
+                </>
+              )}
               <UsagePopNote text={period === "session" ? USAGE_NOTE : USAGE_WINDOW_NOTE[period]} />
               {active.mode === "windowed" ? (
                 <>

@@ -145,6 +145,13 @@ def rows(engine=None) -> list:
                 "folder_label": "",
                 "program": program,
                 "provider": provider,
+                # Auth profile: a pending row has no instance yet, so it can
+                # only report "not pinned". Present-but-empty, not absent —
+                # these rows must carry the same key set as a live row.
+                "profile_id": "",
+                "profile_effective": "",
+                "profile_label": "",
+                "profile_model": "",
                 "path": "",
                 "status": "loading",
                 "started": False,

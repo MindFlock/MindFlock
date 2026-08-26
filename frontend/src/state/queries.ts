@@ -12,6 +12,7 @@ import { errorPop } from "../lib/errorPop";
 import { isVerifySession } from "../components/dialogs/verify";
 import type { EffortCap } from "../lib/effort";
 import type {
+  AuthProfilesResponse,
   Config,
   Json,
   DevicesResponse,
@@ -236,6 +237,22 @@ export function useUsage(enabled = true) {
     enabled,
     placeholderData: (prev) => prev,
   });
+}
+
+/** Auth profiles (Settings → Accounts) — the identity list the New dialog and
+ * each pane's account chip render. Cheap (a settings read), so a modest
+ * staleTime keeps the pickers fresh without polling. */
+export function useAuthProfiles() {
+  return useQuery({
+    queryKey: ["auth-profiles"],
+    queryFn: () => api<AuthProfilesResponse>("/api/settings/auth-profiles"),
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+}
+
+export function refreshAuthProfiles() {
+  return queryClient.invalidateQueries({ queryKey: ["auth-profiles"] });
 }
 
 /** Imperative refresh after any action that changes the session set. */

@@ -3614,6 +3614,60 @@ p.set-hint {
   border-color: var(--accent);
   color: #fff;
 }
+
+
+/* --- Account chip popover (AccountChip) ------------------------------------
+   Borrows the usage popover's shell — same anchor mechanics, same table — so
+   only what is genuinely different about "pick an identity" lives here. */
+
+/* Rows are the whole point of this popover: they are buttons wearing a <tr>.
+   Every other pick-one list in the app (usage periods, usage tabs, the command
+   palette) answers the pointer; without this these rows took a click and gave
+   nothing back. */
+.acct-pop-row {
+  cursor: pointer;
+}
+
+.acct-pop-row:hover td {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+/* The active row reads as a statement, not an option. */
+.acct-pop-row.acct-pop-current td {
+  color: var(--text);
+}
+
+/* A section heading that follows a table needs air above it; .usage-pop-head
+   only carries margin-bottom because in its original home it was always first.
+   Applied to the sibling case only, so the leading heading is unchanged. */
+.usage-pop-tbl + .usage-pop-head,
+.usage-pop-note + .usage-pop-head {
+  margin-top: 10px;
+}
+
+/* The model picker: the popover is a themed surface, and a bare <select>
+   renders as the platform default control on top of it. Matches .set-row
+   select, scaled to the popover's 11px type. */
+.acct-pop-model {
+  padding: 4px 8px 2px;
+}
+
+.acct-pop-model select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.acct-pop-model select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 } /* 090 */ @layer components{
 /* --- Send / prompt-queue: the Queue tab (badge + inline console) --- */
 /* The tab label matches the other tabs in every state — no accent/gold tint;
@@ -4999,6 +5053,31 @@ p.set-hint {
   font-size: 11px;
   font-family: ui-monospace, Menlo, Consolas, monospace;
   white-space: nowrap;
+}
+
+/* `margin-left: auto` above is what pins the chip group to the right edge, and
+   it was written when there was exactly ONE .tok in the header. Flexbox splits
+   free space EQUALLY between every auto margin on the line, so the moment the
+   account chip joined the cost chip the two ended up half a header apart, with
+   a gap that slid around as the title and next-step label changed width. Only
+   the FIRST chip gets the auto margin; the rest ride along beside it.
+   Selector-scoped rather than :first-of-type so a session with no accounts
+   configured (AccountChip renders nothing) is untouched. */
+.pane-head .acct-chip + .tok {
+  margin-left: 0;
+}
+
+/* An account label is free text the user typed. The header never wraps and
+   clips its overflow, so an unbounded label would eat the title and push the
+   controls out; give it the same "truncate, full text on hover" deal the title
+   itself gets. */
+.pane-head .acct-chip .usage-head {
+  display: inline-block;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 /* The websocket state is pure noise while healthy ("connected"/"streaming") and

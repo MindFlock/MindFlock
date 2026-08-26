@@ -126,7 +126,9 @@ class _Claude:
 def _patch_estimate(monkeypatch, window, budget):
     from backend.providers import usage_history
 
-    monkeypatch.setattr(usage_history, "current_window", lambda hours: window)
+    monkeypatch.setattr(
+        usage_history, "current_window", lambda hours, account=None: window
+    )
 
     class _Srv:
         def _window_budget_usd(self):

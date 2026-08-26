@@ -703,6 +703,20 @@ def _startup_trust_gate_clarify(srv, inst, title: str, name: str, created) -> bo
     return False
 
 
+def _session_profile_id(inst) -> str:
+    """The auth profile a session actually runs as ("" = the ambient login).
+
+    Threads recorded server-side need the same per-account key the in-session
+    activity hook uses, or a codex window's conversation would be filed under
+    no account and lost on the next swap."""
+    try:
+        from backend.providers import auth_profiles
+
+        return auth_profiles.effective_profile_id(getattr(inst, "ProfileId", "") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _maybe_record_thread(provider, inst, name: str, created) -> None:
     """Bind this window to its own conversation id while it runs (throttled).
 
@@ -716,7 +730,12 @@ def _maybe_record_thread(provider, inst, name: str, created) -> None:
         now0 = time.time()
         if now0 - _THREAD_RECORD_AT.get(name, 0.0) >= _THREAD_RECORD_EVERY_S:
             _THREAD_RECORD_AT[name] = now0
-            provider.record_thread(name, inst.GetWorktreePath() or "", created)
+            provider.record_thread(
+                name,
+                inst.GetWorktreePath() or "",
+                created,
+                _session_profile_id(inst),
+            )
     except Exception:  # noqa: BLE001 — thread binding is enrichment only
         pass
 

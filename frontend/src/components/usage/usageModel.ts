@@ -50,6 +50,9 @@ export interface UsageProviderEntry {
   window?: PlanWindow | null;
   window_note?: string | null;
   periods?: PeriodTotals | null;
+  /** Per-account breakdown (auth profiles): present only when the provider
+   * has account profiles configured. `id` "default" = the ambient login. */
+  accounts?: Array<{ id: string; label: string; periods?: PeriodTotals | null }>;
 }
 
 export interface UsageWindows extends PeriodTotals {
