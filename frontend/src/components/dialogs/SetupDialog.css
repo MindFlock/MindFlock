@@ -65,8 +65,22 @@
 
 .setup-actions button:hover,
 .setup-acct-row button:hover,
-.test-btn:hover {
+.test-btn:hover:not(:disabled) {
   border-color: var(--accent);
+}
+
+/* A disabled .test-btn used to be pixel-identical to a live one — same fill,
+   same border, same hover lift — across Settings, Intake and Verify, which is
+   every "Test", "Run" and "Start" button in the app. Pressing one did nothing
+   and looked like nothing, so the only reading available was "the feature is
+   broken". The title attribute already explains WHY each one is off; this is
+   what makes a person go looking for it. Same opacity the make-PR and
+   recently-closed dialogs already use for their own disabled actions. */
+.setup-actions button:disabled,
+.setup-acct-row button:disabled,
+.test-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .setup-actions .setup-new {

@@ -13,6 +13,7 @@ import {
   markLoopReset,
   clearLoopReset,
   reconcileLoopReset,
+  resetStep,
   NO_ORIGIN_CMD,
   NO_ORIGIN_ALT,
 } from "../lib/stage";
@@ -146,20 +147,63 @@ describe("nextStep (guided next action)", () => {
   });
 });
 
-describe("loop-reset pin", () => {
-  it("pins the guided stage back to agent after a PR, then clears once git moves off pr", () => {
+describe("back-to-idle pin", () => {
+  it("honours the SERVER's pin: the ladder restarts while stage stays the truth", () => {
+    // stage_reset rides alongside stage (which is still git truth), so a pinned
+    // window reads "idle"/"Commit…" without anyone lying about the branch.
+    const pinned = inst({
+      title: "sr1",
+      status: "running",
+      stage: "pr",
+      stage_reset: true,
+      activity: "idle",
+    });
+    expect(nextStep(pinned)?.label).toBe("Commit…");
+    expect(chipState(pinned).label).toBe("idle");
+    // Released (a new commit landed): the real stage takes over again with no
+    // client-side bookkeeping involved.
+    expect(nextStep(inst({ title: "sr1", status: "running", stage: "pr" }))?.label).toBe("Merge");
+  });
+
+  it("echoes the press locally until the server's row confirms it", () => {
     const row = inst({ title: "loopy", status: "running", stage: "pr", activity: "idle" });
     markLoopReset("loopy");
-    // Pinned: real stage is "pr" but the guided cycle restarts at "Commit…".
+    // Echo: the header flips on the click, before the round trip lands.
     expect(nextStep(row)?.label).toBe("Commit…");
     expect(chipState(row).label).toBe("idle");
-    // Still on pr -> pin holds.
-    reconcileLoopReset(inst({ title: "loopy", stage: "pr" }));
+    // A row that does NOT yet carry the pin must not cancel the echo — that is
+    // exactly the in-flight window the echo exists for.
+    reconcileLoopReset(row);
     expect(nextStep(row)?.label).toBe("Commit…");
-    // Git-derived stage genuinely left pr -> pin drops, real stage takes over.
-    reconcileLoopReset(inst({ title: "loopy", stage: "agent" }));
-    expect(nextStep(row)?.label).toBe("Merge");
+    // Confirmed: the echo is dropped and the server's flag carries it alone.
+    reconcileLoopReset(inst({ title: "loopy", stage: "pr", stage_reset: true }));
+    expect(nextStep(row)?.label).toBe("Merge"); // the un-flagged row is no longer pinned
     clearLoopReset("loopy");
+  });
+
+  it("offers ↺ only where the ladder has somewhere to be put back from", () => {
+    setCaps({ git: true });
+    const at = (o: Partial<Instance>) => resetStep(inst({ status: "running", ...o }));
+    // Finished-branch stages: offered, and the tooltip names the ask it silences.
+    expect(at({ title: "r1", stage: "committed" })?.label).toBe("↺");
+    expect(at({ title: "r2", stage: "committed" })?.title).toContain("push");
+    expect(at({ title: "r3", stage: "pushed" })?.title).toContain("open a PR");
+    expect(at({ title: "r4", stage: "pr" })?.title).toContain("merge");
+    // Nothing to reset: the ladder is already at (or before) its start.
+    expect(at({ title: "r5", stage: "agent" })).toBeNull();
+    expect(at({ title: "r6", stage: "precommit" })).toBeNull();
+    expect(at({ title: "r7", stage: "interrupt" })).toBeNull();
+    // Already pinned — server-side or by the local echo. ↺ is a one-shot action,
+    // so once it has done its job it leaves rather than sitting there ON.
+    expect(at({ title: "r8", stage: "pr", stage_reset: true })).toBeNull();
+    markLoopReset("r9");
+    expect(at({ title: "r9", stage: "pr" })).toBeNull();
+    clearLoopReset("r9");
+    // Sessions that cannot act at all, and repos with no git.
+    expect(at({ title: "r10", stage: "pr", status: "paused" })).toBeNull();
+    expect(at({ title: "r11", stage: "pr", workspace_missing: true })).toBeNull();
+    setCaps({ git: false });
+    expect(at({ title: "r12", stage: "pr" })).toBeNull();
   });
 });
 

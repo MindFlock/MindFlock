@@ -170,6 +170,31 @@ no response whose only content is "gh is not installed".
 | GET | `/api/github/issues` | Open issues on the issue-handling repos (`github.issue_repos`), each annotated with auto-handling eligibility (`eligible`, `reasons`, `has_session`). PRs filtered out. Powers Intake → **Issues** |
 | POST | `/api/github/issues/start` | Body `{repo, number, agent?}` — force-start a coding session for one open issue on a fresh branch, bypassing the age / already-handled filters. `agent` is this launch's coding CLI, outranking the repo card's (`github.issue_repo_settings[repo].agent` → `github.issue_agent` → `[mindflock].agent` → the app default). 400 bad `owner/name` or number or an unknown `agent`, 404 issue gone, 409 a session for it already exists |
 
+The three **POST** force-start routes above share one family of *per-launch*
+overrides, each optional and each meaning "just this item, not the whole queue"
+(they are the pickers beside **Begin work** / **Begin review** / **Start now**):
+
+- `agent` — the coding CLI, outranking the source's / repo card's own.
+- `depth` — how far the autopilot carries it (`agent`, `commit`, `push`, `pr`,
+  `merge`). Unlike a per-source default an individual item **may** choose
+  `merge`: the person picking it is looking at the one thing it will merge.
+- `effort` — how hard the agent thinks about it, on one neutral ladder:
+  `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. The rung is translated into
+  whichever CLI the start resolves to (`claude --effort xhigh`, `codex -c
+  model_reasoning_effort=high`, `agy --effort high`) and **clamps** to that CLI's
+  ceiling rather than being forwarded — a level a CLI doesn't know is either
+  ignored with a warning or rejected by its API. `ultra` is that CLI's own
+  beyond-the-ladder mode rather than a sixth rung: a level name its flag takes
+  (Claude Code: `--effort ultracode`) or, failing that, a keyword appended to the
+  seed prompt; a CLI with no effort setting at all ignores the field. The flags
+  ride on the session's launch args, so a relaunch or a reboot-resume keeps the
+  effort. Each CLI's rungs are published on `/api/providers` (`effort.levels`,
+  plus `effort.ultra_level` / `effort.keyword`) so the picker can name both where
+  that CLI tops out and what it calls the top.
+
+Omitting a field — or sending `""` — keeps the configured behaviour; a value none
+of them recognises is a **400** rather than a silent downgrade.
+
 The three **GET** panel routes above share one caching contract
 (`_cached_fanout` in `server.py`), because each is an upstream fan-out one of
 the three Intake tabs polls while open:
@@ -193,6 +218,86 @@ known list keeps being served, so a GitHub/provider blip can't empty the panel;
 the flip side is that a persistently failing upstream stays invisible to the
 client for up to 5 minutes. `has_session` is annotated on a per-request copy, so
 it stays live on cache hits.
+
+### Verify — checklists for what shipped
+
+The back of the pipeline: work that reaches a repo's **live branch** gets a
+model-written checklist, an agent settles the steps it can from a shell, and the
+rest comes back to a person. See [web-ui.md](web-ui.md#verify) for the surface
+and [configuration.md](configuration.md) for `.mindflock.toml`. Store:
+`backend/web/core/test_plans.py` (`test_plans.json`); events:
+`session.test_plan_ready`, `session.test_plan_failed`,
+`session.test_plan_due`, `session.test_plan_checked`,
+`session.test_plan_gave_up`. They are deliberately separate: *ready* means
+"there are steps worth showing" (what the dialog refetches on), *failed* means a
+generation or rewrite could not be written, *due* means the world changed
+underneath the checklist — the sha reached the live branch and the deploy window
+passed — *checked* means an agent finished working one, carrying `failed` and
+`needs_you` so the client can say what is left without a second fetch, and
+*gave_up* means a run was released after the two-hour deadline without ever
+writing its answers (carrying `run_session` and `hours`). That last one used to
+be silent: the plan simply went back to "not checked yet", so a session that had
+run for two hours and reported nothing was indistinguishable from a button
+nobody pressed.
+
+A plan's **id is its session title**, so it can contain slashes — every route
+below uses a `{plan_id:path}` converter, and clients must percent-encode it.
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/api/test-plans` | `{plans[], live_branch}` — every checklist, newest first. `live_branch` is the **flock-wide** default resolved fresh per request; each plan additionally carries `effective_live_branch`, the same question asked for *that plan's repo*. Compare a plan against its own, never against the top-level one, or every plan in a repo with an override reads as out of date. Per-plan: `state`, `steps[]` (`id`, `text`, `expect`, `actor`, `manual?`), `runs[]` (capped, newest kept), `run_session`, `branch`, `sha`, `tip_sha`, `refreshes`, `merged_at`, `live_at`, `merged_into`, `merged_into_at`, `merged_into_all`, `gen_started`, `gen_attempts`, `error`, `summary`, `intent`, `focus`, `notified_at`, `live_problem`. **`merged_into`** is the branch on `origin` the work has most recently reached (`""` while it is still only on the branch it was pushed to) — *not* `live_branch`, which is the branch the checklist is waiting for: in a repo that ships through a `staging` step the two disagree for most of a change's life, and the disagreement is the interesting part. `merged_into_at` is when it got there (`0` when the rung that answered could not say, i.e. the squash-merge case); `merged_into_all` is the trail, best first and one name per landing, so it is not "every branch that contains the commit" — every branch cut from `main` after a merge does. **`live_problem`** is why a checklist is not coming due when the answer is not "not yet" — origin has no such branch, or the branch's PR merged into a different one. Distinct from `error` (which means an operation you asked for failed); it clears itself. **`summary`** is the model's own one-sentence statement of what the change lets somebody do — what `title` (the session's name) could never be. **`intent`** is what the work was *asked* to do, snapshotted at push time from the ticket or the seed prompt; it is stored on the plan rather than read off the session, because plans outlive sessions and a rewrite that read it live ran with no ticket at all. **`focus`** is what you told the last rewrite it got wrong. The snapshotted session transcript is **not** on the wire: it is generation input, never UI. **`sha` vs `tip_sha`**: `sha` is the liveness anchor — written once and never moved, because ancestry is transitive and moving it forward could only make a checklist come due later or never. `tip_sha` is the newest commit seen pushed on the branch; it is what the diff is read at and what a pre-live run checks out, and it is recorded on every push whether or not a rewrite follows |
+| POST | `/api/instances/{title}/test-plan` | Write a checklist for one session **by hand**, with no repo opted in → **202** `{plan, existing}`. Works for a **closed** session too, falling back to the recently-closed store for its branch and repo (409 when that branch is gone from the repo, 404 when neither store knows the name) — a checklist outlives its session everywhere else here, and creation demanding a live window made the button useless at the moment people ask for one. A closed session carries no seed prompt, so such a plan has no `intent` and is written from the diff alone. A headless one-shot reads the branch's diff and answers in up to three minutes; `existing: true` points at the plan that is already there rather than erroring (a **200**, not an error — the honest answer to "write one for this" when one exists is to point at it). 404 unknown session, 409 no workspace yet / nothing committed on this branch / a detached HEAD |
+| POST | `/api/test-plans/{plan_id:path}/run` | Start a real session that works the checklist's **agent** steps → `{session}`. Optional `{"steps": ["s3"]}` narrows it to those steps (the per-step re-check). 409 a run is already going / the plan has no steps / **every step is a person's** (an agent is forbidden from settling those, so a run would provision a workspace to hand the list straight back), 400 naming an unknown or `human` step |
+| POST | `/api/test-plans/{plan_id:path}/result` | Body `{step_id, result, note}` — record one step's outcome as a **person** → `{plan}`. `result` is `pass` \| `fail` \| `blocked` \| `""` (empty un-answers it). Unlike the file a verify session writes, an unrecognised value is a **400** rather than being coerced. Answering the last outstanding step closes the plan — unless a run is still in flight, in which case the answer is recorded and `finish_run` performs the transition, so a mid-run answer cannot strand the agent working beside it. 404 unknown plan or step |
+| POST | `/api/test-plans/{plan_id:path}/steps` | Body `{text, expect?, actor?}` — append a step a person wrote → `{plan}`. Marked `manual`, so it survives a regenerate. 400 empty text / bad `actor` / at the 25-step cap, 404 unknown plan |
+| DELETE | `/api/test-plans/{plan_id:path}/steps/{step_id}` | Remove a step **a person added** → `{plan}`; recorded answers for it go too. 400 for a generated step (nothing would bring it back), 404 unknown plan or step |
+| PATCH | `/api/test-plans/{plan_id:path}/steps/{step_id}` | Body `{text?, expect?, actor?}` — fix one step in place → `{plan}`. An absent key leaves that field alone. The step becomes `manual`, so the next rewrite keeps your wording. Changing `text` or `expect` changes the *question*, so any answer recorded against it is dropped; changing only `actor` keeps every answer, because who answers is not what is being asked. Also the only way out of a checklist an agent cannot run — an unrecognised `actor` is coerced to `human`, and the run route refuses a plan whose every step is a person's. 400 nothing to change / bad `actor` / a run is in flight, 404 unknown plan or step |
+| POST | `/api/test-plans/{plan_id:path}/regenerate` | Re-ask the model for the steps → **202**. Optional body `{"focus": "…"}` — what the last draft got wrong, in your words; it is stored on the plan (so a later push keeps honouring it), placed above the ticket in the prompt, and cannot change the format the model must answer in. Steps marked `manual` (added *or* edited by you) are kept; answers recorded against steps that change are lost. A rewrite never un-ships a plan: one that has already gone live comes back `due`/`done`, not `generated`, and its "it shipped" push is never re-sent. **409** while a run is in flight — `generate` would set `generating` while the poller only looks at `running`, orphaning a real billed session. 404 unknown plan |
+| POST | `/api/test-plans/{plan_id:path}/deployed` | Skip the rest of the repo's deploy window and make a merged checklist due now → `{plan}`. **`merged_at` vs `live_at`**: `merged_at` is when the work was first seen on the live branch, `live_at` is when it became yours to check — the gap is the deploy wait (`repository.deploy_delay_minutes`, or the repo's own `deploy_delay_minutes`, default 5). 409 unless the checklist is `generated` **and** merged; refusing rather than being idempotent, because on a `done` plan this would silently reopen a finished checklist |
+| POST | `/api/test-plans/{plan_id:path}/cancel` | Stop a run without recording a verdict → `{session, plan}`. The verify session is **closed, not deleted**, so whatever it found is still readable in Recently closed. 404 unknown plan |
+| DELETE | `/api/test-plans/{plan_id:path}` | Forget the checklist and its run history → `{ok, closed}`. Stops the run session first when one is going (`closed: true`) — it would otherwise be answering a checklist that no longer exists. 404 unknown plan |
+
+**Who may settle what is enforced server-side, not requested.** The run prompt
+tells the agent to leave `human` steps blocked, but a prompt is a request: any
+answer an agent gives to a `human` step is stored as `blocked` (keeping its
+note), and an agent's report never overwrites an answer a person already
+recorded. Symmetrically, `blocked` means two different things depending on `by`
+— an **agent's** blocked keeps the checklist open ("a person has to look at
+this"), a **person's** blocked ("Can't check" in the UI) settles it. Neither is
+ever a pass: the verdict is recomputed from the step results and stays `partial`.
+
+**Opting a repo in** is `repository.verify_repos` (`owner/name`, matched
+case-insensitively) OR'd with the repo's own committed `[workspace]
+verify_on_push = true` — the only opt-in available to a checkout with no GitHub
+origin. `repository.verify_enabled` is the master switch and pauses the automatic
+half only (writing on push, and the liveness pass); the routes above keep
+working. Per-repo overrides live in
+`repository.verify_repo_settings[owner/name]` (`live_branch`,
+`deploy_delay_minutes`, `target`, `prompt`) — see
+[configuration.md](configuration.md) for what each decides.
+
+**What a green checklist is evidence of.** MindFlock knows one hard fact — your
+commit is an ancestor of the branch you ship from — and waits out a guess at
+your pipeline on top of it (`deploy_delay_minutes`). What happens next depends
+on one setting. With a repo's `target` set, a run exercises the steps against
+**that deployment**, which is the system your users are on. With it blank, a run
+checks out `origin/<live branch>` **in a linked worktree on this machine** and
+exercises the steps there — so a green checklist means *the code users are
+getting behaves*, not *the deployment is healthy*. Steps marked `human` are the
+half that can always touch the real thing, which is why the generator hands
+anything needing a real browser — or a service the agent has no tool for — to a
+person rather than settling it from a shell. Log lines, dashboards and metrics
+are the agent's when it carries observability tooling (e.g. Grafana MCP), and
+the run prompt says so. A verify session writes its answers to
+`.mindflock_verify.json` in its worktree root (git-excluded, and the only file
+it is permitted to write).
+
+**Cadence.** One background loop, two speeds: the full pass (housekeeping,
+stalled-generation recovery, and a `git fetch` per waiting plan, within a
+wall-clock budget) runs every 60 s, and while any plan is `running` the loop also
+wakes every few seconds to do the purely local half — reading each run's result
+file — so a finished run is reflected almost immediately rather than up to a
+minute later.
 
 ### Worktree setup + verification gate (O2/O3)
 
@@ -224,9 +329,9 @@ survives server restarts. Events: `session.setup_started/finished`,
 |---|---|---|
 | POST | `/api/instances/{title}/send` | Body `{text, submit?}`. Types `text` into the **agent** window and (default) presses Enter, booting/resuming the agent tmux first if it isn't running — so one call kicks a fresh session into motion (max token use). `submit:false` types without submitting. Enter is a separate keystroke a beat after the text so an agent TUI doesn't read the burst as a paste. → `{sent, submitted}` (409 if the workspace is gone or `{budget_locked: true}` when the session is over budget, 502 if the send fails) |
 | GET | `/api/instances/{title}/queue` | `{items: [{id, text, added}], pending, enabled, loop, loop_interval, wait_for_limit, limited_until, last_sent}` |
-| POST | `/api/instances/{title}/queue` | Body `{text}` — append a prompt; enqueuing re-enables draining. → queue state |
+| POST | `/api/instances/{title}/queue` | Body `{text, index?}` — append a prompt, or insert it at a 0-based position (clamped) when `index` is given — or `{texts: [...]}` to bulk-append (one write; blank rows skipped, overflow past the queue cap dropped; response adds `added`/`skipped` counts). Enqueuing re-enables draining. → queue state |
 | POST | `/api/instances/{title}/queue/flags` | Body `{enabled?, loop?, loop_interval?, wait_for_limit?}` — `enabled` gates auto-draining; `loop` re-queues each sent prompt so a self-improving prompt cycles forever; `wait_for_limit` holds draining until the usage window resets |
-| POST | `/api/instances/{title}/queue/reorder` | Body `{id, direction}` (`up`/`down`) |
+| POST | `/api/instances/{title}/queue/reorder` | Body `{id, index}` — move to an absolute 0-based position (clamped; the drag-and-drop path) — or `{id, direction}` (`up`/`down`) to nudge one slot |
 | POST | `/api/instances/{title}/queue/edit` | Body `{id, text}` — rewrite a queued prompt in place |
 | DELETE | `/api/instances/{title}/queue?item=<id>` | Remove one item; omit `item` to clear the whole queue |
 
@@ -348,6 +453,21 @@ off). It only ever fires for sessions that had actually run out, so it is the
 "your usage is back" signal; running *out* is `session.activity_changed` with
 `new == "limit"`. The notification-center
 bell (frontend) curates these into a "what happened while I was away" feed.
+
+`session.activity_changed` transitions **into** `idle`, `clarify`, or `limit`
+are debounced server-side (~3s settle window, i.e. one extra ~4s tick): a
+single poll can misread a busy pane as idle, and every consumer of this event —
+ntfy pushes, desktop notifications, clarify toasts, shell hooks — would
+otherwise fire on the flicker. A reading that reverts before it settles emits
+nothing at all; transitions back to `working`/`offline` are instant.
+
+For ~30s after the server process starts (including a Settings-triggered
+restart, which re-execs), the `status/activity/stage_changed` diff events are
+swallowed entirely and `session.budget_exceeded` arms without emitting:
+rediscovered sessions first register as loading/offline and then "transition"
+to whatever they were parked in before the launch, which used to re-announce
+the standing state of every session on every boot. The state snapshot still
+updates during the window, so transitions after it diff against the truth.
 
 On connect the server sends a **hello frame first** (L4): `seq: 0, event:
 "hello"` with a `server_time` field (the server's clock), so clients can tell

@@ -28,7 +28,13 @@ from ._timeparse import ts_epoch
 
 _ENDPOINT = "https://api.anthropic.com/api/oauth/usage"
 _FETCH_TIMEOUT = 4  # seconds; only paid on a cold/expired cache
-_TTL = 60.0  # matches the UI's /api/usage refresh cadence
+_TTL = 20.0  # see _usage_cache.serve; bounds how stale a UI refresh can be
+# (was 60s, "matching" the pill's poll — which meant a
+# refresh triggered by a finished turn could still be
+# answered from a cache filled a minute earlier, i.e. the
+# event-driven refresh bought nothing. Kept well UNDER the
+# poll cadence for that reason. Still at most one upstream
+# fetch per _TTL no matter how many callers arrive.)
 _GRACE = 600.0  # keep serving the last known-good reading through transient
 # fetch failures for up to this long, so a single blip (401,
 # timeout, network hiccup, or a between-windows payload) does

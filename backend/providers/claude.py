@@ -16,6 +16,7 @@ from typing import Optional
 
 from .base import (
     BaseProvider,
+    EffortSpec,
     LauncherSpec,
     LaunchContext,
     ONESHOT_PROMPT_TOKEN,
@@ -130,6 +131,28 @@ class ClaudeProvider(BaseProvider):
                 ONESHOT_PROMPT_TOKEN,
             ),
             prompt,
+        )
+
+    # --- reasoning effort -------------------------------------------------- #
+    def effort_spec(self) -> EffortSpec:
+        """``claude --effort <level>``, where the top rung is ``ultracode``.
+
+        Read off the CLI itself (2.1.233): passing an unknown level prints
+        "Valid values: low, medium, high, xhigh, max" and falls back to the
+        default, which is exactly why the ladder clamps instead of forwarding.
+        ``ultracode`` is accepted by that same flag without the warning even
+        though the help text omits it — it is not a sixth rung but a mode ("xhigh
+        effort plus standing dynamic-workflow orchestration"), which is why it
+        lives in ``ultra_level`` rather than at the end of ``levels``.
+
+        Claude Code also honours ``ultracode`` as a prompt keyword, but that opts
+        in only the ONE turn it appears in; the flag opts in the session, so the
+        top rung asks for it there instead.
+        """
+        return EffortSpec(
+            args=("--effort", "{level}"),
+            levels=("low", "medium", "high", "xhigh", "max"),
+            ultra_level="ultracode",
         )
 
     # --- usage-window knowledge (roadmap E) ------------------------------- #

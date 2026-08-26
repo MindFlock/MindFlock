@@ -234,11 +234,29 @@ class TicketingSource:
     # Coding-CLI provider name this source's tickets run ("claude", "codex",
     # "aider", …). Empty = fall back to engine.agent, then the engine default.
     agent: str = ""
+    # How hard the agent thinks about a ticket from this source — one of the
+    # neutral rungs in backend/providers/effort.py ("low".."ultra"). Blank =
+    # whatever the CLI does on its own, which is what every source did before
+    # this field existed.
+    #
+    # Per SOURCE because that is where the property actually lives: a queue of
+    # customer bug reports and a queue of gnarly migration tickets want different
+    # amounts of thinking, and nobody wants to set it per ticket forever. An
+    # individual ticket can still override it on its row.
+    #
+    # The rungs are NEUTRAL. The CLI that ends up running the ticket translates
+    # them into its own spelling and clamps anything above its own ceiling, so a
+    # source pinned to "ultra" is safe to point at a CLI that tops out lower.
+    effort: str = ""
     # How far autopilot carries a ticket ingested from this source. Blank =
     # inherit (ultimately "off"). Never "merge" — a per-source default applies to
     # every future ticket with no human in the loop, and merging cannot be
     # undone; the consumer enforces that.
     depth: str = ""
+    # Whose tickets this source ingests: "" / "mine" (assigned to member_id) or
+    # "anyone" (every ticket in the configured workflow states, whoever owns it —
+    # the QA queue). "anyone" is only honoured alongside an ingest-state filter.
+    assignee_scope: str = ""
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -254,7 +272,9 @@ class TicketingSource:
             "label",
             "repo_url",
             "agent",
+            "effort",
             "depth",
+            "assignee_scope",
         ):
             v = getattr(self, k)
             if v:
@@ -281,7 +301,12 @@ class TicketingSource:
             label=str(d.get("label", "") or ""),
             repo_url=str(d.get("repo_url", "") or ""),
             agent=str(d.get("agent", "") or ""),
+            # Coerced against the ladder rather than stored verbatim: this is
+            # read on every settings load, and a hand-edited rung that no
+            # provider knows would be forwarded to a CLI that rejects it.
+            effort=_effort_level(d.get("effort")),
             depth=str(d.get("depth", "") or ""),
+            assignee_scope=str(d.get("assignee_scope", "") or ""),
         )
 
 
@@ -450,6 +475,17 @@ class RepositorySettings:
     # PRs into e.g. "staging" instead of whatever branch it happened to be cut
     # from. Blank = use the session's own base (the prior behaviour).
     pr_base_branch: str = ""
+    # The branch that means "this is in front of users". Verify watches it: once
+    # a pushed session's sha is an ancestor of ``origin/<live_branch>``, that
+    # session's manual test plan becomes due, because the change is now
+    # something a person could hit. Deliberately its own knob rather than
+    # reusing ``pr_base_branch`` — where a PR is *targeted* and where code is
+    # *deployed* are the same branch in most repos but not all (PR into
+    # "develop", ship from "release"), and conflating them would make plans fall
+    # due at merge time in a shop where merging is not shipping. Resolution is
+    # live_branch -> pr_base_branch -> base_branch -> "main", so leaving it blank
+    # keeps the sensible behaviour with no configuration at all.
+    live_branch: str = ""
     # Which transport the ingestion pipeline clones with when it only knows a
     # repo by its owner/name slug (see
     # :mod:`backend.ticket_ingestion.clone_transport`). One of GIT_TRANSPORTS;
@@ -466,6 +502,110 @@ class RepositorySettings:
     # index blocks a commit forever, while a test hook failing must always stop.
     # Test and secret-scanning hooks are refused at the consumer (NEVER_SKIP).
     precommit_retry_hooks: str = ""
+    #: The repos Verify tracks, as ``owner/name`` slugs — the same spelling
+    #: :attr:`GithubSettings.repos` uses, because it is the same kind of thing: a
+    #: GitHub repo somebody CONFIGURED by typing its name. MEMBERSHIP IS THE
+    #: OPT-IN. There is no separate ``auto`` flag: a repo gets automatic test
+    #: plans because a person put it on this list, exactly as a repo in
+    #: ``github.repos`` is watched by virtue of being there, and a list whose
+    #: entries could each be individually switched off would be two settings
+    #: pretending to be one.
+    #:
+    #: This REPLACED a map keyed by absolute repo root that Verify populated by
+    #: discovering the repos behind open sessions. A path was the wrong identity
+    #: twice over: the same repo is a different key in every clone and every
+    #: worktree, so a live branch configured on one checkout was invisible from
+    #: the next, and the list grew a row for every directory anybody had ever
+    #: opened a session on — a settings file that filled itself in with things
+    #: nobody asked for. A slug is the repo, wherever it happens to be checked
+    #: out on this machine.
+    #:
+    #: Stored as the user typed it and compared case-insensitively: GitHub
+    #: preserves the case of a slug but does not distinguish it, so
+    #: ``MindFlock/app`` and ``mindflock/app`` are one repo (see
+    #: ``test_plans.repo_slug``).
+    #:
+    #: A checkout with no GitHub origin cannot be named here at all — there is no
+    #: slug to type. Its opt-in is the repo's own committed ``.mindflock.toml``
+    #: (``[workspace] verify_on_push``), which is path-based, travels with the
+    #: code, and is OR'd with this list; neither can switch the other off.
+    verify_repos: List[str] = field(default_factory=list)
+    #: Master pause for the whole Verify feature, and the sidebar bar's switch.
+    #:
+    #: Off means MindFlock does nothing about verification ON ITS OWN: no plan is
+    #: written when a branch lands (``server._verify_auto_for``), and no plan is
+    #: moved to ``due`` by the liveness loop. Nothing is deleted and nothing is
+    #: forgotten — the tracked repos, the plans and their recorded answers all
+    #: survive, and turning it back on resumes exactly where it stopped. This is
+    #: the twin of ``github.enabled``, and it pauses the same KIND of thing: the
+    #: automatic half.
+    #:
+    #: It deliberately does NOT block a person asking for something by hand —
+    #: Write plan, Run, and answering a step all still work while it is off, the
+    #: same way a forced PR review does. A switch that disabled the buttons too
+    #: would mean "off" had two meanings, and the one people actually want is
+    #: "stop doing things without me".
+    #:
+    #: Defaults ON because the real gate is membership: with no repo on
+    #: ``verify_repos`` and no committed ``verify_on_push``, nothing happens
+    #: anyway. Defaulting it off would have added a second, invisible reason for
+    #: a repo somebody DID add to stay silent.
+    verify_enabled: bool = True
+    #: Whether writing a checklist may read the session's own conversation as
+    #: context.
+    #:
+    #: On by default because it is what makes a checklist about the WORK rather
+    #: than about the diff — the transcript is where "we were adding a parked-page
+    #: gate for the collage service" lives, and a diff alone cannot say it. Off is
+    #: for a machine where people paste credentials or third-party material into
+    #: the pane: the conversation is the one input to this feature that nobody
+    #: reviewed before it was written, and it is admitted into a store that
+    #: outlives its session. What reaches the prompt is already filtered hard
+    #: (recency-biased, per-turn size cap, output-contract and credential shapes
+    #: dropped whole — see ``test_plans._filter_conversation``); this is the
+    #: switch for not doing it at all.
+    #:
+    #: Flock-wide and not per repo, on purpose: the hazard is about what gets
+    #: typed into panes on THIS machine, not about a repository. Distinct from
+    #: :attr:`verify_enabled`, which pauses the whole feature.
+    verify_use_conversation: bool = True
+    #: Minutes between work MERGING and it being worth checking — the flock-wide
+    #: default, overridable per repo (``verify_repo_settings[slug]``).
+    #:
+    #: Merged is not deployed. Ancestry against the live branch is a git fact and
+    #: it is true the instant a PR lands, while the thing a checklist actually
+    #: tests is a running service that a pipeline has not reached yet. Marking a
+    #: checklist due in that window is worse than marking it late: somebody
+    #: checks, sees the old behaviour, and records a FAIL against correct code —
+    #: which is the one outcome the whole surface cannot survive.
+    #:
+    #: Five minutes because that is roughly the shortest real deploy and a
+    #: too-short wait fails in the dangerous direction; a repo that takes longer
+    #: says so on its card. Zero restores the old behaviour (due the moment it
+    #: merges) for a repo where merging IS shipping.
+    deploy_delay_minutes: int = 5
+    #: Per-repo Verify overrides, keyed by a slug in ``verify_repos``:
+    #: ``{"owner/name": {"live_branch": str, "prompt": str}}``. The twin of
+    #: :attr:`GithubSettings.repo_settings`, and split out from the list for the
+    #: same reason: the dialog draws one card per repo, so anything a card can
+    #: edit has to be storable per repo, while the list itself stays a plain list
+    #: of names that any other reader can use without understanding the blocks.
+    #:
+    #: ``live_branch`` OVERRIDES the flat ``live_branch`` above. "What counts as
+    #: shipped" is a per-repo fact — ``main`` in one repo, ``staging`` in the
+    #: next, ``release`` in a third — so one flock-wide branch is wrong the moment
+    #: a user works in two repos, and a plan that came due against the wrong
+    #: branch is worse than no plan. Blank/absent = inherit the chain (see
+    #: ``test_plans.resolve_live_branch``).
+    #:
+    #: ``prompt`` is optional standing instructions folded into THIS repo's
+    #: generation prompt. It exists because the useful thing to say is usually
+    #: repo-shaped and repetitive — "the UI runs on :3000", "always check the
+    #: migration ran", "ignore the vendored directory" — and re-typing it into
+    #: every plan is how it stops being said. Capped at
+    #: :data:`VERIFY_PROMPT_MAX`, and subordinate to the prompt's output
+    #: contract: see ``test_plans.build_generation_prompt``.
+    verify_repo_settings: Dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -477,6 +617,11 @@ class RepositorySettings:
             d["base_branch"] = self.base_branch
         if self.pr_base_branch:
             d["pr_base_branch"] = self.pr_base_branch
+        # Blank stays unwritten here too: an emitted "" would pin the empty
+        # string and cut the live_branch -> pr_base_branch -> base_branch ->
+        # "main" chain off at its first link.
+        if self.live_branch:
+            d["live_branch"] = self.live_branch
         if self.git_transport:
             d["git_transport"] = self.git_transport
         # Emit-on-deviation, like every field above: writing a blank would PIN
@@ -485,6 +630,32 @@ class RepositorySettings:
             d["fasttrack_depth"] = self.fasttrack_depth
         if self.precommit_retry_hooks:
             d["precommit_retry_hooks"] = self.precommit_retry_hooks
+        # Same emit-on-deviation rule as `github.repos` / `github.repo_settings`,
+        # whose shape these two copy: an empty list and an empty map are not
+        # written at all, and the coercer below has already dropped every block
+        # that overrides nothing — so a repo the user only added (and never
+        # customized) costs one string, not a row of blanks.
+        if self.verify_repos:
+            d["verify_repos"] = list(self.verify_repos)
+        # Emitted only when it deviates from the default, like every other flag
+        # here — but note the polarity: this one defaults TRUE, so what gets
+        # written is the OFF state. A file with no key means "on".
+        if not self.verify_enabled:
+            d["verify_enabled"] = False
+        # Same polarity as verify_enabled above: defaults true, so only the OFF
+        # state is ever written.
+        if not self.verify_use_conversation:
+            d["verify_use_conversation"] = False
+        # Written only when it deviates, like every other default here — but this
+        # one is a number, so "deviates" is != rather than falsiness: 0 is a
+        # meaningful, deliberate value (merging IS shipping here) and must
+        # survive a round trip.
+        if self.deploy_delay_minutes != 5:
+            d["deploy_delay_minutes"] = self.deploy_delay_minutes
+        if self.verify_repo_settings:
+            d["verify_repo_settings"] = {
+                k: dict(v) for k, v in self.verify_repo_settings.items()
+            }
         return d
 
     @classmethod
@@ -494,9 +665,17 @@ class RepositorySettings:
             workspace_dir=str(d.get("workspace_dir", "") or ""),
             base_branch=str(d.get("base_branch", "") or ""),
             pr_base_branch=str(d.get("pr_base_branch", "") or ""),
+            live_branch=str(d.get("live_branch", "") or ""),
             git_transport=_git_transport(d.get("git_transport")),
             fasttrack_depth=str(d.get("fasttrack_depth", "") or ""),
             precommit_retry_hooks=str(d.get("precommit_retry_hooks", "") or ""),
+            verify_repos=_str_list(d.get("verify_repos")),
+            verify_repo_settings=_verify_repo_settings(d.get("verify_repo_settings")),
+            # Absent => on. Only an explicit `false` pauses it, so a settings
+            # file written before this flag existed keeps behaving as it did.
+            verify_enabled=d.get("verify_enabled", True) is not False,
+            verify_use_conversation=d.get("verify_use_conversation", True) is not False,
+            deploy_delay_minutes=_non_negative_int(d.get("deploy_delay_minutes"), 5),
         )
 
 
@@ -1013,6 +1192,26 @@ class Settings:
 # --------------------------------------------------------------------------- #
 # Coercion helpers (tolerant — a bad value becomes "unset" rather than raising).
 # --------------------------------------------------------------------------- #
+def _effort_level(v: Any) -> str:
+    """A thinking-effort rung, or ``""`` for "let the CLI decide".
+
+    Unknown values are dropped rather than raised over, like every other coercion
+    in this module: it runs on every settings load, so a hand-edited file must
+    never be able to take the app down. The ladder itself lives in
+    :mod:`backend.providers.effort`, imported lazily because this module is
+    imported by nearly everything and the provider registry is not.
+    """
+    level = str(v or "").strip().lower()
+    if not level:
+        return ""
+    try:
+        from backend.providers import effort as _effort
+
+        return level if level in _effort.EFFORTS else ""
+    except Exception:  # noqa: BLE001 — a partial install keeps the old behaviour
+        return ""
+
+
 def _opt_int(v: Any) -> Optional[int]:
     if v is None or isinstance(v, bool):
         return None
@@ -1137,6 +1336,106 @@ def _repo_overrides(v: Any) -> Dict[str, dict]:
                 s = str(raw or "").strip()
                 if s:
                     clean[key] = s
+        if clean:
+            out[slug] = clean
+    return out
+
+
+#: Ceiling on a per-repo Verify prompt. Room for a paragraph of standing
+#: instructions ("the UI is on :3000", "always check the migration ran"), not
+#: for a pasted design doc: the text shares a prompt with the branch diff, and
+#: the diff is the half that describes the change under test.
+VERIFY_PROMPT_MAX = 2000
+
+
+#: Keys a per-repo Verify override block may carry (see
+#: :attr:`RepositorySettings.verify_repo_settings`). Deliberately tiny next to
+#: :data:`REPO_OVERRIDE_KEYS`: a Verify card asks two questions, and every other
+#: knob the feature has (the generation timeout, the caps, the poll) is a
+#: property of the machine rather than of one repo.
+def _non_negative_int(v: Any, default: int) -> int:
+    """A stored count, tolerating the string/None/garbage a hand-edited file or a
+    text input can hold. Negative reads as ``0`` — "no wait" — never as an error,
+    because this runs on every settings load."""
+    try:
+        return max(0, int(str(v).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+#: Ceiling on a per-repo Verify target. A URL and a sentence about how to reach
+#: it ("staging needs the VPN; log in as qa@example.com"), not a runbook.
+VERIFY_TARGET_MAX = 500
+
+
+VERIFY_OVERRIDE_KEYS = (
+    "live_branch",
+    "prompt",
+    "deploy_delay_minutes",
+    # WHERE THE RUNNING PRODUCT IS, for this repo. The one knob that decides
+    # whether this feature validates a deployment or a checkout: with it blank,
+    # a verify run checks out the live branch and exercises the steps against
+    # that tree on this machine — honest, and all a library or a CLI can offer.
+    # With it set, both the checklist and the run are written against the thing
+    # users are actually hitting. Per-repo because it is per-repo: half a flock
+    # ships web apps behind a URL and half ships packages that have no such
+    # thing, and a flock-wide default would be wrong for whichever half did not
+    # set it.
+    "target",
+)
+
+
+def _verify_repo_settings(v: Any) -> Dict[str, dict]:
+    """Normalize a ``{"owner/name": {"live_branch": …, "prompt": …}}`` map.
+
+    Tolerant in exactly the direction :func:`_repo_overrides` is, and for the
+    same reason — this runs on every settings load, so a hand-edited file must
+    never be able to take the app down: a document that is not a map, a block
+    that is not a map, a blank slug and an unknown key are all dropped rather
+    than raised over. Blank VALUES are dropped too, which is how a card's empty
+    field means "inherit" (the flock-wide ``live_branch``, no standing notes)
+    rather than "pin the empty string" — and a block left with nothing in it is
+    dropped whole, so settings.json carries a row only for a repo that actually
+    overrides something.
+
+    Nothing here decides whether a repo is TRACKED; ``verify_repos`` does. A
+    block for a repo that is not on the list is inert, not an opt-in — which is
+    what lets the dialog leave a removed repo's live branch behind and hand it
+    back unchanged if the user re-adds the repo a minute later.
+
+    THIS IS ALSO WHERE THE OLD SHAPE DIES, and it dies quietly. Verify used to
+    store a map keyed by absolute repo root under ``verify_repos``; a settings
+    file written by that build hands one to :func:`_str_list`, which answers
+    ``[]`` for a dict, so the repo list reads as empty and the user re-adds their
+    repos by slug. There is deliberately no migration: turning a path into an
+    ``owner/name`` means shelling out to ``git remote`` from the settings loader
+    — a hot path that must never raise or block — for a directory that may not
+    exist any more, and a wrong guess would opt some repo into unattended model
+    calls nobody asked for.
+    """
+    if not isinstance(v, dict):
+        return {}
+    out: Dict[str, dict] = {}
+    for repo, block in v.items():
+        slug = str(repo or "").strip()
+        if not slug or not isinstance(block, dict):
+            continue
+        clean: dict = {}
+        for key in VERIFY_OVERRIDE_KEYS:
+            if key not in block:
+                continue
+            s = str(block[key] or "").strip()
+            if not s:
+                continue
+            if key == "target":
+                s = s[:VERIFY_TARGET_MAX]
+            if key == "prompt":
+                # Capped on the way IN, not just on the way out: this text is
+                # concatenated into the generation prompt, and a pasted file
+                # would crowd out the diff — the part of that prompt that is
+                # actually true about the change.
+                s = s[:VERIFY_PROMPT_MAX]
+            clean[key] = s
         if clean:
             out[slug] = clean
     return out

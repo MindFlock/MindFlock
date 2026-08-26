@@ -251,6 +251,13 @@ def _blank() -> dict:
         # When this run last SAW the agent working. Until it is set, a clean tree
         # means "not started yet", not "finished with nothing to show".
         "worked_at": 0.0,
+        # When the current usage-limit hold began (0 = not holding). A weekly cap
+        # can close the window for DAYS, which is far longer than any step
+        # deadline — so the driver stops the deadline clock while a limit holds
+        # and credits the whole stretch back when it lifts. Without it the run
+        # halts hours into a wait it is meant to survive, and the work is still
+        # sitting there uncommitted when the window reopens.
+        "limited_at": 0.0,
         "step_since": 0.0,
         "acted_at": 0.0,
         "boot": "",
@@ -338,6 +345,7 @@ def _normalize(entry) -> dict:
         "started",
         "updated",
         "worked_at",
+        "limited_at",
         "owner_at",
     ):
         try:

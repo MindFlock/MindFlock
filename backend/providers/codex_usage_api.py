@@ -29,7 +29,9 @@ from . import _usage_cache
 from ._timeparse import ts_epoch as _iso_epoch
 
 _FETCH_TIMEOUT = 4  # unused (no network) — kept for symmetry with claude_usage_api
-_TTL = 60.0  # matches the UI's /api/usage refresh cadence
+_TTL = 20.0  # under the UI's refresh cadence, so an event-driven refresh sees
+# new numbers (see claude_usage_api._TTL). Free here: no network,
+# this reads a local file.
 _GRACE = 600.0  # keep serving the last known-good reading through a blip
 
 _logger = logging.getLogger(__name__)

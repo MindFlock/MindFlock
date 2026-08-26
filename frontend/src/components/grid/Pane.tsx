@@ -11,7 +11,7 @@ import { refreshInstances, useConfig } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { copyText } from "../../lib/clipboard";
 import { fmtUsd, displayBranch } from "../../lib/format";
-import { chipState, fastTrackStep, liveStep, nextStep } from "../../lib/stage";
+import { chipState, fastTrackStep, liveStep, nextStep, resetStep } from "../../lib/stage";
 import { cleanupMissing, selectSession } from "../../lib/sessionActions";
 import {
   focusTerm,
@@ -232,6 +232,12 @@ export function Pane({
   }, [focused, missing, loading, histPane, tab]);
 
   const showTab = (t: Tab) => {
+    // A tab click while the full-history overlay covers the body is
+    // navigation, not a request to switch under glass: without this the
+    // clicked tab highlighted while the overlay kept covering its content,
+    // which reads as the tab being dead. Clicking the ACTIVE tab closes the
+    // overlay too — "show me the tab" is what the press means either way.
+    setHistPane(null);
     setTab(t);
     setLastTab(title, t);
     if (t === "shell") setShellStarted(true);
@@ -247,6 +253,10 @@ export function Pane({
     let t = lastTab as Tab;
     if (t === "diff" && !caps.git) t = "agent";
     if (t === tab) return;
+    // Same rule as showTab: a switch done FOR the user (the commit dialog
+    // jumping to the shell to watch pre-commit hooks) must be visible, so the
+    // history overlay closes rather than covering the tab it switched to.
+    setHistPane(null);
     setTab(t);
     if (t === "shell") setShellStarted(true);
     setTimeout(() => peekTerm(title, t === "shell" ? "shell" : "agent")?.doFit(), 0);
@@ -354,6 +364,7 @@ export function Pane({
   const chip = chipState(inst);
   const ns = nextStep(inst);
   const ft = fastTrackStep(inst);
+  const rs = resetStep(inst);
   const step = liveStep(inst);
   const q = inst.queue;
   const pending = q?.pending || 0;
@@ -468,6 +479,20 @@ export function Pane({
               }}
             >
               {ft.label}
+            </button>
+          )}
+          {rs && (
+            <button
+              className="nextstep nextstep-reset"
+              type="button"
+              title={rs.title}
+              aria-label="Back to idle"
+              onClick={(ev) => {
+                ev.stopPropagation();
+                rs.run();
+              }}
+            >
+              {rs.label}
             </button>
           )}
           <span

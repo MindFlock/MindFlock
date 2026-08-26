@@ -31,6 +31,25 @@ export function orderedInstances(
   return { rows, nextOrder: rows.map((i) => i.title) };
 }
 
+/** Slot `title` directly beneath `after` in a materialized order.
+ *
+ * This is what makes a duplicated window land under the one it was copied
+ * from. Without it a copy is simply a session the saved order has never seen,
+ * so `orderedInstances` files it after everything else — at the bottom of a
+ * rail of twelve, nowhere near the window you were looking at.
+ *
+ * If `after` isn't in the order (its session closed while the copy was being
+ * provisioned) the order is returned untouched, which leaves the newcomer
+ * wherever it already was rather than teleporting it somewhere arbitrary. */
+export function orderWithAfter(order: string[], title: string, after: string): string[] {
+  if (!title || !after || title === after) return order;
+  const next = order.filter((t) => t !== title);
+  const at = next.indexOf(after);
+  if (at < 0) return order;
+  next.splice(at + 1, 0, title);
+  return next;
+}
+
 export const SEARCH_MIN = 6;
 
 /** Match only the session's own identifiers — name, alias, branch. NOT repo

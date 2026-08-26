@@ -2,10 +2,13 @@
  * the send/queue console — composer, auto-run flags, loop timer, usage-limit
  * hold status, and the reorderable item list with inline editing. */
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { instApi } from "../../api/client";
 import { fmtDurationShort } from "../../lib/format";
+import { displayName } from "../../state/store";
 import { toast } from "../../lib/toast";
+import { dropIndex, hoverSlot, reorderItems } from "./queueDnd";
+import { promptsFromFile } from "./queueImport";
 
 interface QueueItem {
   id: string;
@@ -32,8 +35,19 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
   const [state, setState] = useState<QueueStatePayload | null>(queueCache.get(title) || null);
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState<{ id: string; value: string } | null>(null);
+  // Drag-and-drop reorder: the id in flight and the insertion slot the pointer
+  // is over (0..items.length). A ref mirrors the drag so the poll can't yank
+  // the list out from under the pointer mid-drag.
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropSlot, setDropSlot] = useState<number | null>(null);
+  const draggingRef = useRef(false);
+  // Inline "add above/below" composer: the slot the new prompt goes into.
+  const [inserting, setInserting] = useState<{ index: number; value: string } | null>(null);
+  // A file (not a queue row) is being dragged over the tab.
+  const [fileHover, setFileHover] = useState(false);
 
   const reload = useCallback(async () => {
+    if (draggingRef.current) return; // don't reshuffle rows under a drag
     try {
       const st = await qApi(title, "/queue");
       queueCache.set(title, st);
@@ -110,7 +124,7 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
     try {
       await qApi(title, "/send", { json: { text } });
       setDraft("");
-      toast("Sent to " + title);
+      toast("Sent to " + displayName(title));
       reload();
     } catch (err) {
       toast("Send failed: " + ((err as Error).message || ""));
@@ -137,13 +151,99 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
     mutate("/queue/edit", { json: { id: editing.id, text: t } });
   };
 
+  const saveInsert = () => {
+    if (!inserting) return;
+    const t = inserting.value.trim();
+    if (!t) return;
+    const at = inserting.index;
+    setInserting(null);
+    mutate("/queue", { json: { text: t, index: at } });
+  };
+
+  /** Dropped file(s) → one queued prompt per CSV row / text line, appended to
+   * the end of the queue in one bulk call. */
+  const importFiles = async (files: FileList) => {
+    const texts: string[] = [];
+    for (const f of Array.from(files)) {
+      try {
+        texts.push(...promptsFromFile(f.name, await f.text()));
+      } catch {
+        toast("Could not read " + f.name);
+      }
+    }
+    if (!texts.length) {
+      toast("No prompts found in the dropped file");
+      return;
+    }
+    try {
+      const st = await qApi<QueueStatePayload & { added?: number; skipped?: number }>(
+        title,
+        "/queue",
+        { json: { texts } }
+      );
+      queueCache.set(title, st);
+      setState(st);
+      const added = st.added ?? texts.length;
+      toast(
+        "Queued " +
+          added +
+          (added === 1 ? " prompt" : " prompts") +
+          (st.skipped ? " — " + st.skipped + " skipped (queue full)" : "")
+      );
+    } catch (err) {
+      toast("Queue failed: " + ((err as Error).message || ""));
+    }
+  };
+
+  const endDrag = () => {
+    draggingRef.current = false;
+    setDragId(null);
+    setDropSlot(null);
+  };
+
+  const finishDrop = () => {
+    const id = dragId;
+    const slot = dropSlot;
+    endDrag();
+    if (!id || slot == null) return;
+    const from = items.findIndex((x) => x.id === id);
+    if (from < 0) return;
+    const to = dropIndex(from, slot);
+    if (to == null) return; // dropped back onto its own edges
+    // Optimistic: settle the row where it was dropped, then let the server
+    // response (via mutate) confirm the order.
+    const optimistic = { ...state, items: reorderItems(items, from, to) };
+    queueCache.set(title, optimistic);
+    setState(optimistic);
+    mutate("/queue/reorder", { json: { id, index: to } });
+  };
+
   return (
-    <div className="queue-console">
+    <div
+      className={"queue-console" + (fileHover ? " file-hover" : "")}
+      onDragOver={(e) => {
+        // Files only — internal row drags carry dragId and are handled per row.
+        if (dragId || !e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        setFileHover(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFileHover(false);
+      }}
+      onDrop={(e) => {
+        if (!fileHover) return;
+        e.preventDefault();
+        setFileHover(false);
+        if (e.dataTransfer.files?.length) void importFiles(e.dataTransfer.files);
+      }}
+    >
       <div className="queue-pop-head">
         <span className="queue-pop-title">{title}</span>
         <span className="queue-pop-sub muted">
           Send a prompt now, or queue prompts to auto-run when the agent goes idle — the run keeps
-          going unattended and resumes when usage limits reset
+          going unattended and resumes when usage limits reset. Drop a .csv or .txt file anywhere
+          here to queue every row as its own prompt.
         </span>
       </div>
       <textarea
@@ -215,13 +315,53 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
       <div className="queue-list">
         <div className={statusCls}>{statusText}</div>
         {items.map((it, i) => (
+          <Fragment key={it.id}>
+            {inserting?.index === i && (
+              <InsertComposer
+                value={inserting.value}
+                onChange={(v) => setInserting({ index: i, value: v })}
+                onSave={saveInsert}
+                onCancel={() => setInserting(null)}
+              />
+            )}
           <div
-            key={it.id}
             className={
-              "queue-item" + (i === 0 ? " queue-next" : "") + (editing?.id === it.id ? " editing" : "")
+              "queue-item" +
+              (i === 0 ? " queue-next" : "") +
+              (editing?.id === it.id ? " editing" : "") +
+              (dragId === it.id ? " dragging" : "") +
+              (dragId && dropSlot === i ? " drop-before" : "") +
+              (dragId && i === items.length - 1 && dropSlot === items.length ? " drop-after" : "")
             }
             data-item-id={it.id}
+            onDragOver={(e) => {
+              if (!dragId) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              const rect = e.currentTarget.getBoundingClientRect();
+              setDropSlot(hoverSlot(i, e.clientY - rect.top, rect.height));
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              finishDrop();
+            }}
           >
+            <span
+              className="qi-drag"
+              title="Drag to reorder"
+              draggable
+              onDragStart={(e) => {
+                const row = (e.currentTarget as HTMLElement).closest(".queue-item");
+                if (row) e.dataTransfer.setDragImage(row, 16, 16);
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", it.id);
+                draggingRef.current = true;
+                setDragId(it.id);
+              }}
+              onDragEnd={endDrag}
+            >
+              ⋮⋮
+            </span>
             <span className="queue-item-pos" title={i === 0 ? "Sends next" : "Position " + (i + 1)}>
               {i === 0 ? "▶" : String(i + 1)}
             </span>
@@ -260,7 +400,7 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
                         const st = await qApi(title, "/queue/send_now", { json: { id: it.id } });
                         queueCache.set(title, st);
                         setState(st);
-                        toast("Sent to " + title);
+                        toast("Sent to " + displayName(title));
                       } catch (err) {
                         toast("Send failed: " + ((err as Error).message || ""));
                       }
@@ -272,20 +412,18 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
                     ✎
                   </button>
                   <button
-                    className="qi-up"
-                    title="Move up"
-                    disabled={i === 0}
-                    onClick={() => mutate("/queue/reorder", { json: { id: it.id, direction: "up" } })}
+                    className="qi-add-above"
+                    title="Add a prompt above this one"
+                    onClick={() => setInserting({ index: i, value: "" })}
                   >
-                    ↑
+                    +↑
                   </button>
                   <button
-                    className="qi-down"
-                    title="Move down"
-                    disabled={i === items.length - 1}
-                    onClick={() => mutate("/queue/reorder", { json: { id: it.id, direction: "down" } })}
+                    className="qi-add-below"
+                    title="Add a prompt below this one"
+                    onClick={() => setInserting({ index: i + 1, value: "" })}
                   >
-                    ↓
+                    +↓
                   </button>
                   <button
                     className="qi-del"
@@ -298,12 +436,64 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
               </>
             )}
           </div>
+          </Fragment>
         ))}
+        {inserting && inserting.index >= items.length && (
+          <InsertComposer
+            value={inserting.value}
+            onChange={(v) => setInserting({ index: inserting.index, value: v })}
+            onSave={saveInsert}
+            onCancel={() => setInserting(null)}
+          />
+        )}
         {items.length > 0 && (
           <button className="queue-clear" onClick={() => mutate("/queue", { method: "DELETE" })}>
             Clear all
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** Inline composer a +↑/+↓ button opens in place: a new prompt written at the
+ * exact slot it will occupy, styled like the row editor so the list reads as
+ * one column. */
+function InsertComposer({
+  value,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  value: string;
+  onChange(v: string): void;
+  onSave(): void;
+  onCancel(): void;
+}) {
+  return (
+    <div className="queue-item queue-item-insert">
+      <span className="queue-item-pos" title="New prompt goes here">
+        +
+      </span>
+      <div className="queue-item-edit">
+        <textarea
+          autoFocus
+          rows={Math.min(10, Math.max(3, value.split("\n").length + 1))}
+          placeholder="New prompt for this spot…"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") onCancel();
+          }}
+        />
+        <div className="queue-item-edit-btns">
+          <button type="button" className="qi-save" onClick={onSave}>
+            Add here
+          </button>
+          <button type="button" className="qi-cancel" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
       </div>
     </div>
   );

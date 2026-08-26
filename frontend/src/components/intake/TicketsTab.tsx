@@ -18,44 +18,61 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
-import { refreshConfig, refreshInstances, usePanelQuery } from "../../state/queries";
+import {
+  putTicketingSources,
+  refreshConfig,
+  refreshInstances,
+  useAgentChoices,
+  usePanelQuery,
+  useTicketingCatalog,
+  useTicketingSources,
+} from "../../state/queries";
 import { toast } from "../../lib/toast";
+import { errorPop } from "../../lib/errorPop";
 import {
   AutomationSwitch,
   SourceCard,
   TestButton,
+  useListFilter,
   WorkGroup,
   WorkItemRow,
   WorkListPanel,
   ageText,
   panelNote,
+  reopenIntakeItem,
   useToggleSet,
+  type ItemWorkspace,
 } from "./kit";
 import {
   NO_STATE_BUCKET,
+  loadMineOnly,
   loadShownBuckets,
+  saveMineOnly,
   saveShownBuckets,
   visibleBuckets,
 } from "./buckets";
 import { DEPTH_LABELS, SOURCE_DEPTHS } from "../../lib/autopilot";
+import {
+  EFFORTS,
+  effortOptionLabel,
+  effortTitle,
+  supportsEffort,
+} from "../../lib/effort";
+import { useProviderEfforts } from "../../state/queries";
 import type { TabProps } from "./IntakeDialog";
+import { ticketMatches } from "./search";
+import type {
+  TicketingCatalogEntry,
+  TicketingCatalogField,
+  TicketingSource,
+} from "../../api/types";
 
-interface CatalogField {
-  key: string;
-  label: string;
-  secret?: boolean;
-  placeholder?: string;
-  type?: string; // "state" = workflow-state picker
-}
-
-interface CatalogEntry {
-  id: string;
-  label: string;
-  blurb?: string;
-  fields: CatalogField[];
-}
-
-type Source = Record<string, string> & { id: string; provider: string };
+// The catalog and source shapes live in api/types, shared with the query cache
+// that holds them (state/queries) — the form below renders straight off the
+// catalog, so the two must not drift.
+type CatalogField = TicketingCatalogField;
+type CatalogEntry = TicketingCatalogEntry;
+type Source = TicketingSource;
 
 /** Coding-CLI names a source's Agent picker offers, plus the app-wide default
  * shown as the "unset" option's label (so the empty choice is never a mystery). */
@@ -98,7 +115,13 @@ function IngestionToggle({ sourceCount }: { sourceCount: number }) {
       await api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
       toast(start ? "Ticket ingestion on" : "Ticket ingestion paused");
     } catch (err) {
-      toast(`Ticket ingestion ${start ? "start" : "stop"} failed: ` + ((err as Error).message || ""));
+      // Failures go to the bottom-right card (lib/errorPop.ts), not to the
+      // confirmation strip: the switch has snapped back and the reason why is
+      // the only thing left worth reading.
+      errorPop(
+        `Ticket ingestion ${start ? "start" : "stop"} failed`,
+        (err as Error).message || "the server gave no reason"
+      );
     } finally {
       setBusy(false);
       setOptimistic(null);
@@ -120,41 +143,50 @@ function IngestionToggle({ sourceCount }: { sourceCount: number }) {
   );
 }
 
+/** Stable "nothing yet" identities, so a tab rendering before its caches land
+ * doesn't hand its children a new array on every frame. */
+const EMPTY_CATALOG: CatalogEntry[] = [];
+const EMPTY_AGENTS: AgentChoices = { names: [], fallback: "" };
+
 export function TicketsTab(_: TabProps) {
-  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
-  const [sources, setSources] = useState<Source[] | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [agents, setAgents] = useState<AgentChoices>({ names: [], fallback: "" });
+  // Catalog, saved sources and agent names all come from the shared query cache
+  // (see state/queries), warmed at app startup. They used to be three requests
+  // fired in series from this component's mount, behind a full-tab "Loading…" —
+  // which is what made opening Intake feel like loading a page rather than
+  // switching to one. On a warm cache this renders on the first frame.
+  const catalog = useTicketingCatalog(true).data || EMPTY_CATALOG;
+  const savedSources = useTicketingSources(true);
+  const agents = useAgentChoices().data || EMPTY_AGENTS;
+  // The card list is edited in place, so it is local state seeded from the
+  // query rather than read straight off it — a background refetch must not
+  // revert an edit in progress, or re-collapse cards the user has opened.
+  // Seeded in the initialiser, not only in the effect below: on a warm cache
+  // (the normal case) that is the difference between the cards being there on
+  // the first frame and a "Loading…" flash on every reopen.
+  const [sources, setSources] = useState<Source[] | null>(savedSources.data ?? null);
+  // Already-saved sources start collapsed (a summary chip).
+  const [collapsed, setCollapsed] = useState<Set<string>>(
+    () => new Set((savedSources.data || []).map((s) => s.id))
+  );
+  const seeded = useRef(savedSources.data !== undefined);
   const seq = useRef(0);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const c = await api<{ providers?: CatalogEntry[] }>("/api/settings/providers/ticketing");
-        setCatalog(c?.providers || []);
-        const r = await api<{ sources?: Source[] }>("/api/settings/ticketing/sources");
-        const list = r?.sources || [];
-        setSources(list);
-        // Already-saved sources start collapsed (a summary chip).
-        setCollapsed(new Set(list.map((s) => s.id)));
-      } catch {
+    if (seeded.current) return;
+    if (savedSources.data === undefined) {
+      // Errored with nothing cached: an empty list is the same "connect your
+      // first source" state the old catch produced, and stops the tab sitting
+      // on "Loading…" forever.
+      if (savedSources.isError) {
+        seeded.current = true;
         setSources([]);
       }
-      // Agent choices are enrichment: a failure just leaves the per-source
-      // picker empty, and an unset agent still means "use the app default".
-      try {
-        const p = await api<{ providers?: Array<{ name: string }>; default?: string }>(
-          "/api/providers"
-        );
-        setAgents({
-          names: (p?.providers || []).map((x) => x.name).filter(Boolean),
-          fallback: p?.default || "",
-        });
-      } catch {
-        /* keep the empty list */
-      }
-    })();
-  }, []);
+      return;
+    }
+    seeded.current = true;
+    setSources(savedSources.data);
+    setCollapsed(new Set(savedSources.data.map((s) => s.id)));
+  }, [savedSources.data, savedSources.isError]);
 
   const persist = useCallback(
     async (list: Source[]) => {
@@ -163,6 +195,9 @@ export function TicketsTab(_: TabProps) {
       try {
         await api("/api/settings/ticketing/sources", { method: "PUT", json: { sources: list } });
         if (mySeq !== seq.current) return;
+        // Keep the shared cache in step, so the next open of this tab shows what
+        // was saved instead of refetching to be told the same thing.
+        putTicketingSources(list);
         toast(
           missingRepo
             ? `Saved — but ${missingRepo} source(s) need a Repo URL to ingest`
@@ -171,7 +206,10 @@ export function TicketsTab(_: TabProps) {
         // Connecting/removing a source flips the ticketing capability.
         refreshConfig();
       } catch (err) {
-        toast("Save failed: " + ((err as Error).message || "ticketing"));
+        errorPop(
+          "Ticketing sources not saved",
+          (err as Error).message || "the server rejected the ticketing settings"
+        );
       }
     },
     []
@@ -269,6 +307,13 @@ export function TicketsTab(_: TabProps) {
           sourceDepths={Object.fromEntries(
             sources.map((s) => [s.id, s.depth || ""])
           )}
+          // ...and for the effort picker, so a row's empty choice names the
+          // queue's own rung instead of the CLI's default. Before the source had
+          // an effort there was nothing to name, which is why that picker's blank
+          // option used to read "Default effort" unconditionally.
+          sourceEfforts={Object.fromEntries(
+            sources.map((s) => [s.id, s.effort || ""])
+          )}
         />
       )}
     </>
@@ -301,6 +346,10 @@ function StatePicker({
   };
   const remaining = states.filter((s) => !selected.includes(String(s.id)));
   const commit = (list: string[]) => onChange({ [field.key]: list.join(",") });
+  // "Anyone's" is carried entirely by this filter — with nothing selected there
+  // is nothing to scope a whole-tracker search by, so the source stays on
+  // assigned-to-me until a state is picked. Say that where the gap is.
+  const needsState = source.assignee_scope === "anyone" && !selected.length;
 
   return (
     <div className="set-row">
@@ -308,7 +357,9 @@ function StatePicker({
       <div className="repo-list">
         {!selected.length ? (
           <div className="repo-empty">
-            Any state — every ticket assigned to you is auto-ingested.
+            {needsState
+              ? "Pick at least one state — Anyone's has nothing to go on without it, so this source is still only taking tickets assigned to you."
+              : "Any state — every ticket assigned to you is auto-ingested."}
           </div>
         ) : (
           selected.map((id) => (
@@ -353,6 +404,36 @@ function StatePicker({
   );
 }
 
+/** A catalog field with a fixed set of values, rendered as a select. */
+function ChoicePicker({
+  field,
+  source,
+  onChange,
+}: {
+  field: CatalogField;
+  source: Source;
+  onChange(patch: Record<string, string>): void;
+}) {
+  return (
+    <label className="set-row">
+      <span className="set-label">{field.label}</span>
+      <select
+        className="tk-choice"
+        data-tk-field={field.key}
+        value={source[field.key] || ""}
+        onChange={(e) => onChange({ [field.key]: e.target.value })}
+      >
+        {(field.options || []).map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {field.hint ? <span className="set-hint">{field.hint}</span> : null}
+    </label>
+  );
+}
+
 interface AssignedTicket {
   source: string;
   source_label?: string;
@@ -366,6 +447,12 @@ interface AssignedTicket {
   has_session?: boolean;
   eligible?: boolean;
   reasons?: string[];
+  /** False only on a source that ingests anyone's tickets. Absent = yours. */
+  mine?: boolean;
+  /** Display name(s) of whoever it is assigned to, when the provider says. */
+  assignee?: string;
+  /** Present when a previous run of this ticket still has its workspace here. */
+  workspace?: ItemWorkspace;
 }
 
 /** "A", "A and B", "A, B and C", then "A, B and 4 more" — provider state names
@@ -398,9 +485,13 @@ function AssignedTickets({
   sourceAgents,
   defaultAgent,
   sourceDepths,
+  sourceEfforts,
 }: {
   agents: string[];
   sourceAgents: Record<string, string>;
+  /** Per source, the thinking-effort rung its tickets run at — what "Configured"
+   * resolves to on a row's effort picker. */
+  sourceEfforts: Record<string, string>;
   /** Per source, the automation depth its rows inherit ("" = none set). */
   sourceDepths: Record<string, string>;
   /** What a row falls back to naming when its source isn't in the map — a
@@ -452,10 +543,15 @@ function AssignedTickets({
   });
 
   const [shown, setShown] = useState<string[] | null>(loadShownBuckets);
+  const [mineOnly, setMineOnly] = useState<boolean>(loadMineOnly);
   // The key predates the source level, when an entry was a bare state name.
   // Those can never match a `source::state` key again, so they are dropped on
   // load rather than accumulating forever; the cost is that a previously
   // expanded bucket starts collapsed once.
+  const filter = useListFilter(
+    "tk-tickets-filter",
+    "Filter by ticket, title, source, state, or assignee…  ( Ctrl+F )",
+  );
   const openBuckets = useToggleSet(BUCKETS_OPEN_LS_KEY, false, (v) => v.includes("::"));
   const openSources = useToggleSet(SOURCES_CLOSED_LS_KEY, true);
   const openWorkflows = useToggleSet(WORKFLOWS_CLOSED_LS_KEY, true);
@@ -463,26 +559,46 @@ function AssignedTickets({
   const visible = visibleBuckets(buckets, doneBuckets, shown);
   const hidden = buckets.filter((b) => !visible.includes(b));
 
+  // Is there anyone else's work in here at all? Only a source set to ingest
+  // anyone's tickets can produce that, and without one the Mine/Everyone
+  // control would filter a list that is already entirely yours.
+  const hasOthers = (tickets || []).some((t) => t.mine === false);
+  const rows = mineOnly ? (tickets || []).filter((t) => t.mine !== false) : tickets || [];
+
   // source -> bucket -> rows. Both levels keep the server's ordering: sources
   // in configured order, buckets in the provider's own workflow order.
   const bySource = new Map<string, Map<string, AssignedTicket[]>>();
   const countAll = new Map<string, number>();
-  for (const t of tickets || []) {
+  // THE BUCKET COUNTS ARE OF THE WHOLE LIST, not of the filter. "+ Add
+  // bucket…" is a standing choice about which workflow states this panel shows
+  // at all; a bucket reading "(0)" because of a search two keystrokes old would
+  // be the wrong answer to the question that menu asks.
+  for (const t of rows) {
+    const b = t.bucket || NO_STATE_BUCKET;
+    countAll.set(b, (countAll.get(b) || 0) + 1);
+  }
+  // The GROUPING, though, is built from what matched — so every heading's count
+  // describes what is under it, and a source or a state with no match drops out
+  // instead of rendering an empty group.
+  for (const t of filter.active
+    ? rows.filter((t) => ticketMatches(t, filter.tokens))
+    : rows) {
     const src = t.source || "unknown";
     const b = t.bucket || NO_STATE_BUCKET;
     if (!bySource.has(src)) bySource.set(src, new Map());
     const inner = bySource.get(src)!;
     if (!inner.has(b)) inner.set(b, []);
     inner.get(b)!.push(t);
-    countAll.set(b, (countAll.get(b) || 0) + 1);
   }
-  const sourceOrder = [
-    ...listedSources,
-    ...[...sourceErrors.keys()].filter((s) => !listedSources.includes(s)),
-    ...[...bySource.keys()].filter(
-      (s) => !listedSources.includes(s) && !sourceErrors.has(s)
-    ),
-  ];
+  const sourceOrder = filter.active
+    ? [...bySource.keys()]
+    : [
+        ...listedSources,
+        ...[...sourceErrors.keys()].filter((s) => !listedSources.includes(s)),
+        ...[...bySource.keys()].filter(
+          (s) => !listedSources.includes(s) && !sourceErrors.has(s)
+        ),
+      ];
 
   const hideBucket = (b: string) => {
     // First customization starts from what's on screen (the default view),
@@ -535,7 +651,9 @@ function AssignedTickets({
 
   return (
     <WorkListPanel
-      label="Assigned tickets"
+      // "Assigned tickets" is a lie the moment a source ingests anyone's — the
+      // QA queue's rows are assigned to whoever wrote the code.
+      label={hasOthers ? "Ticket queue" : "Assigned tickets"}
       onRefresh={load}
       note={note}
       rowId="tk-assigned-row"
@@ -543,27 +661,54 @@ function AssignedTickets({
       noteId="tk-tickets-note"
       listId="tk-tickets-list"
       toolbarExtra={
-        <select
-          id="tk-bucket-add"
-          className="tk-bucket-add"
-          value=""
-          disabled={!hidden.length}
-          title="Show another workflow state in this panel"
-          onChange={(e) => addBucket(e.target.value)}
-        >
-          <option value="">{hidden.length ? "+ Add bucket…" : "All buckets shown"}</option>
-          {hidden.map((b) => (
-            <option key={b} value={b}>
-              {b} ({countAll.get(b) || 0})
-            </option>
-          ))}
-        </select>
+        <>
+          {tickets && tickets.length ? filter.control : null}
+          {hasOthers ? (
+            <select
+              id="tk-mine-filter"
+              className="tk-mine-filter"
+              value={mineOnly ? "mine" : "all"}
+              title="Whose tickets this panel lists"
+              onChange={(e) => {
+                const next = e.target.value === "mine";
+                setMineOnly(next);
+                saveMineOnly(next);
+              }}
+            >
+              <option value="all">Everyone's tickets</option>
+              <option value="mine">Only mine</option>
+            </select>
+          ) : null}
+          <select
+            id="tk-bucket-add"
+            className="tk-bucket-add"
+            value=""
+            disabled={!hidden.length}
+            title="Show another workflow state in this panel"
+            onChange={(e) => addBucket(e.target.value)}
+          >
+            <option value="">{hidden.length ? "+ Add bucket…" : "All buckets shown"}</option>
+            {hidden.map((b) => (
+              <option key={b} value={b}>
+                {b} ({countAll.get(b) || 0})
+              </option>
+            ))}
+          </select>
+        </>
       }
       hint={
         <>
-          Your tickets, grouped by source and then by workflow state. Click a heading to
-          expand or collapse it; use <strong>+ Add bucket…</strong> / ✕ to choose which
-          states appear at all.{" "}
+          {hasOthers ? (
+            <>
+              Tickets from your sources — including other people's, from any source set to{" "}
+              <strong>Anyone's</strong> — grouped by source and then by workflow state. Use{" "}
+              <strong>Only mine</strong> to narrow it back down.{" "}
+            </>
+          ) : (
+            "Your tickets, grouped by source and then by workflow state. "
+          )}
+          Click a heading to expand or collapse it; use <strong>+ Add bucket…</strong> / ✕ to
+          choose which states appear at all.{" "}
           {parkedDone.length ? (
             <>
               {parkedDone.length === 1 ? "The done state " : "Done states "}
@@ -584,7 +729,11 @@ function AssignedTickets({
         </div>
       ) : !sourceOrder.length ? (
         <div className="repo-empty">
-          No tickets are assigned to you on the connected sources.
+          {filter.active
+            ? "No ticket matches “" + filter.query + "”."
+            : mineOnly && hasOthers
+              ? "None of the tickets here are yours — switch to Everyone's tickets to see them."
+              : "No tickets are assigned to you on the connected sources."}
         </div>
       ) : (
         sourceOrder.map((src) => {
@@ -637,6 +786,7 @@ function AssignedTickets({
                         // is what a ticket from a just-removed source would show.
                         configuredAgent={sourceAgents[t.source] || defaultAgent}
                         configuredDepth={sourceDepths[t.source] || ""}
+                        configuredEffort={sourceEfforts[t.source] || ""}
                         onStarted={relistTickets}
                       />
                     ))}
@@ -706,6 +856,7 @@ function AssignedTicketRow({
   agents,
   configuredAgent,
   configuredDepth,
+  configuredEffort,
   onStarted,
 }: {
   t: AssignedTicket;
@@ -714,6 +865,8 @@ function AssignedTicketRow({
   configuredAgent: string;
   /** How far this ticket's source is configured to take its items. */
   configuredDepth: string;
+  /** How hard this ticket's source is configured to think about its items. */
+  configuredEffort: string;
   onStarted(): void;
 }) {
   return (
@@ -721,25 +874,45 @@ function AssignedTicketRow({
       agents={agents}
       configuredAgent={configuredAgent}
       configuredDepth={configuredDepth}
+      configuredEffort={configuredEffort}
       reference={t.slug}
       url={t.url}
       title={t.name}
       linkTitle={"Open " + t.slug + " in " + (t.source_label || t.source)}
       tooltip={t.slug + " — " + (t.name || "") + "\nfrom " + (t.source_label || t.source)}
-      meta={ageText(t.created_at)}
+      // Whose it is, but only when it isn't yours — on an assigned-to-me queue
+      // every row would say your own name, which tells you nothing.
+      meta={
+        t.mine === false
+          ? ageText(t.created_at) + " · " + (t.assignee || "someone else")
+          : ageText(t.created_at)
+      }
       hasSession={t.has_session}
       eligible={t.eligible}
       eligibleLabel="queued for auto ingestion"
       reasons={t.reasons}
       actionLabel="Begin work"
       failPrefix="Begin work failed"
-      onStart={async ({ agent, depth }) => {
+      workspace={t.workspace}
+      onReopen={async () => {
+        const title = await reopenIntakeItem({
+          kind: "tickets",
+          source: t.source,
+          id: t.id,
+        });
+        // The row's chips (and its Reopen button) are about to be wrong: it
+        // has a session now. Same delay the start path uses.
+        setTimeout(onStarted, 5000);
+        return title;
+      }}
+      onStart={async ({ agent, depth, effort }) => {
         const r = await api<{ title?: string }>("/api/tickets/start", {
           json: {
             source: t.source,
             id: t.id,
             ...(agent ? { agent } : {}),
             ...(depth ? { depth } : {}),
+            ...(effort ? { effort } : {}),
           },
         });
         // The server already has a provisioning row for it: pull it now
@@ -770,6 +943,16 @@ function TicketSourceCard({
   onRemove(): void;
 }) {
   const meta = catalog.find((p) => p.id === source.provider) || null;
+  // Which CLI this source's tickets will actually run on, so the effort picker
+  // below can name THAT CLI's ceiling rather than the ladder's. The empty choice
+  // in the Agent picker means "app default", which is what `agents.fallback`
+  // holds — so the two pickers agree about which CLI is under discussion.
+  const effortProvider = source.agent || agents.fallback || "";
+  // undefined = caps not fetched yet, or a custom program no provider claims.
+  // That reads as "assume it works" rather than disabling a control that does.
+  const effortCaps = useProviderEfforts().data;
+  const effortCap = effortCaps ? effortCaps[effortProvider] : undefined;
+  const effortUsable = supportsEffort(effortCap);
   const [states, setStates] = useState<Array<{ id: string | number; name?: string }>>([]);
 
   const provName = meta?.label || source.provider;
@@ -903,6 +1086,48 @@ function TicketSourceCard({
           row is green, or leave it on the app default.
         </span>
       </label>
+      {/* THINKING EFFORT, directly under the CLI that will do the thinking —
+          the two are one decision. "Which CLI" and "how hard should it think"
+          are read together, and a rung means different things on different CLIs
+          (each spells it its own way and clamps its own ceiling), so the picker
+          has to sit where the CLI it is about to qualify is still on screen.
+          Per SOURCE because that is where the property lives: a queue of
+          one-line copy fixes and a queue of schema migrations deserve different
+          answers, and neither deserves to be set per ticket forever. */}
+      <label className="set-row">
+        <span className="set-label">Thinking effort</span>
+        <select
+          className="tk-effort"
+          data-tk-field="effort"
+          value={effortUsable ? source.effort || "" : ""}
+          disabled={!effortUsable}
+          title={effortTitle(effortProvider, effortCap)}
+          onChange={(e) => onChange({ effort: e.target.value })}
+        >
+          <option value="">
+            {effortUsable
+              ? "CLI default — however it thinks on its own"
+              : "No effort setting (" + (effortProvider || "this CLI") + ")"}
+          </option>
+          {effortUsable &&
+            EFFORTS.map((e) => (
+              // A rung above this CLI's ceiling still runs, clamped, and the top
+              // rung is named the way the CLI names it — so the pick says what it
+              // will actually do rather than what was asked for.
+              <option key={e} value={e}>
+                {effortOptionLabel(e, effortCap)}
+              </option>
+            ))}
+        </select>
+        <span className="set-hint">
+          How hard the agent thinks about <em>every</em> ticket from this source —
+          both the ones the pipeline picks up on its own and the ones you start by
+          hand. The rungs are neutral: whichever CLI runs the ticket translates
+          them into its own spelling and never receives a rung it would reject, so
+          this is safe to set higher than the CLI above can go. An individual
+          ticket can still choose its own on its row.
+        </span>
+      </label>
       <label className="set-row">
         <span className="set-label">Take tickets as far as</span>
         <select
@@ -936,6 +1161,8 @@ function TicketSourceCard({
               loadStates={loadStates}
               onChange={onChange}
             />
+          ) : f.type === "choice" ? (
+            <ChoicePicker key={f.key} field={f} source={source} onChange={onChange} />
           ) : (
             <label className="set-row" key={f.key}>
               <span className="set-label">{f.label}</span>

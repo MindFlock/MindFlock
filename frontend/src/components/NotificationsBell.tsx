@@ -257,7 +257,7 @@ export function NotificationsBell() {
                     data-session={n.session}
                     onClick={() => jump(n.session)}
                   >
-                    <span className="notif-sess">{n.session || "—"}</span>
+                    <span className="notif-sess">{aliases[n.session] || n.session || "—"}</span>
                     <span className="notif-text">{n.text}</span>
                     <span className="notif-time">{relTime(n.ts)}</span>
                   </div>

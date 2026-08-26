@@ -35,6 +35,8 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from backend.config import settings as settings_store
+from backend.web.core import aliases as _aliases
+from backend.web.core import events as _events
 from backend.web.core import mobile_access, mobile_announce, ntfy
 
 from .base import SECRET_MASK, Addon, AppContext, FrontendDescriptor
@@ -242,10 +244,41 @@ def _matches(rule: dict, envelope: dict) -> bool:
     return True
 
 
+def _session_branch(title: str) -> str:
+    """The session's branch, off the ``/api/instances`` snapshot the bus keeps.
+
+    Only naming needs it, so an empty answer is not a failure: a session the
+    poll has not seen yet (or one on a device this node only proxies) simply
+    gets named by its title, which is what happened before this looked at all.
+    """
+    try:
+        for inst in _events.sessions_snapshot():
+            if isinstance(inst, dict) and inst.get("title") == title:
+                return str(inst.get("branch") or "")
+    except Exception:  # noqa: BLE001 — naming must never break a push
+        pass
+    return ""
+
+
 def _fill(template: str, envelope: dict) -> str:
-    """``{session}`` → the envelope's session title (the JS ``fill``'s twin)."""
+    """``{session}`` → the session's DISPLAY name (the JS ``fill``'s twin).
+
+    The envelope carries the raw title; the user reads the name in the rail. Two
+    things stand between them and both belong here, or the push describes a
+    session that does not appear to exist:
+
+    * **The rename**, which the SPA syncs into ``core.aliases``.
+    * **The pipeline label** for the sessions nobody renamed. A ticket session is
+      titled by its provider slug — "shortcut-21431" — and the sidebar shows
+      "(tix) sitecheck-social-stop-producing/shortcut-21431", built from the
+      branch. Naming the push by the slug alone made the reader match a
+      notification against a rail that agrees with it nowhere.
+
+    The raw title remains the last resort, which is also the right answer for a
+    hand-made session: that IS its name."""
+    title = str(envelope.get("session") or "")
     return str(template or "").replace(
-        "{session}", str(envelope.get("session") or "session")
+        "{session}", _aliases.display_name(title, _session_branch(title)) or "session"
     )
 
 

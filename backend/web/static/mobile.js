@@ -275,6 +275,11 @@
   function nextAct(inst) {
     if (!inst || inst.status === "loading" || inst.status === "paused") return null;
     if (inst.workspace_missing) return null;
+    // "Back to idle" pin: the owner has said this branch's cycle is finished and
+    // they are still working on it, so the recommended step is the start of the
+    // ladder again — not Push/PR/Merge. Server-side (stage_reset.py), which is
+    // what makes the phone and the desktop agree about it.
+    if (inst.stage_reset) return "commit";
     switch (inst.stage || "agent") {
       case "agent": return "commit";
       case "interrupt": return "commit";     // re-commit after a pre-commit ✗

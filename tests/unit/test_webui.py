@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from backend import session
 from backend.session.storage import Loading
 from backend.web import server
+from backend.web.core import plain_repo
 from backend.web.server import app
 
 client = TestClient(app)
@@ -197,3 +198,107 @@ def test_create_provisioned_branch_name_as_title(monkeypatch):
     finally:
         server.ENGINE.instances.pop(seg, None)
         server._EVENT_SNAPSHOT.pop(seg, None)
+
+
+def test_create_can_git_init_the_folder_it_then_works_directly_in(
+    monkeypatch, tmp_path
+):
+    """``init_repo`` and ``in_place`` are combinable — and this is the pair.
+
+    create_instance used to compute ``init_repo = … and not in_place``, on the
+    reading that an in-place session works in an existing repo and so cannot
+    create one. That silently dropped a tick the user had just made: asking for
+    "create a git repo in this folder" AND "work directly in this folder" —
+    which is the ordinary way to start a brand-new project, since a worktree
+    forked off a repo that was empty a second ago is the awkward case, not the
+    obvious one — handed back a git-LESS session in a plain folder.
+
+    The pair that genuinely cannot both be true is ``in_place`` and provisioning
+    (which builds a separate worktree or clone), and the line above this one in
+    the route has always enforced that: ``in_place = … and not is_provisioned``.
+
+    So the real ``_prepare_plain_repo`` runs here, against a folder under
+    ``tmp_path`` that does not exist yet: it is the thing that mkdirs, git-inits
+    and makes the initial commit, and short of watching it do that there is no
+    way to tell "the tick survived" from "the tick was dropped and the folder
+    happened to be a repo already".
+    """
+    captured = []
+    _stub_create(monkeypatch, captured=captured)
+    asked = []
+
+    def _spy(repo, init):
+        # A spy over the REAL preparation, not a stand-in for it: what was asked
+        # for (``init``) is the flag this test exists for, and what it does to
+        # the folder is the proof it was honoured.
+        asked.append((repo, init))
+        return plain_repo._prepare_plain_repo(repo, init)
+
+    monkeypatch.setattr(server, "_prepare_plain_repo", _spy)
+    folder = tmp_path / "brand-new-project"
+    title = "init-and-work-here"
+    server.ENGINE.instances.pop(title, None)
+    try:
+        r = client.post(
+            "/api/instances",
+            json={
+                "title": title,
+                "program": "bash",
+                "repo_path": str(folder),
+                "in_place": True,
+                "init_repo": True,
+            },
+        )
+        assert r.status_code == 202
+        # The tick reached the folder preparation instead of being zeroed by the
+        # in-place one next to it.
+        assert asked == [(str(folder), True)]
+        # ...and the folder really is a repo with a HEAD to work against, which
+        # is what turns the session's diff/commit/PR features on.
+        assert (folder / ".git").is_dir()
+        assert server._is_git_repo(str(folder)) is True
+        assert server._git_has_commits(str(folder)) is True
+        # The session runs IN that folder — no worktree cut from it.
+        assert len(captured) == 1
+        assert captured[0].in_place is True
+        assert captured[0].path == str(folder.resolve())
+        assert captured[0].provisioned is False
+    finally:
+        server.ENGINE.instances.pop(title, None)
+        server._EVENT_SNAPSHOT.pop(title, None)
+
+
+def test_create_drops_in_place_for_a_provisioned_session(monkeypatch):
+    """The pair that IS exclusive, and now the only one.
+
+    Provisioning builds a SEPARATE worktree or clone, so there is no "this
+    folder" left to work directly in; the route has always answered that by
+    computing ``in_place = … and not is_provisioned``. Locked here because the
+    New Session dialog's checkboxes were changed to mirror exactly this rule
+    (they used to exclude ``init_repo`` and ``in_place`` instead, which the test
+    above shows was a rule about nothing), so the UI's claim about which two
+    modes conflict is only true for as long as this line is.
+    """
+    captured = []
+    _stub_create(monkeypatch, captured=captured, git_enabled=True)
+    monkeypatch.setattr(server, "git_available", lambda: True)
+    title = "provisioned-not-in-place"
+    server.ENGINE.instances.pop(title, None)
+    try:
+        r = client.post(
+            "/api/instances",
+            json={
+                "title": title,
+                "program": "bash",
+                "provisioned": True,
+                "repo_path": "/tmp/mf-fake",
+                "in_place": True,
+            },
+        )
+        assert r.status_code == 202
+        assert len(captured) == 1
+        assert captured[0].provisioned is True
+        assert captured[0].in_place is False  # the tick the server overrules
+    finally:
+        server.ENGINE.instances.pop(title, None)
+        server._EVENT_SNAPSHOT.pop(title, None)

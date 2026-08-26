@@ -44,10 +44,12 @@ __all__ = [
     "get_state",
     "list_queue",
     "enqueue",
+    "enqueue_many",
     "update_item",
     "remove_item",
     "clear",
     "move_item",
+    "move_item_to",
     "set_flags",
     "peek_next",
     "record_sent",
@@ -180,12 +182,14 @@ def list_queue(title: str) -> List[dict]:
     return get_state(title)["items"]
 
 
-def enqueue(title: str, text: str) -> dict:
-    """Append a prompt to ``title``'s queue. Returns the new entry.
+def enqueue(title: str, text: str, index: Optional[int] = None) -> dict:
+    """Add a prompt to ``title``'s queue. Returns the new entry.
 
-    Blank/whitespace text is ignored (returns the unchanged entry). Enqueuing
-    always leaves the queue ``enabled`` so a freshly added prompt actually
-    drains without a separate toggle.
+    Appends by default; with ``index`` the prompt is inserted at that 0-based
+    position (clamped), which is how "add above/below this item" lands in the
+    right slot. Blank/whitespace text is ignored (returns the unchanged
+    entry). Enqueuing always leaves the queue ``enabled`` so a freshly added
+    prompt actually drains without a separate toggle.
     """
     text = str(text or "").strip()
     with _LOCK:
@@ -194,11 +198,41 @@ def enqueue(title: str, text: str) -> dict:
         if text:
             if len(entry["items"]) >= _MAX_ITEMS:
                 raise ValueError("queue is full (%d items)" % _MAX_ITEMS)
-            entry["items"].append({"id": _new_id(), "text": text, "added": time.time()})
+            item = {"id": _new_id(), "text": text, "added": time.time()}
+            if index is None:
+                entry["items"].append(item)
+            else:
+                pos = max(0, min(int(index), len(entry["items"])))
+                entry["items"].insert(pos, item)
             entry["enabled"] = True
             data[title] = entry
             _save(data)
         return entry
+
+
+def enqueue_many(title: str, texts) -> tuple:
+    """Append several prompts to ``title``'s queue in one write — the bulk
+    path behind dropping a CSV/text file on the Queue tab (one prompt per
+    row). Blank/whitespace rows are skipped; rows beyond the queue cap are
+    dropped rather than raising, so a big file adds what fits.
+
+    Returns ``(entry, added, skipped)`` where ``skipped`` counts non-blank
+    rows that didn't fit. Adding anything leaves the queue ``enabled``,
+    exactly like a single enqueue."""
+    cleaned = [t for t in (str(x or "").strip() for x in (texts or [])) if t]
+    with _LOCK:
+        data = _load()
+        entry = _normalize(data.get(title))
+        room = max(0, _MAX_ITEMS - len(entry["items"]))
+        take = cleaned[:room]
+        now = time.time()
+        for t in take:
+            entry["items"].append({"id": _new_id(), "text": t, "added": now})
+        if take:
+            entry["enabled"] = True
+            data[title] = entry
+            _save(data)
+        return entry, len(take), len(cleaned) - len(take)
 
 
 def update_item(title: str, item_id: str, text: str) -> dict:
@@ -257,6 +291,22 @@ def move_item(title: str, item_id: str, direction: str) -> dict:
                 items[idx], items[j] = items[j], items[idx]
                 data[title] = entry
                 _save(data)
+        return entry
+
+
+def move_item_to(title: str, item_id: str, index: int) -> dict:
+    """Move one item to an absolute 0-based position (clamped) — the
+    drag-and-drop reorder. An unknown id leaves the queue unchanged."""
+    with _LOCK:
+        data = _load()
+        entry = _normalize(data.get(title))
+        items = entry["items"]
+        idx = next((i for i, it in enumerate(items) if it["id"] == item_id), -1)
+        if idx >= 0:
+            it = items.pop(idx)
+            items.insert(max(0, min(int(index), len(items))), it)
+            data[title] = entry
+            _save(data)
         return entry
 
 

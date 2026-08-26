@@ -55,8 +55,40 @@ function ruleMatches(rule, env) {
   return true;
 }
 
+// The envelope carries the RAW session title; the user reads the name in the
+// sidebar — which is the rename if there is one, and otherwise the pipeline
+// label ("(tix) add-dark-mode/sc-12345"), NOT the machine slug the event
+// carries. A notification naming a window nobody can find in the rail is the
+// one mistake this channel cannot make, so it asks the app for the name rather
+// than deriving a second opinion: window.mindflock.displayName is the sidebar's
+// own resolver (frontend/src/lib/windowName.ts).
+//
+// Read at fill time, not cached, so a rename made after this page loaded still
+// names the notification the way the tab does. The alias fallback below is what
+// answers on a page where the bundle has not published the bridge (an older
+// build, or an event arriving before first paint).
+function sessionLabel(title) {
+  try {
+    const named = window.mindflock && window.mindflock.displayName;
+    if (typeof named === "function") {
+      const shown = named(title);
+      if (typeof shown === "string" && shown) return shown;
+    }
+  } catch (e) {
+    /* the bridge is optional by construction */
+  }
+  try {
+    const aliases = JSON.parse(localStorage.getItem("mf_aliases") || "{}");
+    const alias = aliases && aliases[title];
+    if (typeof alias === "string" && alias) return alias;
+  } catch (e) {
+    /* unreadable storage: fall back to the raw title */
+  }
+  return title || "session";
+}
+
 function fill(template, env) {
-  return String(template || "").replace(/\{session\}/g, env.session || "session");
+  return String(template || "").replace(/\{session\}/g, sessionLabel(env.session));
 }
 
 window.mindflockAddons = window.mindflockAddons || {};

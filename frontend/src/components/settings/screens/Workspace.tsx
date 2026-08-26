@@ -48,6 +48,16 @@ export function Workspace({ gotoScreen }: ScreenProps) {
         </span>
       </label>
       <label className="set-row">
+        <span className="set-label">Live branch</span>
+        <SettingField group="repository" field="live_branch" placeholder="main" />
+        <span className="set-hint">
+          The branch that means <em>shipped</em>. <strong>Verify</strong> waits until a
+          session's commit is an ancestor of it, then asks you to test the change for real.
+          Blank = fall back to the PR base branch, then the default base branch, then{" "}
+          <code>main</code>.
+        </span>
+      </label>
+      <label className="set-row">
         <span className="set-label">Fast-track goes as far as</span>
         <SettingField
           group="repository"

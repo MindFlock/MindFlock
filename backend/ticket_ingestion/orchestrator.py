@@ -17,8 +17,10 @@ from backend.ticket_ingestion.config import (
     PipelineConfig,
     agent_now,
     source_agent_now,
+    source_effort_now,
 )
 from backend.ticket_ingestion.filter import AssigneeFilter
+from backend.ticket_ingestion.providers.base import ingests_any_assignee
 from backend.ticket_ingestion.issue_monitor import (
     IssueCommentsFetchError,
     IssueMonitor,
@@ -110,7 +112,18 @@ class PipelineOrchestrator:
         ]
         # Defensive net over every source's server-side "assigned to me" search:
         # accept a ticket if it's assigned to ANY configured identity.
-        member_ids = [s.member_id for s in sources if s.member_id]
+        #
+        # The net is flock-wide and the work queue doesn't record which source a
+        # story came from, so one source set to ingest any assignee disarms it
+        # entirely: those tickets are meant to belong to other people, and an
+        # id-based net has no way to tell them from a mis-scoped fetch on a
+        # neighbouring source. Each provider's own server-side scoping stays the
+        # real filter either way.
+        member_ids = (
+            []
+            if any(ingests_any_assignee(s) for s in sources)
+            else [s.member_id for s in sources if s.member_id]
+        )
         self._assignee_filter = AssigneeFilter(member_ids)
         self._validator = TicketValidator(config)
         self._provisioner = EnvironmentProvisioner(config)
@@ -342,6 +355,9 @@ class PipelineOrchestrator:
             # since a previous run must launch on the CLI configured NOW, not
             # the one configured when that run booted.
             story.agent = source_agent_now(scanner._source_key, scanner._source.agent)
+            story.effort = source_effort_now(
+                scanner._source_key, scanner._source.effort
+            )
             await self._queue.put(story)
             _logger.info("Re-enqueued pending ticket %s from a prior run.", slug)
 

@@ -422,10 +422,19 @@ def test_settings_panel_keeps_its_rows_while_refetching():
     assert "Could not list issues: " in js
     assert "Could not list tickets: " in js
     # Each panel distinguishes "first load" from "reloading what you can see".
-    # One shared implementation now (intake/kit.tsx `panelNote`), driven three
-    # times — the three hand-rolled copies were the drift risk this replaced.
+    # One shared implementation now (intake/kit.tsx `panelNote`) — the three
+    # hand-rolled copies were the drift risk this replaced, and the ``== 1``
+    # below is the assertion that actually guards it: exactly one place in the
+    # bundle decides "Refreshing…" vs "Loading…".
     assert js.count('? "Refreshing…" : "Loading…"') == 1
-    assert js.count("panelNote({") == 3
+    # The call count is a floor, not a fixed number. It was pinned at 3 when the
+    # PRs/issues/tickets panels were the only callers, but every later panel that
+    # adopts the shared helper (the Intake queue tab, the Verify dialog) pushes it
+    # up — and adopting it is precisely the behaviour this test wants, so an exact
+    # count would fail on the good change. The three original panels are still
+    # covered: their error banners are asserted above, and the sibling test
+    # asserts their hand-rolled `setPrsNote(` / `setIssuesNote(` state is gone.
+    assert js.count("panelNote({") >= 3
 
 
 def test_settings_panel_refresh_asks_the_server_to_skip_its_cache():
@@ -477,8 +486,15 @@ def test_opening_work_warms_all_three_panels():
     whose data is still fresh is skipped. It is also what fills in the tab
     strip's counts before you get there."""
     js = client.get("/app.js").text
-    assert "if (open) prefetchIntakePanels();" in js
-    dialog = js.split("if (open) prefetchIntakePanels();", 1)[1][:80]
+    # The dialog's own top-up: both warms together, keyed on `open`. Anchored on
+    # the pair because `prefetchIntakePanels()` alone also appears in the
+    # shell's warm loop (useIntakeWarm), which runs on a timer, not on open.
+    #
+    # The chrome around the rows — settings, source cards, agent names — is
+    # topped up on the same open, so no tab lands on a "Loading…" either.
+    pair = "prefetchIntakePanels();\n    prefetchIntakeMeta();"
+    assert pair in js
+    dialog = js.split(pair, 1)[1][:80]
     assert "[open]" in dialog  # the effect keys on `open` alone
     prefetch = js.split("function prefetchIntakePanels()", 1)[1][:400]
     assert "Object.keys(PANELS)" in prefetch  # every panel, no hand-kept list

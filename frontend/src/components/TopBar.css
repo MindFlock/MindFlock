@@ -124,10 +124,18 @@ body #mf-winctl {
   justify-content: flex-start;
 }
 
+/* The menu carries seven items now (New, Intake, Verify, Recent, Prompts,
+   Command, Settings), so the type and the spacing are deliberately tighter than
+   the rest of the app — here, on #topbar button, on .tb-item / .tb-drop-btn and
+   on #new-btn, which must all move together or the row goes ragged.
+   The bar must stay ONE line at the narrowest window anyone actually uses: it is
+   fixed and full-width, so an item that wraps does not push anything down, it
+   disappears under the edge of the window. 11px is the floor — these are the
+   app's primary navigation and the next notch down stops reading as a label. */
 #topbar .tb-menu {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 
 /* The flexible tail is the drag handle; Electron window buttons overlay it. */
@@ -147,7 +155,7 @@ body #mf-winctl {
    in the UA button font while the wordmark uses the app font. */
 #topbar button {
   font-family: inherit;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 500;
 }
 
@@ -157,14 +165,14 @@ body #mf-winctl {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 28px;
-  min-width: 30px;
-  padding: 0 8px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0 6px;
   background: transparent;
   color: var(--text);
   border: 1px solid transparent;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: 5px;
+  font-size: 11px;
   line-height: 1;
   cursor: pointer;
 }
@@ -173,6 +181,35 @@ body #mf-winctl {
 #topbar .tb-drop-btn:hover {
   background: var(--panel-2);
   border-color: var(--border);
+}
+
+/* Count riding inside a bar item (Verify's due plans). Same accent-tinted pill as
+   .ik-tab-count on the Intake tabs — on both surfaces a non-zero count is the
+   call to action, not decoration — one size down because it sits inside a 24px
+   control rather than a tab strip. It borrows .notif-badge's COLOURS (see below)
+   but not its box: that one is an absolutely-positioned overlay on the bell's
+   icon, whereas this rides in the flow after a word and is allowed to widen its
+   button. */
+#topbar .tb-count {
+  margin-left: 4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 7px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  /* The SOLID fill of .notif-badge, not the accent-tinted outline .ik-tab-count
+     wears. The tinted pill is legible on a panel inside an open dialog; up here,
+     against a top bar that is itself accent-tinted in several of the surface
+     themes, it washed out to the point of being missable — which for the one
+     control whose job is to say "something shipped and nobody checked it" is the
+     whole failure. Same red-and-white as the bell so the two read as one idea
+     ("this wants you") rather than two vocabularies of urgency. */
+  background: var(--red);
+  color: #fff;
 }
 
 /* Flock mark before the sidebar toggle. The PNG is used as a pure-alpha mask
@@ -188,18 +225,21 @@ body #mf-winctl {
   pointer-events: none;
 }
 
+/* The icon cluster tracks the menu's height, not its own. They sit on one row
+   and the hover fill is what shows a size mismatch — a 28px chip beside a 24px
+   one reads as a rendering fault rather than as two kinds of control. */
 #topbar #sidebar-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 28px;
-  width: 32px;
+  height: 24px;
+  width: 28px;
   padding: 0;
   line-height: 0;
   background: transparent;
   color: var(--text);
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 5px;
   cursor: pointer;
 }
 
@@ -213,12 +253,12 @@ body #mf-winctl {
 }
 
 #topbar #theme-btn {
-  height: 28px;
-  padding: 0 6px;
+  height: 24px;
+  padding: 0 5px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: 5px;
+  font-size: 12px;
   line-height: 1;
   color: var(--text);
   cursor: pointer;
@@ -233,15 +273,17 @@ body #mf-winctl {
   display: block;
 }
 
-/* Matches the neutral .tb-item look (same as the Recent button). */
+/* Matches the neutral .tb-item look (same as the Recent button) — which is why
+   it follows .tb-item down to the smaller type and tighter padding above rather
+   than staying 13px/8px and reading as a different kind of button. */
 #topbar #new-btn.tb-new {
   background: transparent;
   color: var(--text);
   border: 1px solid transparent;
-  border-radius: 6px;
-  height: 28px;
-  padding: 0 8px;
-  font-size: 13px;
+  border-radius: 5px;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11px;
   cursor: pointer;
 }
 

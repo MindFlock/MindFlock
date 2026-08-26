@@ -11,7 +11,7 @@ import {
   refreshInstances,
   type EventEnvelope,
 } from "../state/queries";
-import { useUi } from "../state/store";
+import { displayName, useUi } from "../state/store";
 import { fmtUsd } from "../lib/format";
 import {
   dropActivity,
@@ -141,7 +141,12 @@ export function markSessionSeen(title: string) {
   if (clarifyUnseen.has(title)) clearClarify(title);
 }
 
-// Non-spammy toasts: at most one per session+state per 30s.
+// Non-spammy toasts: at most one per session+state per 30s. The dedupe key is
+// the raw title on purpose — renaming a session mid-storm must not reset its
+// 30s window — while the message text names the session by displayName(), the
+// same saved-name rule the bell, sidebar and panes use: a toast that says
+// "untitled needs your input" about the tab you renamed to "rapisynth" makes
+// the reader hunt for a session that doesn't appear to exist.
 const notifyAt = new Map<string, number>();
 function notifyOnce(session: string, state: string, msg: string, opts?: ToastOpts) {
   const key = session + "|" + state;
@@ -191,7 +196,7 @@ export function EventToasts() {
           markClarify(env.session);
           const inst = instByTitle(env.session);
           const snip = inst?.last_turn ? " — “" + inst.last_turn + "”" : "";
-          notifyOnce(env.session, "clarify", env.session + " needs your input" + snip, {
+          notifyOnce(env.session, "clarify", displayName(env.session) + " needs your input" + snip, {
             onClick: () => selectSession(env.session),
           });
         }
@@ -200,7 +205,7 @@ export function EventToasts() {
     unsubs.push(
       ev.subscribe("session.setup_finished", (env) => {
         if (isReplay(env) || env.new === "ok") return;
-        notifyOnce(env.session, "setupfail", "worktree setup failed on " + env.session + " — prompts held", {
+        notifyOnce(env.session, "setupfail", "worktree setup failed on " + displayName(env.session) + " — prompts held", {
           onClick: () => selectSession(env.session),
         });
       })
@@ -208,7 +213,7 @@ export function EventToasts() {
     unsubs.push(
       ev.subscribe("session.check_finished", (env) => {
         if (isReplay(env) || env.new === "ok") return;
-        notifyOnce(env.session, "checkfail", "checks failed on " + env.session, {
+        notifyOnce(env.session, "checkfail", "checks failed on " + displayName(env.session), {
           onClick: () => selectSession(env.session),
         });
       })
@@ -255,7 +260,7 @@ export function EventToasts() {
           { live: true }
         );
         if (String(env.new || "") === "halted")
-          notifyOnce(env.session, "ftstop", "fast-track stopped on " + env.session, {
+          notifyOnce(env.session, "ftstop", "fast-track stopped on " + displayName(env.session), {
             onClick: () => selectSession(env.session),
           });
       })
@@ -271,7 +276,7 @@ export function EventToasts() {
         if (isReplay(env)) return; // toast-only subscriber — skip stale history
         const title = env.session;
         if (env.new === "interrupt") {
-          notifyOnce(title, "interrupt", "pre-commit failed on " + title, {
+          notifyOnce(title, "interrupt", "pre-commit failed on " + displayName(title), {
             onClick: () => selectSession(title),
           });
         }
@@ -288,7 +293,7 @@ export function EventToasts() {
         const title = env.session;
         const url = String((env.data as { url?: string } | undefined)?.url || "");
         if (env.new === "OPEN") {
-          notifyOnce(title, "pr", "PR open for " + title, {
+          notifyOnce(title, "pr", "PR open for " + displayName(title), {
             onClick: () => {
               const inst = instByTitle(title);
               const href = inst?.pr_url || url;
@@ -297,7 +302,7 @@ export function EventToasts() {
             },
           });
         } else if (env.old === "OPEN") {
-          notifyOnce(title, "merged", title + ": PR merged or closed ✓", {
+          notifyOnce(title, "merged", displayName(title) + ": PR merged or closed ✓", {
             onClick: () => selectSession(title),
           });
         }
@@ -316,7 +321,7 @@ export function EventToasts() {
         notifyOnce(
           env.session,
           "budget",
-          env.session + " exceeded its budget (" + fmtUsd(d.cost || 0) + " of " + fmtUsd(d.budget || 0) + ")",
+          displayName(env.session) + " exceeded its budget (" + fmtUsd(d.cost || 0) + " of " + fmtUsd(d.budget || 0) + ")",
           { onClick: () => selectSession(env.session), duration: 8000 }
         );
       })

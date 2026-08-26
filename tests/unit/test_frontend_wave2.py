@@ -149,7 +149,14 @@ def test_app_js_wave3_wiring():
     assert 'env.old === "pr"' not in js
     assert 'env.new === "merged"' not in js
     # F5 retired: neither the managed-repo label nor the foreign-repo ⇄ chip remain.
-    assert "repo_root" not in js
+    # Keyed on the DOM id F5 actually deleted (the same one
+    # test_index_has_wave3_markup asserts is gone from the served HTML), not on
+    # the API field ``repo_root`` this used to proxy through. The label was fed
+    # from that field, so banning the field caught the label for free — but the
+    # field name is shared, and Verify legitimately renders a test plan's
+    # ``repo_root`` (which main repo the plan belongs to) in its plan rows. The
+    # id is the thing F5 removed, so assert on the id.
+    assert "repo-root" not in js
     assert "foreign-chip" not in js
     # F8: doctor warning chip (lazy re-check) + inline Shortcut token input
     assert "doctor-warn" in js

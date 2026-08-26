@@ -3,6 +3,14 @@
 
 import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
+import {
+  BREAK_MAX_MINUTES,
+  BREAK_MIN_MINUTES,
+  clampBreakMinutes,
+  clampIdleMinutes,
+  IDLE_MAX_MINUTES,
+  IDLE_MIN_MINUTES,
+} from "../../../lib/breakTimer";
 import { setWheelDamping } from "../../../lib/terminals";
 import { toast } from "../../../lib/toast";
 import { useUi } from "../../../state/store";
@@ -37,6 +45,8 @@ export function General(_: ScreenProps) {
       <ResumeOnUsageResetRow />
       <ScrollSpeedRow />
       <ReduceMotionRow />
+      <TakeABreakRow />
+      <IdleFlockRow />
       <GettingStarted />
     </>
   );
@@ -162,6 +172,139 @@ function ReduceMotionRow() {
           onChange={(e) => {
             setReduceMotion(e.target.checked);
             toast(e.target.checked ? "Reduce motion on" : "Reduce motion off");
+          }}
+        />
+        <span className="ca-slider" />
+      </label>
+    </div>
+  );
+}
+
+/** Take a break: a reminder on a timer, with the flock from mindflock.ai flying
+ * over your grid. Snooze pushes it back five minutes; "Resumed work" restarts
+ * the full interval. Off by default — an app that interrupts you uninvited is a
+ * worse app.
+ *
+ * The row's whole description is the sentence it configures, with the interval
+ * editable in place. Shown whether or not the switch is on, because it is what
+ * tells you what the switch does. */
+function TakeABreakRow() {
+  const on = useUi((s) => s.breakReminder);
+  const every = useUi((s) => s.breakEveryMin);
+  const setOn = useUi((s) => s.setBreakReminder);
+  const setEvery = useUi((s) => s.setBreakEveryMin);
+  // Local text state so the field can be empty mid-edit; the store only ever
+  // sees a clamped whole number (typing "9" on the way to "90" would otherwise
+  // be clamped to the 5-minute floor and eat the keystroke).
+  const [draft, setDraft] = useState(String(every));
+  useEffect(() => setDraft(String(every)), [every]);
+
+  const commit = (raw: string) => {
+    const next = clampBreakMinutes(raw === "" ? every : raw);
+    setEvery(next);
+    setDraft(String(next));
+    if (on) toast("Break reminder every " + next + " min");
+  };
+
+  return (
+    <div className="set-row set-switch-row">
+      <span className="notif-rule-text">
+        <span className="set-label">Take a break</span>
+        <span className="set-hint notif-rule-desc break-every">
+          Reminder to take a break every{" "}
+          <input
+            type="number"
+            aria-label="Minutes between break reminders"
+            min={BREAK_MIN_MINUTES}
+            max={BREAK_MAX_MINUTES}
+            step={5}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={(e) => commit(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+          />{" "}
+          minutes.
+        </span>
+      </span>
+      {/* label wraps only the switch, so clicking the row text no longer flips it */}
+      <label className="ca-switch">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            setOn(e.target.checked);
+            toast(
+              e.target.checked
+                ? "Break reminder on — every " + every + " min"
+                : "Break reminder off"
+            );
+          }}
+        />
+        <span className="ca-slider" />
+      </label>
+    </div>
+  );
+}
+
+/** The idle flock: birds over the grid once nobody has touched this window for
+ * a while. On by default, and the one animation in the app that is safe to
+ * leave on — it can only appear when you are not there to be interrupted. The
+ * delay is the same sentence-with-a-field shape as the break row above.
+ *
+ * "Touched" means a click, a keystroke, a scroll or a tap in THIS window; a
+ * drifting mouse and a streaming agent are not you (see breaks/useIdle). */
+function IdleFlockRow() {
+  const on = useUi((s) => s.idleFlock);
+  const after = useUi((s) => s.idleFlockAfterMin);
+  const setOn = useUi((s) => s.setIdleFlock);
+  const setAfter = useUi((s) => s.setIdleFlockAfterMin);
+  // Local text state so the field can be empty mid-edit — same reason as the
+  // break interval: typing "1" on the way to "15" must not commit a 1.
+  const [draft, setDraft] = useState(String(after));
+  useEffect(() => setDraft(String(after)), [after]);
+
+  const commit = (raw: string) => {
+    const next = clampIdleMinutes(raw === "" ? after : raw);
+    setAfter(next);
+    setDraft(String(next));
+    if (on) toast("Idle flock after " + next + " min");
+  };
+
+  return (
+    <div className="set-row set-switch-row">
+      <span className="notif-rule-text">
+        <span className="set-label">Idle flock</span>
+        <span className="set-hint notif-rule-desc break-every">
+          Fly the flock over your grid after{" "}
+          <input
+            type="number"
+            aria-label="Minutes idle before the flock appears"
+            min={IDLE_MIN_MINUTES}
+            max={IDLE_MAX_MINUTES}
+            step={5}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={(e) => commit(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+          />{" "}
+          minutes with no click, keystroke or scroll in this window. It hides
+          nothing and takes no input — the first touch sends the birds home.
+        </span>
+      </span>
+      {/* label wraps only the switch, so clicking the row text no longer flips it */}
+      <label className="ca-switch">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) => {
+            setOn(e.target.checked);
+            toast(
+              e.target.checked ? "Idle flock on — after " + after + " min" : "Idle flock off"
+            );
           }}
         />
         <span className="ca-slider" />

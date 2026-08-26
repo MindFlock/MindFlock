@@ -21,6 +21,7 @@ from backend.ticket_ingestion.providers.base import (
     HTTP_TIMEOUT,
     ProviderError,
     TicketProvider,
+    ingests_any_assignee,
     parse_acceptance_criteria,
     parse_iso8601,
     workflow_state_list,
@@ -78,13 +79,31 @@ def _state_label(state: dict | None) -> str:
     return f"{team} · {name}" if team else name
 
 
-def _search_query(with_state: bool) -> str:
-    """The assigned-issues query, optionally gated to workflow state(s)."""
+def _search_query(
+    with_state: bool, *, any_assignee: bool = False, with_team: bool = False
+) -> str:
+    """The issue-search query, optionally gated to workflow state(s).
+
+    Assignee scoping is structural in Linear: ``viewer.assignedIssues`` IS the
+    "assigned to me" filter, so a source that ingests any assignee has to search
+    from the top-level ``issues`` root instead, narrowed by state (and by team
+    when the source names one)."""
     params = "$since: DateTimeOrDuration!, $n: Int!"
     filt = "updatedAt: { gte: $since }"
     if with_state:
         params += ", $stateIds: [ID!]!"
         filt += ", state: { id: { in: $stateIds } }"
+    if any_assignee:
+        if with_team:
+            params += ", $team: String!"
+            filt += ", team: { key: { eq: $team } }"
+        return (
+            f"query({params}) {{"
+            f" issues("
+            f"   first: $n, filter: {{ {filt} }},"
+            f"   orderBy: updatedAt"
+            f" ) {{ nodes {{{_ISSUE_FIELDS}}} }} }}"
+        )
     return (
         f"query({params}) {{"
         f" viewer {{ assignedIssues("
@@ -155,6 +174,7 @@ class LinearProvider(TicketProvider):
             description=description,
             acceptance_criteria=parse_acceptance_criteria(description),
             owner_ids=[str(assignee.get("id"))] if assignee.get("id") else [],
+            owner_names=[str(assignee.get("name"))] if assignee.get("name") else [],
             app_url=issue.get("url") or "",
             created_at=parse_iso8601(issue.get("createdAt")),
             comments=comments,
@@ -166,16 +186,27 @@ class LinearProvider(TicketProvider):
         )
 
     async def _assigned(self, since: datetime, *, with_state: bool) -> list[Ticket]:
-        """``viewer.assignedIssues`` since ``since``, optionally narrowed to the
-        source's ingest states. Single source of the query/variable shape for
-        both the pipeline poll and the unfiltered panel listing."""
+        """Issues updated since ``since``, optionally narrowed to the source's
+        ingest states. Single source of the query/variable shape for both the
+        pipeline poll and the unfiltered panel listing — and of the assignee
+        scope, which decides which GraphQL root the issues come from."""
+        any_assignee = ingests_any_assignee(self.cfg)
+        team = (self.cfg.project or "").strip() if any_assignee else ""
         variables: dict = {"since": since.isoformat(), "n": _MAX_ISSUES}
         if with_state:
             variables["stateIds"] = workflow_state_list(self.cfg)
-        data = await self._gql(_search_query(with_state), variables)
+        if team:
+            variables["team"] = team
+        data = await self._gql(
+            _search_query(with_state, any_assignee=any_assignee, with_team=bool(team)),
+            variables,
+        )
         nodes = (
-            ((data.get("viewer") or {}).get("assignedIssues") or {}).get("nodes")
-        ) or []
+            ((data.get("issues") or {}).get("nodes") or [])
+            if any_assignee
+            else ((data.get("viewer") or {}).get("assignedIssues") or {}).get("nodes")
+            or []
+        )
         return [self._issue_to_ticket(n) for n in nodes]
 
     async def search_assigned(self, since: datetime) -> list[Ticket]:
@@ -188,8 +219,11 @@ class LinearProvider(TicketProvider):
         and with no age cutoff: the source's ``workflow_state`` ingest filter is
         deliberately omitted so the panel can list — and force-start — the issue
         you are about to move INTO that state, which is precisely the case the
-        panel exists for. ``Ticket.state`` carries the state name (the bucket)."""
-        return await self._assigned(_EPOCH, with_state=False)
+        panel exists for. ``Ticket.state`` carries the state name (the bucket).
+
+        An any-assignee source keeps the filter: it is the only bound on a search
+        that no longer runs through ``viewer``."""
+        return await self._assigned(_EPOCH, with_state=ingests_any_assignee(self.cfg))
 
     async def fetch(self, ticket_id: str) -> Ticket:
         data = await self._gql(_FETCH_QUERY, {"id": ticket_id})

@@ -74,6 +74,85 @@ body.conn-lost #grid {
   transition: opacity 0.3s ease, filter 0.3s ease;
 }
 
+/* --------------------------------------------------------------------------- *
+ * Error cards (lib/errorPop.ts) — the same bottom-right corner, the same red
+ * rule, for failures that are NOT about the connection: a refused force-start, a
+ * reopen that lost its worktree, a recorded failure reason opened from its chip.
+ *
+ * They live here rather than beside the surface that raises them because the
+ * corner is the shared vocabulary: one place a failure ever appears, so it is
+ * learned once. They stack (newest nearest the corner) and never auto-hide.
+ * --------------------------------------------------------------------------- */
+#cs-errors {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 3900; /* under #conn-banner: a dead connection outranks any of these */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  pointer-events: none; /* the cards take pointer events, the column doesn't */
+}
+
+/* While the connection card is up it owns the corner, so the stack sits above
+   it rather than underneath — two cards in one place reads as one broken card. */
+body.conn-lost #cs-errors {
+  bottom: 132px;
+}
+
+#cs-errors .cs-error {
+  pointer-events: auto;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  padding: 9px 12px 10px;
+  text-align: left;
+  font-size: 12.5px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--red);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
+
+#cs-errors .cs-error-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 12.5px;
+  color: var(--red);
+}
+
+#cs-errors .cs-error-x {
+  margin-left: auto;
+  flex: none;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+  font-family: inherit;
+}
+
+#cs-errors .cs-error-x:hover {
+  color: var(--text);
+}
+
+#cs-errors .cs-error-body {
+  margin-top: 4px;
+  line-height: 1.45;
+  /* A git error carries an unbroken branch name and an absolute path, and the
+     remedy is the last sentence — so it wraps anywhere, and a truly enormous
+     message scrolls inside the card instead of growing past the viewport. */
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
 /* E2 — clickable notification toast (focus the session / open the PR). */
 #cs-toast.clickable {
   pointer-events: auto;

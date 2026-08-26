@@ -369,11 +369,17 @@ async def merge_pr(wt: str, number: int) -> PRResult:
 async def find_pr(wt: str, branch: str) -> Optional[dict]:
     """The most recent PR whose head is ``branch``, or ``None``.
 
-    Shaped like the ``gh pr list --json url,state`` answer it stands in for —
-    ``{"url", "state", "number"}`` with an uppercase OPEN/MERGED/CLOSED state —
-    so the stage machine cannot tell which rung produced it. REST reports a
-    merged PR as ``state: closed`` plus a ``merged_at``, which is folded back
-    into gh's three-way vocabulary here.
+    Shaped like the ``gh pr list --json url,state,baseRefName`` answer it stands
+    in for — ``{"url", "state", "number", "base"}`` with an uppercase
+    OPEN/MERGED/CLOSED state — so the stage machine cannot tell which rung
+    produced it. REST reports a merged PR as ``state: closed`` plus a
+    ``merged_at``, which is folded back into gh's three-way vocabulary here.
+
+    ``base`` is the branch the PR targets, and Verify needs it: a squash merge
+    rewrites the commit, so "this branch's PR merged" is the only evidence left
+    that the work shipped — and that evidence is only good if the PR merged into
+    the branch the checklist is actually waiting for. Without the base, the
+    question has to be answered from flock-wide settings instead of from the PR.
     """
     ref = repo_ref(wt)
     if ref is None or not branch:
@@ -398,7 +404,15 @@ async def find_pr(wt: str, branch: str) -> Optional[dict]:
     if not isinstance(item, dict):
         return None
     state = "MERGED" if item.get("merged_at") else str(item.get("state", "")).upper()
-    return {"url": item.get("html_url"), "state": state, "number": item.get("number")}
+    base = ""
+    if isinstance(item.get("base"), dict):
+        base = str(item["base"].get("ref") or "")
+    return {
+        "url": item.get("html_url"),
+        "state": state,
+        "number": item.get("number"),
+        "base": base,
+    }
 
 
 async def pr_checks(wt: str, branch: str) -> str:

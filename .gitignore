@@ -130,6 +130,9 @@ docs/demo*.mp4
 
 # --- Frontend build workspace ---
 frontend/node_modules/
+# vitest run from the repo root leaves a cache here; nothing in a node_modules
+# anywhere in this tree is ours to commit
+node_modules/
 # Vite build artifacts land in backend/web/static/ (committed); the
 # sourcemap is dev convenience only
 backend/web/static/app.js.map

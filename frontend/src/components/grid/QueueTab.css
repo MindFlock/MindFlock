@@ -72,6 +72,19 @@
   flex-direction: column;
 }
 
+/* A file dragged over the tab: the whole console is the drop target, so mark
+   the whole console. */
+.queue-console.file-hover {
+  outline: 2px dashed var(--accent);
+  outline-offset: -8px;
+  border-radius: 10px;
+}
+
+.queue-console.file-hover > * {
+  /* Children must not steal dragleave/drop from the console while hovering. */
+  pointer-events: none;
+}
+
 .queue-pop-head {
   margin-bottom: 10px;
 }
@@ -252,6 +265,48 @@
   gap: 10px;
   padding: 10px 0;
   border-top: 1px solid var(--border);
+}
+
+/* Drag-and-drop reorder: grab the ⋮⋮ handle; the accent line marks the slot
+   the item will land in. */
+.qi-drag {
+  flex: 0 0 auto;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: -2px;
+  padding: 0 2px;
+  opacity: 0.6;
+}
+
+.queue-item:hover .qi-drag {
+  opacity: 1;
+}
+
+.qi-drag:active {
+  cursor: grabbing;
+}
+
+.queue-item.dragging {
+  opacity: 0.4;
+}
+
+.queue-item.drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.queue-item.drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* Inline "add above/below" composer row: the + slot marker gets the accent so
+   the eye lands where the new prompt will sit. */
+.queue-item-insert .queue-item-pos {
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .queue-item-pos {

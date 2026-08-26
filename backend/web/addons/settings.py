@@ -483,6 +483,9 @@ def _source_cfg_from_body(body: dict):
         member_id=pick("member_id", sp("member_id")),
         project=pick("project", sp("project")),
         workflow_state=pick("workflow_state", sp("workflow_state")),
+        # Carried so Test exercises the query the pipeline will actually run:
+        # an any-assignee source searches by state, not by member id.
+        assignee_scope=pick("assignee_scope", sp("assignee_scope")),
         # Carried so a provider that derives its scope from the repo (GitHub
         # Issues auto-detects owner/repo from repo_url) can Test with nothing but
         # a repo filled in, and so the agent shows up in the round-tripped config.

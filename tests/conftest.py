@@ -49,6 +49,16 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "MINDFLOCK_PORTS_FILE", str(tmp_path / "mindflock" / "ports.json")
     )
+    # Point the Verify test-plan store (``~/.mindflock/test_plans.json``) at a
+    # per-test tmp file. This one is not merely hygiene: the lifespan registers
+    # ``_test_plans_due_loop``, which does its first pass *immediately* (work
+    # first, sleep after), so every ``with TestClient(server.app)`` in the suite
+    # would otherwise read the developer's real plans — and, for any plan whose
+    # branch had reached the live branch, write ``state="due"`` back to that real
+    # file and fire a real ntfy push at their phone.
+    monkeypatch.setenv(
+        "MINDFLOCK_TEST_PLANS_FILE", str(tmp_path / "mindflock" / "test_plans.json")
+    )
     # Neutralize the web auth gate's enable signals so the suite never depends on
     # the ambient shell. auth.auth_enabled() turns on when CS_WEB_MODE is a
     # non-local mode (a dev shell often exports CS_WEB_MODE=tailscale), when an
@@ -92,6 +102,18 @@ def _no_tailnet_side_effects(monkeypatch):
     monkeypatch.setattr(mobile_announce, "_refresh_cache_soon", lambda: None)
     monkeypatch.setattr(mobile_announce, "_CACHED_URL", None)
     monkeypatch.setattr(mobile_announce, "_CACHED_AT", 0.0)
+
+
+@pytest.fixture(autouse=True)
+def _no_boot_quiet(monkeypatch):
+    """Tests run within seconds of importing the server module, which is
+    exactly the post-launch quiet window that swallows *_changed events and the
+    boot budget re-announce (server._BOOT_QUIET_SECONDS) — so every test would
+    silently sit inside it. Disable it; the quiet-window tests re-arm it
+    themselves (see tests/unit/test_events.py)."""
+    from backend.web import server
+
+    monkeypatch.setattr(server, "_BOOT_QUIET_SECONDS", 0.0)
 
 
 @pytest.fixture

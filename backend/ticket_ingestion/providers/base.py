@@ -210,6 +210,41 @@ def workflow_state_list(cfg: TicketProviderConfig) -> list[str]:
     return [s for s in (x.strip() for x in raw.split(",")) if s]
 
 
+#: Providers that can search by something other than the assignee. Asana is
+#: absent on purpose: its task list endpoint requires an assignee (paired with a
+#: workspace) or a project scope, so "anyone" has nothing to stand on there.
+ANY_ASSIGNEE_PROVIDERS = frozenset({"shortcut", "jira", "linear", "github_issues"})
+
+#: Of those, the ones whose search is bounded by ``workflow_state``. Dropping the
+#: assignee here without an ingest state selected would ask the tracker for every
+#: ticket in the organization, so the scope quietly stays "mine" until one is
+#: picked. GitHub Issues is not listed — it has no workflow states, and the
+#: ``owner/repo`` it is pinned to is the bound.
+STATE_BOUNDED_PROVIDERS = frozenset({"shortcut", "jira", "linear"})
+
+
+def ingests_any_assignee(cfg) -> bool:
+    """Whether this source takes tickets regardless of who they're assigned to.
+
+    A QA queue picks work up by *state* ("Ready for test"), not by assignment —
+    those tickets belong to whoever wrote the code and are deliberately never
+    reassigned. ``assignee_scope = "anyone"`` says so.
+
+    Fails narrow on purpose: an unsupported provider, or a state-bounded one with
+    no ingest state selected, stays assignee-scoped. Widening the scope is a
+    setting; fetching an entire tracker by accident is not something a typo
+    should be able to do.
+    """
+    if (getattr(cfg, "assignee_scope", "") or "").strip().lower() != "anyone":
+        return False
+    provider = (getattr(cfg, "provider", "") or "").strip().lower()
+    if provider not in ANY_ASSIGNEE_PROVIDERS:
+        return False
+    if provider in STATE_BOUNDED_PROVIDERS and not workflow_state_list(cfg):
+        return False
+    return True
+
+
 # --------------------------------------------------------------------------- #
 # Provider interface
 # --------------------------------------------------------------------------- #

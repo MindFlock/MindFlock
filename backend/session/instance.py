@@ -1042,6 +1042,19 @@ def _provider_default_launch_args(program: str) -> tuple[str, ...]:
         return ()
 
 
+def provider_default_launch_args(program: str) -> tuple[str, ...]:
+    """Public reader for the global default launch flags of ``program``'s CLI.
+
+    A caller that passes ``InstanceOptions.launch_args`` EXPLICITLY opts out of
+    the inherit-the-defaults path below, so anything adding per-session flags of
+    its own (the intake force-starts and their per-start effort) has to fold the
+    defaults back in itself — or a session started with an effort would silently
+    lose the user's configured flags. Thin wrapper on purpose: the private name
+    stays the one :func:`new_instance` calls, so tests that patch it still bite.
+    """
+    return _provider_default_launch_args(program)
+
+
 def _merge_launch_args(*groups) -> tuple[str, ...]:
     """Concatenate arg groups, dropping duplicates while preserving first-seen
     order — so a flag set both globally and per-session appears exactly once."""
@@ -1053,6 +1066,11 @@ def _merge_launch_args(*groups) -> tuple[str, ...]:
                 seen.add(a)
                 out.append(a)
     return tuple(out)
+
+
+#: Public alias — same de-duplicating concatenation, for callers assembling
+#: per-session launch args before :func:`new_instance` sees them.
+merge_launch_args = _merge_launch_args
 
 
 def new_instance(opts: InstanceOptions) -> Instance:

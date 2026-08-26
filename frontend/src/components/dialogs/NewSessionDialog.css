@@ -409,6 +409,73 @@
   background: rgba(var(--accent-rgb), 0.14);
 }
 
+/* The name-search results (#new-search). Everything the card, the head and the
+   pills look like is inherited: it carries .new-templates and .nf-suggest too
+   (see the JSX), so it is the same strip as the suggestions above it, and the
+   accent highlight on the row Enter would take comes free from
+   .nf-suggest .nt-chip.active — including the light-theme override, which
+   already lists that selector.
+
+   What it cannot inherit is the layout. The suggestion strip is one clipped line
+   per source because chips there are interchangeable shortcuts; a search hit has
+   to carry its PATH as well as its name, since two folders called `api` are told
+   apart only by where they live, and that is the whole reason the user searched
+   rather than clicked a chip. So: one row per match, stacked. */
+.nf-search-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* About five rows. The list opens between the Folder field and the rest of
+     the form, so an unbounded one would push Create off the bottom of the card;
+     the matches arrive ranked, so the tail is what scrolls. */
+  max-height: 152px;
+  overflow-y: auto;
+}
+
+/* Overrides the one-line pill geometry .nf-suggest .nt-chip sets (flex: none
+   and the 190px cap), which is right for a chip in a no-wrap row and wrong for
+   a full-width row carrying a path. Same specificity as the rule it overrides,
+   so it has to stay BELOW it. */
+.nf-search .nt-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  max-width: 100%;
+  padding: 3px 9px;
+  border-radius: 7px;
+  text-align: left;
+}
+
+/* The name is the answer, so it keeps its full width and the path gives way. */
+.nf-search .nf-search-name {
+  flex: none;
+}
+
+/* The path is context: quiet, right-aligned so the eye can run down the column
+   of names first, and the first thing to be ellipsised when the row is narrow
+   (the button's title carries the full path either way). */
+.nf-search .nf-search-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* "Nothing matched" and "there were more": one quiet line each, sized like the
+   git nudge below, because they are the same kind of aside — an explanation of
+   what the dialog can and cannot see, not an error the user has to clear. */
+.nf-search-empty,
+.nf-search-note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
 /* The git-features aside. Deliberately not .error: pointing a session at a
    plain folder is a legal thing to do, and the line is here to explain what
    will be missing and offer the fix, not to stop anyone. The negative top

@@ -651,6 +651,32 @@ def test_budget_event_emitted_once_per_session(budget_env):
         unsub()
 
 
+def test_budget_event_arms_silently_in_boot_quiet(budget_env, monkeypatch):
+    # _BUDGET_FIRED is in-memory, so a restart used to re-announce every
+    # session already over budget the moment its first cost computed. Inside
+    # the boot quiet window the notice arms without emitting; sessions crossing
+    # after the window still announce.
+    import time as _time
+
+    _set_budget(1.0)
+    monkeypatch.setattr(server, "_BOOT_QUIET_SECONDS", 60.0)
+    monkeypatch.setattr(server, "_BOOT_MONO", _time.monotonic())
+    got = []
+    unsub = events_mod.BUS.subscribe(
+        lambda e: got.append(e) if e["event"] == "session.budget_exceeded" else None
+    )
+    try:
+        server._check_session_budget("bq1", 2.0)  # over AT boot: old news
+        assert got == []
+        monkeypatch.setattr(server, "_BOOT_QUIET_SECONDS", 0.0)
+        server._check_session_budget("bq1", 2.5)  # armed: no late re-fire
+        assert got == []
+        server._check_session_budget("bq2", 3.0)  # crossed after: announces
+        assert len(got) == 1 and got[0]["session"] == "bq2"
+    finally:
+        unsub()
+
+
 def test_budget_event_rearms_when_budget_raised(budget_env):
     _set_budget(1.0)
     got = []

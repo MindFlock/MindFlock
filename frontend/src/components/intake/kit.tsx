@@ -25,9 +25,62 @@
  * a single pixel. Read them as "work card" / "work item".
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { api } from "../../api/client";
+import type { Instance } from "../../api/types";
+import { refreshInstances, useProviderEfforts } from "../../state/queries";
+import { displayName } from "../../state/store";
+import { selectSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
+import { errorPop } from "../../lib/errorPop";
+import { shortReason } from "../../lib/failureText";
 import { DEPTHS, DEPTH_LABELS } from "../../lib/autopilot";
+import { searchTokens } from "../../lib/rowSearch";
+import { useUi } from "../../state/store";
+import { DialogFilter } from "../dialogs/DialogFilter";
+import {
+  EFFORTS,
+  effortOptionLabel,
+  effortTitle,
+  supportsEffort,
+} from "../../lib/effort";
+
+/** A workspace an earlier run of a work item left on THIS machine, as the
+ * server found it (see backend/web/core/reopen.py). Present on a row only when
+ * the directory is still there, so its mere presence is the answer to "can this
+ * be reopened?" — the fields are for saying which thing is being reopened. */
+export interface ItemWorkspace {
+  /** `closed` = a session you ended (restored in full), `worktree` / `clone` =
+   * a workspace whose session is gone but whose files are not. */
+  kind?: string;
+  path?: string;
+  branch?: string;
+  /** Only on `closed` — when you ended it. */
+  closed_at?: string;
+}
+
+/** Put a window back on the workspace an intake item already has here.
+ *
+ * `target` is the item's identity in the same shape its /start route takes
+ * (`{kind: "tickets", source, id}` / `{kind: "prs"|"issues", repo, number}`) —
+ * the server re-resolves the workspace itself rather than trusting a path from
+ * the client, so a panel left open for an hour can't name a directory that has
+ * since been deleted. Resolves with the reopened session's title. */
+export async function reopenIntakeItem(target: Record<string, unknown>): Promise<string> {
+  const inst = await api<Instance>("/api/intake/reopen", { json: target });
+  await refreshInstances();
+  if (inst?.title) selectSession(inst.title);
+  return inst?.title || "";
+}
+
+/** "closed 2d ago" / "on disk" — what the Reopen button is pointing at. */
+function workspaceNote(ws: ItemWorkspace): string {
+  if (ws.kind === "closed") {
+    const when = ageText(ws.closed_at).replace(" old", " ago");
+    return when ? "session ended " + when : "session you ended";
+  }
+  return "workspace left on this machine";
+}
 
 /** "3h old" / "20m old" / "2d old" — one implementation, three tabs. */
 export function ageText(iso?: string): string {
@@ -335,6 +388,9 @@ export function WorkItemRow({
   agents,
   configuredAgent,
   configuredDepth,
+  configuredEffort,
+  workspace,
+  onReopen,
 }: {
   reference: string;
   url?: string;
@@ -349,8 +405,9 @@ export function WorkItemRow({
   /** e.g. "Begin review" */
   actionLabel: string;
   /** Starts the session on `agent` ("" = the configured chain); resolve with the
-   * created session's title for the toast. */
-  onStart(opts: { agent: string; depth: string }): Promise<string>;
+   * created session's title for the toast. `effort` is a neutral rung the server
+   * translates into the launching CLI's own flag ("" = that CLI's default). */
+  onStart(opts: { agent: string; depth: string; effort: string }): Promise<string>;
   /** e.g. "Begin review failed" */
   failPrefix: string;
   /** Tooltip on the reference link; defaults to GitHub's wording. */
@@ -364,14 +421,37 @@ export function WorkItemRow({
   /** What this row's source defaults its automation depth to, so the empty
    * choice names it. */
   configuredDepth?: string;
+  /** ...and its thinking effort. Absent/"" = the source has no opinion, so the
+   * empty choice falls back to naming the CLI's own default. */
+  configuredEffort?: string;
+  /** The workspace this item already has here, when it has one. Present =>
+   * the row leads with Reopen instead of with a fresh start. */
+  workspace?: ItemWorkspace;
+  /** Reopens `workspace`; resolve with the session title for the toast. */
+  onReopen?(): Promise<string>;
 }) {
   const [state, setState] = useState<"idle" | "starting" | "started">("idle");
+  // Independent of `state`: reopening and starting are different actions on the
+  // same row, and a failed reopen must leave Begin work usable.
+  const [reopening, setReopening] = useState<"idle" | "busy" | "done">("idle");
+  const canReopen = !!workspace && !!onReopen && !hasSession;
   // Per-start override, not persisted: it applies to THIS launch. Changing the
   // queue's CLI is a card edit; running one item elsewhere is this.
   const [agent, setAgent] = useState("");
   // Same lifetime, same reasoning: how far THIS launch should carry itself.
   // Unlike the source default, an individual item may choose "merge".
   const [depth, setDepth] = useState("");
+  // …and how hard the agent should think about it. "This ticket is gnarly, run
+  // it on ultracode" is a property of the ticket, not of the queue.
+  const [effort, setEffort] = useState("");
+  // Which CLI this row would launch on, so the Effort picker can name that CLI's
+  // ceiling. The cache is shared by every row (see useProviderEfforts).
+  const effortCaps = useProviderEfforts().data;
+  const effortProvider = agent || configuredAgent || "";
+  // undefined = caps not loaded (or a custom program no provider claims), which
+  // reads as "assume it works" rather than disabling a working control.
+  const effortCap = effortCaps ? effortCaps[effortProvider] : undefined;
+  const effortUsable = supportsEffort(effortCap);
   return (
     <div className="pr-open-item" title={tooltip}>
       <div className="pr-open-main">
@@ -393,15 +473,33 @@ export function WorkItemRow({
         ) : eligible ? (
           <span className="pr-open-chip ok">{eligibleLabel}</span>
         ) : (
-          (reasons || []).map((reason) => (
-            // title: a recorded failure reason is a full sentence of git output
-            // whose actionable half is at the end, so the chip wraps to keep it
-            // visible (see .pr-open-chip) and hovering still gives the raw
-            // string on one line.
-            <span className="pr-open-chip" key={reason} title={reason}>
-              {reason}
-            </span>
-          ))
+          (reasons || []).map((reason) => {
+            // A recorded failure reason is a full sentence of git output whose
+            // actionable half is at the END ("… is already checked out at
+            // <path>. Kill that session first"). It used to WRAP inside the chip
+            // to keep that half visible, which turned one row into a paragraph.
+            // Now the chip takes the front of the sentence and the whole thing
+            // opens in the bottom-right error card — the corner this app already
+            // uses for failures, and the only one with room for a paragraph.
+            const { short, clipped } = shortReason(reason);
+            if (!clipped)
+              return (
+                <span className="pr-open-chip" key={reason} title={reason}>
+                  {reason}
+                </span>
+              );
+            return (
+              <button
+                type="button"
+                className="pr-open-chip pr-open-chip-more"
+                key={reason}
+                title={reason + "\n\nClick for the full message."}
+                onClick={() => errorPop(reference + " — why it was skipped", reason)}
+              >
+                {short}
+              </button>
+            );
+          })
         )}
       </div>
       {hasSession ? (
@@ -410,6 +508,47 @@ export function WorkItemRow({
         </button>
       ) : (
         <div className="ik-item-start">
+          {/* The work is already here: reopening it is the action, and starting
+              over is the alternative — so Reopen takes the primary button and
+              the start demotes to the quiet one below. Nothing is hidden: a
+              leftover workspace can be one you want to abandon, and Begin work
+              still reclaims it (worktree_reclaim) when it holds no work. */}
+          {canReopen && (
+            <button
+              type="button"
+              className="btn-primary pr-review-btn ik-reopen-btn"
+              disabled={reopening !== "idle"}
+              title={
+                "Reopen the workspace this already has here — " +
+                workspaceNote(workspace!) +
+                (workspace!.branch ? "\nbranch: " + workspace!.branch : "") +
+                (workspace!.path ? "\n" + workspace!.path : "")
+              }
+              onClick={async () => {
+                setReopening("busy");
+                try {
+                  const title = await onReopen!();
+                  toast("Reopened " + (title ? displayName(title) : reference));
+                  setReopening("done");
+                } catch (err) {
+                  // Bottom-right card, not a 1.4s toast: the server's answer here
+                  // is a sentence with a remedy in it, and it has to survive long
+                  // enough to be read.
+                  errorPop(
+                    "Reopen failed — " + reference,
+                    (err as Error).message || "error"
+                  );
+                  setReopening("idle");
+                }
+              }}
+            >
+              {reopening === "busy"
+                ? "Reopening…"
+                : reopening === "done"
+                  ? "Reopened"
+                  : "Reopen window"}
+            </button>
+          )}
           {/* The two per-launch pickers share ONE line. `.ik-item-start` is a
               column whose children are stretched to the widest, so a third
               stacked control would make every row in the list taller. */}
@@ -462,19 +601,71 @@ export function WorkItemRow({
                 </option>
               ))}
             </select>
+            {/* Thinking effort, and now it has a configured default to name like
+                the other two: a ticketing source carries its own rung, so the
+                empty choice says which rung this row would run at rather than
+                the bare "Default effort" it used to show whatever the queue was
+                set to. With no source opinion it still falls back to the CLI's
+                own default, and the tooltip says where the CLI this row would
+                launch tops out. A CLI with no effort setting gets the control
+                disabled rather than an enabled one that does nothing. */}
+            <select
+              className="ik-item-effort"
+              value={effortUsable ? effort : ""}
+              data-picked={(effortUsable && effort) || undefined}
+              disabled={state !== "idle" || !effortUsable}
+              title={effortTitle(effortProvider, effortCap)}
+              aria-label={"How hard to think about " + reference}
+              onChange={(e) => setEffort(e.target.value)}
+            >
+              <option value="">
+                {!effortUsable
+                  ? "No effort (" + (effortProvider || "this CLI") + ")"
+                  : configuredEffort
+                    ? "Configured (" + effortOptionLabel(configuredEffort, effortCap) + ")"
+                    : "Default effort"}
+              </option>
+              {effortUsable &&
+                EFFORTS.map((e) => (
+                  // A rung above this CLI's ceiling still runs — clamped — and
+                  // the top rung is named the way the CLI names it (claude:
+                  // `ultracode`), so a pick says what it will actually do.
+                  <option key={e} value={e}>
+                    {effortOptionLabel(e, effortCap)}
+                  </option>
+                ))}
+            </select>
           </div>
           <button
             type="button"
-            className="btn-primary pr-review-btn"
+            className={
+              canReopen ? "test-btn ik-start-again" : "btn-primary pr-review-btn"
+            }
             disabled={state !== "idle"}
+            title={
+              canReopen
+                ? actionLabel + " starts a NEW session, leaving the workspace above alone"
+                : undefined
+            }
             onClick={async () => {
               setState("starting");
               try {
-                const created = await onStart({ agent, depth });
+                const created = await onStart({
+                  agent,
+                  depth,
+                  // Never sent for a CLI that has no effort control: the pick is
+                  // unreachable there, and posting a stale one would put a
+                  // "started at its own default" note on a start nobody asked
+                  // an effort for.
+                  effort: effortUsable ? effort : "",
+                });
                 toast(created + " — provisioning, see the sidebar");
                 setState("started");
               } catch (err) {
-                toast(failPrefix + ": " + ((err as Error).message || "error"));
+                errorPop(
+                  failPrefix + " — " + reference,
+                  (err as Error).message || "error"
+                );
                 setState("idle");
               }
             }}
@@ -519,6 +710,42 @@ export function saveStringSet(key: string, v: Set<string>) {
  * rows are the reason you came), state buckets default CLOSED (the headings
  * with their counts are the overview), and expressing both as "the set holds
  * the exceptions" keeps a fresh install writing nothing at all. */
+/** The Ctrl+F filter for one Intake work list.
+ *
+ * ONE HOOK, FOUR PANELS. Tickets, Pull requests, Issues and the Auto-start
+ * roll-up all grow without bound — every open PR on every watched repo, every
+ * ticket in every workflow state — and each of them wants the same control the
+ * other list dialogs already have. Written once so a third dialect cannot
+ * appear: the box is `DialogFilter` (Recently closed's, down to Ctrl+F focusing
+ * it and Escape clearing before it closes), and the tokens it produces go
+ * through `matchesTokens` in :mod:`intake/search`.
+ *
+ * Only the ACTIVE tab is mounted (`IntakeDialog` renders `tab === t.key &&`),
+ * so exactly one of these exists at a time and Ctrl+F is never ambiguous.
+ *
+ * Returns the tokens (empty = match everything, so a panel with no query does
+ * no work), whether the filter is doing anything, and the control to hand to
+ * `WorkListPanel`'s `toolbarExtra`. */
+export function useListFilter(id: string, placeholder: string) {
+  const closeDialog = useUi((s) => s.closeDialog);
+  const [query, setQuery] = useState("");
+  const tokens = useMemo(() => searchTokens(query), [query]);
+  return {
+    query,
+    tokens,
+    active: tokens.length > 0,
+    control: (
+      <DialogFilter
+        id={id}
+        value={query}
+        onChange={setQuery}
+        placeholder={placeholder}
+        onEscape={closeDialog}
+      />
+    ),
+  };
+}
+
 export function useToggleSet(
   key: string,
   invert = false,

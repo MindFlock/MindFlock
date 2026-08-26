@@ -49,6 +49,26 @@ PROVIDER_REGISTRY: dict[str, Type[TicketProvider]] = {
 # already has issues assigned to them) and the only source that needs no input at
 # all — the token comes from `gh auth login` and the repo from `origin` — so it
 # is the on-ramp a first-time user should land on.
+def _scope_field(anyone_label: str, hint: str) -> dict:
+    """The "whose tickets" picker, for a provider that can search without an
+    assignee. QA queues are picked up by state — the tickets in them belong to
+    whoever wrote the code and are deliberately never reassigned — so scope is a
+    per-source choice, not a property of the account. Absent from Asana, whose
+    task endpoint has no query without an assignee or a project."""
+    return {
+        "key": "assignee_scope",
+        "label": "Whose tickets",
+        "type": "choice",
+        "secret": False,
+        "required": False,
+        "options": [
+            {"value": "", "label": "Assigned to me"},
+            {"value": "anyone", "label": anyone_label},
+        ],
+        "hint": hint,
+    }
+
+
 PROVIDER_META: list[dict] = [
     {
         "id": "github_issues",
@@ -73,6 +93,12 @@ PROVIDER_META: list[dict] = [
                 "required": False,
                 "placeholder": "optional — falls back to your GitHub connection",
             },
+            _scope_field(
+                "Anyone's — every open issue",
+                "GitHub issues have no workflow states, so the repository above "
+                "is the only thing scoping this. Anyone's includes unassigned "
+                "issues.",
+            ),
         ],
     },
     {
@@ -95,6 +121,12 @@ PROVIDER_META: list[dict] = [
                 "placeholder": "auto-filled by Test",
                 "auto": True,
             },
+            _scope_field(
+                "Anyone's — by state",
+                "Anyone's picks up every story sitting in the ingest states "
+                "below, whoever owns it — the QA queue. It needs at least one "
+                "state selected; without one it stays assigned-to-me.",
+            ),
             {
                 "key": "workflow_state",
                 "label": "Ingest states",
@@ -139,6 +171,12 @@ PROVIDER_META: list[dict] = [
                 "placeholder": "auto-filled by Test (optional)",
                 "auto": True,
             },
+            _scope_field(
+                "Anyone's — by status",
+                "Anyone's picks up every issue sitting in the ingest statuses "
+                "below, whoever it is assigned to. It needs at least one status "
+                "selected; without one it stays assigned-to-me.",
+            ),
             {
                 "key": "workflow_state",
                 "label": "Ingest statuses",
@@ -169,6 +207,13 @@ PROVIDER_META: list[dict] = [
                 "placeholder": "auto-filled by Test (optional)",
                 "auto": True,
             },
+            _scope_field(
+                "Anyone's — by state",
+                "Anyone's picks up every issue sitting in the ingest states "
+                "below, whoever it is assigned to — scoped to the team in "
+                "Project when one is set. It needs at least one state selected; "
+                "without one it stays assigned-to-me.",
+            ),
             {
                 "key": "workflow_state",
                 "label": "Ingest states",

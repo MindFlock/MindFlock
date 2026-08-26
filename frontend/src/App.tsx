@@ -3,6 +3,7 @@
  * which special panes (logs / system logs / assistant chat) are open. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api } from "./api/client";
 import { useConfig, useInstances, useIntakeWarm } from "./state/queries";
 import { tourDecision, useUi } from "./state/store";
 import { followAutopilot, noteActivity, reconcileLoopReset } from "./lib/stage";
@@ -20,6 +21,8 @@ import { ShortcutsSheet } from "./components/palette/ShortcutsSheet";
 import { NewSessionDialog } from "./components/dialogs/NewSessionDialog";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { IntakeDialog } from "./components/intake/IntakeDialog";
+import { VerifyDialog } from "./components/dialogs/VerifyDialog";
+import { isVerifySession } from "./components/dialogs/verify";
 import { CommitDialog } from "./components/dialogs/CommitDialog";
 import { MakePrDialog } from "./components/dialogs/MakePrDialog";
 import { RenameDialog } from "./components/dialogs/RenameDialog";
@@ -31,6 +34,7 @@ import { SetupDialog, useDoctorAutoShow } from "./components/dialogs/SetupDialog
 import { TodoDialog } from "./components/dialogs/TodoDialog";
 import { AssistantAgentDialog } from "./components/dialogs/AssistantAgentDialog";
 import { WelcomeTour } from "./components/onboarding/WelcomeTour";
+import { Breaks } from "./components/breaks/Breaks";
 
 export default function App() {
   const { data: config } = useConfig();
@@ -71,6 +75,18 @@ export default function App() {
     if (decision === "open") ui.openTour();
   }, [config?.onboarded, ui.tourDone, ui.hintsEnabled, ui.openTour]);
 
+  // Seed the server's alias mirror once per load: renames made before the
+  // mirror existed live only in this browser's localStorage, and ntfy pushes
+  // are formatted server-side. Merge-only on the server, so this cannot erase
+  // renames another browser synced. Fire-and-forget — an older server without
+  // the endpoint just keeps naming pushes by raw title.
+  useEffect(() => {
+    const aliases = useUi.getState().aliases;
+    if (Object.keys(aliases).length) {
+      api("/api/aliases", { json: { aliases } }).catch(() => {});
+    }
+  }, []);
+
   // Capability gating: body classes drive the caps-gate CSS (and addon CSS).
   useEffect(() => {
     const caps = config?.caps;
@@ -109,8 +125,30 @@ export default function App() {
     }
   }, [instances]);
 
-  // Special panes (logs / system logs / assistant chat).
+  // Special panes (logs / system logs / assistant chat / verify runs).
   const [openSpecial, setOpenSpecial] = useState<Set<string>>(new Set());
+  const verifyPanes = useUi((s) => s.verifyPanes);
+
+  // REAP A WATCH WINDOW WHOSE SESSION HAS GONE. A verify run is a real session
+  // and it can end without anybody closing its pane: it finishes, it is
+  // cancelled, its plan is deleted, or it dies and `test_plans.prune` releases
+  // the plan back to `due`. The pane is driven off a title in the store, so
+  // none of those reach it — the head goes on saying "Verifying" over an empty
+  // body forever, because the terminal socket behind it has nothing to attach
+  // to. It reads as the feature being broken, and the fix is to stop rendering
+  // a window onto something that is not there.
+  //
+  // Guarded on a NON-EMPTY list, deliberately: `instances` is `undefined` while
+  // the first poll is in flight and `[]` on a failed one, and reaping against
+  // either would shut a pane the user is watching every time the network
+  // hiccups.
+  useEffect(() => {
+    if (!instances || !instances.length || !verifyPanes.length) return;
+    const live = new Set(instances.map((i) => i.title));
+    for (const session of verifyPanes) {
+      if (!live.has(session)) useUi.getState().closeVerifyPane(session);
+    }
+  }, [instances, verifyPanes]);
   const toggleSpecial = useCallback((kind: "logs" | "syslogs" | "chat") => {
     setOpenSpecial((prev) => {
       const next = new Set(prev);
@@ -125,21 +163,38 @@ export default function App() {
       syslogs: { title: "System logs" },
       chat: { title: "Assistant" },
     };
-    return [...openSpecial].map((kind) => ({
+    const fixed: SpecialPaneDesc[] = [...openSpecial].map((kind) => ({
       key: kind,
       kind: kind as SpecialPaneDesc["kind"],
       title: meta[kind].title,
       onClose: () => toggleSpecial(kind as "logs" | "syslogs" | "chat"),
     }));
-  }, [openSpecial, toggleSpecial]);
+    // Verify runs are watch windows: read-only, closable, never in the sidebar.
+    // They live in the store rather than in `openSpecial` because there is one
+    // per session being watched, and the Verify dialog (which has no reach into
+    // this component's state) is what opens them.
+    const runs: SpecialPaneDesc[] = verifyPanes.map((session) => ({
+      key: "verify:" + session,
+      kind: "verify",
+      title: session,
+      session,
+      onClose: () => useUi.getState().closeVerifyPane(session),
+    }));
+    return fixed.concat(runs);
+  }, [openSpecial, toggleSpecial, verifyPanes]);
 
   // Keyboard: the host object gives the keymap reach into UI it can't import.
   const host = useMemo<KeymapHost>(() => {
     // Stable sidebar order: user drag order first, unknown titles appended in
-    // snapshot order (mirrors ordering.ts; selection never reorders).
+    // snapshot order (mirrors ordering.ts; selection never reorders). Verify
+    // sessions are excluded to match the rail: it hides them, so its Alt+N
+    // number badges are painted over the filtered list — a live verify run in
+    // this list shifted every badge after it off by one.
     const stableTitles = () => {
       const order = useUi.getState().order;
-      const list = instancesSnapshot().map((i) => i.title);
+      const list = instancesSnapshot()
+        .map((i) => i.title)
+        .filter((t) => !isVerifySession(t));
       const known = order.filter((t) => list.includes(t));
       return [...known, ...list.filter((t) => !known.includes(t))];
     };
@@ -183,6 +238,7 @@ export default function App() {
       <NewSessionDialog />
       <SettingsDialog onOpenSysLogsPane={() => toggleSpecial("syslogs")} />
       <IntakeDialog />
+      <VerifyDialog />
       <CommitDialog />
       <MakePrDialog />
       <RenameDialog />
@@ -196,6 +252,10 @@ export default function App() {
       <CommandPalette host={host} />
       <ShortcutsSheet />
       <WelcomeTour />
+
+      {/* Break reminder + the idle flock (Settings → General; both off-screen
+          until their timers fire) */}
+      <Breaks />
 
       {/* Headless: event-bus toasts, favicon/title badges */}
       <EventToasts />

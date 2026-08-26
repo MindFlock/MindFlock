@@ -69,8 +69,8 @@
 }
 
 .stagechip.s-precommit {
-  color: #1a1a1a;
-  background: var(--gold);
+  color: var(--gold-ink);
+  background: var(--gold-fill);
 }
 
 .stagechip.s-interrupt {

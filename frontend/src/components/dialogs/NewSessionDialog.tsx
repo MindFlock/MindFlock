@@ -77,6 +77,67 @@ const SUGGEST_SOURCES: Array<{ key: string; label: string; hint: string }> = [
  * per-keystroke call would be harmless but pointless traffic. */
 const CHECK_DEBOUNCE_MS = 400;
 
+/** How long the Folder field must sit still before a NAME typed into it is
+ * looked up. Deliberately half the path probe's wait above, because the two
+ * debounces buy different things: the check only decorates a field the user has
+ * already finished with, while the match list is the thing they are sitting
+ * there waiting to read, and 400ms of blank space reads as "searching doesn't
+ * work here". The walk behind it is bounded server-side (see
+ * ``search_repos``'s scan cap and 1.5s deadline), so asking a keystroke early
+ * costs a bounded amount. */
+const SEARCH_DEBOUNCE_MS = 200;
+
+/** Below this a query is not worth a walk: one character matches most of the
+ * machine and tells the user nothing. ``search_repos`` enforces the same floor
+ * and answers an empty list rather than an error, so this copy only saves the
+ * round trip. */
+const SEARCH_MIN_CHARS = 2;
+
+/** Whether what is in the Folder field is a PATH rather than a name to look up.
+ *
+ * This one predicate is what lets the field become a combobox without ceasing
+ * to be a path field. Text starting with / or ~ is unambiguously a location and
+ * keeps every behaviour it has always had — the check_repo probe, the git
+ * nudge, Create sending it verbatim — while anything else is a name, and names
+ * get searched for. There is no mode to switch and none to get stuck in: the
+ * rule is re-read from the text on every keystroke, so deleting a leading slash
+ * turns a path back into a search and typing one turns it back again. */
+export function looksLikePath(text: string): boolean {
+  const t = text.trim();
+  return t.startsWith("/") || t.startsWith("~");
+}
+
+/** Whether the Folder field is holding a QUERY rather than a folder to use.
+ *
+ * The field means two things now, and only one of them is a location. Create
+ * sends what the field holds verbatim, and the server resolves a bare name
+ * against ITS OWN working directory and then CREATES it (`_prepare_plain_repo`
+ * does realpath + expanduser + makedirs), so an unpicked search term — `api`
+ * typed, nothing chosen, Create clicked — made a `MindFlock/api` directory and
+ * started a session in it, while `backend` would have found the server's own
+ * source tree. Every route to Create consults this and refuses: a name is
+ * something to look up, and looking it up is what the match list is for.
+ * Relative paths (`./foo`, `$HOME/foo`) are refused by the same rule and for the
+ * same reason — they too resolve against the server, not against anything the
+ * user can see. */
+export function isNameQuery(text: string): boolean {
+  const t = text.trim();
+  return !!t && !looksLikePath(t);
+}
+
+/** A match's path as the list shows it under the folder's name: home-relative,
+ * because every match comes from a walk rooted at $HOME and repeating
+ * /home/<user>/ down the column distinguishes nothing. The ~ is kept so the
+ * line still reads as a path — the row's job is to say WHERE the folder is, and
+ * `code/acme/api` is vague about that in a way `~/code/acme/api` is not. Either
+ * separator is honoured, since the prefix is whatever the server sent. */
+export function homeRelative(path: string, home: string): string {
+  if (!home || !path.startsWith(home)) return path;
+  const rest = path.slice(home.length);
+  if (!rest) return "~";
+  return rest[0] === "/" || rest[0] === "\\" ? "~" + rest : path;
+}
+
 /** Whether a child ending at ``childRight`` fits inside a row ending at
  * ``rowRight``. Both edges must come from the SAME coordinate space — mixing
  * an offsetParent-relative offset with a container width is what emptied the
@@ -299,6 +360,26 @@ export function NewSessionDialog() {
   // The server's verdict on the folder in the field, stamped with the path we
   // asked about — see the debounce effect for why the stamp is load-bearing.
   const [folderCheck, setFolderCheck] = useState<{ asked: string; plain: boolean } | null>(null);
+  // What /api/repos/search last answered, stamped with the query it answers.
+  // Same trick as folderCheck, load-bearing for the same reason: a walk started
+  // three keystrokes ago must not drop its matches under a field that has moved
+  // on. `home` rides along so the rows can shorten their paths against the
+  // server's idea of home rather than the config's.
+  const [search, setSearch] = useState<{
+    asked: string;
+    matches: RepoSuggestion[];
+    truncated: boolean;
+    home: string;
+  } | null>(null);
+  // Whether the match list is on screen. Escape closes it and touches nothing
+  // else: the list is a suggestion, not a modal, and dismissing it must not also
+  // throw away the query the user typed to summon it.
+  const [searchOpen, setSearchOpen] = useState(true);
+  // Which match Enter takes. Always a real row rather than "nothing selected",
+  // so what Enter will do is visible before it is pressed — the alternative is a
+  // key that either fills the field or creates a session depending on state the
+  // user can't see.
+  const [searchSel, setSearchSel] = useState(0);
   const [presetValue, setPresetValue] = useState("");
   const [savedPresets, setSavedPresets] = useState<Preset[]>([]);
   // Auth profile pin: "" = inherit the app-wide default account; "default" =
@@ -314,6 +395,9 @@ export function NewSessionDialog() {
   const launchDefaults = useRef<Record<string, string>>({});
   const titleRef = useRef<HTMLInputElement | null>(null);
   const launchRef = useRef<HTMLDetailsElement | null>(null);
+  // The match list's scroll box, so the keyboard highlight can be scrolled into
+  // it — see the effect below for why nothing else will do that.
+  const searchListRef = useRef<HTMLDivElement | null>(null);
   const promptRef = useRef<HTMLDetailsElement | null>(null);
   // The modal's own element, so the opening focus can tell "nothing in here has
   // the caret yet" from "the user is already typing in one of these fields".
@@ -343,6 +427,12 @@ export function NewSessionDialog() {
     setLaunchOpen(false);
     setPromptOpen(false);
     folderDo({ t: "reopen" });
+    // Last opening's matches answered last opening's query, and the reducer's
+    // "reopen" keeps the folder itself — so the list would come back up over a
+    // field nobody has typed into yet.
+    setSearch(null);
+    setSearchOpen(true);
+    setSearchSel(0);
     setActiveTemplate("");
     setPresetValue("");
     setProfileId("");
@@ -460,7 +550,14 @@ export function NewSessionDialog() {
   // folder that already has a repo is exactly the wrong kind of wrong.
   useEffect(() => {
     const asked = repoPath.trim();
-    if (!open || !asked) {
+    // Only a PATH is probed. The field also takes a name to look up now, and a
+    // name is not a location: `check_repo` resolves whatever it is handed
+    // against the SERVER's working directory, so typing `backend` while the
+    // server runs from its own checkout answered "exists, no git repo here" —
+    // about MindFlock's own backend/ — and the nudge underneath offered to git
+    // init it. The search list is the right answer to a name; a status line
+    // about some directory beside the server is not.
+    if (!open || !asked || !looksLikePath(asked)) {
       setFolderCheck(null);
       return;
     }
@@ -483,6 +580,67 @@ export function NewSessionDialog() {
       window.clearTimeout(timer);
     };
   }, [open, repoPath]);
+
+  // A NAME in the Folder field is a question — "where is the repo called api?"
+  // — and only the server can answer it: the suggestion sweep above is depth-1
+  // by design, so a repo three levels down is invisible to it. Same machinery as
+  // the check probe above (a timer so the walk waits for the typing to settle, a
+  // `live` flag so an overtaken answer can never land) plus the one guard that
+  // keeps this field a path field: text starting with / or ~ never reaches the
+  // endpoint at all, so a typed path behaves exactly as it did before this list
+  // existed.
+  useEffect(() => {
+    const asked = repoPath.trim();
+    if (!open || looksLikePath(asked) || asked.length < SEARCH_MIN_CHARS) {
+      setSearch(null);
+      return;
+    }
+    let live = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const r = await api<{ matches?: RepoSuggestion[]; truncated?: boolean; home?: string }>(
+          "/api/repos/search?q=" + encodeURIComponent(asked)
+        );
+        if (!live) return;
+        setSearch({
+          asked,
+          matches: r.matches || [],
+          truncated: !!r.truncated,
+          home: r.home || "",
+        });
+        // The newly ranked top row is what Enter should take. Leaving the
+        // highlight where the last query left it would aim it at whichever
+        // folder happens to sit at that index now — a different folder, chosen
+        // by nobody.
+        setSearchSel(0);
+      } catch {
+        // A search that failed says nothing rather than "no matches": there is a
+        // difference between "your folder isn't there" and "we couldn't look",
+        // and only the first of those should send someone to Browse….
+        if (live) setSearch(null);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [open, repoPath]);
+
+  // The highlighted match has to be ON SCREEN, and only this can put it there.
+  // The list is a short scroller (about five rows, see .nf-search-list) holding
+  // up to twenty matches, so a few presses of ArrowDown walk the highlight out
+  // of the visible box: every row still on screen looks unselected, and Enter
+  // then fills the field from a folder the user was never shown. Nothing
+  // scrolls by itself either — the caret stays in the input and the list is
+  // driven by aria-activedescendant, which moves no viewport.
+  useEffect(() => {
+    const row = searchListRef.current?.querySelector<HTMLElement>('[aria-selected="true"]');
+    // "nearest" scrolls the minimum: the highlight comes into view without the
+    // list jumping under a user who is only stepping one row at a time. Guarded
+    // because scrollIntoView is a real-browser nicety jsdom does not implement,
+    // and a missing scroll must not throw inside a render commit.
+    if (row && typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest" });
+  }, [searchSel, search, searchOpen]);
 
   const setAgent = useCallback((value: string) => {
     const v = (value || "").trim();
@@ -566,7 +724,14 @@ export function NewSessionDialog() {
     if (t.prompt) setPrompt(t.prompt);
     setProvision(!!t.provisioned);
     if (t.workspace_strategy) setStrategy(t.workspace_strategy);
-    setInPlace(!!t.in_place);
+    // A provisioned template's in_place is dead on arrival — the server drops it
+    // (`in_place = … and not is_provisioned`) — and taking it at face value here
+    // would tick the two boxes that now exclude each other, leaving the fold in
+    // a state the user cannot get out of and the form claiming a mode the
+    // session will not run in. init_repo, by contrast, is now free to arrive
+    // alongside either: git-initialising a folder and working directly in it is
+    // an ordinary combination.
+    setInPlace(!!t.in_place && !t.provisioned);
     setInitRepo(!!t.init_repo);
     setAdvancedOpen(!!(t.provisioned || t.init_repo || !t.in_place));
     // A template that brings a prompt has just written into a fold that
@@ -579,13 +744,19 @@ export function NewSessionDialog() {
 
   /** The git nudge's action drives the real "Create a git repo in this folder"
    * checkbox instead of a flag of its own — two switches for one behaviour is
-   * how a submitted form ends up disagreeing with what the user was shown — and
-   * so it inherits that checkbox pair's mutual exclusion with "work directly in
-   * this folder". The fold is opened at the same time so the box it just ticked
-   * is visible and untickable, rather than changing state out of sight. */
+   * how a submitted form ends up disagreeing with what the user was shown. The
+   * fold is opened at the same time so the box it just ticked is visible and
+   * untickable, rather than changing state out of sight.
+   *
+   * It pointedly does NOT touch "work directly in this folder" any more. It used
+   * to have to: the two boxes disabled each other, so arming one meant clearing
+   * the other or leaving the form in a state its own controls forbade. They are
+   * combinable now — `git init` here and then work here is the ordinary reading
+   * of both boxes together, and the server does exactly that — so silently
+   * turning in-place off would be the nudge changing a mode nobody asked it to
+   * change. */
   const armInitRepo = () => {
     setInitRepo(true);
-    setInPlace(false);
     setAdvancedOpen(true);
   };
 
@@ -597,6 +768,28 @@ export function NewSessionDialog() {
   // reply for an older path is stale by definition, whether it arrived late or
   // is simply what we last learned before the current keystrokes.
   const plainFolder = folderCheck?.asked === folderPath && !!folderCheck?.plain;
+  // The matches that are actually on screen: only for the text now in the field
+  // (an answer to an older query is stale by definition), only while the user
+  // hasn't dismissed them, and never underneath the folder browser — that is a
+  // folder picker too, and two of them stacked under one field, both answering
+  // Escape, is one picker too many.
+  const searchHits =
+    search && search.asked === folderPath && searchOpen && !browserOpen ? search : null;
+  // Clamped rather than stored clamped, because the list it indexes into is
+  // replaced whole every time an answer lands. -1 when there is nothing to
+  // highlight, which is also what tells Enter to fall through to the form.
+  const selIndex =
+    searchHits && searchHits.matches.length
+      ? Math.min(searchSel, searchHits.matches.length - 1)
+      : -1;
+  // Provisioning and working in place are the two that cannot both be true —
+  // provisioning builds a separate worktree or clone, so there is no "this
+  // folder" left to work in, and the server enforces exactly that
+  // (`in_place = … and not is_provisioned`). Read through offerProvision so a
+  // provision box that is not on screen cannot disable a box that is: an
+  // in-place checkbox greyed out by an invisible control is unfixable from the
+  // dialog.
+  const provisionOn = offerProvision && provision;
   // Empty groups drop out, so a machine with no recent sessions shows "Nearby"
   // alone instead of two blank label columns.
   const suggestRows = SUGGEST_SOURCES.map((g) => ({
@@ -604,7 +797,32 @@ export function NewSessionDialog() {
     items: suggestions.filter((s) => s.source === g.key),
   })).filter((g) => g.items.length > 0);
 
+  /** Take one match. The path goes through the reducer like every other way of
+   * naming a folder — typing, a chip, the browser, a template — so the git
+   * nudge, the chip highlight and Create all follow it, and nothing has to know
+   * that this particular folder arrived from a search. The list is shut
+   * explicitly rather than left to the effect: the field now holds a path, so
+   * the effect will clear the matches anyway, and waiting a render for it to do
+   * so leaves the list flashing under the folder it has just filled in. */
+  const pickMatch = (path: string) => {
+    folderDo({ t: "user-set", path });
+    setSearchOpen(false);
+  };
+
   const submit = async () => {
+    if (isNameQuery(repoPath)) {
+      // Every way of reaching Create lands here — the button, Ctrl/Cmd+Enter,
+      // and Enter in any other field — so this is the one place that can stop a
+      // search term being sent as a folder. It has to stop it BEFORE the
+      // optimistic close below: the dialog shuts and the POST goes out in the
+      // same breath, so by the time the server has made its stray directory
+      // there is nothing left on screen to cancel. See isNameQuery for what the
+      // server does with a name.
+      setError(
+        `“${repoPath.trim()}” is a name to look up, not a folder — pick one of the matches, or type a full path starting with / or ~ (Browse… fills one in).`
+      );
+      return;
+    }
     setError("Creating…");
     const body: Record<string, unknown> = {
       title: title.trim(),
@@ -761,9 +979,86 @@ export function NewSessionDialog() {
                 <input
                   id="new-repo-path"
                   autoComplete="off"
-                  placeholder="/home/me/projects/foo"
+                  placeholder="/home/me/projects/foo — or a folder name to look up"
                   value={repoPath}
-                  onChange={(e) => folderDo({ t: "user-set", path: e.target.value })}
+                  // Announced as a combobox because it is one now: without these
+                  // a screen reader hears an ordinary text box, the arrow keys
+                  // move a highlight nothing reports, and Enter fills the field
+                  // from a list that was never mentioned.
+                  role="combobox"
+                  aria-expanded={!!searchHits}
+                  aria-controls="new-search-list"
+                  aria-autocomplete="list"
+                  aria-activedescendant={selIndex >= 0 ? "new-search-hit-" + selIndex : undefined}
+                  onChange={(e) => {
+                    folderDo({ t: "user-set", path: e.target.value });
+                    // Typing is what brings a dismissed list back: the query has
+                    // changed, so the reason it was dismissed went with it.
+                    setSearchOpen(true);
+                  }}
+                  onKeyDown={(e) => {
+                    const hits = searchHits?.matches || [];
+                    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                      if (!searchHits && search && search.asked === folderPath && !browserOpen) {
+                        // Matches exist for exactly this text and were merely
+                        // dismissed: the first arrow brings them back, rather
+                        // than making the user type a character and delete it
+                        // again to see the list they just closed.
+                        e.preventDefault();
+                        setSearchOpen(true);
+                        return;
+                      }
+                      if (!hits.length) return;
+                      // Otherwise the arrows would take the caret to the ends of
+                      // the path instead of moving the highlight.
+                      e.preventDefault();
+                      const step = e.key === "ArrowDown" ? 1 : -1;
+                      const at = Math.min(searchSel, hits.length - 1) + step;
+                      setSearchSel(Math.max(0, Math.min(hits.length - 1, at)));
+                    } else if (
+                      e.key === "Enter" &&
+                      !e.ctrlKey &&
+                      !e.metaKey &&
+                      isNameQuery(folderPath)
+                    ) {
+                      // This input sits inside the form whose submit CREATES the
+                      // session, so a plain Enter must not leak out of a field
+                      // that is holding a NAME — with or without matches under
+                      // it. With a highlight it takes the highlighted folder;
+                      // preventDefault then stops the session being created in a
+                      // folder the user had only just chosen, before they had
+                      // seen the choice land. Without one — the search found
+                      // nothing, or has not answered yet, or the list was
+                      // dismissed with Escape — it does nothing, which is the
+                      // whole point: gating this branch on the matches meant
+                      // Enter on "notathing" submitted the SEARCH TERM as
+                      // repo_path, and the server resolves a bare name against
+                      // its own working directory and creates it. A search that
+                      // came up empty must not be one keystroke from a session in
+                      // a stray folder next to the server.
+                      //
+                      // Ctrl/Cmd+Enter is excluded on purpose: that chord means
+                      // "create now" everywhere else in the dialog, the modal's
+                      // own handler owns it, and submit() refuses a name there.
+                      // A field holding a real path keeps plain Enter as submit,
+                      // exactly as it behaved before this field could search.
+                      e.preventDefault();
+                      if (hits.length) pickMatch(hits[Math.min(searchSel, hits.length - 1)].path);
+                      else if (search && search.asked === folderPath && !browserOpen)
+                        // Matches exist and were merely dismissed: Enter brings
+                        // them back rather than swallowing the keystroke, the
+                        // same courtesy the arrows do above.
+                        setSearchOpen(true);
+                    } else if (e.key === "Escape" && searchHits) {
+                      // Escape dismisses the list and nothing else: not the typed
+                      // text, which is the query and the one thing the user would
+                      // resent retyping, and not the dialog — so it must not
+                      // reach the modal's Escape handler above.
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setSearchOpen(false);
+                    }
+                  }}
                 />
                 <button
                   type="button"
@@ -909,6 +1204,103 @@ export function NewSessionDialog() {
           {/* The datalist mount slots.js populates from /api/providers. */}
           <datalist id="provider-list"></datalist>
 
+          {searchHits && (
+            /* The name-search results. Wears .new-templates and .nf-suggest for
+               the same reason the suggestion strip below does — same card, same
+               head, same pills, a different source — and adds only what a search
+               hit needs that a suggestion chip doesn't: its path. Two folders
+               called `api` are told apart by where they live, and telling them
+               apart is the entire point of having searched. */
+            <div id="new-search" className="new-templates nf-suggest nf-search">
+              <div className="nt-head">
+                <span>Matches for “{searchHits.asked}”</span>
+                <span className="nf-suggest-legend">↑↓ choose · Enter fills · Esc closes</span>
+              </div>
+              {searchHits.matches.length > 0 && (
+                <div
+                  id="new-search-list"
+                  className="nf-search-list"
+                  ref={searchListRef}
+                  role="listbox"
+                  aria-label="Folder matches"
+                >
+                  {searchHits.matches.map((m, i) => (
+                    <button
+                      key={m.path}
+                      id={"new-search-hit-" + i}
+                      type="button"
+                      role="option"
+                      aria-selected={i === selIndex}
+                      /* .active is the suggestion strip's "this is the folder
+                         you get" treatment — accent border and tint, light
+                         theme included — and that is precisely what the
+                         highlight means here, so it reuses it rather than
+                         inventing a second way to say the same thing. */
+                      className={
+                        "nt-chip" + (m.is_git ? " is-git" : "") + (i === selIndex ? " active" : "")
+                      }
+                      data-path={m.path}
+                      title={m.path + (m.is_git ? "" : "\nno git repo here yet")}
+                      // Hovering moves the highlight so the mouse and the
+                      // keyboard never disagree about which row Enter takes.
+                      onMouseMove={() => setSearchSel(i)}
+                      onClick={() => pickMatch(m.path)}
+                    >
+                      <span className="nf-search-name">{(m.is_git ? "📦 " : "📁 ") + m.name}</span>
+                      <span className="nf-search-path">
+                        {homeRelative(m.path, searchHits.home || homePath)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {searchHits.matches.length === 0 && (
+                /* An empty result has to name the ways out, because the field
+                   looks identical whether the search found nothing or was never
+                   a search at all. Both sentences are written to claim only what
+                   the walk can actually support. A budget that tripped before
+                   finding anything did not look everywhere, so "not here" would
+                   be a claim it never got far enough to make — and it does not
+                   ask the user to type more of the name, because the walk is
+                   query-independent (the needle only RANKS what was already
+                   reached) and a longer query re-walks the same directories for
+                   the same budget. Nor does the complete-walk sentence say
+                   "nothing under your home directory is called X": the search
+                   stops at three levels, never enters a git repo and skips
+                   hidden and node_modules-shaped folders, so a `widget` inside
+                   the monorepo the user lives in is plainly under home and
+                   plainly not something this walk can see. */
+                <p className="nf-search-empty muted">
+                  {searchHits.truncated ? (
+                    <>
+                      The search stopped at its time and size limit before it found “
+                      {searchHits.asked}” — Browse… walks straight to it, and a path starting with /
+                      or ~ is used exactly as typed.
+                    </>
+                  ) : (
+                    <>
+                      No folder called “{searchHits.asked}” in the first three levels under your
+                      home directory — the search doesn’t look inside git repos or hidden folders.
+                      Browse… reaches those and the rest of the disk, and a path starting with / or
+                      ~ is used exactly as typed.
+                    </>
+                  )}
+                </p>
+              )}
+              {searchHits.matches.length > 0 && searchHits.truncated && (
+                /* Deliberately does NOT say "more folders matched": truncation
+                   is one flag over three causes (the scan cap, the 1.5s deadline
+                   and the row limit), and under either of the first two no extra
+                   match is known to exist — the walk simply stopped. "May not be
+                   everything" is true of all three. */
+                <p className="nf-search-note muted">
+                  The search stopped early, so this list may not be everything — Browse… if the
+                  folder you want isn’t here.
+                </p>
+              )}
+            </div>
+          )}
+
           {plainFolder && (
             <p className="nf-git-nudge">
               {initRepo ? (
@@ -993,27 +1385,38 @@ export function NewSessionDialog() {
                   type="checkbox"
                   id="new-in-place"
                   checked={inPlace}
-                  disabled={initRepo}
+                  disabled={provisionOn}
                   onChange={(e) => {
                     setInPlace(e.target.checked);
-                    if (e.target.checked) setInitRepo(false);
+                    // The other half of the exclusion. Unreachable while the
+                    // provision row is on screen (this box is disabled then),
+                    // but not dead: when offerProvision hides that row, a
+                    // provision flag left over from a template would otherwise
+                    // survive invisibly and be submitted.
+                    if (e.target.checked) setProvision(false);
                   }}
                 />
                 Work directly in this folder{" "}
                 <span className="muted">
-                  (no worktree — edits the original; multiple sessions can share it)
+                  {provisionOn
+                    ? "(off while provisioning: that builds a separate worktree or clone, so there is no “this folder” left to work in)"
+                    : "(no worktree — edits the original; multiple sessions can share it)"}
                 </span>
               </label>
+              {/* No longer exclusive with "work directly in this folder", and
+                  the pairing was always backwards: git-initialising a folder and
+                  then working in that same folder is the ordinary thing to want
+                  — arguably the most natural mode for a folder you just made,
+                  since a worktree cut from a brand-new repo is the awkward case.
+                  The server does exactly that combination: _prepare_plain_repo
+                  git-inits and makes the first commit, and the session comes up
+                  in place with diff/commit/PR on. */}
               <label className="check">
                 <input
                   type="checkbox"
                   id="new-init-repo"
                   checked={initRepo}
-                  disabled={inPlace}
-                  onChange={(e) => {
-                    setInitRepo(e.target.checked);
-                    if (e.target.checked) setInPlace(false);
-                  }}
+                  onChange={(e) => setInitRepo(e.target.checked)}
                 />
                 Create a git repo in this folder{" "}
                 <span className="muted">(git init + initial commit — enables diff/commit/PR)</span>
@@ -1025,10 +1428,21 @@ export function NewSessionDialog() {
                     type="checkbox"
                     id="new-provision"
                     checked={provision}
-                    onChange={(e) => setProvision(e.target.checked)}
+                    onChange={(e) => {
+                      setProvision(e.target.checked);
+                      // Turning provisioning on turns working-in-place off,
+                      // rather than being disabled by it: in-place ships ticked,
+                      // so a symmetric disable would leave this box permanently
+                      // greyed out and provisioning undiscoverable — which is
+                      // exactly how the old init-repo pairing went wrong. The
+                      // explicit choice wins over the default one.
+                      if (e.target.checked) setInPlace(false);
+                    }}
                   />
                   Provision workspace{" "}
-                  <span className="muted">— run repo setup &amp; warm test caches</span>
+                  <span className="muted">
+                    — run repo setup &amp; warm test caches, in a separate worktree or clone
+                  </span>
                 </label>
               )}
               {offerProvision && provision && (

@@ -505,8 +505,8 @@ function requireReact_production() {
   react_production.useId = function() {
     return ReactSharedInternals.H.useId();
   };
-  react_production.useImperativeHandle = function(ref, create2, deps) {
-    return ReactSharedInternals.H.useImperativeHandle(ref, create2, deps);
+  react_production.useImperativeHandle = function(ref2, create2, deps) {
+    return ReactSharedInternals.H.useImperativeHandle(ref2, create2, deps);
   };
   react_production.useInsertionEffect = function(create2, deps) {
     return ReactSharedInternals.H.useInsertionEffect(create2, deps);
@@ -4683,11 +4683,11 @@ function requireReactDomClient_production() {
     }
   }
   function updateEvent(callback) {
-    var ref = updateWorkInProgressHook().memoizedState;
-    useEffectEventImpl({ ref, nextImpl: callback });
+    var ref2 = updateWorkInProgressHook().memoizedState;
+    useEffectEventImpl({ ref: ref2, nextImpl: callback });
     return function() {
       if (0 !== (executionContext & 2)) throw Error(formatProdErrorMessage(440));
-      return ref.impl.apply(void 0, arguments);
+      return ref2.impl.apply(void 0, arguments);
     };
   }
   function updateInsertionEffect(create2, deps) {
@@ -4696,22 +4696,22 @@ function requireReactDomClient_production() {
   function updateLayoutEffect(create2, deps) {
     return updateEffectImpl(4, 4, create2, deps);
   }
-  function imperativeHandleEffect(create2, ref) {
-    if ("function" === typeof ref) {
+  function imperativeHandleEffect(create2, ref2) {
+    if ("function" === typeof ref2) {
       create2 = create2();
-      var refCleanup = ref(create2);
+      var refCleanup = ref2(create2);
       return function() {
-        "function" === typeof refCleanup ? refCleanup() : ref(null);
+        "function" === typeof refCleanup ? refCleanup() : ref2(null);
       };
     }
-    if (null !== ref && void 0 !== ref)
-      return create2 = create2(), ref.current = create2, function() {
-        ref.current = null;
+    if (null !== ref2 && void 0 !== ref2)
+      return create2 = create2(), ref2.current = create2, function() {
+        ref2.current = null;
       };
   }
-  function updateImperativeHandle(ref, create2, deps) {
-    deps = null !== deps && void 0 !== deps ? deps.concat([ref]) : null;
-    updateEffectImpl(4, 4, imperativeHandleEffect.bind(null, create2, ref), deps);
+  function updateImperativeHandle(ref2, create2, deps) {
+    deps = null !== deps && void 0 !== deps ? deps.concat([ref2]) : null;
+    updateEffectImpl(4, 4, imperativeHandleEffect.bind(null, create2, ref2), deps);
   }
   function mountDebugValue() {
   }
@@ -5010,12 +5010,12 @@ function requireReactDomClient_production() {
     },
     useContext: readContext,
     useEffect: mountEffect,
-    useImperativeHandle: function(ref, create2, deps) {
-      deps = null !== deps && void 0 !== deps ? deps.concat([ref]) : null;
+    useImperativeHandle: function(ref2, create2, deps) {
+      deps = null !== deps && void 0 !== deps ? deps.concat([ref2]) : null;
       mountEffectImpl(
         4194308,
         4,
-        imperativeHandleEffect.bind(null, create2, ref),
+        imperativeHandleEffect.bind(null, create2, ref2),
         deps
       );
     },
@@ -5175,12 +5175,12 @@ function requireReactDomClient_production() {
       );
     },
     useEffectEvent: function(callback) {
-      var hook = mountWorkInProgressHook(), ref = { impl: callback };
-      hook.memoizedState = ref;
+      var hook = mountWorkInProgressHook(), ref2 = { impl: callback };
+      hook.memoizedState = ref2;
       return function() {
         if (0 !== (executionContext & 2))
           throw Error(formatProdErrorMessage(440));
-        return ref.impl.apply(void 0, arguments);
+        return ref2.impl.apply(void 0, arguments);
       };
     }
   }, HooksDispatcherOnUpdate = {
@@ -5475,7 +5475,7 @@ function requireReactDomClient_production() {
   }
   function updateForwardRef(current2, workInProgress2, Component, nextProps, renderLanes2) {
     Component = Component.render;
-    var ref = workInProgress2.ref;
+    var ref2 = workInProgress2.ref;
     if ("ref" in nextProps) {
       var propsWithoutRef = {};
       for (var key in nextProps)
@@ -5487,7 +5487,7 @@ function requireReactDomClient_production() {
       workInProgress2,
       Component,
       propsWithoutRef,
-      ref,
+      ref2,
       renderLanes2
     );
     key = checkDidRenderIdHook();
@@ -5697,13 +5697,13 @@ function requireReactDomClient_production() {
     return current2;
   }
   function markRef(current2, workInProgress2) {
-    var ref = workInProgress2.ref;
-    if (null === ref)
+    var ref2 = workInProgress2.ref;
+    if (null === ref2)
       null !== current2 && null !== current2.ref && (workInProgress2.flags |= 4194816);
     else {
-      if ("function" !== typeof ref && "object" !== typeof ref)
+      if ("function" !== typeof ref2 && "object" !== typeof ref2)
         throw Error(formatProdErrorMessage(284));
-      if (null === current2 || current2.ref !== ref)
+      if (null === current2 || current2.ref !== ref2)
         workInProgress2.flags |= 4194816;
     }
   }
@@ -7116,8 +7116,8 @@ function requireReactDomClient_production() {
   }
   function safelyAttachRef(current2, nearestMountedAncestor) {
     try {
-      var ref = current2.ref;
-      if (null !== ref) {
+      var ref2 = current2.ref;
+      if (null !== ref2) {
         switch (current2.tag) {
           case 26:
           case 27:
@@ -7130,15 +7130,15 @@ function requireReactDomClient_production() {
           default:
             instanceToUse = current2.stateNode;
         }
-        "function" === typeof ref ? current2.refCleanup = ref(instanceToUse) : ref.current = instanceToUse;
+        "function" === typeof ref2 ? current2.refCleanup = ref2(instanceToUse) : ref2.current = instanceToUse;
       }
     } catch (error) {
       captureCommitPhaseError(current2, nearestMountedAncestor, error);
     }
   }
   function safelyDetachRef(current2, nearestMountedAncestor) {
-    var ref = current2.ref, refCleanup = current2.refCleanup;
-    if (null !== ref)
+    var ref2 = current2.ref, refCleanup = current2.refCleanup;
+    if (null !== ref2)
       if ("function" === typeof refCleanup)
         try {
           refCleanup();
@@ -7147,13 +7147,13 @@ function requireReactDomClient_production() {
         } finally {
           current2.refCleanup = null, current2 = current2.alternate, null != current2 && (current2.refCleanup = null);
         }
-      else if ("function" === typeof ref)
+      else if ("function" === typeof ref2)
         try {
-          ref(null);
+          ref2(null);
         } catch (error$140) {
           captureCommitPhaseError(current2, nearestMountedAncestor, error$140);
         }
-      else ref.current = null;
+      else ref2.current = null;
   }
   function commitHostMount(finishedWork) {
     var type = finishedWork.type, props = finishedWork.memoizedProps, instance = finishedWork.stateNode;
@@ -21501,6 +21501,640 @@ async function api(path, opts) {
 function instApi(title, suffix, opts) {
   return api("/api/instances/" + encodeURIComponent(title) + suffix, opts);
 }
+const USAGE_COALESCE_MS = 5e3;
+function nudgeUsage(now, lastRefreshAt, trailingQueued, coalesceMs = USAGE_COALESCE_MS) {
+  if (lastRefreshAt == null) return { action: "refresh" };
+  const elapsed = now - lastRefreshAt;
+  if (elapsed < 0 || elapsed >= coalesceMs) return { action: "refresh" };
+  if (trailingQueued) return { action: "skip" };
+  return { action: "schedule", delayMs: coalesceMs - elapsed };
+}
+let toastTimer;
+function toast(msg, opts) {
+  const o = opts || {};
+  let el = document.getElementById("cs-toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "cs-toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.toggle("clickable", !!o.onClick);
+  el.onclick = o.onClick ? () => {
+    el.classList.remove("show", "clickable");
+    el.onclick = null;
+    o.onClick();
+  } : null;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  const dur = o.duration || (o.onClick ? 6e3 : 1400);
+  toastTimer = setTimeout(() => el.classList.remove("show"), dur);
+}
+function publishToast() {
+  const w = window;
+  w.mindflock = w.mindflock || {};
+  w.mindflock.toast = toast;
+}
+const MAX_CARDS = 3;
+function host() {
+  let el = document.getElementById("cs-errors");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "cs-errors";
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function errorPop(title, detail) {
+  const box = host();
+  const key = title + "\0" + detail;
+  for (const existing of Array.from(box.children)) {
+    if (existing.dataset.key === key) return;
+  }
+  const card = document.createElement("div");
+  card.className = "cs-error";
+  card.dataset.key = key;
+  const head = document.createElement("div");
+  head.className = "cs-error-head";
+  head.textContent = title;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "cs-error-x";
+  close.setAttribute("aria-label", "Dismiss");
+  close.textContent = "✕";
+  close.onclick = () => card.remove();
+  head.appendChild(close);
+  const body = document.createElement("div");
+  body.className = "cs-error-body";
+  body.textContent = detail;
+  card.appendChild(head);
+  card.appendChild(body);
+  box.appendChild(card);
+  while (box.children.length > MAX_CARDS) box.removeChild(box.children[0]);
+}
+function searchTokens(query) {
+  return query.toLowerCase().split(/\s+/).filter(Boolean);
+}
+function matchesTokens(fields, tokens) {
+  if (!tokens.length) return true;
+  const hay = fields.filter(Boolean).join(" ").toLowerCase();
+  return tokens.every((t) => hay.includes(t));
+}
+function isFinal(result) {
+  return result === "pass" || result === "fail";
+}
+function isYourAnswer(result, by = "") {
+  return isFinal(result) || result === "blocked" && by === "human";
+}
+function answeredByYou(entry) {
+  return isYourAnswer(entry == null ? void 0 : entry.result, entry == null ? void 0 : entry.by);
+}
+function handedBack(entry) {
+  return (entry == null ? void 0 : entry.result) === "blocked" && (entry == null ? void 0 : entry.by) !== "human";
+}
+function stepIsYours(plan, step) {
+  return step.actor === "human" || handedBack(stepResult(plan, step.id));
+}
+function isPhantomRun(run) {
+  if (run.session) return false;
+  const results = run.results || {};
+  return !Object.keys(results).some((id) => {
+    var _a2;
+    return !!((_a2 = results[id]) == null ? void 0 : _a2.result);
+  });
+}
+function latestRun(plan) {
+  const runs = plan.runs || [];
+  let best = null;
+  for (const run of runs) {
+    if (!run || isPhantomRun(run)) continue;
+    if (!best || (run.at || 0) >= (best.at || 0)) best = run;
+  }
+  return best;
+}
+function stepResult(plan, stepId) {
+  var _a2;
+  const run = latestRun(plan);
+  if (!run) return null;
+  return ((_a2 = run.results) == null ? void 0 : _a2[stepId]) ?? null;
+}
+function verdictOf(plan) {
+  var _a2;
+  const run = latestRun(plan);
+  if (!run) return "none";
+  const results = run.results || {};
+  const ids = answerableIds(plan, run);
+  if (!ids.length) return "partial";
+  let unsettled = false;
+  for (const id of ids) {
+    const result = (_a2 = results[id]) == null ? void 0 : _a2.result;
+    if (result === "fail") return "fail";
+    if (!isFinal(result)) unsettled = true;
+  }
+  return unsettled ? "partial" : "pass";
+}
+function answerableIds(plan, run) {
+  const steps = plan.steps || [];
+  return steps.length ? steps.map((s) => s.id) : Object.keys(run.results || {});
+}
+function openHumanSteps(plan) {
+  const run = latestRun(plan);
+  if (!run) return [];
+  const results = run.results || {};
+  return (plan.steps || []).filter(
+    (step) => stepIsYours(plan, step) && !answeredByYou(results[step.id])
+  );
+}
+function needsConfirmation(plan) {
+  return openHumanSteps(plan).length > 0;
+}
+function allSettled(plan) {
+  const run = latestRun(plan);
+  const steps = plan.steps || [];
+  if (!run || !steps.length) return false;
+  const results = run.results || {};
+  return steps.every((s) => answeredByYou(results[s.id]));
+}
+function failCount(plan) {
+  const run = latestRun(plan);
+  if (!run) return 0;
+  const results = run.results || {};
+  return answerableIds(plan, run).filter((id) => {
+    var _a2;
+    return ((_a2 = results[id]) == null ? void 0 : _a2.result) === "fail";
+  }).length;
+}
+function unansweredCount(plan) {
+  const run = latestRun(plan);
+  if (!run) return 0;
+  const results = run.results || {};
+  return answerableIds(plan, run).filter((id) => {
+    var _a2;
+    return !isFinal((_a2 = results[id]) == null ? void 0 : _a2.result);
+  }).length;
+}
+function cantCheckCount(plan) {
+  const run = latestRun(plan);
+  if (!run) return 0;
+  const results = run.results || {};
+  return answerableIds(plan, run).filter((id) => {
+    const entry = results[id];
+    return (entry == null ? void 0 : entry.result) === "blocked" && entry.by === "human";
+  }).length;
+}
+function isWaitingOnYou(plan) {
+  return plan.state === "due" || plan.state === "running" || // A shipped plan being rewritten. The rewrite resolves to ``due`` unless
+  // every step was already settled (the server's ``_generate_inner`` mirrors
+  // this exact expression), so the badge holds steady across it.
+  plan.state === "generating" && !!plan.live_at && !allSettled(plan) || needsConfirmation(plan);
+}
+function dueCount(plans) {
+  return (plans || []).filter(isWaitingOnYou).length;
+}
+function liveBranchOverridden(liveBranch, plans, trackedRepos, blocks) {
+  if ((plans || []).some(
+    (plan) => plan.effective_live_branch && plan.effective_live_branch !== liveBranch
+  ))
+    return true;
+  const tracked = new Set(
+    (trackedRepos || []).map((slug) => String(slug || "").trim().toLowerCase())
+  );
+  return Object.entries(blocks || {}).some(([slug, block]) => {
+    const own = String((block == null ? void 0 : block.live_branch) || "").trim();
+    return !!own && own !== liveBranch && tracked.has(String(slug || "").trim().toLowerCase());
+  });
+}
+function planTargets(instances2, plans, closed = []) {
+  const havePlans = new Set((plans || []).map((plan) => plan.id));
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const take = (title, branch) => {
+    if (!title || !branch || havePlans.has(title) || seen.has(title)) return;
+    seen.add(title);
+    out.push(title);
+  };
+  for (const inst of instances2 || []) take(inst.title, inst.branch);
+  for (const entry of closed || []) take(entry.title, entry.branch);
+  return out;
+}
+function closedTargets(instances2, closed = []) {
+  const live = new Set((instances2 || []).map((i) => i.title));
+  return new Set(
+    (closed || []).map((e) => e.title).filter((t) => t && !live.has(t))
+  );
+}
+function noTargetsReason(instances2, plans, closed = []) {
+  if (planTargets(instances2, plans, closed).length) return "";
+  const list = [...instances2 || [], ...closed || []];
+  if (!list.length)
+    return "Start a session first — a checklist is written from a branch's diff.";
+  if (!list.some((inst) => inst.branch))
+    return "No session has a branch yet — a checklist is written from a branch's diff.";
+  return "Every session with a branch already has a checklist — they're in the list below.";
+}
+const GROUPS = [
+  // "Not checked yet", not "Waiting on you": the group holds three unlike
+  // situations — nobody has pressed Run, an agent is running it right now, and
+  // some steps genuinely need your eyes — and only the third is literally
+  // waiting on the reader. A heading that named the person while the row under
+  // it said "an agent is checking the steps it can" was a contradiction the
+  // reader had to resolve, and the natural resolution is "this count is
+  // approximate", which is how a badge dies. What is true of every member is
+  // that it shipped and nobody has finished checking it, so that is the name.
+  { key: "due", label: "Not checked yet" },
+  // "Steps failed", not "Failed the check": in a repo this reads next to a PR's
+  // CI checks, and a heading with that shape sent people to GitHub to look for
+  // a red tick. This is about steps in a checklist, and it says so.
+  { key: "fail", label: "Steps failed" },
+  { key: "generated", label: "Not shipped yet" },
+  { key: "done", label: "Checked" },
+  // "Couldn't be written", not "No plan": every row in this group IS a plan, so
+  // the old heading contradicted its own contents. The defect is that the model
+  // could not produce steps for it.
+  { key: "failed", label: "Couldn't be written" }
+];
+function planGroup(plan) {
+  if (isWaitingOnYou(plan)) return "due";
+  if (plan.state === "failed") return "failed";
+  if (verdictOf(plan) === "fail") return "fail";
+  if (plan.state === "done") return "done";
+  if (plan.state === "generating" && plan.live_at) return "done";
+  return "generated";
+}
+function planMatches(plan, tokens) {
+  var _a2;
+  if (!tokens.length) return true;
+  const fields = [
+    plan.title,
+    plan.id,
+    plan.summary,
+    plan.branch,
+    plan.sha,
+    plan.repo_root,
+    plan.live_branch,
+    (_a2 = GROUPS.find((g) => g.key === planGroup(plan))) == null ? void 0 : _a2.label
+  ];
+  for (const step of plan.steps || []) {
+    fields.push(step.text, step.expect, step.actor === "human" ? "you" : "agent");
+  }
+  return matchesTokens(fields, tokens);
+}
+function canRunNow(plan) {
+  const action = planStatus(plan).action;
+  return action === "run" || action === "rerun";
+}
+function groupPlans(plans) {
+  const buckets = /* @__PURE__ */ new Map();
+  for (const plan of plans || []) {
+    if (!plan) continue;
+    const key = planGroup(plan);
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(plan);
+    else buckets.set(key, [plan]);
+  }
+  return GROUPS.filter((g) => (buckets.get(g.key) || []).length > 0).map((g) => {
+    const found = buckets.get(g.key) || [];
+    if (g.key === "due" || g.key === "fail") {
+      const sum = found.reduce(
+        (acc, p) => {
+          const t = checkTally(p);
+          return { yours: acc.yours + t.yours, failed: acc.failed + t.failed };
+        },
+        { yours: 0, failed: 0 }
+      );
+      const bits2 = [];
+      if (sum.failed) bits2.push(sum.failed + (sum.failed === 1 ? " step failed" : " steps failed"));
+      if (sum.yours) bits2.push(sum.yours + (sum.yours === 1 ? " step needs" : " steps need") + " you");
+      return {
+        key: g.key,
+        label: g.label,
+        detail: bits2.length ? bits2.join(" · ") : void 0,
+        plans: found
+      };
+    }
+    if (g.key !== "done") return { key: g.key, label: g.label, plans: found };
+    const short = found.filter((p) => unansweredCount(p) > 0);
+    const blank = short.filter((p) => unansweredCount(p) - cantCheckCount(p) > 0).length;
+    const cant = short.length - blank;
+    const bits = [];
+    if (blank)
+      bits.push(
+        blank + (blank === 1 ? " checklist" : " checklists") + " never got an answer"
+      );
+    if (cant) bits.push(cant + " you couldn't check");
+    return {
+      key: g.key,
+      label: g.label,
+      // Said on the heading so a collapsed "Checked · 11" cannot hide the fact
+      // that three of those eleven were never actually finished.
+      detail: bits.length ? bits.join(" · ") : void 0,
+      plans: [...short, ...found.filter((p) => unansweredCount(p) === 0)]
+    };
+  });
+}
+const GENERATION_STALE_S = 300;
+function isGenerationStalled(plan, now = Date.now() / 1e3) {
+  if (!plan || plan.state !== "generating") return false;
+  return now - (plan.gen_started || 0) >= GENERATION_STALE_S;
+}
+function runElapsed(run, now = Date.now() / 1e3) {
+  const at = Number((run == null ? void 0 : run.at) || 0);
+  if (!at) return "";
+  const mins = Math.round((now - at) / 60);
+  if (mins < 1 || mins > 60 * 24) return "";
+  return " (" + agoText(at, now).replace(" ago", "") + " so far)";
+}
+function agoText(epochSeconds, now = Date.now() / 1e3) {
+  const mins = Math.max(0, Math.round((now - (epochSeconds || 0)) / 60));
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins + "m ago";
+  const h = Math.round(mins / 60);
+  return h < 48 ? h + "h ago" : Math.round(h / 24) + "d ago";
+}
+const HEADLINE_MAX = 120;
+function errorHeadline(plan) {
+  const raw = String((plan == null ? void 0 : plan.error) || "").trim();
+  if (!raw) return "";
+  const stop = raw.search(/[.!?](\s|$)/);
+  let first = stop >= 0 ? raw.slice(0, stop + 1) : raw;
+  if (first.length > HEADLINE_MAX) {
+    const cut = first.slice(0, HEADLINE_MAX);
+    const space = cut.lastIndexOf(" ");
+    first = (space > 40 ? cut.slice(0, space) : cut).replace(/[,;:]$/, "") + "…";
+  }
+  const cased = first.charAt(0).toUpperCase() + first.slice(1);
+  return /[.!?…]$/.test(cased) ? cased : cased + ".";
+}
+function planStatus(plan, liveBranch = "") {
+  const status = planStatusOf(plan, liveBranch);
+  const headline = errorHeadline(plan);
+  if (!headline || plan.state === "failed" || plan.state === "generating" || !(plan.steps || []).length)
+    return status;
+  return { ...status, line: status.line + " " + headline };
+}
+function planStatusOf(plan, liveBranch = "") {
+  const group = planGroup(plan);
+  const steps = plan.steps || [];
+  const run = latestRun(plan);
+  const agentCan = steps.filter((s) => s.actor !== "human").length;
+  const again = (ran = true) => agentCan ? ["rerun", ran ? "Run again with an agent" : "Run with an agent"] : (
+    // No agent step to re-run, so there is nothing to run and the button is
+    // just the way back into the list. It used to read "Check again", which
+    // is the same phrase the can't-check branch below uses for an actual
+    // re-check — one label, two meanings, six lines apart.
+    ["answer", "Open the steps"]
+  );
+  const at = (tone, line, action, actionLabel = "") => ({ group, tone, line, action, actionLabel });
+  if (plan.state === "generating") {
+    if (isGenerationStalled(plan))
+      return at(
+        "broken",
+        "Writing this checklist stopped part-way — nothing has been written for five minutes.",
+        "rewrite",
+        "Rewrite the checklist"
+      );
+    return at("wait", "Writing the checklist from the diff — up to three minutes.", "none");
+  }
+  if (plan.state === "failed" && !steps.length)
+    return at(
+      "broken",
+      "The model couldn't write a checklist for this.",
+      "rewrite",
+      "Rewrite the checklist"
+    );
+  if (plan.state === "failed")
+    return at(
+      "warn",
+      "Rewriting this failed — these are the steps from before, and they still work.",
+      "rewrite",
+      "Try rewriting again"
+    );
+  if (!steps.length)
+    return at(
+      "broken",
+      "No steps — the checklist came back empty.",
+      "rewrite",
+      "Rewrite the checklist"
+    );
+  if (plan.state === "running") {
+    const mine = openHumanSteps(plan).length;
+    if (!plan.run_session)
+      return at(
+        "warn",
+        "The agent that was checking this is gone — nothing is running now.",
+        ...again(false)
+      );
+    const been = runElapsed(run);
+    return at(
+      "busy",
+      mine ? "An agent is checking the rest" + been + " — " + mine + (mine === 1 ? " step needs" : " steps need") + " your eyes." : "An agent is checking the steps it can" + been + ".",
+      "watch",
+      "Watch"
+    );
+  }
+  if (!run) {
+    if (plan.live_at || plan.state === "due") {
+      if (!agentCan)
+        return at(
+          "you",
+          steps.length === 1 ? "Shipped — its one step is yours to check." : "Shipped — all " + steps.length + " steps are yours to check.",
+          "answer",
+          "Answer " + steps.length + (steps.length === 1 ? " step" : " steps")
+        );
+      return at(
+        "you",
+        "Shipped — nobody has checked it yet. " + // No "the rest are yours" when there is no rest: a checklist an agent
+        // can work end to end is the good case, and inventing a share for the
+        // reader would send them looking for steps that do not exist.
+        (agentCan === steps.length ? "An agent can check all " + steps.length + (steps.length === 1 ? " step." : " steps.") : "An agent can check " + agentCan + " of " + steps.length + "; the rest are yours."),
+        "run",
+        "Run with an agent"
+      );
+    }
+    if (plan.merged_at)
+      return at(
+        "wait",
+        "Merged " + agoText(plan.merged_at) + " — waiting for it to deploy.",
+        "none"
+      );
+    if (plan.live_problem)
+      return at("warn", plan.live_problem, "none");
+    return at(
+      "wait",
+      "Waiting for " + (plan.branch || "this branch") + " to reach " + (plan.live_branch || liveBranch || "the live branch") + " — it turns up here to check when it ships.",
+      "none"
+    );
+  }
+  const open = openHumanSteps(plan);
+  if (open.length)
+    return at(
+      "you",
+      open.length === 1 ? "1 step needs your eyes — an agent can't judge it." : open.length + " steps need your eyes — an agent can't judge them.",
+      "answer",
+      "Answer " + open.length + (open.length === 1 ? " step" : " steps")
+    );
+  const failed = failCount(plan);
+  if (failed)
+    return at(
+      "bad",
+      failed === 1 ? "1 step didn't do what was expected." : failed + " steps didn't do what was expected.",
+      "answer",
+      "See what failed"
+    );
+  const missing = unansweredCount(plan);
+  const cant = cantCheckCount(plan);
+  if (missing && missing === cant) {
+    const seen = (plan.steps || []).length - cant;
+    return at(
+      "warn",
+      seen ? seen + (seen === 1 ? " step passed · " : " steps passed · ") + cant + " you couldn't check." : "Nothing could be checked — " + cant + (cant === 1 ? " step you couldn't get to." : " steps you couldn't get to."),
+      "answer",
+      "Check again"
+    );
+  }
+  const ranByAgent = !!(run.session || run.by === "agent");
+  if (missing) {
+    const blank = missing - cant;
+    const gaps = [
+      blank ? blank + (blank === 1 ? " step" : " steps") + " with no answer" : "",
+      cant ? cant + " you couldn't check" : ""
+    ].filter(Boolean).join(" · ");
+    return at(
+      "warn",
+      (plan.state === "done" ? "Checked — " : ranByAgent ? "The run stopped early — " : "Part-answered — ") + gaps + ".",
+      ...again(ranByAgent)
+    );
+  }
+  return at("ok", "Every step has an answer — it works.", "answer", "See the answers");
+}
+function checkTally(plan) {
+  const steps = (plan == null ? void 0 : plan.steps) || [];
+  const t = {
+    passed: 0,
+    failed: 0,
+    yours: 0,
+    cant: 0,
+    pending: 0,
+    total: steps.length
+  };
+  const key = {
+    pass: "passed",
+    fail: "failed",
+    yours: "yours",
+    cant: "cant",
+    pending: "pending"
+  };
+  for (const step of steps) t[key[stepCheck(plan, step.id)]]++;
+  return t;
+}
+function tallyBits(plan) {
+  const t = checkTally(plan);
+  const bits = [
+    { state: "pass", count: t.passed, label: "passed" },
+    { state: "fail", count: t.failed, label: "failed" },
+    // The one label with a verb in it, so the one that has to agree with its
+    // number: this string is read out as the tally's whole aria-label, and "1
+    // need you" is where a screen reader gives the surface away.
+    { state: "yours", count: t.yours, label: t.yours === 1 ? "needs you" : "need you" },
+    { state: "cant", count: t.cant, label: "you couldn't check" },
+    { state: "pending", count: t.pending, label: "not checked yet" }
+  ];
+  return bits.filter((b) => b.count > 0);
+}
+function tallySentence(plan) {
+  const t = checkTally(plan);
+  if (!t.total) return "";
+  const bits = tallyBits(plan);
+  const head = t.total + (t.total === 1 ? " check" : " checks");
+  if (!bits.length) return head;
+  return head + ": " + bits.map((b) => b.count + " " + b.label).join(", ");
+}
+function planShipped(plan) {
+  return !!(plan == null ? void 0 : plan.live_at) || (plan == null ? void 0 : plan.state) === "due" || (plan == null ? void 0 : plan.state) === "running" || (plan == null ? void 0 : plan.state) === "done";
+}
+function asksHumanSteps(plan) {
+  return planShipped(plan) || !!latestRun(plan);
+}
+function stepCheck(plan, stepId) {
+  const entry = stepResult(plan, stepId);
+  if ((entry == null ? void 0 : entry.result) === "pass") return "pass";
+  if ((entry == null ? void 0 : entry.result) === "fail") return "fail";
+  if (isYourAnswer((entry == null ? void 0 : entry.result) || "", (entry == null ? void 0 : entry.by) || "")) return "cant";
+  const step = (plan.steps || []).find((s) => s.id === stepId);
+  if (step && stepIsYours(plan, step) && asksHumanSteps(plan)) return "yours";
+  return "pending";
+}
+const CHECK_MARK = {
+  pass: "✓",
+  fail: "✗",
+  cant: "–",
+  yours: "●",
+  pending: "○"
+};
+function stepKeyAction(key) {
+  switch (key) {
+    case "1":
+    case "p":
+    case "P":
+      return "pass";
+    case "2":
+    case "f":
+    case "F":
+      return "fail";
+    case "3":
+    case "b":
+    case "B":
+      return "blocked";
+    case "u":
+    case "U":
+      return "";
+    // handled as "undo" by the caller — see stepKeyIsUndo
+    case "n":
+    case "N":
+      return "note";
+    default:
+      return "";
+  }
+}
+function noteDraftAfter(result, noteOpen, note) {
+  if (result === "") return { open: false, text: "" };
+  if ((result === "fail" || result === "blocked") && !noteOpen)
+    return { open: true, text: "" };
+  if (noteOpen && note.trim()) return { open: false, text: "" };
+  return { open: noteOpen, text: note };
+}
+function stepKeyAllowed(busy, repeat) {
+  return !busy && !repeat;
+}
+function stepKeyIsUndo(key) {
+  return key === "u" || key === "U";
+}
+function runEvidence(run, liveBranch = "") {
+  if (!run) return "";
+  if (run.target) return "Checked against " + run.target;
+  const sha = (run.tested_sha || "").slice(0, 7);
+  if (!sha) return "";
+  return "Checked on " + (liveBranch || "the live branch") + " @ " + sha;
+}
+function runTreeMismatch(run) {
+  const tested = ((run == null ? void 0 : run.tested_sha) || "").trim();
+  const expected = ((run == null ? void 0 : run.expected_sha) || "").trim();
+  return !!(tested && expected && tested !== expected);
+}
+function rewriteWarning(plan) {
+  if (!latestRun(plan)) return "";
+  return "Answers on steps that change are lost. Steps you added or edited yourself are kept.";
+}
+function rewriteBlockedReason(plan) {
+  if (plan.state === "running")
+    return "An agent is checking this right now — cancel the run first.";
+  if (plan.state === "generating") return "It is already being written.";
+  return "";
+}
+const VERIFY_SESSION_PREFIX = "verify-";
+function isVerifySession(title) {
+  return (title || "").startsWith(VERIFY_SESSION_PREFIX);
+}
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -21539,6 +22173,38 @@ function useConfig() {
 function refreshConfig() {
   return queryClient.invalidateQueries({ queryKey: ["config"] });
 }
+const PROVIDERS_STALE_MS = 3e5;
+function providersQuery() {
+  return {
+    queryKey: ["providers"],
+    queryFn: () => api("/api/providers"),
+    staleTime: PROVIDERS_STALE_MS
+  };
+}
+function refreshProviders() {
+  return queryClient.invalidateQueries({ queryKey: ["providers"] });
+}
+function useProviderEfforts() {
+  return useQuery({
+    ...providersQuery(),
+    select: (d) => {
+      const out = {};
+      for (const p of (d == null ? void 0 : d.providers) || []) {
+        if ((p == null ? void 0 : p.name) && p.effort) out[p.name] = p.effort;
+      }
+      return out;
+    }
+  });
+}
+function useAgentChoices$1() {
+  return useQuery({
+    ...providersQuery(),
+    select: (d) => ({
+      names: ((d == null ? void 0 : d.providers) || []).map((x) => x.name || "").filter(Boolean),
+      fallback: (d == null ? void 0 : d.default) || ""
+    })
+  });
+}
 function useDevices() {
   return useQuery({
     queryKey: ["devices"],
@@ -21547,11 +22213,54 @@ function useDevices() {
     placeholderData: (prev) => prev
   });
 }
+function refreshUsage() {
+  return queryClient.invalidateQueries({ queryKey: ["usage"] });
+}
+let usageBridged = false;
+let usageRefreshedAt = null;
+let usageTrailing = null;
+function nudgeUsageNow() {
+  const decision = nudgeUsage(Date.now(), usageRefreshedAt, usageTrailing != null);
+  if (decision.action === "skip") return;
+  if (decision.action === "refresh") {
+    usageRefreshedAt = Date.now();
+    refreshUsage();
+    return;
+  }
+  usageTrailing = setTimeout(() => {
+    usageTrailing = null;
+    usageRefreshedAt = Date.now();
+    refreshUsage();
+  }, decision.delayMs);
+}
+function bridgeUsageEvents() {
+  var _a2;
+  if (usageBridged) return;
+  const ev = (_a2 = window.mindflock) == null ? void 0 : _a2.events;
+  if (!ev) return;
+  usageBridged = true;
+  ev.subscribe("session.activity_changed", (env) => {
+    if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+    nudgeUsageNow();
+  });
+  ev.subscribe("session.usage_restored", () => nudgeUsageNow());
+  ev.onStatus((status) => {
+    if (status === "connected") nudgeUsageNow();
+  });
+}
 function useUsage(enabled = true) {
+  reactExports.useEffect(bridgeUsageEvents, []);
   return useQuery({
     queryKey: ["usage"],
     queryFn: () => api("/api/usage"),
-    refetchInterval: 6e4,
+    // Halved from 60s, and now only the floor under the event-driven refreshes
+    // above rather than the sole way the number ever moves.
+    refetchInterval: 3e4,
+    // Overrides the client-wide `false`. The interval does not run while the
+    // window is hidden, so without this, coming back to a long-backgrounded app
+    // showed a minutes-old percentage until the next tick — the worst case of
+    // the delay this whole path is about.
+    refetchOnWindowFocus: true,
     enabled,
     placeholderData: (prev) => prev
   });
@@ -21637,8 +22346,94 @@ function prefetchIntakePanels() {
     });
   }
 }
+const SETTINGS_STALE_MS = 3e4;
+function useSettingsDoc(enabled) {
+  return useQuery({
+    queryKey: ["settings"],
+    queryFn: async () => {
+      var _a2;
+      return ((_a2 = await api("/api/settings")) == null ? void 0 : _a2.settings) || {};
+    },
+    staleTime: SETTINGS_STALE_MS,
+    enabled,
+    placeholderData: (prev) => prev
+  });
+}
+function putSettingsDoc(settings) {
+  queryClient.setQueryData(["settings"], settings);
+}
+function fetchSettingsDoc() {
+  return queryClient.fetchQuery({
+    queryKey: ["settings"],
+    queryFn: async () => {
+      var _a2;
+      return ((_a2 = await api("/api/settings")) == null ? void 0 : _a2.settings) || {};
+    },
+    staleTime: 0
+  });
+}
+function useTicketingCatalog(enabled) {
+  return useQuery({
+    queryKey: ["ticketing-catalog"],
+    queryFn: async () => {
+      var _a2;
+      return ((_a2 = await api(
+        "/api/settings/providers/ticketing"
+      )) == null ? void 0 : _a2.providers) || [];
+    },
+    staleTime: Infinity,
+    enabled
+  });
+}
+function useTicketingSources(enabled) {
+  return useQuery({
+    queryKey: ["ticketing-sources"],
+    queryFn: async () => {
+      var _a2;
+      return ((_a2 = await api("/api/settings/ticketing/sources")) == null ? void 0 : _a2.sources) || [];
+    },
+    staleTime: SETTINGS_STALE_MS,
+    enabled,
+    placeholderData: (prev) => prev
+  });
+}
+function putTicketingSources(sources) {
+  queryClient.setQueryData(["ticketing-sources"], sources);
+}
+function prefetchIntakeMeta() {
+  void queryClient.prefetchQuery({
+    queryKey: ["settings"],
+    queryFn: async () => {
+      var _a2;
+      return ((_a2 = await api("/api/settings")) == null ? void 0 : _a2.settings) || {};
+    },
+    staleTime: SETTINGS_STALE_MS
+  });
+  void queryClient.prefetchQuery({
+    queryKey: ["ticketing-sources"],
+    queryFn: async () => {
+      var _a2;
+      return ((_a2 = await api("/api/settings/ticketing/sources")) == null ? void 0 : _a2.sources) || [];
+    },
+    staleTime: SETTINGS_STALE_MS
+  });
+  void queryClient.prefetchQuery({
+    queryKey: ["ticketing-catalog"],
+    queryFn: async () => {
+      var _a2;
+      return ((_a2 = await api(
+        "/api/settings/providers/ticketing"
+      )) == null ? void 0 : _a2.providers) || [];
+    },
+    staleTime: Infinity
+  });
+  void queryClient.prefetchQuery(providersQuery());
+}
 const PANEL_WARM_MS = 4 * 6e4;
 function useIntakeWarm(enabled) {
+  reactExports.useEffect(() => {
+    prefetchIntakeMeta();
+  }, []);
   reactExports.useEffect(() => {
     if (!enabled) return;
     const warm = () => {
@@ -21653,31 +22448,497 @@ function useIntakeWarm(enabled) {
     };
   }, [enabled]);
 }
-let toastTimer;
-function toast(msg, opts) {
-  const o = opts || {};
-  let el = document.getElementById("cs-toast");
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "cs-toast";
-    document.body.appendChild(el);
-  }
-  el.textContent = msg;
-  el.classList.toggle("clickable", !!o.onClick);
-  el.onclick = o.onClick ? () => {
-    el.classList.remove("show", "clickable");
-    el.onclick = null;
-    o.onClick();
-  } : null;
-  el.classList.add("show");
-  clearTimeout(toastTimer);
-  const dur = o.duration || (o.onClick ? 6e3 : 1400);
-  toastTimer = setTimeout(() => el.classList.remove("show"), dur);
+const TEST_PLANS_POLL_MS = 1e4;
+let testPlansBridged = false;
+function bridgeTestPlanEvents() {
+  var _a2;
+  const ev = (_a2 = window.mindflock) == null ? void 0 : _a2.events;
+  if (testPlansBridged || !ev) return;
+  testPlansBridged = true;
+  const bump = (env) => {
+    if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+    refreshTestPlans();
+  };
+  ev.subscribe("session.test_plan_ready", bump);
+  ev.subscribe("session.test_plan_due", bump);
+  const say = (env, text) => {
+    if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+    refreshTestPlans();
+    const data = (env == null ? void 0 : env.data) || {};
+    toast(text(data));
+  };
+  ev.subscribe(
+    "session.test_plan_ready",
+    (env) => say(env, (d) => {
+      const n = Number(d.steps) || 0;
+      return (d.refreshed ? "Rewrote the checklist for " : "New checklist for ") + String(d.plan || "a session") + " — " + n + (n === 1 ? " step" : " steps");
+    })
+  );
+  ev.subscribe(
+    "session.test_plan_failed",
+    (env) => say(
+      env,
+      (d) => "Couldn't write the checklist for " + String(d.plan || "a session") + ": " + String(d.error || "no reason recorded")
+    )
+  );
+  ev.subscribe("session.create_failed", (env) => {
+    if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+    const session = String((env == null ? void 0 : env.session) || "");
+    if (!isVerifySession(session) && !session.startsWith("fix-")) return;
+    refreshTestPlans();
+    const data = (env == null ? void 0 : env.data) || {};
+    errorPop(
+      isVerifySession(session) ? "The verify session couldn't start" : "The session to fix it couldn't start",
+      String(data.error || "no reason recorded")
+    );
+  });
+  ev.subscribe(
+    "session.test_plan_gave_up",
+    (env) => say(
+      env,
+      (d) => "Gave up on the verify run for " + String(d.title || d.plan || "a checklist") + " — " + String(d.run_session || "the session") + " never wrote its answers. Run it again."
+    )
+  );
+  ev.subscribe(
+    "session.test_plan_checked",
+    (env) => say(env, (d) => {
+      const failed = Number(d.failed) || 0;
+      const mine = Number(d.needs_you) || 0;
+      const bits = [
+        failed ? failed + (failed === 1 ? " step failed" : " steps failed") : "",
+        mine ? mine + (mine === 1 ? " step needs you" : " steps need you") : ""
+      ].filter(Boolean);
+      return String(d.title || d.plan || "A checklist") + " checked" + (bits.length ? " — " + bits.join(", ") : " — everything passed");
+    })
+  );
 }
-function publishToast() {
-  const w = window;
+function useTestPlans(enabled = true) {
+  reactExports.useEffect(bridgeTestPlanEvents, []);
+  return useQuery({
+    queryKey: ["test-plans"],
+    queryFn: () => api("/api/test-plans"),
+    enabled,
+    refetchInterval: TEST_PLANS_POLL_MS,
+    placeholderData: (prev) => prev,
+    retry: false
+  });
+}
+function refreshTestPlans() {
+  return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
+}
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function featureBranchName(branch, slug) {
+  const m = new RegExp(`^feature/${escapeRe(slug)}/(.+)$`).exec(branch);
+  return m ? m[1] : "";
+}
+function branchTail(branch) {
+  const parts = branch.split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "";
+}
+function splitKind(title) {
+  if (title.startsWith("pr-")) return { kind: "pr", slug: title.slice(3) };
+  if (title.startsWith("issue-")) return { kind: "iss", slug: title.slice(6) };
+  return null;
+}
+function sessionLabel(title, branch) {
+  const plain = { text: title, kind: "", name: "", slug: title };
+  if (!title) return plain;
+  const split = splitKind(title);
+  const ticketName = split ? "" : featureBranchName(branch, title);
+  if (!split && !ticketName) return plain;
+  const kind = split ? split.kind : "tix";
+  const slug = split ? split.slug : title;
+  if (!slug) return plain;
+  const name = split ? featureBranchName(branch, title) || branchTail(branch) : ticketName;
+  const useName = name && name !== slug && name !== title ? name : "";
+  return {
+    text: useName ? `(${kind}) ${useName}/${slug}` : `(${kind}) ${slug}`,
+    kind,
+    name: useName,
+    slug
+  };
+}
+const createStoreImpl = (createState) => {
+  let state;
+  const listeners = /* @__PURE__ */ new Set();
+  const setState = (partial, replace) => {
+    const nextState = typeof partial === "function" ? partial(state) : partial;
+    if (!Object.is(nextState, state)) {
+      const previousState = state;
+      state = (replace != null ? replace : typeof nextState !== "object" || nextState === null) ? nextState : Object.assign({}, state, nextState);
+      listeners.forEach((listener) => listener(state, previousState));
+    }
+  };
+  const getState = () => state;
+  const getInitialState = () => initialState;
+  const subscribe = (listener) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  };
+  const api2 = { setState, getState, getInitialState, subscribe };
+  const initialState = state = createState(setState, getState, api2);
+  return api2;
+};
+const createStore = ((createState) => createState ? createStoreImpl(createState) : createStoreImpl);
+const identity = (arg) => arg;
+function useStore(api2, selector = identity) {
+  const slice = React.useSyncExternalStore(
+    api2.subscribe,
+    React.useCallback(() => selector(api2.getState()), [api2, selector]),
+    React.useCallback(() => selector(api2.getInitialState()), [api2, selector])
+  );
+  React.useDebugValue(slice);
+  return slice;
+}
+const createImpl = (createState) => {
+  const api2 = createStore(createState);
+  const useBoundStore = (selector) => useStore(api2, selector);
+  Object.assign(useBoundStore, api2);
+  return useBoundStore;
+};
+const create = ((createState) => createState ? createImpl(createState) : createImpl);
+const BREAK_MIN_MINUTES = 5;
+const BREAK_MAX_MINUTES = 480;
+const BREAK_DEFAULT_MINUTES = 60;
+const SNOOZE_MS = 5 * 6e4;
+const IDLE_MIN_MINUTES = 1;
+const IDLE_MAX_MINUTES = 480;
+const IDLE_DEFAULT_MINUTES = 10;
+const BREAK_ARM_KEY = "mf_break_due";
+function clampBreakMinutes(value) {
+  if (value === null || value === void 0) return BREAK_DEFAULT_MINUTES;
+  if (typeof value === "string" && value.trim() === "") return BREAK_DEFAULT_MINUTES;
+  const n = Math.round(Number(value));
+  if (!isFinite(n)) return BREAK_DEFAULT_MINUTES;
+  return Math.min(BREAK_MAX_MINUTES, Math.max(BREAK_MIN_MINUTES, n));
+}
+function clampIdleMinutes(value) {
+  if (value === null || value === void 0) return IDLE_DEFAULT_MINUTES;
+  if (typeof value === "string" && value.trim() === "") return IDLE_DEFAULT_MINUTES;
+  const n = Math.round(Number(value));
+  if (!isFinite(n)) return IDLE_DEFAULT_MINUTES;
+  return Math.min(IDLE_MAX_MINUTES, Math.max(IDLE_MIN_MINUTES, n));
+}
+function armBreak(now, everyMin) {
+  const every = clampBreakMinutes(everyMin);
+  return { at: now + every * 6e4, every };
+}
+function snoozeArm(now, everyMin) {
+  return { at: now + SNOOZE_MS, every: clampBreakMinutes(everyMin) };
+}
+function nextArm(now, everyMin, saved) {
+  const every = clampBreakMinutes(everyMin);
+  if (saved && saved.every === every && typeof saved.at === "number" && isFinite(saved.at) && saved.at <= now + every * 6e4)
+    return { at: saved.at, every };
+  return armBreak(now, every);
+}
+function fmtElapsed(ms) {
+  const total = Math.max(0, Math.floor(ms / 1e3));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m + ":" + String(s).padStart(2, "0");
+}
+function loadArm() {
+  try {
+    const raw = localStorage.getItem(BREAK_ARM_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    if (!v || typeof v.at !== "number" || typeof v.every !== "number") return null;
+    return v;
+  } catch {
+    return null;
+  }
+}
+function saveArm(arm) {
+  try {
+    if (arm) localStorage.setItem(BREAK_ARM_KEY, JSON.stringify(arm));
+    else localStorage.removeItem(BREAK_ARM_KEY);
+  } catch {
+  }
+}
+const SIDEBAR_BARS = [
+  { key: "usage", label: "Usage" },
+  { key: "ingestion", label: "Ticket Ingestion" },
+  { key: "pr-review", label: "PR Review" },
+  { key: "issue-handling", label: "Issue Handling" },
+  // Last of the automations, and after the three that START work: Verify is the
+  // other end of the same pipeline — what came in through ingestion comes back
+  // here once it has actually shipped.
+  { key: "verify", label: "Verify" },
+  { key: "assistant", label: "Assistant" }
+];
+const DEFAULT_VISIBLE_BARS = ["usage", "ingestion", "assistant"];
+function defaultHiddenBars() {
+  const visible = new Set(DEFAULT_VISIBLE_BARS);
+  return SIDEBAR_BARS.map((b) => b.key).filter((k) => !visible.has(k));
+}
+const SESSIONS_KEY = "sessions";
+const DEFAULT_SECTION_ORDER = [
+  ...SIDEBAR_BARS.map((b) => b.key),
+  SESSIONS_KEY
+];
+const KNOWN = new Set(DEFAULT_SECTION_ORDER);
+const BY_KEY = new Map(SIDEBAR_BARS.map((b) => [b.key, b]));
+function orderedSections(order) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const key of order) {
+    if (KNOWN.has(key) && !seen.has(key)) {
+      out.push(key);
+      seen.add(key);
+    }
+  }
+  for (const key of DEFAULT_SECTION_ORDER) {
+    if (!seen.has(key)) out.push(key);
+  }
+  return out;
+}
+function orderedBars(order) {
+  return orderedSections(order).map((key) => BY_KEY.get(key)).filter((b) => !!b);
+}
+const SIDEBAR_MIN_W = 260;
+const SIDEBAR_MAX_W = 560;
+const SIDEBAR_DEFAULT_W = 260;
+function clampSidebarWidth(px) {
+  if (!isFinite(px)) return SIDEBAR_DEFAULT_W;
+  return Math.round(Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, px)));
+}
+function load(key, fallback, parse = true) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    return parse ? JSON.parse(raw) : raw;
+  } catch {
+    return fallback;
+  }
+}
+function firstRun(key) {
+  try {
+    return localStorage.getItem(key) === null;
+  } catch {
+    return false;
+  }
+}
+function save(key, value, stringify = true) {
+  try {
+    localStorage.setItem(key, stringify ? JSON.stringify(value) : String(value));
+  } catch {
+  }
+}
+const useUi = create((set, get) => ({
+  focused: null,
+  viewMode: load("cs_viewmode", "auto", false),
+  gridRows: load("cs_gridrows", []),
+  sidebarHidden: load("cs_sidebar", "", false) === "hidden",
+  sidebarWidth: clampSidebarWidth(load("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
+  order: load("cs_order", []),
+  mru: load("cs_mru", []),
+  filter: "",
+  hidden: new Set(load("mf_hidden", [])),
+  verifyPanes: [],
+  bulkSelected: /* @__PURE__ */ new Set(),
+  aliases: load("mf_aliases", {}),
+  collapsedDevices: new Set(load("cs_devcollapse", [])),
+  // Fresh users start with the essentials (Usage + Ticket Ingestion + Assistant)
+  // so a first run isn't overwhelming; the rest are one click away in Customize.
+  // Once the user touches Customize the saved set wins, empty included.
+  hiddenBars: new Set(
+    firstRun("mf_hiddenbars") ? defaultHiddenBars() : load("mf_hiddenbars", [])
+  ),
+  barOrder: load("mf_barorder", []),
+  reduceMotion: load("mf_reduce_motion", false),
+  breakReminder: load("mf_break_on", false),
+  breakEveryMin: clampBreakMinutes(load("mf_break_every", BREAK_DEFAULT_MINUTES)),
+  idleFlock: load("mf_idle_flock", true),
+  idleFlockAfterMin: clampIdleMinutes(load("mf_idle_after", IDLE_DEFAULT_MINUTES)),
+  hintsEnabled: load("mf_hints", true),
+  dismissedHints: new Set(load("mf_hints_seen", [])),
+  tourDone: load("mf_tour_done", false),
+  tourOpen: false,
+  lastTab: load("cs_lasttab", {}),
+  openDialog: null,
+  dialogTarget: null,
+  prBaseByRepo: load("mf_prbase", {}),
+  setFocused: (title) => set({ focused: title }),
+  touchMru: (title) => {
+    const mru = [title, ...get().mru.filter((t) => t !== title)].slice(0, 50);
+    save("cs_mru", mru);
+    set({ mru });
+  },
+  setOrderlessMru: (mru) => {
+    save("cs_mru", mru);
+    set({ mru });
+  },
+  setViewMode: (v) => {
+    save("cs_viewmode", v, false);
+    set({ viewMode: v });
+  },
+  setGridRows: (rows) => {
+    save("cs_gridrows", rows);
+    set({ gridRows: rows });
+  },
+  toggleSidebar: () => {
+    const hidden = !get().sidebarHidden;
+    save("cs_sidebar", hidden ? "hidden" : "", false);
+    set({ sidebarHidden: hidden });
+  },
+  setSidebarWidth: (px) => {
+    const w = clampSidebarWidth(px);
+    if (w === get().sidebarWidth) return;
+    save("mf_sidebar_w", w);
+    set({ sidebarWidth: w });
+  },
+  setOrder: (order) => {
+    save("cs_order", order);
+    set({ order });
+  },
+  moveInOrder: (title, before) => {
+    const order = get().order.filter((t) => t !== title);
+    const i = before === null ? order.length : order.indexOf(before);
+    order.splice(i < 0 ? order.length : i, 0, title);
+    save("cs_order", order);
+    set({ order });
+  },
+  setFilter: (filter) => set({ filter: filter.toLowerCase() }),
+  setHidden: (title, hidden) => {
+    const next = new Set(get().hidden);
+    if (hidden) next.add(title);
+    else next.delete(title);
+    save("mf_hidden", [...next]);
+    set({ hidden: next });
+  },
+  openVerifyPane: (title) => {
+    if (!title || get().verifyPanes.includes(title)) return;
+    set({ verifyPanes: [...get().verifyPanes, title] });
+  },
+  closeVerifyPane: (title) => set({ verifyPanes: get().verifyPanes.filter((t) => t !== title) }),
+  toggleBulk: (title) => {
+    const next = new Set(get().bulkSelected);
+    if (next.has(title)) next.delete(title);
+    else next.add(title);
+    set({ bulkSelected: next });
+  },
+  clearBulk: () => set({ bulkSelected: /* @__PURE__ */ new Set() }),
+  setAlias: (title, alias) => {
+    const aliases = { ...get().aliases };
+    if (alias) aliases[title] = alias;
+    else delete aliases[title];
+    save("mf_aliases", aliases);
+    set({ aliases });
+    api("/api/aliases", { json: { title, alias: alias || "" } }).catch(() => {
+    });
+  },
+  toggleDeviceCollapsed: (device) => {
+    const next = new Set(get().collapsedDevices);
+    if (next.has(device)) next.delete(device);
+    else next.add(device);
+    save("cs_devcollapse", [...next]);
+    set({ collapsedDevices: next });
+  },
+  toggleBarHidden: (key) => {
+    const next = new Set(get().hiddenBars);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    save("mf_hiddenbars", [...next]);
+    set({ hiddenBars: next });
+  },
+  setBarOrder: (order) => {
+    save("mf_barorder", order);
+    set({ barOrder: order });
+  },
+  setReduceMotion: (on) => {
+    save("mf_reduce_motion", on);
+    set({ reduceMotion: on });
+  },
+  setBreakReminder: (on) => {
+    save("mf_break_on", on);
+    set({ breakReminder: on });
+  },
+  setBreakEveryMin: (min) => {
+    const every = clampBreakMinutes(min);
+    save("mf_break_every", every);
+    set({ breakEveryMin: every });
+  },
+  setIdleFlock: (on) => {
+    save("mf_idle_flock", on);
+    set({ idleFlock: on });
+  },
+  setIdleFlockAfterMin: (min) => {
+    const after = clampIdleMinutes(min);
+    save("mf_idle_after", after);
+    set({ idleFlockAfterMin: after });
+  },
+  setHintsEnabled: (on) => {
+    save("mf_hints", on);
+    if (on) {
+      save("mf_hints_seen", []);
+      set({ hintsEnabled: true, dismissedHints: /* @__PURE__ */ new Set() });
+    } else {
+      set({ hintsEnabled: false });
+    }
+  },
+  dismissHint: (key) => {
+    const next = new Set(get().dismissedHints);
+    next.add(key);
+    save("mf_hints_seen", [...next]);
+    set({ dismissedHints: next });
+  },
+  openTour: () => set({ tourOpen: true }),
+  finishTour: () => {
+    save("mf_tour_done", true);
+    set({ tourOpen: false, tourDone: true });
+  },
+  setLastTab: (title, tab) => {
+    const lastTab = { ...get().lastTab, [title]: tab };
+    save("cs_lasttab", lastTab);
+    set({ lastTab });
+  },
+  openDialogFor: (name, target = null) => set({ openDialog: name, dialogTarget: target }),
+  closeDialog: () => set({ openDialog: null, dialogTarget: null }),
+  setPrBase: (repo, base) => {
+    if (!repo) return;
+    const next = { ...get().prBaseByRepo };
+    if (base) next[repo] = base;
+    else delete next[repo];
+    save("mf_prbase", next);
+    set({ prBaseByRepo: next });
+  }
+}));
+function displayName(title) {
+  return useUi.getState().aliases[title] || title;
+}
+function tourDecision(opts) {
+  if (opts.tourDone || !opts.hintsEnabled) return "skip";
+  if (opts.onboarded === void 0) return "wait";
+  return opts.onboarded ? "skip" : "open";
+}
+function snapshot() {
+  var _a2, _b2;
+  const w = globalThis;
+  try {
+    const list = (_b2 = (_a2 = w.mindflock) == null ? void 0 : _a2.sessions) == null ? void 0 : _b2.call(_a2);
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+function windowName(title) {
+  const raw = String(title || "");
+  if (!raw) return "";
+  const alias = useUi.getState().aliases[raw];
+  if (alias) return alias;
+  const inst = snapshot().find(
+    (i) => i && (i.title === raw || i.display_title === raw)
+  );
+  if (!inst) return raw;
+  return sessionLabel(inst.display_title || inst.title || raw, inst.branch || "").text || raw;
+}
+function publishWindowName() {
+  const w = globalThis;
   w.mindflock = w.mindflock || {};
-  w.mindflock.toast = toast;
+  w.mindflock.displayName = windowName;
 }
 function copyText(text) {
   var _a2, _b2;
@@ -21868,18 +23129,18 @@ function disableAppMouseReporting(term) {
   } catch {
   }
 }
-function attachCopyOnSelect(host, term, opts) {
+function attachCopyOnSelect(host2, term, opts) {
   disableAppMouseReporting(term);
   try {
     term.loadAddon(new addonWebLinksExports.WebLinksAddon((_ev, uri) => window.open(uri, "_blank")));
   } catch {
   }
-  host.title = "Drag to select · release to copy · Ctrl+V / right-click pastes (text or image) · wheel scrolls · Ctrl+Shift+C";
+  host2.title = "Drag to select · release to copy · Ctrl+V / right-click pastes (text or image) · wheel scrolls · Ctrl+Shift+C";
   const interactive = !term.options.disableStdin;
   const session = opts.session;
   if (interactive) {
-    host.title += " · drop / paste files to upload";
-    host.addEventListener(
+    host2.title += " · drop / paste files to upload";
+    host2.addEventListener(
       "paste",
       (ev) => {
         const cd = ev.clipboardData;
@@ -21900,21 +23161,21 @@ function attachCopyOnSelect(host, term, opts) {
       },
       true
     );
-    host.addEventListener("dragover", (ev) => {
+    host2.addEventListener("dragover", (ev) => {
       if (!dtHasFiles(ev.dataTransfer)) return;
       ev.preventDefault();
       ev.stopPropagation();
       ev.dataTransfer.dropEffect = "copy";
-      host.classList.add("file-drop");
+      host2.classList.add("file-drop");
     });
-    host.addEventListener("dragleave", (ev) => {
-      if (!host.contains(ev.relatedTarget)) host.classList.remove("file-drop");
+    host2.addEventListener("dragleave", (ev) => {
+      if (!host2.contains(ev.relatedTarget)) host2.classList.remove("file-drop");
     });
-    host.addEventListener("drop", (ev) => {
+    host2.addEventListener("drop", (ev) => {
       if (!dtHasFiles(ev.dataTransfer)) return;
       ev.preventDefault();
       ev.stopPropagation();
-      host.classList.remove("file-drop");
+      host2.classList.remove("file-drop");
       pasteFilesAsPaths(ev.dataTransfer.files, term, session);
     });
   }
@@ -21934,13 +23195,13 @@ function attachCopyOnSelect(host, term, opts) {
     }
     return false;
   }
-  host.addEventListener("mousedown", (e) => {
+  host2.addEventListener("mousedown", (e) => {
     if (e.button === 0) captured = "";
   });
-  host.addEventListener("mouseup", (e) => {
+  host2.addEventListener("mouseup", (e) => {
     if (e.button === 0) setTimeout(doCopy, 0);
   });
-  host.addEventListener("contextmenu", (e) => {
+  host2.addEventListener("contextmenu", (e) => {
     if (term.options.disableStdin) {
       if (doCopy()) e.preventDefault();
       return;
@@ -21972,14 +23233,14 @@ let wheelDamping = 1;
 function setWheelDamping(speed) {
   wheelDamping = speed / Math.max(1, Math.round(speed));
 }
-function attachWheelScroll(host, term, getWs) {
+function attachWheelScroll(host2, term, getWs) {
   function cellHeight() {
-    return host.getBoundingClientRect().height / (term.rows || 24) || 16;
+    return host2.getBoundingClientRect().height / (term.rows || 24) || 16;
   }
   function sendWheel(clientX, clientY, up, count) {
     const ws = getWs();
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-    const rect = host.getBoundingClientRect();
+    const rect = host2.getBoundingClientRect();
     const cols = term.cols || 80, rows = term.rows || 24;
     const cellW = rect.width / cols || 8, cellH = rect.height / rows || 16;
     const col = Math.max(1, Math.min(cols, Math.floor((clientX - rect.left) / cellW) + 1));
@@ -21991,7 +23252,7 @@ function attachWheelScroll(host, term, getWs) {
     return true;
   }
   let wheelAcc = 0, wheelAt = 0;
-  host.addEventListener(
+  host2.addEventListener(
     "wheel",
     (ev) => {
       if (!ev.deltaY) return;
@@ -22014,10 +23275,10 @@ function attachWheelScroll(host, term, getWs) {
     },
     { capture: true, passive: false }
   );
-  host.style.touchAction = "none";
+  host2.style.touchAction = "none";
   let touchLast = null;
   let touchScrolling = false;
-  host.addEventListener(
+  host2.addEventListener(
     "touchstart",
     (ev) => {
       if (ev.touches.length !== 1) {
@@ -22029,7 +23290,7 @@ function attachWheelScroll(host, term, getWs) {
     },
     { capture: true, passive: true }
   );
-  host.addEventListener(
+  host2.addEventListener(
     "touchmove",
     (ev) => {
       if (!touchLast || ev.touches.length !== 1) return;
@@ -22050,7 +23311,7 @@ function attachWheelScroll(host, term, getWs) {
     },
     { capture: true, passive: false }
   );
-  host.addEventListener(
+  host2.addEventListener(
     "touchend",
     () => {
       touchLast = null;
@@ -22065,13 +23326,13 @@ function dragEdgeAt(y, r, zone = DRAG_EDGE_ZONE) {
   if (y > r.bottom - zone) return "bottom";
   return null;
 }
-function attachDragHistoryGesture(host, fire) {
+function attachDragHistoryGesture(host2, fire) {
   const HOLD_MS = 220;
-  host.addEventListener("mousedown", (down) => {
+  host2.addEventListener("mousedown", (down) => {
     if (down.button !== 0) return;
     let timer;
     const onMove = (ev) => {
-      const edge = dragEdgeAt(ev.clientY, host.getBoundingClientRect());
+      const edge = dragEdgeAt(ev.clientY, host2.getBoundingClientRect());
       if (edge && timer === void 0) {
         timer = setTimeout(() => {
           cleanup();
@@ -22445,264 +23706,6 @@ function Appearance(_) {
     /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Dark / light mode itself is the moon toggle in the top bar." })
   ] });
 }
-const createStoreImpl = (createState) => {
-  let state;
-  const listeners = /* @__PURE__ */ new Set();
-  const setState = (partial, replace) => {
-    const nextState = typeof partial === "function" ? partial(state) : partial;
-    if (!Object.is(nextState, state)) {
-      const previousState = state;
-      state = (replace != null ? replace : typeof nextState !== "object" || nextState === null) ? nextState : Object.assign({}, state, nextState);
-      listeners.forEach((listener) => listener(state, previousState));
-    }
-  };
-  const getState = () => state;
-  const getInitialState = () => initialState;
-  const subscribe = (listener) => {
-    listeners.add(listener);
-    return () => listeners.delete(listener);
-  };
-  const api2 = { setState, getState, getInitialState, subscribe };
-  const initialState = state = createState(setState, getState, api2);
-  return api2;
-};
-const createStore = ((createState) => createState ? createStoreImpl(createState) : createStoreImpl);
-const identity = (arg) => arg;
-function useStore(api2, selector = identity) {
-  const slice = React.useSyncExternalStore(
-    api2.subscribe,
-    React.useCallback(() => selector(api2.getState()), [api2, selector]),
-    React.useCallback(() => selector(api2.getInitialState()), [api2, selector])
-  );
-  React.useDebugValue(slice);
-  return slice;
-}
-const createImpl = (createState) => {
-  const api2 = createStore(createState);
-  const useBoundStore = (selector) => useStore(api2, selector);
-  Object.assign(useBoundStore, api2);
-  return useBoundStore;
-};
-const create = ((createState) => createState ? createImpl(createState) : createImpl);
-const SIDEBAR_BARS = [
-  { key: "usage", label: "Usage" },
-  { key: "ingestion", label: "Ticket Ingestion" },
-  { key: "pr-review", label: "PR Review" },
-  { key: "issue-handling", label: "Issue Handling" },
-  { key: "assistant", label: "Assistant" }
-];
-const DEFAULT_VISIBLE_BARS = ["usage", "ingestion", "assistant"];
-function defaultHiddenBars() {
-  const visible = new Set(DEFAULT_VISIBLE_BARS);
-  return SIDEBAR_BARS.map((b) => b.key).filter((k) => !visible.has(k));
-}
-const SESSIONS_KEY = "sessions";
-const DEFAULT_SECTION_ORDER = [
-  ...SIDEBAR_BARS.map((b) => b.key),
-  SESSIONS_KEY
-];
-const KNOWN = new Set(DEFAULT_SECTION_ORDER);
-const BY_KEY = new Map(SIDEBAR_BARS.map((b) => [b.key, b]));
-function orderedSections(order) {
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  for (const key of order) {
-    if (KNOWN.has(key) && !seen.has(key)) {
-      out.push(key);
-      seen.add(key);
-    }
-  }
-  for (const key of DEFAULT_SECTION_ORDER) {
-    if (!seen.has(key)) out.push(key);
-  }
-  return out;
-}
-function orderedBars(order) {
-  return orderedSections(order).map((key) => BY_KEY.get(key)).filter((b) => !!b);
-}
-const SIDEBAR_MIN_W = 260;
-const SIDEBAR_MAX_W = 560;
-const SIDEBAR_DEFAULT_W = 260;
-function clampSidebarWidth(px) {
-  if (!isFinite(px)) return SIDEBAR_DEFAULT_W;
-  return Math.round(Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, px)));
-}
-function load(key, fallback, parse = true) {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw === null) return fallback;
-    return parse ? JSON.parse(raw) : raw;
-  } catch {
-    return fallback;
-  }
-}
-function firstRun(key) {
-  try {
-    return localStorage.getItem(key) === null;
-  } catch {
-    return false;
-  }
-}
-function save(key, value, stringify = true) {
-  try {
-    localStorage.setItem(key, stringify ? JSON.stringify(value) : String(value));
-  } catch {
-  }
-}
-const useUi = create((set, get) => ({
-  focused: null,
-  viewMode: load("cs_viewmode", "auto", false),
-  gridRows: load("cs_gridrows", []),
-  sidebarHidden: load("cs_sidebar", "", false) === "hidden",
-  sidebarWidth: clampSidebarWidth(load("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
-  order: load("cs_order", []),
-  mru: load("cs_mru", []),
-  filter: "",
-  hidden: new Set(load("mf_hidden", [])),
-  bulkSelected: /* @__PURE__ */ new Set(),
-  aliases: load("mf_aliases", {}),
-  collapsedDevices: new Set(load("cs_devcollapse", [])),
-  // Fresh users start with the essentials (Usage + Ticket Ingestion + Assistant)
-  // so a first run isn't overwhelming; the rest are one click away in Customize.
-  // Once the user touches Customize the saved set wins, empty included.
-  hiddenBars: new Set(
-    firstRun("mf_hiddenbars") ? defaultHiddenBars() : load("mf_hiddenbars", [])
-  ),
-  barOrder: load("mf_barorder", []),
-  reduceMotion: load("mf_reduce_motion", false),
-  hintsEnabled: load("mf_hints", true),
-  dismissedHints: new Set(load("mf_hints_seen", [])),
-  tourDone: load("mf_tour_done", false),
-  tourOpen: false,
-  lastTab: load("cs_lasttab", {}),
-  openDialog: null,
-  dialogTarget: null,
-  prBaseByRepo: load("mf_prbase", {}),
-  setFocused: (title) => set({ focused: title }),
-  touchMru: (title) => {
-    const mru = [title, ...get().mru.filter((t) => t !== title)].slice(0, 50);
-    save("cs_mru", mru);
-    set({ mru });
-  },
-  setOrderlessMru: (mru) => {
-    save("cs_mru", mru);
-    set({ mru });
-  },
-  setViewMode: (v) => {
-    save("cs_viewmode", v, false);
-    set({ viewMode: v });
-  },
-  setGridRows: (rows) => {
-    save("cs_gridrows", rows);
-    set({ gridRows: rows });
-  },
-  toggleSidebar: () => {
-    const hidden = !get().sidebarHidden;
-    save("cs_sidebar", hidden ? "hidden" : "", false);
-    set({ sidebarHidden: hidden });
-  },
-  setSidebarWidth: (px) => {
-    const w = clampSidebarWidth(px);
-    if (w === get().sidebarWidth) return;
-    save("mf_sidebar_w", w);
-    set({ sidebarWidth: w });
-  },
-  setOrder: (order) => {
-    save("cs_order", order);
-    set({ order });
-  },
-  moveInOrder: (title, before) => {
-    const order = get().order.filter((t) => t !== title);
-    const i = before === null ? order.length : order.indexOf(before);
-    order.splice(i < 0 ? order.length : i, 0, title);
-    save("cs_order", order);
-    set({ order });
-  },
-  setFilter: (filter) => set({ filter: filter.toLowerCase() }),
-  setHidden: (title, hidden) => {
-    const next = new Set(get().hidden);
-    if (hidden) next.add(title);
-    else next.delete(title);
-    save("mf_hidden", [...next]);
-    set({ hidden: next });
-  },
-  toggleBulk: (title) => {
-    const next = new Set(get().bulkSelected);
-    if (next.has(title)) next.delete(title);
-    else next.add(title);
-    set({ bulkSelected: next });
-  },
-  clearBulk: () => set({ bulkSelected: /* @__PURE__ */ new Set() }),
-  setAlias: (title, alias) => {
-    const aliases = { ...get().aliases };
-    if (alias) aliases[title] = alias;
-    else delete aliases[title];
-    save("mf_aliases", aliases);
-    set({ aliases });
-  },
-  toggleDeviceCollapsed: (device) => {
-    const next = new Set(get().collapsedDevices);
-    if (next.has(device)) next.delete(device);
-    else next.add(device);
-    save("cs_devcollapse", [...next]);
-    set({ collapsedDevices: next });
-  },
-  toggleBarHidden: (key) => {
-    const next = new Set(get().hiddenBars);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    save("mf_hiddenbars", [...next]);
-    set({ hiddenBars: next });
-  },
-  setBarOrder: (order) => {
-    save("mf_barorder", order);
-    set({ barOrder: order });
-  },
-  setReduceMotion: (on) => {
-    save("mf_reduce_motion", on);
-    set({ reduceMotion: on });
-  },
-  setHintsEnabled: (on) => {
-    save("mf_hints", on);
-    if (on) {
-      save("mf_hints_seen", []);
-      set({ hintsEnabled: true, dismissedHints: /* @__PURE__ */ new Set() });
-    } else {
-      set({ hintsEnabled: false });
-    }
-  },
-  dismissHint: (key) => {
-    const next = new Set(get().dismissedHints);
-    next.add(key);
-    save("mf_hints_seen", [...next]);
-    set({ dismissedHints: next });
-  },
-  openTour: () => set({ tourOpen: true }),
-  finishTour: () => {
-    save("mf_tour_done", true);
-    set({ tourOpen: false, tourDone: true });
-  },
-  setLastTab: (title, tab) => {
-    const lastTab = { ...get().lastTab, [title]: tab };
-    save("cs_lasttab", lastTab);
-    set({ lastTab });
-  },
-  openDialogFor: (name, target = null) => set({ openDialog: name, dialogTarget: target }),
-  closeDialog: () => set({ openDialog: null, dialogTarget: null }),
-  setPrBase: (repo, base) => {
-    if (!repo) return;
-    const next = { ...get().prBaseByRepo };
-    if (base) next[repo] = base;
-    else delete next[repo];
-    save("mf_prbase", next);
-    set({ prBaseByRepo: next });
-  }
-}));
-function tourDecision(opts) {
-  if (opts.tourDone || !opts.hintsEnabled) return "skip";
-  if (opts.onboarded === void 0) return "wait";
-  return opts.onboarded ? "skip" : "open";
-}
 function errMsg(err) {
   return (err == null ? void 0 : err.message) || "error";
 }
@@ -22768,6 +23771,14 @@ function orderedInstances(instances2, order) {
     }
   }
   return { rows, nextOrder: rows.map((i) => i.title) };
+}
+function orderWithAfter(order, title, after) {
+  if (!title || !after || title === after) return order;
+  const next = order.filter((t) => t !== title);
+  const at = next.indexOf(after);
+  if (at < 0) return order;
+  next.splice(at + 1, 0, title);
+  return next;
 }
 const SEARCH_MIN = 6;
 function matchesFilter(inst, filter, aliases) {
@@ -23067,7 +24078,7 @@ async function undoLastClose() {
       return;
     }
     if (!ent.exists) {
-      toast("Can’t reopen “" + (ent.title || "session") + "” — its worktree is gone", {
+      toast("Can’t reopen “" + (ent.title ? displayName(ent.title) : "session") + "” — its worktree is gone", {
         duration: 5e3
       });
       return;
@@ -23079,7 +24090,7 @@ async function undoLastClose() {
       );
       await refreshInstances();
       if (inst == null ? void 0 : inst.title) selectSession(inst.title);
-      toast("Reopened " + (ent.title || "session"));
+      toast("Reopened " + (ent.title ? displayName(ent.title) : "session"));
     } catch (err) {
       toast("Reopen failed: " + errMsg(err), { duration: 5e3 });
     }
@@ -23135,15 +24146,34 @@ function failPendingSession(title) {
       (i) => !(i.pending_create && i.title === title)
     )
   );
+  dropFromOrder(title);
+}
+function dropFromOrder(title) {
+  const ui = useUi.getState();
+  if (title && ui.order.includes(title)) ui.setOrder(ui.order.filter((t) => t !== title));
+}
+function placeAfter(title, after) {
+  const ui = useUi.getState();
+  const live = instances$1().map((i) => i.title);
+  if (!live.includes(title) || !live.includes(after)) return;
+  const seen = new Set(ui.order);
+  const merged = ui.order.concat(live.filter((t) => !seen.has(t)));
+  const next = orderWithAfter(merged, title, after);
+  if (next !== merged) ui.setOrder(next);
 }
 async function copySession(title) {
   if (!title) return;
   const guess = addPendingSession(title + "-copy");
+  placeAfter(guess, title);
   try {
     const inst = await instApi(title, "/copy", { method: "POST" });
     if (inst == null ? void 0 : inst.title) clearStaleAlias(inst.title);
     await refreshInstances();
-    if (inst == null ? void 0 : inst.title) selectSession(inst.title);
+    if (inst == null ? void 0 : inst.title) {
+      if (inst.title !== guess) dropFromOrder(guess);
+      placeAfter(inst.title, title);
+      selectSession(inst.title);
+    }
   } catch (err) {
     failPendingSession(guess);
     alert("Copy failed: " + errMsg(err));
@@ -23224,6 +24254,27 @@ async function stopFastTrack(title) {
     toast("Could not stop fast-track: " + errMsg(err), { duration: 6e3 });
   }
 }
+async function resetStage(title, opts) {
+  var _a2;
+  if (!title || !requireGit()) return;
+  markLoopReset(title);
+  try {
+    const r = await instApi(
+      title,
+      "/reset-stage",
+      { method: "POST" }
+    );
+    if ((_a2 = r == null ? void 0 : r.row) == null ? void 0 : _a2.title) patchInstance(title, r.row);
+    const cleared = (r == null ? void 0 : r.cleared) || [];
+    if (!(opts == null ? void 0 : opts.quiet))
+      toast(
+        "Back to idle" + (cleared.length ? " — also cleared " + cleared.join(" + ") : "")
+      );
+  } catch (err) {
+    clearLoopReset(title);
+    toast("Could not reset this window: " + errMsg(err), { duration: 6e3 });
+  }
+}
 async function ideSession(title, quiet = false) {
   if (!title) return;
   try {
@@ -23250,7 +24301,7 @@ async function submitMakePr(title, base) {
       else toast(msg, { duration: 9e3 });
     } else {
       if (r == null ? void 0 : r.url) window.open(r.url, "_blank");
-      markLoopReset(title);
+      await resetStage(title, { quiet: true });
     }
   } catch (err) {
     clearStep(title);
@@ -23323,17 +24374,57 @@ const STAGE_META = {
 function stageMeta(stage) {
   return STAGE_META[stage] || STAGE_META.agent;
 }
-const loopReset = /* @__PURE__ */ new Set();
+const echo = /* @__PURE__ */ new Map();
+const ECHO_TTL_MS = 2e4;
+function echoing(title) {
+  if (!title) return false;
+  const at = echo.get(title);
+  if (at === void 0) return false;
+  if (Date.now() - at > ECHO_TTL_MS) {
+    echo.delete(title);
+    return false;
+  }
+  return true;
+}
 function markLoopReset(title) {
-  if (title) loopReset.add(title);
+  if (title) echo.set(title, Date.now());
+}
+function clearLoopReset(title) {
+  echo.delete(title);
 }
 function reconcileLoopReset(inst) {
-  if (loopReset.has(inst.title) && (inst.stage || "agent") !== "pr")
-    loopReset.delete(inst.title);
+  if (!inst.title) return;
+  if (inst.stage_reset) echo.delete(inst.title);
+  else echoing(inst.title);
+}
+function isStageReset(inst) {
+  return !!inst.stage_reset || echoing(inst.title);
 }
 function guidedStage(inst) {
-  if (inst.title && loopReset.has(inst.title)) return "agent";
+  if (isStageReset(inst)) return "agent";
   return inst.stage || "agent";
+}
+const RESETTABLE = /* @__PURE__ */ new Set(["committed", "pushed", "pr"]);
+const RESET_ASK = {
+  committed: "push",
+  pushed: "open a PR",
+  pr: "merge"
+};
+function resetStep(inst) {
+  var _a2;
+  const title = inst.title;
+  const caps2 = (_a2 = queryClient.getQueryData(["config"])) == null ? void 0 : _a2.caps;
+  if (caps2 && !caps2.git) return null;
+  if (!title || inst.status === "loading" || inst.status === "paused") return null;
+  if (inst.workspace_missing) return null;
+  if (isStageReset(inst)) return null;
+  const stage = inst.stage || "agent";
+  if (!RESETTABLE.has(stage)) return null;
+  return {
+    label: "↺",
+    title: "Back to idle — restart the guided cycle on this branch.\nNothing is undone: the commits stay, an open PR stays open. The header\njust stops asking you to " + (RESET_ASK[stage] || "finish up") + " so you can keep working here.\nIt clears itself the moment you commit again.",
+    run: () => resetStage(title)
+  };
 }
 const actShown = /* @__PURE__ */ new Map();
 const actPending = /* @__PURE__ */ new Map();
@@ -23683,7 +24774,10 @@ const MODAL_DIALOG_NAMES = [
   "device",
   // The Intake reads like a page, not a popover, and its per-card Remove buttons make
   // a stray Delete genuinely dangerous behind it.
-  "intake"
+  "intake",
+  // Same shape as Intake: a full-page surface with per-plan Delete buttons, and
+  // nothing about it suggests the session behind is still taking keystrokes.
+  "verify"
 ];
 const MODAL_DOM_IDS = [
   "new-dialog",
@@ -23692,7 +24786,12 @@ const MODAL_DOM_IDS = [
   "commit-dialog",
   "rename-dialog",
   "device-dialog",
-  "intake-dialog"
+  "intake-dialog",
+  "verify-dialog",
+  // The take-a-break screen owns the whole window and holds the keyboard on
+  // its own buttons; a Delete meant for the card must not reach the session
+  // running behind it.
+  "break-screen"
 ];
 function modalOpen() {
   const open = useUi.getState().openDialog;
@@ -23867,6 +24966,18 @@ const KEYMAP = [
     run: () => useUi.getState().openDialogFor("intake")
   },
   {
+    // Alt for the same reasons as Alt+I next door — Ctrl+V is paste and always
+    // will be — and guarded the same way: Option+V on macOS types √, and a
+    // surface you visit a few times a day must not eat a keystroke aimed at a
+    // text field or a terminal.
+    key: "v",
+    alt: true,
+    id: "verify",
+    help: ["Navigation", "Alt+V", "Verify — shipped changes nobody has checked"],
+    when: () => !isEditingTarget(document.activeElement),
+    run: () => useUi.getState().openDialogFor("verify")
+  },
+  {
     key: "Tab",
     mod: "ctrl",
     id: "cycle",
@@ -24028,8 +25139,13 @@ function defaultCombosFor(id) {
     alt: x.alt
   }));
 }
+function breakScreenUp() {
+  const el = document.getElementById("break-screen");
+  return !!el && !el.classList.contains("break-leaving");
+}
 function _dispatch(e) {
   if (_rebindCapturing) return;
+  if (breakScreenUp()) return;
   if (_chordPending) {
     _handleChordKey(e);
     return;
@@ -24052,12 +25168,12 @@ function _dispatch(e) {
     }
   }
 }
-function installKeymap(host) {
-  _host = host;
+function installKeymap(host2) {
+  _host = host2;
   document.addEventListener("keydown", _dispatch, true);
   return () => {
     document.removeEventListener("keydown", _dispatch, true);
-    if (_host === host) _host = null;
+    if (_host === host2) _host = null;
     _chordPending = false;
     clearTimeout(_chordTimer);
   };
@@ -24260,7 +25376,7 @@ function NotificationsBell() {
             "data-session": n.session,
             onClick: () => jump(n.session),
             children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "notif-sess", children: n.session || "—" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "notif-sess", children: aliases[n.session] || n.session || "—" }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "notif-text", children: n.text }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "notif-time", children: relTime(n.ts) })
             ]
@@ -24407,10 +25523,10 @@ function instByTitle(title) {
   return instances().find((i) => i.title === title) || null;
 }
 function EventToasts() {
-  const snapshot = queryClient.getQueryData(["instances"]);
+  const snapshot2 = queryClient.getQueryData(["instances"]);
   reactExports.useEffect(() => {
     updateTitleBadge();
-  }, [snapshot]);
+  }, [snapshot2]);
   const focused = useUi((s) => s.focused);
   reactExports.useEffect(() => {
     if (focused) markSessionSeen(focused);
@@ -24433,7 +25549,7 @@ function EventToasts() {
           markClarify(env.session);
           const inst = instByTitle(env.session);
           const snip = (inst == null ? void 0 : inst.last_turn) ? " — “" + inst.last_turn + "”" : "";
-          notifyOnce(env.session, "clarify", env.session + " needs your input" + snip, {
+          notifyOnce(env.session, "clarify", displayName(env.session) + " needs your input" + snip, {
             onClick: () => selectSession(env.session)
           });
         }
@@ -24442,7 +25558,7 @@ function EventToasts() {
     unsubs.push(
       ev.subscribe("session.setup_finished", (env) => {
         if (isReplay(env) || env.new === "ok") return;
-        notifyOnce(env.session, "setupfail", "worktree setup failed on " + env.session + " — prompts held", {
+        notifyOnce(env.session, "setupfail", "worktree setup failed on " + displayName(env.session) + " — prompts held", {
           onClick: () => selectSession(env.session)
         });
       })
@@ -24450,7 +25566,7 @@ function EventToasts() {
     unsubs.push(
       ev.subscribe("session.check_finished", (env) => {
         if (isReplay(env) || env.new === "ok") return;
-        notifyOnce(env.session, "checkfail", "checks failed on " + env.session, {
+        notifyOnce(env.session, "checkfail", "checks failed on " + displayName(env.session), {
           onClick: () => selectSession(env.session)
         });
       })
@@ -24492,7 +25608,7 @@ function EventToasts() {
           { live: true }
         );
         if (String(env.new || "") === "halted")
-          notifyOnce(env.session, "ftstop", "fast-track stopped on " + env.session, {
+          notifyOnce(env.session, "ftstop", "fast-track stopped on " + displayName(env.session), {
             onClick: () => selectSession(env.session)
           });
       })
@@ -24503,7 +25619,7 @@ function EventToasts() {
         if (isReplay(env)) return;
         const title = env.session;
         if (env.new === "interrupt") {
-          notifyOnce(title, "interrupt", "pre-commit failed on " + title, {
+          notifyOnce(title, "interrupt", "pre-commit failed on " + displayName(title), {
             onClick: () => selectSession(title)
           });
         }
@@ -24516,7 +25632,7 @@ function EventToasts() {
         const title = env.session;
         const url = String(((_a3 = env.data) == null ? void 0 : _a3.url) || "");
         if (env.new === "OPEN") {
-          notifyOnce(title, "pr", "PR open for " + title, {
+          notifyOnce(title, "pr", "PR open for " + displayName(title), {
             onClick: () => {
               const inst = instByTitle(title);
               const href = (inst == null ? void 0 : inst.pr_url) || url;
@@ -24525,7 +25641,7 @@ function EventToasts() {
             }
           });
         } else if (env.old === "OPEN") {
-          notifyOnce(title, "merged", title + ": PR merged or closed ✓", {
+          notifyOnce(title, "merged", displayName(title) + ": PR merged or closed ✓", {
             onClick: () => selectSession(title)
           });
         }
@@ -24544,7 +25660,7 @@ function EventToasts() {
         notifyOnce(
           env.session,
           "budget",
-          env.session + " exceeded its budget (" + fmtUsd(d.cost || 0) + " of " + fmtUsd(d.budget || 0) + ")",
+          displayName(env.session) + " exceeded its budget (" + fmtUsd(d.cost || 0) + " of " + fmtUsd(d.budget || 0) + ")",
           { onClick: () => selectSession(env.session), duration: 8e3 }
         );
       })
@@ -24594,6 +25710,8 @@ function TopBar() {
   const [recentOpen, setRecentOpen] = reactExports.useState(false);
   const [version, setVersion] = reactExports.useState(engineVersion);
   const dropRef = reactExports.useRef(null);
+  const { data: testPlans } = useTestPlans();
+  const due = dueCount((testPlans == null ? void 0 : testPlans.plans) || []);
   const [mac] = reactExports.useState(hasNativeWindowControls);
   const [fullScreen, setFullScreen] = reactExports.useState(false);
   reactExports.useEffect(() => {
@@ -24723,6 +25841,20 @@ function TopBar() {
             title: "Intake — tickets, pull requests and issues waiting to become sessions (Alt+I)",
             onClick: () => ui.openDialogFor("intake"),
             children: "Intake"
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "button",
+          {
+            id: "verify-btn",
+            className: "tb-item",
+            type: "button",
+            title: "Verify — shipped changes nobody has checked (Alt+V)",
+            onClick: () => ui.openDialogFor("verify"),
+            children: [
+              "Verify",
+              due > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tb-count", children: due })
+            ]
           }
         ),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tb-drop" + (recentOpen ? " open" : ""), id: "recent-menu", ref: dropRef, children: [
@@ -25105,40 +26237,6 @@ function VoiceInput() {
     ),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "mic-caption", className: caption == null ? "hidden" : "", children: caption || "" })
   ] });
-}
-function escapeRe(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function featureBranchName(branch, slug) {
-  const m = new RegExp(`^feature/${escapeRe(slug)}/(.+)$`).exec(branch);
-  return m ? m[1] : "";
-}
-function branchTail(branch) {
-  const parts = branch.split("/").filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : "";
-}
-function splitKind(title) {
-  if (title.startsWith("pr-")) return { kind: "pr", slug: title.slice(3) };
-  if (title.startsWith("issue-")) return { kind: "iss", slug: title.slice(6) };
-  return null;
-}
-function sessionLabel(title, branch) {
-  const plain = { text: title, kind: "", name: "", slug: title };
-  if (!title) return plain;
-  const split = splitKind(title);
-  const ticketName = split ? "" : featureBranchName(branch, title);
-  if (!split && !ticketName) return plain;
-  const kind = split ? split.kind : "tix";
-  const slug = split ? split.slug : title;
-  if (!slug) return plain;
-  const name = split ? featureBranchName(branch, title) || branchTail(branch) : ticketName;
-  const useName = name && name !== slug && name !== title ? name : "";
-  return {
-    text: useName ? `(${kind}) ${useName}/${slug}` : `(${kind}) ${slug}`,
-    kind,
-    name: useName,
-    slug
-  };
 }
 const DBLCLICK_MS = 300;
 function displayTitle(inst) {
@@ -25998,7 +27096,10 @@ function OverallUsage() {
         title,
         onClick: (ev) => {
           ev.stopPropagation();
-          setOpen((o) => !o);
+          setOpen((o) => {
+            if (!o) refreshUsage();
+            return !o;
+          });
         },
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "usage-head", children: head }),
@@ -26375,6 +27476,111 @@ function PrReviewBar() {
     }
   );
 }
+function VerifyBar() {
+  const openDialogFor = useUi((s) => s.openDialogFor);
+  const openDialog = useUi((s) => s.openDialog);
+  const qc = useQueryClient();
+  const { data: repo, refetch } = useQuery({
+    queryKey: ["verify-settings"],
+    queryFn: async () => {
+      var _a2;
+      const r = await api(
+        "/api/settings"
+      );
+      return ((_a2 = r == null ? void 0 : r.settings) == null ? void 0 : _a2.repository) || {};
+    },
+    refetchInterval: 3e4,
+    retry: false
+  });
+  const { data: plansData } = useTestPlans();
+  reactExports.useEffect(() => {
+    if (openDialog === null) refetch();
+  }, [openDialog, refetch]);
+  const repos = Array.isArray(repo == null ? void 0 : repo.verify_repos) ? repo.verify_repos : [];
+  const plans = (plansData == null ? void 0 : plansData.plans) || [];
+  const on = (repo == null ? void 0 : repo.verify_enabled) !== false;
+  const due = dueCount(plans);
+  const running = plans.some((p) => p.state === "running");
+  const broken = plans.filter((p) => verdictOf(p) === "fail").length;
+  if (!repo || repos.length === 0 && plans.length === 0) return null;
+  const toggle = async (enable) => {
+    try {
+      await api("/api/settings", { json: { repository: { verify_enabled: enable } } });
+      toast(enable ? "Automatic checking on" : "Automatic checking paused");
+    } catch (err) {
+      toast("Verify " + (enable ? "on" : "off") + " failed: " + errMsg(err));
+    } finally {
+      refetch();
+      qc.invalidateQueries({ queryKey: ["test-plans"] });
+    }
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      id: "verify-bar",
+      title: "Verify — writes a checklist when a session branch ships, then hands you the steps an agent cannot honestly check. " + (repos.length ? `Tracking ${repos.length} ${repos.length === 1 ? "repository" : "repositories"}.` : "No repositories tracked; the checklists here were asked for by hand or by a repo's own .mindflock.toml."),
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "span",
+          {
+            id: "verify-dot",
+            className: "dc-dot " + (running ? "on" : broken ? "dc-error" : !on ? "off" : "idle"),
+            role: "img",
+            "aria-label": running ? "Verify: an agent is checking a checklist" : broken ? "Verify: " + broken + " shipped " + (broken === 1 ? "change" : "changes") + " failed its checklist" : !on ? "Verify: switched off" : "Verify: on, " + (due ? due + " not checked yet" : "nothing outstanding"),
+            title: running ? "An agent is working through a checklist right now" : broken ? broken + (broken === 1 ? " shipped change" : " shipped changes") + " did not do what its checklist expected — open Checklists to see which step, and what was observed" : !on ? (
+              // Deliberately not the word a removed status line used: a blunt
+              // bundle-wide guard in test_pr_review_settings.py watches for it
+              // coming back, and this tooltip is not what it is guarding.
+              "Switched off — nothing is written when a branch ships, and nothing new turns up to check"
+            ) : due ? due + (due === 1 ? " shipped change has" : " shipped changes have") + " not been checked" : "On, and nothing is outstanding — a checklist appears here when a branch ships"
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "dc-label", children: "Verify" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "dc-actions", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "button",
+            {
+              id: "verify-plans-btn",
+              className: "dc-toggle",
+              title: "Checklists for what shipped, tracked repositories and what counts as live (Alt+V)",
+              onClick: () => openDialogFor("verify"),
+              children: [
+                "Checklists",
+                broken > 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "span",
+                  {
+                    className: "dc-count dc-count-bad",
+                    title: broken + (broken === 1 ? " checklist has" : " checklists have") + " a step that failed",
+                    children: "✗" + broken
+                  }
+                ) : null
+              ]
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "label",
+            {
+              className: "dc-switch",
+              title: "Flip to pause automatic checking — your repositories, checklists and answers are kept either way, and writing one by hand, running and answering all still work",
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    type: "checkbox",
+                    id: "verify-toggle",
+                    checked: on,
+                    onChange: (e) => void toggle(e.target.checked)
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "dc-slider" })
+              ]
+            }
+          )
+        ] })
+      ]
+    }
+  );
+}
 const SECTION_MIME = "application/x-mf-section";
 function barContent(key, cbs) {
   switch (key) {
@@ -26386,6 +27592,8 @@ function barContent(key, cbs) {
       return /* @__PURE__ */ jsxRuntimeExports.jsx(PrReviewBar, {});
     case "issue-handling":
       return /* @__PURE__ */ jsxRuntimeExports.jsx(GitIssueBar, {});
+    case "verify":
+      return /* @__PURE__ */ jsxRuntimeExports.jsx(VerifyBar, {});
     case "assistant":
       return /* @__PURE__ */ jsxRuntimeExports.jsxs(
         "div",
@@ -26495,11 +27703,11 @@ function FooterCustomize() {
   const toggleBarHidden = useUi((s) => s.toggleBarHidden);
   const barOrder = useUi((s) => s.barOrder);
   const [open, setOpen] = reactExports.useState(false);
-  const ref = reactExports.useRef(null);
+  const ref2 = reactExports.useRef(null);
   reactExports.useEffect(() => {
     if (!open) return;
     const onDown = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+      if (ref2.current && !ref2.current.contains(e.target)) setOpen(false);
     };
     const onKey = (e) => {
       if (e.key === "Escape") setOpen(false);
@@ -26511,7 +27719,7 @@ function FooterCustomize() {
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "foot-customize", ref, children: [
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "foot-customize", ref: ref2, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx(
       "button",
       {
@@ -26875,9 +28083,10 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
   const [secDrag, setSecDrag] = reactExports.useState(null);
   const [secCue, setSecCue] = reactExports.useState(null);
   const addonBarsRef = reactExports.useRef(null);
+  const listed = reactExports.useMemo(() => instances2.filter((i) => !isVerifySession(i.title)), [instances2]);
   const { rows: allRows } = reactExports.useMemo(
-    () => orderedInstances(instances2, ui.order),
-    [instances2, ui.order]
+    () => orderedInstances(listed, ui.order),
+    [listed, ui.order]
   );
   const filtered = reactExports.useMemo(
     () => allRows.filter((i) => matchesFilter(i, ui.filter, ui.aliases)),
@@ -26980,9 +28189,9 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
     );
   });
   const cap = viewCap(ui.viewMode);
-  const shownCount = instances2.filter((i) => !ui.hidden.has(i.title)).length;
-  const countHead = isFinite(cap) && shownCount > cap ? `${cap} of ${shownCount} shown` : `${instances2.length} session${instances2.length === 1 ? "" : "s"}`;
-  const searchVisible = instances2.length >= SEARCH_MIN || !!ui.filter;
+  const shownCount = listed.filter((i) => !ui.hidden.has(i.title)).length;
+  const countHead = isFinite(cap) && shownCount > cap ? `${cap} of ${shownCount} shown` : `${listed.length} session${listed.length === 1 ? "" : "s"}`;
+  const searchVisible = listed.length >= SEARCH_MIN || !!ui.filter;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("aside", { id: "sidebar", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx(SidebarResizer, {}),
     doctorWarn.failing && !doctorWarn.dismissed && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "doctor-warn", children: [
@@ -27932,15 +29141,105 @@ function HistoryOverlay({
     }
   );
 }
+function hoverSlot(rowIndex, offsetY, rowHeight) {
+  return offsetY < rowHeight / 2 ? rowIndex : rowIndex + 1;
+}
+function dropIndex(from, slot) {
+  const to = from < slot ? slot - 1 : slot;
+  return to === from ? null : to;
+}
+function reorderItems(items, from, to) {
+  const next = items.slice();
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+function csvRecords(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else inQuotes = false;
+      } else cell += ch;
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      row.push(cell);
+      cell = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else cell += ch;
+  }
+  if (cell !== "" || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows;
+}
+const HEADER_WORDS = /* @__PURE__ */ new Set([
+  "prompt",
+  "prompts",
+  "text",
+  "entry",
+  "entries",
+  "task",
+  "tasks",
+  "item",
+  "items",
+  "message",
+  "messages",
+  "queue",
+  // Companion columns a prompt sheet tends to carry next to the prompt.
+  "title",
+  "name",
+  "description",
+  "priority",
+  "notes",
+  "order",
+  "id"
+]);
+function promptsFromFile(name, text) {
+  let lines;
+  if (/\.csv$/i.test(name)) {
+    const records = csvRecords(text).map(
+      (cells) => cells.map((c) => c.trim()).filter(Boolean)
+    );
+    const first = records[0];
+    if ((first == null ? void 0 : first.length) && first.every((c) => HEADER_WORDS.has(c.toLowerCase()))) {
+      records.shift();
+    }
+    lines = records.map((cells) => cells.join(" "));
+  } else {
+    lines = text.split(/\r\n|\r|\n/);
+  }
+  return lines.map((l) => l.trim()).filter(Boolean);
+}
 const queueCache = /* @__PURE__ */ new Map();
 function qApi(title, path, opts) {
   return instApi(title, path, opts);
 }
-function QueueTab({ title, active }) {
+function QueueTab$1({ title, active }) {
   const [state, setState] = reactExports.useState(queueCache.get(title) || null);
   const [draft, setDraft] = reactExports.useState("");
   const [editing, setEditing] = reactExports.useState(null);
+  const [dragId, setDragId] = reactExports.useState(null);
+  const [dropSlot, setDropSlot] = reactExports.useState(null);
+  const draggingRef = reactExports.useRef(false);
+  const [inserting, setInserting] = reactExports.useState(null);
+  const [fileHover, setFileHover] = reactExports.useState(false);
   const reload = reactExports.useCallback(async () => {
+    if (draggingRef.current) return;
     try {
       const st = await qApi(title, "/queue");
       queueCache.set(title, st);
@@ -28002,7 +29301,7 @@ function QueueTab({ title, active }) {
     try {
       await qApi(title, "/send", { json: { text } });
       setDraft("");
-      toast("Sent to " + title);
+      toast("Sent to " + displayName(title));
       reload();
     } catch (err) {
       toast("Send failed: " + (err.message || ""));
@@ -28027,189 +29326,342 @@ function QueueTab({ title, active }) {
     setEditing(null);
     mutate("/queue/edit", { json: { id: editing.id, text: t } });
   };
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-console", children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-pop-head", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "queue-pop-title", children: title }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "queue-pop-sub muted", children: "Send a prompt now, or queue prompts to auto-run when the agent goes idle — the run keeps going unattended and resumes when usage limits reset" })
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(
-      "textarea",
-      {
-        className: "queue-input",
-        rows: 3,
-        placeholder: "Type a prompt — Add to queue, or Send now",
-        value: draft,
-        onChange: (e) => setDraft(e.target.value)
+  const saveInsert = () => {
+    if (!inserting) return;
+    const t = inserting.value.trim();
+    if (!t) return;
+    const at = inserting.index;
+    setInserting(null);
+    mutate("/queue", { json: { text: t, index: at } });
+  };
+  const importFiles = async (files) => {
+    const texts = [];
+    for (const f of Array.from(files)) {
+      try {
+        texts.push(...promptsFromFile(f.name, await f.text()));
+      } catch {
+        toast("Could not read " + f.name);
       }
-    ),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-actions", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "queue-add primary", type: "button", onClick: add, children: "Add to queue" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "queue-send", type: "button", onClick: send, children: "Send now" })
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-flags", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { children: [
+    }
+    if (!texts.length) {
+      toast("No prompts found in the dropped file");
+      return;
+    }
+    try {
+      const st = await qApi(
+        title,
+        "/queue",
+        { json: { texts } }
+      );
+      queueCache.set(title, st);
+      setState(st);
+      const added = st.added ?? texts.length;
+      toast(
+        "Queued " + added + (added === 1 ? " prompt" : " prompts") + (st.skipped ? " — " + st.skipped + " skipped (queue full)" : "")
+      );
+    } catch (err) {
+      toast("Queue failed: " + (err.message || ""));
+    }
+  };
+  const endDrag = () => {
+    draggingRef.current = false;
+    setDragId(null);
+    setDropSlot(null);
+  };
+  const finishDrop = () => {
+    const id = dragId;
+    const slot = dropSlot;
+    endDrag();
+    if (!id || slot == null) return;
+    const from = items.findIndex((x) => x.id === id);
+    if (from < 0) return;
+    const to = dropIndex(from, slot);
+    if (to == null) return;
+    const optimistic = { ...state, items: reorderItems(items, from, to) };
+    queueCache.set(title, optimistic);
+    setState(optimistic);
+    mutate("/queue/reorder", { json: { id, index: to } });
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      className: "queue-console" + (fileHover ? " file-hover" : ""),
+      onDragOver: (e) => {
+        if (dragId || !e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        setFileHover(true);
+      },
+      onDragLeave: (e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) setFileHover(false);
+      },
+      onDrop: (e) => {
+        var _a2;
+        if (!fileHover) return;
+        e.preventDefault();
+        setFileHover(false);
+        if ((_a2 = e.dataTransfer.files) == null ? void 0 : _a2.length) void importFiles(e.dataTransfer.files);
+      },
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-pop-head", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "queue-pop-title", children: title }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "queue-pop-sub muted", children: "Send a prompt now, or queue prompts to auto-run when the agent goes idle — the run keeps going unattended and resumes when usage limits reset. Drop a .csv or .txt file anywhere here to queue every row as its own prompt." })
+        ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "input",
+          "textarea",
           {
-            type: "checkbox",
-            className: "queue-enabled",
-            checked: enabled,
-            onChange: (e) => flags({ enabled: e.target.checked })
+            className: "queue-input",
+            rows: 3,
+            placeholder: "Type a prompt — Add to queue, or Send now",
+            value: draft,
+            onChange: (e) => setDraft(e.target.value)
           }
         ),
-        " ",
-        "Auto-run queue when idle"
-      ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { title: "Re-queue each sent prompt so a single self-improving prompt cycles forever", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "input",
-          {
-            type: "checkbox",
-            className: "queue-loop",
-            checked: loop,
-            onChange: (e) => flags({ loop: e.target.checked })
-          }
-        ),
-        " ",
-        "Loop (keep re-running)"
-      ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs(
-        "label",
-        {
-          className: "queue-loop-timer" + (loop ? "" : " disabled"),
-          title: "With Loop on, only re-send every N minutes (0 = re-send as soon as the agent is idle)",
-          children: [
-            "↳ every",
-            " ",
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-actions", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "queue-add primary", type: "button", onClick: add, children: "Add to queue" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "queue-send", type: "button", onClick: send, children: "Send now" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-flags", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
               {
-                type: "number",
-                className: "queue-loop-interval",
-                min: 0,
-                max: 1440,
-                step: 1,
-                defaultValue: loopInterval,
-                disabled: !loop,
-                onChange: (e) => {
-                  let n = parseInt(e.target.value, 10);
-                  if (!(n >= 0)) n = 0;
-                  if (n > 1440) n = 1440;
-                  flags({ loop_interval: n });
-                }
+                type: "checkbox",
+                className: "queue-enabled",
+                checked: enabled,
+                onChange: (e) => flags({ enabled: e.target.checked })
               }
             ),
             " ",
-            "min"
-          ]
+            "Auto-run queue when idle"
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { title: "Re-queue each sent prompt so a single self-improving prompt cycles forever", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                type: "checkbox",
+                className: "queue-loop",
+                checked: loop,
+                onChange: (e) => flags({ loop: e.target.checked })
+              }
+            ),
+            " ",
+            "Loop (keep re-running)"
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "label",
+            {
+              className: "queue-loop-timer" + (loop ? "" : " disabled"),
+              title: "With Loop on, only re-send every N minutes (0 = re-send as soon as the agent is idle)",
+              children: [
+                "↳ every",
+                " ",
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    type: "number",
+                    className: "queue-loop-interval",
+                    min: 0,
+                    max: 1440,
+                    step: 1,
+                    defaultValue: loopInterval,
+                    disabled: !loop,
+                    onChange: (e) => {
+                      let n = parseInt(e.target.value, 10);
+                      if (!(n >= 0)) n = 0;
+                      if (n > 1440) n = 1440;
+                      flags({ loop_interval: n });
+                    }
+                  }
+                ),
+                " ",
+                "min"
+              ]
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { title: "When the agent hits its usage limit, wait out the window and auto-resume the moment it resets. Turn off to stop the queue when limited instead of waiting.", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                type: "checkbox",
+                className: "queue-wait",
+                checked: waitLimit,
+                onChange: (e) => flags({ wait_for_limit: e.target.checked })
+              }
+            ),
+            " ",
+            "Wait out usage limits (auto-resume on reset)"
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-list", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: statusCls, children: statusText }),
+          items.map((it, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs(reactExports.Fragment, { children: [
+            (inserting == null ? void 0 : inserting.index) === i && /* @__PURE__ */ jsxRuntimeExports.jsx(
+              InsertComposer,
+              {
+                value: inserting.value,
+                onChange: (v) => setInserting({ index: i, value: v }),
+                onSave: saveInsert,
+                onCancel: () => setInserting(null)
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs(
+              "div",
+              {
+                className: "queue-item" + (i === 0 ? " queue-next" : "") + ((editing == null ? void 0 : editing.id) === it.id ? " editing" : "") + (dragId === it.id ? " dragging" : "") + (dragId && dropSlot === i ? " drop-before" : "") + (dragId && i === items.length - 1 && dropSlot === items.length ? " drop-after" : ""),
+                "data-item-id": it.id,
+                onDragOver: (e) => {
+                  if (!dragId) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setDropSlot(hoverSlot(i, e.clientY - rect.top, rect.height));
+                },
+                onDrop: (e) => {
+                  e.preventDefault();
+                  finishDrop();
+                },
+                children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(
+                    "span",
+                    {
+                      className: "qi-drag",
+                      title: "Drag to reorder",
+                      draggable: true,
+                      onDragStart: (e) => {
+                        const row = e.currentTarget.closest(".queue-item");
+                        if (row) e.dataTransfer.setDragImage(row, 16, 16);
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", it.id);
+                        draggingRef.current = true;
+                        setDragId(it.id);
+                      },
+                      onDragEnd: endDrag,
+                      children: "⋮⋮"
+                    }
+                  ),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "queue-item-pos", title: i === 0 ? "Sends next" : "Position " + (i + 1), children: i === 0 ? "▶" : String(i + 1) }),
+                  (editing == null ? void 0 : editing.id) === it.id ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-item-edit", children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(
+                      "textarea",
+                      {
+                        autoFocus: true,
+                        rows: Math.min(10, Math.max(3, editing.value.split("\n").length + 1)),
+                        value: editing.value,
+                        onChange: (e) => setEditing({ id: it.id, value: e.target.value })
+                      }
+                    ),
+                    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-item-edit-btns", children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "qi-save", onClick: saveEdit, children: "Save" }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "qi-cancel", onClick: () => {
+                        setEditing(null);
+                        reload();
+                      }, children: "Cancel" })
+                    ] })
+                  ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                    /* @__PURE__ */ jsxRuntimeExports.jsx(
+                      "span",
+                      {
+                        className: "queue-item-text",
+                        title: "Double-click to edit",
+                        onDoubleClick: () => setEditing({ id: it.id, value: it.text }),
+                        children: it.text
+                      }
+                    ),
+                    /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "queue-item-ctrls", children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(
+                        "button",
+                        {
+                          className: "qi-send",
+                          title: "Send this prompt now — skips the idle wait, cooldowns and any usage-limit hold",
+                          onClick: async () => {
+                            try {
+                              const st = await qApi(title, "/queue/send_now", { json: { id: it.id } });
+                              queueCache.set(title, st);
+                              setState(st);
+                              toast("Sent to " + displayName(title));
+                            } catch (err) {
+                              toast("Send failed: " + (err.message || ""));
+                            }
+                          },
+                          children: "▶"
+                        }
+                      ),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "qi-edit", title: "Edit", onClick: () => setEditing({ id: it.id, value: it.text }), children: "✎" }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(
+                        "button",
+                        {
+                          className: "qi-add-above",
+                          title: "Add a prompt above this one",
+                          onClick: () => setInserting({ index: i, value: "" }),
+                          children: "+↑"
+                        }
+                      ),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(
+                        "button",
+                        {
+                          className: "qi-add-below",
+                          title: "Add a prompt below this one",
+                          onClick: () => setInserting({ index: i + 1, value: "" }),
+                          children: "+↓"
+                        }
+                      ),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(
+                        "button",
+                        {
+                          className: "qi-del",
+                          title: "Remove",
+                          onClick: () => mutate("/queue?item=" + encodeURIComponent(it.id), { method: "DELETE" }),
+                          children: "✕"
+                        }
+                      )
+                    ] })
+                  ] })
+                ]
+              }
+            )
+          ] }, it.id)),
+          inserting && inserting.index >= items.length && /* @__PURE__ */ jsxRuntimeExports.jsx(
+            InsertComposer,
+            {
+              value: inserting.value,
+              onChange: (v) => setInserting({ index: inserting.index, value: v }),
+              onSave: saveInsert,
+              onCancel: () => setInserting(null)
+            }
+          ),
+          items.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "queue-clear", onClick: () => mutate("/queue", { method: "DELETE" }), children: "Clear all" })
+        ] })
+      ]
+    }
+  );
+}
+function InsertComposer({
+  value,
+  onChange,
+  onSave,
+  onCancel
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-item queue-item-insert", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "queue-item-pos", title: "New prompt goes here", children: "+" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-item-edit", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "textarea",
+        {
+          autoFocus: true,
+          rows: Math.min(10, Math.max(3, value.split("\n").length + 1)),
+          placeholder: "New prompt for this spot…",
+          value,
+          onChange: (e) => onChange(e.target.value),
+          onKeyDown: (e) => {
+            if (e.key === "Escape") onCancel();
+          }
         }
       ),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { title: "When the agent hits its usage limit, wait out the window and auto-resume the moment it resets. Turn off to stop the queue when limited instead of waiting.", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "input",
-          {
-            type: "checkbox",
-            className: "queue-wait",
-            checked: waitLimit,
-            onChange: (e) => flags({ wait_for_limit: e.target.checked })
-          }
-        ),
-        " ",
-        "Wait out usage limits (auto-resume on reset)"
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-item-edit-btns", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "qi-save", onClick: onSave, children: "Add here" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "qi-cancel", onClick: onCancel, children: "Cancel" })
       ] })
-    ] }),
-    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-list", children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: statusCls, children: statusText }),
-      items.map((it, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
-        "div",
-        {
-          className: "queue-item" + (i === 0 ? " queue-next" : "") + ((editing == null ? void 0 : editing.id) === it.id ? " editing" : ""),
-          "data-item-id": it.id,
-          children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "queue-item-pos", title: i === 0 ? "Sends next" : "Position " + (i + 1), children: i === 0 ? "▶" : String(i + 1) }),
-            (editing == null ? void 0 : editing.id) === it.id ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-item-edit", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
-                "textarea",
-                {
-                  autoFocus: true,
-                  rows: Math.min(10, Math.max(3, editing.value.split("\n").length + 1)),
-                  value: editing.value,
-                  onChange: (e) => setEditing({ id: it.id, value: e.target.value })
-                }
-              ),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "queue-item-edit-btns", children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "qi-save", onClick: saveEdit, children: "Save" }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "qi-cancel", onClick: () => {
-                  setEditing(null);
-                  reload();
-                }, children: "Cancel" })
-              ] })
-            ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
-                "span",
-                {
-                  className: "queue-item-text",
-                  title: "Double-click to edit",
-                  onDoubleClick: () => setEditing({ id: it.id, value: it.text }),
-                  children: it.text
-                }
-              ),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "queue-item-ctrls", children: [
-                /* @__PURE__ */ jsxRuntimeExports.jsx(
-                  "button",
-                  {
-                    className: "qi-send",
-                    title: "Send this prompt now — skips the idle wait, cooldowns and any usage-limit hold",
-                    onClick: async () => {
-                      try {
-                        const st = await qApi(title, "/queue/send_now", { json: { id: it.id } });
-                        queueCache.set(title, st);
-                        setState(st);
-                        toast("Sent to " + title);
-                      } catch (err) {
-                        toast("Send failed: " + (err.message || ""));
-                      }
-                    },
-                    children: "▶"
-                  }
-                ),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "qi-edit", title: "Edit", onClick: () => setEditing({ id: it.id, value: it.text }), children: "✎" }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx(
-                  "button",
-                  {
-                    className: "qi-up",
-                    title: "Move up",
-                    disabled: i === 0,
-                    onClick: () => mutate("/queue/reorder", { json: { id: it.id, direction: "up" } }),
-                    children: "↑"
-                  }
-                ),
-                /* @__PURE__ */ jsxRuntimeExports.jsx(
-                  "button",
-                  {
-                    className: "qi-down",
-                    title: "Move down",
-                    disabled: i === items.length - 1,
-                    onClick: () => mutate("/queue/reorder", { json: { id: it.id, direction: "down" } }),
-                    children: "↓"
-                  }
-                ),
-                /* @__PURE__ */ jsxRuntimeExports.jsx(
-                  "button",
-                  {
-                    className: "qi-del",
-                    title: "Remove",
-                    onClick: () => mutate("/queue?item=" + encodeURIComponent(it.id), { method: "DELETE" }),
-                    children: "✕"
-                  }
-                )
-              ] })
-            ] })
-          ]
-        },
-        it.id
-      )),
-      items.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "queue-clear", onClick: () => mutate("/queue", { method: "DELETE" }), children: "Clear all" })
     ] })
   ] });
 }
@@ -28403,7 +29855,7 @@ function Pane({
   const [histPane, setHistPane] = reactExports.useState(null);
   const bodyRef = reactExports.useRef(null);
   const fitTimer = reactExports.useRef(void 0);
-  const displayName = alias || title;
+  const displayName2 = alias || title;
   const adopt = reactExports.useCallback(
     (kind) => (el) => {
       if (!el || missing || loading) return;
@@ -28488,6 +29940,7 @@ function Pane({
     return () => document.removeEventListener("keydown", onKey, true);
   }, [focused, missing, loading, histPane, tab]);
   const showTab = (t) => {
+    setHistPane(null);
     setTab(t);
     setLastTab(title, t);
     if (t === "shell") setShellStarted(true);
@@ -28501,6 +29954,7 @@ function Pane({
     let t = lastTab;
     if (t === "diff" && !caps2.git) t = "agent";
     if (t === tab) return;
+    setHistPane(null);
     setTab(t);
     if (t === "shell") setShellStarted(true);
     setTimeout(() => {
@@ -28548,7 +30002,7 @@ function Pane({
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pane-head", ...headDrag, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "grip", title: "Drag to move this window", children: "⠿" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", children: displayName }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", children: displayName2 }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "stagechip s-missing", title: "Workspace directory no longer exists", children: "missing workspace" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state", children: "workspace gone" })
           ] }),
@@ -28583,7 +30037,7 @@ function Pane({
         children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pane-head", ...headDrag, children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "grip", title: "Drag to move this window", children: "⠿" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", children: displayName }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", children: displayName2 }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "branch", children: inst.branch ? "(" + displayBranch(inst) + ")" : "" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state", children: "provisioning…" })
           ] }),
@@ -28599,6 +30053,7 @@ function Pane({
   const chip = chipState(inst);
   const ns = nextStep(inst);
   const ft = fastTrackStep(inst);
+  const rs = resetStep(inst);
   const step = liveStep(inst);
   const q = inst.queue;
   const pending = (q == null ? void 0 : q.pending) || 0;
@@ -28618,7 +30073,7 @@ function Pane({
       children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pane-head", ...headDrag, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "grip", title: "Drag to move this window", children: "⠿" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", title: (alias ? title + "  ·  " : "") + (inst.branch || title), children: displayName }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", title: (alias ? title + "  ·  " : "") + (inst.branch || title), children: displayName2 }),
           hasDiffStat && /* @__PURE__ */ jsxRuntimeExports.jsx(CtxLine, { inst }),
           /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tabs", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("button", { "data-tab": "agent", className: tab === "agent" ? "active" : "", onClick: (e) => {
@@ -28693,6 +30148,20 @@ function Pane({
                   ft.run();
                 },
                 children: ft.label
+              }
+            ),
+            rs && /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                className: "nextstep nextstep-reset",
+                type: "button",
+                title: rs.title,
+                "aria-label": "Back to idle",
+                onClick: (ev) => {
+                  ev.stopPropagation();
+                  rs.run();
+                },
+                children: rs.label
               }
             ),
             /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -28817,7 +30286,7 @@ function Pane({
           ] }),
           shellStarted ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-term shell-term" + (tab !== "shell" ? " hidden" : ""), ref: adopt("shell") }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-term shell-term" + (tab !== "shell" ? " hidden" : "") }),
           caps2.git && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-diff" + (tab !== "diff" ? " hidden" : ""), children: /* @__PURE__ */ jsxRuntimeExports.jsx(DiffTab, { title, active: tab === "diff" }) }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-queue" + (tab !== "queue" ? " hidden" : ""), children: /* @__PURE__ */ jsxRuntimeExports.jsx(QueueTab, { title, active: tab === "queue" }) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-queue" + (tab !== "queue" ? " hidden" : ""), children: /* @__PURE__ */ jsxRuntimeExports.jsx(QueueTab$1, { title, active: tab === "queue" }) }),
           histPane && /* @__PURE__ */ jsxRuntimeExports.jsx(
             HistoryOverlay,
             {
@@ -28968,8 +30437,125 @@ function BudgetLock({
     /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "bl-err error", children: err })
   ] }) });
 }
+const NOT_YET = 4404;
+const NOT_READY = 4409;
+const RETRY_MS = [700, 1500, 3e3];
+const RETRY_MAX_MS = 3e3;
+const RETRY_LIMIT = 100;
+function retryAfter(code, attempts, reconnect) {
+  if (!reconnect || attempts >= RETRY_LIMIT) return null;
+  if (code === NOT_YET || code === NOT_READY)
+    return RETRY_MS[attempts] ?? RETRY_MAX_MS;
+  if (code === 1006 || code === 1001 || attempts === 0)
+    return RETRY_MS[attempts] ?? RETRY_MAX_MS;
+  return null;
+}
+function isStarting(code) {
+  return code === NOT_YET || code === NOT_READY;
+}
+function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
+  const [state, setState] = reactExports.useState("connecting");
+  reactExports.useEffect(() => {
+    const host2 = hostRef.current;
+    if (!host2) return;
+    const term = new xtermExports.Terminal({
+      cursorBlink: interactive,
+      fontSize: 12,
+      theme: termTheme(),
+      disableStdin: !interactive,
+      fontFamily: 'ui-monospace, "Cascadia Code", Menlo, Consolas, monospace',
+      scrollback: 2e4,
+      macOptionClickForcesSelection: true
+    });
+    const fit = new addonFitExports.FitAddon();
+    term.loadAddon(fit);
+    term.open(host2);
+    let ws = null;
+    let timer;
+    let dead = false;
+    let attempts = 0;
+    let said = false;
+    const doFit = (sendResize) => {
+      try {
+        fit.fit();
+      } catch {
+        return;
+      }
+      if (ws && ws.readyState === WebSocket.OPEN)
+        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+    };
+    const connect = () => {
+      if (dead) return;
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const sock = new WebSocket(proto + "://" + location.host + wsPath);
+      ws = sock;
+      sock.binaryType = "arraybuffer";
+      sock.onopen = () => {
+        if (dead) return;
+        attempts = 0;
+        setState("streaming");
+        doFit();
+      };
+      sock.onmessage = (ev) => {
+        if (typeof ev.data === "string") {
+          try {
+            const j = JSON.parse(ev.data);
+            if (j.type === "error") {
+              term.write("\r\n[error] " + j.message + "\r\n");
+              return;
+            }
+          } catch {
+            term.write(ev.data);
+          }
+        } else {
+          term.write(new Uint8Array(ev.data));
+        }
+      };
+      sock.onclose = (ev) => {
+        if (dead) return;
+        const wait = retryAfter(ev.code, attempts, reconnect);
+        if (wait === null) {
+          setState("disconnected");
+          return;
+        }
+        const transient = isStarting(ev.code);
+        if (!said) {
+          said = true;
+          term.write(
+            "\r\n\x1B[2mWaiting for the session to start — this takes a moment the first time in a repository.\x1B[0m\r\n"
+          );
+        }
+        setState(transient ? "starting" : "reconnecting");
+        timer = setTimeout(connect, wait);
+        attempts++;
+      };
+      sock.onerror = () => {
+      };
+    };
+    if (interactive)
+      term.onData((d) => {
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
+      });
+    const obs = new ResizeObserver(() => doFit());
+    obs.observe(host2);
+    const t = setTimeout(() => doFit(), 50);
+    connect();
+    return () => {
+      dead = true;
+      clearTimeout(t);
+      if (timer) clearTimeout(timer);
+      obs.disconnect();
+      try {
+        ws == null ? void 0 : ws.close();
+      } catch {
+      }
+      term.dispose();
+    };
+  }, [hostRef, wsPath, interactive, reconnect]);
+  return state;
+}
 function SpecialPane({ desc, drag }) {
-  const title = sentinel(desc.kind);
+  const title = sentinel(desc.kind, desc.session);
   const paneRef = reactExports.useRef(null);
   const headDrag = {
     draggable: true,
@@ -29002,10 +30588,11 @@ function SpecialPane({ desc, drag }) {
     "section",
     {
       ref: paneRef,
-      className: "pane focused " + (desc.kind === "logs" ? "logs-pane" : desc.kind === "syslogs" ? "syslogs-pane" : "chat-pane"),
+      className: "pane focused " + (desc.kind === "logs" ? "logs-pane" : desc.kind === "syslogs" ? "syslogs-pane" : desc.kind === "verify" ? "verify-pane" : "chat-pane"),
       "data-title": title,
       ...paneDrag,
       children: [
+        desc.kind === "verify" && /* @__PURE__ */ jsxRuntimeExports.jsx(VerifyBody, { desc, headDrag }),
         desc.kind === "logs" && /* @__PURE__ */ jsxRuntimeExports.jsx(LogsBody, { desc, headDrag }),
         desc.kind === "syslogs" && /* @__PURE__ */ jsxRuntimeExports.jsx(SysLogsBody, { desc, headDrag }),
         desc.kind === "chat" && /* @__PURE__ */ jsxRuntimeExports.jsx(ChatBody, { desc, headDrag })
@@ -29013,74 +30600,49 @@ function SpecialPane({ desc, drag }) {
     }
   );
 }
-function useWsTerm(hostRef, wsPath, interactive) {
-  const [state, setState] = reactExports.useState("connecting");
-  reactExports.useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    const term = new xtermExports.Terminal({
-      cursorBlink: interactive,
-      fontSize: 12,
-      theme: termTheme(),
-      disableStdin: !interactive,
-      fontFamily: 'ui-monospace, "Cascadia Code", Menlo, Consolas, monospace',
-      scrollback: 2e4,
-      macOptionClickForcesSelection: true
-    });
-    const fit = new addonFitExports.FitAddon();
-    term.loadAddon(fit);
-    term.open(host);
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(proto + "://" + location.host + wsPath);
-    ws.binaryType = "arraybuffer";
-    const doFit = (sendResize) => {
-      try {
-        fit.fit();
-      } catch {
-        return;
-      }
-      if (ws.readyState === WebSocket.OPEN)
-        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-    };
-    ws.onopen = () => {
-      setState("streaming");
-      doFit();
-    };
-    ws.onmessage = (ev) => {
-      if (typeof ev.data === "string") {
-        try {
-          const j = JSON.parse(ev.data);
-          if (j.type === "error") {
-            term.write("\r\n[error] " + j.message + "\r\n");
-            return;
+function VerifyBody({ desc, headDrag }) {
+  const hostRef = reactExports.useRef(null);
+  const session = desc.session || "";
+  const state = useWsTerm(
+    hostRef,
+    "/api/instances/" + encodeURIComponent(session) + "/terminal",
+    false
+  );
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pane-head", ...headDrag, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "grip", title: "Drag to move this window", children: "⠿" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", children: "Verifying" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "branch", children: session }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state", children: state }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "actions", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            className: "act verify-pane-back",
+            title: "Back to Verify (Alt+V)",
+            onClick: (e) => {
+              e.stopPropagation();
+              useUi.getState().openDialogFor("verify");
+            },
+            children: "Verify"
           }
-        } catch {
-          term.write(ev.data);
-        }
-      } else {
-        term.write(new Uint8Array(ev.data));
-      }
-    };
-    ws.onclose = () => setState("disconnected");
-    ws.onerror = () => setState("error");
-    if (interactive)
-      term.onData((d) => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(d);
-      });
-    const obs = new ResizeObserver(() => doFit());
-    obs.observe(host);
-    const t = setTimeout(() => doFit(), 50);
-    return () => {
-      clearTimeout(t);
-      obs.disconnect();
-      try {
-        ws.close();
-      } catch {
-      }
-      term.dispose();
-    };
-  }, [hostRef, wsPath, interactive]);
-  return state;
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            className: "act verify-pane-close",
+            title: "Close this window — the run keeps going",
+            onClick: (e) => {
+              e.stopPropagation();
+              desc.onClose();
+            },
+            children: "Close"
+          }
+        )
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-body", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-term", ref: hostRef }) })
+  ] });
 }
 function LogsBody({ desc, headDrag }) {
   const hostRef = reactExports.useRef(null);
@@ -29182,18 +30744,22 @@ function TerminalGrid({ specialPanes }) {
   const { data: config } = useConfig();
   const ui = useUi();
   const [drag, setDrag] = reactExports.useState(null);
+  const workable = reactExports.useMemo(
+    () => (instances2 || []).filter((i) => !isVerifySession(i.title)),
+    [instances2]
+  );
   const visible = reactExports.useMemo(
-    () => computeVisible(instances2 || [], {
+    () => computeVisible(workable, {
       hidden: ui.hidden,
       viewMode: ui.viewMode,
       mru: ui.mru,
       order: ui.order
     }),
-    [instances2, ui.hidden, ui.viewMode, ui.mru, ui.order]
+    [workable, ui.hidden, ui.viewMode, ui.mru, ui.order]
   );
   const byTitle = reactExports.useMemo(() => new Map(visible.map((i) => [i.title, i])), [visible]);
   const specialByKey = reactExports.useMemo(
-    () => new Map(specialPanes.map((p) => [sentinel(p.kind), p])),
+    () => new Map(specialPanes.map((p) => [sentinel(p.kind, p.session), p])),
     [specialPanes]
   );
   const slotTitles = reactExports.useMemo(
@@ -29310,25 +30876,25 @@ function TerminalGrid({ specialPanes }) {
     }
   );
 }
-function sentinel(kind) {
-  return kind === "logs" ? "\0mindflock-logs" : kind === "syslogs" ? "\0system-logs" : "\0assistant-chat";
+function sentinel(kind, ref2 = "") {
+  return kind === "logs" ? "\0mindflock-logs" : kind === "syslogs" ? "\0system-logs" : kind === "verify" ? "\0verify:" + ref2 : "\0assistant-chat";
 }
 async function sendMessagePrompt(title) {
-  const text = window.prompt("Send a message to " + title + ":");
+  const text = window.prompt("Send a message to " + displayName(title) + ":");
   if (!text || !text.trim()) return;
   try {
     await instApi(title, "/send", { json: { text: text.trim() } });
-    toast("Sent to " + title);
+    toast("Sent to " + displayName(title));
   } catch (err) {
     toast("Send failed: " + (err.message || ""));
   }
 }
 async function queuePromptPrompt(title) {
-  const text = window.prompt("Queue a prompt for " + title + " (auto-runs when idle):");
+  const text = window.prompt("Queue a prompt for " + displayName(title) + " (auto-runs when idle):");
   if (!text || !text.trim()) return;
   try {
     await instApi(title, "/queue", { json: { text: text.trim() } });
-    toast("Queued for " + title);
+    toast("Queued for " + displayName(title));
   } catch (err) {
     toast("Queue failed: " + (err.message || ""));
   }
@@ -29348,7 +30914,7 @@ function fuzzyScore(query, text) {
   }
   return score;
 }
-function CommandPalette({ host }) {
+function CommandPalette({ host: host2 }) {
   const open = useUi((s) => s.openDialog === "palette");
   const closeDialog = useUi((s) => s.closeDialog);
   const { data: config } = useConfig();
@@ -29398,18 +30964,28 @@ function CommandPalette({ host }) {
           run: () => mergeSession(t)
         });
     }
-    acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host.toggleShortcuts() });
+    acts.push({ label: "Keyboard shortcuts", hint: "?", run: () => host2.toggleShortcuts() });
     acts.push({ label: "Open Intake", hint: "Alt+I", run: () => ui.openDialogFor("intake") });
     acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
     acts.push({ label: "Intake: Pull requests", run: () => ui.openDialogFor("intake", "prs") });
     acts.push({ label: "Intake: Issues", run: () => ui.openDialogFor("intake", "issues") });
+    acts.push({
+      label: "Intake: Auto-start",
+      hint: "what starts on its own",
+      run: () => ui.openDialogFor("intake", "autostart")
+    });
+    acts.push({
+      label: "Verify — what's waiting on you",
+      hint: "Alt+V",
+      run: () => ui.openDialogFor("verify")
+    });
     acts.push({ label: "Open Settings", run: () => ui.openDialogFor("settings") });
-    acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
+    acts.push({ label: "Open Doctor", run: () => host2.openDoctor() });
     acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
     acts.push({ label: "New from Recently closed…", run: () => ui.openDialogFor("recent") });
     return acts;
-  }, [open, config, host]);
+  }, [open, config, host2]);
   const filtered = reactExports.useMemo(() => {
     const scored = actions.map((a, i) => ({ a, i, s: fuzzyScore(query, a.label) })).filter((x) => x.s >= 0);
     scored.sort((x, y) => x.s - y.s || x.i - y.i);
@@ -29815,13 +31391,29 @@ const SUGGEST_SOURCES = [
   { key: "nearby", label: "Nearby", hint: "repos and folders sitting under your home directory" }
 ];
 const CHECK_DEBOUNCE_MS = 400;
+const SEARCH_DEBOUNCE_MS = 200;
+const SEARCH_MIN_CHARS = 2;
+function looksLikePath(text) {
+  const t = text.trim();
+  return t.startsWith("/") || t.startsWith("~");
+}
+function isNameQuery(text) {
+  const t = text.trim();
+  return !!t && !looksLikePath(t);
+}
+function homeRelative(path, home) {
+  if (!home || !path.startsWith(home)) return path;
+  const rest = path.slice(home.length);
+  if (!rest) return "~";
+  return rest[0] === "/" || rest[0] === "\\" ? "~" + rest : path;
+}
 function fitsWithin(childRight, rowRight) {
   return childRight <= rowRight + 0.5;
 }
 function FitRow({ children }) {
-  const ref = reactExports.useRef(null);
+  const ref2 = reactExports.useRef(null);
   reactExports.useLayoutEffect(() => {
-    const el = ref.current;
+    const el = ref2.current;
     if (!el) return;
     const fit = () => {
       const kids = Array.from(el.children);
@@ -29839,7 +31431,7 @@ function FitRow({ children }) {
     ro.observe(el);
     return () => ro.disconnect();
   });
-  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "nt-list", ref, children });
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "nt-list", ref: ref2, children });
 }
 function leafName(path) {
   return path.replace(/[/\\]+$/, "").split(/[/\\]/).pop() || path;
@@ -29912,6 +31504,9 @@ function NewSessionDialog() {
   const [homePath, setHomePath] = reactExports.useState("");
   const [suggestions, setSuggestions] = reactExports.useState([]);
   const [folderCheck, setFolderCheck] = reactExports.useState(null);
+  const [search, setSearch] = reactExports.useState(null);
+  const [searchOpen, setSearchOpen] = reactExports.useState(true);
+  const [searchSel, setSearchSel] = reactExports.useState(0);
   const [presetValue, setPresetValue] = reactExports.useState("");
   const [savedPresets, setSavedPresets] = reactExports.useState([]);
   const [profileId, setProfileId] = reactExports.useState("");
@@ -29922,6 +31517,7 @@ function NewSessionDialog() {
   const launchDefaults = reactExports.useRef({});
   const titleRef = reactExports.useRef(null);
   const launchRef = reactExports.useRef(null);
+  const searchListRef = reactExports.useRef(null);
   const promptRef = reactExports.useRef(null);
   const rootRef = reactExports.useRef(null);
   const [folder, folderDo] = reactExports.useReducer(folderReducer, FOLDER_INIT);
@@ -29940,6 +31536,9 @@ function NewSessionDialog() {
     setLaunchOpen(false);
     setPromptOpen(false);
     folderDo({ t: "reopen" });
+    setSearch(null);
+    setSearchOpen(true);
+    setSearchSel(0);
     setActiveTemplate("");
     setPresetValue("");
     setProfileId("");
@@ -30012,7 +31611,7 @@ function NewSessionDialog() {
   }, [open]);
   reactExports.useEffect(() => {
     const asked = repoPath.trim();
-    if (!open || !asked) {
+    if (!open || !asked || !looksLikePath(asked)) {
       setFolderCheck(null);
       return;
     }
@@ -30032,6 +31631,40 @@ function NewSessionDialog() {
       window.clearTimeout(timer);
     };
   }, [open, repoPath]);
+  reactExports.useEffect(() => {
+    const asked = repoPath.trim();
+    if (!open || looksLikePath(asked) || asked.length < SEARCH_MIN_CHARS) {
+      setSearch(null);
+      return;
+    }
+    let live = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const r = await api(
+          "/api/repos/search?q=" + encodeURIComponent(asked)
+        );
+        if (!live) return;
+        setSearch({
+          asked,
+          matches: r.matches || [],
+          truncated: !!r.truncated,
+          home: r.home || ""
+        });
+        setSearchSel(0);
+      } catch {
+        if (live) setSearch(null);
+      }
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+  }, [open, repoPath]);
+  reactExports.useEffect(() => {
+    var _a2;
+    const row = (_a2 = searchListRef.current) == null ? void 0 : _a2.querySelector('[aria-selected="true"]');
+    if (row && typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest" });
+  }, [searchSel, search, searchOpen]);
   const setAgent = reactExports.useCallback((value) => {
     const v = (value || "").trim();
     setProgram(v);
@@ -30089,7 +31722,7 @@ function NewSessionDialog() {
     if (t.prompt) setPrompt(t.prompt);
     setProvision(!!t.provisioned);
     if (t.workspace_strategy) setStrategy(t.workspace_strategy);
-    setInPlace(!!t.in_place);
+    setInPlace(!!t.in_place && !t.provisioned);
     setInitRepo(!!t.init_repo);
     setAdvancedOpen(!!(t.provisioned || t.init_repo || !t.in_place));
     if (t.prompt) setPromptOpen(true);
@@ -30099,18 +31732,30 @@ function NewSessionDialog() {
   };
   const armInitRepo = () => {
     setInitRepo(true);
-    setInPlace(false);
     setAdvancedOpen(true);
   };
   if (!open) return null;
   const folderPath = repoPath.trim();
   const offerProvision = provisioningAvailable || !!folderPath;
   const plainFolder = (folderCheck == null ? void 0 : folderCheck.asked) === folderPath && !!(folderCheck == null ? void 0 : folderCheck.plain);
+  const searchHits = search && search.asked === folderPath && searchOpen && !browserOpen ? search : null;
+  const selIndex = searchHits && searchHits.matches.length ? Math.min(searchSel, searchHits.matches.length - 1) : -1;
+  const provisionOn = offerProvision && provision;
   const suggestRows = SUGGEST_SOURCES.map((g) => ({
     ...g,
     items: suggestions.filter((s) => s.source === g.key)
   })).filter((g) => g.items.length > 0);
+  const pickMatch = (path) => {
+    folderDo({ t: "user-set", path });
+    setSearchOpen(false);
+  };
   const submit = async () => {
+    if (isNameQuery(repoPath)) {
+      setError(
+        `“${repoPath.trim()}” is a name to look up, not a folder — pick one of the matches, or type a full path starting with / or ~ (Browse… fills one in).`
+      );
+      return;
+    }
     setError("Creating…");
     const body = {
       title: title.trim(),
@@ -30257,9 +31902,41 @@ function NewSessionDialog() {
                           {
                             id: "new-repo-path",
                             autoComplete: "off",
-                            placeholder: "/home/me/projects/foo",
+                            placeholder: "/home/me/projects/foo — or a folder name to look up",
                             value: repoPath,
-                            onChange: (e) => folderDo({ t: "user-set", path: e.target.value })
+                            role: "combobox",
+                            "aria-expanded": !!searchHits,
+                            "aria-controls": "new-search-list",
+                            "aria-autocomplete": "list",
+                            "aria-activedescendant": selIndex >= 0 ? "new-search-hit-" + selIndex : void 0,
+                            onChange: (e) => {
+                              folderDo({ t: "user-set", path: e.target.value });
+                              setSearchOpen(true);
+                            },
+                            onKeyDown: (e) => {
+                              const hits = (searchHits == null ? void 0 : searchHits.matches) || [];
+                              if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                                if (!searchHits && search && search.asked === folderPath && !browserOpen) {
+                                  e.preventDefault();
+                                  setSearchOpen(true);
+                                  return;
+                                }
+                                if (!hits.length) return;
+                                e.preventDefault();
+                                const step = e.key === "ArrowDown" ? 1 : -1;
+                                const at = Math.min(searchSel, hits.length - 1) + step;
+                                setSearchSel(Math.max(0, Math.min(hits.length - 1, at)));
+                              } else if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && isNameQuery(folderPath)) {
+                                e.preventDefault();
+                                if (hits.length) pickMatch(hits[Math.min(searchSel, hits.length - 1)].path);
+                                else if (search && search.asked === folderPath && !browserOpen)
+                                  setSearchOpen(true);
+                              } else if (e.key === "Escape" && searchHits) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setSearchOpen(false);
+                              }
+                            }
                           }
                         ),
                         /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -30381,6 +32058,81 @@ function NewSessionDialog() {
               ] }) }),
               routeWarning && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "nf-git-nudge", children: routeWarning }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("datalist", { id: "provider-list" }),
+              searchHits && /* The name-search results. Wears .new-templates and .nf-suggest for
+              the same reason the suggestion strip below does — same card, same
+              head, same pills, a different source — and adds only what a search
+              hit needs that a suggestion chip doesn't: its path. Two folders
+              called `api` are told apart by where they live, and telling them
+              apart is the entire point of having searched. */
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "new-search", className: "new-templates nf-suggest nf-search", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "nt-head", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { children: [
+                    "Matches for “",
+                    searchHits.asked,
+                    "”"
+                  ] }),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "nf-suggest-legend", children: "↑↓ choose · Enter fills · Esc closes" })
+                ] }),
+                searchHits.matches.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "div",
+                  {
+                    id: "new-search-list",
+                    className: "nf-search-list",
+                    ref: searchListRef,
+                    role: "listbox",
+                    "aria-label": "Folder matches",
+                    children: searchHits.matches.map((m, i) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                      "button",
+                      {
+                        id: "new-search-hit-" + i,
+                        type: "button",
+                        role: "option",
+                        "aria-selected": i === selIndex,
+                        className: "nt-chip" + (m.is_git ? " is-git" : "") + (i === selIndex ? " active" : ""),
+                        "data-path": m.path,
+                        title: m.path + (m.is_git ? "" : "\nno git repo here yet"),
+                        onMouseMove: () => setSearchSel(i),
+                        onClick: () => pickMatch(m.path),
+                        children: [
+                          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "nf-search-name", children: (m.is_git ? "📦 " : "📁 ") + m.name }),
+                          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "nf-search-path", children: homeRelative(m.path, searchHits.home || homePath) })
+                        ]
+                      },
+                      m.path
+                    ))
+                  }
+                ),
+                searchHits.matches.length === 0 && /* An empty result has to name the ways out, because the field
+                looks identical whether the search found nothing or was never
+                a search at all. Both sentences are written to claim only what
+                the walk can actually support. A budget that tripped before
+                finding anything did not look everywhere, so "not here" would
+                be a claim it never got far enough to make — and it does not
+                ask the user to type more of the name, because the walk is
+                query-independent (the needle only RANKS what was already
+                reached) and a longer query re-walks the same directories for
+                the same budget. Nor does the complete-walk sentence say
+                "nothing under your home directory is called X": the search
+                stops at three levels, never enters a git repo and skips
+                hidden and node_modules-shaped folders, so a `widget` inside
+                the monorepo the user lives in is plainly under home and
+                plainly not something this walk can see. */
+                /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "nf-search-empty muted", children: searchHits.truncated ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                  "The search stopped at its time and size limit before it found “",
+                  searchHits.asked,
+                  "” — Browse… walks straight to it, and a path starting with / or ~ is used exactly as typed."
+                ] }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                  "No folder called “",
+                  searchHits.asked,
+                  "” in the first three levels under your home directory — the search doesn’t look inside git repos or hidden folders. Browse… reaches those and the rest of the disk, and a path starting with / or ~ is used exactly as typed."
+                ] }) }),
+                searchHits.matches.length > 0 && searchHits.truncated && /* Deliberately does NOT say "more folders matched": truncation
+                is one flag over three causes (the scan cap, the 1.5s deadline
+                and the row limit), and under either of the first two no extra
+                match is known to exist — the walk simply stopped. "May not be
+                everything" is true of all three. */
+                /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "nf-search-note muted", children: "The search stopped early, so this list may not be everything — Browse… if the folder you want isn’t here." })
+              ] }),
               plainFolder && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "nf-git-nudge", children: initRepo ? /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: "A git repo will be created here — diff, commit and PR will work." }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
                 "No git repo in this folder, so diff, commit and PR stay off.",
                 " ",
@@ -30450,16 +32202,16 @@ function NewSessionDialog() {
                             type: "checkbox",
                             id: "new-in-place",
                             checked: inPlace,
-                            disabled: initRepo,
+                            disabled: provisionOn,
                             onChange: (e) => {
                               setInPlace(e.target.checked);
-                              if (e.target.checked) setInitRepo(false);
+                              if (e.target.checked) setProvision(false);
                             }
                           }
                         ),
                         "Work directly in this folder",
                         " ",
-                        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "muted", children: "(no worktree — edits the original; multiple sessions can share it)" })
+                        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "muted", children: provisionOn ? "(off while provisioning: that builds a separate worktree or clone, so there is no “this folder” left to work in)" : "(no worktree — edits the original; multiple sessions can share it)" })
                       ] }),
                       /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "check", children: [
                         /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -30468,11 +32220,7 @@ function NewSessionDialog() {
                             type: "checkbox",
                             id: "new-init-repo",
                             checked: initRepo,
-                            disabled: inPlace,
-                            onChange: (e) => {
-                              setInitRepo(e.target.checked);
-                              if (e.target.checked) setInPlace(false);
-                            }
+                            onChange: (e) => setInitRepo(e.target.checked)
                           }
                         ),
                         "Create a git repo in this folder",
@@ -30486,12 +32234,15 @@ function NewSessionDialog() {
                             type: "checkbox",
                             id: "new-provision",
                             checked: provision,
-                            onChange: (e) => setProvision(e.target.checked)
+                            onChange: (e) => {
+                              setProvision(e.target.checked);
+                              if (e.target.checked) setInPlace(false);
+                            }
                           }
                         ),
                         "Provision workspace",
                         " ",
-                        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "muted", children: "— run repo setup & warm test caches" })
+                        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "muted", children: "— run repo setup & warm test caches, in a separate worktree or clone" })
                       ] }),
                       offerProvision && provision && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "provision-opts", children: [
                         /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { children: [
@@ -30777,25 +32528,22 @@ function FolderBrowser({
   ] });
 }
 const SECRET_MASK = "•••set";
+const EMPTY_SETTINGS = {};
 function useSettingsModel(open) {
-  const [settings, setSettings] = reactExports.useState({});
+  const settings = useSettingsDoc(open).data ?? EMPTY_SETTINGS;
   const reload = reactExports.useCallback(async () => {
     try {
-      const r = await api("/api/settings");
-      setSettings((r == null ? void 0 : r.settings) || {});
+      await fetchSettingsDoc();
     } catch {
     }
   }, []);
-  reactExports.useEffect(() => {
-    if (open) reload();
-  }, [open, reload]);
   const saveField = reactExports.useCallback(
     async (group, field, value) => {
       try {
         const r = await api("/api/settings", {
           json: { [group]: { [field]: value } }
         });
-        setSettings((r == null ? void 0 : r.settings) || {});
+        putSettingsDoc((r == null ? void 0 : r.settings) || {});
         void refreshConfig();
         toast("Saved " + field.replace(/_/g, " "));
       } catch (err) {
@@ -30809,7 +32557,7 @@ function useSettingsModel(open) {
     async (group, patch, okMsg) => {
       try {
         const r = await api("/api/settings", { json: { [group]: patch } });
-        setSettings((r == null ? void 0 : r.settings) || {});
+        putSettingsDoc((r == null ? void 0 : r.settings) || {});
         void refreshConfig();
         if (okMsg) toast(okMsg);
       } catch (err) {
@@ -30903,9 +32651,152 @@ function saveShownBuckets(v) {
 function visibleBuckets(buckets, doneBuckets, shown) {
   return shown === null ? buckets.filter((b) => !doneBuckets.includes(b)) : buckets.filter((b) => shown.includes(b));
 }
-function countInBuckets(tickets, visible) {
+const MINE_LS_KEY = "mf_ticket_mine_only";
+function loadMineOnly() {
+  try {
+    return localStorage.getItem(MINE_LS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function saveMineOnly(v) {
+  try {
+    if (v) localStorage.setItem(MINE_LS_KEY, "1");
+    else localStorage.removeItem(MINE_LS_KEY);
+  } catch {
+  }
+}
+function shownTickets(tickets, visible, mineOnly) {
   const set = new Set(visible);
-  return tickets.filter((t) => set.has(t.bucket || NO_STATE_BUCKET)).length;
+  return tickets.filter(
+    (t) => set.has(t.bucket || NO_STATE_BUCKET) && (!mineOnly || t.mine !== false)
+  );
+}
+function countInBuckets(tickets, visible, mineOnly = false) {
+  return shownTickets(tickets, visible, mineOnly).length;
+}
+const CHIP_BUDGET = 58;
+function shortReason(reason, budget = CHIP_BUDGET) {
+  const text = String(reason || "").split(/\s+/).join(" ").trim();
+  if (text.length <= budget) return { short: text, clipped: false };
+  const window2 = text.slice(0, budget);
+  const lastSpace = window2.lastIndexOf(" ");
+  const head = text[budget] === " " || lastSpace <= budget * 0.5 ? window2 : window2.slice(0, lastSpace);
+  return { short: head.replace(/[\s,;:.]+$/, "") + "…", clipped: true };
+}
+function DialogFilter({ value, onChange, placeholder, id, onEscape }) {
+  const ref2 = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    const onKey = (e) => {
+      var _a2, _b2;
+      if ((e.key === "f" || e.key === "F") && (e.ctrlKey || e.metaKey) && !e.altKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        (_a2 = ref2.current) == null ? void 0 : _a2.focus();
+        (_b2 = ref2.current) == null ? void 0 : _b2.select();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dlg-filter", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "input",
+      {
+        ref: ref2,
+        id,
+        type: "text",
+        autoComplete: "off",
+        spellCheck: false,
+        placeholder,
+        "aria-label": placeholder,
+        value,
+        onChange: (e) => onChange(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key !== "Escape") return;
+          e.stopPropagation();
+          if (value) onChange("");
+          else onEscape == null ? void 0 : onEscape();
+        }
+      }
+    ),
+    value && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "button",
+      {
+        type: "button",
+        className: "dlg-filter-clear",
+        title: "Clear filter",
+        "aria-label": "Clear filter",
+        onClick: () => {
+          var _a2;
+          onChange("");
+          (_a2 = ref2.current) == null ? void 0 : _a2.focus();
+        },
+        children: "✕"
+      }
+    )
+  ] });
+}
+const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
+const EFFORT_LABELS = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+  ultra: "Ultra"
+};
+function normalizeEffort(value) {
+  const e = String(value || "").trim().toLowerCase();
+  return EFFORTS.includes(e) ? e : "";
+}
+function supportsEffort(cap) {
+  return !cap || cap.levels.length > 0;
+}
+function appliedEffort(want, cap) {
+  const level = normalizeEffort(want);
+  if (!level || !cap || cap.levels.length === 0) return "";
+  if (cap.levels.includes(level)) return level;
+  const below = EFFORTS.filter(
+    (r) => EFFORTS.indexOf(r) <= EFFORTS.indexOf(level) && cap.levels.includes(r)
+  );
+  return below.length ? below[below.length - 1] : cap.levels[0];
+}
+function effortOptionLabel(rung, cap) {
+  const label = EFFORT_LABELS[rung] || rung;
+  if (rung === "ultra" && (cap == null ? void 0 : cap.ultra_level))
+    return label + " (" + cap.ultra_level + ")";
+  const got = appliedEffort(rung, cap);
+  return got && got !== rung ? label + " (→ " + EFFORT_LABELS[got] + ")" : label;
+}
+function effortTitle(provider, cap) {
+  const head = "How hard to think about this one — just this start, not the whole queue.";
+  const cli = provider || "the configured CLI";
+  if (!cap) return head;
+  if (cap.levels.length === 0)
+    return head + "\n" + cli + " has no effort setting, so this start ignores it.";
+  const top = cap.levels[cap.levels.length - 1];
+  let ceiling;
+  if (top !== "ultra")
+    ceiling = cli + " tops out at " + EFFORT_LABELS[top] + "; anything above that runs there.";
+  else if (cap.ultra_level)
+    ceiling = cli + " goes all the way to Ultra, which it calls `" + cap.ultra_level + "` and runs for the whole session.";
+  else
+    ceiling = cli + " goes all the way to Ultra, which also puts `" + cap.keyword + "` in the prompt.";
+  return head + "\n" + ceiling;
+}
+async function reopenIntakeItem(target) {
+  const inst = await api("/api/intake/reopen", { json: target });
+  await refreshInstances();
+  if (inst == null ? void 0 : inst.title) selectSession(inst.title);
+  return (inst == null ? void 0 : inst.title) || "";
+}
+function workspaceNote(ws) {
+  if (ws.kind === "closed") {
+    const when = ageText(ws.closed_at).replace(" old", " ago");
+    return when ? "session ended " + when : "session you ended";
+  }
+  return "workspace left on this machine";
 }
 function ageText(iso) {
   const t = Date.parse(iso || "");
@@ -31087,11 +32978,21 @@ function WorkItemRow({
   linkTitle,
   agents,
   configuredAgent,
-  configuredDepth
+  configuredDepth,
+  configuredEffort,
+  workspace,
+  onReopen
 }) {
   const [state, setState] = reactExports.useState("idle");
+  const [reopening, setReopening] = reactExports.useState("idle");
+  const canReopen = !!workspace && !!onReopen && !hasSession;
   const [agent, setAgent] = reactExports.useState("");
   const [depth, setDepth] = reactExports.useState("");
+  const [effort, setEffort] = reactExports.useState("");
+  const effortCaps = useProviderEfforts().data;
+  const effortProvider = agent || configuredAgent || "";
+  const effortCap = effortCaps ? effortCaps[effortProvider] : void 0;
+  const effortUsable = supportsEffort(effortCap);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-item", title: tooltip, children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-main", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -31109,15 +33010,48 @@ function WorkItemRow({
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-meta", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: meta }),
-      hasSession ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip on", children: "session open" }) : eligible ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip ok", children: eligibleLabel }) : (reasons || []).map((reason) => (
-        // title: a recorded failure reason is a full sentence of git output
-        // whose actionable half is at the end, so the chip wraps to keep it
-        // visible (see .pr-open-chip) and hovering still gives the raw
-        // string on one line.
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip", title: reason, children: reason }, reason)
-      ))
+      hasSession ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip on", children: "session open" }) : eligible ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip ok", children: eligibleLabel }) : (reasons || []).map((reason) => {
+        const { short, clipped } = shortReason(reason);
+        if (!clipped)
+          return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip", title: reason, children: reason }, reason);
+        return /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            type: "button",
+            className: "pr-open-chip pr-open-chip-more",
+            title: reason + "\n\nClick for the full message.",
+            onClick: () => errorPop(reference + " — why it was skipped", reason),
+            children: short
+          },
+          reason
+        );
+      })
     ] }),
     hasSession ? /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "btn-primary pr-review-btn", disabled: true, children: "Session open" }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ik-item-start", children: [
+      canReopen && /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          className: "btn-primary pr-review-btn ik-reopen-btn",
+          disabled: reopening !== "idle",
+          title: "Reopen the workspace this already has here — " + workspaceNote(workspace) + (workspace.branch ? "\nbranch: " + workspace.branch : "") + (workspace.path ? "\n" + workspace.path : ""),
+          onClick: async () => {
+            setReopening("busy");
+            try {
+              const title2 = await onReopen();
+              toast("Reopened " + (title2 ? displayName(title2) : reference));
+              setReopening("done");
+            } catch (err) {
+              errorPop(
+                "Reopen failed — " + reference,
+                err.message || "error"
+              );
+              setReopening("idle");
+            }
+          },
+          children: reopening === "busy" ? "Reopening…" : reopening === "done" ? "Reopened" : "Reopen window"
+        }
+      ),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ik-item-picks", children: [
         agents && agents.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs(
           "select",
@@ -31150,22 +33084,55 @@ function WorkItemRow({
               DEPTHS.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: d, children: DEPTH_LABELS[d] }, d))
             ]
           }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "select",
+          {
+            className: "ik-item-effort",
+            value: effortUsable ? effort : "",
+            "data-picked": effortUsable && effort || void 0,
+            disabled: state !== "idle" || !effortUsable,
+            title: effortTitle(effortProvider, effortCap),
+            "aria-label": "How hard to think about " + reference,
+            onChange: (e) => setEffort(e.target.value),
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: !effortUsable ? "No effort (" + (effortProvider || "this CLI") + ")" : configuredEffort ? "Configured (" + effortOptionLabel(configuredEffort, effortCap) + ")" : "Default effort" }),
+              effortUsable && EFFORTS.map((e) => (
+                // A rung above this CLI's ceiling still runs — clamped — and
+                // the top rung is named the way the CLI names it (claude:
+                // `ultracode`), so a pick says what it will actually do.
+                /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: e, children: effortOptionLabel(e, effortCap) }, e)
+              ))
+            ]
+          }
         )
       ] }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
         {
           type: "button",
-          className: "btn-primary pr-review-btn",
+          className: canReopen ? "test-btn ik-start-again" : "btn-primary pr-review-btn",
           disabled: state !== "idle",
+          title: canReopen ? actionLabel + " starts a NEW session, leaving the workspace above alone" : void 0,
           onClick: async () => {
             setState("starting");
             try {
-              const created = await onStart({ agent, depth });
+              const created = await onStart({
+                agent,
+                depth,
+                // Never sent for a CLI that has no effort control: the pick is
+                // unreachable there, and posting a stale one would put a
+                // "started at its own default" note on a start nobody asked
+                // an effort for.
+                effort: effortUsable ? effort : ""
+              });
               toast(created + " — provisioning, see the sidebar");
               setState("started");
             } catch (err) {
-              toast(failPrefix + ": " + (err.message || "error"));
+              errorPop(
+                failPrefix + " — " + reference,
+                err.message || "error"
+              );
               setState("idle");
             }
           },
@@ -31190,6 +33157,26 @@ function saveStringSet(key, v) {
   } catch {
   }
 }
+function useListFilter(id, placeholder) {
+  const closeDialog = useUi((s) => s.closeDialog);
+  const [query, setQuery] = reactExports.useState("");
+  const tokens = reactExports.useMemo(() => searchTokens(query), [query]);
+  return {
+    query,
+    tokens,
+    active: tokens.length > 0,
+    control: /* @__PURE__ */ jsxRuntimeExports.jsx(
+      DialogFilter,
+      {
+        id,
+        value: query,
+        onChange: setQuery,
+        placeholder,
+        onEscape: closeDialog
+      }
+    )
+  };
+}
 function useToggleSet(key, invert = false, keep) {
   const [set, setSet] = reactExports.useState(() => loadStringSet(key, keep));
   return {
@@ -31202,6 +33189,79 @@ function useToggleSet(key, invert = false, keep) {
       return next;
     })
   };
+}
+function annotations(item) {
+  return [
+    item.eligible ? "queued for auto" : "",
+    ...item.reasons || []
+  ];
+}
+function issueMatches(issue, tokens) {
+  return matchesTokens(
+    [
+      issue.repo,
+      "#" + issue.number,
+      String(issue.number),
+      issue.title,
+      issue.author,
+      ...annotations(issue)
+    ],
+    tokens
+  );
+}
+function prMatches(pr, tokens) {
+  return matchesTokens(
+    [
+      pr.repo,
+      "#" + pr.number,
+      String(pr.number),
+      pr.title,
+      pr.author,
+      // The branch names are on the row and are how a PR is often remembered —
+      // "the one off feature/coupon-flow" — and `base_ref` is what a reviewer
+      // asks about when a PR targets the wrong branch.
+      pr.head_ref,
+      pr.base_ref,
+      ...annotations(pr)
+    ],
+    tokens
+  );
+}
+function ticketMatches(ticket, tokens) {
+  return matchesTokens(
+    [
+      ticket.source,
+      ticket.source_label,
+      ticket.id,
+      ticket.slug,
+      ticket.name,
+      // The workflow state is a HEADING the row sits under rather than text on
+      // the row itself, and it is the most useful thing to narrow by after the
+      // name: "shortcut ready for dev" is a question people actually have.
+      ticket.bucket,
+      // Only present on a source that ingests anyone's tickets — which is
+      // exactly when "whose is this?" is worth filtering on.
+      ticket.assignee,
+      ...annotations(ticket)
+    ],
+    tokens
+  );
+}
+function queuedMatches(item, tokens) {
+  return matchesTokens(
+    [
+      item.reference,
+      item.title,
+      item.group,
+      item.state,
+      item.assignee,
+      // "tickets" / "prs" / "issues": the roll-up mixes all three, so the kind
+      // is the one column the other lists do not need.
+      item.kind,
+      item.kind === "prs" ? "pull request" : ""
+    ],
+    tokens
+  );
 }
 function IngestionToggle({ sourceCount }) {
   const [busy, setBusy] = reactExports.useState(false);
@@ -31227,7 +33287,10 @@ function IngestionToggle({ sourceCount }) {
       await api(`/api/mindflock/${start ? "start" : "stop"}`, { method: "POST" });
       toast(start ? "Ticket ingestion on" : "Ticket ingestion paused");
     } catch (err) {
-      toast(`Ticket ingestion ${start ? "start" : "stop"} failed: ` + (err.message || ""));
+      errorPop(
+        `Ticket ingestion ${start ? "start" : "stop"} failed`,
+        err.message || "the server gave no reason"
+      );
     } finally {
       setBusy(false);
       setOptimistic(null);
@@ -31250,36 +33313,31 @@ function IngestionToggle({ sourceCount }) {
     }
   );
 }
+const EMPTY_CATALOG = [];
+const EMPTY_AGENTS = { names: [], fallback: "" };
 function TicketsTab(_) {
-  const [catalog, setCatalog] = reactExports.useState([]);
-  const [sources, setSources] = reactExports.useState(null);
-  const [collapsed, setCollapsed] = reactExports.useState(/* @__PURE__ */ new Set());
-  const [agents, setAgents] = reactExports.useState({ names: [], fallback: "" });
+  const catalog = useTicketingCatalog(true).data || EMPTY_CATALOG;
+  const savedSources = useTicketingSources(true);
+  const agents = useAgentChoices$1().data || EMPTY_AGENTS;
+  const [sources, setSources] = reactExports.useState(savedSources.data ?? null);
+  const [collapsed, setCollapsed] = reactExports.useState(
+    () => new Set((savedSources.data || []).map((s) => s.id))
+  );
+  const seeded = reactExports.useRef(savedSources.data !== void 0);
   const seq = reactExports.useRef(0);
   reactExports.useEffect(() => {
-    (async () => {
-      try {
-        const c = await api("/api/settings/providers/ticketing");
-        setCatalog((c == null ? void 0 : c.providers) || []);
-        const r = await api("/api/settings/ticketing/sources");
-        const list = (r == null ? void 0 : r.sources) || [];
-        setSources(list);
-        setCollapsed(new Set(list.map((s) => s.id)));
-      } catch {
+    if (seeded.current) return;
+    if (savedSources.data === void 0) {
+      if (savedSources.isError) {
+        seeded.current = true;
         setSources([]);
       }
-      try {
-        const p = await api(
-          "/api/providers"
-        );
-        setAgents({
-          names: ((p == null ? void 0 : p.providers) || []).map((x) => x.name).filter(Boolean),
-          fallback: (p == null ? void 0 : p.default) || ""
-        });
-      } catch {
-      }
-    })();
-  }, []);
+      return;
+    }
+    seeded.current = true;
+    setSources(savedSources.data);
+    setCollapsed(new Set(savedSources.data.map((s) => s.id)));
+  }, [savedSources.data, savedSources.isError]);
   const persist = reactExports.useCallback(
     async (list) => {
       const mySeq = ++seq.current;
@@ -31287,12 +33345,16 @@ function TicketsTab(_) {
       try {
         await api("/api/settings/ticketing/sources", { method: "PUT", json: { sources: list } });
         if (mySeq !== seq.current) return;
+        putTicketingSources(list);
         toast(
           missingRepo ? `Saved — but ${missingRepo} source(s) need a Repo URL to ingest` : "Saved ticketing sources"
         );
         refreshConfig();
       } catch (err) {
-        toast("Save failed: " + (err.message || "ticketing"));
+        errorPop(
+          "Ticketing sources not saved",
+          err.message || "the server rejected the ticketing settings"
+        );
       }
     },
     []
@@ -31371,6 +33433,9 @@ function TicketsTab(_) {
         defaultAgent: agents.fallback,
         sourceDepths: Object.fromEntries(
           sources.map((s) => [s.id, s.depth || ""])
+        ),
+        sourceEfforts: Object.fromEntries(
+          sources.map((s) => [s.id, s.effort || ""])
         )
       }
     )
@@ -31390,9 +33455,10 @@ function StatePicker({
   };
   const remaining = states.filter((s) => !selected.includes(String(s.id)));
   const commit = (list) => onChange({ [field.key]: list.join(",") });
+  const needsState = source.assignee_scope === "anyone" && !selected.length;
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: field.label }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-list", children: !selected.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Any state — every ticket assigned to you is auto-ingested." }) : selected.map((id) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "repo-chip", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-list", children: !selected.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: needsState ? "Pick at least one state — Anyone's has nothing to go on without it, so this source is still only taking tickets assigned to you." : "Any state — every ticket assigned to you is auto-ingested." }) : selected.map((id) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "repo-chip", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "repo-chip-name", children: nameOf(id) }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         "button",
@@ -31427,6 +33493,26 @@ function StatePicker({
     /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Tickets in any of these states are auto-ingested; empty = every state. Everything else starts manually from the Assigned tickets panel below." })
   ] });
 }
+function ChoicePicker({
+  field,
+  source,
+  onChange
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: field.label }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "select",
+      {
+        className: "tk-choice",
+        "data-tk-field": field.key,
+        value: source[field.key] || "",
+        onChange: (e) => onChange({ [field.key]: e.target.value }),
+        children: (field.options || []).map((o) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: o.value, children: o.label }, o.value))
+      }
+    ),
+    field.hint ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: field.hint }) : null
+  ] });
+}
 function listNames(names) {
   if (names.length <= 2) return names.join(" and ");
   if (names.length === 3) return names[0] + ", " + names[1] + " and " + names[2];
@@ -31439,7 +33525,8 @@ function AssignedTickets({
   agents,
   sourceAgents,
   defaultAgent,
-  sourceDepths
+  sourceDepths,
+  sourceEfforts
 }) {
   var _a2, _b2, _c2, _d2, _e2, _f2, _g2, _h2;
   const ticketsQuery = usePanelQuery("tickets");
@@ -31473,23 +33560,33 @@ function AssignedTickets({
     detail: [...sourceErrors].map(([s, e]) => (sourceLabels[s] || s) + ": " + e).join(" · ")
   });
   const [shown, setShown] = reactExports.useState(loadShownBuckets);
+  const [mineOnly, setMineOnly] = reactExports.useState(loadMineOnly);
+  const filter = useListFilter(
+    "tk-tickets-filter",
+    "Filter by ticket, title, source, state, or assignee…  ( Ctrl+F )"
+  );
   const openBuckets = useToggleSet(BUCKETS_OPEN_LS_KEY, false, (v) => v.includes("::"));
   const openSources = useToggleSet(SOURCES_CLOSED_LS_KEY, true);
   const openWorkflows = useToggleSet(WORKFLOWS_CLOSED_LS_KEY, true);
   const visible = visibleBuckets(buckets, doneBuckets, shown);
   const hidden = buckets.filter((b) => !visible.includes(b));
+  const hasOthers = (tickets || []).some((t) => t.mine === false);
+  const rows = mineOnly ? (tickets || []).filter((t) => t.mine !== false) : tickets || [];
   const bySource = /* @__PURE__ */ new Map();
   const countAll = /* @__PURE__ */ new Map();
-  for (const t of tickets || []) {
+  for (const t of rows) {
+    const b = t.bucket || NO_STATE_BUCKET;
+    countAll.set(b, (countAll.get(b) || 0) + 1);
+  }
+  for (const t of filter.active ? rows.filter((t2) => ticketMatches(t2, filter.tokens)) : rows) {
     const src = t.source || "unknown";
     const b = t.bucket || NO_STATE_BUCKET;
     if (!bySource.has(src)) bySource.set(src, /* @__PURE__ */ new Map());
     const inner = bySource.get(src);
     if (!inner.has(b)) inner.set(b, []);
     inner.get(b).push(t);
-    countAll.set(b, (countAll.get(b) || 0) + 1);
   }
-  const sourceOrder = [
+  const sourceOrder = filter.active ? [...bySource.keys()] : [
     ...listedSources,
     ...[...sourceErrors.keys()].filter((s) => !listedSources.includes(s)),
     ...[...bySource.keys()].filter(
@@ -31529,35 +33626,66 @@ function AssignedTickets({
   return /* @__PURE__ */ jsxRuntimeExports.jsx(
     WorkListPanel,
     {
-      label: "Assigned tickets",
+      label: hasOthers ? "Ticket queue" : "Assigned tickets",
       onRefresh: load2,
       note,
       rowId: "tk-assigned-row",
       refreshId: "tk-tickets-refresh",
       noteId: "tk-tickets-note",
       listId: "tk-tickets-list",
-      toolbarExtra: /* @__PURE__ */ jsxRuntimeExports.jsxs(
-        "select",
-        {
-          id: "tk-bucket-add",
-          className: "tk-bucket-add",
-          value: "",
-          disabled: !hidden.length,
-          title: "Show another workflow state in this panel",
-          onChange: (e) => addBucket(e.target.value),
-          children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: hidden.length ? "+ Add bucket…" : "All buckets shown" }),
-            hidden.map((b) => /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: b, children: [
-              b,
-              " (",
-              countAll.get(b) || 0,
-              ")"
-            ] }, b))
-          ]
-        }
-      ),
+      toolbarExtra: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+        tickets && tickets.length ? filter.control : null,
+        hasOthers ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "select",
+          {
+            id: "tk-mine-filter",
+            className: "tk-mine-filter",
+            value: mineOnly ? "mine" : "all",
+            title: "Whose tickets this panel lists",
+            onChange: (e) => {
+              const next = e.target.value === "mine";
+              setMineOnly(next);
+              saveMineOnly(next);
+            },
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "all", children: "Everyone's tickets" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "mine", children: "Only mine" })
+            ]
+          }
+        ) : null,
+        /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "select",
+          {
+            id: "tk-bucket-add",
+            className: "tk-bucket-add",
+            value: "",
+            disabled: !hidden.length,
+            title: "Show another workflow state in this panel",
+            onChange: (e) => addBucket(e.target.value),
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: hidden.length ? "+ Add bucket…" : "All buckets shown" }),
+              hidden.map((b) => /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: b, children: [
+                b,
+                " (",
+                countAll.get(b) || 0,
+                ")"
+              ] }, b))
+            ]
+          }
+        )
+      ] }),
       hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-        "Your tickets, grouped by source and then by workflow state. Click a heading to expand or collapse it; use ",
+        hasOthers ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          "Tickets from your sources — including other people's, from any source set to",
+          " ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Anyone's" }),
+          " — grouped by source and then by workflow state. Use",
+          " ",
+          /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Only mine" }),
+          " to narrow it back down.",
+          " "
+        ] }) : "Your tickets, grouped by source and then by workflow state. ",
+        "Click a heading to expand or collapse it; use ",
         /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "+ Add bucket…" }),
         " / ✕ to choose which states appear at all.",
         " ",
@@ -31571,7 +33699,7 @@ function AssignedTickets({
         ] }) : null,
         ingestSummary
       ] }),
-      children: error ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: error }) : tickets === null ? null : !visible.length && buckets.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "All buckets are hidden — pick one from the “+ Add bucket…” menu above." }) : !sourceOrder.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No tickets are assigned to you on the connected sources." }) : sourceOrder.map((src) => {
+      children: error ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: error }) : tickets === null ? null : !visible.length && buckets.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "All buckets are hidden — pick one from the “+ Add bucket…” menu above." }) : !sourceOrder.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: filter.active ? "No ticket matches “" + filter.query + "”." : mineOnly && hasOthers ? "None of the tickets here are yours — switch to Everyone's tickets to see them." : "No tickets are assigned to you on the connected sources." }) : sourceOrder.map((src) => {
         const inner = bySource.get(src) || /* @__PURE__ */ new Map();
         const shownBuckets = visible.filter((b) => (inner.get(b) || []).length);
         const total = shownBuckets.reduce((n, b) => n + (inner.get(b) || []).length, 0);
@@ -31585,25 +33713,26 @@ function AssignedTickets({
         }
         const nestWorkflows = workflows.filter(Boolean).length > 1;
         const bucketsOf = (wf) => shownBuckets.filter((b) => wf === null || groupOf(b) === wf).map((b) => {
-          const rows = inner.get(b) || [];
+          const rows2 = inner.get(b) || [];
           const key = src + "::" + b;
           return /* @__PURE__ */ jsxRuntimeExports.jsx(
             WorkGroup,
             {
               indent: true,
               name: wf === null ? b : labelOf(b),
-              count: rows.length,
+              count: rows2.length,
               open: openBuckets.isOpen(key),
               onToggle: () => openBuckets.toggle(key),
               onHide: () => hideBucket(b),
               hideTitle: "Hide the " + b + " bucket everywhere (re-add it from the dropdown)",
-              children: rows.map((t) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+              children: rows2.map((t) => /* @__PURE__ */ jsxRuntimeExports.jsx(
                 AssignedTicketRow,
                 {
                   t,
                   agents,
                   configuredAgent: sourceAgents[t.source] || defaultAgent,
                   configuredDepth: sourceDepths[t.source] || "",
+                  configuredEffort: sourceEfforts[t.source] || "",
                   onStarted: relistTickets
                 },
                 t.source + ":" + t.id
@@ -31617,8 +33746,8 @@ function AssignedTickets({
           // two different situations, and only one of them is your filter.
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No tickets are assigned to you on this source." })
         ) : !shownBuckets.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No tickets from this source in the buckets you're showing." }) : !nestWorkflows ? bucketsOf(null) : workflows.map((wf) => {
-          const rows = shownBuckets.filter((b) => groupOf(b) === wf);
-          const n = rows.reduce((acc, b) => acc + (inner.get(b) || []).length, 0);
+          const rows2 = shownBuckets.filter((b) => groupOf(b) === wf);
+          const n = rows2.reduce((acc, b) => acc + (inner.get(b) || []).length, 0);
           const key = src + "::wf::" + wf;
           return /* @__PURE__ */ jsxRuntimeExports.jsx(
             WorkGroup,
@@ -31656,6 +33785,7 @@ function AssignedTicketRow({
   agents,
   configuredAgent,
   configuredDepth,
+  configuredEffort,
   onStarted
 }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -31664,25 +33794,37 @@ function AssignedTicketRow({
       agents,
       configuredAgent,
       configuredDepth,
+      configuredEffort,
       reference: t.slug,
       url: t.url,
       title: t.name,
       linkTitle: "Open " + t.slug + " in " + (t.source_label || t.source),
       tooltip: t.slug + " — " + (t.name || "") + "\nfrom " + (t.source_label || t.source),
-      meta: ageText(t.created_at),
+      meta: t.mine === false ? ageText(t.created_at) + " · " + (t.assignee || "someone else") : ageText(t.created_at),
       hasSession: t.has_session,
       eligible: t.eligible,
       eligibleLabel: "queued for auto ingestion",
       reasons: t.reasons,
       actionLabel: "Begin work",
       failPrefix: "Begin work failed",
-      onStart: async ({ agent, depth }) => {
+      workspace: t.workspace,
+      onReopen: async () => {
+        const title = await reopenIntakeItem({
+          kind: "tickets",
+          source: t.source,
+          id: t.id
+        });
+        setTimeout(onStarted, 5e3);
+        return title;
+      },
+      onStart: async ({ agent, depth, effort }) => {
         const r = await api("/api/tickets/start", {
           json: {
             source: t.source,
             id: t.id,
             ...agent ? { agent } : {},
-            ...depth ? { depth } : {}
+            ...depth ? { depth } : {},
+            ...effort ? { effort } : {}
           }
         });
         refreshInstances();
@@ -31702,6 +33844,10 @@ function TicketSourceCard({
   onRemove
 }) {
   const meta = catalog.find((p) => p.id === source.provider) || null;
+  const effortProvider = source.agent || agents.fallback || "";
+  const effortCaps = useProviderEfforts().data;
+  const effortCap = effortCaps ? effortCaps[effortProvider] : void 0;
+  const effortUsable = supportsEffort(effortCap);
   const [states, setStates] = reactExports.useState([]);
   const provName = (meta == null ? void 0 : meta.label) || source.provider;
   const detail = (source.label || source.member_id || source.repo_url || "").trim();
@@ -31820,6 +33966,34 @@ function TicketSourceCard({
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Which coding CLI runs the sessions this source starts. Route one queue to a cloud CLI and another to a local model — pick a provider whose Connections row is green, or leave it on the app default." })
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Thinking effort" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "select",
+            {
+              className: "tk-effort",
+              "data-tk-field": "effort",
+              value: effortUsable ? source.effort || "" : "",
+              disabled: !effortUsable,
+              title: effortTitle(effortProvider, effortCap),
+              onChange: (e) => onChange({ effort: e.target.value }),
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: effortUsable ? "CLI default — however it thinks on its own" : "No effort setting (" + (effortProvider || "this CLI") + ")" }),
+                effortUsable && EFFORTS.map((e) => (
+                  // A rung above this CLI's ceiling still runs, clamped, and the top
+                  // rung is named the way the CLI names it — so the pick says what it
+                  // will actually do rather than what was asked for.
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: e, children: effortOptionLabel(e, effortCap) }, e)
+                ))
+              ]
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+            "How hard the agent thinks about ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "every" }),
+            " ticket from this source — both the ones the pipeline picks up on its own and the ones you start by hand. The rungs are neutral: whichever CLI runs the ticket translates them into its own spelling and never receives a rung it would reject, so this is safe to set higher than the CLI above can go. An individual ticket can still choose its own on its row."
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Take tickets as far as" }),
           /* @__PURE__ */ jsxRuntimeExports.jsxs(
             "select",
@@ -31851,7 +34025,7 @@ function TicketSourceCard({
               onChange
             },
             f.key
-          ) : /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+          ) : f.type === "choice" ? /* @__PURE__ */ jsxRuntimeExports.jsx(ChoicePicker, { field: f, source, onChange }, f.key) : /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: f.label }),
             /* @__PURE__ */ jsxRuntimeExports.jsx(
               "input",
@@ -31916,6 +34090,8 @@ function AgentPicker({
   ] });
 }
 const REPO_RE = /^[^\s/]+\/[^\s/]+$/;
+const VERIFY_PROMPT_MAX = 2e3;
+const VERIFY_TARGET_MAX = 500;
 let nextKey = 1;
 const named = (list) => list.map((c) => c.repo.trim()).filter(Boolean);
 const cardKey = (c) => c.repo || "new-" + c.key;
@@ -31956,10 +34132,15 @@ function RepoSourceList({
   reactExports.useEffect(() => {
     setOv((prev) => JSON.stringify(prev) === savedOv ? prev : overrides);
   }, [savedOv]);
+  const keepsRemovedBlocks = surface === "verify";
   const persist = (list, nextOverrides, msg) => {
     const slugs = named(list);
-    const kept = {};
-    for (const slug of slugs) if (nextOverrides[slug]) kept[slug] = nextOverrides[slug];
+    let kept;
+    if (keepsRemovedBlocks) kept = { ...nextOverrides };
+    else {
+      kept = {};
+      for (const slug of slugs) if (nextOverrides[slug]) kept[slug] = nextOverrides[slug];
+    }
     setOv(kept);
     onSave(slugs, kept, msg);
   };
@@ -32016,7 +34197,7 @@ function RepoSourceList({
     const next = cards.filter((c) => c.key !== key);
     setCards(next);
     const moved = { ...ov };
-    if (card == null ? void 0 : card.repo) delete moved[card.repo];
+    if ((card == null ? void 0 : card.repo) && !keepsRemovedBlocks) delete moved[card.repo];
     persist(next, moved, (card == null ? void 0 : card.repo) ? "Removed " + card.repo : "Removed the empty card");
   };
   const add = () => {
@@ -32030,7 +34211,15 @@ function RepoSourceList({
       const o = ov[card.repo];
       const agent = (o == null ? void 0 : o.agent) || "";
       const depth = (o == null ? void 0 : o.depth) || "";
-      const summary = (card.repo || "New repository") + " · " + (agent || (defaults.agent ? defaults.agent + " (default)" : "app default"));
+      const live = (o == null ? void 0 : o.live_branch) || defaults.liveBranch;
+      const summary = surface === "verify" ? (
+        // The agent is not a verify card's business (see `surface`),
+        // so the summary carries the fact that IS: which branch a plan
+        // written here waits for. Dropped entirely when the server has
+        // not answered yet rather than guessed at — naming the wrong
+        // live branch is the one lie this surface cannot afford.
+        (card.repo || "New repository") + (live ? " · live: " + live : "")
+      ) : (card.repo || "New repository") + " · " + (agent || (defaults.agent ? defaults.agent + " (default)" : "app default"));
       return /* @__PURE__ */ jsxRuntimeExports.jsxs(
         SourceCard,
         {
@@ -32088,114 +34277,255 @@ function RepoSourceList({
                   }
                 }
               ),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Required — press Enter or click away to save. This list is separate from the other GitHub tab's; a repo can be on either, or both." })
-            ] }),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Agent CLI" }),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs(
-                "select",
-                {
-                  "data-repo-field": "agent",
-                  value: agent,
-                  disabled: !card.repo,
-                  onChange: (e) => patch(card.repo, "agent", e.target.value),
-                  children: [
-                    /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: defaults.agent ? `Inherit (${defaults.agent})` : "Inherit (app default)" }),
-                    agents.names.map((n) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: n, children: n }, n))
-                  ]
-                }
-              ),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Which coding CLI this repository's sessions run. Route one repo to a cloud CLI and another to a local model — pick a provider whose Connections row is green, or inherit the tab's default." })
-            ] }),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Take them as far as" }),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs(
-                "select",
-                {
-                  "data-repo-field": "depth",
-                  value: depth,
-                  disabled: !card.repo,
-                  onChange: (e) => patch(card.repo, "depth", e.target.value),
-                  children: [
-                    /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "Off — stop after the agent works" }),
-                    SOURCE_DEPTHS.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: d, children: DEPTH_LABELS[d] }, d))
-                  ]
-                }
-              ),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "How far each item from this repo carries itself once the agent finishes: commit, push, open a PR. Merge is not offered for a whole repo — pick it on an individual row instead." })
-            ] }),
-            surface === "pr" && /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Base branch" }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
-                "input",
-                {
-                  type: "text",
-                  autoComplete: "off",
-                  spellCheck: false,
-                  "data-repo-field": "base_branch",
-                  disabled: !card.repo,
-                  placeholder: defaults.baseBranch || "inherit the tab default",
-                  defaultValue: overrideText(o, "base_branch"),
-                  onBlur: (e) => {
-                    if (e.target.value.trim() !== overrideText(o, "base_branch"))
-                      patch(card.repo, "base_branch", e.target.value);
-                  }
-                }
-              ),
               /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
-                "Only PRs targeting this branch are auto-reviewed here. Blank inherits the tab default — which is ",
-                /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "not" }),
-                ` "every branch": it falls through to your repository's configured base branch. A PR into any other branch is still listed below, with a chip saying so, and`,
+                "Required — press Enter or click away to save.",
                 " ",
-                /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Begin review" }),
-                " works on it."
+                surface === "verify" ? (
+                  // Verify's list is not one of the Intake tabs' and does not
+                  // read like one, so it gets the sentence that actually
+                  // matters here: how a checkout on this machine is matched
+                  // to the name you typed. It is the remote, not the path —
+                  // which is the whole reason this list is slugs.
+                  "A checkout counts as this repo when its origin points here, so it works wherever you cloned it and on every machine in the flock."
+                ) : "This list is separate from the other GitHub tab's; a repo can be on either, or both."
               ] })
             ] }),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: surface === "pr" ? "Min PR age (minutes)" : "Min issue age (minutes)" }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
-                "input",
-                {
-                  type: "number",
-                  className: "num-sm",
-                  autoComplete: "off",
-                  "data-repo-field": "min_age_minutes",
-                  disabled: !card.repo,
-                  placeholder: defaults.minAge || "15",
-                  defaultValue: (o == null ? void 0 : o.min_age_minutes) == null ? "" : String(o.min_age_minutes),
-                  onBlur: (e) => {
-                    const cur = (o == null ? void 0 : o.min_age_minutes) == null ? "" : String(o.min_age_minutes);
-                    if (e.target.value.trim() !== cur)
-                      patch(card.repo, "min_age_minutes", e.target.value);
-                  }
-                }
-              ),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Grace period after it opens before work starts, so you can finish pushing or writing. Blank inherits the tab default." })
+            surface === "verify" && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Live branch" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    type: "text",
+                    autoComplete: "off",
+                    spellCheck: false,
+                    "data-repo-field": "live_branch",
+                    disabled: !card.repo,
+                    placeholder: live || "main",
+                    defaultValue: (o == null ? void 0 : o.live_branch) || "",
+                    onBlur: (e) => {
+                      if (e.target.value.trim() !== ((o == null ? void 0 : o.live_branch) || ""))
+                        patch(card.repo, "live_branch", e.target.value);
+                    },
+                    onKeyDown: (e) => {
+                      if (e.key === "Enter") e.target.blur();
+                    }
+                  },
+                  "lb-" + card.repo
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+                  "Which branch counts as shipped ",
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "for this repo" }),
+                  ": a plan written here goes due when its commit lands on it. Blank inherits",
+                  " ",
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: defaults.liveBranch || "the flock-wide setting" }),
+                  " — Settings → Workspace, falling through the PR base and the base branch to ",
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "main" }),
+                  "."
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Deploy takes (minutes)" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    type: "number",
+                    min: 0,
+                    step: 1,
+                    autoComplete: "off",
+                    "data-repo-field": "deploy_delay_minutes",
+                    disabled: !card.repo,
+                    placeholder: defaults.deployDelay || "5",
+                    defaultValue: (o == null ? void 0 : o.deploy_delay_minutes) || "",
+                    onBlur: (e) => {
+                      if (e.target.value.trim() !== ((o == null ? void 0 : o.deploy_delay_minutes) || ""))
+                        patch(card.repo, "deploy_delay_minutes", e.target.value);
+                    },
+                    onKeyDown: (e) => {
+                      if (e.key === "Enter") e.target.blur();
+                    }
+                  },
+                  "dd-" + card.repo
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+                  "How long after merging before the change is actually running. A checklist waits that long before it turns up to be checked — merged is not deployed, and checking too early records a failure against code that is fine. ",
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "0" }),
+                  " if merging is shipping here. Blank inherits",
+                  " ",
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: defaults.deployDelay || "5" }),
+                  "."
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Where it runs (optional)" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    type: "text",
+                    autoComplete: "off",
+                    spellCheck: false,
+                    "data-repo-field": "target",
+                    maxLength: VERIFY_TARGET_MAX,
+                    disabled: !card.repo,
+                    placeholder: "e.g. https://app.example.com — log in as qa@example.com",
+                    defaultValue: (o == null ? void 0 : o.target) || "",
+                    onBlur: (e) => {
+                      if (e.target.value.trim() !== ((o == null ? void 0 : o.target) || ""))
+                        patch(card.repo, "target", e.target.value);
+                    },
+                    onKeyDown: (e) => {
+                      if (e.key === "Enter") e.target.blur();
+                    }
+                  },
+                  "tg-" + card.repo
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+                  `The deployment this repo's users actually reach. THE knob that decides what "it works" is checked against: with it set, both the checklist and the agent that works it are aimed at`,
+                  " ",
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "that running system" }),
+                  ". Blank is a real answer, not a missing one — a library, a CLI or anything with no environment to point at is checked against a fresh checkout of the live branch on this machine, and a checklist for one says so rather than pretending otherwise."
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Extra instructions (optional)" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "textarea",
+                  {
+                    className: "vf-repo-prompt",
+                    rows: 3,
+                    spellCheck: false,
+                    "data-repo-field": "prompt",
+                    maxLength: VERIFY_PROMPT_MAX,
+                    disabled: !card.repo,
+                    placeholder: "e.g. The UI runs on :3000 — check there, not :8080.\nAlways confirm the migration ran.\nIgnore anything under vendor/.",
+                    defaultValue: (o == null ? void 0 : o.prompt) || "",
+                    onBlur: (e) => {
+                      if (e.target.value.trim() !== ((o == null ? void 0 : o.prompt) || ""))
+                        patch(card.repo, "prompt", e.target.value);
+                    }
+                  },
+                  "pr-" + card.repo
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+                  "Folded into the prompt that writes a plan ",
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "for this repo" }),
+                  ", so the things that are true of every change here — where the app runs, what to always check, what to ignore — do not have to be retyped into each plan. It steers ",
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "what" }),
+                  " gets tested; it cannot change the format the generator must answer in, so a note here can never break plan writing. Click away to save. Up to",
+                  " ",
+                  VERIFY_PROMPT_MAX.toLocaleString(),
+                  " characters — the box stops there rather than letting you paste a page that would be trimmed on save."
+                ] })
+              ] })
             ] }),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Skip authors" }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
-                "input",
-                {
-                  type: "text",
-                  autoComplete: "off",
-                  spellCheck: false,
-                  "data-repo-field": "skip_authors",
-                  disabled: !card.repo,
-                  placeholder: defaults.skipAuthors || "inherit — none",
-                  defaultValue: overrideText(o, "skip_authors"),
-                  onBlur: (e) => {
-                    if (e.target.value.trim() !== overrideText(o, "skip_authors"))
-                      patch(card.repo, "skip_authors", e.target.value);
+            surface !== "verify" && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Agent CLI" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  "select",
+                  {
+                    "data-repo-field": "agent",
+                    value: agent,
+                    disabled: !card.repo,
+                    onChange: (e) => patch(card.repo, "agent", e.target.value),
+                    children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: defaults.agent ? `Inherit (${defaults.agent})` : "Inherit (app default)" }),
+                      agents.names.map((n) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: n, children: n }, n))
+                    ]
                   }
-                }
-              ),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
-                "Comma-separated GitHub logins.",
-                " ",
-                surface === "pr" ? "Review only ever takes your own PRs, so this drops their review comments instead — the bots whose feedback you don't want acted on." : "Issues opened by these accounts are ignored.",
-                " ",
-                "Blank inherits the tab default."
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Which coding CLI this repository's sessions run. Route one repo to a cloud CLI and another to a local model — pick a provider whose Connections row is green, or inherit the tab's default." })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Take them as far as" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  "select",
+                  {
+                    "data-repo-field": "depth",
+                    value: depth,
+                    disabled: !card.repo,
+                    onChange: (e) => patch(card.repo, "depth", e.target.value),
+                    children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "Off — stop after the agent works" }),
+                      SOURCE_DEPTHS.map((d) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: d, children: DEPTH_LABELS[d] }, d))
+                    ]
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "How far each item from this repo carries itself once the agent finishes: commit, push, open a PR. Merge is not offered for a whole repo — pick it on an individual row instead." })
+              ] }),
+              surface === "pr" && /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Base branch" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    type: "text",
+                    autoComplete: "off",
+                    spellCheck: false,
+                    "data-repo-field": "base_branch",
+                    disabled: !card.repo,
+                    placeholder: defaults.baseBranch || "inherit the tab default",
+                    defaultValue: overrideText(o, "base_branch"),
+                    onBlur: (e) => {
+                      if (e.target.value.trim() !== overrideText(o, "base_branch"))
+                        patch(card.repo, "base_branch", e.target.value);
+                    }
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+                  "Only PRs targeting this branch are auto-reviewed here. Blank inherits the tab default — which is ",
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "not" }),
+                  ` "every branch": it falls through to your repository's configured base branch. A PR into any other branch is still listed below, with a chip saying so, and`,
+                  " ",
+                  /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Begin review" }),
+                  " works on it."
+                ] })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: surface === "pr" ? "Min PR age (minutes)" : "Min issue age (minutes)" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    type: "number",
+                    className: "num-sm",
+                    autoComplete: "off",
+                    "data-repo-field": "min_age_minutes",
+                    disabled: !card.repo,
+                    placeholder: defaults.minAge || "15",
+                    defaultValue: (o == null ? void 0 : o.min_age_minutes) == null ? "" : String(o.min_age_minutes),
+                    onBlur: (e) => {
+                      const cur = (o == null ? void 0 : o.min_age_minutes) == null ? "" : String(o.min_age_minutes);
+                      if (e.target.value.trim() !== cur)
+                        patch(card.repo, "min_age_minutes", e.target.value);
+                    }
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Grace period after it opens before work starts, so you can finish pushing or writing. Blank inherits the tab default." })
+              ] }),
+              /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Skip authors" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "input",
+                  {
+                    type: "text",
+                    autoComplete: "off",
+                    spellCheck: false,
+                    "data-repo-field": "skip_authors",
+                    disabled: !card.repo,
+                    placeholder: defaults.skipAuthors || "inherit — none",
+                    defaultValue: overrideText(o, "skip_authors"),
+                    onBlur: (e) => {
+                      if (e.target.value.trim() !== overrideText(o, "skip_authors"))
+                        patch(card.repo, "skip_authors", e.target.value);
+                    }
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+                  "Comma-separated GitHub logins.",
+                  " ",
+                  surface === "pr" ? "Review only ever takes your own PRs, so this drops their review comments instead — the bots whose feedback you don't want acted on." : "Issues opened by these accounts are ignored.",
+                  " ",
+                  "Blank inherits the tab default."
+                ] })
               ] })
             ] })
           ]
@@ -32213,6 +34543,10 @@ function PullRequestsTab({ gotoTab }) {
   const s = useSettings();
   const agentChoices = useAgentChoices();
   const groups = useToggleSet(PR_GROUPS_KEY, true);
+  const filter = useListFilter(
+    "gh-prs-filter",
+    "Filter by repo, number, title, author, branch, or why…  ( Ctrl+F )"
+  );
   const gh = s.settings.github || {};
   const enabled = gh.enabled !== false;
   const repos = Array.isArray(gh.repos) ? gh.repos : [];
@@ -32232,13 +34566,14 @@ function PullRequestsTab({ gotoTab }) {
   });
   const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
   const n = repos.length;
+  const shownPrs = (prs || []).filter((p) => prMatches(p, filter.tokens));
   const byRepo = /* @__PURE__ */ new Map();
-  for (const p of prs || []) {
+  for (const p of shownPrs) {
     const key = p.repo || "unknown";
     if (!byRepo.has(key)) byRepo.set(key, []);
     byRepo.get(key).push(p);
   }
-  const groupOrder = [
+  const groupOrder = filter.active ? [...byRepo.keys()] : [
     ...repos.filter((r) => prsRepos.includes(r) || byRepo.has(r)),
     ...[...byRepo.keys()].filter((r) => !repos.includes(r))
   ];
@@ -32294,7 +34629,11 @@ function PullRequestsTab({ gotoTab }) {
           agent: String(gh.agent || agentChoices.fallback || ""),
           baseBranch: String(gh.base_branch || ""),
           minAge: gh.min_age_minutes == null ? "" : String(gh.min_age_minutes),
-          skipAuthors: String(skipAuthors)
+          skipAuthors: String(skipAuthors),
+          // Verify's field. Blank here for the same reason Issues passes a blank
+          // base branch: the bag is one shape for all three surfaces, and a
+          // surface that never renders a field has nothing to seed it with.
+          liveBranch: ""
         },
         listId: "gh-repos-list",
         addId: "gh-repo-add-btn",
@@ -32317,12 +34656,17 @@ function PullRequestsTab({ gotoTab }) {
         refreshId: "gh-prs-refresh",
         noteId: "gh-prs-note",
         listId: "gh-prs-list",
+        toolbarExtra: prs && prs.length ? filter.control : void 0,
         hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
           "Every non-draft open PR on the repositories above , grouped by repository, with why auto review has or hasn't picked it up. ",
           /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Begin review" }),
           " starts a review session for that PR right now, bypassing the author / age / base-branch / already-reviewed filters."
         ] }),
-        children: prsError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: prsError }) : prs === null ? null : !prsRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open PRs." }) : !prs.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open pull requests on the watched repositories." }) : groupOrder.map((repo) => {
+        children: prsError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: prsError }) : prs === null ? null : !prsRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open PRs." }) : !prs.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open pull requests on the watched repositories." }) : !groupOrder.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "repo-empty", children: [
+          "No open pull request matches “",
+          filter.query,
+          "”."
+        ] }) : groupOrder.map((repo) => {
           const rows = byRepo.get(repo) || [];
           const body = !rows.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open pull requests in this repository." }) : rows.map((p) => {
             var _a3, _b3;
@@ -32340,16 +34684,27 @@ function PullRequestsTab({ gotoTab }) {
                 reasons: p.reasons,
                 actionLabel: "Begin review",
                 failPrefix: "Begin review failed",
+                workspace: p.workspace,
+                onReopen: async () => {
+                  const title = await reopenIntakeItem({
+                    kind: "prs",
+                    repo: p.repo,
+                    number: p.number
+                  });
+                  setTimeout(relistPrs, 5e3);
+                  return title;
+                },
                 agents: agentChoices.names,
                 configuredAgent: ((_a3 = overrides[repo]) == null ? void 0 : _a3.agent) || String(gh.agent || agentChoices.fallback || ""),
                 configuredDepth: ((_b3 = overrides[repo]) == null ? void 0 : _b3.depth) || "",
-                onStart: async ({ agent, depth }) => {
+                onStart: async ({ agent, depth, effort }) => {
                   const r = await api("/api/github/prs/review", {
                     json: {
                       repo: p.repo,
                       number: p.number,
                       ...agent ? { agent } : {},
-                      ...depth ? { depth } : {}
+                      ...depth ? { depth } : {},
+                      ...effort ? { effort } : {}
                     }
                   });
                   refreshInstances();
@@ -32482,6 +34837,10 @@ function IssuesTab({ gotoTab }) {
   const s = useSettings();
   const agentChoices = useAgentChoices();
   const groups = useToggleSet(ISSUE_GROUPS_KEY, true);
+  const filter = useListFilter(
+    "gh-issues-filter",
+    "Filter by repo, number, title, author, or why…  ( Ctrl+F )"
+  );
   const gh = s.settings.github || {};
   const enabled = gh.issues_enabled === true;
   const repos = Array.isArray(gh.issue_repos) ? gh.issue_repos : [];
@@ -32505,13 +34864,14 @@ function IssuesTab({ gotoTab }) {
   });
   const saveGithub = (patch, okMsg) => s.saveGroup("github", patch, okMsg);
   const n = repos.length;
+  const shown = (issues || []).filter((i) => issueMatches(i, filter.tokens));
   const byRepo = /* @__PURE__ */ new Map();
-  for (const i of issues || []) {
+  for (const i of shown) {
     const key = i.repo || "unknown";
     if (!byRepo.has(key)) byRepo.set(key, []);
     byRepo.get(key).push(i);
   }
-  const groupOrder = [
+  const groupOrder = filter.active ? [...byRepo.keys()] : [
     ...repos.filter((r) => issuesRepos.includes(r) || byRepo.has(r)),
     ...[...byRepo.keys()].filter((r) => !repos.includes(r))
   ];
@@ -32566,7 +34926,10 @@ function IssuesTab({ gotoTab }) {
           agent: String(gh.issue_agent || agentChoices.fallback || ""),
           baseBranch: "",
           minAge: gh.issue_min_age_minutes == null ? "" : String(gh.issue_min_age_minutes),
-          skipAuthors: String(skipAuthors)
+          skipAuthors: String(skipAuthors),
+          // Verify's field, blank here for the same reason baseBranch is: this
+          // surface does not render it, so there is nothing to seed.
+          liveBranch: ""
         },
         listId: "gh-issue-repos-list",
         addId: "gh-issue-repo-add-btn",
@@ -32589,12 +34952,17 @@ function IssuesTab({ gotoTab }) {
         refreshId: "gh-issues-refresh",
         noteId: "gh-issues-note",
         listId: "gh-issues-list",
+        toolbarExtra: issues && issues.length ? filter.control : void 0,
         hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
           "Every open issue on the repositories above, grouped by repository, with why auto handling has or hasn't picked it up. ",
           /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Start work" }),
           " spins up a session for that issue right now, bypassing the age / already-handled filters."
         ] }),
-        children: issuesError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: issuesError }) : issues === null ? null : !issuesRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open issues." }) : !issues.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open issues on the watched repositories." }) : groupOrder.map((repo) => {
+        children: issuesError ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: issuesError }) : issues === null ? null : !issuesRepos.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "Add a repository above to see its open issues." }) : !issues.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open issues on the watched repositories." }) : !groupOrder.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "repo-empty", children: [
+          "No open issue matches “",
+          filter.query,
+          "”."
+        ] }) : groupOrder.map((repo) => {
           const rows = byRepo.get(repo) || [];
           const body = !rows.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: "No open issues in this repository." }) : rows.map((i) => {
             var _a3, _b2;
@@ -32612,16 +34980,27 @@ function IssuesTab({ gotoTab }) {
                 reasons: i.reasons,
                 actionLabel: "Start work",
                 failPrefix: "Start work failed",
+                workspace: i.workspace,
+                onReopen: async () => {
+                  const title = await reopenIntakeItem({
+                    kind: "issues",
+                    repo: i.repo,
+                    number: i.number
+                  });
+                  setTimeout(relistIssues, 5e3);
+                  return title;
+                },
                 agents: agentChoices.names,
                 configuredAgent: ((_a3 = overrides[repo]) == null ? void 0 : _a3.agent) || String(gh.issue_agent || agentChoices.fallback || ""),
                 configuredDepth: ((_b2 = overrides[repo]) == null ? void 0 : _b2.depth) || "",
-                onStart: async ({ agent, depth }) => {
+                onStart: async ({ agent, depth, effort }) => {
                   const r = await api("/api/github/issues/start", {
                     json: {
                       repo: i.repo,
                       number: i.number,
                       ...agent ? { agent } : {},
-                      ...depth ? { depth } : {}
+                      ...depth ? { depth } : {},
+                      ...effort ? { effort } : {}
                     }
                   });
                   refreshInstances();
@@ -32726,6 +35105,333 @@ function IssuesTab({ gotoTab }) {
     ] })
   ] });
 }
+function isQueued(item) {
+  return item.eligible === true && !item.has_session;
+}
+function oldestFirst(rows) {
+  return rows.slice().sort((a, b) => {
+    const ta = Date.parse(a.created_at || "");
+    const tb = Date.parse(b.created_at || "");
+    if (!isFinite(ta) && !isFinite(tb)) return 0;
+    if (!isFinite(ta)) return 1;
+    if (!isFinite(tb)) return -1;
+    return ta - tb;
+  });
+}
+function ref(repo, number) {
+  return (repo || "") + "#" + (number ?? "?");
+}
+function queuedOf(kind, payloads) {
+  var _a2, _b2, _c2, _d2;
+  if (kind === "tickets") {
+    const labels = ((_a2 = payloads.tickets) == null ? void 0 : _a2.source_labels) || {};
+    return oldestFirst((((_b2 = payloads.tickets) == null ? void 0 : _b2.tickets) || []).filter(isQueued)).map((t) => ({
+      kind,
+      key: "tickets:" + (t.source || "") + ":" + (t.id ?? t.slug ?? ""),
+      reference: t.slug || String(t.id ?? ""),
+      title: t.name || "",
+      url: t.url,
+      group: labels[t.source || ""] || t.source || "Tickets",
+      created_at: t.created_at,
+      state: t.bucket,
+      assignee: t.mine === false ? t.assignee || "someone else" : void 0,
+      target: {
+        kind: "tickets",
+        source: t.source || "",
+        // /api/tickets/start takes the provider's own id; the slug is the
+        // display name and is not interchangeable with it.
+        id: String(t.id ?? "")
+      }
+    }));
+  }
+  const rows = kind === "prs" ? ((_c2 = payloads.prs) == null ? void 0 : _c2.prs) || [] : ((_d2 = payloads.issues) == null ? void 0 : _d2.issues) || [];
+  return oldestFirst(rows.filter(isQueued)).map((r) => ({
+    kind,
+    key: kind + ":" + (r.repo || "") + ":" + (r.number ?? ""),
+    reference: ref(r.repo, r.number),
+    title: r.title || "",
+    url: r.url,
+    group: r.repo || (kind === "prs" ? "Pull requests" : "Issues"),
+    created_at: r.created_at,
+    target: { kind, repo: r.repo || "", number: r.number ?? 0 }
+  }));
+}
+function collectQueued(payloads) {
+  return [
+    ...queuedOf("tickets", payloads),
+    ...queuedOf("prs", payloads),
+    ...queuedOf("issues", payloads)
+  ];
+}
+function runState(opts) {
+  if (!opts.engineAvailable || !opts.configured) return "unset";
+  if (!opts.switchOn) return "off-switch";
+  if (!opts.engineOn) return "off-engine";
+  return "on";
+}
+function byGroup(items) {
+  const out = [];
+  for (const item of items) {
+    const found = out.find((g) => g.group === item.group);
+    if (found) found.items.push(item);
+    else out.push({ group: item.group, items: [item] });
+  }
+  return out;
+}
+function useIngestionStatus() {
+  return useQuery({
+    queryKey: ["mindflock-status"],
+    queryFn: () => api("/api/mindflock/status"),
+    refetchInterval: 4e3,
+    retry: false
+  });
+}
+function StateChip({ state }) {
+  if (state === "unset") return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip", children: "not set up" });
+  if (state === "on") return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip ok", children: "auto-start on" });
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-chip", children: "auto-start off" });
+}
+function StalledNote({ s }) {
+  const many = s.items.length !== 1;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ik-queue-stalled", children: [
+    many ? "These are" : "This one is",
+    " ready, but auto-start is off —",
+    " ",
+    many ? "they will" : "it will",
+    " not begin until ",
+    /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: s.blockedOn }),
+    " is switched on",
+    s.blockedElsewhere ? ", on the Tickets tab (this runs inside it)" : "",
+    ". You can still start ",
+    many ? "any of them" : "it",
+    " here, with ",
+    /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Start now" }),
+    "."
+  ] });
+}
+function SectionBlock({
+  s,
+  gotoTab,
+  agents,
+  configuredFor,
+  onStart
+}) {
+  const groups = byGroup(s.items);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ik-queue-section", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ik-queue-head", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ik-queue-kind", children: s.label }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ik-tab-count", children: s.items.length }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(StateChip, { state: s.state }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "button",
+        {
+          type: "button",
+          className: "test-btn ik-queue-goto",
+          onClick: () => gotoTab(s.tab),
+          title: "Open the " + s.label + " tab",
+          children: [
+            "Open ",
+            s.label,
+            " ›"
+          ]
+        }
+      )
+    ] }),
+    s.note ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pr-open-note", children: s.note }) : null,
+    s.items.length === 0 ? (
+      // A plain line, not the boxed `.repo-empty` the other tabs use for an
+      // empty list: three kinds are always on screen here, and three empty
+      // boxes make a quiet queue look like a broken one.
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "ik-queue-empty", children: s.state === "unset" ? "Nothing configured yet — set it up on the " + s.label + " tab." : "Nothing waiting." })
+    ) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+      s.state !== "on" && /* @__PURE__ */ jsxRuntimeExports.jsx(StalledNote, { s }),
+      groups.map((g) => /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ik-queue-group", children: [
+        groups.length > 1 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "ik-queue-group-name", children: g.group }),
+        g.items.map((item) => {
+          const configured = configuredFor(item.target);
+          return /* @__PURE__ */ jsxRuntimeExports.jsx(
+            WorkItemRow,
+            {
+              reference: item.reference,
+              url: item.url,
+              title: item.title,
+              linkTitle: "Open " + item.reference,
+              tooltip: item.reference + (item.title ? " — " + item.title : "") + "\nfrom " + item.group,
+              meta: [item.state, ageText(item.created_at), item.assignee].filter(Boolean).join(" · "),
+              eligible: true,
+              eligibleLabel: "will auto-start",
+              actionLabel: "Start now",
+              failPrefix: "Start failed",
+              agents,
+              configuredAgent: configured.agent,
+              configuredDepth: configured.depth,
+              onStart: ({ agent, depth, effort }) => onStart(item, agent, depth, effort)
+            },
+            item.key
+          );
+        })
+      ] }, g.group))
+    ] })
+  ] });
+}
+function QueueTab({ gotoTab }) {
+  var _a2, _b2, _c2;
+  const ticketsQ = usePanelQuery("tickets");
+  const prsQ = usePanelQuery("github-prs");
+  const issuesQ = usePanelQuery("github-issues");
+  const statusQ = useIngestionStatus();
+  const status = statusQ.data;
+  const engineAvailable = !!(status == null ? void 0 : status.available);
+  const engineOn = !!((status == null ? void 0 : status.desired) ?? (status == null ? void 0 : status.running));
+  const agentChoices = useAgentChoices();
+  const s = useSettings();
+  const gh = s.settings.github || {};
+  const ticketSources = (s.settings.ticketing || {}).sources;
+  const configuredFor = (t) => {
+    var _a3, _b3;
+    if (t.kind === "tickets") {
+      const src = (ticketSources || []).find((x) => x.id === t.source);
+      return { agent: (src == null ? void 0 : src.agent) || agentChoices.fallback || "", depth: (src == null ? void 0 : src.depth) || "" };
+    }
+    const overrides = (t.kind === "prs" ? gh.repo_settings : gh.issue_repo_settings) || {};
+    const fallbackAgent = t.kind === "prs" ? gh.agent : gh.issue_agent;
+    return {
+      agent: ((_a3 = overrides[t.repo]) == null ? void 0 : _a3.agent) || String(fallbackAgent || agentChoices.fallback || ""),
+      depth: ((_b3 = overrides[t.repo]) == null ? void 0 : _b3.depth) || ""
+    };
+  };
+  const startItem = async (item, agent, depth, effort) => {
+    const extra = {
+      ...agent ? { agent } : {},
+      ...depth ? { depth } : {},
+      ...effort ? { effort } : {}
+    };
+    const t = item.target;
+    let title = "";
+    if (t.kind === "tickets") {
+      const r = await api("/api/tickets/start", {
+        json: { source: t.source, id: t.id, ...extra }
+      });
+      title = "Session " + ((r == null ? void 0 : r.title) || item.reference);
+    } else if (t.kind === "prs") {
+      const r = await api("/api/github/prs/review", {
+        json: { repo: t.repo, number: t.number, ...extra }
+      });
+      title = "Review session " + ((r == null ? void 0 : r.title) || "");
+    } else {
+      const r = await api("/api/github/issues/start", {
+        json: { repo: t.repo, number: t.number, ...extra }
+      });
+      title = "Issue session " + ((r == null ? void 0 : r.title) || "");
+    }
+    refreshInstances();
+    const panel = item.kind === "tickets" ? ticketsQ : item.kind === "prs" ? prsQ : issuesQ;
+    setTimeout(() => void panel.refetch(), 5e3);
+    return title;
+  };
+  const payloads = {
+    tickets: ticketsQ.data ?? null,
+    prs: prsQ.data ?? null,
+    issues: issuesQ.data ?? null
+  };
+  const total = collectQueued(payloads).length;
+  const filter = useListFilter(
+    "ik-queue-filter",
+    "Filter by item, title, source, or state…  ( Ctrl+F )"
+  );
+  const noteFor = (q, what) => panelNote({
+    error: q.error ? "Could not list " + what + ": " + (q.error.message || "error") : "",
+    fetching: q.isFetching,
+    loaded: !!q.data
+  });
+  const sections = [
+    {
+      kind: "tickets",
+      label: "Tickets",
+      tab: "tickets",
+      state: runState({
+        configured: (((_a2 = ticketsQ.data) == null ? void 0 : _a2.sources) || []).length > 0,
+        engineAvailable,
+        engineOn,
+        // Tickets have no switch of their own — the engine is it.
+        switchOn: true
+      }),
+      blockedOn: "Automated ingestion",
+      blockedElsewhere: false,
+      items: queuedOf("tickets", payloads),
+      note: noteFor(ticketsQ, "tickets")
+    },
+    {
+      kind: "prs",
+      label: "Pull requests",
+      tab: "prs",
+      state: runState({
+        configured: (((_b2 = prsQ.data) == null ? void 0 : _b2.repos) || []).length > 0,
+        engineAvailable,
+        engineOn,
+        switchOn: (status == null ? void 0 : status.pr_enabled) !== false
+      }),
+      // Its own toggle is off => name that; the engine being down => name the
+      // engine, because turning PR review on would still start nothing.
+      blockedOn: (status == null ? void 0 : status.pr_enabled) === false ? "Automated PR review" : "Automated ingestion",
+      blockedElsewhere: (status == null ? void 0 : status.pr_enabled) !== false,
+      items: queuedOf("prs", payloads),
+      note: noteFor(prsQ, "PRs")
+    },
+    {
+      kind: "issues",
+      label: "Issues",
+      tab: "issues",
+      state: runState({
+        configured: (((_c2 = issuesQ.data) == null ? void 0 : _c2.repos) || []).length > 0,
+        engineAvailable,
+        engineOn,
+        switchOn: (status == null ? void 0 : status.issues_enabled) === true
+      }),
+      blockedOn: (status == null ? void 0 : status.issues_enabled) !== true ? "Automated issue handling" : "Automated ingestion",
+      blockedElsewhere: (status == null ? void 0 : status.issues_enabled) === true,
+      items: queuedOf("issues", payloads),
+      note: noteFor(issuesQ, "issues")
+    }
+  ];
+  const shownSections = filter.active ? sections.map((sec) => ({
+    ...sec,
+    items: sec.items.filter((i) => queuedMatches(i, filter.tokens))
+  })).filter((sec) => sec.items.length) : sections;
+  const shownTotal = shownSections.reduce((n, sec) => n + sec.items.length, 0);
+  const refreshAll = () => {
+    ticketsQ.refresh();
+    prsQ.refresh();
+    issuesQ.refresh();
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row", id: "ik-queue-row", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Starts automatically" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-open-toolbar", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "test-btn", id: "ik-queue-refresh", onClick: refreshAll, children: "Refresh" }),
+      total ? filter.control : null,
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "pr-open-note", children: total === 0 ? "Nothing waiting to start" : filter.active ? shownTotal + " of " + total + " shown" : total + (total === 1 ? " item will auto-start" : " items will auto-start") })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ik-queue", id: "ik-queue-list", children: [
+      filter.active && !shownSections.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ik-queue-empty", children: [
+        "No queued item matches “",
+        filter.query,
+        "”."
+      ] }) : null,
+      shownSections.map((sec) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+        SectionBlock,
+        {
+          s: sec,
+          gotoTab,
+          agents: agentChoices.names,
+          configuredFor,
+          onStart: startItem
+        },
+        sec.kind
+      ))
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Everything the automations would start on their next sweep, oldest first — the order they are actually drawn in. An item is here because it passed its own kind's filters (ingest state, min age, author, base branch, and not already in the processed ledger); the other tabs explain, per row, why anything else was skipped. Where a section says auto-start is off, these are exactly the items that would go the moment you switch it on — or you can start any of them here now. Items the pipeline has already taken are no longer waiting: they are sessions, in the sidebar." })
+  ] });
+}
 const LEGACY_SCREEN_TABS = {
   ticketing: "tickets",
   repo: "prs",
@@ -32746,15 +35452,38 @@ const TABS = [
     caps: "git ticketing",
     legacyId: "git-issues-block",
     el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(IssuesTab, { ...p })
-  }
+  },
+  // Last, and not the landing tab: the three tabs before it are where you set a
+  // source up, and this one only has anything to say once one of them is
+  // working. Its badge carries the answer anyway, which is the point of the
+  // counts being on the strip.
+  //
+  // "Auto-start" rather than "Queue": a queue of what, and queued behind what?
+  // The rows are here precisely because the automations would take them on their
+  // own, and the label should say that — including when the switch is off, where
+  // the tab's job is to show exactly what would go the moment you turn it on.
+  { key: "autostart", label: "Auto-start", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(QueueTab, { ...p }) }
 ];
+function AutoStartCount() {
+  const tickets = usePanelQuery("tickets");
+  const prs = usePanelQuery("github-prs");
+  const issues = usePanelQuery("github-issues");
+  const n = collectQueued({
+    tickets: tickets.data ?? null,
+    prs: prs.data ?? null,
+    issues: issues.data ?? null
+  }).length;
+  if (!n) return null;
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ik-tab-count", children: n });
+}
 function TabCount({ tab }) {
   const key = tab === "tickets" ? "tickets" : tab === "prs" ? "github-prs" : "github-issues";
   const q = usePanelQuery(key);
   if (!q.data) return null;
   const n = tab === "tickets" ? countInBuckets(
     q.data.tickets || [],
-    visibleBuckets(q.data.buckets || [], q.data.done_buckets || [], loadShownBuckets())
+    visibleBuckets(q.data.buckets || [], q.data.done_buckets || [], loadShownBuckets()),
+    loadMineOnly()
   ) : (q.data.prs || q.data.issues || []).length;
   if (!n) return null;
   return /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ik-tab-count", children: n });
@@ -32772,7 +35501,9 @@ function IntakeDialog() {
     setTab(wanted && TABS.some((t) => t.key === wanted) ? wanted : "tickets");
   }, [open, target]);
   reactExports.useEffect(() => {
-    if (open) prefetchIntakePanels();
+    if (!open) return;
+    prefetchIntakePanels();
+    prefetchIntakeMeta();
   }, [open]);
   reactExports.useEffect(() => {
     if (!open) return;
@@ -32812,7 +35543,7 @@ function IntakeDialog() {
             onClick: () => setTab(t.key),
             children: [
               t.label,
-              /* @__PURE__ */ jsxRuntimeExports.jsx(TabCount, { tab: t.key })
+              t.key === "autostart" ? /* @__PURE__ */ jsxRuntimeExports.jsx(AutoStartCount, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(TabCount, { tab: t.key })
             ]
           },
           t.key
@@ -32867,6 +35598,8 @@ function General(_) {
     /* @__PURE__ */ jsxRuntimeExports.jsx(ResumeOnUsageResetRow, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(ScrollSpeedRow, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(ReduceMotionRow, {}),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(TakeABreakRow, {}),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(IdleFlockRow, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(GettingStarted, {})
   ] });
 }
@@ -32964,6 +35697,120 @@ function ReduceMotionRow() {
           onChange: (e) => {
             setReduceMotion(e.target.checked);
             toast(e.target.checked ? "Reduce motion on" : "Reduce motion off");
+          }
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
+    ] })
+  ] });
+}
+function TakeABreakRow() {
+  const on = useUi((s) => s.breakReminder);
+  const every = useUi((s) => s.breakEveryMin);
+  const setOn = useUi((s) => s.setBreakReminder);
+  const setEvery = useUi((s) => s.setBreakEveryMin);
+  const [draft, setDraft] = reactExports.useState(String(every));
+  reactExports.useEffect(() => setDraft(String(every)), [every]);
+  const commit = (raw) => {
+    const next = clampBreakMinutes(raw === "" ? every : raw);
+    setEvery(next);
+    setDraft(String(next));
+    if (on) toast("Break reminder every " + next + " min");
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row set-switch-row", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "notif-rule-text", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Take a break" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint notif-rule-desc break-every", children: [
+        "Reminder to take a break every",
+        " ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            type: "number",
+            "aria-label": "Minutes between break reminders",
+            min: BREAK_MIN_MINUTES,
+            max: BREAK_MAX_MINUTES,
+            step: 5,
+            value: draft,
+            onChange: (e) => setDraft(e.target.value),
+            onBlur: (e) => commit(e.target.value),
+            onKeyDown: (e) => {
+              if (e.key === "Enter") e.target.blur();
+            }
+          }
+        ),
+        " ",
+        "minutes."
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          type: "checkbox",
+          checked: on,
+          onChange: (e) => {
+            setOn(e.target.checked);
+            toast(
+              e.target.checked ? "Break reminder on — every " + every + " min" : "Break reminder off"
+            );
+          }
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
+    ] })
+  ] });
+}
+function IdleFlockRow() {
+  const on = useUi((s) => s.idleFlock);
+  const after = useUi((s) => s.idleFlockAfterMin);
+  const setOn = useUi((s) => s.setIdleFlock);
+  const setAfter = useUi((s) => s.setIdleFlockAfterMin);
+  const [draft, setDraft] = reactExports.useState(String(after));
+  reactExports.useEffect(() => setDraft(String(after)), [after]);
+  const commit = (raw) => {
+    const next = clampIdleMinutes(raw === "" ? after : raw);
+    setAfter(next);
+    setDraft(String(next));
+    if (on) toast("Idle flock after " + next + " min");
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "set-row set-switch-row", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "notif-rule-text", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Idle flock" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint notif-rule-desc break-every", children: [
+        "Fly the flock over your grid after",
+        " ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "input",
+          {
+            type: "number",
+            "aria-label": "Minutes idle before the flock appears",
+            min: IDLE_MIN_MINUTES,
+            max: IDLE_MAX_MINUTES,
+            step: 5,
+            value: draft,
+            onChange: (e) => setDraft(e.target.value),
+            onBlur: (e) => commit(e.target.value),
+            onKeyDown: (e) => {
+              if (e.key === "Enter") e.target.blur();
+            }
+          }
+        ),
+        " ",
+        "minutes with no click, keystroke or scroll in this window. It hides nothing and takes no input — the first touch sends the birds home."
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "input",
+        {
+          type: "checkbox",
+          checked: on,
+          onChange: (e) => {
+            setOn(e.target.checked);
+            toast(
+              e.target.checked ? "Idle flock on — after " + after + " min" : "Idle flock off"
+            );
           }
         }
       ),
@@ -34366,6 +37213,20 @@ function Workspace({ gotoScreen }) {
       ] })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Live branch" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(SettingField, { group: "repository", field: "live_branch", placeholder: "main" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "set-hint", children: [
+        "The branch that means ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("em", { children: "shipped" }),
+        ". ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Verify" }),
+        " waits until a session's commit is an ancestor of it, then asks you to test the change for real. Blank = fall back to the PR base branch, then the default base branch, then",
+        " ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "main" }),
+        "."
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "set-row", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-label", children: "Fast-track goes as far as" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx(
         SettingField,
@@ -34586,6 +37447,7 @@ function Providers(_) {
       toast("Removed provider " + name);
       load2();
       (_a2 = window.reloadProviderPicker) == null ? void 0 : _a2.call(window);
+      void refreshProviders();
     } catch (err) {
       toast("Delete failed: " + (err.message || name));
     }
@@ -34634,6 +37496,7 @@ function Providers(_) {
       }
       load2();
       (_a2 = window.reloadProviderPicker) == null ? void 0 : _a2.call(window);
+      void refreshProviders();
     } catch (err) {
       setError(err.message || (editing ? "save failed" : "add failed"));
     }
@@ -35907,6 +38770,1908 @@ function SettingsDialog({ onOpenSysLogsPane }) {
     }
   ) });
 }
+function selectedInOrder(selected, allKeys) {
+  return allKeys.filter((k) => selected.has(k));
+}
+function applyKeys(selected, keys, on) {
+  const next = new Set(selected);
+  for (const k of keys) {
+    if (on) next.add(k);
+    else next.delete(k);
+  }
+  if (next.size === selected.size) return selected;
+  return next;
+}
+function selectAllState(selected, visibleKeys) {
+  if (!visibleKeys.length) return "none";
+  let n = 0;
+  for (const k of visibleKeys) if (selected.has(k)) n++;
+  if (!n) return "none";
+  return n === visibleKeys.length ? "all" : "some";
+}
+function rangeBetween(visibleKeys, anchor, target) {
+  const a = visibleKeys.indexOf(anchor);
+  const b = visibleKeys.indexOf(target);
+  if (a < 0 || b < 0) return b < 0 ? [] : [target];
+  return visibleKeys.slice(Math.min(a, b), Math.max(a, b) + 1);
+}
+function previewList(names, limit = 8) {
+  const head = names.slice(0, limit).map((n) => "  • " + n);
+  const rest = names.length - head.length;
+  if (rest > 0) head.push(`  • …and ${rest} more`);
+  return head.join("\n");
+}
+function useRowSelection(allKeys, visibleKeys) {
+  const [selected, setSelected] = reactExports.useState(() => /* @__PURE__ */ new Set());
+  const anchor = reactExports.useRef(null);
+  const visibleRef = reactExports.useRef(visibleKeys);
+  visibleRef.current = visibleKeys;
+  const keys = reactExports.useMemo(() => selectedInOrder(selected, allKeys), [selected, allKeys]);
+  const hiddenCount = reactExports.useMemo(() => {
+    const vis = new Set(visibleKeys);
+    return keys.filter((k) => !vis.has(k)).length;
+  }, [keys, visibleKeys]);
+  const toggle = reactExports.useCallback((key, shift) => {
+    setSelected((prev) => {
+      if (shift && anchor.current) {
+        return applyKeys(prev, rangeBetween(visibleRef.current, anchor.current, key), true);
+      }
+      anchor.current = key;
+      return applyKeys(prev, [key], !prev.has(key));
+    });
+  }, []);
+  const setAllVisible = reactExports.useCallback((on) => {
+    anchor.current = null;
+    setSelected((prev) => applyKeys(prev, visibleRef.current, on));
+  }, []);
+  const clear = reactExports.useCallback(() => {
+    anchor.current = null;
+    setSelected((prev) => prev.size ? /* @__PURE__ */ new Set() : prev);
+  }, []);
+  return {
+    keys,
+    has: (k) => selected.has(k),
+    toggle,
+    setAllVisible,
+    allState: selectAllState(selected, visibleKeys),
+    clear,
+    hiddenCount
+  };
+}
+function RowCheck({
+  checked,
+  disabled,
+  title,
+  onToggle
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "input",
+    {
+      className: "row-check",
+      type: "checkbox",
+      checked,
+      disabled,
+      title,
+      "aria-label": title,
+      onChange: () => {
+      },
+      onClick: (e) => {
+        e.stopPropagation();
+        if (!disabled) onToggle(e.shiftKey);
+      }
+    }
+  );
+}
+function SelectAllCheck({
+  state,
+  onChange,
+  label
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "input",
+    {
+      className: "row-check row-check-all",
+      type: "checkbox",
+      checked: state === "all",
+      ref: (el) => {
+        if (el) el.indeterminate = state === "some";
+      },
+      title: label,
+      "aria-label": label,
+      onChange: (e) => onChange(e.target.checked)
+    }
+  );
+}
+function BulkRowBar({
+  count,
+  hiddenCount,
+  noun,
+  onClear,
+  children
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dlg-bulk", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "bulk-count", children: [
+      count,
+      " ",
+      noun,
+      count === 1 ? "" : "s",
+      " selected",
+      hiddenCount ? ` · ${hiddenCount} hidden by the filter` : ""
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "bulk-acts", children: [
+      children,
+      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", title: "Clear selection", onClick: onClear, children: "Clear" })
+    ] })
+  ] });
+}
+const GROUPS_KEY = "mf_verify_groups";
+const PLANS_KEY = "mf_verify_plans";
+function planPath(id) {
+  return "/api/test-plans/" + encodeURIComponent(id);
+}
+function planName(plan) {
+  return plan.title || plan.id;
+}
+function ageOf(epochSeconds) {
+  if (!epochSeconds) return "";
+  return ageText(new Date(epochSeconds * 1e3).toISOString());
+}
+function agoOf(epochSeconds) {
+  const age = ageOf(epochSeconds);
+  return age ? age.replace(/ old$/, " ago") : "";
+}
+const ANSWER_LABEL = {
+  pass: "Pass",
+  fail: "Fail",
+  blocked: "Can't check"
+};
+const CHECK_LABEL = {
+  pass: "Passed",
+  fail: "Failed",
+  cant: "You couldn't check this",
+  yours: "Waiting on you",
+  pending: "Not checked yet"
+};
+function answerLabel(result) {
+  return ANSWER_LABEL[result] || result;
+}
+function receiptLabel(entry) {
+  if (entry.result === "blocked" && entry.by !== "human") return "for you to check";
+  return answerLabel(entry.result).toLowerCase();
+}
+function byLabel(by) {
+  return by === "human" ? "you" : by || "agent";
+}
+function patchPlan(id, apply2) {
+  void queryClient.cancelQueries({ queryKey: ["test-plans"] });
+  queryClient.setQueryData(
+    ["test-plans"],
+    (prev) => prev ? { ...prev, plans: prev.plans.map((p) => p.id === id ? apply2(p) : p) } : prev
+  );
+}
+function OverflowMenu({ label, items }) {
+  const ref2 = reactExports.useRef(null);
+  const [open, setOpen] = reactExports.useState(false);
+  const [up, setUp] = reactExports.useState(false);
+  reactExports.useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => {
+      if (ref2.current && !ref2.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+  if (!items.length) return null;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("details", { className: "vf-menu" + (up ? " vf-menu-up" : ""), open, ref: ref2, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "summary",
+      {
+        "aria-label": label,
+        title: label,
+        onClick: (e) => {
+          e.preventDefault();
+          const next = !open;
+          if (next && ref2.current) {
+            const here = ref2.current.getBoundingClientRect();
+            const body = document.getElementById("verify-body");
+            const floor = body ? body.getBoundingClientRect().bottom : window.innerHeight;
+            setUp(floor - here.bottom < 24 * items.length + 40);
+          }
+          setOpen(next);
+        },
+        children: "⋯"
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "vf-menu-list", children: items.map((item) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "button",
+      {
+        type: "button",
+        className: "vf-menu-item" + (item.danger ? " vf-menu-danger" : "") + (item.className ? " " + item.className : ""),
+        title: item.title,
+        onClick: () => {
+          setOpen(false);
+          item.onSelect();
+        },
+        children: item.label
+      },
+      item.key
+    )) })
+  ] });
+}
+const NOTE_DRAFTS = /* @__PURE__ */ new Map();
+function noteKey(planId, stepId) {
+  return planId + "\0" + stepId;
+}
+const ROW_UI = /* @__PURE__ */ new Map();
+function rowUi(planId) {
+  return ROW_UI.get(planId) || {};
+}
+function setRowUi(planId, patch) {
+  ROW_UI.set(planId, { ...rowUi(planId), ...patch });
+}
+function forgetNoteDrafts() {
+  NOTE_DRAFTS.clear();
+  ROW_UI.clear();
+}
+function StepRow({
+  step,
+  index,
+  plan,
+  onRecord,
+  onRunStep,
+  running,
+  onRemove,
+  onEdit
+}) {
+  const [pending, setPending] = reactExports.useState(null);
+  const draftKey = noteKey(plan.id, step.id);
+  const draft = NOTE_DRAFTS.get(draftKey);
+  const [editing, setEditing] = reactExports.useState(false);
+  const [noteOpen, setNoteOpenRaw] = reactExports.useState(!!(draft == null ? void 0 : draft.open));
+  const [note, setNoteRaw] = reactExports.useState((draft == null ? void 0 : draft.text) || "");
+  const [saving, setSaving] = reactExports.useState(false);
+  const setNoteOpen = (next, text = note) => {
+    setNoteOpenRaw(next);
+    if (next) NOTE_DRAFTS.set(draftKey, { open: true, text });
+    else NOTE_DRAFTS.delete(draftKey);
+  };
+  const setNote = (next) => {
+    setNoteRaw(next);
+    NOTE_DRAFTS.set(draftKey, { open: true, text: next });
+  };
+  const entry = stepResult(plan, step.id);
+  const check = stepCheck(plan, step.id);
+  const shown = pending ?? (entry == null ? void 0 : entry.result) ?? "";
+  const shownBy = pending !== null ? "human" : (entry == null ? void 0 : entry.by) || "";
+  const answered = isYourAnswer(shown, shownBy);
+  const handed = handedBack(entry);
+  const mine = stepIsYours(plan, step);
+  const wantsYou = mine && !answered && asksHumanSteps(plan);
+  const mayNote = !answered || !entry || entry.by === "human";
+  const mayResave = answered && (!entry || entry.by === "human");
+  const record = async (result) => {
+    setPending(result);
+    try {
+      await onRecord(step, result, result === "" ? "" : note.trim());
+      const draftNext = noteDraftAfter(result, noteOpen, note);
+      setNoteRaw(draftNext.text);
+      setNoteOpen(draftNext.open, draftNext.text);
+    } catch (err) {
+      errorPop("Couldn't record that answer", errMsg(err));
+    } finally {
+      setPending(null);
+    }
+  };
+  const saveNote = async () => {
+    if (!mayResave) return;
+    setSaving(true);
+    try {
+      await onRecord(step, shown, note.trim());
+      setNoteOpen(false);
+    } catch (err) {
+      errorPop("Couldn't save that note", errMsg(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const stepMenu = [];
+  if (!mine && onRunStep)
+    stepMenu.push({
+      key: "recheck",
+      label: running ? "Re-checking…" : "Re-check this step",
+      title: "Start a session that checks only this step",
+      // A no-op while its own re-check is already starting: the item stays for
+      // the label, not for a second press.
+      onSelect: () => {
+        if (!running) void onRunStep(step);
+      }
+    });
+  if (onEdit) {
+    stepMenu.push({
+      key: "edit",
+      label: "Edit this step",
+      title: "Change the wording. It becomes yours, so the next rewrite keeps it — and any answer already recorded against it is cleared, because the question changed.",
+      onSelect: () => setEditing(true)
+    });
+    stepMenu.push({
+      key: "actor",
+      // The flip is worth its own item rather than living inside the editor: it
+      // is the only way out of a checklist an agent cannot run at all (an
+      // unrecognised actor is coerced to "human", and the run route refuses a
+      // plan where every step is a person's), and it costs no answers.
+      label: mine ? "Let the agent check this" : "I'll check this one",
+      title: mine ? "An agent will settle it from a shell on the next run. Answers already recorded are kept — only who answers changes." : "Take it off the agent — a run will leave it for you.",
+      onSelect: () => void onEdit(step, { actor: mine ? "agent" : "human" })
+    });
+  }
+  if (step.manual && onRemove)
+    stepMenu.push({
+      key: "remove",
+      label: "Remove this step",
+      title: "You added this one, so nothing will bring it back",
+      danger: true,
+      onSelect: () => void onRemove(step)
+    });
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      className: "vf-step" + (wantsYou ? " vf-wants-you" : "") + (shown === "fail" ? " vf-step-bad" : ""),
+      "data-step-id": step.id,
+      "data-manual": step.manual ? "1" : void 0,
+      onKeyDown: (e) => {
+        const from = e.target;
+        if (from !== e.currentTarget && from.closest("input, textarea, select"))
+          return;
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        if (!stepKeyAllowed(pending !== null || saving, e.repeat)) return;
+        if (stepKeyIsUndo(e.key)) {
+          if (!answered) return;
+          e.preventDefault();
+          void record("");
+          return;
+        }
+        const action = stepKeyAction(e.key);
+        if (!action) return;
+        e.preventDefault();
+        if (action === "note") {
+          if (mayNote) setNoteOpen(true);
+          return;
+        }
+        void record(action);
+      },
+      tabIndex: -1,
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "span",
+          {
+            className: "vf-step-mark",
+            "data-check": check,
+            "aria-hidden": "true",
+            title: CHECK_LABEL[check],
+            children: CHECK_MARK[check]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-step-n", children: index + 1 }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "span",
+          {
+            className: "vf-step-who" + (mine ? " vf-who-you" : ""),
+            title: handed ? "The agent's step, handed back: it went and tried, and said it couldn't settle this one — the reason is on the row. It is yours now. A later run has another go at it." : mine ? "Only a person can answer this — visual judgement, a real browser, or a service the agent has no tool for. A verify run leaves it blocked with a reason." : "The agent's — checkable from a shell or its own tools (log searches and dashboards included), so a verify run settles it without you. You can still override its answer.",
+            children: mine ? "you" : "agent"
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-step-body", children: [
+          editing && onEdit ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+            StepEditor,
+            {
+              step,
+              onCancel: () => setEditing(false),
+              onSave: async (fields) => {
+                await onEdit(step, fields);
+                setEditing(false);
+              }
+            }
+          ) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "vf-step-head", children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-step-text", children: step.text }) }),
+            step.expect ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-step-expect", children: [
+              "Expect: ",
+              step.expect
+            ] }) : null
+          ] }),
+          (entry == null ? void 0 : entry.note) ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "vf-step-note", children: entry.note }) : null,
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-step-actions", children: [
+            ["pass", "fail", "blocked"].map((choice) => {
+              const on = shown === choice && (answered || choice !== "blocked");
+              return /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "button",
+                {
+                  type: "button",
+                  className: "vf-mark vf-mark-" + choice,
+                  "data-on": on ? "1" : void 0,
+                  "aria-pressed": on,
+                  "aria-label": answerLabel(choice) + " — step " + (index + 1),
+                  disabled: pending !== null || saving,
+                  title: on ? shownBy === "human" ? "Recorded — press again to take it back" : "The agent recorded this — Undo takes it back" : "Record " + answerLabel(choice).toLowerCase(),
+                  onClick: () => {
+                    if (on && answered) {
+                      if (shownBy === "human") void record("");
+                      return;
+                    }
+                    void record(choice);
+                  },
+                  children: pending === choice ? "…" : answerLabel(choice)
+                },
+                choice
+              );
+            }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "vf-step-tail", children: [
+              entry && !pending && entry.result ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "vf-receipt", "data-result": entry.result, children: [
+                  receiptLabel(entry),
+                  " · ",
+                  byLabel(entry.by),
+                  ageOf(entry.at) ? " · " + ageOf(entry.at) : ""
+                ] }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  "button",
+                  {
+                    type: "button",
+                    className: "vf-undo",
+                    disabled: pending !== null || saving,
+                    title: "Take this answer back — the step goes back to unchecked",
+                    onClick: () => void record(""),
+                    children: "Undo"
+                  }
+                )
+              ] }) : null,
+              mayNote && !noteOpen ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "button",
+                {
+                  type: "button",
+                  className: "vf-notetoggle",
+                  onClick: () => {
+                    setNote((entry == null ? void 0 : entry.by) === "human" ? entry.note || "" : "");
+                    setNoteOpen(true);
+                  },
+                  children: "+ note"
+                }
+              ) : null
+            ] }),
+            stepMenu.length ? /* @__PURE__ */ jsxRuntimeExports.jsx(OverflowMenu, { label: "More for step " + (index + 1), items: stepMenu }) : null
+          ] }),
+          noteOpen ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-step-note-row", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "input",
+              {
+                type: "text",
+                className: "vf-step-input",
+                placeholder: shown === "pass" ? "anything worth recording?" : "what happened?",
+                "aria-label": "Note for step " + (index + 1),
+                autoComplete: "off",
+                value: note,
+                disabled: saving,
+                onChange: (e) => setNote(e.target.value),
+                onKeyDown: (e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void saveNote();
+                  }
+                  if (e.key === "Escape") {
+                    e.stopPropagation();
+                    setNoteOpen(false);
+                  }
+                },
+                onBlur: () => {
+                  if (mayResave && note.trim() && note.trim() !== ((entry == null ? void 0 : entry.note) || ""))
+                    void saveNote();
+                }
+              }
+            ),
+            mayResave ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                type: "button",
+                className: "test-btn vf-note-save",
+                disabled: saving,
+                onClick: () => void saveNote(),
+                children: saving ? "Saving…" : "Save"
+              }
+            ) : (
+              // Nothing of yours to attach it to yet — the step is unanswered,
+              // or the answer on it is the agent's and re-posting would restamp
+              // it as yours. So the note waits and travels WITH the answer you
+              // pick, which `record` sends. Saying that beats a Save button that
+              // would have to invent a result to hang the sentence on.
+              //
+              // Phrased as the instruction it is. "goes with the answer you
+              // pick" describes the mechanism and leaves the reader to work out
+              // that they are supposed to do something.
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-note-hint", children: "pick an answer — this saves with it" })
+            )
+          ] }) : null
+        ] })
+      ]
+    }
+  );
+}
+function PlanRow({
+  plan,
+  liveBranch,
+  selection,
+  expanded,
+  onToggle,
+  onExpand
+}) {
+  const closeDialog = useUi((s) => s.closeDialog);
+  const openVerifyPane = useUi((s) => s.openVerifyPane);
+  const [busy, setBusy] = reactExports.useState("");
+  const [stepBusy, setStepBusy] = reactExports.useState("");
+  const [focusStep, setFocusStep] = reactExports.useState("");
+  const savedUi = rowUi(plan.id);
+  const [rewriting, setRewritingRaw] = reactExports.useState(!!savedUi.rewriting);
+  const setRewriting = (next) => {
+    setRewritingRaw(next);
+    setRowUi(plan.id, { rewriting: next });
+  };
+  const [confirming, setConfirmingRaw] = reactExports.useState(
+    savedUi.confirming || ""
+  );
+  const setConfirming = (next) => {
+    setConfirmingRaw(next);
+    setRowUi(plan.id, { confirming: next });
+  };
+  const [watchPref, setWatchPrefRaw] = reactExports.useState(
+    savedUi.watching === void 0 ? null : savedUi.watching
+  );
+  const setWatchingHere = (next) => {
+    setWatchPrefRaw(next);
+    setRowUi(plan.id, { watching: next });
+  };
+  const bodyRef = reactExports.useRef(null);
+  const run = latestRun(plan);
+  const running = plan.state === "running";
+  const watchSession = plan.run_session || (run == null ? void 0 : run.session) || "";
+  const watchingHere = watchPref === null ? running : watchPref;
+  const evidence = runEvidence(run, plan.live_branch || liveBranch);
+  const failedCount = failCount(plan);
+  const steps = plan.steps || [];
+  const status = planStatus(plan, liveBranch);
+  const open = openHumanSteps(plan);
+  const mineCount = steps.filter((s) => stepIsYours(plan, s)).length;
+  const agentCount = steps.length - mineCount;
+  const nowLive = plan.effective_live_branch || liveBranch;
+  const where = plan.merged_into || (plan.live_at ? nowLive || "shipped" : "local");
+  const whereAgo = agoOf(plan.merged_into_at || plan.live_at || plan.generated_at);
+  const whereTitle = (plan.merged_into ? [
+    "Most recently merged into " + plan.merged_into + " on origin" + (whereAgo ? " " + whereAgo : "") + ".",
+    // The trail, when there is one: staging on the day it merged, main on
+    // the day somebody promoted it. One name per landing, so this is short.
+    (plan.merged_into_all || []).length > 1 ? "Also in " + (plan.merged_into_all || []).slice(1).join(", ") + "." : "",
+    plan.merged_into === nowLive ? "" : "This repo ships from " + (nowLive || "?") + "."
+  ] : [
+    plan.live_at ? "Live on " + (nowLive || "the live branch") + "." : "Still only on " + (plan.branch || "its own branch") + " — origin has it nowhere else yet.",
+    plan.generated_at && !plan.live_at ? "Checklist written " + agoOf(plan.generated_at) + "." : "",
+    plan.live_at ? "" : "This repo ships from " + (nowLive || "?") + "."
+  ]).filter(Boolean).join("\n");
+  reactExports.useEffect(() => {
+    var _a2;
+    if (!focusStep || !expanded) return;
+    const root = bodyRef.current;
+    if (root) {
+      const esc = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(focusStep) : focusStep;
+      const el = root.querySelector('[data-step-id="' + esc + '"]');
+      if (el) {
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
+        (_a2 = el.focus) == null ? void 0 : _a2.call(el, { preventScroll: true });
+      }
+    }
+    setFocusStep("");
+  }, [focusStep, expanded]);
+  const startRun = async (only) => {
+    if (only) setStepBusy(only[0]);
+    else setBusy("run");
+    try {
+      const r = await api(
+        planPath(plan.id) + "/run",
+        { method: "POST", json: only ? { steps: only } : {} }
+      );
+      await refreshInstances();
+      const started = r == null ? void 0 : r.plan;
+      patchPlan(
+        plan.id,
+        (p) => started || { ...p, state: "running", run_session: (r == null ? void 0 : r.session) || "" }
+      );
+      setWatchingHere(true);
+      await refreshTestPlans();
+      toast("Starting an agent on " + planName(plan) + " in " + ((r == null ? void 0 : r.session) || "a new session"));
+    } catch (err) {
+      errorPop("Couldn't start the run for " + planName(plan), errMsg(err));
+      void refreshTestPlans();
+    } finally {
+      setBusy("");
+      setStepBusy("");
+    }
+  };
+  const watch = () => {
+    if (!watchSession) {
+      errorPop(
+        "Nothing to watch",
+        "That run's session is gone. The row will catch up in a moment — start it again from there."
+      );
+      void refreshTestPlans();
+      return;
+    }
+    openVerifyPane(watchSession);
+    closeDialog();
+  };
+  const firstStepWith = (result, by = "") => {
+    var _a2;
+    const results = (run == null ? void 0 : run.results) || {};
+    return ((_a2 = steps.find((s) => {
+      const entry = results[s.id];
+      return (entry == null ? void 0 : entry.result) === result && (!by || entry.by === by);
+    })) == null ? void 0 : _a2.id) || "";
+  };
+  const regenerate = async (focus = "") => {
+    setBusy("regen");
+    try {
+      await api(planPath(plan.id) + "/regenerate", {
+        method: "POST",
+        json: { focus: focus.trim() }
+      });
+      patchPlan(plan.id, (p) => ({
+        ...p,
+        state: "generating",
+        error: "",
+        gen_started: Date.now() / 1e3
+      }));
+      setRewriting(false);
+      toast("Rewriting the checklist for " + planName(plan) + " — up to three minutes");
+    } catch (err) {
+      errorPop("Couldn't rewrite " + planName(plan), errMsg(err));
+      void refreshTestPlans();
+    } finally {
+      setBusy("");
+    }
+  };
+  const runEarly = () => setConfirming("early");
+  const cancelRun = async () => {
+    setBusy("cancel");
+    try {
+      const r = await api(
+        planPath(plan.id) + "/cancel",
+        { method: "POST" }
+      );
+      if (r == null ? void 0 : r.plan) patchPlan(plan.id, () => r.plan);
+      if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
+      await refreshInstances();
+      await refreshTestPlans();
+      toast((r == null ? void 0 : r.session) ? "Stopped " + r.session : "Run cancelled");
+    } catch (err) {
+      errorPop("Couldn't cancel the run", errMsg(err));
+      void refreshTestPlans();
+    } finally {
+      setBusy("");
+    }
+  };
+  const fixFailures = async (only) => {
+    setBusy("fix");
+    try {
+      const r = await api(
+        planPath(plan.id) + "/fix",
+        { method: "POST", json: only ? { steps: only } : {} }
+      );
+      await refreshInstances();
+      toast(
+        "Opened " + ((r == null ? void 0 : r.session) || "a session") + " to fix what failed" + ((r == null ? void 0 : r.reclaimed) ? " (cleared the last one's empty workspace)" : "")
+      );
+    } catch (err) {
+      errorPop("Couldn't open a session to fix it", errMsg(err));
+    } finally {
+      setBusy("");
+    }
+  };
+  const markDeployed = async () => {
+    setBusy("deployed");
+    try {
+      const r = await api(planPath(plan.id) + "/deployed", {
+        method: "POST"
+      });
+      if (r == null ? void 0 : r.plan) patchPlan(plan.id, () => r.plan);
+      await refreshTestPlans();
+      toast(planName(plan) + " is ready to check");
+    } catch (err) {
+      errorPop("Couldn't release " + planName(plan) + " for checking", errMsg(err));
+      void refreshTestPlans();
+    } finally {
+      setBusy("");
+    }
+  };
+  const remove = async () => {
+    setBusy("delete");
+    try {
+      await api(planPath(plan.id), { method: "DELETE" });
+      if (watchSession) useUi.getState().closeVerifyPane(watchSession);
+      ROW_UI.delete(plan.id);
+      queryClient.setQueryData(
+        ["test-plans"],
+        (prev) => prev ? { ...prev, plans: prev.plans.filter((p) => p.id !== plan.id) } : prev
+      );
+      await refreshTestPlans();
+    } catch (err) {
+      errorPop("Couldn't delete " + planName(plan), errMsg(err));
+      void refreshTestPlans();
+    } finally {
+      setBusy("");
+    }
+  };
+  const recordStep = async (step, result, note) => {
+    var _a2;
+    const wasAsking = isWaitingOnYou(plan);
+    const answer = await api(planPath(plan.id) + "/result", {
+      json: { step_id: step.id, result, note }
+    });
+    const next = answer == null ? void 0 : answer.plan;
+    if (next) patchPlan(plan.id, () => next);
+    if (next && wasAsking && !isWaitingOnYou(next)) {
+      const dest = ((_a2 = groupPlans([next])[0]) == null ? void 0 : _a2.label) || "";
+      toast(
+        "All your steps are answered — " + planName(plan) + (dest ? " moves to " + dest : "")
+      );
+    }
+    void refreshTestPlans();
+  };
+  const doPrimary = () => {
+    if (status.action === "answer") {
+      onExpand();
+      const target = (status.tone === "bad" ? firstStepWith("fail") : "") || (open.length ? open[0].id : "") || firstStepWith("blocked", "human");
+      if (target) setFocusStep(target);
+      return;
+    }
+    if (status.action === "watch") {
+      onExpand();
+      setWatchingHere(true);
+      return;
+    }
+    if (status.action === "rewrite") {
+      onExpand();
+      setRewriting(true);
+      return;
+    }
+    void startRun();
+  };
+  const menu = [];
+  if (watchSession && !watchingHere)
+    menu.push({
+      key: "watch-here",
+      label: running ? "Show the run here" : "Show the last run here",
+      title: watchSession + " — its output, inline under this checklist, without closing the dialog",
+      onSelect: () => setWatchingHere(true)
+    });
+  if (watchSession)
+    menu.push({
+      key: "watch",
+      label: "Open the session in its own window",
+      title: watchSession + " — the same stream this checklist shows inline, in a grid pane you can keep open while you work somewhere else. Closing it does not stop the run.",
+      onSelect: watch
+    });
+  if (running)
+    menu.push({
+      key: "cancel",
+      label: "Cancel run",
+      title: "Stops the session and puts this plan back. Nothing it found is lost — the session is closed, not deleted, and Recent… reopens it.",
+      className: "test-btn vf-cancel",
+      onSelect: () => void cancelRun()
+    });
+  if (plan.state === "generated" && plan.merged_at)
+    menu.push({
+      key: "deployed",
+      label: "It's deployed — check it now",
+      title: "Skip the rest of this repo's deploy window and make it due now",
+      onSelect: () => void markDeployed()
+    });
+  if (!running && steps.length && plan.state !== "generating") {
+    const agentCan = steps.some((s) => s.actor !== "human");
+    if (status.action === "none" && agentCan)
+      menu.push({
+        key: "early",
+        label: "Check it early…",
+        title: "Runs an agent against this checklist's own commit rather than the live branch — and closes it, so it will not come back when the branch ships",
+        onSelect: runEarly
+      });
+    else if (agentCan && status.action !== "run" && status.action !== "rerun")
+      menu.push({
+        key: "run",
+        label: run ? "Run again with an agent" : "Run with an agent",
+        title: "Starts a session that works every step it can from a shell",
+        onSelect: () => void startRun()
+      });
+  }
+  if (!running && failedCount > 0)
+    menu.push({
+      key: "fix",
+      label: failedCount === 1 ? "Fix what failed…" : "Fix the " + failedCount + " that failed…",
+      title: "Opens an ordinary session in this repo with the step, what was expected and what happened instead. It is told to reproduce it first — a step can be wrong, and changing shipped code to satisfy a wrong step is worse.",
+      onSelect: () => void fixFailures()
+    });
+  if (plan.state !== "generating" && status.action !== "rewrite")
+    menu.push({
+      key: "regen",
+      label: "Rewrite the checklist",
+      title: "Ask the model again — and tell it what this draft got wrong, which is the part that makes the second one better than the first",
+      onSelect: () => {
+        onExpand();
+        setRewriting(true);
+      }
+    });
+  menu.push({
+    key: "delete",
+    label: "Delete this checklist",
+    danger: true,
+    title: "Forget this checklist and everything recorded against it",
+    onSelect: () => {
+      onExpand();
+      setConfirming("delete");
+    }
+  });
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      className: "vf-plan" + ((selection == null ? void 0 : selection.has(plan.id)) ? " picked" : ""),
+      "data-tone": status.tone,
+      "data-plan-id": plan.id,
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-plan-head", children: [
+          selection ? (
+            // BEFORE the expander, so the column of boxes is the first thing the
+            // eye can run down — the same place Recently closed puts it. The
+            // checkbox stops its own click, so ticking a row never expands it.
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-plan-check", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+              RowCheck,
+              {
+                checked: selection.has(plan.id),
+                title: "Select " + planName(plan) + " (Shift-click to extend the range)",
+                onToggle: (shift) => selection.toggle(plan.id, shift)
+              }
+            ) })
+          ) : null,
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "button",
+            {
+              type: "button",
+              className: "vf-plan-toggle",
+              "aria-expanded": expanded,
+              onClick: onToggle,
+              title: [
+                planName(plan),
+                "branch " + (plan.branch || "?"),
+                "commit " + (plan.sha ? plan.sha.slice(0, 12) : "?"),
+                "live branch " + (plan.live_branch || "?"),
+                plan.merged_into ? "merged into " + plan.merged_into : "",
+                plan.repo_root
+              ].filter(Boolean).join("\n"),
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "tk-caret", children: "▸" }),
+                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-plan-title", children: planName(plan) }),
+                plan.summary ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-plan-summary", children: plan.summary }) : null
+              ]
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-plan-line", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-stopline", "data-tone": status.tone, children: [
+              plan.state === "generating" && status.tone === "wait" ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-spin", "aria-hidden": "true" }) : null,
+              status.line
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(PlanTally, { plan })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-plan-meta", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-plan-meta-text", children: plan.branch }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs(
+              "span",
+              {
+                className: "vf-plan-landed",
+                "data-live": where === nowLive && !!nowLive ? "yes" : "no",
+                title: whereTitle,
+                children: [
+                  where,
+                  whereAgo ? " · " + whereAgo : ""
+                ]
+              }
+            )
+          ] }),
+          status.action !== "none" ? /* @__PURE__ */ jsxRuntimeExports.jsx(
+            "button",
+            {
+              type: "button",
+              className: "btn-primary vf-primary",
+              "data-action": status.action,
+              disabled: busy !== "" || stepBusy !== "" || status.action === "watch" && !plan.run_session,
+              title: status.action === "answer" ? status.tone === "bad" ? "Open the steps that didn't do what was expected" : status.tone === "warn" ? "Open the steps you couldn't get to" : "Open the steps that need your eyes" : status.action === "watch" ? "Open " + (plan.run_session || "the verify session") : status.action === "rewrite" ? "Ask the model for a new set of steps from the same diff" : (
+                // The cost, said plainly. This is the one control on the
+                // surface that spends a workspace and minutes of a billed
+                // agent, and it used to be indistinguishable from "run the
+                // tests".
+                "Starts a real session in its own workspace and works every step it can from a shell — minutes, not seconds. Steps only you can judge come back for you."
+              ),
+              onClick: doPrimary,
+              children: busy === "run" ? "Starting…" : busy === "regen" ? "…" : status.actionLabel
+            }
+          ) : null,
+          /* @__PURE__ */ jsxRuntimeExports.jsx(OverflowMenu, { label: "More actions for " + planName(plan), items: menu })
+        ] }),
+        expanded && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-plan-body", ref: bodyRef, children: [
+          !!plan.error && // The generator failing is a defect in the plumbing, not an answer
+          // about the code, so it gets the error verbatim rather than a
+          // friendly paraphrase — the raw line is what makes it fixable.
+          //
+          // Keyed on the ERROR and not on `state === "failed"`, because a
+          // rewrite that fails no longer costs the plan its rung: a checklist
+          // with steps keeps its place in the queue and records the reason
+          // here (see `test_plans._fail`). Rendering this only for `failed`
+          // meant the commonest failure — a rewrite of a good checklist timing
+          // out — reported itself nowhere at all.
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-error", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: steps.length ? "That didn't work." : "Couldn't write a plan." }),
+            " ",
+            plan.error || "no reason recorded",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "vf-note", children: steps.length ? "The steps below are untouched, and still answerable." : "Rewriting asks the model again. If it keeps failing, the coding CLI it used probably has no headless mode configured, or the worktree it was written from is gone — you can also write the steps yourself below." })
+          ] }),
+          plan.state === "generated" && steps.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-warn", children: [
+            "Answering these now closes the checklist — it will not come back to",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: " Not checked yet" }),
+            " when the branch ships."
+          ] }),
+          plan.live_branch && nowLive && plan.live_branch !== nowLive && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-drift", children: [
+            "Measured against ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: plan.live_branch }),
+            "; this repo now ships",
+            " ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: nowLive }),
+            ". Answers here were recorded against that branch, so it keeps it — a checklist with nothing answered re-aims itself at",
+            " ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: nowLive }),
+            " on its own, within a minute."
+          ] }),
+          run && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-note", children: [
+            "Last checked by ",
+            byLabel(run.by),
+            run.session ? " (" + run.session + ")" : "",
+            ", ",
+            agoOf(run.at) || "just now",
+            ".",
+            evidence ? " " + evidence + "." : ""
+          ] }),
+          runTreeMismatch(run) && // The failure `build_run_prompt` calls the one that must not be able
+          // to happen, made visible when it does. The server has already
+          // downgraded that run's passes; this says why, so the row is not a
+          // mystery full of blocked steps.
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-warn", children: [
+            "That run wasn't on ",
+            nowLive || "the live branch",
+            " — it worked",
+            " ",
+            /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: ((run == null ? void 0 : run.tested_sha) || "").slice(0, 7) }),
+            ", so its passes have been set aside. Run it again."
+          ] }),
+          steps.length > 0 && // The one sentence a new user genuinely must read, said once per
+          // plan where it is unmissable. It used to be three `title`
+          // attributes, which is a strange place to keep the promise the
+          // whole surface rests on.
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-legend", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-step-who vf-who-you", children: "you" }),
+              " = only a person can check it ·",
+              " ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-step-who", children: "agent" }),
+              " = a verify run settles it from a shell",
+              mineCount > 0 && agentCount > 0 ? " — " + agentCount + " for the agent, " + mineCount + " for you" : "",
+              "."
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Pass" }),
+              " = it did what's expected · ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Fail" }),
+              " = it didn't · ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Can't check" }),
+              " = you couldn't get to it. All three count as your answer; only Pass says it works."
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-keys", children: [
+              "On a step: ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("kbd", { children: "1" }),
+              " pass · ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("kbd", { children: "2" }),
+              " fail · ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("kbd", { children: "3" }),
+              " can't check · ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("kbd", { children: "u" }),
+              " undo · ",
+              /* @__PURE__ */ jsxRuntimeExports.jsx("kbd", { children: "n" }),
+              " note."
+            ] })
+          ] }),
+          rewriting && /* @__PURE__ */ jsxRuntimeExports.jsx(
+            RewriteBox,
+            {
+              plan,
+              busy: busy === "regen",
+              onCancel: () => setRewriting(false),
+              onRewrite: (focus) => void regenerate(focus)
+            }
+          ),
+          confirming === "delete" && /* @__PURE__ */ jsxRuntimeExports.jsx(
+            ConfirmBox,
+            {
+              title: "Delete the checklist for " + planName(plan) + "?",
+              body: "Every answer recorded against it goes too. " + (running ? "This also stops " + (plan.run_session || "the verify session") + "." : "A later push of the same branch writes a new one."),
+              confirmLabel: busy === "delete" ? "Deleting…" : "Delete it",
+              busy: busy !== "",
+              onCancel: () => setConfirming(""),
+              onConfirm: () => {
+                setConfirming("");
+                void remove();
+              }
+            }
+          ),
+          confirming === "early" && /* @__PURE__ */ jsxRuntimeExports.jsx(
+            ConfirmBox,
+            {
+              title: "Check it before it ships?",
+              body: planName(plan) + " hasn't reached " + (plan.live_branch || nowLive || "the live branch") + " yet, so this checks out its own commit (" + (plan.sha ? plan.sha.slice(0, 7) : "its branch") + ") rather than what users have. Once it finishes, this checklist is closed — it will NOT come back to “Not checked yet” when the branch does ship.",
+              confirmLabel: "Check it early",
+              busy: busy !== "",
+              onCancel: () => setConfirming(""),
+              onConfirm: () => {
+                setConfirming("");
+                void startRun();
+              }
+            }
+          ),
+          watchSession && watchingHere && /* @__PURE__ */ jsxRuntimeExports.jsx(
+            RunWatch,
+            {
+              session: watchSession,
+              onPopOut: watch,
+              onHide: () => setWatchingHere(false)
+            }
+          ),
+          steps.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx(ChecksHead, { plan }),
+          steps.length > 0 ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "vf-steps", children: steps.map((step, i) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+            StepRow,
+            {
+              step,
+              index: i,
+              plan,
+              onRecord: recordStep,
+              onRunStep: running || busy !== "" || stepBusy !== "" && stepBusy !== step.id ? void 0 : (s) => startRun([s.id]),
+              running: stepBusy === step.id,
+              onEdit: running ? void 0 : async (st, fields) => {
+                try {
+                  const r = await api(
+                    planPath(plan.id) + "/steps/" + encodeURIComponent(st.id),
+                    { method: "PATCH", json: fields }
+                  );
+                  if (r == null ? void 0 : r.plan) patchPlan(plan.id, () => r.plan);
+                  void refreshTestPlans();
+                } catch (err) {
+                  errorPop("Couldn't change that step", errMsg(err));
+                }
+              },
+              onRemove: async (st) => {
+                try {
+                  const r = await api(
+                    planPath(plan.id) + "/steps/" + encodeURIComponent(st.id),
+                    { method: "DELETE" }
+                  );
+                  if (r == null ? void 0 : r.plan) patchPlan(plan.id, () => r.plan);
+                  void refreshTestPlans();
+                } catch (err) {
+                  errorPop("Couldn't remove that step", errMsg(err));
+                }
+              }
+            },
+            step.id
+          )) }) : null,
+          plan.state !== "generating" && /* @__PURE__ */ jsxRuntimeExports.jsxs("details", { className: "vf-addstep-fold", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("summary", { children: "Add a step of your own" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              AddStep,
+              {
+                plan,
+                onAdded: (next) => {
+                  patchPlan(plan.id, () => next);
+                  void refreshTestPlans();
+                }
+              }
+            )
+          ] })
+        ] })
+      ]
+    }
+  );
+}
+function StepEditor({
+  step,
+  onCancel,
+  onSave
+}) {
+  const [text, setText] = reactExports.useState(step.text);
+  const [expect, setExpect] = reactExports.useState(step.expect || "");
+  const [busy, setBusy] = reactExports.useState(false);
+  const ref2 = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    var _a2;
+    (_a2 = ref2.current) == null ? void 0 : _a2.focus();
+  }, []);
+  const save2 = async () => {
+    if (!text.trim()) return;
+    setBusy(true);
+    try {
+      await onSave({ text: text.trim(), expect: expect.trim() });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-step-edit", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "textarea",
+      {
+        ref: ref2,
+        className: "vf-step-edit-text",
+        rows: 2,
+        "aria-label": "What to do",
+        value: text,
+        disabled: busy,
+        onChange: (e) => setText(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            onCancel();
+          }
+        }
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "input",
+      {
+        type: "text",
+        className: "vf-step-edit-expect",
+        "aria-label": "What should happen",
+        placeholder: "what should happen",
+        autoComplete: "off",
+        value: expect,
+        disabled: busy,
+        onChange: (e) => setExpect(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void save2();
+          }
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            onCancel();
+          }
+        }
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-step-edit-actions", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          className: "test-btn",
+          disabled: busy || !text.trim(),
+          onClick: () => void save2(),
+          children: busy ? "Saving…" : "Save"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "test-btn", disabled: busy, onClick: onCancel, children: "Cancel" })
+    ] })
+  ] });
+}
+function ChecksHead({ plan }) {
+  const t = checkTally(plan);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-checks-head", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "vf-checks-total", children: [
+      t.total,
+      " ",
+      t.total === 1 ? "check" : "checks"
+    ] }),
+    tallyBits(plan).map((bit) => /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "vf-checks-bit", "data-check": bit.state, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-mark-glyph", "aria-hidden": "true", children: CHECK_MARK[bit.state] }),
+      bit.count,
+      " ",
+      bit.label
+    ] }, bit.state))
+  ] });
+}
+function PlanTally({ plan }) {
+  const bits = tallyBits(plan);
+  const sentence = tallySentence(plan);
+  if (!bits.length) return null;
+  return (
+    // `role="img"` + a label is what makes a group of glyphs announce as one
+    // sentence instead of as five bare numbers; there is no visually-hidden
+    // utility class in this app and inventing a global one for a tally would be
+    // the wrong shape of change.
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-plan-tally", role: "img", "aria-label": sentence, title: sentence, children: bits.map((bit) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "span",
+      {
+        className: "vf-plan-tally-bit",
+        "data-check": bit.state,
+        "aria-hidden": "true",
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-mark-glyph", children: CHECK_MARK[bit.state] }),
+          bit.count
+        ]
+      },
+      bit.state
+    )) })
+  );
+}
+function RewriteBox({
+  plan,
+  busy,
+  onCancel,
+  onRewrite
+}) {
+  const [focus, setFocusRaw] = reactExports.useState(rowUi(plan.id).focus ?? (plan.focus || ""));
+  const setFocus = (next) => {
+    setFocusRaw(next);
+    setRowUi(plan.id, { focus: next });
+  };
+  const ref2 = reactExports.useRef(null);
+  const blocked = rewriteBlockedReason(plan);
+  const warning = rewriteWarning(plan);
+  reactExports.useEffect(() => {
+    var _a2;
+    (_a2 = ref2.current) == null ? void 0 : _a2.focus();
+  }, []);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-rewrite", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "vf-rewrite-title", children: "Rewrite the checklist" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "textarea",
+      {
+        ref: ref2,
+        className: "vf-rewrite-text",
+        rows: 2,
+        "aria-label": "What should the new checklist check instead?",
+        placeholder: "What should it check instead? (optional) — e.g. “focus on the coupon flow at checkout, ignore the settings refactor”",
+        value: focus,
+        disabled: busy || !!blocked,
+        onChange: (e) => setFocus(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            onCancel();
+          }
+        }
+      }
+    ),
+    blocked ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "vf-rewrite-warn", children: blocked }) : warning ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "vf-rewrite-warn", children: warning }) : null,
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-rewrite-actions", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          className: "btn-primary",
+          disabled: busy || !!blocked,
+          onClick: () => onRewrite(focus),
+          children: busy ? "Asking…" : "Rewrite"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "test-btn", disabled: busy, onClick: onCancel, children: "Cancel" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-rewrite-note", children: "It keeps the steps you wrote or edited yourself, and takes up to three minutes." })
+    ] })
+  ] });
+}
+function ConfirmBox({
+  title,
+  body,
+  confirmLabel,
+  busy,
+  onCancel,
+  onConfirm
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-confirm", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "vf-confirm-title", children: title }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "vf-confirm-body", children: body }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-confirm-actions", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          className: "test-btn vf-confirm-go",
+          disabled: busy,
+          onClick: onConfirm,
+          children: confirmLabel
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "test-btn", disabled: busy, onClick: onCancel, children: "Keep it" })
+    ] })
+  ] });
+}
+function RunWatch({
+  session,
+  onPopOut,
+  onHide
+}) {
+  const hostRef = reactExports.useRef(null);
+  const state = useWsTerm(
+    hostRef,
+    "/api/instances/" + encodeURIComponent(session) + "/terminal",
+    false,
+    true
+  );
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-runwatch", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-runwatch-head", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-runwatch-title", children: session }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-runwatch-state", "data-state": state, children: state === "starting" ? "starting the session…" : state === "reconnecting" ? "reconnecting…" : state === "streaming" ? "live" : state }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          className: "test-btn",
+          onClick: onPopOut,
+          title: "Open it as a grid window so you can keep it while you work elsewhere",
+          children: "Own window"
+        }
+      ),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          type: "button",
+          className: "test-btn",
+          onClick: onHide,
+          title: "Hide this view — the run keeps going",
+          children: "Hide"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "vf-runwatch-term", ref: hostRef })
+  ] });
+}
+function AddStep({ plan, onAdded }) {
+  const [text, setText] = reactExports.useState("");
+  const [expect, setExpect] = reactExports.useState("");
+  const [actor, setActor] = reactExports.useState("agent");
+  const [busy, setBusy] = reactExports.useState(false);
+  const add = async () => {
+    const body = text.trim();
+    if (!body) return;
+    setBusy(true);
+    try {
+      const r = await api(planPath(plan.id) + "/steps", {
+        method: "POST",
+        json: { text: body, expect: expect.trim(), actor }
+      });
+      if (r == null ? void 0 : r.plan) onAdded(r.plan);
+      setText("");
+      setExpect("");
+    } catch (err) {
+      errorPop("Couldn't add that step", errMsg(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-addstep", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "input",
+      {
+        type: "text",
+        className: "vf-addstep-text",
+        placeholder: "what to do",
+        "aria-label": "New step",
+        autoComplete: "off",
+        value: text,
+        disabled: busy,
+        onChange: (e) => setText(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void add();
+          }
+          if (e.key === "Escape") e.stopPropagation();
+        }
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "input",
+      {
+        type: "text",
+        className: "vf-addstep-expect",
+        placeholder: "what should happen (optional)",
+        "aria-label": "Expected result",
+        autoComplete: "off",
+        value: expect,
+        disabled: busy,
+        onChange: (e) => setExpect(e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void add();
+          }
+          if (e.key === "Escape") e.stopPropagation();
+        }
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "select",
+      {
+        className: "vf-addstep-actor",
+        "aria-label": "Who checks this step",
+        value: actor,
+        disabled: busy,
+        onChange: (e) => setActor(e.target.value),
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "agent", children: "the agent" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "human", children: "me" })
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "button",
+      {
+        type: "button",
+        className: "test-btn",
+        disabled: busy || !text.trim(),
+        onClick: () => void add(),
+        children: busy ? "Adding…" : "Add"
+      }
+    )
+  ] });
+}
+function PlanList({
+  plans,
+  liveBranch,
+  selection
+}) {
+  const groups = useToggleSet(GROUPS_KEY, true);
+  const opened = useToggleSet(PLANS_KEY);
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(jsxRuntimeExports.Fragment, { children: groupPlans(plans).map((g) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+    WorkGroup,
+    {
+      heading: true,
+      name: g.label,
+      count: g.plans.length,
+      detail: g.detail,
+      open: groups.isOpen(g.key),
+      onToggle: () => groups.toggle(g.key),
+      children: g.plans.map((plan) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+        PlanRow,
+        {
+          plan,
+          liveBranch,
+          selection,
+          expanded: opened.isOpen(plan.id),
+          onToggle: () => opened.toggle(plan.id),
+          onExpand: () => {
+            if (!opened.isOpen(plan.id)) opened.toggle(plan.id);
+          }
+        },
+        plan.id
+      ))
+    },
+    g.key
+  )) });
+}
+function NewPlanBar({
+  candidates,
+  closed,
+  reason
+}) {
+  const [busy, setBusy] = reactExports.useState("");
+  const [picked, setPicked] = reactExports.useState("");
+  const target = candidates.includes(picked) ? picked : candidates[0] || "";
+  async function write() {
+    setBusy(target);
+    try {
+      const r = await api(
+        "/api/instances/" + encodeURIComponent(target) + "/test-plan",
+        { method: "POST" }
+      );
+      toast(
+        r.existing ? target + " already has a checklist — it is in the list below" : "Writing a checklist for " + target + " — up to three minutes"
+      );
+      refreshTestPlans();
+    } catch (err) {
+      errorPop("Couldn't write a checklist", errMsg(err));
+    } finally {
+      setBusy("");
+    }
+  }
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "vf-newplan", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("label", { htmlFor: "vf-newplan-pick", children: "Write a checklist for" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "select",
+      {
+        id: "vf-newplan-pick",
+        value: target,
+        disabled: !!busy || !candidates.length,
+        onChange: (e) => setPicked(e.target.value),
+        children: candidates.map((t) => /* @__PURE__ */ jsxRuntimeExports.jsxs("option", { value: t, children: [
+          t,
+          closed.has(t) ? " (closed)" : ""
+        ] }, t))
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "button",
+      {
+        type: "button",
+        id: "vf-newplan-go",
+        className: "test-btn",
+        disabled: !!busy || !candidates.length,
+        onClick: () => void write(),
+        children: busy ? "Writing…" : "Write it"
+      }
+    ),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: reason || "Reads the branch's diff and writes a checklist of what to check." })
+  ] });
+}
+function VerifySources({
+  liveBranch,
+  deployDelay
+}) {
+  const s = useSettings();
+  const repo = s.settings.repository || {};
+  const repos = Array.isArray(repo.verify_repos) ? repo.verify_repos : [];
+  const overrides = repo.verify_repo_settings || {};
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    RepoSourceList,
+    {
+      surface: "verify",
+      label: "Sources",
+      repos,
+      overrides,
+      onSave: (list, next, msg) => s.saveGroup("repository", { verify_repos: list, verify_repo_settings: next }, msg),
+      defaults: {
+        agent: "",
+        baseBranch: "",
+        minAge: "",
+        skipAuthors: "",
+        liveBranch,
+        deployDelay
+      },
+      listId: "vf-repos-list",
+      addId: "vf-repo-add-btn",
+      addLabel: "+ Add repository",
+      emptyText: "No repositories yet — add one and every session branch pushed in it gets a checklist.",
+      hint: /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+        "Each card is one GitHub repository, matched to your checkouts by their",
+        " ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "origin" }),
+        ", with its own live branch. Being on this list is the opt-in: the first push of a session branch in these repos gets a checklist. A repo with no GitHub remote opts in with ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "[workspace] verify_on_push = true" }),
+        " in its own ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: ".mindflock.toml" }),
+        " instead."
+      ] })
+    }
+  );
+}
+function VerifySwitch() {
+  const s = useSettings();
+  const repo = s.settings.repository || {};
+  const n = Array.isArray(repo.verify_repos) ? repo.verify_repos.length : 0;
+  const on = repo.verify_enabled !== false;
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    AutomationSwitch,
+    {
+      label: "Check what ships, automatically",
+      title: "Turn automatic checking on or off — your repositories, checklists and answers are kept either way",
+      rowId: "vf-toggle-row",
+      inputId: "vf-enabled",
+      statusId: "vf-status",
+      checked: on,
+      onChange: (next) => s.saveGroup(
+        "repository",
+        { verify_enabled: next },
+        next ? "Automatic checking on" : "Automatic checking paused"
+      ),
+      note: n ? void 0 : "Add a repository below and every session branch pushed in it gets a checklist"
+    }
+  );
+}
+function VerifyByHand({
+  candidates,
+  closed,
+  reason
+}) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("details", { className: "pr-advanced", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("summary", { children: "Write a checklist by hand" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pr-advanced-body", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint set-block-hint", children: [
+        "Reads a session branch's diff and writes a checklist for it now, without tracking its repository. Useful once, to see what the checklists look like before opting a repository in. Sessions you have already",
+        " ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "closed" }),
+        " are offered too — asking for a checklist is something you do when the work is finished and the window has been put away, so refusing there made the button useless at the one moment you want it."
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(NewPlanBar, { candidates, closed, reason })
+    ] })
+  ] });
+}
+function VerifyEmpty({ liveBranch }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "repo-empty vf-empty", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Nothing has shipped that needs checking yet." }) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("ol", { className: "vf-howto", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { children: [
+        "Add a repository under ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "Sources" }),
+        " above — every session branch pushed in it gets a checklist."
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("li", { children: "The checklist waits while the branch is reviewed and merged." }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { children: [
+        "When that work reaches ",
+        /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: liveBranch || "the live branch" }),
+        ", it turns up here for you to check."
+      ] })
+    ] })
+  ] });
+}
+function VerifyDialog() {
+  var _a2, _b2;
+  const open = useUi((s) => s.openDialog === "verify");
+  const closeDialog = useUi((s) => s.closeDialog);
+  const plansQ = useTestPlans(open);
+  const instancesQ = useInstances();
+  const closedQ = useQuery({
+    queryKey: ["recently-closed"],
+    queryFn: () => api("/api/recently-closed"),
+    enabled: open,
+    staleTime: 3e4,
+    retry: false
+  });
+  const model = useSettingsModel(open);
+  const [query, setQuery] = reactExports.useState("");
+  const allPlans = ((_a2 = plansQ.data) == null ? void 0 : _a2.plans) || [];
+  const shown = reactExports.useMemo(() => {
+    const tokens = searchTokens(query);
+    return allPlans.filter((p) => planMatches(p, tokens));
+  }, [allPlans, query]);
+  const sel = useRowSelection(
+    reactExports.useMemo(() => allPlans.map((p) => p.id), [allPlans]),
+    reactExports.useMemo(() => shown.map((p) => p.id), [shown])
+  );
+  const [bulk, setBulk] = reactExports.useState("");
+  const [confirmBulk, setConfirmBulk] = reactExports.useState(false);
+  reactExports.useEffect(() => {
+    if (open) return;
+    forgetNoteDrafts();
+    setQuery("");
+    setConfirmBulk(false);
+    sel.clear();
+  }, [open, sel]);
+  reactExports.useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        closeDialog();
+        e.preventDefault();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, closeDialog]);
+  reactExports.useEffect(() => {
+    if (!open) return;
+    const id = window.setTimeout(() => {
+      const panel = document.getElementById("verify-panel");
+      for (const sel2 of [".vf-primary", "#vf-repo-add-btn", "#verify-close"]) {
+        const el = panel == null ? void 0 : panel.querySelector(sel2);
+        if (el) {
+          el.focus();
+          break;
+        }
+      }
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [open]);
+  if (!open) return null;
+  const plans = allPlans;
+  const byId = new Map(plans.map((p) => [p.id, p]));
+  const picked = sel.keys.map((id) => byId.get(id)).filter(Boolean);
+  const liveBranch = ((_b2 = plansQ.data) == null ? void 0 : _b2.live_branch) || "";
+  const repoCfg = model.settings.repository || {};
+  const deployDelay = String(
+    repoCfg.deploy_delay_minutes == null ? 5 : repoCfg.deploy_delay_minutes
+  );
+  const overridden = liveBranchOverridden(
+    liveBranch,
+    plans,
+    repoCfg.verify_repos,
+    repoCfg.verify_repo_settings
+  );
+  const closed = closedQ.data || [];
+  const targets = planTargets(instancesQ.data || [], plans, closed);
+  const closedNames = closedTargets(instancesQ.data || [], closed);
+  const fanOut = async (targets2, verb, each) => {
+    if (!targets2.length) return;
+    setBulk(verb);
+    const failures = [];
+    for (const plan of targets2) {
+      try {
+        await each(plan);
+      } catch (err) {
+        failures.push(planName(plan) + " — " + errMsg(err));
+      }
+    }
+    setBulk("");
+    setConfirmBulk(false);
+    sel.clear();
+    await refreshInstances();
+    await refreshTestPlans();
+    const done = targets2.length - failures.length;
+    if (done) toast(verb + " " + done + " of " + targets2.length);
+    if (failures.length)
+      errorPop(
+        failures.length + (failures.length === 1 ? " checklist" : " checklists") + " couldn't be " + verb.toLowerCase(),
+        failures.join("\n")
+      );
+  };
+  const runnable = picked.filter(canRunNow);
+  const error = plansQ.error ? "Could not load the checklists: " + (plansQ.error.message || "error") : "";
+  const note = panelNote({
+    error,
+    fetching: plansQ.isFetching,
+    loaded: !!plansQ.data
+  });
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsCtx.Provider, { value: model, children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      id: "verify-dialog",
+      className: "modal",
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-labelledby": "verify-title",
+      onClick: (e) => {
+        if (e.target === e.currentTarget) closeDialog();
+      },
+      children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "verify-panel", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ws-head", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { id: "verify-title", children: "Verify" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ik-subtitle", children: "What shipped, and does it work?" }),
+          liveBranch ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "span",
+            {
+              className: "vf-live",
+              title: "A checklist sits quiet until its commit reaches this branch, then turns up here to be checked." + (overridden ? " Some repos ship from another branch — each checklist's own is on its row." : ""),
+              children: [
+                "checked once work reaches ",
+                /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: liveBranch }),
+                overridden ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "vf-live-more", children: " · some repos differ" }) : null
+              ]
+            }
+          ) : null,
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "verify-close", onClick: closeDialog, children: "Close" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "verify-body", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint set-block-hint", children: "MindFlock writes a checklist for every session branch pushed in the repositories below, and brings it here to be checked once that work reaches the branch you ship from. An agent settles the steps a shell can settle; the rest are yours." }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(VerifySwitch, {}),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(VerifySources, { liveBranch, deployDelay }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            WorkListPanel,
+            {
+              label: "Checklists",
+              onRefresh: () => void plansQ.refetch(),
+              note,
+              rowId: "vf-plans-row",
+              refreshId: "vf-plans-refresh",
+              noteId: "vf-plans-note",
+              listId: "vf-plans-list",
+              toolbarExtra: plans.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  SelectAllCheck,
+                  {
+                    state: sel.allState,
+                    onChange: sel.setAllVisible,
+                    label: "Select every checklist shown"
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  DialogFilter,
+                  {
+                    id: "vf-plans-filter",
+                    value: query,
+                    onChange: setQuery,
+                    placeholder: "Filter by ticket, branch, repo, or what a step says…  ( Ctrl+F )",
+                    onEscape: closeDialog
+                  }
+                )
+              ] }) : void 0,
+              hint: plans.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                "Steps marked ",
+                /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: "you" }),
+                " are the job — an agent settles the rest."
+              ] }) : void 0,
+              children: error ? /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "repo-empty", children: error }) : !plansQ.data ? null : !plans.length ? /* @__PURE__ */ jsxRuntimeExports.jsx(VerifyEmpty, { liveBranch }) : /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                picked.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  BulkRowBar,
+                  {
+                    count: picked.length,
+                    hiddenCount: sel.hiddenCount,
+                    noun: "checklist",
+                    onClear: sel.clear,
+                    children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(
+                        "button",
+                        {
+                          type: "button",
+                          disabled: !runnable.length || bulk !== "",
+                          title: runnable.length ? "Start a verify session for each — minutes of a real agent apiece" : "None of the selected checklists is one an agent can run",
+                          onClick: () => void fanOut(
+                            runnable,
+                            "Started",
+                            (plan) => api(planPath(plan.id) + "/run", { method: "POST", json: {} })
+                          ),
+                          children: bulk === "Started" ? "Starting…" : "Run " + runnable.length + (runnable.length === picked.length ? "" : " of " + picked.length)
+                        }
+                      ),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx(
+                        "button",
+                        {
+                          type: "button",
+                          className: "danger",
+                          disabled: bulk !== "",
+                          title: "Delete the selected checklists and every answer recorded against them",
+                          onClick: () => setConfirmBulk(true),
+                          children: bulk === "Deleted" ? "Deleting…" : "Delete selected"
+                        }
+                      )
+                    ]
+                  }
+                ) : null,
+                confirmBulk ? (
+                  // Inline, not a native confirm(): this dialog is
+                  // `aria-modal`, and a second window the app did not draw
+                  // cannot say what is about to be destroyed. `previewList` is
+                  // the same summary Recently closed shows before a wipe.
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(
+                    ConfirmBox,
+                    {
+                      title: "Delete " + picked.length + (picked.length === 1 ? " checklist?" : " checklists?"),
+                      body: "Their steps and every answer recorded against them go too. This cannot be undone.\n" + previewList(picked.map(planName)),
+                      confirmLabel: "Delete " + picked.length,
+                      busy: bulk !== "",
+                      onCancel: () => setConfirmBulk(false),
+                      onConfirm: () => void fanOut(
+                        picked,
+                        "Deleted",
+                        (plan) => api(planPath(plan.id), { method: "DELETE" })
+                      )
+                    }
+                  )
+                ) : null,
+                shown.length ? /* @__PURE__ */ jsxRuntimeExports.jsx(PlanList, { plans: shown, liveBranch, selection: sel }) : /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "muted vf-nomatch", children: [
+                  "No checklist matches “",
+                  query,
+                  "”."
+                ] })
+              ] })
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            VerifyByHand,
+            {
+              candidates: targets,
+              closed: closedNames,
+              reason: noTargetsReason(instancesQ.data || [], plans, closed)
+            }
+          )
+        ] })
+      ] })
+    }
+  ) });
+}
 const lastCommitMsg = /* @__PURE__ */ new Map();
 function CommitDialog() {
   const open = useUi((s) => s.openDialog === "commit");
@@ -36412,6 +41177,112 @@ function DeviceDialog() {
     }
   );
 }
+function compareText(a, b) {
+  return a.localeCompare(b, void 0, { numeric: true, sensitivity: "base" });
+}
+function sortRows(rows, value, dir) {
+  const sign = dir === "asc" ? 1 : -1;
+  return rows.slice().sort((ra, rb) => {
+    const a = value(ra);
+    const b = value(rb);
+    const aEmpty = a == null || a === "";
+    const bEmpty = b == null || b === "";
+    if (aEmpty || bEmpty) return aEmpty && bEmpty ? 0 : aEmpty ? 1 : -1;
+    if (typeof a === "string" || typeof b === "string") {
+      return sign * compareText(String(a), String(b));
+    }
+    return sign * (a - b);
+  });
+}
+function loadSortPref(storeKey, fallback) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(storeKey) || "null");
+    if (raw && typeof raw.key === "string" && (raw.dir === "asc" || raw.dir === "desc")) {
+      return { key: raw.key, dir: raw.dir };
+    }
+  } catch {
+  }
+  return fallback;
+}
+function saveSortPref(storeKey, pref) {
+  try {
+    localStorage.setItem(storeKey, JSON.stringify(pref));
+  } catch {
+  }
+}
+function useSortPref(storeKey, options) {
+  const fallback = { key: options[0].key, dir: options[0].defaultDir };
+  const [pref, setPref] = reactExports.useState(() => {
+    const p = loadSortPref(storeKey, fallback);
+    return options.some((o) => o.key === p.key) ? p : fallback;
+  });
+  const set = reactExports.useCallback(
+    (next) => {
+      setPref(next);
+      saveSortPref(storeKey, next);
+    },
+    [storeKey]
+  );
+  const setKey = reactExports.useCallback(
+    (key) => {
+      const opt = options.find((o) => o.key === key);
+      if (opt) set({ key, dir: opt.defaultDir });
+    },
+    // `options` is a module-level constant at every call site.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [set]
+  );
+  const flip = reactExports.useCallback(
+    () => set({ key: pref.key, dir: pref.dir === "asc" ? "desc" : "asc" }),
+    [pref, set]
+  );
+  return { pref, setKey, flip };
+}
+function SortPicker({
+  id,
+  options,
+  pref,
+  onKey,
+  onFlip
+}) {
+  const active = options.find((o) => o.key === pref.key) || options[0];
+  const dirLabel = pref.dir === "asc" ? active.asc : active.desc;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dlg-sort", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("label", { className: "muted", htmlFor: id, children: "Sort" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("select", { id, value: active.key, onChange: (e) => onKey(e.target.value), children: options.map((o) => /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: o.key, children: o.label }, o.key)) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "button",
+      {
+        type: "button",
+        className: "dlg-sort-dir",
+        title: `${dirLabel} — click to reverse`,
+        "aria-label": `Sort direction: ${dirLabel}`,
+        onClick: onFlip,
+        children: pref.dir === "asc" ? "↑" : "↓"
+      }
+    )
+  ] });
+}
+const SORTS$1 = [
+  { key: "name", label: "Name", defaultDir: "asc", asc: "A → Z", desc: "Z → A" },
+  {
+    key: "date",
+    label: "Last modified",
+    defaultDir: "desc",
+    asc: "oldest first",
+    desc: "newest first"
+  },
+  {
+    key: "size",
+    label: "Size on disk",
+    defaultDir: "desc",
+    asc: "smallest first",
+    desc: "largest first"
+  }
+];
+function isProtected(w) {
+  return w.kind === "base" || w.kind === "refresher";
+}
 function WorkspacesDialog() {
   const open = useUi((s) => s.openDialog === "workspaces");
   const closeDialog = useUi((s) => s.closeDialog);
@@ -36419,6 +41290,8 @@ function WorkspacesDialog() {
   const [total, setTotal] = reactExports.useState("");
   const [error, setError] = reactExports.useState("");
   const [clearBusy, setClearBusy] = reactExports.useState(false);
+  const [query, setQuery] = reactExports.useState("");
+  const sort = useSortPref("mf_sort_workspaces", SORTS$1);
   const seq = reactExports.useRef(0);
   const load2 = reactExports.useCallback(async () => {
     const mySeq = ++seq.current;
@@ -36443,16 +41316,66 @@ function WorkspacesDialog() {
       return;
     }
     if (mySeq !== seq.current) return;
-    const byPath = new Map((sized.workspaces || []).map((s) => [s.path, s.size_bytes || 0]));
+    const byPath2 = new Map((sized.workspaces || []).map((s) => [s.path, s.size_bytes || 0]));
     let sum = 0;
-    for (const v of byPath.values()) sum += v;
-    setWs(list.map((w) => ({ ...w, size_bytes: byPath.get(w.path) ?? w.size_bytes })));
+    for (const v of byPath2.values()) sum += v;
+    setWs(list.map((w) => ({ ...w, size_bytes: byPath2.get(w.path) ?? w.size_bytes })));
     setTotal(list.length + " dir" + (list.length === 1 ? "" : "s") + " · " + humanSize(sum));
   }, []);
   reactExports.useEffect(() => {
     if (open) load2();
   }, [open, load2]);
+  reactExports.useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+  const sorted = reactExports.useMemo(
+    () => sortRows(
+      ws || [],
+      (w) => sort.pref.key === "name" ? w.name : sort.pref.key === "size" ? w.size_bytes : w.mtime,
+      sort.pref.dir
+    ),
+    [ws, sort.pref]
+  );
+  const shown = reactExports.useMemo(() => {
+    const tokens = searchTokens(query);
+    return sorted.filter((w) => matchesTokens([w.name, w.path, w.kind, w.active_session], tokens));
+  }, [sorted, query]);
+  const byPath = reactExports.useMemo(() => new Map((ws || []).map((w) => [w.path, w])), [ws]);
+  const selectable = reactExports.useMemo(
+    () => sorted.filter((w) => !isProtected(w)).map((w) => w.path),
+    [sorted]
+  );
+  const selectableShown = reactExports.useMemo(
+    () => shown.filter((w) => !isProtected(w)).map((w) => w.path),
+    [shown]
+  );
+  const sel = useRowSelection(selectable, selectableShown);
   if (!open) return null;
+  const picked = sel.keys.map((p) => byPath.get(p)).filter(Boolean);
+  const delSelected = async () => {
+    if (!picked.length) return;
+    const active = picked.filter((w) => w.active_session);
+    const sized = picked.filter((w) => w.size_bytes != null);
+    const sum = sized.reduce((n, w) => n + (w.size_bytes || 0), 0);
+    const msg = `Permanently delete ${picked.length} workspace${picked.length === 1 ? "" : "s"}` + (sized.length ? ` (${humanSize(sum)}${sized.length < picked.length ? "+" : ""})` : "") + "?\n\n" + previewList(picked.map((w) => w.name)) + "\n" + (active.length ? `
+${active.length} of these ${active.length === 1 ? "is an ACTIVE session" : "are ACTIVE sessions"} (${active.map((w) => w.active_session).join(", ")}) — ${active.length === 1 ? "it" : "they"} will be killed first.
+` : "") + "\nThis cannot be undone.";
+    if (!confirm(msg)) return;
+    setError("");
+    setClearBusy(true);
+    const results = await Promise.all(
+      picked.map(
+        (w) => api("/api/workspaces/delete", { json: { path: w.path } }).then(() => "").catch((e) => e.message)
+      )
+    );
+    setClearBusy(false);
+    const failed = results.filter(Boolean);
+    if (failed.length) setError(`${failed.length} delete(s) failed: ${failed[0]}`);
+    toast(`Deleted ${results.length - failed.length}/${results.length} workspace(s)`);
+    sel.clear();
+    await load2();
+    refreshInstances();
+  };
   const del = async (w) => {
     const szNote = w.size_bytes == null ? "" : " (" + humanSize(w.size_bytes) + ")";
     let msg = `Permanently delete '${w.name}'${szNote}?`;
@@ -36474,7 +41397,9 @@ function WorkspacesDialog() {
   };
   const clearAll = async () => {
     if (!confirm(
-      "Delete ALL unprotected, idle workspaces?\n\nKept: protected base clones / cache refreshers, and any workspace with a running session.\n\nThis cannot be undone."
+      "Delete ALL unprotected, idle workspaces?\n\nKept: protected base clones / cache refreshers, and any workspace with a running session.\n" + // The filter narrows the LIST, not the sweep — a user who filtered to
+      // three rows and then hit this button would otherwise lose everything.
+      (query ? "\nThe filter does not limit this — every unprotected, idle workspace goes.\n" : "") + "\nThis cannot be undone."
     ))
       return;
     setError("");
@@ -36507,7 +41432,7 @@ function WorkspacesDialog() {
       children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "workspaces-panel", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ws-head", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { children: "Workspaces on disk" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: "ws-total", className: "muted", children: total }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: "ws-total", className: "muted", children: query && total ? `${shown.length} of ${total}` : total }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(
             "button",
             {
@@ -36522,9 +41447,68 @@ function WorkspacesDialog() {
           /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "ws-refresh", onClick: load2, children: "Refresh" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "ws-close", onClick: closeDialog, children: "Close" })
         ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "ws-list", children: ws === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "Loading…" }) : !ws.length && !error ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "No workspace directories on disk." }) : ws.map((w) => {
-          const isProtected = w.kind === "base" || w.kind === "refresher";
-          return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ws-row", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dlg-filter-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            SelectAllCheck,
+            {
+              state: sel.allState,
+              onChange: sel.setAllVisible,
+              label: "Select every deletable workspace shown"
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            DialogFilter,
+            {
+              id: "ws-filter",
+              value: query,
+              onChange: setQuery,
+              placeholder: "Filter by name, path, or session…  ( Ctrl+F )",
+              onEscape: closeDialog
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            SortPicker,
+            {
+              id: "ws-sort",
+              options: SORTS$1,
+              pref: sort.pref,
+              onKey: sort.setKey,
+              onFlip: sort.flip
+            }
+          )
+        ] }),
+        !!picked.length && /* @__PURE__ */ jsxRuntimeExports.jsx(
+          BulkRowBar,
+          {
+            count: picked.length,
+            hiddenCount: sel.hiddenCount,
+            noun: "workspace",
+            onClear: sel.clear,
+            children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                type: "button",
+                className: "danger",
+                title: "Permanently delete the selected workspaces",
+                disabled: clearBusy,
+                onClick: delSelected,
+                children: "Delete selected"
+              }
+            )
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "ws-list", children: ws === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "Loading…" }) : !shown.length && !error ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: query && ws.length ? `No workspace matches “${query}”.` : "No workspace directories on disk." }) : shown.map((w) => {
+          const prot = isProtected(w);
+          return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ws-row" + (sel.has(w.path) ? " picked" : ""), children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              RowCheck,
+              {
+                checked: sel.has(w.path),
+                disabled: prot,
+                title: prot ? "Protected — cannot be deleted" : "Select (Shift-click to extend the range)",
+                onToggle: (shift) => sel.toggle(w.path, shift)
+              }
+            ),
             /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ws-info", children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-name", title: w.path, children: w.name }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: w.kind }),
@@ -36533,8 +41517,16 @@ function WorkspacesDialog() {
                 w.active_session
               ] })
             ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "span",
+              {
+                className: "ws-when muted",
+                title: w.mtime ? "Modified " + new Date(w.mtime * 1e3).toLocaleString() : "",
+                children: w.mtime ? relTime(w.mtime) : ""
+              }
+            ),
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-size", children: w.size_bytes == null ? "…" : humanSize(w.size_bytes) }),
-            isProtected ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-protected", title: "Protected — needed by the engine", children: "protected" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "ws-del", onClick: () => del(w), children: "Delete" })
+            prot ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-protected", title: "Protected — needed by the engine", children: "protected" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "ws-del", onClick: () => del(w), children: "Delete" })
           ] }, w.path);
         }) }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("p", { id: "ws-error", className: "error", children: error })
@@ -36547,11 +41539,32 @@ function fmtClosedAt(iso) {
   const d = new Date(iso);
   return isNaN(d.getTime()) ? "" : d.toLocaleString();
 }
+function closedMs(e) {
+  if (!e.closed_at) return null;
+  const t = new Date(e.closed_at).getTime();
+  return isNaN(t) ? null : t;
+}
+function entryLabel(e, alias = "") {
+  return alias || e.branch || e.title || "(untitled)";
+}
+const SORTS = [
+  {
+    key: "date",
+    label: "Date closed",
+    defaultDir: "desc",
+    asc: "oldest first",
+    desc: "newest first"
+  },
+  { key: "name", label: "Branch / name", defaultDir: "asc", asc: "A → Z", desc: "Z → A" }
+];
 function RecentDialog() {
   const open = useUi((s) => s.openDialog === "recent");
   const closeDialog = useUi((s) => s.closeDialog);
+  const aliases = useUi((s) => s.aliases);
   const [list, setList] = reactExports.useState(null);
   const [error, setError] = reactExports.useState("");
+  const [query, setQuery] = reactExports.useState("");
+  const sort = useSortPref("mf_sort_recent", SORTS);
   const load2 = reactExports.useCallback(async () => {
     try {
       const data2 = await api("/api/recently-closed");
@@ -36564,8 +41577,85 @@ function RecentDialog() {
   reactExports.useEffect(() => {
     if (open) load2();
   }, [open, load2]);
+  reactExports.useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+  const all = list || [];
+  const aliasOf = reactExports.useCallback(
+    (e) => e.title && aliases[e.title] || "",
+    [aliases]
+  );
+  const sorted = reactExports.useMemo(
+    () => sortRows(
+      all,
+      (e) => sort.pref.key === "name" ? entryLabel(e, aliasOf(e)) : closedMs(e),
+      sort.pref.dir
+    ),
+    [all, sort.pref, aliasOf]
+  );
+  const data = reactExports.useMemo(() => {
+    const tokens = searchTokens(query);
+    return sorted.filter(
+      (e) => matchesTokens(
+        [
+          aliasOf(e),
+          e.branch,
+          e.title,
+          e.folder,
+          e.in_place ? "in-place" : "",
+          e.provisioned ? "provisioned" : "",
+          e.exists ? "" : "worktree gone"
+        ],
+        tokens
+      )
+    );
+  }, [sorted, query, aliasOf]);
+  const byId = reactExports.useMemo(() => new Map(all.map((e) => [e.id, e])), [all]);
+  const sel = useRowSelection(
+    reactExports.useMemo(() => sorted.map((e) => e.id), [sorted]),
+    reactExports.useMemo(() => data.map((e) => e.id), [data])
+  );
   if (!open) return null;
-  const data = list || [];
+  const picked = sel.keys.map((id) => byId.get(id)).filter(Boolean);
+  const label = (e) => entryLabel(e, aliasOf(e));
+  const runBulk = async (wipe, verb) => {
+    const targets = wipe ? picked.filter((e) => e.exists && !e.in_place) : picked;
+    if (!targets.length) return;
+    const results = await Promise.all(
+      targets.map(
+        (e) => api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, { json: { wipe } }).then(() => "").catch((err) => err.message)
+      )
+    );
+    const failed = results.filter(Boolean);
+    if (failed.length) setError(`${failed.length} ${verb} failed: ${failed[0]}`);
+    toast(`${verb} ${results.length - failed.length}/${results.length} session(s)`);
+    sel.clear();
+    load2();
+  };
+  const wipeSelected = async () => {
+    const targets = picked.filter((e) => e.exists && !e.in_place);
+    const skipped = picked.length - targets.length;
+    if (!targets.length) {
+      alert(
+        "None of the selected sessions has a worktree to wipe — they are in-place or already gone.\n\nUse Forget to drop them from this list."
+      );
+      return;
+    }
+    const msg = `Permanently delete ${targets.length} worktree${targets.length === 1 ? "" : "s"}?
+
+` + previewList(targets.map(label)) + "\n" + (skipped ? `
+${skipped} selected row${skipped === 1 ? " is" : "s are"} in-place or already gone and will be left alone.
+` : "") + "\nThis cannot be undone.";
+    if (!confirm(msg)) return;
+    await runBulk(true, "Wiped");
+  };
+  const forgetSelected = async () => {
+    const msg = `Forget ${picked.length} closed session${picked.length === 1 ? "" : "s"}?
+
+` + previewList(picked.map(label)) + "\n\nWorktrees stay on disk; the rows leave this list, so Reopen is no longer offered.";
+    if (!confirm(msg)) return;
+    await runBulk(false, "Forgot");
+  };
   return /* @__PURE__ */ jsxRuntimeExports.jsx(
     "div",
     {
@@ -36578,103 +41668,181 @@ function RecentDialog() {
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ws-head", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { children: "Recently closed" }),
           /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { id: "recent-total", className: "muted", children: [
-            data.length,
+            query ? `${data.length} of ${all.length}` : data.length,
             " session",
-            data.length === 1 ? "" : "s"
+            (query ? all.length : data.length) === 1 ? "" : "s"
           ] }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "recent-refresh", onClick: load2, children: "Refresh" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "recent-close", onClick: closeDialog, children: "Close" })
         ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "recent-list", children: list === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "Loading…" }) : !data.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "No recently closed sessions." }) : data.map((e) => {
-          const gone = !e.exists;
-          return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "recent-row", children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "recent-info", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx(
-                "span",
-                {
-                  className: "recent-name",
-                  title: [
-                    e.branch ? "Branch: " + e.branch : "",
-                    e.title ? "Session: " + e.title : "",
-                    e.folder || ""
-                  ].filter(Boolean).join("\n"),
-                  children: e.branch || e.title || "(untitled)"
-                }
-              ),
-              /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "recent-sub", children: [
-                e.branch && e.title && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-slug muted", children: e.title }),
-                e.in_place && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "in-place" }),
-                e.provisioned && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "provisioned" }),
-                gone && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge gone", children: "worktree gone" }),
-                /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-when muted", children: fmtClosedAt(e.closed_at) })
-              ] })
-            ] }),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "recent-actions", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dlg-filter-row", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            SelectAllCheck,
+            {
+              state: sel.allState,
+              onChange: sel.setAllVisible,
+              label: "Select every session shown"
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            DialogFilter,
+            {
+              id: "recent-filter",
+              value: query,
+              onChange: setQuery,
+              placeholder: "Filter by name, branch, session, or path…  ( Ctrl+F )",
+              onEscape: closeDialog
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            SortPicker,
+            {
+              id: "recent-sort",
+              options: SORTS,
+              pref: sort.pref,
+              onKey: sort.setKey,
+              onFlip: sort.flip
+            }
+          )
+        ] }),
+        !!picked.length && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          BulkRowBar,
+          {
+            count: picked.length,
+            hiddenCount: sel.hiddenCount,
+            noun: "session",
+            onClear: sel.clear,
+            children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "button",
                 {
-                  className: "recent-reopen",
-                  disabled: gone,
-                  onClick: async () => {
-                    try {
-                      const inst = await api(
-                        `/api/recently-closed/${encodeURIComponent(e.id)}/reopen`,
-                        { method: "POST" }
-                      );
-                      closeDialog();
-                      await refreshInstances();
-                      if (inst == null ? void 0 : inst.title) selectSession(inst.title);
-                    } catch (err) {
-                      alert("Reopen failed: " + err.message);
-                      load2();
-                    }
-                  },
-                  children: "Reopen"
-                }
-              ),
-              !e.in_place && !gone && /* @__PURE__ */ jsxRuntimeExports.jsx(
-                "button",
-                {
-                  className: "recent-wipe danger",
-                  onClick: async () => {
-                    if (!confirm(
-                      `Permanently delete the worktree for '${e.title || ""}'?
-This cannot be undone.`
-                    ))
-                      return;
-                    try {
-                      await api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, {
-                        json: { wipe: true }
-                      });
-                    } catch (err) {
-                      alert("Wipe failed: " + err.message);
-                      return;
-                    }
-                    load2();
-                  },
-                  children: "Wipe worktree"
+                  type: "button",
+                  title: "Drop the selected rows from this list (worktrees stay on disk)",
+                  onClick: forgetSelected,
+                  children: "Forget selected"
                 }
               ),
               /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "button",
                 {
-                  className: "recent-forget",
-                  onClick: async () => {
-                    try {
-                      await api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, {
-                        json: { wipe: false }
-                      });
-                    } catch (err) {
-                      alert("Forget failed: " + err.message);
-                      return;
-                    }
-                    load2();
-                  },
-                  children: "Forget"
+                  type: "button",
+                  className: "danger",
+                  title: "Permanently delete the selected sessions' worktrees",
+                  onClick: wipeSelected,
+                  children: "Wipe worktrees"
                 }
               )
-            ] })
-          ] }, e.id);
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "recent-list", children: list === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "Loading…" }) : !data.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: query && all.length ? `No closed session matches “${query}”.` : "No recently closed sessions." }) : data.map((e) => {
+          const gone = !e.exists;
+          const a = aliasOf(e);
+          return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "div",
+            {
+              className: "recent-row" + (sel.has(e.id) ? " picked" : ""),
+              children: [
+                /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  RowCheck,
+                  {
+                    checked: sel.has(e.id),
+                    title: "Select (Shift-click to extend the range)",
+                    onToggle: (shift) => sel.toggle(e.id, shift)
+                  }
+                ),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "recent-info", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(
+                    "span",
+                    {
+                      className: "recent-name",
+                      title: [
+                        a ? "Saved name: " + a : "",
+                        e.branch ? "Branch: " + e.branch : "",
+                        e.title ? "Session: " + e.title : "",
+                        e.folder || ""
+                      ].filter(Boolean).join("\n"),
+                      children: label(e)
+                    }
+                  ),
+                  /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "recent-sub", children: [
+                    a && e.branch && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-slug muted", children: e.branch }),
+                    e.title && (a || e.branch) && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-slug muted", children: e.title }),
+                    e.in_place && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "in-place" }),
+                    e.provisioned && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "provisioned" }),
+                    gone && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge gone", children: "worktree gone" }),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-when muted", children: fmtClosedAt(e.closed_at) })
+                  ] })
+                ] }),
+                /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "recent-actions", children: [
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(
+                    "button",
+                    {
+                      className: "recent-reopen",
+                      disabled: gone,
+                      onClick: async () => {
+                        try {
+                          const inst = await api(
+                            `/api/recently-closed/${encodeURIComponent(e.id)}/reopen`,
+                            { method: "POST" }
+                          );
+                          closeDialog();
+                          await refreshInstances();
+                          if (inst == null ? void 0 : inst.title) selectSession(inst.title);
+                        } catch (err) {
+                          alert("Reopen failed: " + err.message);
+                          load2();
+                        }
+                      },
+                      children: "Reopen"
+                    }
+                  ),
+                  !e.in_place && !gone && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                    "button",
+                    {
+                      className: "recent-wipe danger",
+                      onClick: async () => {
+                        if (!confirm(
+                          `Permanently delete the worktree for '${label(e)}'?
+This cannot be undone.`
+                        ))
+                          return;
+                        try {
+                          await api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, {
+                            json: { wipe: true }
+                          });
+                        } catch (err) {
+                          alert("Wipe failed: " + err.message);
+                          return;
+                        }
+                        load2();
+                      },
+                      children: "Wipe worktree"
+                    }
+                  ),
+                  /* @__PURE__ */ jsxRuntimeExports.jsx(
+                    "button",
+                    {
+                      className: "recent-forget",
+                      onClick: async () => {
+                        try {
+                          await api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, {
+                            json: { wipe: false }
+                          });
+                        } catch (err) {
+                          alert("Forget failed: " + err.message);
+                          return;
+                        }
+                        load2();
+                      },
+                      children: "Forget"
+                    }
+                  )
+                ] })
+              ]
+            },
+            e.id
+          );
         }) }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("p", { id: "recent-error", className: "error", children: error })
       ] })
@@ -37474,6 +42642,638 @@ function WelcomeTour() {
     }
   );
 }
+const SPECIES = [
+  { d: "#7d56f4", l: "#422d8a" },
+  { d: "#3d8bfd", l: "#144791" },
+  { d: "#18b3dd", l: "#095c73" },
+  { d: "#2ec2b3", l: "#09635b" },
+  { d: "#44b556", l: "#1a5825" },
+  { d: "#e8b71e", l: "#675007" },
+  { d: "#a8c332", l: "#48560c" },
+  { d: "#f07b3c", l: "#8a3d0d" },
+  { d: "#d444f1", l: "#70148a" },
+  { d: "#e5484d", l: "#841419" },
+  { d: "#ee5d8f", l: "#8c1e47" },
+  { d: "#97a1b5", l: "#3d4554" }
+];
+const SPRITE_URL = "/bird.png";
+const SPRITE_W = 216;
+const SPRITE_H = 160;
+const HINGE = 0.56;
+let sprite = null;
+const tints = /* @__PURE__ */ new Map();
+function birdSprite() {
+  if (typeof Image === "undefined") return null;
+  if (!sprite) {
+    sprite = new Image();
+    sprite.src = SPRITE_URL;
+  }
+  return sprite;
+}
+function tinted(color) {
+  const img = birdSprite();
+  if (!img || !img.complete || !img.naturalWidth) return null;
+  const cached = tints.get(color);
+  if (cached) return cached;
+  const c = document.createElement("canvas");
+  c.width = SPRITE_W;
+  c.height = SPRITE_H;
+  const g = c.getContext("2d");
+  if (!g) return null;
+  g.drawImage(img, 0, 0, SPRITE_W, SPRITE_H);
+  g.globalCompositeOperation = "source-in";
+  g.fillStyle = color;
+  g.fillRect(0, 0, SPRITE_W, SPRITE_H);
+  tints.set(color, c);
+  return c;
+}
+const GATHER_MS = 820;
+const EMERGE_MS = 2e4;
+const HATCH_FLIGHT_MS = 4e3;
+function startFlock(canvas, opts = {}) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return { stop: () => {
+  }, gather: () => 0 };
+  const areaPerBird = opts.areaPerBird ?? 14e3;
+  const minBirds = opts.min ?? 45;
+  const maxBirds = opts.max ?? 160;
+  const alpha = opts.alpha ?? 0.95;
+  const boids = [];
+  let W = 0;
+  let H = 0;
+  let frame = 0;
+  let raf = 0;
+  let stopped = false;
+  let light = document.documentElement.classList.contains("light");
+  let transit = null;
+  let hatchFrom = null;
+  let hatchEnd = 0;
+  const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function pickTarget(b) {
+    b.tx = Math.random() * W;
+    b.ty = Math.random() * H;
+    b.tt = 200 + Math.random() * 400;
+  }
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    if (!w || !h) return;
+    W = w;
+    H = h;
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (transit || hatchFrom) return;
+    const n = Math.min(maxBirds, Math.max(minBirds, Math.round(W * H / areaPerBird)));
+    for (const b of boids) pickTarget(b);
+    while (boids.length < n) {
+      const b = {
+        x: Math.random() * W,
+        y: Math.random() * H,
+        vx: (Math.random() - 0.5) * 2,
+        vy: (Math.random() - 0.5) * 2,
+        sp: SPECIES[Math.floor(Math.random() * SPECIES.length)],
+        size: 1.35 + Math.random() * 0.95,
+        phase: Math.random() * Math.PI * 2,
+        // Slow flapping, to match the slow flight speed below.
+        freq: 0.07 + Math.random() * 0.05,
+        tx: 0,
+        ty: 0,
+        tt: 0,
+        gx: 0,
+        gy: 0,
+        curve: (Math.random() - 0.5) * 2,
+        delay: 0,
+        shrink: 1,
+        fade: 1,
+        s0: 1,
+        f0: 1,
+        hatchAt: 0
+      };
+      pickTarget(b);
+      boids.push(b);
+    }
+    boids.length = n;
+    if (reduced) {
+      for (const b of boids) {
+        b.x = (b.x % W + W) % W;
+        b.y = (b.y % H + H) % H;
+      }
+      for (let k = 0; k < 60; k++) step();
+      draw();
+    }
+  }
+  function step() {
+    const R = 35;
+    const R2 = R * R;
+    const SEP = 15 * 15;
+    for (let i = 0; i < boids.length; i++) {
+      const b = boids[i];
+      if (b.hatchAt) continue;
+      let cx = 0;
+      let cy = 0;
+      let ax = 0;
+      let ay = 0;
+      let sx = 0;
+      let sy = 0;
+      let n = 0;
+      for (let j = 0; j < boids.length; j++) {
+        if (i === j) continue;
+        const o = boids[j];
+        if (o.hatchAt) continue;
+        const dx = o.x - b.x;
+        const dy = o.y - b.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < R2) {
+          cx += o.x;
+          cy += o.y;
+          ax += o.vx;
+          ay += o.vy;
+          n++;
+          if (d2 < SEP && d2 > 0) {
+            sx -= dx / d2;
+            sy -= dy / d2;
+          }
+        }
+      }
+      if (n) {
+        b.vx += (cx / n - b.x) * 12e-4 + (ax / n - b.vx) * 0.035 + sx * 3.2;
+        b.vy += (cy / n - b.y) * 12e-4 + (ay / n - b.vy) * 0.035 + sy * 3.2;
+      }
+      let tdx = b.tx - b.x;
+      if (tdx > W / 2) tdx -= W;
+      else if (tdx < -W / 2) tdx += W;
+      let tdy = b.ty - b.y;
+      if (tdy > H / 2) tdy -= H;
+      else if (tdy < -H / 2) tdy += H;
+      if ((b.tt -= 1) <= 0 || tdx * tdx + tdy * tdy < 625) pickTarget(b);
+      b.vx += tdx * 4e-4;
+      b.vy += tdy * 4e-4;
+      const sp = Math.sqrt(b.vx * b.vx + b.vy * b.vy) || 1;
+      const max = 1.1;
+      const min = 0.4;
+      if (sp > max) {
+        b.vx = b.vx / sp * max;
+        b.vy = b.vy / sp * max;
+      }
+      if (sp < min) {
+        b.vx = b.vx / sp * min;
+        b.vy = b.vy / sp * min;
+      }
+      b.x += b.vx;
+      b.y += b.vy;
+      if (b.x < -20) b.x = W + 20;
+      if (b.x > W + 20) b.x = -20;
+      if (b.y < -20) b.y = H + 20;
+      if (b.y > H + 20) b.y = -20;
+    }
+  }
+  function smoothstep(t) {
+    const c = Math.min(1, Math.max(0, t));
+    return c * c * (3 - 2 * c);
+  }
+  function beginGather(x, y) {
+    hatchFrom = null;
+    for (const b of boids) {
+      b.hatchAt = 0;
+      b.gx = b.x;
+      b.gy = b.y;
+      b.delay = Math.random() * 0.25;
+      b.s0 = b.shrink;
+      b.f0 = b.fade;
+    }
+    transit = { x, y, t0: performance.now() };
+  }
+  function gatherStep(now) {
+    const h = transit;
+    const raw = Math.min(1, (now - h.t0) / GATHER_MS);
+    for (const b of boids) {
+      const t = smoothstep((raw - b.delay) / (1 - b.delay));
+      const dx = h.x - b.gx;
+      const dy = h.y - b.gy;
+      const len = Math.hypot(dx, dy) || 1;
+      const arc = Math.sin(t * Math.PI) * b.curve * Math.min(120, len * 0.3);
+      const px = b.x;
+      const py = b.y;
+      b.x = b.gx + dx * t + -dy / len * arc;
+      b.y = b.gy + dy * t + dx / len * arc;
+      const mx = b.x - px;
+      const my = b.y - py;
+      if (mx * mx + my * my > 1e-4) {
+        b.vx = mx;
+        b.vy = my;
+      }
+      b.shrink = b.s0 * (1 - t * 0.82);
+      b.fade = b.f0 * (1 - smoothstep((t - 0.72) / 0.28));
+    }
+    return raw < 1;
+  }
+  function beginHatch(x, y) {
+    transit = null;
+    const t0 = performance.now();
+    const launchWindow = Math.max(0, EMERGE_MS - HATCH_FLIGHT_MS);
+    for (let i = 0; i < boids.length; i++) {
+      const b = boids[i];
+      b.gx = b.x;
+      b.gy = b.y;
+      b.x = x;
+      b.y = y;
+      b.shrink = 0.16;
+      b.fade = 0;
+      b.hatchAt = t0 + launchWindow * (i + Math.random()) / Math.max(1, boids.length);
+    }
+    hatchFrom = { x, y };
+    hatchEnd = t0 + launchWindow + HATCH_FLIGHT_MS;
+  }
+  function land(b) {
+    b.x = b.gx;
+    b.y = b.gy;
+    b.shrink = 1;
+    b.fade = 1;
+    const sp = Math.hypot(b.vx, b.vy);
+    const a = sp > 1e-3 ? Math.atan2(b.vy, b.vx) : Math.random() * Math.PI * 2;
+    b.vx = Math.cos(a) * 0.8;
+    b.vy = Math.sin(a) * 0.8;
+    b.hatchAt = 0;
+    pickTarget(b);
+  }
+  function hatchStep(now) {
+    const h = hatchFrom;
+    for (const b of boids) {
+      if (!b.hatchAt) continue;
+      const raw = (now - b.hatchAt) / HATCH_FLIGHT_MS;
+      if (raw <= 0) {
+        b.x = h.x;
+        b.y = h.y;
+        b.fade = 0;
+        continue;
+      }
+      if (raw >= 1) {
+        land(b);
+        continue;
+      }
+      const t = smoothstep(raw);
+      const dx = b.gx - h.x;
+      const dy = b.gy - h.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const arc = Math.sin(t * Math.PI) * b.curve * Math.min(120, len * 0.3);
+      const px = b.x;
+      const py = b.y;
+      b.x = h.x + dx * t + -dy / len * arc;
+      b.y = h.y + dy * t + dx / len * arc;
+      const mx = b.x - px;
+      const my = b.y - py;
+      if (mx * mx + my * my > 1e-4) {
+        b.vx = mx;
+        b.vy = my;
+      }
+      b.shrink = 0.16 + 0.84 * t;
+      b.fade = smoothstep(raw / 0.18);
+    }
+    if (now < hatchEnd) return;
+    for (const b of boids) if (b.hatchAt) land(b);
+    hatchFrom = null;
+    resize();
+  }
+  function vectorBird(g, w, flap) {
+    g.beginPath();
+    g.ellipse(0, 0, w * 0.42, w * 0.13, 0, 0, Math.PI * 2);
+    g.fill();
+    g.beginPath();
+    g.moveTo(-w * 0.12, 0);
+    g.lineTo(w * 0.1, -w * 0.5 * flap);
+    g.lineTo(w * 0.28, 0);
+    g.closePath();
+    g.fill();
+  }
+  function draw() {
+    const g = ctx;
+    frame++;
+    g.clearRect(0, 0, W, H);
+    for (const b of boids) {
+      const flapRate = transit || b.hatchAt ? 2.4 : 1;
+      const a = Math.atan2(b.vy, b.vx);
+      const color = light ? b.sp.l : b.sp.d;
+      const img = tinted(color);
+      const bw = 15 * b.size * b.shrink;
+      const bh = bw * SPRITE_H / SPRITE_W;
+      const hy = Math.round(SPRITE_H * HINGE);
+      const hp = bh * HINGE;
+      const f = 0.65 + 0.4 * Math.sin(frame * b.freq * flapRate + b.phase);
+      g.globalAlpha = alpha * b.fade;
+      g.save();
+      g.translate(b.x, b.y);
+      g.rotate(a);
+      if (b.vx < 0) g.scale(1, -1);
+      if (img) {
+        g.drawImage(img, 0, hy, SPRITE_W, SPRITE_H - hy, -bw / 2, hp - bh / 2, bw, bh - hp);
+        g.translate(0, hp - bh / 2);
+        g.scale(1, Math.max(0.2, f));
+        g.drawImage(img, 0, 0, SPRITE_W, hy, -bw / 2, -hp, bw, hp);
+      } else {
+        g.fillStyle = color;
+        vectorBird(g, bw, Math.max(0.2, f));
+      }
+      g.restore();
+    }
+    g.globalAlpha = 1;
+  }
+  function loop() {
+    if (stopped) return;
+    if (!document.hidden) {
+      const now = performance.now();
+      if (transit) {
+        gatherStep(now);
+      } else {
+        if (hatchFrom) hatchStep(now);
+        step();
+      }
+      draw();
+    }
+    raf = requestAnimationFrame(loop);
+  }
+  const themeWatch = new MutationObserver(() => {
+    const next = document.documentElement.classList.contains("light");
+    if (next === light) return;
+    light = next;
+    if (reduced) draw();
+  });
+  themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+  const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => resize()) : null;
+  if (ro) ro.observe(canvas);
+  window.addEventListener("resize", resize);
+  const spriteImg = birdSprite();
+  const onSpriteReady = () => {
+    if (!stopped && reduced) draw();
+  };
+  const spritePending = !!spriteImg && !(spriteImg.complete && spriteImg.naturalWidth);
+  if (spritePending) spriteImg.addEventListener("load", onSpriteReady);
+  resize();
+  if (reduced) {
+    for (let k = 0; k < 900; k++) step();
+    draw();
+  } else {
+    if (opts.emergeFrom && boids.length) {
+      beginHatch(opts.emergeFrom.x, opts.emergeFrom.y);
+    }
+    raf = requestAnimationFrame(loop);
+  }
+  return {
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      cancelAnimationFrame(raf);
+      themeWatch.disconnect();
+      if (ro) ro.disconnect();
+      window.removeEventListener("resize", resize);
+      if (spritePending) spriteImg.removeEventListener("load", onSpriteReady);
+    },
+    gather(x, y) {
+      if (reduced || stopped) return 0;
+      if (transit) return Math.max(0, GATHER_MS - (performance.now() - transit.t0));
+      beginGather(x, y);
+      return GATHER_MS;
+    }
+  };
+}
+function Flock({ id, className, options, apiRef }) {
+  const ref2 = reactExports.useRef(null);
+  const opts = reactExports.useRef(options);
+  reactExports.useEffect(() => {
+    const canvas = ref2.current;
+    if (!canvas) return;
+    const flock = startFlock(canvas, opts.current);
+    if (apiRef) apiRef.current = flock;
+    return () => {
+      flock.stop();
+      if (apiRef && apiRef.current === flock) apiRef.current = null;
+    };
+  }, [apiRef]);
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("canvas", { id, ref: ref2, className, "aria-hidden": "true" });
+}
+const REARM_THROTTLE_MS = 1e3;
+const ACTIVITY = ["pointerdown", "keydown", "touchstart", "wheel"];
+function useIdle(ms, enabled) {
+  const [idle, setIdle] = reactExports.useState(false);
+  reactExports.useEffect(() => {
+    if (!enabled) {
+      setIdle(false);
+      return;
+    }
+    let timer = 0;
+    let armedAt = 0;
+    let isIdle = false;
+    const arm = () => {
+      armedAt = Date.now();
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        isIdle = true;
+        setIdle(true);
+      }, ms);
+    };
+    const wake = () => {
+      if (!isIdle && Date.now() - armedAt < REARM_THROTTLE_MS) return;
+      isIdle = false;
+      setIdle(false);
+      arm();
+    };
+    const opts = { capture: true, passive: true };
+    for (const e of ACTIVITY) window.addEventListener(e, wake, opts);
+    arm();
+    return () => {
+      window.clearTimeout(timer);
+      for (const e of ACTIVITY) window.removeEventListener(e, wake, opts);
+    };
+  }, [ms, enabled]);
+  return idle;
+}
+function logoPoint() {
+  const el = document.getElementById("brand-logo");
+  if (el) {
+    const r = el.getBoundingClientRect();
+    if (r.width || r.height) return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  }
+  return { x: 26, y: 22 };
+}
+function Breaks() {
+  const on = useUi((s) => s.breakReminder);
+  const every = useUi((s) => s.breakEveryMin);
+  const flockOn = useUi((s) => s.idleFlock);
+  const flockAfter = useUi((s) => s.idleFlockAfterMin);
+  const [dueAt, setDueAt] = reactExports.useState(null);
+  const [now, setNow] = reactExports.useState(() => Date.now());
+  const [leaving, setLeaving] = reactExports.useState(false);
+  const breakFlock = reactExports.useRef(null);
+  const exitTimer = reactExports.useRef(0);
+  reactExports.useEffect(() => {
+    if (!on) {
+      saveArm(null);
+      setDueAt(null);
+      return;
+    }
+    const armed = nextArm(Date.now(), every, loadArm());
+    saveArm(armed);
+    setDueAt(armed.at);
+    setNow(Date.now());
+  }, [on, every]);
+  reactExports.useEffect(() => {
+    if (!on) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1e3);
+    return () => window.clearInterval(id);
+  }, [on]);
+  reactExports.useEffect(() => () => window.clearTimeout(exitTimer.current), []);
+  const onBreak = on && dueAt !== null && now >= dueAt;
+  const idle = useIdle(flockAfter * 6e4, flockOn && !onBreak);
+  const dismiss = (kind) => {
+    var _a2;
+    if (leaving) return;
+    const home = logoPoint();
+    const flight = ((_a2 = breakFlock.current) == null ? void 0 : _a2.gather(home.x, home.y)) ?? 0;
+    const rearm = () => {
+      setLeaving(false);
+      if (!useUi.getState().breakReminder) return;
+      const arm = kind === "snooze" ? snoozeArm(Date.now(), every) : armBreak(Date.now(), every);
+      saveArm(arm);
+      setDueAt(arm.at);
+      setNow(Date.now());
+    };
+    if (!flight) {
+      rearm();
+      return;
+    }
+    setLeaving(true);
+    exitTimer.current = window.setTimeout(rearm, flight);
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    onBreak && /* @__PURE__ */ jsxRuntimeExports.jsx(
+      BreakScreen,
+      {
+        away: now - dueAt,
+        leaving,
+        flockRef: breakFlock,
+        onSnooze: () => dismiss("snooze"),
+        onResume: () => dismiss("resume")
+      }
+    ),
+    !onBreak && /* @__PURE__ */ jsxRuntimeExports.jsx(IdleFlock, { idle })
+  ] });
+}
+function BreakScreen({ away, leaving, flockRef, onSnooze, onResume }) {
+  const resumeRef = reactExports.useRef(null);
+  const resumeNow = reactExports.useRef(onResume);
+  reactExports.useEffect(() => {
+    resumeNow.current = onResume;
+  });
+  reactExports.useEffect(() => {
+    var _a2;
+    const prev = document.activeElement;
+    (_a2 = resumeRef.current) == null ? void 0 : _a2.focus();
+    return () => {
+      var _a3;
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== document.documentElement) return;
+      try {
+        (_a3 = prev == null ? void 0 : prev.focus) == null ? void 0 : _a3.call(prev);
+      } catch {
+      }
+    };
+  }, []);
+  reactExports.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      resumeNow.current();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "div",
+    {
+      id: "break-screen",
+      className: "modal break-screen" + (leaving ? " break-leaving" : ""),
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-labelledby": "break-title",
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          Flock,
+          {
+            className: "break-flock",
+            apiRef: flockRef,
+            options: {
+              areaPerBird: 11e3,
+              min: 55,
+              max: 190,
+              alpha: 1,
+              emergeFrom: logoPoint()
+            }
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "break-card", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { id: "break-title", className: "break-title", children: "Time for a break" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "break-body", children: "Stand up, look at something further away than this screen. The flock keeps flying without you — nothing you have running needs you for the next few minutes." }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "break-clock", children: [
+            "Away ",
+            fmtElapsed(away)
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "break-actions", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "break-btn", disabled: leaving, onClick: onSnooze, children: "Snooze 5 min" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                type: "button",
+                className: "break-btn primary",
+                ref: resumeRef,
+                disabled: leaving,
+                onClick: onResume,
+                children: "Resumed work"
+              }
+            )
+          ] })
+        ] })
+      ]
+    }
+  );
+}
+function IdleFlock({ idle }) {
+  const [shown, setShown] = reactExports.useState(false);
+  const flock = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    var _a2;
+    if (idle) {
+      setShown(true);
+      return;
+    }
+    if (!shown) return;
+    const home = logoPoint();
+    const flight = ((_a2 = flock.current) == null ? void 0 : _a2.gather(home.x, home.y)) ?? 0;
+    if (!flight) {
+      setShown(false);
+      return;
+    }
+    const t = window.setTimeout(() => setShown(false), flight);
+    return () => window.clearTimeout(t);
+  }, [idle, shown]);
+  if (!shown) return null;
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    Flock,
+    {
+      id: "idle-flock",
+      className: "idle-flock",
+      apiRef: flock,
+      options: {
+        areaPerBird: 14e3,
+        min: 45,
+        max: 150,
+        alpha: 0.95,
+        emergeFrom: logoPoint()
+      }
+    }
+  );
+}
 function App() {
   var _a2;
   const { data: config } = useConfig();
@@ -37493,6 +43293,13 @@ function App() {
     tourDecided.current = true;
     if (decision === "open") ui.openTour();
   }, [config == null ? void 0 : config.onboarded, ui.tourDone, ui.hintsEnabled, ui.openTour]);
+  reactExports.useEffect(() => {
+    const aliases = useUi.getState().aliases;
+    if (Object.keys(aliases).length) {
+      api("/api/aliases", { json: { aliases } }).catch(() => {
+      });
+    }
+  }, []);
   reactExports.useEffect(() => {
     const caps2 = config == null ? void 0 : config.caps;
     document.body.classList.toggle("no-git", caps2 ? !caps2.git : false);
@@ -37515,6 +43322,14 @@ function App() {
     }
   }, [instances2]);
   const [openSpecial, setOpenSpecial] = reactExports.useState(/* @__PURE__ */ new Set());
+  const verifyPanes = useUi((s) => s.verifyPanes);
+  reactExports.useEffect(() => {
+    if (!instances2 || !instances2.length || !verifyPanes.length) return;
+    const live = new Set(instances2.map((i) => i.title));
+    for (const session of verifyPanes) {
+      if (!live.has(session)) useUi.getState().closeVerifyPane(session);
+    }
+  }, [instances2, verifyPanes]);
   const toggleSpecial = reactExports.useCallback((kind) => {
     setOpenSpecial((prev) => {
       const next = new Set(prev);
@@ -37529,17 +43344,25 @@ function App() {
       syslogs: { title: "System logs" },
       chat: { title: "Assistant" }
     };
-    return [...openSpecial].map((kind) => ({
+    const fixed = [...openSpecial].map((kind) => ({
       key: kind,
       kind,
       title: meta[kind].title,
       onClose: () => toggleSpecial(kind)
     }));
-  }, [openSpecial, toggleSpecial]);
-  const host = reactExports.useMemo(() => {
+    const runs = verifyPanes.map((session) => ({
+      key: "verify:" + session,
+      kind: "verify",
+      title: session,
+      session,
+      onClose: () => useUi.getState().closeVerifyPane(session)
+    }));
+    return fixed.concat(runs);
+  }, [openSpecial, toggleSpecial, verifyPanes]);
+  const host2 = reactExports.useMemo(() => {
     const stableTitles = () => {
       const order = useUi.getState().order;
-      const list = instances$1().map((i) => i.title);
+      const list = instances$1().map((i) => i.title).filter((t) => !isVerifySession(t));
       const known = order.filter((t) => list.includes(t));
       return [...known, ...list.filter((t) => !known.includes(t))];
     };
@@ -37566,7 +43389,7 @@ function App() {
       openDoctor: () => useUi.getState().openDialogFor("settings", "doctor")
     };
   }, []);
-  reactExports.useEffect(() => installKeymap(host), [host]);
+  reactExports.useEffect(() => installKeymap(host2), [host2]);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx(ConnBanner, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(StateNotice, {}),
@@ -37583,6 +43406,7 @@ function App() {
     /* @__PURE__ */ jsxRuntimeExports.jsx(NewSessionDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(SettingsDialog, { onOpenSysLogsPane: () => toggleSpecial("syslogs") }),
     /* @__PURE__ */ jsxRuntimeExports.jsx(IntakeDialog, {}),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(VerifyDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(CommitDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(MakePrDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(RenameDialog, {}),
@@ -37593,9 +43417,10 @@ function App() {
     /* @__PURE__ */ jsxRuntimeExports.jsx(SetupDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(TodoDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(AssistantAgentDialog, {}),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(CommandPalette, { host }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(CommandPalette, { host: host2 }),
     /* @__PURE__ */ jsxRuntimeExports.jsx(ShortcutsSheet, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(WelcomeTour, {}),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(Breaks, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(EventToasts, {})
   ] });
 }
@@ -37605,6 +43430,7 @@ Object.assign(window, {
   WebLinksAddon: { WebLinksAddon: addonWebLinksExports.WebLinksAddon }
 });
 publishToast();
+publishWindowName();
 installGlobalDropGuards();
 applyStoredAppearance();
 clientExports.createRoot(document.getElementById("root")).render(

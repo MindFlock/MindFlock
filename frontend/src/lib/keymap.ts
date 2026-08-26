@@ -117,6 +117,9 @@ const MODAL_DIALOG_NAMES: DialogName[] = [
   // The Intake reads like a page, not a popover, and its per-card Remove buttons make
   // a stray Delete genuinely dangerous behind it.
   "intake",
+  // Same shape as Intake: a full-page surface with per-plan Delete buttons, and
+  // nothing about it suggests the session behind is still taking keystrokes.
+  "verify",
 ];
 const MODAL_DOM_IDS = [
   "new-dialog",
@@ -126,6 +129,11 @@ const MODAL_DOM_IDS = [
   "rename-dialog",
   "device-dialog",
   "intake-dialog",
+  "verify-dialog",
+  // The take-a-break screen owns the whole window and holds the keyboard on
+  // its own buttons; a Delete meant for the card must not reach the session
+  // running behind it.
+  "break-screen",
 ];
 export function modalOpen(): boolean {
   const open = useUi.getState().openDialog;
@@ -351,6 +359,18 @@ export const KEYMAP: KeymapEntry[] = [
     run: () => useUi.getState().openDialogFor("intake"),
   },
   {
+    // Alt for the same reasons as Alt+I next door — Ctrl+V is paste and always
+    // will be — and guarded the same way: Option+V on macOS types √, and a
+    // surface you visit a few times a day must not eat a keystroke aimed at a
+    // text field or a terminal.
+    key: "v",
+    alt: true,
+    id: "verify",
+    help: ["Navigation", "Alt+V", "Verify — shipped changes nobody has checked"],
+    when: () => !isEditingTarget(document.activeElement),
+    run: () => useUi.getState().openDialogFor("verify"),
+  },
+  {
     key: "Tab",
     mod: "ctrl",
     id: "cycle",
@@ -542,8 +562,22 @@ export function defaultCombosFor(id: string): Combo[] {
 
 // --- The dispatcher -----------------------------------------------------------
 
+/** The take-a-break screen (Settings → General) is a full-window overlay with
+ * exactly two answers on it. Every global shortcut has to go quiet while it is
+ * up: the surfaces they open are plain `.modal`s with no z-index, so they land
+ * UNDER its opaque scrim — Ctrl+P opened an invisible palette that then took
+ * every keystroke, and Enter in it could push or delete the focused session.
+ *
+ * Excludes the leaving state: the flock is flying home by then, the scrim has
+ * faded and the app is clickable again, so it must be typeable again too. */
+function breakScreenUp(): boolean {
+  const el = document.getElementById("break-screen");
+  return !!el && !el.classList.contains("break-leaving");
+}
+
 function _dispatch(e: KeyboardEvent) {
   if (_rebindCapturing) return; // the "?" sheet is recording a new combo
+  if (breakScreenUp()) return; // nothing behind the break card is reachable
   if (_chordPending) {
     _handleChordKey(e);
     return;

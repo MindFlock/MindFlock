@@ -75,7 +75,7 @@ import threading
 import time
 import weakref
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
@@ -88,17 +88,20 @@ from backend import config, log
 from backend import providers
 from backend import session
 from backend.providers import config as provider_config
+from backend.providers import effort as _provider_effort
 from backend.providers.claude import remove_trust_entry as _remove_trust_entry
 from backend.config import ide as ide_cfg
+from backend.session import instance as _instance
 from backend.session import provisioned as provisioning
 from backend.session import tmux
 from backend.session.git import gh_available
 from backend.session.git import remote_url as _remote_url
-from backend.session.storage import Loading
+from backend.session.storage import Loading, Paused
 from backend.workspace_setup import exclude_artifacts as _exclude_artifacts
 from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirname
 
 # Core modules the monolith was split into (see backend.web/core/).
+from backend.web.core import aliases as _aliases
 from backend.web.core import auth as _auth
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import commit_message as _commit_message
@@ -108,11 +111,15 @@ from backend.web.core import issue_start as _issue_start
 from backend.web.core import github_pr as _github_pr
 from backend.web.core import live_stage as _live_stage
 from backend.web.core import pr_review as _pr_review
+from backend.web.core import reopen as _reopen
 from backend.web.core import worktree_reclaim as _worktree_reclaim
 from backend.web.core import ticket_start as _ticket_start
 from backend.web.core import remote as _remote
+from backend.web.core import stage_reset as _stage_reset
 from backend.web.core import pending as _pending
 from backend.web.core import prompt_queue as _prompt_queue
+from backend.web.core import ntfy as _ntfy
+from backend.web.core import test_plans as _test_plans
 from backend.web.core import window_refresh as _window_refresh
 from backend.web.core import worktree_setup as _wt_setup
 from backend.web.core.agent_state import (
@@ -124,6 +131,7 @@ from backend.web.core.agent_state import (
     _COMMIT_PLUMBING_RE,
     _CPU_ACTIVE_JIFFIES_PER_S,
     _LAST_BRANCH,
+    _LIMIT_PROBE,
     _MARKER_TRUST_WINDOW_S,
     _PID_TREE_CACHE,
     _PID_TREE_TTL,
@@ -204,6 +212,7 @@ from backend.web.core.recently_closed import (
 )
 from backend.web.core.repo_picker import (
     check_repo,
+    search_repos,
     suggest_repos,
 )
 from backend.web.core.workspaces import (
@@ -425,6 +434,9 @@ async def lifespan(app: FastAPI):
     # still start an edge watcher (asyncio.create_task needs the loop).
     _live_stage.set_loop(asyncio.get_running_loop())
     _register_task(_window_refresh_loop())
+    # Verify: watch origin until each generated test plan's work reaches the
+    # live branch, and poll the verify sessions that are working through one.
+    _register_task(_test_plans_due_loop())
     # Tailnet device discovery + remote session snapshots (multi-device mode).
     _register_task(_remote.discovery_loop(_server_port()))
     _register_task(_remote.instances_loop())
@@ -548,6 +560,43 @@ _LOG_SLOW_MS = 1500.0
 
 
 @app.middleware("http")
+async def _checklist_store_errors(request, call_next):
+    """Answer a checklist request whose STORE WRITE failed in words.
+
+    ``test_plans._save`` re-raises — correctly: a write that did not land must
+    not be reported as one — and every route below catches ``ValueError`` only.
+    So a full disk, a read-only home or a permissions change came back as
+    Starlette's plain-text 500, which the client renders as
+    ``/api/test-plans/sc-1/result -> 500``: no sentence, nothing to act on, and
+    an answer the person just recorded silently gone.
+
+    Scoped to this feature's own paths, and to ``OSError`` — the one exception
+    class the store raises for "the filesystem said no" — so nothing else in the
+    app changes shape. 503, not 500: the request was fine and would work again
+    once there is somewhere to write.
+    """
+    if not request.url.path.startswith("/api/test-plans"):
+        return await call_next(request)
+    try:
+        return await call_next(request)
+    except OSError as err:
+        try:
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf(
+                    "checklist store write failed on %s: %v", request.url.path, err
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        return JSONResponse(
+            {
+                "error": "couldn't save the checklist — %s. Nothing was recorded; "
+                "try again once there is somewhere to write." % err
+            },
+            status_code=503,
+        )
+
+
+@app.middleware("http")
 async def _activity_log(request, call_next):
     """Log every request to ``mindflock.log`` (Settings → System logs) so normal
     activity — not just errors — is visible: ``METHOD /path -> status ms client``.
@@ -661,29 +710,101 @@ ENGINE = get_engine()
 _EVENT_SNAPSHOT: Dict[str, dict] = {}
 _EVENT_SNAPSHOT_LOCK = threading.Lock()
 
+# Activity readings flap: one poll can misread a busy pane as "idle" (or
+# "clarify"/"limit") and the next reads "working" again. The UI debounces its
+# own *display* across 2 polls (frontend lib/stage.ts noteActivity), but events
+# used to carry every raw diff — straight into ntfy pushes, desktop
+# notifications, clarify toasts and shell hooks, and past the UI debounce via
+# forceActivity ("authoritative push"). So transitions INTO these states are
+# held until the reading has persisted this long; a flicker that reverts before
+# then emits nothing at all. Transitions OUT (to "working"/"offline") stay
+# instant — they are cheap to show and wrong to delay. The window is chosen
+# > _PROBE_TTL (2.5s) so settling always requires a second INDEPENDENT probe,
+# not the same memoized misread served twice; with the ~4s tick cadence a real
+# stop settles one tick (~4s) later than it used to.
+_SETTLE_ACTIVITIES = frozenset({"idle", "clarify", "limit"})
+_ACTIVITY_SETTLE_SECONDS = 3.0
+
+# Boot quiet window: for this long after process start (a restart re-execs, so
+# this is also "after every restart") the *_changed diff events are swallowed —
+# the snapshot still updates, so post-window transitions diff against the truth.
+# Rationale: rediscovered sessions first register as loading/offline and then
+# "transition" to whatever state they were parked in before the restart —
+# clarify, idle, limit — which re-announced the standing state of every session
+# to every channel (ntfy, desktop, toasts, shell hooks) on every launch. Old
+# news is not a transition. The UI never depended on these boot events (it
+# polls /api/instances); a REAL transition inside the window is lost, which is
+# the accepted cost of a quiet launch.
+_BOOT_QUIET_SECONDS = 30.0
+_BOOT_MONO = time.monotonic()
+
+
+def _in_boot_quiet() -> bool:
+    """Whether the process is still inside its post-launch quiet window."""
+    return time.monotonic() - _BOOT_MONO < _BOOT_QUIET_SECONDS
+
 
 def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> None:
     """Diff a session's freshly computed state against the last snapshot and
     emit ``session.status/activity/stage_changed`` events on the bus. The first
     sighting only seeds the snapshot (creation is announced by its endpoint;
-    created sessions are pre-seeded so their first real transition emits, F6)."""
+    created sessions are pre-seeded so their first real transition emits, F6).
+
+    Activity transitions into :data:`_SETTLE_ACTIVITIES` are debounced: the
+    candidate value parks in the snapshot's ``pending_activity`` (value,
+    first-seen monotonic ts) while the snapshot keeps announcing the old
+    activity, and only a reading that persists ``_ACTIVITY_SETTLE_SECONDS``
+    emits. A flicker that reverts first is dropped without a trace — the whole
+    point: a one-tick "idle" misread must not push a phone notification."""
+    now = time.monotonic()
     with _EVENT_SNAPSHOT_LOCK:
         prev = _EVENT_SNAPSHOT.get(title)
-        _EVENT_SNAPSHOT[title] = {
+        snap = {
             "status": status,
             "activity": activity,
             "stage": stage,
         }
+        if (
+            prev is not None
+            and activity != prev.get("activity")
+            and activity in _SETTLE_ACTIVITIES
+        ):
+            pending = prev.get("pending_activity")
+            if pending is None or pending[0] != activity:
+                # New candidate (or the candidate changed): start settling.
+                snap["activity"] = prev.get("activity")
+                snap["pending_activity"] = (activity, now)
+            elif now - pending[1] < _ACTIVITY_SETTLE_SECONDS:
+                snap["activity"] = prev.get("activity")
+                snap["pending_activity"] = pending
+            # else: settled — snap keeps the new activity and the diff below
+            # emits the transition.
+        _EVENT_SNAPSHOT[title] = snap
     if prev is None:
         return
-    for field, event, new in (
-        ("status", "session.status_changed", status),
-        ("activity", "session.activity_changed", activity),
-        ("stage", "session.stage_changed", stage),
-    ):
-        old = prev.get(field)
-        if old != new:
-            _events.BUS.emit(event, session=title, old=old, new=new)
+    if not _in_boot_quiet():
+        for field, event, new in (
+            ("status", "session.status_changed", status),
+            ("activity", "session.activity_changed", snap["activity"]),
+            ("stage", "session.stage_changed", stage),
+        ):
+            old = prev.get(field)
+            if old != new:
+                _events.BUS.emit(event, session=title, old=old, new=new)
+    # Verify — the SECOND of two triggers that write a test plan for freshly
+    # pushed work. The first is the ``session.pushed`` subscriber below, fed by
+    # the live_stage push watcher, which is the better signal (it knows the sha
+    # actually reached origin) but is not a guarantee: watchers cap at
+    # ``live_stage._MAX_WATCHERS`` (4) and expire after 180s, so a flock pushing
+    # five sessions at once, or a push whose hooks run past the deadline, simply
+    # never announces. The stage ladder has neither limit — it is recomputed for
+    # every session on every tick — so it catches what the watcher drops.
+    # Deliberately redundant, and safe precisely because it is:
+    # ``test_plans.ensure_plan_for`` is idempotent per (session, branch), so the
+    # loser of the race does no work at all. Cheap enough to be unconditional:
+    # this fires on a stage TRANSITION, not on every tick.
+    if prev.get("stage") != stage and stage == "pushed":
+        _ensure_test_plan(title)
 
 
 def _seed_event_snapshot(title: str) -> None:
@@ -763,6 +884,49 @@ def _probe_seed(probe: str, inst, value):
     return value
 
 
+def _free_untitled() -> str:
+    """The next free ``untitled`` name (titles key ``ENGINE.instances``).
+
+    Its own function because it is needed twice: once early, to name the
+    instance, and again inside the registration lock — where the first answer
+    may have gone stale while a repo was being prepared on another thread.
+    """
+    title = "untitled"
+    n = 2
+    while title in ENGINE.instances:
+        title = "untitled-%d" % n
+        n += 1
+    return title
+
+
+def _drop_failed_start(title: str, inst) -> bool:
+    """Clear the registry entry a failed background ``Start`` left behind, and
+    say whether this failure is ours to report.
+
+    BY IDENTITY, NEVER BY NAME, and the difference is a running agent. Every
+    creator here registers the instance as ``Loading`` and starts it on a
+    background task, so by the time that task fails the title may belong to a
+    DIFFERENT, live session — a fast delete-and-retry, a second force-start
+    after the row was closed, two creates racing through one title. Popping by
+    name then deleted the live session's record: its tmux session and its
+    worktree carried on with nothing owning them (invisible in the rail, absent
+    from ``ENGINE.save``), which is exactly how the orphan that blocks the next
+    run of the same name is minted. Reporting by name is the same mistake one
+    layer up — a "couldn't start" event, or a checklist stamped with a failure,
+    about a session that is working.
+
+    Returns True when nothing else claims the title (we popped our own entry, or
+    it was already gone) — say so. False means a live session owns it: stay
+    quiet.
+    """
+    with ENGINE.lock:
+        current = ENGINE.instances.get(title)
+        if current is inst:
+            ENGINE.instances.pop(title, None)
+            return True
+        return current is None
+
+
 def _forget_probes(title: str) -> None:
     """Drop every memoized probe result for one session (kill/delete paths),
     so a session recreated under the same title starts from fresh probes —
@@ -771,7 +935,7 @@ def _forget_probes(title: str) -> None:
     with _PROBE_CACHE_LOCK:
         for k in [k for k in _PROBE_CACHE if k[1] == title]:
             _PROBE_CACHE.pop(k, None)
-    for _d in (_ACTIVITY_CACHE, _THREAD_RECORD_AT, _TRUST_DISMISS_AT):
+    for _d in (_ACTIVITY_CACHE, _LIMIT_PROBE, _THREAD_RECORD_AT, _TRUST_DISMISS_AT):
         _d.pop(title, None)
     _forget_tokens(title)
 
@@ -1490,12 +1654,31 @@ def _autopilot_snapshot(inst, title: str, wt: str, stage: dict) -> dict:
     except Exception:  # noqa: BLE001
         queue_pending = False
     activity = _agent_activity(inst, title)
-    # `_agent_activity` already reports "limit" for a pane parked on a usage-limit
-    # screen, which is all this gate needs. The drain loop calls
-    # `_refresh_limit_state` instead because it needs the reset TIMESTAMP for the
-    # countdown; probing for it here would only add a tmux round-trip (and
-    # `_ensure_agent_session`'s reboot side effect) to get a boolean we have.
+    # THE MOST IMPORTANT FIELD HERE. "The agent stopped" and "the agent ran out"
+    # are the same observation to every cheap probe: a turn the account's usage
+    # limit cuts short ends with the CLI's Stop hook, a quiet pane and an idle
+    # badge, exactly like a finished one. `_agent_activity` now re-checks the
+    # pane before reporting that idle, but the pane is not the whole story —
+    # a session that ran out mid-turn can be sitting at a redrawn prompt with no
+    # banner in view — so an idle verdict is confirmed against the drain's own
+    # limit state, which adds the provider's usage METER (Anthropic's usage
+    # endpoint: the weekly cap included, independent of any pane text) and
+    # carries a bounded, self-correcting expiry that also feeds the UI countdown.
+    # This is what stops the ladder committing and pushing a half-finished
+    # session because the weekly window closed under it.
+    #
+    # Only on idle: a working session is not about to be committed, and the
+    # confirmation costs a tmux capture. `_refresh_limit_state` takes the tmux
+    # name directly, so there is no `_ensure_agent_session` reboot side effect.
     limited = activity == "limit"
+    if not limited and activity == "idle":
+        try:
+            limited = (
+                _refresh_limit_state(inst, title, tmux.to_mindflock_tmux_name(title))
+                > now
+            )
+        except Exception:  # noqa: BLE001 — detection must never break a pass
+            limited = False
     # None means "could not measure", which must never be read as "nothing has
     # been committed" — that mistake produced a false "the agent finished without
     # changing anything" on sessions whose work was already committed and pushed.
@@ -1734,9 +1917,16 @@ def _autopilot_note(title: str, rec: dict, note: str) -> None:
 def _autopilot_wait(title, rec, snap, detail, now) -> None:
     """Book-keeping for a pass that decided to do nothing: keep the idle dwell
     honest, publish the reason, and halt if this step outlived its deadline."""
+    limited = bool(snap.get("limited"))
     if detail.get("mark_idle") and rec.get("idle_since") is None:
         _autopilot.update(title, idle_since=now)
-    elif snap["activity"] != "idle" and rec.get("idle_since") is not None:
+    elif (limited or snap["activity"] != "idle") and rec.get("idle_since") is not None:
+        # A usage-limited session usually LOOKS idle (its turn ended, at the
+        # CLI's own hook's word), so the dwell has to be dropped explicitly or it
+        # keeps accruing through the outage — and the first pass after the window
+        # reopens, before the resume nudge has landed, would find a satisfied
+        # 30s settle and commit the half-finished work. The dwell is re-earned
+        # after the limit lifts, which is the whole point of it.
         _autopilot.update(title, idle_since=None)
     # Remember that the agent was seen doing something: a clean tree only means
     # "finished with nothing to show" AFTER that, and means "not started yet"
@@ -1746,6 +1936,23 @@ def _autopilot_wait(title, rec, snap, detail, now) -> None:
         if now - worked > 30.0:
             _autopilot.update(title, worked_at=now)
     _autopilot_note(title, rec, detail.get("reason") or "")
+    # STOP THE DEADLINE CLOCK WHILE A LIMIT HOLDS. A weekly cap can close the
+    # window for days; every step deadline here is minutes-to-hours, so a run
+    # that correctly waits out a limit would be halted for "no progress" by its
+    # own patience. The stretch is credited back to step_since when the limit
+    # lifts (two writes per episode, not one per 5s pass).
+    was_limited = float(rec.get("limited_at") or 0.0)
+    if limited and not was_limited:
+        rec = _autopilot.update(title, limited_at=now) or rec
+    elif not limited and was_limited:
+        rec = (
+            _autopilot.update(
+                title,
+                limited_at=0.0,
+                step_since=float(rec.get("step_since") or now) + (now - was_limited),
+            )
+            or rec
+        )
     step = rec.get("step") or "agent"
     # A run that has not acted yet is WAITING TO BE NEEDED, not making slow progress
     # through a step — so it gets the generous arm budget rather than the agent
@@ -1756,7 +1963,7 @@ def _autopilot_wait(title, rec, snap, detail, now) -> None:
     else:
         deadline = _AUTOPILOT_DEADLINES.get(step, _AUTOPILOT_DEADLINES["agent"])
     since = float(rec.get("step_since") or 0.0)
-    if since and now - since > deadline:
+    if since and not limited and now - since > deadline:
         _autopilot_halt(
             title,
             "gave up waiting at %s after %d min — %s"
@@ -2229,6 +2436,1787 @@ async def _window_refresh_loop() -> None:
         await asyncio.sleep(_WINDOW_REFRESH_TICK)
 
 
+# --- Verify: manual test plans for work that has gone live -------------------- #
+# The impure half of :mod:`backend.web.core.test_plans` (the store, the prompt
+# building and the generation one-shot live there; the routes are further down).
+# Three things live here because they cannot live in a core module: the trigger
+# that fires off a push, the loop that watches origin until the work is really
+# live, and the run route's use of ``create_instance``.
+#
+# The whole feature hangs off ONE entry point, :func:`_ensure_test_plan`, called
+# from two independent triggers on purpose — see the comment in
+# :func:`_emit_state_changes` for why the redundancy is required and why it is
+# free.
+
+#: The due loop's cadence. A minute is deliberately unhurried: this waits for a
+#: PR to merge, which happens on human time, and every pass costs a ``git fetch``
+#: per waiting plan. Nothing in the product degrades if the "it's live" card
+#: appears 59 seconds late.
+_TEST_PLAN_DUE_INTERVAL = 60.0
+
+#: The cadence while a verify session is actually running. A minute is right for
+#: waiting on a merge and badly wrong for waiting on an agent that is finishing
+#: on the user's own screen: the run writes its results file, the session goes
+#: quiet, and the row goes on saying "an agent is checking the steps it can" for
+#: up to another minute — during which the panel's Refresh button, which on every
+#: other surface in the app means "go and ask again", cannot change the answer
+#: either, because the only thing that reads that file is this loop. So while
+#: anything is running the loop drops to a few seconds. It costs nothing: the
+#: running phase is purely local (one ``open()`` per running plan), the expensive
+#: half stays on its own minute cadence (see ``full`` in
+#: :func:`_test_plans_due_pass`), and there is normally nothing running at all.
+_TEST_PLAN_RUN_POLL_S = 4.0
+
+#: How long a verify session may sit in ``running`` before the plan is handed
+#: back to the user. A run that has not written its results file in two hours is
+#: not slow, it is wedged — the agent crashed, the user took the session over and
+#: forgot, the CLI hit a usage limit and stopped. Releasing the plan to ``due``
+#: is strictly better than leaving it in a state whose only exit is a file that
+#: is never going to be written; the user can re-run it, or answer the steps by
+#: hand.
+_TEST_PLAN_RUN_GIVE_UP_S = 2 * 60 * 60.0
+
+#: How long ONE pass may spend asking origin whether waiting plans have gone
+#: live. Half the interval, so a pass normally finishes inside its own tick.
+#: The per-call caps in ``test_plans`` (120s for the fetch) stop a single
+#: unreachable remote from wedging the loop, but they are per CALL: a flock with
+#: a dozen branches waiting to ship, on a laptop whose VPN just dropped so the
+#: origin host blackholes TCP rather than refusing, pays that timeout once per
+#: plan and the pass runs for half an hour. This is the aggregate cap the
+#: per-call ones cannot be. Checked BETWEEN plans, so a pass can overrun by at
+#: most one plan's worth of timeouts.
+_TEST_PLAN_LIVE_BUDGET_S = 30.0
+
+#: plan id -> epoch when its liveness was last asked. The cursor that makes the
+#: budget above fair rather than a guillotine: see :func:`_liveness_order`. In
+#: memory on purpose — it is a scheduling hint, and a restart re-asking every
+#: plan once is exactly the right behaviour.
+_TEST_PLAN_LIVE_CHECKED: Dict[str, float] = {}
+
+#: How long a plan's "where has this landed" answer is good for, and how long
+#: ONE pass may spend refreshing them. Minutes rather than the liveness pass's
+#: every-tick rotation, because this is a fact somebody READS off a card rather
+#: than one the machine acts on: nothing is marked due by it, nothing is pushed
+#: to a phone, and a branch name that is five minutes stale costs nobody
+#: anything. The cheap half is local (one `for-each-ref` per plan); the fetch it
+#: rides on is shared per repository — see ``test_plans.fetch_all_heads``.
+_TEST_PLAN_LANDED_TTL_S = 300.0
+_TEST_PLAN_LANDED_BUDGET_S = 15.0
+
+#: plan id -> epoch when its landing was last asked. Same cursor trick as
+#: :data:`_TEST_PLAN_LIVE_CHECKED`, and in memory for the same reason.
+_TEST_PLAN_LANDED_CHECKED: Dict[str, float] = {}
+
+
+def _verify_enabled() -> bool:
+    """The Verify master switch (``repository.verify_enabled``).
+
+    Read fresh rather than cached: it is a switch a person flips expecting the
+    next minute's loop to obey it, and ``load_settings`` is already the cheap,
+    memoized read every other setting on this path goes through.
+
+    Local import for the reason the module docstring gives and
+    ``server-settings-local-import-trap`` learned the hard way: a bare
+    ``load_settings()`` here would NameError into the house try/except and
+    silently answer "off" forever.
+
+    Fails OPEN. A settings file this cannot read is not a decision to pause —
+    defaulting to off would silently stop writing plans for a user who never
+    touched the switch, and the failure would look exactly like the feature
+    being broken.
+    """
+    try:
+        from backend.config import settings as _settings
+
+        return bool(_settings.load_settings().repository.verify_enabled)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _verify_auto_for(repo_root: str, wt: str) -> bool:
+    """Whether a push in this repo should write a plan by itself.
+
+    The master switch outranks both opt-ins below. It is not a third opt-in but
+    a pause over the whole feature: a user who switches Verify off means "stop
+    doing this on your own", and a repo's committed ``verify_on_push`` — which
+    is a statement about the repo, not about this machine — must not be able to
+    override that. Explicit requests (Write plan, Run) are unaffected; see
+    ``RepositorySettings.verify_enabled``.
+
+    Two independent opt-ins, OR'd, because they answer different questions. The
+    repo's committed ``.mindflock.toml`` says "everyone who clones this should
+    get plans" and travels with the code; the list half says "a person typed
+    this repo into the Verify dialog on this machine" and never touches a
+    tracked file. Neither can switch the other off — a local list that could
+    silently override a repo's committed intent (or vice versa) would make both
+    untrustworthy.
+
+    MEMBERSHIP IS THE LOCAL OPT-IN. There is no per-repo ``auto`` flag any more:
+    a repo gets automatic plans because somebody added it to
+    ``repository.verify_repos``, exactly as a repo in ``github.repos`` gets its
+    PRs reviewed by virtue of being there. The match is by the ``owner/name``
+    behind this checkout's ``origin`` rather than by its path, so one entry
+    covers every clone and every worktree of that repo — see
+    :func:`test_plans.is_tracked`, which never raises and whose slug lookup is
+    memoized, so this costs at most one ``git remote get-url`` per repo per
+    minute on the push path.
+
+    The file half is not legacy. It is the ONLY opt-in available to a checkout
+    with no GitHub origin — a local-path remote (MindFlock's own provisioned
+    clones are exactly that), another forge, or no remote at all — because such
+    a repo has no slug to be listed under.
+
+    The ``.mindflock.toml`` is read from ``wt``, the worktree the push came out
+    of: that is the checkout whose branch is being verified, and its copy of the
+    file is the one that shipped with this branch.
+    """
+    if not _verify_enabled():
+        return False
+    try:
+        if _wt_setup.load_config(wt).verify_on_push:
+            return True
+    except Exception:  # noqa: BLE001 — a malformed toml is not an opt-in
+        pass
+    return _test_plans.is_tracked(repo_root)
+
+
+def _ensure_test_plan(title: str, manual: bool = False) -> None:
+    """Idempotent: create + generate a test plan for a session that just landed
+    on origin. **Never raises, never blocks the caller.**
+
+    ``manual`` is the button saying a person asked for this plan by name, and it
+    skips the repo's ``verify_on_push`` opt-in (see
+    :func:`_ensure_test_plan_blocking`). Nothing else differs: an explicit
+    request and an opted-in push produce exactly the same plan, so there is one
+    generation path and not two.
+
+    Both triggers (the ``session.pushed`` subscriber and the stage-transition
+    fallback) run on a worker thread inside an event emit, and one of them is on
+    the path of the state tick that every client's poll depends on. So this
+    function does no work at all itself: it hands the whole job — the git
+    probes, the store write, and the up-to-``TIMEOUT_GENERATE`` model call — to
+    its own daemon thread and returns immediately.
+
+    A daemon thread rather than ``_register_task(asyncio.to_thread(...))``
+    because there is no running loop to create a task on: ``_announce_push``
+    reaches us through ``asyncio.to_thread`` and ``_emit_state_changes`` through
+    the instances tick, both of which are worker threads where
+    ``asyncio.create_task`` raises. (This is the same trap ``live_stage.watch``
+    documents; here there is nothing to hop back to the loop FOR, so the thread
+    just does the work.)
+
+    Racing callers are not a problem and are not guarded against here:
+    ``ensure_plan_for`` decides under its own lock and returns ``None`` to
+    everyone but the first, so a duplicate trigger costs one store read.
+    """
+    if not title:
+        return
+    try:
+        threading.Thread(
+            target=_ensure_test_plan_blocking,
+            args=(title, manual),
+            name="mf-testplan-%s" % title[:48],
+            daemon=True,
+        ).start()
+    except Exception:  # noqa: BLE001 — a plan we could not start is not a reason
+        # to fail the push that triggered it. The next push tries again.
+        pass
+
+
+def _ensure_test_plan_blocking(title: str, manual: bool = False) -> None:
+    """The body of :func:`_ensure_test_plan`, on its own thread.
+
+    Resolves everything the plan must outlive its session with, then generates.
+    The one subtle field is ``repo_root``: it is the MAIN repo
+    (``GetGitWorktree().GetRepoPath()``, the same accessor
+    ``core.workspaces._base_clone_references`` uses to answer "which repo is this
+    session's"), never the worktree. A plan comes due when the work merges, by
+    which time the session is normally deleted and its worktree reclaimed — a
+    plan pointing at the worktree would be a plan that can never be run, and the
+    due loop's ``git fetch`` would have nowhere to run either. The worktree is
+    still passed to ``generate`` as its cwd, because right now — seconds after
+    the push — it is the only place the branch's diff is guaranteed to be
+    readable.
+    """
+    try:
+        inst = ENGINE.instances.get(title)
+        if inst is None:
+            return  # deleted between the push and this thread starting
+        wt = inst.GetWorktreePath()
+        if not wt:
+            return  # a session with no git workspace has nothing to verify
+        try:
+            repo_root = inst.GetGitWorktree().GetRepoPath() or ""
+        except Exception:  # noqa: BLE001 — raises when Start hasn't finished
+            repo_root = ""
+        # In-place sessions have repoPath == worktreePath, so this fallback only
+        # ever fires for a session whose worktree object is not readable yet —
+        # and then the worktree path is the best (and correct) guess.
+        repo_root = repo_root or wt
+        # Explicit opt-in, exactly like the O3 check gate two fields up in the
+        # same file: a repo that has not asked for this gets NOTHING on a push.
+        # Generating a plan is a real model call of up to TIMEOUT_GENERATE, and
+        # a flock pushing across several repos all day would spend it on plans
+        # nobody asked for — and worse, fill the Verify badge, which only means
+        # anything while it counts things a person actually intends to check.
+        # The button on a pushed session (POST /api/instances/{title}/test-plan,
+        # which arrives here with manual=True) is the normal way to get a plan;
+        # the opt-in is for a repo whose every change warrants a manual test.
+        if not manual and not _verify_auto_for(repo_root, wt):
+            return
+        branch = _current_branch(wt)
+        sha = _git_head_sha(wt)
+        # ``repo_root``, not nothing: the live branch is a PER-REPO fact, and the
+        # plan is stamped with whichever branch it is told at creation — it is
+        # what the due loop watches and what the run prompt checks out. Asking
+        # for the flock-wide default here would silently ignore this repo's own
+        # override, i.e. the whole feature not working for exactly the repo the
+        # user bothered to configure.
+        plan = _test_plans.ensure_plan_for(
+            title,
+            branch,
+            sha,
+            repo_root,
+            _test_plans.resolve_live_branch(repo_root),
+            intent=_test_plan_intent(title),
+        )
+        if plan is None:
+            # This branch already has a plan — ``ensure_plan_for``'s idempotent
+            # no-op, unchanged: five pushes still make ONE plan. What a later
+            # push MAY do is refresh that one plan, and only while nobody has
+            # answered anything on it. Deliberately after the ``_verify_auto_for``
+            # gate above, so a repo nobody tracks still gets nothing.
+            if _test_plans.refresh_for_push(title, branch, sha) is not None:
+                _generate_test_plan(
+                    title, getattr(inst, "Program", "") or "", wt, refresh=True
+                )
+            return
+        _generate_test_plan(title, getattr(inst, "Program", "") or "", wt)
+    except Exception as err:  # noqa: BLE001 — nothing above may surface: this
+        # thread has no caller left to raise into, and a missing test plan must
+        # never look like a failed push.
+        if log.ErrorLog is not None:
+            try:
+                log.ErrorLog.Printf("test plan for %s could not start: %v", title, err)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _generate_test_plan(
+    plan_id: str, program: str, worktree: str, refresh: bool = False
+) -> None:
+    """Run the generation one-shot and announce the result. Blocking (up to
+    ``test_plans.TIMEOUT_GENERATE``); call it on a thread.
+
+    ``generate`` never raises for a *generation* failure — a timeout, a CLI with
+    no headless mode, an unparseable answer all land in the plan as
+    ``state="failed"`` with a sentence for the user — so the only thing left to
+    do here is emit when it actually worked. ``session.test_plan_ready`` is
+    deliberately NOT emitted for a failure: the event means "there are steps
+    worth showing", and the Verify dialog re-fetches on it.
+
+    The wrapper is for the failures ``generate`` can't own — a store that cannot
+    be written, a disk that filled. This is a thread ENTRY POINT (see
+    :func:`_start_test_plan_generation`), and an escaping exception there is a
+    bare traceback on stderr with nobody's request attached to it.
+    """
+    try:
+        plan = _test_plans.generate(plan_id, program, worktree, refresh) or {}
+    except Exception as err:  # noqa: BLE001
+        if log.ErrorLog is not None:
+            try:
+                log.ErrorLog.Printf("test plan %s generation failed: %v", plan_id, err)
+            except Exception:  # noqa: BLE001
+                pass
+        return
+    if plan.get("state") != "generated":
+        # NOT SILENCE. `test_plan_ready` keeps its narrow meaning — there are
+        # steps worth showing, which is what the dialog refetches on — but a
+        # rewrite that failed used to emit nothing at all, so the row went on
+        # saying "writing…" for up to a poll and then changed with no
+        # explanation. A sibling event says what happened.
+        if plan.get("error"):
+            _events.BUS.emit(
+                "session.test_plan_failed",
+                session=plan_id,
+                data={
+                    "plan": plan_id,
+                    "error": str(plan.get("error") or ""),
+                    "refreshed": refresh,
+                },
+            )
+        return
+    _events.BUS.emit(
+        "session.test_plan_ready",
+        session=plan_id,
+        # ``refreshed`` is additive: the Verify dialog already refetches on this
+        # event, so nothing in the frontend has to change to see a refreshed
+        # checklist — the flag is for anyone reading the bus.
+        data={
+            "plan": plan_id,
+            "steps": len(plan.get("steps") or []),
+            "refreshed": refresh,
+        },
+    )
+
+
+#: How many generation attempts a plan gets before the due loop stops trying and
+#: parks it in ``failed``. Two, i.e. the original plus exactly one automatic
+#: retry: the ordinary cause of a stall is the app closing mid-write, which the
+#: retry fixes outright, while a machine where generation reliably dies (a CLI
+#: that hangs, a repo that is gone) must reach a sentence a person can read
+#: instead of re-spending a model call every five minutes forever.
+_TEST_PLAN_GEN_ATTEMPTS = 2
+
+
+def _test_plan_intent(plan_id: str) -> str:
+    """What this session was ASKED to do, from wherever it still survives.
+
+    Called at the one moment the answer is knowable — while the session that did
+    the work is still alive — so ``test_plans`` can write it onto the plan and
+    stop depending on the engine forever after. See the ``intent`` field in
+    ``test_plans._blank``.
+
+    THREE SOURCES, and the second one is not a nicety. ``create_instance`` blanks
+    ``inst.Prompt`` and hands the text to the prompt queue whenever a repo has
+    committed ``[workspace]`` setup commands (see the hold above) — so reading
+    only ``Prompt`` loses the ticket entirely for exactly the repos whose owners
+    configured them hardest. The third is the transcript: a session whose prompt
+    was delivered and consumed still has it written down in its own scrollback.
+    """
+    inst = ENGINE.instances.get(plan_id)
+    if inst is None:
+        return ""
+    seed = str(getattr(inst, "Prompt", "") or "").strip()
+    if not seed:
+        try:
+            queued = _prompt_queue.list_queue(plan_id) or []
+            seed = str((queued[0] or {}).get("text") or "").strip() if queued else ""
+        except Exception:  # noqa: BLE001 — best effort, never a failed push
+            seed = ""
+    if not seed:
+        try:
+            from backend.web.core.agent_state import _session_find_prompt
+
+            seed = _session_find_prompt(inst, "# Story:") or ""
+        except Exception:  # noqa: BLE001
+            seed = ""
+    return _test_plans.intent_from_prompt(seed)
+
+
+def _test_plan_session_ctx(plan_id: str) -> tuple:
+    """``(program, worktree)`` for generating this plan, from its session.
+
+    Plans are keyed by session title, so the session — when it still exists — is
+    where the two things generation wants come from: the CLI that answers the
+    question, and the checkout whose branch the diff is readable in. Both are
+    optional: ``generate`` falls back to the flock's default program and to the
+    plan's ``repo_root``, which is what lets a plan be rewritten long after its
+    session was deleted.
+
+    Shared by the regenerate route and the stall recovery below so the two paths
+    cannot drift into asking for different trees.
+    """
+    inst = ENGINE.instances.get(plan_id)
+    if inst is None:
+        return "", ""
+    try:
+        worktree = inst.GetWorktreePath() or ""
+    except Exception:  # noqa: BLE001 — a session mid-Start has no worktree yet
+        worktree = ""
+    return getattr(inst, "Program", "") or "", worktree
+
+
+def _recover_stalled_test_plans(plans: list) -> None:
+    """Pick generations back up that nothing is going to finish.
+
+    THE BUG THIS ENDS: generation runs on a daemon thread, so quitting the app
+    while a plan is being written kills it mid-answer. Nothing else ever writes
+    that plan again — ``generating`` is the one state whose every exit is written
+    by the thread that just died — so the card read "Writing the plan from the
+    diff — up to three minutes" forever, and the dialog hides the rewrite button
+    in that state, so there was no way out of it from inside the product.
+
+    The loop that already exists is the right owner: it wakes every minute, it
+    runs its first pass at startup (which is precisely when the abandoned plans
+    are), and it is already the place where "a plan is stuck in a state nothing
+    will move it out of" is handled for running plans — see
+    ``_TEST_PLAN_RUN_GIVE_UP_S``. This is the same watchdog one rung up the
+    ladder.
+
+    Retry first, give up second. A stall is usually the app having been closed,
+    and the honest fix for that is to write the plan the user is waiting for, not
+    to show them an error about a machine that is no longer switched off.
+    :data:`_TEST_PLAN_GEN_ATTEMPTS` bounds it, and ``test_plans.is_stalled``
+    guarantees we never race a generation that is merely slow.
+
+    Skipped entirely while Verify is paused, exactly like the liveness phase: the
+    switch means the feature is quiet, and a paused Verify that fired model calls
+    on a timer would be the loudest thing it does. Nothing is lost — a stalled
+    plan keeps its state and the next enabled pass recovers it.
+    """
+    if not _verify_enabled():
+        return
+    for plan in plans:
+        try:
+            if not _test_plans.is_stalled(plan):
+                continue
+            pid = plan["id"]
+            if int(plan.get("gen_attempts") or 0) >= _TEST_PLAN_GEN_ATTEMPTS:
+                if _test_plans.give_up_generating(pid) is not None and (
+                    log.ErrorLog is not None
+                ):
+                    try:
+                        log.ErrorLog.Printf(
+                            "test plan %s: generation stalled twice, giving up", pid
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                continue
+            program, worktree = _test_plan_session_ctx(pid)
+            # A plan that already HAS steps is being refreshed, whatever
+            # started the generation that stalled — so a second failure must put
+            # it back in ``generated`` rather than parking a working checklist in
+            # ``failed`` and taking it out of the due loop.
+            _start_test_plan_generation(
+                pid, program, worktree, refresh=bool(plan.get("steps"))
+            )
+        except Exception:  # noqa: BLE001 — one bad plan can't stop the pass
+            pass
+
+
+def _start_test_plan_generation(
+    plan_id: str, program: str, worktree: str, refresh: bool = False
+) -> None:
+    """Fire :func:`_generate_test_plan` on a daemon thread and return at once.
+
+    The regenerate route's spawner. Same reasoning as :func:`_ensure_test_plan`'s
+    thread: three minutes is far too long for a request (or for anything else
+    sharing the event loop) to wait on, and the answer is written to the store,
+    so nobody has to be listening when it lands.
+    """
+    try:
+        threading.Thread(
+            target=_generate_test_plan,
+            args=(plan_id, program, worktree, refresh),
+            name="mf-testplan-%s" % plan_id[:48],
+            daemon=True,
+        ).start()
+    except Exception:  # noqa: BLE001 — the plan keeps whatever it already had
+        pass
+
+
+def _on_session_pushed(envelope: dict) -> None:
+    """Bus subscriber: a session's branch reached origin, so it needs a plan.
+
+    The PRIMARY trigger. ``live_stage`` emits ``session.pushed`` exactly once per
+    watcher, at the instant the remote branch head equals the local one — the
+    only moment in the whole process where "that sha is on origin" is a known
+    fact rather than an inference. Subscribers run synchronously on the emitting
+    thread, so this must return immediately; :func:`_ensure_test_plan` does.
+    """
+    try:
+        if envelope.get("event") != "session.pushed":
+            return
+        _ensure_test_plan(str(envelope.get("session") or ""))
+    except Exception:  # noqa: BLE001 — a subscriber that raises is logged by the
+        # bus and skipped, but a push watcher is not the place to find that out.
+        pass
+
+
+# Subscribed at import, NOT in the lifespan, because the bus is process-wide
+# while the lifespan is per-ASGI-app: a test (or the CLI) that imports this
+# module and drives the engine directly still gets the trigger, and there is
+# nothing to tear down — the callback outlives nothing.
+_events.BUS.subscribe(_on_session_pushed)
+
+
+def _merging_is_shipping(live_branch: str) -> bool:
+    """Whether, in this flock, "the PR merged" is evidence that work SHIPPED.
+
+    The gate on the squash-merge fallback below, and the reason
+    ``repository.live_branch`` exists as its own knob. In most repos a PR merges
+    into the branch users get and the two questions are the same one. In a shop
+    that PRs into ``develop`` and ships from ``release`` — the exact split the
+    setting's own docstring describes — they are not: a merged PR there says the
+    work reached ``develop``, which is not what a Verify plan is waiting for.
+
+    ``pr_base_branch or base_branch or "main"`` mirrors
+    ``test_plans.resolve_live_branch``'s chain with both of its live-branch links
+    removed (this repo's own override and the flock-wide one): it is where a PR
+    lands when nobody says otherwise. Equal to the plan's live branch
+    means merging IS shipping and a MERGED PR may stand in for ancestry;
+    different means it may not, and the plan waits for the real ancestry test
+    (which is what "live" means and is never wrong, only sometimes silent).
+
+    THE QUESTION IS ABOUT THE FLOCK'S SHAPE, NOT ABOUT ONE BRANCH NAME, and that
+    is why the flock-wide live branch is asked for as well. There is no per-repo
+    PR base anywhere — ``verify_repo_settings`` carries ``live_branch`` and
+    ``prompt`` and nothing else — so comparing a PER-REPO live branch against the
+    FLOCK-WIDE PR target compares two things that were never about the same
+    repo. A repo whose
+    card says it ships from ``staging`` while the flock configures no PR base at
+    all would score ``"main" != "staging"`` and lose the squash-merge fallback
+    forever: its plans would sit in ``generated`` and never come due, i.e. the
+    feature would break for exactly the repo somebody bothered to configure, and
+    would have worked before they configured it. So the split is detected once,
+    flock-wide — does the PR target differ from what the flock calls live? — and
+    only a flock that really has typed that split (``pr_base_branch=develop``
+    with ``live_branch=release``) falls through to the per-plan comparison, which
+    still lets a plan whose branch IS the PR target keep the fallback.
+
+    Unreadable settings answer ``True``, i.e. the pre-existing behaviour: the
+    divergent configuration is one the user had to type, and a flock that never
+    touched the setting must not lose the squash-merge fallback over a failed
+    settings read.
+    """
+    try:
+        # Function-local by house rule (see :func:`_configured_pr_base`): a
+        # module-level-only reference NameErrors into the except below and
+        # silently answers the fallback forever.
+        from backend.config.settings import load_settings
+
+        r = load_settings().repository
+        target = (r.pr_base_branch or r.base_branch or "main").strip()
+    except Exception:  # noqa: BLE001
+        return True
+    # No repo argument on purpose: this is the flock-wide answer, the one thing
+    # ``target`` is comparable with. When they agree, nobody has declared a
+    # PR-base/ship split and merging is shipping everywhere in the flock —
+    # including in a repo that overrode its own live branch, whose override says
+    # where IT ships and says nothing about a develop/release process.
+    if target == _test_plans.resolve_live_branch():
+        return True
+    return target == str(live_branch or "").strip()
+
+
+def _test_plan_is_live(plan: dict) -> bool:
+    """Whether this plan's work has reached the live branch. Blocking (a fetch
+    plus, sometimes, a PR lookup) — call it on a thread.
+
+    Two questions, because one of them cannot answer on its own. Ancestry
+    (``test_plans.is_live``) is the honest test and the only one that works for a
+    repo with no PRs at all. But a **squash merge rewrites the commit**, so the
+    sha this plan recorded at push time never becomes an ancestor of anything —
+    for the many flocks that squash by default, ancestry alone would mean no plan
+    is EVER due, which is the feature silently not existing. So a branch whose
+    most recent PR reports ``MERGED`` counts as live too — but only where merging
+    IS shipping (:func:`_merging_is_shipping`).
+
+    That gate is not a nicety. ``_pr_info`` matches by head branch alone and is
+    deliberately NOT filtered by base (its docstring says why, and it cannot be:
+    neither rung even returns the base a PR merged into). So without the gate,
+    the fallback reads "this branch's PR merged into *something*" — and in a shop
+    that PRs into ``develop`` and ships from ``release`` that fires on every
+    merge, marking plans due, pushing "it's live — verify it" to a phone, and
+    sending a verify run at a branch that does not contain the change. Worse, it
+    is a one-way door: liveness is only re-asked while the plan is ``generated``,
+    so the premature ``due`` is never corrected when the work really ships.
+
+    ``_pr_info`` is reused rather than re-asked: it is the same memoized, sticky,
+    gh-or-REST lookup the stage machine runs, so the two can never disagree about
+    whether a branch's PR merged. It is given the MAIN repo as its cwd — the
+    worktree it was written for is usually gone by now, and the main repo has the
+    same origin, which is all ``gh`` needs.
+    """
+    verdict = _test_plans.probe_live(
+        plan["repo_root"], plan["sha"], plan["live_branch"]
+    )
+    if verdict == "live":
+        _test_plans.set_live_problem(plan["id"], "")
+        return True
+    # SAY WHEN THE WAIT CANNOT END. "Not shipped yet" and "waiting for a branch
+    # origin does not have" look identical on screen — a row cheerfully saying
+    # "it turns up here to check when it ships" — and only one of them is the
+    # user's to fix. A checklist that can never come due is worse than no
+    # checklist, because the whole promise is that it tells you.
+    if verdict == "missing":
+        _test_plans.set_live_problem(
+            plan["id"],
+            "origin has no branch called %s, so this can never come due. Set the "
+            "live branch on this repo's card in Verify \u2192 Sources."
+            % (plan["live_branch"] or "?"),
+        )
+    else:
+        # "waiting" and "unreachable" are both ordinary; clear any stale
+        # diagnosis (the branch may have just been created, or the network came
+        # back) rather than leaving a sentence that is no longer true.
+        _test_plans.set_live_problem(plan["id"], "")
+    info = _pr_info(plan["repo_root"], plan["branch"])
+    merged = bool(info) and str(info.get("state") or "").upper() == "MERGED"
+    base = str((info or {}).get("base") or "").strip()
+    live = str(plan["live_branch"] or "").strip()
+    if merged and base:
+        # THE EXACT ANSWER, when the PR can give one. A squash merge rewrites the
+        # commit, so "this branch's PR merged" is the only evidence left that the
+        # work shipped — and it is good evidence precisely when the PR merged
+        # into the branch this checklist is waiting for. That is a fact about the
+        # PR, and asking it beats inferring it from flock-wide settings, which is
+        # what `_merging_is_shipping` has to do when the base is unknown.
+        if base == live:
+            _test_plans.set_live_problem(plan["id"], "")
+            return True
+        # Merged, but somewhere else. This is the state that used to wait for
+        # ever in silence: a repo that PRs into `staging` and ships from `main`
+        # has work that is genuinely merged and genuinely not live, and the row
+        # said "it turns up here to check when it ships" indefinitely. Say what
+        # happened, and let the deploy question stay open.
+        _test_plans.set_live_problem(
+            plan["id"],
+            "Its pull request merged into %s, not %s. This checklist is waiting "
+            "for %s \u2014 change the live branch on this repo's card if %s is "
+            "what you ship." % (base, live, live, base),
+        )
+        return False
+    if not _merging_is_shipping(live):
+        return False
+    return merged
+
+
+def _test_plan_merged_into(plan: dict) -> dict:
+    """Where this plan's work has reached on origin. Blocking — call it on a
+    thread. Shaped like ``test_plans.probe_merged_into``.
+
+    THE QUESTION THE CARD COULD NOT ANSWER. A checklist knows the branch it was
+    pushed on and the branch it is waiting for; between those two it says nothing
+    about the branch the work is actually sitting on right now, which in a repo
+    with a develop or a release step is most of a change's life. "Is this in
+    staging yet, or already in main?" is the thing somebody scanning the list
+    wants, and until this it was a question you answered by leaving the app.
+
+    Two rungs, the same two — and in the same order — as :func:`_test_plan_is_live`:
+
+    * **Ancestry** (``probe_merged_into``) is the honest test, works in a repo
+      with no PRs at all, and is the only one that can name a branch nobody
+      opened a PR against.
+    * **The PR's own base**, when ancestry finds nothing. A SQUASH merge rewrites
+      the commit, so the sha this plan recorded never becomes an ancestor of
+      anything and ancestry says "nowhere" about work that demonstrably shipped —
+      for a flock that squashes by default, that is the feature silently not
+      existing. ``_pr_info`` is reused rather than re-asked, so this and the due
+      loop can never disagree about where a branch's PR went.
+
+    Unlike the liveness fallback this one needs no ``_merging_is_shipping`` gate:
+    it is not deciding whether anything shipped, only reporting the branch a
+    merged PR names as its base. A PR that merged into ``develop`` is exactly the
+    case this is here to show.
+    """
+    found = _test_plans.probe_merged_into(
+        plan.get("repo_root") or "", plan.get("sha") or "", plan.get("branch") or ""
+    )
+    if found.get("branch"):
+        return found
+    info = _pr_info(plan.get("repo_root") or "", plan.get("branch") or "")
+    if not info or str(info.get("state") or "").upper() != "MERGED":
+        return found
+    base = str(info.get("base") or "").strip()
+    if not base:
+        return found
+    # The PR knows WHERE but this rung cannot know WHEN — `_pr_info` does not
+    # carry a merge time. `merged_at` is the closest honest stamp (the moment
+    # this flock first saw the work merged) and 0.0 says "no idea", which is
+    # what the row renders as an unqualified "merged into develop".
+    return {
+        "branch": base,
+        "at": float(plan.get("merged_at") or 0.0),
+        "all": [base],
+    }
+
+
+def _notify_test_plan_due(plan: dict) -> None:
+    """Push "this is live, go check it" to the user's phone, when ntfy is on.
+
+    AT MOST ONCE PER PLAN — see ``test_plans.mark_notified``. Several things can
+    move a plan to ``due`` more than once (pressing "it's out, check it now", a
+    rewrite of a plan that had already shipped), and *"sc-1234 shipped to main"*
+    arriving days after it shipped is a notification that is not true, about the
+    one subject this surface exists to be believed about.
+
+    The one notification this feature sends, and the reason it can be sent at
+    all: a plan comes due minutes or days after the session that made it, from a
+    merge this machine may have had nothing to do with, so there is frequently
+    nobody looking at the UI when it happens. Guarded on ``cfg.active`` (the same
+    check every other push path makes) and wrapped, because a notification must
+    never be able to stop the loop that produced it.
+    """
+    try:
+        if plan.get("notified_at"):
+            return
+        cfg = _ntfy.load()
+        # Stamped whether or not ntfy is on, and before the send rather than
+        # after it: the stamp means "this plan's shipping moment has passed", not
+        # "a push succeeded". Switching notifications ON next week must not
+        # produce a backlog of announcements about work that shipped last month.
+        _test_plans.mark_notified(str(plan.get("id") or ""))
+        if not cfg.active:
+            return
+        steps = plan.get("steps") or []
+        mine = sum(1 for s in steps if s.get("actor") == "human")
+        _ntfy.publish_soon(
+            cfg,
+            title="%s shipped to %s"
+            % (
+                plan.get("title") or plan.get("id"),
+                plan.get("live_branch") or "the live branch",
+            ),
+            # Two numbers, because they are not the same number and the old
+            # message implied they were: "4 step(s) to check on main" reads as
+            # four things for the reader to do, when three of them are the
+            # agent's. It also garden-paths — "check on main" parses as "look in
+            # on main" before it parses as "check, on main" — which is why the
+            # branch has moved up into the title, where it is a fact about what
+            # happened rather than a place to go.
+            message="%d step%s in its checklist, %d for you."
+            % (len(steps), "" if len(steps) == 1 else "s", mine),
+            # 3 = normal. This is news, not an emergency: nothing is broken and
+            # nothing is waiting on the user, unlike the rules that ring at 4.
+            priority=3,
+            tags=["white_check_mark"],
+        )
+    except Exception as err:  # noqa: BLE001
+        _ntfy.log_error("test plan due push failed: %s", err)
+
+
+def _test_plan_run_started_at(plan: dict) -> float:
+    """When the plan's CURRENT run began (0.0 when there isn't one).
+
+    Read off the run record ``start_run`` opened rather than tracked in memory,
+    so a server restart mid-run does not reset the give-up clock — a wedged
+    verify session must not become immortal by outliving the process watching it.
+    """
+    for run in reversed(plan.get("runs") or []):
+        if run.get("session") == plan.get("run_session"):
+            return float(run.get("at") or 0.0)
+    return 0.0
+
+
+def _read_verify_results(plan: dict) -> Optional[dict]:
+    """The run session's ``.mindflock_verify.json``, or ``None``.
+
+    This file IS the verify session's return channel: the run is an ordinary
+    session in a real workspace with no exit code and no callback (exactly the
+    problem ``live_stage`` exists for), so the agent is told to write its answers
+    to one git-excluded file and the due loop reads it. Absent, half-written or
+    malformed all read the same way — "not finished yet" — because the poller
+    runs every 60s and the next pass is a free retry.
+    """
+    inst = ENGINE.instances.get(plan.get("run_session") or "")
+    if inst is None:
+        return None  # session deleted; test_plans.prune releases the plan
+    try:
+        wt = inst.GetWorktreePath()
+    except Exception:  # noqa: BLE001
+        wt = ""
+    if not wt:
+        return None
+    try:
+        with open(
+            os.path.join(wt, _test_plans.RESULT_FILE), "r", encoding="utf-8"
+        ) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    # IT MUST BE ABOUT THIS PLAN. The prompt asks the agent to echo the plan id
+    # and nothing checked it, so a result file left behind by an earlier plan in
+    # a reused worktree — or one an agent wrote from an example — could settle a
+    # checklist it never read. Blank is tolerated: an older build's file has no
+    # id, and refusing those would strand every run in flight across an upgrade.
+    claimed = str(data.get("plan") or "")
+    if claimed and claimed != str(plan.get("id") or ""):
+        return None
+    return data
+
+
+def _free_stale_verify_worktree(repo_root: str, title: str) -> str:
+    """Release a worktree a DEAD verify session left holding this run's branch.
+
+    THE TRAP THIS ENDS, and it is a permanent one rather than a flaky one. A
+    verify session is named for its plan and its commit (``verify-<plan>-<sha7>``)
+    precisely so that "same commit" and "different commit" are different
+    sessions — which also makes the branch it wants
+    (``<branch_prefix>verify-<plan>-<sha7>``) the SAME name every time. Git will
+    not check a branch out in two worktrees at once, so the moment one verify
+    worktree is left behind — the app killed mid-run, a session removed from the
+    engine without its worktree being reclaimed, a crash — every subsequent run
+    of that checklist dies in ``Start`` with::
+
+        fatal: '<branch>' is already used by worktree at '<path>'
+
+    and the plan silently reverts. Not once: forever, for that checklist, with no
+    control anywhere in the product that clears it.
+
+    ONLY WHAT NOTHING OWNS. The live sessions' worktree paths are collected
+    first and never touched — this must not be able to reclaim the tree an agent
+    is working in, which is the one thing worse than the bug it fixes. A
+    worktree registered to a path that no longer exists on disk is also fair
+    game (that is what ``git worktree prune`` is for) and is the commonest shape
+    of the leftover.
+
+    Returns a short description of what it freed, for the log; "" when there was
+    nothing to do, which is the normal case.
+    """
+    repo = str(repo_root or "")
+    if not repo or not git_available():
+        return ""
+    try:
+        from backend.config import config as _config
+        from backend.session.git.worktree import sanitize_branch_name
+
+        want = sanitize_branch_name(
+            "{}{}".format(_config.LoadConfig().branch_prefix, title)
+        )
+    except Exception:  # noqa: BLE001 — a cleanup that cannot name its target
+        return ""  # is a cleanup that must not run
+
+    live: set = set()
+    for inst in list(ENGINE.instances.values()):
+        try:
+            path = inst.GetWorktreePath()
+        except Exception:  # noqa: BLE001
+            path = ""
+        if path:
+            live.add(os.path.abspath(path))
+
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo, "worktree", "list", "--porcelain"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+        )
+    except Exception:  # noqa: BLE001
+        return ""
+    if out.returncode != 0:
+        return ""
+
+    def _remove(path: str, branch: str) -> None:
+        for argv in (
+            ["git", "-C", repo, "worktree", "remove", "--force", path],
+            ["git", "-C", repo, "worktree", "prune"],
+        ) + ((["git", "-C", repo, "branch", "-D", branch],) if branch else ()):
+            try:
+                subprocess.run(
+                    argv,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    timeout=60,
+                )
+            except Exception:  # noqa: BLE001 — best effort, in order
+                pass
+
+    # The directory name a worktree for THIS session would have:
+    # ``<worktrees dir>/<sanitized branch>_<hex>``, so the basename is the last
+    # segment of the branch plus an underscore. Matched by name because the
+    # branch line cannot be relied on — see the detached case below.
+    leaf = want.rsplit("/", 1)[-1] + "_"
+
+    freed = ""
+    path = ""
+    detached = False
+    for line in out.stdout.decode("utf-8", "replace").splitlines() + [""]:
+        if line.startswith("worktree "):
+            path = line[len("worktree ") :].strip()
+            detached = False
+            continue
+        if line.strip() == "detached":
+            detached = True
+            continue
+        branch = ""
+        if line.startswith("branch "):
+            branch = line[len("branch ") :].strip().split("refs/heads/", 1)[-1]
+        elif line.strip():
+            continue
+        # End of this worktree's block (a blank line), or its branch line.
+        if not path:
+            continue
+        # A LEFTOVER IS NOT ALWAYS ON ITS BRANCH, and that is the case this
+        # feature actually produces: a verify run's first act is to check out the
+        # commit it is verifying, so the worktree ends up DETACHED and the branch
+        # is often gone entirely. Matching only the branch line therefore missed
+        # every leftover from a run that had actually run — they accumulate in
+        # `~/.mindflock/worktrees`, a full checkout each, and nothing in the
+        # product ever removes them. So a directory named for this session
+        # counts too, and it is just as safe: the name carries the plan AND the
+        # sha, and a live session's path is never touched.
+        mine = branch == want or (
+            (detached or not branch) and os.path.basename(path).startswith(leaf)
+        )
+        if not mine:
+            if branch or not line.strip():
+                path = ""
+                detached = False
+            continue
+        if os.path.abspath(path) in live:
+            # An agent is in there right now. Whatever is wrong, this is not
+            # ours to take.
+            return ""
+        _remove(path, branch if branch == want else "")
+        freed = ("%s (%s)" % (branch, path)) if branch else path
+        path = ""
+        detached = False
+    return freed
+
+
+def _kill_orphan_plan_tmux(title: str) -> str:
+    """Kill the tmux sessions a DEAD run of this checklist left behind.
+
+    THE OTHER HALF OF :func:`_free_stale_verify_worktree`, and the same trap
+    from the other end. A verify session is named for its plan and its commit,
+    so the tmux session it wants (``mindflock_verify-<plan>-<sha7>``) has the
+    SAME name every time that checklist is run for that commit. tmux outlives
+    this process: kill the app mid-run, delete the session while its window is
+    detached, lose the engine's record in a crash, and the tmux session survives
+    with nothing owning it. Every later run of that checklist then dies in
+    ``Instance.Start`` with
+
+        failed to start new session: tmux session already exists: mindflock_verify-…
+
+    which is exactly what the owner saw. It dies LATE, too — on the background
+    start task, after the workspace was provisioned and after the route already
+    answered 202 — so the plan is stamped ``running``, then reverts with that
+    sentence recorded on it and no control anywhere in the product to clear it.
+    Permanent for that checklist, like the worktree case, and invisible: nothing
+    in the session list shows an orphan, because nothing in the app owns it.
+
+    ONLY WHAT NOTHING OWNS. Called for a ``verify-`` or ``fix-`` title with no
+    live instance, it kills exactly the two sessions named for that title (the
+    agent window and its shell) and nothing else. Both are sessions THIS FEATURE
+    creates, from a name it derives, for work it is about to start again — which
+    is what makes killing them safe in a way it would not be for a session
+    somebody named themselves. Note the asymmetry with the worktree: a window is
+    a process, and killing an unowned one loses nothing that was not already
+    lost, while a fix session's TREE can hold uncommitted work and is only ever
+    reclaimed when it is provably pristine (:func:`_reclaim_plan_worktree`).
+
+    Returns what it killed, for the log; "" when there was nothing, which is the
+    normal case. Never raises.
+    """
+    title = str(title or "")
+    # Belt and braces: the caller checks both of these, and this must never be
+    # reachable for a session a person owns.
+    if not title.startswith(("verify-", "fix-")) or title in ENGINE.instances:
+        return ""
+    killed = []
+    try:
+        names = [tmux.to_mindflock_tmux_name(title), _shell_tmux_name(title)]
+    except Exception:  # noqa: BLE001 — a cleanup that cannot name its target
+        return ""  # is a cleanup that must not run
+    for name in names:
+        try:
+            if _live_session_name(name) is None:
+                continue
+            rc = _run_capped(
+                ["tmux", "kill-session", "-t=" + name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+            ).returncode
+            if rc == 0:
+                killed.append(name)
+        except Exception:  # noqa: BLE001 — best effort, one name at a time
+            continue
+    return ", ".join(killed)
+
+
+def _reclaim_plan_worktree(repo_root: str, title: str) -> Tuple[str, str]:
+    """Free the branch a dead ``fix-`` session is holding — ONLY if it is safe.
+
+    The same permanent wedge as :func:`_free_stale_verify_worktree`, on a
+    session with the opposite contract. A fix session's whole job is to CHANGE
+    the tree, so its worktree can hold work nobody has committed, and the verify
+    reclaim's ``worktree remove --force`` + ``branch -D`` would delete exactly
+    that. ``worktree_reclaim.reclaim_for_branch`` refuses anything that is not
+    pristine and anything a live session owns, so the wedge clears itself in the
+    (common) case where the leftover is empty and stays put in the case where
+    removing it would lose work — where the route's own error is then the honest
+    answer.
+
+    Returns ``(reclaimed, held)``: the path it freed, or the path it REFUSED to
+    free and why the caller must stop. Both empty is the normal case — nothing
+    was holding the branch. Never raises.
+
+    THE THIRD ANSWER IS THE POINT. A decline used to look exactly like "nothing
+    to do", so the route created the session anyway and the collision surfaced
+    minutes later inside ``_bg_start`` as a raw git line in the notifications
+    bell — nowhere near the checklist, and with no hint that the fix for it is a
+    directory full of somebody's uncommitted work. The route can now say that
+    synchronously.
+    """
+    repo = str(repo_root or "")
+    if not repo or not git_available():
+        return "", ""
+    try:
+        from backend.config import config as _config
+        from backend.session.git.worktree import sanitize_branch_name
+        from backend.session.provisioned import worktree_holding_branch
+        from backend.web.core import worktree_reclaim as _reclaim
+
+        branch = sanitize_branch_name(
+            "{}{}".format(_config.LoadConfig().branch_prefix, title)
+        )
+        held_at = worktree_holding_branch(repo, branch) or ""
+        if not held_at:
+            return "", ""
+        live = set()
+        for inst in list(ENGINE.instances.values()):
+            try:
+                path = inst.GetWorktreePath()
+            except Exception:  # noqa: BLE001
+                path = ""
+            if path:
+                live.add(os.path.abspath(path))
+        freed = _reclaim.reclaim_for_branch(
+            repo, branch, lambda path: os.path.abspath(path) in live
+        )
+        return (freed, "") if freed else ("", held_at)
+    except Exception:  # noqa: BLE001 — a cleanup that cannot name its target
+        return "", ""  # is a cleanup that must not run
+
+
+def _verify_session_usable(title: str) -> bool:
+    """Whether the open verify session ``title`` can actually be sent work.
+
+    A session record outlives its workspace: the worktree can be reclaimed,
+    removed by hand, or lost with the disk it was on, and the engine goes on
+    holding the instance. Everything that matters downstream — sending a prompt,
+    reading the result file — needs the directory, so "is there a record" is the
+    wrong question and was the one being asked.
+    """
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        return False
+    try:
+        wt = inst.GetWorktreePath()
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(wt) and os.path.isdir(wt)
+
+
+def _test_plan_row(plan: dict, live_branch: Optional[str] = None) -> dict:
+    """One plan, shaped the way every reader of this feature expects it.
+
+    THE TWO EDITS THE STORE DOES NOT DO, in one place because a second reader
+    now exists (``POST /run`` answers with the plan it just started, and the
+    client REPLACES its whole row with it):
+
+    * ``effective_live_branch`` — what THIS PLAN'S REPO calls live, which is the
+      only branch its own stamp can honestly be compared with. Without it a row
+      falls back to the flock-wide default and a repo that ships from ``staging``
+      starts reading as "written against a branch that has since moved".
+    * ``conversation`` — the snapshotted transcript is generation input, never
+      UI. Nothing renders it, and it is up to CONV_BUDGET of somebody's session
+      text per plan.
+
+    Mutates and returns the same dict, which is what the list route wants.
+    """
+    root = str(plan.get("repo_root") or "")
+    plan["effective_live_branch"] = (
+        live_branch
+        if live_branch is not None
+        else _test_plans.resolve_live_branch(root)
+    )
+    plan.pop("conversation", None)
+    return plan
+
+
+def _is_verify_repo_usable(repo_root: str) -> bool:
+    """Whether a run can actually be started in ``repo_root``.
+
+    A plan records the MAIN repo rather than the worktree, precisely so it
+    outlives the session that produced it — and over the weeks a checklist can
+    wait, that path can be moved, renamed or deleted. Nothing downstream
+    notices: ``_prepare_plain_repo`` creates a missing path rather than
+    refusing, so the run gets a real session in an empty non-git folder.
+
+    A directory that exists but is not a git repository counts as unusable for
+    the same reason: the run's first instruction is to check out the live
+    branch. Never raises — an unreadable path is not a usable one.
+    """
+    root = str(repo_root or "")
+    if not root:
+        return False
+    try:
+        if not os.path.isdir(root):
+            return False
+        return (
+            _run_capped(
+                ["git", "-C", root, "rev-parse", "--git-dir"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                timeout=30,
+            ).returncode
+            == 0
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _clear_verify_results(session_title: str) -> None:
+    """Delete a verify session's result file, if it has one. Never raises.
+
+    Keyed by session title rather than by plan, because it runs before the plan
+    knows which session it is about to get. A session that does not exist yet
+    (the first run) has nothing to clear, which is why every failure here is a
+    no-op rather than an error.
+    """
+    inst = ENGINE.instances.get(session_title)
+    if inst is None:
+        return
+    try:
+        wt = inst.GetWorktreePath()
+        if wt:
+            os.unlink(os.path.join(wt, _test_plans.RESULT_FILE))
+    except Exception:  # noqa: BLE001 — no file, no worktree, no permission
+        pass
+
+
+def _announce_test_plan_checked(plan: dict) -> None:
+    """Say that a run finished, and whether it left anything.
+
+    Starting a run is loud — a toast, a row that changes, a terminal that opens
+    — and finishing one was completely silent: the results landed in a dialog
+    the user had almost certainly navigated away from, minutes later. The event
+    carries the two numbers that decide whether anything is being asked of them,
+    so the client can say "8 passed, 3 need your eyes" without a second fetch.
+    """
+    try:
+        pid = str(plan.get("id") or "")
+        run = (plan.get("runs") or [{}])[-1]
+        results = run.get("results") or {}
+        failed = sum(1 for r in results.values() if r.get("result") == "fail")
+        # THE TWO NUMBERS MUST NOT COUNT THE SAME STEP. Written as "not a pass
+        # and not answered by a person", this counted every agent-recorded FAIL
+        # in both — so a run finding one broken step announced "1 step failed, 1
+        # step needs you", which reads as two problems and is one.
+        #
+        # Mirrors `stepCheck`'s "yours" in verify.ts, which is what the row will
+        # say when the user opens the dialog the toast sent them to: a step is
+        # yours when nobody has settled it AND either it was always yours (a
+        # human actor) or the agent explicitly handed it back (`blocked`).
+        # `pass` and `fail` are settled; a `blocked` a PERSON recorded is their
+        # "can't check", which is an answer.
+        needs_you = 0
+        for step in plan.get("steps") or []:
+            entry = results.get(step.get("id")) or {}
+            result = entry.get("result") or ""
+            if result in ("pass", "fail"):
+                continue
+            if result == "blocked" and entry.get("by") == "human":
+                continue
+            if step.get("actor") == "human" or result == "blocked":
+                needs_you += 1
+        _events.BUS.emit(
+            "session.test_plan_checked",
+            session=pid,
+            data={
+                "plan": pid,
+                "title": plan.get("title") or pid,
+                "failed": failed,
+                "needs_you": needs_you,
+            },
+        )
+    except Exception:  # noqa: BLE001 — an announcement must never stop the pass
+        pass
+
+
+def _verify_run_trees(plan: dict) -> tuple:
+    """``(tested_sha, expected_sha)`` for a run that has just answered.
+
+    THE CLAIM THIS MAKES CHECKABLE. ``build_run_prompt`` spends a paragraph on
+    why a verify run must not be able to test the wrong tree, and until this the
+    whole mechanism was a sentence asking the agent to check out
+    ``origin/<live>``. A fetch that failed quietly left the agent working
+    whatever HEAD the worktree was cut from — typically the clone's LOCAL live
+    branch, which is behind origin — and the plan then recorded "it works" about
+    a tree nobody could name.
+
+    Both answers are best-effort and both may be blank, which
+    ``test_plans.run_tree_mismatch`` reads as "unknown", never as "mismatched":
+    the cost of a wrong guess here is throwing away a good run's answers.
+
+    A plan run BEFORE it shipped is compared against its own commit, which is
+    what that arm of the run prompt asked for and the tree those steps are about.
+    """
+    inst = ENGINE.instances.get(plan.get("run_session") or "")
+    if inst is None:
+        return "", ""
+    try:
+        wt = inst.GetWorktreePath() or ""
+    except Exception:  # noqa: BLE001
+        wt = ""
+    if not wt:
+        return "", ""
+    tested = _git_head_sha(wt)
+    live = str(plan.get("live_branch") or "").strip()
+    if not plan.get("live_at"):
+        # "Check it early" — the honest expectation is the branch's own tip.
+        return tested, str(plan.get("tip_sha") or plan.get("sha") or "")
+    root = str(plan.get("repo_root") or "") or wt
+    expected = ""
+    for ref in ("origin/%s" % live, live):
+        if not live:
+            break
+        out = subprocess.run(
+            ["git", "-C", root, "rev-parse", "--verify", "-q", ref],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            timeout=15,
+        )
+        if out.returncode == 0:
+            expected = out.stdout.decode("utf-8", "replace").strip()
+            break
+    return tested, expected
+
+
+#: When each running verify session was first seen with no tmux window, and how
+#: long that has to hold before the run is released. One miss is not proof: tmux
+#: can be briefly unreachable, and `create_instance` registers the record a
+#: moment before `Start` makes the window.
+_VERIFY_DEAD_SINCE: Dict[str, float] = {}
+_VERIFY_DEAD_GRACE_S = 120.0
+
+
+def _verify_window_gone(run_session: str, now: Optional[float] = None) -> bool:
+    """Whether ``session``'s agent window has been missing long enough to act on.
+
+    Cheap in the normal case — one ``tmux has-session`` per running plan, and
+    there is usually at most one. Never raises: a probe that cannot answer is
+    not evidence of death, so it forgets the session and starts the clock again.
+
+    A SESSION THAT HAS NOT COME UP YET IS NOT A DEAD ONE, and this is the trap
+    worth naming: `start_run` stamps the plan the moment the route answers 202,
+    while the workspace behind it is still being made — a cold base clone plus a
+    dependency install runs for MINUTES, with no tmux window for any of it. A
+    bare "no window" test would therefore give up on every first run in a new
+    repo, halfway through provisioning it. A paused session is the same
+    argument: its window is deliberately gone and its run is not. Both are left
+    to the clock they already have (the two-hour deadline) and to `prune`, which
+    owns the case where the record itself has disappeared.
+    """
+    ts = float(now if now is not None else time.time())
+    inst = ENGINE.instances.get(run_session)
+    if inst is None:
+        _VERIFY_DEAD_SINCE.pop(run_session, None)
+        return False
+    try:
+        # `Paused` by name rather than `session.Paused`: an earlier draft of
+        # this took the title in a parameter called `session`, which shadowed the
+        # `session` MODULE — the attribute form then resolved against a string,
+        # raised, and the except below read that as "not evidence", so the check
+        # could never fire at all. The parameter is `run_session` now; the plain
+        # name stays because it cannot be shadowed by accident.
+        if not inst.Started() or inst.Status in (Loading, Paused):
+            _VERIFY_DEAD_SINCE.pop(run_session, None)
+            return False
+    except Exception:  # noqa: BLE001 — an unreadable status is not evidence
+        _VERIFY_DEAD_SINCE.pop(run_session, None)
+        return False
+    # THREE ANSWERS, NOT TWO. `tmux has-session` exits 0 for a live session and
+    # 1 for a missing one; anything else — a tmux server that is not answering,
+    # the 124 `_run_capped` returns when it kills a hung probe — means the
+    # question was not answered at all. Folding that into "missing" is how a
+    # loaded machine gives up on a run that is working: two minutes of slow
+    # probes and the plan is released out from under a live agent.
+    try:
+        rc = _run_capped(
+            ["tmux", "has-session", "-t=" + tmux.to_mindflock_tmux_name(run_session)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        ).returncode
+    except Exception:  # noqa: BLE001
+        rc = -1
+    if rc != 1:
+        _VERIFY_DEAD_SINCE.pop(run_session, None)
+        return False
+    first = _VERIFY_DEAD_SINCE.setdefault(run_session, ts)
+    return ts - first >= _VERIFY_DEAD_GRACE_S
+
+
+def _release_wedged_run(
+    pid: str, run_session: str, reason: str, hours: int = 0
+) -> None:
+    """Put a plan back and SAY WHY, for a run that is never going to report.
+
+    Both callers — the two-hour deadline and the dead window — need the same
+    three things to happen together, and the one that mattered most was missing
+    from both: the sentence. `mark_due` alone put the row back to "nobody has
+    checked it yet", so a session that had been started, been billed and died
+    read exactly like a button nobody pressed.
+    """
+    released = _test_plans.mark_due(pid, reason=reason)
+    if released is None:
+        return
+    _VERIFY_DEAD_SINCE.pop(run_session, None)
+    # `mark_due` cleared `run_session` AND dropped the empty run record, which is
+    # what actually hands the session to `_sweep_orphan_verify_sessions`: it
+    # keeps any session a run record still names, so before that pop the
+    # abandoned agent was exempt from the one thing that closes strays.
+    _events.BUS.emit(
+        "session.test_plan_gave_up",
+        session=pid,
+        data={
+            "plan": pid,
+            "title": released.get("title") or pid,
+            "run_session": run_session,
+            # WHICH release this was. Two things end a run without a report — a
+            # window that died in the first minutes and a deadline two hours
+            # later — and an event carrying only `hours` (0 for one of them)
+            # made them indistinguishable to anyone reading the bus, while the
+            # sentence the plan got said exactly which. It travels with it.
+            "hours": hours,
+            "reason": reason,
+        },
+    )
+
+
+def _poll_running_test_plans(plans: list) -> None:
+    """Fold in the results of every verify session that has finished.
+
+    Deliberately its own phase, run BEFORE the liveness checks and never behind
+    them: this is the half of the pass that is purely local (one ``open()`` per
+    running plan) and the half a person is actually waiting on — the verify
+    session on their screen has written its answers and the plan still says
+    "running". Sharing one loop with the network half meant a plan waiting to go
+    live could hold the results of a finished run hostage for as long as origin
+    took to answer, which is also how the two-hour give-up clock stopped being
+    evaluated. Ordering costs nothing and removes the coupling entirely.
+    """
+    live_titles = set()
+    for plan in plans:
+        if plan["state"] != "running":
+            continue
+        pid = plan["id"]
+        # NOT `session`: that is an imported MODULE name, and shadowing it in a
+        # function that also asks about instance status is how a guard
+        # silently stops guarding (see `_verify_window_gone`).
+        run_session = str(plan.get("run_session") or "")
+        live_titles.add(run_session)
+        try:
+            data = _read_verify_results(plan)
+            if data and data.get("finished"):
+                results = data.get("results")
+                tested, expected = _verify_run_trees(plan)
+                done = _test_plans.finish_run(
+                    pid,
+                    results if isinstance(results, list) else [],
+                    tested_sha=tested,
+                    expected_sha=expected,
+                    target=_test_plans.verify_target(plan.get("repo_root") or ""),
+                )
+                # Only when the store actually took it. `finish_run` answers
+                # None for a plan that was deleted while the run was working,
+                # and announcing that one would toast about a checklist that is
+                # no longer there.
+                if done:
+                    # THE ANSWER IS EATEN, not left on disk. This file is the
+                    # session's whole return channel and the poller believes the
+                    # first `finished: true` it sees, so a copy left behind is a
+                    # loaded gun: the next run of the same plan is finished by
+                    # its predecessor within 60s — before the agent has checked
+                    # anything out — and takes the old verdict as the new one.
+                    # `/run` clears it too, but only while an engine record still
+                    # points at the worktree, which is exactly what a sweep, a
+                    # cancel or a restart takes away.
+                    _clear_verify_results(run_session)
+                    _announce_test_plan_checked(done)
+                continue
+            started = _test_plan_run_started_at(plan)
+            # THE WINDOW IS GONE — the commonest way a run dies, and the one the
+            # two-hour clock served worst. An agent that hits a usage limit, is
+            # killed in its pane, or whose tmux server went down leaves the
+            # engine record intact, so nothing here noticed: the row said "an
+            # agent is checking the steps it can" and offered Watch onto a dead
+            # pane for two hours. A single miss is not proof (tmux can be
+            # briefly unreachable, and a session is created a moment before it
+            # is recorded), so the miss has to persist.
+            if run_session and _verify_window_gone(run_session):
+                _release_wedged_run(
+                    pid,
+                    run_session,
+                    # SHORT FIRST SENTENCE, deliberately: the collapsed row
+                    # lifts sentence one and nothing else (`errorHeadline`), so
+                    # a paragraph-long opener is a release nobody can see.
+                    "The verify session's agent window is gone. Nothing was "
+                    "running any more, and nothing it may have found was "
+                    "recorded — run it again.",
+                )
+                continue
+            if started and time.time() - started > _TEST_PLAN_RUN_GIVE_UP_S:
+                # NOT SILENTLY. This is a real session that was started, was
+                # billed for two hours and never wrote an answer; releasing the
+                # plan without a word turned that into "nobody has checked it
+                # yet", which reads as the button never having been pressed.
+                # The sentence lands on the plan (the row says it) and on the
+                # bus (so it reaches someone who is not looking at the dialog —
+                # which, two hours in, is everyone).
+                hours = int(_TEST_PLAN_RUN_GIVE_UP_S // 3600) or 1
+                _release_wedged_run(
+                    pid,
+                    run_session,
+                    "The verify run was given up on after %d hours. %s never "
+                    "wrote its answers, so nothing it may have found was "
+                    "recorded — run it again." % (hours, run_session or "The session"),
+                    hours=hours,
+                )
+        except Exception:  # noqa: BLE001 — one bad plan can't stop the pass
+            pass
+    # A cursor, not a cache: anything not still running this pass is forgotten,
+    # so the map cannot outgrow the runs it is watching.
+    for key in [k for k in _VERIFY_DEAD_SINCE if k not in live_titles]:
+        _VERIFY_DEAD_SINCE.pop(key, None)
+
+
+def _liveness_order(plans: list) -> list:
+    """The ``generated`` plans, least-recently-asked first.
+
+    The rotation that makes :data:`_TEST_PLAN_LIVE_BUDGET_S` fair. A pass that
+    simply stopped at the budget would re-ask the same head of a fixed list
+    every minute and never reach the tail, so the plans at the back would wait
+    for their work to go live forever. Sorting by when each plan was last asked
+    turns the budget into a round-robin: whatever got skipped last time is at
+    the front this time. Never-asked plans (0.0) go first, and within a tie the
+    store's own newest-first order stands.
+    """
+    candidates = [p for p in plans if p["state"] == "generated"]
+    ids = {p["id"] for p in candidates}
+    # Forget plans that have left ``generated`` (marked due, deleted, pruned) so
+    # this map cannot outgrow the store it is a cursor into.
+    for key in [k for k in _TEST_PLAN_LIVE_CHECKED if k not in ids]:
+        _TEST_PLAN_LIVE_CHECKED.pop(key, None)
+    return sorted(candidates, key=lambda p: _TEST_PLAN_LIVE_CHECKED.get(p["id"], 0.0))
+
+
+def _check_test_plans_for_liveness(plans: list) -> None:
+    """Ask origin whether any waiting plan's work has shipped, within a budget.
+
+    The expensive phase: each plan costs a ``git fetch`` (up to
+    ``test_plans.TIMEOUT_FETCH``, 120s) and sometimes a ``gh`` call on top, and
+    those caps are per CALL — a dozen plans waiting on a remote that blackholes
+    TCP add up to a pass measured in tens of minutes, which is the whole loop
+    gone, not just this half of it. So the phase gets a wall-clock budget and
+    stops when it runs out; :func:`_liveness_order` makes sure the plans it did
+    not reach are the ones it starts with next minute.
+
+    The "last asked" stamp is written BEFORE the check, not after: a plan whose
+    repo hangs for the full timeout has been asked, expensively, and must go to
+    the back of the queue rather than monopolize the head of it.
+    """
+    # Nothing can reach a live branch without git; skip the fetch storm entirely
+    # on a machine that hasn't got it.
+    if not git_available():
+        return
+    # Paused. "Off" has to mean the feature is quiet, not merely that no NEW
+    # plans get written: a paused Verify that still fetched every minute and
+    # kept moving plans into `due` would carry on lighting the top-bar badge
+    # with work the user has just said they do not want chased. Nothing is lost
+    # — the plans keep their state and the next enabled pass picks them up.
+    if not _verify_enabled():
+        return
+    # A DUE plan follows the setting too — when nobody has answered anything.
+    # `_liveness_order` never visits `due` (there is nothing to ask origin
+    # about), so without this pass a checklist that went due against the OLD
+    # branch — the observed case went due on `main` for a PR that had merged
+    # into `staging` — sat in the badge telling the user to "change the live
+    # branch on this repo's card" while the changed card changed nothing.
+    # `retarget_live_branch` owns the gate (a plan with a settled answer keeps
+    # its branch) and puts the mover back to waiting, where the rotation below
+    # picks it up on the next pass. Costs a settings read per due plan, no git.
+    for plan in plans:
+        if plan.get("state") != "due":
+            continue
+        try:
+            _test_plans.retarget_live_branch(
+                plan["id"],
+                _test_plans.resolve_live_branch(plan.get("repo_root") or ""),
+            )
+        except Exception:  # noqa: BLE001 — one unreadable plan must not stall the pass
+            pass
+    deadline = time.monotonic() + _TEST_PLAN_LIVE_BUDGET_S
+    for plan in _liveness_order(plans):
+        if time.monotonic() >= deadline:
+            break
+        pid = plan["id"]
+        try:
+            # WHICH BRANCH ARE WE EVEN WATCHING? Asked every pass, because the
+            # answer is a live setting: a repo re-pointed from `staging` to
+            # `main` must re-aim the checklists that have not gone due yet, or
+            # the setting is a lie for exactly the plans that exist right now.
+            # `retarget_live_branch` owns the gate (and clears any merge stamp,
+            # which was recorded against the branch we just stopped watching).
+            moved = _test_plans.retarget_live_branch(
+                pid, _test_plans.resolve_live_branch(plan.get("repo_root") or "")
+            )
+            if moved is not None:
+                plan = moved
+            # MERGED AND DEPLOYED ARE TWO FACTS. Ancestry is true the instant a
+            # PR lands; what a checklist tests is a running service the pipeline
+            # reaches minutes later, and a plan marked due in that window gets
+            # answered against the behaviour the change replaces — a FAIL
+            # recorded on correct code, which is the one outcome this surface
+            # cannot survive. So the merge starts a clock and the clock is what
+            # marks it due.
+            if not plan.get("merged_at"):
+                # Not seen merged yet: this is the expensive question (a fetch,
+                # sometimes a `gh` call), so it is the only branch that is
+                # rate-limited by the rotation stamp below.
+                _TEST_PLAN_LIVE_CHECKED[pid] = time.time()
+                if not _test_plan_is_live(plan):
+                    continue
+                if _test_plans.mark_merged(pid) is None:
+                    continue  # deleted while we were asking origin
+                plan = _test_plans.get(pid) or plan
+            # ...and from here on there is nothing left to ask origin. A plan
+            # waiting out its deploy window costs one clock comparison per pass
+            # instead of a fetch, so adding the wait made this loop cheaper.
+            delay = _test_plans.resolve_deploy_delay(plan.get("repo_root") or "")
+            if not _test_plans.deploy_ready(plan, delay):
+                continue
+            due = _test_plans.mark_due(pid)
+            if due is None:
+                continue  # deleted while it was waiting
+            _events.BUS.emit(
+                "session.test_plan_due",
+                session=pid,
+                data={
+                    "plan": pid,
+                    "title": due["title"],
+                    "live_branch": due["live_branch"],
+                },
+            )
+            _notify_test_plan_due(due)
+        except Exception:  # noqa: BLE001 — one bad plan can't stop the pass
+            pass
+
+
+def _check_test_plan_landings(plans: list) -> None:
+    """Refresh "which branch has this reached on origin" for the cards that show it.
+
+    A SEPARATE PASS FROM LIVENESS, over a different set of plans, on purpose.
+    The liveness rotation visits ``generated`` plans only — everything else has
+    nothing left to ask origin *about the branch it ships from*. But every card
+    on the surface shows where its work landed, including the ones that are due,
+    running or answered, and a checklist written before this existed has no
+    answer at all. So this walks all of them.
+
+    What stops it being expensive:
+
+    * **A plan that has reached its own live branch is finished being asked.**
+      That is the end of the road this question is tracking; a later landing on
+      some other branch is not what the card is for.
+    * **:data:`_TEST_PLAN_LANDED_TTL_S`** — minutes, not every tick. Nothing acts
+      on this answer, so nothing is hurt by it being a few minutes old.
+    * **The fetch is per repository, not per plan** (``fetch_all_heads``), so a
+      dozen checklists in one repo cost one fetch between them.
+    * **A wall-clock budget**, least-recently-asked first, exactly like the
+      liveness pass — and for the same reason: the per-call caps are per CALL,
+      and a remote that blackholes TCP would otherwise spend the whole loop here.
+    """
+    if not git_available() or not _verify_enabled():
+        return
+    live = {p["id"] for p in plans}
+    for key in [k for k in _TEST_PLAN_LANDED_CHECKED if k not in live]:
+        _TEST_PLAN_LANDED_CHECKED.pop(key, None)
+    now = time.time()
+    todo = []
+    for plan in plans:
+        if not (plan.get("repo_root") and plan.get("branch") and plan.get("sha")):
+            continue
+        landed = str(plan.get("merged_into") or "")
+        if landed and landed == str(plan.get("live_branch") or ""):
+            continue
+        if (
+            now - _TEST_PLAN_LANDED_CHECKED.get(plan["id"], 0.0)
+            < _TEST_PLAN_LANDED_TTL_S
+        ):
+            continue
+        todo.append(plan)
+    todo.sort(key=lambda p: _TEST_PLAN_LANDED_CHECKED.get(p["id"], 0.0))
+    deadline = time.monotonic() + _TEST_PLAN_LANDED_BUDGET_S
+    for plan in todo:
+        if time.monotonic() >= deadline:
+            break
+        # Stamped BEFORE the ask, like the liveness cursor: a plan whose repo
+        # hangs for the full timeout has been asked, expensively, and must go to
+        # the back of the queue rather than monopolize the head of it.
+        _TEST_PLAN_LANDED_CHECKED[plan["id"]] = time.time()
+        try:
+            found = _test_plan_merged_into(plan)
+            _test_plans.set_merged_into(
+                plan["id"],
+                found.get("branch") or "",
+                float(found.get("at") or 0.0),
+                list(found.get("all") or []),
+            )
+        except Exception:  # noqa: BLE001 — one bad repo can't stop the pass
+            pass
+
+
+def _test_plans_due_pass(full: bool = True) -> bool:
+    """One pass of the due loop. Blocking; runs via ``to_thread``.
+
+    Two jobs on one cadence, deliberately not two loops: both are "look at every
+    plan and see whether the world moved", and a second 60s timer would only
+    double the wakeups. They are two PHASES rather than one interleaved loop
+    because only one of them talks to the network — see
+    :func:`_poll_running_test_plans` for what that coupling cost.
+
+    ``full`` is what lets the two phases keep one loop while running at two
+    speeds. A pass with ``full=False`` does the local half ONLY: it reads the
+    results file of anything that is running, and touches neither the network nor
+    the store's housekeeping. That is the pass the loop runs every few seconds
+    while a verify session is in flight, so an agent that has just finished on
+    the user's screen is reflected almost immediately instead of up to a minute
+    later. The expensive half — prune, stalled-generation recovery, and the
+    ``git fetch`` per waiting plan — stays strictly on the minute.
+
+    Returns whether anything is still running, which is how the loop picks its
+    next sleep without a second store read.
+
+    Every plan is wrapped on its own. A repo that was deleted, a remote that
+    hangs, a run session in a broken state — none of them may stop the pass, or
+    one bad plan silently switches the feature off for every other one.
+    """
+    if full:
+        # Release plans whose verify session no longer exists (the user deleted
+        # it mid-run, so nothing is left to write the results file) and enforce
+        # the store's cap. Explicitly NOT a liveness prune of the plans
+        # themselves — plans are supposed to outlive their sessions; see
+        # test_plans.prune.
+        try:
+            _test_plans.prune(list(ENGINE.instances.keys()))
+        except Exception:  # noqa: BLE001
+            pass
+    plans = _test_plans.list_plans()
+    # Cheap and local (no network, no model call on this thread), so it runs
+    # before the phase that can spend the whole pass talking to origin: a plan
+    # abandoned mid-generation must not have to wait behind a fetch storm to be
+    # picked back up.
+    if full:
+        _recover_stalled_test_plans(plans)
+    _poll_running_test_plans(plans)
+    if full:
+        _check_test_plans_for_liveness(plans)
+        # After liveness, never before: that phase is the one with a deadline
+        # the user feels (a plan going due, a push to a phone), and this one is
+        # a label on a card. Both are budgeted, so the worst case is that a
+        # slow remote costs the label a pass and not the other way round.
+        _check_test_plan_landings(plans)
+    # Re-read rather than reusing ``plans``: the phase above may have just folded
+    # a finished run in, and sleeping four seconds because of the state it held
+    # on the way IN would keep the fast cadence one tick longer than it is owed.
+    try:
+        return any(p["state"] == "running" for p in _test_plans.list_plans())
+    except Exception:  # noqa: BLE001 — an unreadable store is not a reason to spin
+        return False
+
+
+# How old an unreferenced verify session must be before the sweeper may close
+# it. The window it protects is run_test_plan's: the session exists from
+# `create_instance` until `start_run` writes it onto the plan, and a sweep
+# landing inside that gap would close a run the user started seconds ago. The
+# gap is really milliseconds; fifteen minutes is deliberate overkill, because
+# the sessions this exists for have been sitting unreferenced for DAYS.
+_VERIFY_ORPHAN_GRACE_S = 15 * 60
+
+
+async def _sweep_orphan_verify_sessions() -> None:
+    """Close verify sessions that no plan remembers any more.
+
+    The symmetric half of ``test_plans.prune``: prune releases a plan whose
+    verify session is gone, and this closes a verify session whose plan is
+    gone. Plans forget their sessions on paths that never reach
+    ``_end_verify_session`` — ``ensure_plan_for`` replaces a plan wholesale
+    when its session moves to a new branch, and the store's MAX_PLANS cap
+    evicts old plans entirely — and the core module cannot end sessions itself
+    (the engine owns them). What that stranded: an agent session, invisible in
+    the rail (the sidebar hides ``verify-*`` on purpose), with no card left in
+    the Verify dialog offering to end it, alive for days.
+
+    A session is kept while ANY plan references it — the in-flight
+    ``run_session`` or any run record's ``session`` (a finished run's session
+    deliberately stays open for the user to read). Closing goes through
+    ``_end_verify_session``: a close, not a delete, so a mistaken sweep is one
+    click from coming back via recently-closed.
+    """
+    try:
+        plans = _test_plans.list_plans()
+    except Exception:  # noqa: BLE001 — an unreadable store must not close anything
+        return
+    referenced = set()
+    for plan in plans:
+        title = str(plan.get("run_session") or "")
+        if title:
+            referenced.add(title)
+        for run in plan.get("runs") or []:
+            title = str((run or {}).get("session") or "")
+            if title:
+                referenced.add(title)
+    for title in list(ENGINE.instances.keys()):
+        # The prefix run_test_plan builds titles from ("verify-%s" % plan_id).
+        if not title.startswith("verify-") or title in referenced:
+            continue
+        inst = ENGINE.instances.get(title)
+        created = getattr(inst, "CreatedAt", None)
+        if created is None:
+            # Unknown age — never close on a question we could not ask.
+            continue
+        try:
+            age = (_datetime.datetime.now(created.tzinfo) - created).total_seconds()
+        except Exception:  # noqa: BLE001 — a broken timestamp is not evidence of age
+            continue
+        if age < _VERIFY_ORPHAN_GRACE_S:
+            continue
+        try:
+            if await _end_verify_session(title) and log.ErrorLog is not None:
+                log.ErrorLog.Printf(
+                    "verify: closed orphaned session %s (no plan references it)",
+                    title,
+                )
+        except Exception:  # noqa: BLE001 — one bad session can't stop the sweep
+            pass
+
+
+async def _test_plans_due_loop() -> None:
+    """Watch every waiting test plan until its work goes live, and poll the
+    running ones (started by the lifespan).
+
+    Work first, sleep after, like the autopilot loop: a plan whose PR merged
+    while the server was down should come due within a minute of startup rather
+    than after the first full interval.
+
+    Two cadences, one loop. The full pass runs on its own minute regardless; in
+    between, and only while something is actually running, the loop wakes on
+    ``_TEST_PLAN_RUN_POLL_S`` to do the local half. The clock for the full pass
+    is monotonic and independent of the fast ticks, so a long-running verify
+    session cannot starve the liveness checks and a burst of fast ticks cannot
+    bring a fetch storm forward.
+    """
+    next_full = 0.0
+    while True:
+        running = False
+        try:
+            full = time.monotonic() >= next_full
+            if full:
+                next_full = time.monotonic() + _TEST_PLAN_DUE_INTERVAL
+            running = await asyncio.to_thread(_test_plans_due_pass, full)
+            # On the minute, with the rest of the housekeeping — never on the
+            # fast ticks, which exist only to read result files quickly.
+            if full:
+                await _sweep_orphan_verify_sessions()
+        except Exception:  # noqa: BLE001 — the loop must never die
+            pass
+        await asyncio.sleep(
+            _TEST_PLAN_RUN_POLL_S if running else _TEST_PLAN_DUE_INTERVAL
+        )
+
+
 # The per-session budget guardrail + lock (J5) — _session_budget_usd /
 # _window_budget_usd / _check_session_budget / _budget_overrides /
 # _set_budget_override / _forget_budget / _effective_budget /
@@ -2390,6 +4378,7 @@ _SNAPSHOT_PROBE_KEYS = (
     "diff_stat",
     "has_origin",
     "stage",
+    "stage_reset",
     "pr_url",
     "failed_step",
     "failed_hook",
@@ -2429,6 +4418,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["stage"] = (
         "provisioning" if (not i.Started() and i.Status == Loading) else "agent"
     )
+    d["stage_reset"] = False
     d["pr_url"] = None
     d["merge_state"] = None
     d["queue"] = _queue_summary(i.Title, queues)
@@ -2603,6 +4593,13 @@ def _instances_tick() -> None:
             _emit_state_changes(title, d["status"], d["activity"], d["stage"])
         except Exception:  # noqa: BLE001 — one bad session can't stop the tick
             pass
+    # Titles are REUSED after a delete, so a "back to idle" pin left behind by a
+    # deleted session could be inherited by its namesake — see stage_reset.prune.
+    # One set difference over an almost-always-empty dict.
+    try:
+        _stage_reset.prune(list(ENGINE.instances.keys()))
+    except Exception:  # noqa: BLE001 — housekeeping can't fail the tick
+        pass
     # Publish the freshly computed state so AppContext.sessions() (Addon API
     # v2) and GET /api/instances can serve it without recomputing it.
     _events.set_sessions_snapshot(out)
@@ -2922,6 +4919,39 @@ def _start_depth_override(payload: dict) -> str:
             "unknown depth %r — pick one of: %s" % (raw, ", ".join(_autopilot.DEPTHS))
         )
     return depth
+
+
+def _start_effort_override(payload: dict) -> str:
+    """A validated per-start thinking-effort rung from a force-start body, or ``""``.
+
+    The third member of the per-item override family (:func:`_start_agent_override`,
+    :func:`_start_depth_override`) and the same shape: ``""`` means "whatever the
+    CLI does by default", so an old client that sends nothing behaves exactly as
+    before, and a junk rung is refused rather than silently downgraded.
+
+    The rungs are neutral; :mod:`backend.providers.effort` translates them into
+    whichever CLI is about to run (and clamps a rung above that CLI's ceiling),
+    which is why validation here is against the ladder and not against flags.
+    """
+    return _provider_effort.validate((payload or {}).get("effort", ""))
+
+
+def _start_launch_args(program: str, effort: str):
+    """Per-session launch args for an intake start, or ``None``.
+
+    ``None`` = this start adds nothing, so the session inherits the global
+    default launch flags exactly as it always has (``InstanceOptions.launch_args``
+    treats an explicit value — even an empty one — as "use verbatim"). When an
+    effort rung DOES contribute flags, the provider's configured defaults are
+    folded back in first, so asking for more thinking never costs a session the
+    flags the user set in Settings → Coding CLI.
+    """
+    args = _provider_effort.launch_args(program, effort)
+    if not args:
+        return None
+    return _instance.merge_launch_args(
+        _instance.provider_default_launch_args(program), args
+    )
 
 
 def _cap_source_depth(depth: str) -> str:
@@ -3278,6 +5308,36 @@ async def repo_suggestions() -> JSONResponse:
     )
 
 
+@app.get("/api/repos/search")
+async def repo_search(q: str = "", limit: int = 20) -> JSONResponse:
+    """Find a folder by NAME, for the picker's third way into the folder field.
+
+    :func:`repo_suggestions` guesses (depth-1, so it cannot see a repo nested
+    under ``~/code/acme/services``), :func:`repo_check` reports on a path already
+    typed in full, and Browse walks a tree one click at a time. None of those is
+    "I know it's called ``api``, find it", which is what this answers — a bounded
+    depth-3 walk of the usual code directories (see
+    :func:`backend.web.core.repo_picker.search_repos`, which owns every budget
+    and ranking decision).
+
+    A query under two characters is not an error, just an empty ``matches``: the
+    dialog calls this while the user types, the same way it calls
+    ``/api/repos/check``, and a 4xx per keystroke lights the field up red at
+    someone who is mid-word. ``truncated`` says the walk hit its cap, its 1.5s
+    deadline, or ``limit`` — so the UI can offer "narrow the search / use
+    Browse…" rather than implying the folder is not there. ``home`` rides along
+    for the same reason ``/api/repos/suggest`` returns it: the picker renders
+    paths relative to it. Threaded because the walk is thousands of stats plus a
+    git probe per surviving match, and a cold mount must not stall the loop.
+    """
+    home = os.path.expanduser("~")
+    # Clamp rather than reject: this is a convenience list, and the only harm a
+    # silly limit does is to the scan budget, which the caller does not pay for.
+    capped = max(1, min(int(limit or 0), 50))
+    result = await asyncio.to_thread(search_repos, q, home, capped)
+    return JSONResponse({**result, "home": home})
+
+
 @app.get("/api/repos/check")
 async def repo_check(path: str = "") -> JSONResponse:
     """Report what the folder the user typed into the picker actually is.
@@ -3405,7 +5465,8 @@ async def create_instance(payload: dict) -> JSONResponse:
     * ``repo_path`` — a user-chosen local repo to base the session on.
     * ``in_place`` — run directly in ``repo_path`` (no worktree); forced on for a
       non-git folder. Ignored in provisioned mode.
-    * ``init_repo`` — ``git init`` an empty folder first (ignored for in-place).
+    * ``init_repo`` — ``git init`` an empty folder first (plus an initial commit).
+      Combines with ``in_place``: init the folder and then work directly in it.
     * ``launch_args`` — per-session agent flags; absent means inherit the global
       default, present (even ``[]``) means use exactly these.
     * ``profile_id`` — auth profile the agent runs under; absent/blank means
@@ -3502,14 +5563,16 @@ async def create_instance(payload: dict) -> JSONResponse:
                 # else mindflock/<title>.
                 new_branch = provisioning.branch_name_for(story_id or None, title)
 
+    # Whether WE invented this name. A title the caller typed is theirs and a
+    # collision is theirs to hear about; one we generated is ours to make unique,
+    # which is what the numbering below is for — and what the claim further down
+    # has to keep doing rather than answering 409 for a request in which nobody
+    # typed a name at all.
+    auto_title = not title
     if not title:
         # Quick launch: an empty Name starts an "untitled" session, numbered to
         # stay unique (titles key ENGINE.instances).
-        title = "untitled"
-        n = 2
-        while title in ENGINE.instances:
-            title = "untitled-%d" % n
-            n += 1
+        title = _free_untitled()
         # Provisioned sessions derive their branch from the title; the empty
         # title skipped that above, so derive it from the generated one.
         if is_provisioned and not new_branch:
@@ -3531,8 +5594,15 @@ async def create_instance(payload: dict) -> JSONResponse:
     git_enabled = True
     if repo_path or not is_provisioned:
         in_place = bool(payload.get("in_place", False)) and not is_provisioned
-        # In-place works directly in an existing repo, so it can't create one.
-        init_repo = bool(payload.get("init_repo", False)) and not in_place
+        # Combinable with in_place, deliberately: "git init this folder, then work
+        # directly in it" is the natural way to start a brand-new project, and
+        # suppressing the init for in-place sessions silently dropped the tick and
+        # handed the user a git-less session in the folder they had just asked to
+        # make a repo of. _prepare_plain_repo inits + makes the initial commit, so
+        # the in-place session comes up on a real branch with git features on.
+        # The pair that genuinely cannot coexist is in_place and provisioning
+        # (a separate worktree/clone), which the line above already enforces.
+        init_repo = bool(payload.get("init_repo", False))
         try:
             plain_path, git_enabled = await asyncio.to_thread(
                 _prepare_plain_repo, repo_path, init_repo
@@ -3580,23 +5650,69 @@ async def create_instance(payload: dict) -> JSONResponse:
     setup_cfg = None
     if git_enabled and not is_provisioned and not in_place:
         setup_cfg = _wt_setup.load_config(plain_path)
-    if setup_cfg is not None and setup_cfg.has_setup and prompt:
-        # Hold the initial prompt until setup succeeds: deliver it via the
-        # prompt queue (drained only once setup is ok + the agent is idle)
-        # instead of seeding the agent CLI directly. A failed setup keeps
-        # the prompt visible in the queue rather than losing it.
-        inst.Prompt = ""
-        _prompt_queue.enqueue(title, prompt)
-        _prompt_queue.set_flags(title, enabled=True)
-
     # Start does the heavy lifting (git worktree/clone + provisioning + tmux),
     # which can take minutes on the first worktree run (one-time base clone +
     # uv sync). Register the instance as "loading" and run Start in the
     # background so the create request returns immediately and the session shows
     # as provisioning in the grid instead of freezing the dialog on "Creating…".
     inst.SetStatus(Loading)
+    # THE TITLE IS CLAIMED UNDER THE LOCK, AND RE-CHECKED THERE. The 409 above
+    # is a read with no claim, and everything between it and here can await —
+    # `_prepare_plain_repo` alone is a whole thread hop — so two creates for one
+    # title (two tabs, a stale row, the same Run pressed twice) both passed the
+    # gate and the second overwrote the first's record. Nothing then owned the
+    # first session: its tmux and its worktree carried on, invisible, and the
+    # next attempt at that title died in Start with "tmux session already
+    # exists". That is where the orphan verify sessions come from, and it is why
+    # this re-check is not merely defensive.
     with ENGINE.lock:
+        if title in ENGINE.instances:
+            # A NAME WE INVENTED IS OURS TO RE-INVENT. The numbering above ran
+            # before the thread hop, so two quick launches inside that window
+            # both derived "untitled" and the second would have been refused —
+            # a hard error for a request in which the user typed nothing at all.
+            # Provisioned sessions are excluded because their BRANCH is derived
+            # from the title too, and re-naming here would leave the two saying
+            # different things.
+            if auto_title and not is_provisioned:
+                title = _free_untitled()
+                inst.Title = title
+            else:
+                return JSONResponse(
+                    {"error": "instance %s already exists" % title}, status_code=409
+                )
         ENGINE.instances[title] = inst
+
+    if setup_cfg is not None and setup_cfg.has_setup and prompt:
+        # Hold the initial prompt until setup succeeds: deliver it via the
+        # prompt queue (drained only once setup is ok + the agent is idle)
+        # instead of seeding the agent CLI directly. A failed setup keeps
+        # the prompt visible in the queue rather than losing it.
+        #
+        # AFTER the claim above, not before: a create that loses the race must
+        # not leave its prompt in the winner's queue, which is a real prompt
+        # sent to a real agent by a request that answered 409.
+        try:
+            inst.Prompt = ""
+            _prompt_queue.enqueue(title, prompt)
+            _prompt_queue.set_flags(title, enabled=True)
+        except Exception as err:  # noqa: BLE001
+            # A FULL OR UNWRITABLE QUEUE MUST NOT COST THE SESSION. Both calls
+            # can raise (`prompt_queue._save` re-raises, and `enqueue` refuses a
+            # full queue), and this is the one window where an exception is
+            # unrecoverable: the title is claimed and `_bg_start` has not been
+            # scheduled yet, so the session would sit in the list as Loading for
+            # ever. Fall back to seeding the prompt the ordinary way — it loses
+            # the "hold it until setup succeeds" guarantee, which is a smaller
+            # loss than the session.
+            inst.Prompt = prompt
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf(
+                    "queueing the initial prompt for %s failed (%v) — seeding it "
+                    "directly instead",
+                    title,
+                    err,
+                )
     _mark_onboarded()  # first-ever session ends first-run; setup card won't auto-show again
     # Remember the folder this session chose so the NEXT New Session dialog opens
     # on it and the repo suggestions rank it first — the second session in a repo
@@ -3625,8 +5741,28 @@ async def create_instance(payload: dict) -> JSONResponse:
         except Exception as err:  # noqa: BLE001
             if log.ErrorLog is not None:
                 log.ErrorLog.Printf("failed to create instance %s: %v", title, err)
-            with ENGINE.lock:
-                ENGINE.instances.pop(title, None)
+            # ONLY OUR OWN RECORD, and only OUR failure to report — see
+            # :func:`_drop_failed_start`. A title that now belongs to a live
+            # session must not be popped (that is how an orphan is minted) and
+            # must not be reported (stamping "the verify session couldn't start"
+            # on a plan whose agent is working is worse than saying nothing).
+            # A title nobody owns is still ours to report: the session was
+            # deleted while it provisioned, and the checklist waiting on it has
+            # to hear that rather than sit in ``running`` until prune.
+            if not _drop_failed_start(title, inst):
+                return
+            # ...and if a CHECKLIST was waiting on this session, tell the
+            # checklist. `POST /run` answered 202 long before this point and
+            # stamped the plan `running`, so without this the row goes on saying
+            # an agent is checking something for the thirty seconds until
+            # `prune` releases it — and then reverts with the reason recorded
+            # nowhere. See `test_plans.fail_run`.
+            try:
+                pid = _test_plans.find_by_run_session(title)
+                if pid:
+                    _test_plans.fail_run(pid, title, str(err))
+            except Exception:  # noqa: BLE001 — never mask the create failure
+                pass
             # Surface the failure to watchers (UI toast, `mindflock events`,
             # the CLI's create poll) — a session silently vanishing from the
             # list is the worst failure mode.
@@ -3650,6 +5786,37 @@ async def create_instance(payload: dict) -> JSONResponse:
         },
     )
     return JSONResponse(_instance_json(inst), status_code=202)
+
+
+@app.get("/api/aliases")
+def get_aliases() -> JSONResponse:
+    """The synced session display aliases (title -> label). See core.aliases:
+    the browser owns renames; this mirror only feeds server-originated text
+    (ntfy pushes) so a phone notification names the tab the way the sidebar
+    does."""
+    return JSONResponse({"aliases": _aliases.all_aliases()})
+
+
+@app.post("/api/aliases")
+def post_aliases(payload: dict) -> JSONResponse:
+    """Record renames. Two shapes:
+
+    * ``{"title": ..., "alias": ...}`` — one rename delta (empty or missing
+      ``alias`` clears it). The per-rename path: deltas, not whole maps, so
+      browsers with different localStorage don't clobber each other.
+    * ``{"aliases": {title: label, ...}}`` — the SPA's boot-time seed, folded
+      in merge-only (set/overwrite, never delete): it exists for renames made
+      before the server mirror did, and must not erase another browser's.
+    """
+    payload = payload or {}
+    if isinstance(payload.get("aliases"), dict):
+        _aliases.merge(payload["aliases"])
+        return JSONResponse({"aliases": _aliases.all_aliases()})
+    title = str(payload.get("title") or "").strip()
+    if not title:
+        return JSONResponse({"error": "title is required"}, status_code=400)
+    _aliases.set_alias(title, str(payload.get("alias") or "").strip())
+    return JSONResponse({"aliases": _aliases.all_aliases()})
 
 
 @app.delete("/api/instances/{title}")
@@ -3689,6 +5856,7 @@ async def delete_instance(title: str) -> JSONResponse:
     # session via LoadInstances).
     ENGINE.save(exclude_titles={title})
     _EVENT_SNAPSHOT.pop(title, None)
+    _aliases.drop(title)
     _BUDGET_FIRED.pop(title, None)
     _forget_probes(title)
     # A recreated same-title session must start with a fresh branch baseline.
@@ -4071,16 +6239,41 @@ def get_queue(title: str) -> JSONResponse:
 
 @app.post("/api/instances/{title}/queue")
 def post_queue(title: str, payload: dict) -> JSONResponse:
-    """Append a prompt to the queue. ``{"text": "..."}``."""
+    """Add prompts to the queue. ``{"text": "..."}`` appends one; an optional
+    ``index`` (0-based, clamped) inserts it at that position instead — the
+    "add above/below this item" path. ``{"texts": ["...", ...]}`` bulk-appends
+    (one write) — the drop-a-CSV path — skipping blank rows and dropping
+    whatever exceeds the queue cap; the response then carries ``added`` and
+    ``skipped`` counts on top of the queue state."""
     if ENGINE.instances.get(title) is None:
         return JSONResponse(
             {"error": "instance not found: %s" % title}, status_code=404
         )
-    text = str((payload or {}).get("text", ""))
+    payload = payload or {}
+    texts = payload.get("texts")
+    if isinstance(texts, list):
+        entry, added, skipped = _prompt_queue.enqueue_many(
+            title, [str(t) for t in texts]
+        )
+        if not added and not skipped:
+            return JSONResponse({"error": "no prompts in payload"}, status_code=400)
+        if added:
+            _emit_queue_changed(title)
+        body = _queue_state_json(title)
+        body["added"] = added
+        body["skipped"] = skipped
+        return JSONResponse(body)
+    text = str(payload.get("text", ""))
     if not text.strip():
         return JSONResponse({"error": "empty prompt"}, status_code=400)
+    index = payload.get("index")
+    if index is not None:
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            index = None
     try:
-        _prompt_queue.enqueue(title, text)
+        _prompt_queue.enqueue(title, text, index=index)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
     _emit_queue_changed(title)
@@ -4116,11 +6309,20 @@ def post_queue_flags(title: str, payload: dict) -> JSONResponse:
 
 @app.post("/api/instances/{title}/queue/reorder")
 def post_queue_reorder(title: str, payload: dict) -> JSONResponse:
-    """Move one item ``up`` or ``down`` within the queue."""
+    """Reorder one item: ``{"id", "index": N}`` moves it to an absolute
+    0-based position (clamped) — the drag-and-drop path — while
+    ``{"id", "direction": "up"|"down"}`` nudges it one slot (kept for older
+    clients)."""
     payload = payload or {}
-    _prompt_queue.move_item(
-        title, str(payload.get("id", "")), str(payload.get("direction", ""))
-    )
+    item_id = str(payload.get("id", ""))
+    index = payload.get("index")
+    if index is not None:
+        try:
+            _prompt_queue.move_item_to(title, item_id, int(index))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "bad index"}, status_code=400)
+    else:
+        _prompt_queue.move_item(title, item_id, str(payload.get("direction", "")))
     _emit_queue_changed(title)
     return JSONResponse(_queue_state_json(title))
 
@@ -4394,8 +6596,9 @@ def _pr_merge_state(wt: str, branch: str, force: bool = False):
 
 
 def _pr_info(wt: str, branch: str, force: bool = False):
-    """Most recent PR for ``branch`` (any base) as ``{url, state}`` (cached
-    60s), or None. ``state`` is OPEN / MERGED / CLOSED.
+    """Most recent PR for ``branch`` (any base) as ``{url, state, base}`` (cached
+    60s), or None. ``state`` is OPEN / MERGED / CLOSED; ``base`` is the branch it
+    targets, or ``""`` when the rung could not say.
 
     Matched by head branch alone — deliberately NOT filtered by base. make-pr
     can target any base (a configured default like ``staging``, or one picked
@@ -4438,7 +6641,13 @@ def _pr_info(wt: str, branch: str, force: bool = False):
 
 
 def _gh_pr_info(wt: str, branch: str):
-    """The ``gh`` rung of :func:`_pr_info` — ``{url, state}`` or None."""
+    """The ``gh`` rung of :func:`_pr_info` — ``{url, state, base}`` or None.
+
+    ``baseRefName`` is asked for because Verify's squash-merge fallback needs it:
+    "the PR merged" is only evidence that work SHIPPED if it merged into the
+    branch the checklist is waiting for, and that is a fact about the PR rather
+    than something to infer from settings.
+    """
     cp = _run_capped(
         [
             "gh",
@@ -4449,7 +6658,7 @@ def _gh_pr_info(wt: str, branch: str):
             "--state",
             "all",
             "--json",
-            "url,state",
+            "url,state,baseRefName",
             "--limit",
             "1",
         ],
@@ -4466,7 +6675,11 @@ def _gh_pr_info(wt: str, branch: str):
         return None
     if not arr:
         return None
-    return {"url": arr[0].get("url"), "state": arr[0].get("state")}
+    return {
+        "url": arr[0].get("url"),
+        "state": arr[0].get("state"),
+        "base": arr[0].get("baseRefName") or "",
+    }
 
 
 # _TOKENS_CACHE / _created_epoch / _session_tokens moved to core.session_stats
@@ -4612,6 +6825,7 @@ async def instance_cleanup(title: str) -> JSONResponse:
         ENGINE.instances.pop(title, None)
     ENGINE.save(exclude_titles={title})
     _EVENT_SNAPSHOT.pop(title, None)
+    _aliases.drop(title)
     _events.BUS.emit("session.deleted", session=title, data={"cleaned": True})
     return JSONResponse({"ok": True})
 
@@ -4648,6 +6862,7 @@ async def close_instance(title: str) -> JSONResponse:
         ENGINE.instances.pop(title, None)
     ENGINE.save(exclude_titles={title})
     _EVENT_SNAPSHOT.pop(title, None)
+    _aliases.drop(title)
     _events.BUS.emit("session.deleted", session=title, data={"closed": True})
     return JSONResponse({"ok": True})
 
@@ -4803,6 +7018,13 @@ def recently_closed() -> JSONResponse:
 @app.post("/api/recently-closed/{entry_id}/reopen")
 async def reopen_recently_closed(entry_id: str) -> JSONResponse:
     """Recreate a closed session as a running instance on its preserved worktree."""
+    return await _reopen_closed_entry(entry_id)
+
+
+async def _reopen_closed_entry(entry_id: str) -> JSONResponse:
+    """The reopen itself, callable from anywhere that identifies a closed
+    session — the Recent… dialog by entry id, and an intake row that found this
+    entry still holding its work (see :func:`intake_reopen`)."""
     from backend.session.instance import FromInstanceData
     from backend.session.storage import InstanceData
 
@@ -5147,6 +7369,66 @@ async def instance_stage(title: str) -> JSONResponse:
             {"error": "instance not found: %s" % title}, status_code=404
         )
     return JSONResponse(row)
+
+
+@app.post("/api/instances/{title}/reset-stage")
+async def instance_reset_stage(title: str) -> JSONResponse:
+    """Put this window's guided cycle back to the start ("keep working here").
+
+    The stage is git-derived, so it already returns to ``agent`` the moment the
+    tree goes dirty. What this answers is the CLEAN-tree case: a branch that is
+    committed / pushed / PR'd, where every control on the window is about
+    advancing a cycle its owner considers finished, and the next thing they want
+    to do is write more code on the same branch.
+
+    NOTHING GIT-FACING HAPPENS HERE. No reset, no revert, no PR close: the pin is
+    a display note (:mod:`backend.web.core.stage_reset`) that the UI's guided
+    ladder honours and the published ``stage`` deliberately does not, so the
+    autopilot driver and the verification-check kicker keep reading git truth. It
+    releases itself as soon as the worktree moves — a new commit or a dirty tree.
+
+    Two leftovers from the finished cycle go with it, because "back to idle" that
+    leaves the previous run's badges up is not back to idle:
+      * a HALTED fast-track record (a live one is left strictly alone — stopping
+        someone's running chain is not what this button says it does), and
+      * a STALE verification result, whose sha is not HEAD. A current failure is
+        never touched: the push gate reads it.
+    """
+    if not git_available():
+        return _no_git_response()
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    wt = inst.GetWorktreePath()
+    if not wt:
+        return JSONResponse({"error": "workspace not ready"}, status_code=409)
+
+    def _work() -> dict:
+        head = _git_head_sha(wt)
+        dirty = _is_dirty(wt)
+        # A dirty tree is ALREADY at the start of the ladder, so there is nothing
+        # to pin — say so rather than store a pin the next stage read discards.
+        pinned = (not dirty) and _stage_reset.pin(title, head)
+        cleared = []
+        run = _autopilot.get(title)
+        if run and run.get("state") == "halted" and _autopilot.disarm(title):
+            cleared.append("fast-track")
+        chk = _wt_setup.check_summary(wt)
+        if (
+            chk
+            and chk.get("stale")
+            and not _wt_setup.is_running(wt, "check")
+            and _wt_setup.clear_check(wt)
+        ):
+            cleared.append("checks")
+        return {"pinned": bool(pinned), "dirty": bool(dirty), "cleared": cleared}
+
+    res = await asyncio.to_thread(_work)
+    # Same freshness contract as GET /stage: hand back the recomputed row so the
+    # presser's window flips now instead of on the next 4s tick, and every other
+    # client gets it through the publish.
+    row = await asyncio.to_thread(_republish_session, title)
+    return JSONResponse({"ok": True, "row": row, **res})
 
 
 @app.post("/api/instances/{title}/push-branch")
@@ -5693,6 +7975,61 @@ async def _cached_fanout(
     return data, False
 
 
+# How each panel's rows describe the workspace a run of them would own. ONE
+# definition per kind: the listing probes with it (to decide whether the row
+# gets a Reopen button) and the reopen endpoint re-resolves with it (to find the
+# directory the click meant). Two copies of these would let the button and the
+# action disagree about which workspace a row is talking about.
+def _ticket_workspace_args(row: dict) -> dict:
+    return {
+        "title": str(row.get("session") or ""),
+        "branch": str(row.get("branch") or ""),
+        "repo_url": str(row.get("repo_url") or ""),
+        "strategy": str(row.get("strategy") or ""),
+    }
+
+
+def _pr_workspace_args(row: dict) -> dict:
+    return {
+        "title": str(row.get("session") or ""),
+        "branch": str(row.get("head_ref") or ""),
+        "workspace_path": str(row.get("workspace_path") or ""),
+        # PR review always provisions its own clone of the head.
+        "strategy": "clone",
+    }
+
+
+def _issue_workspace_args(row: dict) -> dict:
+    return {
+        "title": str(row.get("session") or ""),
+        "branch": str(row.get("branch") or ""),
+        "strategy": str(row.get("strategy") or ""),
+    }
+
+
+async def _annotate_workspaces(rows: list, resolve) -> None:
+    """Stamp ``workspace`` onto the rows of a panel response that can be
+    reopened rather than started over (see :mod:`backend.web.core.reopen`).
+
+    Annotated here, on the per-request copies, for the same reason
+    ``has_session`` is: the listing itself is cached for minutes, while a
+    workspace can be deleted or a session closed at any moment, and a Reopen
+    button pointing at a directory that is gone is worse than no button.
+
+    Off the event loop, because it is blocking work whose size is the *panel's*,
+    not the machine's: a thousand assigned tickets means a thousand ``isdir``
+    probes and, when a base clone is involved, a ``git worktree list``. Run
+    inline, that stalls every other request the open dialog fires alongside this
+    one — which is most of what made opening Intake feel slow even on a warm
+    cache.
+    """
+    try:
+        await asyncio.to_thread(_reopen.annotate, rows, resolve)
+    except Exception as err:  # noqa: BLE001 — never fail a listing over a probe
+        if log.ErrorLog is not None:
+            log.ErrorLog.Printf("workspace annotation failed: %v", err)
+
+
 @app.get("/api/github/prs")
 async def github_open_prs(fresh: bool = False) -> JSONResponse:
     """Open PRs on the review repos, annotated with auto-review eligibility.
@@ -5713,6 +8050,7 @@ async def github_open_prs(fresh: bool = False) -> JSONResponse:
         p["has_session"] = p.get("session") in ENGINE.instances or _pending_has(
             p.get("session")
         )
+    await _annotate_workspaces(data.get("prs", []), _pr_workspace_args)
     return JSONResponse(data)
 
 
@@ -5732,6 +8070,7 @@ async def github_force_review(payload: dict) -> JSONResponse:
     try:
         agent_override = _start_agent_override(payload)
         depth_override = _start_depth_override(payload)
+        effort_override = _start_effort_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
 
@@ -5795,22 +8134,28 @@ async def github_force_review(payload: dict) -> JSONResponse:
         # shows up in the grid without a reload.
         try:
             directory, prompt, n_comments = await _pr_review.prepare_review(pr)
+            # This start's own pick, then this repo's card, then Intake → Pull
+            # requests' screen-wide Agent CLI (same chain the auto monitor uses),
+            # then the app-wide default. Mirrors the issue force-start below,
+            # which reads the same chain. Resolved first because this start's
+            # effort has to be translated into THAT CLI's spelling.
+            program = (
+                agent_override
+                or _pr_review.review_agent(repo)
+                or ENGINE.default_program()
+            )
+            prompt = _provider_effort.decorate_prompt(prompt, program, effort_override)
             inst = session.NewInstance(
                 session.InstanceOptions(
                     title=title,
                     path=".",
-                    # This start's own pick, then this repo's card, then Intake →
-                    # Pull requests' screen-wide Agent CLI (same chain the auto
-                    # monitor uses), then the app-wide default. Mirrors the issue
-                    # force-start below, which reads the same chain.
-                    program=agent_override
-                    or _pr_review.review_agent(repo)
-                    or ENGINE.default_program(),
+                    program=program,
                     provisioned=True,
                     workspace_strategy="clone",
                     new_branch=pr.head_ref,
                     prompt=prompt,
                     workspace_path=str(directory),
+                    launch_args=_start_launch_args(program, effort_override),
                 )
             )
             inst.ExtraEnv = _ports.env_for(title)
@@ -5828,8 +8173,9 @@ async def github_force_review(payload: dict) -> JSONResponse:
                 await asyncio.to_thread(inst.Start, True)
                 ENGINE.save()
             except Exception:
-                with ENGINE.lock:
-                    ENGINE.instances.pop(title, None)
+                # By identity: this task may be the loser of a re-start, and
+                # popping by name would delete the LIVE session's record.
+                _drop_failed_start(title, inst)
                 raise
             # Ledger the PR so auto review doesn't run it a second time.
             _pr_review.record_reviewed(pr)
@@ -5881,6 +8227,7 @@ async def assigned_tickets(fresh: bool = False) -> JSONResponse:
         t["has_session"] = t.get("session") in ENGINE.instances or _pending_has(
             t.get("session")
         )
+    await _annotate_workspaces(data.get("tickets", []), _ticket_workspace_args)
     return JSONResponse(data)
 
 
@@ -5897,6 +8244,7 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
     try:
         agent_override = _start_agent_override(payload)
         depth_override = _start_depth_override(payload)
+        effort_override = _start_effort_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
 
@@ -5984,18 +8332,28 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
             # pipeline's scans treat the ticket as taken (orchestrator guard).
             _ticket_start.record_started(story)
             marked = True
+            # The ticket's source may pin its own agent CLI; empty falls back to
+            # this app's default program. Resolved before the options because
+            # this start's effort has to be translated into THAT CLI's spelling.
+            program = _ticket_start.agent_for(story) or ENGINE.default_program()
+            # This start's own rung wins; the source's default is what applies
+            # when the row did not pick one. Resolved here rather than in
+            # `_start_effort_override` because the source is only knowable once
+            # the story is — and an explicit choice on the row must be able to
+            # ask for LESS thinking than the queue's default, not just more.
+            level = effort_override or _ticket_start.effort_for(story)
+            prompt = _provider_effort.decorate_prompt(prompt, program, level)
             inst = session.NewInstance(
                 session.InstanceOptions(
                     title=title,
                     path=".",
-                    # The ticket's source may pin its own agent CLI; empty falls
-                    # back to this app's default program.
-                    program=_ticket_start.agent_for(story) or ENGINE.default_program(),
+                    program=program,
                     provisioned=True,
                     workspace_strategy=_ticket_start.workspace_mode(),
                     new_branch=branch,
                     prompt=prompt,
                     provision_repo_url=getattr(story, "repo_url", "") or "",
+                    launch_args=_start_launch_args(program, level),
                 )
             )
             inst.ExtraEnv = _ports.env_for(title)
@@ -6017,8 +8375,9 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
                 await asyncio.to_thread(inst.Start, True)
                 ENGINE.save()
             except Exception:
-                with ENGINE.lock:
-                    ENGINE.instances.pop(title, None)
+                # By identity: this task may be the loser of a re-start, and
+                # popping by name would delete the LIVE session's record.
+                _drop_failed_start(title, inst)
                 raise
             # Terminal ledger entry so auto ingestion doesn't run it again.
             _ticket_start.record_result(story, branch=branch)
@@ -6066,6 +8425,7 @@ async def github_open_issues(fresh: bool = False) -> JSONResponse:
         i["has_session"] = i.get("session") in ENGINE.instances or _pending_has(
             i.get("session")
         )
+    await _annotate_workspaces(data.get("issues", []), _issue_workspace_args)
     return JSONResponse(data)
 
 
@@ -6085,6 +8445,7 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
     try:
         agent_override = _start_agent_override(payload)
         depth_override = _start_depth_override(payload)
+        effort_override = _start_effort_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
 
@@ -6153,20 +8514,27 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
                 getattr(story, "repo_url", "") or "",
                 branch,
             )
+            # This start's own pick outranks the repo card's Agent CLI, which
+            # prepare_start already resolved onto the story. Resolved before the
+            # options because this start's effort has to be translated into THAT
+            # CLI's spelling.
+            program = (
+                agent_override
+                or getattr(story, "agent", "")
+                or ENGINE.default_program()
+            )
+            prompt = _provider_effort.decorate_prompt(prompt, program, effort_override)
             inst = session.NewInstance(
                 session.InstanceOptions(
                     title=title,
                     path=".",
-                    # This start's own pick outranks the repo card's Agent CLI,
-                    # which prepare_start already resolved onto the story.
-                    program=agent_override
-                    or getattr(story, "agent", "")
-                    or ENGINE.default_program(),
+                    program=program,
                     provisioned=True,
                     workspace_strategy=_issue_start.workspace_mode(),
                     new_branch=branch,
                     prompt=prompt,
                     provision_repo_url=getattr(story, "repo_url", "") or "",
+                    launch_args=_start_launch_args(program, effort_override),
                 )
             )
             inst.ExtraEnv = _ports.env_for(title)
@@ -6184,8 +8552,9 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
                 await asyncio.to_thread(inst.Start, True)
                 ENGINE.save()
             except Exception:
-                with ENGINE.lock:
-                    ENGINE.instances.pop(title, None)
+                # By identity: this task may be the loser of a re-start, and
+                # popping by name would delete the LIVE session's record.
+                _drop_failed_start(title, inst)
                 raise
             # Ledger the issue so auto handling doesn't run it a second time.
             _issue_start.record_handled(issue)
@@ -6202,6 +8571,1098 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
 
     _register_task(_bg_start())
     return JSONResponse({"started": True, "title": title}, status_code=202)
+
+
+# --- Intake reopen (all three panels) -------------------------------------
+# The other half of "Begin work": an item that has been worked once usually
+# still HAS its workspace on this machine (ending a session keeps the worktree;
+# a restart loses the session but not the directory). Starting over would
+# collide with that worktree or duplicate it, so every row whose work is still
+# on disk carries a `workspace` annotation (see backend.web.core.reopen) and
+# this endpoint puts a window back on it.
+#
+# The client sends only the item's identity — the same fields it posts to the
+# matching /start route — and the workspace is re-resolved HERE, live. Taking a
+# path from the payload would let a stale panel (or anything else) name a
+# directory the server never offered.
+
+#: The intake kinds a reopen can be asked for. Each names the cached listing its
+#: rows come from and the resolver that reads a row — the SAME resolver the
+#: listing annotated with, so the button and the action can't disagree.
+_INTAKE_KINDS = ("tickets", "prs", "issues")
+
+
+def _intake_row(kind: str, payload: dict):
+    """``(row, workspace_args)`` for one intake item, read from the cached
+    listing its panel is showing. ``row`` is ``None`` when the panel's list no
+    longer holds the item (a stale tab, or a server restarted since). Raises
+    ``ValueError`` for a payload that doesn't identify an item at all."""
+    if kind == "tickets":
+        source = str(payload.get("source", "") or "").strip()
+        ticket_id = str(payload.get("id", "") or "").strip()
+        if not source or not ticket_id:
+            raise ValueError("source and id are required")
+        row = _pending.cached_row(
+            _ASSIGNED_TICKETS_CACHE,
+            "tickets",
+            lambda t: t.get("source") == source and str(t.get("id")) == ticket_id,
+        )
+        return row, _ticket_workspace_args
+    repo = str(payload.get("repo", "") or "").strip()
+    if not re.match(r"^[^\s/]+/[^\s/]+$", repo):
+        raise ValueError("repo must be owner/name")
+    try:
+        number = int(payload.get("number"))
+    except (TypeError, ValueError):
+        raise ValueError("number must be an integer") from None
+
+    def _match(row: dict) -> bool:
+        return row.get("repo") == repo and row.get("number") == number
+
+    if kind == "prs":
+        return _pending.cached_row(_OPEN_PRS_CACHE, "prs", _match), _pr_workspace_args
+    return (
+        _pending.cached_row(_OPEN_ISSUES_CACHE, "issues", _match),
+        _issue_workspace_args,
+    )
+
+
+@app.post("/api/intake/reopen")
+async def intake_reopen(payload: dict) -> JSONResponse:
+    """Put a session back on the workspace an earlier run of an intake item
+    left on this machine, instead of starting the item over.
+
+    A closed session is restored from its recently-closed entry (branch,
+    program, prompt and provisioning flags intact). A workspace with no such
+    entry — the run whose session a restart lost — gets a fresh in-place
+    session on the directory: in-place because the directory is not ours to
+    delete, so ending this session must leave the work exactly where it is.
+    """
+    payload = payload or {}
+    kind = str(payload.get("kind", "") or "").strip()
+    if kind not in _INTAKE_KINDS:
+        return JSONResponse(
+            {"error": "kind must be one of: " + ", ".join(sorted(_INTAKE_KINDS))},
+            status_code=400,
+        )
+    try:
+        row, resolve = _intake_row(kind, payload)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    if row is None:
+        return JSONResponse(
+            {"error": "that item is not in the panel's current list — Refresh it"},
+            status_code=409,
+        )
+
+    title = str(row.get("session") or "")
+    if title in ENGINE.instances or _pending_has(title):
+        return JSONResponse(
+            {"error": "session %s is already open" % title, "title": title},
+            status_code=409,
+        )
+
+    found = await asyncio.to_thread(lambda: _reopen.find_workspace(**resolve(row)))
+    if found is None:
+        return JSONResponse(
+            {
+                "error": "no workspace for this item is left on this machine — "
+                "use Begin work to start it fresh"
+            },
+            status_code=410,
+        )
+    if found.get("kind") == "closed" and found.get("entry_id"):
+        return await _reopen_closed_entry(str(found["entry_id"]))
+
+    folder = str(found.get("path") or "")
+    open_title = _unique_title(title or os.path.basename(folder) or "session")
+    program = ENGINE.default_program()
+    inst = session.NewInstance(
+        session.InstanceOptions(
+            title=open_title,
+            path=folder,
+            program=program,
+            in_place=True,
+        )
+    )
+    inst.ExtraEnv = _ports.env_for(open_title)
+    inst.SetStatus(Loading)
+    with ENGINE.lock:
+        ENGINE.instances[open_title] = inst
+
+    async def _bg_open() -> None:
+        try:
+            await asyncio.to_thread(inst.Start, True)
+            ENGINE.save()
+        except Exception as err:  # noqa: BLE001
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf("failed to reopen %s: %v", open_title, err)
+            with ENGINE.lock:
+                ENGINE.instances.pop(open_title, None)
+            _events.BUS.emit(
+                "session.create_failed", session=open_title, data={"error": str(err)}
+            )
+
+    _register_task(_bg_open())
+    _seed_event_snapshot(open_title)
+    _events.BUS.emit(
+        "session.created",
+        session=open_title,
+        new="loading",
+        data={"program": program, "reopened": folder},
+    )
+    return JSONResponse(_instance_json(inst), status_code=202)
+
+
+# --- Verify (test plans) ------------------------------------------------------
+# The read/act surface over backend.web.core.test_plans, driving the Verify
+# dialog. The plans themselves are written by the push triggers and matured by
+# _test_plans_due_loop, both further up; nothing here generates on the request
+# path — the one-shot takes up to three minutes.
+#
+# ``{plan_id:path}`` rather than the usual ``{plan_id}``: a plan is keyed by its
+# session title, and a session title can be a whole branch path
+# (``feature/sc-412/queue-badges`` — create_instance accepts exactly that shape).
+# With the default converter those plans would 404 at the router before any
+# handler ran, which is the kind of bug that only shows up for the users with the
+# tidiest branch names. The converter is greedy, but every route below is pinned
+# by a literal suffix (or by its method), so there is nothing for it to swallow.
+
+
+@app.get("/api/test-plans")
+def list_test_plans() -> JSONResponse:
+    """Every test plan, newest first, plus the branch that counts as live.
+
+    ``live_branch`` is resolved fresh per request and returned alongside rather
+    than read off the plans: a plan carries the branch it was created against,
+    and the dialog needs to be able to say "waiting to reach main" for a plan
+    that has not been near a settings change.
+
+    Each plan also carries ``effective_live_branch`` — the same question asked
+    FOR THAT PLAN'S REPO — and the two are not interchangeable. The top-level one
+    is the flock-wide default, which is the right thing for a header and for a
+    card's placeholder, and the wrong thing to compare a plan against: plans are
+    stamped with the PER-REPO answer at creation
+    (``resolve_live_branch(repo_root)``), so a repo that overrides its live
+    branch would have every one of its plans read as "written against a branch
+    that has since moved" when nothing has moved at all. Resolved here rather than
+    in ``test_plans.list_plans`` because it is a derived, settings-dependent view
+    of a plan and not part of what the store persists; memoized per repo because
+    the chain is one settings read and a list is routinely a hundred plans over a
+    handful of repos.
+    """
+    plans = _test_plans.list_plans()
+    resolved: Dict[str, str] = {}
+    for plan in plans:
+        root = str(plan.get("repo_root") or "")
+        if root not in resolved:
+            resolved[root] = _test_plans.resolve_live_branch(root)
+        _test_plan_row(plan, resolved[root])
+    return JSONResponse(
+        {
+            "plans": plans,
+            "live_branch": _test_plans.resolve_live_branch(),
+        }
+    )
+
+
+# The repo list Verify tracks has NO routes of its own, and that absence is the
+# design. It is ``repository.verify_repos`` + ``repository.verify_repo_settings``
+# — ordinary settings, typed as ``owner/name`` into the same card list Intake
+# uses for PR review and issues, and saved through ``POST /api/settings`` like
+# every other setting. What used to be here (a GET that DISCOVERED repos from
+# open sessions and a POST that patched a block keyed by absolute path) is gone
+# along with the discovery: a repo Verify watches is one a person named, not one
+# that happened to have a session open, and the name is the GitHub slug because
+# that is the only spelling that is the same in every clone and every worktree.
+
+
+def _closed_session_plan_inputs(title: str) -> tuple:
+    """``(branch, sha, repo_root, program)`` for a session that is CLOSED, or
+    ``(…, "")`` when there is nothing usable.
+
+    WHY VERIFY HAS TO LOOK HERE. Everything else about this feature is built on
+    the fact that a checklist outlives its session — that is why the plan stores
+    the main repo rather than the worktree, and why a plan can be rewritten and
+    run months after the work merged. Plan CREATION was the one half that still
+    demanded a live window, so "write me a checklist for that" stopped being
+    possible at exactly the moment people actually do it: after the work is done
+    and the window has been closed.
+
+    The recently-closed store already keeps what a plan needs — the title, the
+    branch, and the repo the worktree was cut from — because it is the undo store
+    for reopening the session, so nothing new has to be recorded.
+
+    THE ONE THING IT CANNOT RECOVER is the intent. The ticket text lives in the
+    session's seed prompt, the closed entry does not carry it, and the transcript
+    that would hold it lived in a worktree that is reclaimed on close. So a
+    checklist written from here is diff-only, and it says so rather than
+    pretending: the honest fix for a diff-only draft is the rewrite box, where a
+    person can type what it should have been about in one sentence.
+    """
+    for entry in _load_recently_closed():
+        if str(entry.get("title") or "") != title:
+            continue
+        data = entry.get("data") or {}
+        wt = data.get("worktree") or {}
+        repo_root = (
+            str(wt.get("repo_path") or "")
+            or str(entry.get("folder") or "")
+            or str(data.get("path") or "")
+        )
+        branch = str(entry.get("branch") or data.get("branch") or "")
+        program = str(data.get("program") or "")
+        if not repo_root or not branch:
+            return "", "", "", ""
+        # The branch may well be gone locally (merged and deleted), so origin's
+        # copy is a real answer and not a fallback. Whichever resolves is the
+        # commit the checklist is about.
+        sha = ""
+        for ref in (branch, "origin/%s" % branch):
+            out = subprocess.run(
+                ["git", "-C", repo_root, "rev-parse", "--verify", "-q", ref],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                timeout=15,
+            )
+            if out.returncode == 0:
+                sha = out.stdout.decode("utf-8", "replace").strip()
+                break
+        return branch, sha, repo_root, program
+    return "", "", "", ""
+
+
+@app.post("/api/instances/{title}/test-plan")
+async def instance_write_test_plan(title: str) -> JSONResponse:
+    """Write a test plan for this session, because a person asked for one.
+
+    The normal way to get a plan. Automatic generation is opt-in per repo (on
+    the Verify list, or ``[workspace] verify_on_push`` in ``.mindflock.toml`` —
+    see :func:`_verify_auto_for`) and off everywhere
+    else, so without this button the feature would only exist for repos that had
+    already been configured for it — and you cannot configure a repo for
+    something you have never seen work.
+
+    Unlike the push trigger this answers synchronously about everything it can
+    know quickly (is there a session, does it have a workspace, is there already
+    a plan) and only then hands the model call to a thread, because a button
+    needs to say what happened. An existing plan for the branch is reported as
+    ``existing: true`` with a 200 rather than an error: the honest answer to
+    "write a plan for this" when one is already written is to point at it, and
+    the dialog opens it. Regenerating is a different button and says so.
+    """
+    if not git_available():
+        return _no_git_response()
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        # ...unless the session was merely CLOSED. A checklist is worth asking
+        # for precisely when the work is finished and the window has been put
+        # away, so refusing there made the button useless at the only moment
+        # people reach for it. See `_closed_session_plan_inputs`.
+        return await _write_test_plan_for_closed(title)
+    wt = inst.GetWorktreePath()
+    if not wt:
+        return JSONResponse({"error": "workspace not ready"}, status_code=409)
+
+    def _prepare():
+        try:
+            repo_root = inst.GetGitWorktree().GetRepoPath() or ""
+        except Exception:  # noqa: BLE001 — raises before Start has finished
+            repo_root = ""
+        branch = _current_branch(wt)
+        sha = _git_head_sha(wt)
+        if not branch:
+            # A detached HEAD. ``ensure_plan_for`` refuses a branchless plan (it
+            # has nothing to watch for going live), and it says so by returning
+            # None — which is the SAME answer it gives for "there is already a
+            # plan for this branch". Without this the route reports the cheerful
+            # one: "already has a checklist — it is in the list below", pointing
+            # at a checklist that does not exist and never will.
+            return None, JSONResponse(
+                {"error": "this session isn't on a branch"}, status_code=409
+            )
+        if not sha:
+            # An unborn HEAD: nothing has been committed, so there is no change
+            # to describe and a plan would be a list of steps about nothing.
+            return None, JSONResponse(
+                {"error": "nothing committed on this branch yet"}, status_code=409
+            )
+        # One expression, used twice on purpose: the plan's repo and the repo the
+        # live branch is resolved FOR must be the same one, or a repo whose
+        # override says "staging" gets a plan that waits for "main" forever.
+        root = repo_root or wt
+        plan = _test_plans.ensure_plan_for(
+            title,
+            branch,
+            sha,
+            root,
+            _test_plans.resolve_live_branch(root),
+            intent=_test_plan_intent(title),
+        )
+        return plan, None
+
+    plan, resp = await asyncio.to_thread(_prepare)
+    if resp is not None:
+        return resp
+    if plan is None:
+        existing = _test_plans.get(title) or {}
+        return JSONResponse(
+            {
+                "ok": True,
+                "plan": title,
+                "existing": True,
+                "state": existing.get("state", ""),
+            }
+        )
+    _start_test_plan_generation(title, getattr(inst, "Program", "") or "", wt)
+    return JSONResponse({"ok": True, "plan": title, "existing": False}, status_code=202)
+
+
+async def _write_test_plan_for_closed(title: str) -> JSONResponse:
+    """`instance_write_test_plan` for a session that has been closed.
+
+    The same answers in the same shapes — ``existing: true`` for one that is
+    already written, 202 for one being written — because the caller is one
+    button and must not have to care which store the session came from.
+
+    Generation runs with NO worktree, which is the path `generate` already takes
+    for every rewrite of a plan whose session is gone: it falls back to the
+    plan's ``repo_root``, reads the branch's diff there, and asks the repo's
+    default CLI. That is exactly the situation here.
+    """
+
+    def _prepare():
+        branch, sha, repo_root, program = _closed_session_plan_inputs(title)
+        if not repo_root:
+            return (
+                None,
+                "",
+                JSONResponse({"error": "no such session: %s" % title}, status_code=404),
+            )
+        if not branch:
+            return (
+                None,
+                "",
+                JSONResponse(
+                    {"error": "that session wasn't on a branch"}, status_code=409
+                ),
+            )
+        if not sha:
+            return (
+                None,
+                "",
+                JSONResponse(
+                    {
+                        "error": "%s is gone from this repo — nothing left to write a "
+                        "checklist from" % branch
+                    },
+                    status_code=409,
+                ),
+            )
+        plan = _test_plans.ensure_plan_for(
+            title,
+            branch,
+            sha,
+            repo_root,
+            _test_plans.resolve_live_branch(repo_root),
+            # Deliberately empty: the closed entry does not carry the seed
+            # prompt and the transcript went with the worktree. Guessing here
+            # would be worse than a diff-only draft the user can aim with the
+            # rewrite box.
+            intent="",
+        )
+        return plan, program, None
+
+    plan, program, resp = await asyncio.to_thread(_prepare)
+    if resp is not None:
+        return resp
+    if plan is None:
+        existing = _test_plans.get(title) or {}
+        return JSONResponse(
+            {
+                "ok": True,
+                "plan": title,
+                "existing": True,
+                "state": existing.get("state", ""),
+            }
+        )
+    _start_test_plan_generation(title, program, "")
+    return JSONResponse({"ok": True, "plan": title, "existing": False}, status_code=202)
+
+
+@app.post("/api/test-plans/{plan_id:path}/run")
+async def run_test_plan(plan_id: str, payload: Optional[dict] = None) -> JSONResponse:
+    """Start a real session that works through this plan's agent steps.
+
+    Deliberately a full session and not a headless one-shot (the asymmetry the
+    core module's docstring is built around): checking a feature means checking
+    out the live branch, pulling, starting things and reading logs — minutes of
+    real work the user must be able to watch, interrupt and take over. So it goes
+    through :func:`create_instance` like anything else, which also means its
+    failures (a repo that has moved, a title collision, a folder that is no
+    longer a git repo) are reported in that endpoint's own words instead of a
+    second, subtly different set.
+
+    An optional ``{"steps": ["s3"]}`` narrows the run to those steps — the
+    per-step Run button, for re-checking one thing after a fix without paying
+    for the whole plan again. **A human step can never be named there.** It is
+    refused with a 400 rather than quietly dropped, because the request is a
+    category error and silently running nothing would look like it worked: a
+    step is ``human`` precisely because no shell can observe what it asks about.
+    """
+    payload = payload or {}
+    if not git_available():
+        return _no_git_response()
+    plan = _test_plans.get(plan_id)
+    if plan is None:
+        return JSONResponse(
+            {"error": "test plan not found: %s" % plan_id}, status_code=404
+        )
+    # A RECORD IS NOT A SESSION, here as much as below: a run whose workspace has
+    # gone (cleared by hand, a disk that went away) keeps its record and its
+    # agent window, so `_verify_window_gone` never fires and the two-hour clock
+    # was the only way out — while every press of Run answered "already
+    # verifying this plan" and never reached the husk-closing path below.
+    if plan["state"] == "running" and await asyncio.to_thread(
+        _verify_session_usable, plan["run_session"]
+    ):
+        return JSONResponse(
+            {
+                "error": "%s is already verifying this plan" % plan["run_session"],
+                "session": plan["run_session"],
+            },
+            status_code=409,
+        )
+    if not plan["steps"]:
+        # A plan still generating, or one that failed to: there is nothing for a
+        # session to do, and starting one would burn a workspace to print an
+        # empty checklist. 409 (not 400) — the request is fine, the plan is not
+        # ready, and the regenerate button is the fix.
+        return JSONResponse(
+            {"error": "this plan has no steps yet — regenerate it first"},
+            status_code=409,
+        )
+    if not any(s["actor"] != "human" for s in plan["steps"]):
+        # Every step is a person's own. An agent is FORBIDDEN from settling one
+        # (see ``finish_run``, which coerces any answer it gives to a human step
+        # back to "blocked"), so this would provision a workspace and minutes of
+        # a billed session for a run that is not allowed to answer anything and
+        # hands the whole checklist straight back. Not an exotic case either:
+        # ``parse_plan`` defaults an unrecognised actor to "human", so a model
+        # that omits the key produces exactly this plan. 409 for the same reason
+        # as above — the request is fine, the plan is not one an agent can work.
+        return JSONResponse(
+            {
+                "error": "every step in this checklist is for a person to check — "
+                "there is nothing here an agent can settle"
+            },
+            status_code=409,
+        )
+    # THE REPO HAS TO STILL BE THERE. `create_instance` CREATES a missing
+    # repo_path and falls back to a git-less in-place session, so a plan whose
+    # repo has moved or been deleted did not fail — it made an empty folder,
+    # started a real (billed) agent in it, told it to check out `origin/<live>`,
+    # and stamped the plan `running` for the two hours until the give-up clock
+    # noticed nothing had been written. The route's own docstring promised this
+    # was reported "in that endpoint's own words"; now it is.
+    repo_root = plan.get("repo_root") or ""
+    if not await asyncio.to_thread(_is_verify_repo_usable, repo_root):
+        return JSONResponse(
+            {
+                "error": "the repo this checklist was written from is gone (%s) — "
+                "a run needs it to check out the live branch"
+                % (repo_root or "no path recorded")
+            },
+            status_code=409,
+        )
+    only = payload.get("steps")
+    if only is not None:
+        if not isinstance(only, list) or not only:
+            return JSONResponse(
+                {"error": "steps must be a non-empty list of step ids"},
+                status_code=400,
+            )
+        by_id = {s["id"]: s for s in plan["steps"]}
+        unknown = [str(s) for s in only if str(s) not in by_id]
+        if unknown:
+            return JSONResponse(
+                {"error": "no such step: %s" % ", ".join(unknown)}, status_code=400
+            )
+        human = [str(s) for s in only if by_id[str(s)]["actor"] == "human"]
+        if human:
+            return JSONResponse(
+                {
+                    "error": "%s %s for a person to check, not an agent"
+                    % (
+                        ", ".join(human),
+                        "is" if len(human) == 1 else "are",
+                    ),
+                    "human_steps": human,
+                },
+                status_code=400,
+            )
+        only = [str(s) for s in only]
+    # The session is named for the COMMIT, not just the plan, so every new
+    # branch gets a fresh one.
+    #
+    # A plan is keyed by session title and is REPLACED when that session moves
+    # to a different branch (test_plans.ensure_plan_for), but the run session's
+    # name was derived from the plan id alone — so the next branch's run reused
+    # the previous branch's workspace. Reuse is deliberate and right for
+    # re-checking one step of the SAME commit (below), and exactly wrong across
+    # commits: that session is checked out at the old sha, its result file holds
+    # the old answers, and it is sitting in a worktree cut for work that has
+    # already shipped. Putting the sha in the name makes "same commit" and
+    # "different commit" different sessions, which is the distinction that
+    # actually matters, and it does it without any bookkeeping.
+    sha7 = str(plan.get("sha") or "")[:7]
+    title = "verify-%s%s" % (plan_id, ("-" + sha7) if sha7 else "")
+    # Has this change actually shipped? Not a gate — you may run a plan whenever
+    # you like, and wanting to check your own work before it ships is a normal
+    # thing to want. It decides WHICH TREE the session checks out; see
+    # build_run_prompt. "done" counts as live: it got there and was verified.
+    # The repo's standing instructions and its deployed target reach the RUNNER,
+    # not only the writer. The settings field's own placeholder is "The UI runs
+    # on :3000 — check there, not :8080" — a sentence written for the agent that
+    # works the checklist, which until now only the model that wrote it ever saw.
+    prompt = _test_plans.build_run_prompt(
+        plan,
+        only,
+        live=plan["state"] in ("due", "running", "done"),
+        repo_notes=_test_plans.repo_notes(repo_root),
+        target=_test_plans.verify_target(repo_root),
+    )
+    # Clear the previous run's answers BEFORE starting another one. The result
+    # file is the session's only return channel and the poller believes the
+    # first `finished: true` it sees: left in place, a re-run (or a one-step
+    # re-check) would be finished by its predecessor's file within 60s — before
+    # the agent had so much as checked out the branch — and the plan would take
+    # the old verdict as the new one. Silent, and wrong in the direction that
+    # matters, since the usual reason to re-run is that something failed.
+    await asyncio.to_thread(_clear_verify_results, title)
+    # A RECORD IS NOT A USABLE SESSION. The reuse path below tests only for a
+    # record, and a verify session whose workspace has since been cleared keeps
+    # one — so `instance_send` answered 409 "workspace no longer exists" and the
+    # route returned before `start_run`, forever, for that checklist. There is
+    # no control anywhere that ends that session either (the rail hides
+    # `verify-*`, and the dialog's own End is gated on `plan.run_session`), so
+    # it was a permanent dead end reachable by pressing Run twice. Closing the
+    # husk drops it back into the reclaim-and-create path below.
+    if title in ENGINE.instances and not await asyncio.to_thread(
+        _verify_session_usable, title
+    ):
+        await _end_verify_session(title)
+    if title not in ENGINE.instances:
+        # Clear this run's own leftovers before creating anything. Both of these
+        # prevent a failure that happens on a background task, minutes after
+        # this route has answered 202 — which is why they run here and not in an
+        # error handler. tmux first: the orphan's shell is sitting IN the
+        # worktree the next call reclaims.
+        killed = await asyncio.to_thread(_kill_orphan_plan_tmux, title)
+        if killed and log.ErrorLog is not None:
+            log.ErrorLog.Printf("verify: killed orphan tmux session %s", killed)
+        # Free a branch a dead run of this same checklist is still holding.
+        freed = await asyncio.to_thread(
+            _free_stale_verify_worktree, plan.get("repo_root") or "", title
+        )
+        if freed and log.ErrorLog is not None:
+            log.ErrorLog.Printf("verify: reclaimed stale worktree %s", freed)
+    if title in ENGINE.instances:
+        # A verify session for this plan is already open — the normal state of
+        # things once you have run the plan and are now re-checking one step.
+        # Send it the new instructions instead of calling create_instance, which
+        # would 409 on the duplicate title and leave "Run step" permanently
+        # broken for exactly the case it exists for. Reuse is also the better
+        # behaviour on its own terms: the workspace is already provisioned and
+        # already sitting on the live branch.
+        resp = await instance_send(title, {"text": prompt})
+        if resp.status_code >= 400:
+            return resp
+    else:
+        resp = await create_instance(
+            {
+                "title": title,
+                # The MAIN repo, which is why the plan stores it: the worktree
+                # this branch was written in is normally reclaimed by the time a
+                # plan comes due.
+                "repo_path": plan["repo_root"],
+                "prompt": prompt,
+            }
+        )
+        if resp.status_code >= 400:
+            return resp
+    # Only now: start_run stamps the plan "running" and opens the run record the
+    # due loop's give-up clock reads, and a plan claiming a session that was
+    # never created would be stuck there for two hours.
+    started = await asyncio.to_thread(_test_plans.start_run, plan_id, title)
+    if started is None:
+        # The plan was deleted while the session was being provisioned. Answering
+        # `ok` here left a real, billed agent working a checklist that no longer
+        # exists — and one nothing would ever collect, since the sweep's grace
+        # window measures from the session and the poller only looks at plans.
+        await _end_verify_session(title)
+        return JSONResponse(
+            {"error": "test plan not found: %s" % plan_id}, status_code=404
+        )
+    # The plan comes back with it. The row needs the run record `start_run` just
+    # opened (the "last checked" line, the give-up clock, the carried human
+    # answers), and the client was hand-synthesising a state without it.
+    #
+    # SHAPED THE WAY THE LIST ROUTE SHAPES IT, because the client REPLACES its
+    # whole row with this object: a raw store record has no
+    # `effective_live_branch`, so a repo that ships from `staging` would have
+    # its row fall back to the flock-wide branch and start claiming the plan was
+    # measured against the wrong one — and it would carry the conversation blob
+    # the list route drops on purpose.
+    return JSONResponse(
+        {"ok": True, "session": title, "plan": _test_plan_row(started)},
+        status_code=202,
+    )
+
+
+@app.post("/api/test-plans/{plan_id:path}/fix")
+async def fix_failed_test_plan_steps(
+    plan_id: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Open a session to fix what a check found → **202** ``{session}``.
+
+    THE LOOP THIS CLOSES. A red checklist is the most valuable thing this feature
+    produces — the work shipped, it does not do what it was for, and somebody
+    observed exactly how — and until this route it was a dead end: the row's
+    button opened the evidence and there was nothing to press next.
+
+    An ORDINARY session, not the verify one. A verify run's entire posture is
+    "report, never fix" (the single-file output contract, the git-excluded
+    result file, the rule that it may write nothing else); reusing it to make a
+    change would dismantle the property that makes its report readable as
+    evidence in the first place. So this creates a normal session in the plan's
+    repo, named for the plan, and hands it the failures.
+
+    ``{"steps": ["s3"]}`` narrows it; the default is every step whose newest
+    answer is ``fail``. 409 when nothing failed — a button that opens an empty
+    session is worse than no button.
+    """
+    plan = _test_plans.get(plan_id)
+    if plan is None:
+        return JSONResponse(
+            {"error": "test plan not found: %s" % plan_id}, status_code=404
+        )
+    if not git_available():
+        return JSONResponse({"error": "git is not available"}, status_code=409)
+    failures = _test_plans.failed_steps(plan)
+    only = (payload or {}).get("steps")
+    if only is not None:
+        # VALIDATED LIKE /run'S, because the two silent answers here were both
+        # wrong in the direction that wastes a session. A non-list (``"s3"``)
+        # failed the isinstance test and silently widened the request to every
+        # failure on the checklist; an id that does not exist, or one that
+        # exists and did not fail, answered "nothing on this checklist failed"
+        # on a checklist with three red steps — which reads as the feature being
+        # broken rather than the request being wrong.
+        if not isinstance(only, list) or not only:
+            return JSONResponse(
+                {"error": "steps must be a non-empty list of step ids"},
+                status_code=400,
+            )
+        wanted = [str(s) for s in only]
+        by_id = {s["id"] for s in plan["steps"]}
+        unknown = [s for s in wanted if s not in by_id]
+        if unknown:
+            return JSONResponse(
+                {
+                    "error": "no such step: %s" % ", ".join(unknown),
+                    "unknown_steps": unknown,
+                },
+                status_code=400,
+            )
+        chosen = {f["step"]["id"] for f in failures if f["step"]["id"] in wanted}
+        missing = [s for s in wanted if s not in chosen]
+        if missing:
+            return JSONResponse(
+                {
+                    "error": "%s didn't fail — there is nothing to fix there"
+                    % ", ".join(missing)
+                },
+                status_code=409,
+            )
+        failures = [f for f in failures if f["step"]["id"] in chosen]
+    if not failures:
+        return JSONResponse(
+            {"error": "nothing on this checklist failed"}, status_code=409
+        )
+    if not plan.get("repo_root"):
+        return JSONResponse(
+            {"error": "this checklist has no repository to work in"}, status_code=409
+        )
+    title = "fix-%s" % plan_id
+    prompt = _test_plans.build_fix_prompt(plan, failures)
+    reclaimed = ""
+    if title in ENGINE.instances and await asyncio.to_thread(
+        _verify_session_usable, title
+    ):
+        # Already open — the normal state once you have pressed this and are
+        # coming back with a second failure. Sending beats 409ing on the title.
+        # "Open" means a workspace, not merely a record: a fix session whose
+        # worktree has gone answers 409 "workspace no longer exists" for ever
+        # otherwise, exactly as the run route's reuse path did.
+        resp = await instance_send(title, {"text": prompt})
+    else:
+        if title in ENGINE.instances:
+            await _end_verify_session(title)
+        # THE REPO HAS TO STILL BE THERE, the same preflight `/run` does and for
+        # a worse reason: `create_instance` CREATES a missing `repo_path` and
+        # falls back to a git-less in-place session, so a checklist whose clone
+        # has been moved or deleted started a real, billed agent in a brand-new
+        # empty folder — holding instructions to reproduce and repair code that
+        # is not there. Scoped to this branch, because a fix session's own
+        # worktree can legitimately outlive the main repo.
+        if not await asyncio.to_thread(
+            _is_verify_repo_usable, plan.get("repo_root") or ""
+        ):
+            return JSONResponse(
+                {
+                    "error": "the repo this checklist was written from is gone "
+                    "(%s) — a fix session needs it to work in"
+                    % (plan.get("repo_root") or "no path recorded")
+                },
+                status_code=409,
+            )
+        # THE SAME WEDGE /run CLEARS, and this route had none of it. The title
+        # is derived from the plan, so the branch and the tmux name repeat on
+        # every press: one leftover — and `close_instance` KEEPS the worktree on
+        # purpose, so pressing Fix, ending the session and pressing Fix again is
+        # enough — made every later press die inside `_bg_start`, minutes after
+        # this route answered 202, with the raw git or tmux line landing in the
+        # notifications bell and nowhere near the checklist.
+        #
+        # Cleared where that is safe, REPORTED where it is not: an empty
+        # leftover is removed, a leftover with work in it is named in a 409
+        # below. What this must never do is what the run route's own reclaim
+        # does — force-remove and delete the branch — because the whole point of
+        # a fix session is the changes in that tree.
+        killed = await asyncio.to_thread(_kill_orphan_plan_tmux, title)
+        if killed and log.ErrorLog is not None:
+            log.ErrorLog.Printf("fix: killed orphan tmux session %s", killed)
+        reclaimed, held = await asyncio.to_thread(
+            _reclaim_plan_worktree, plan.get("repo_root") or "", title
+        )
+        if reclaimed and log.ErrorLog is not None:
+            log.ErrorLog.Printf("fix: reclaimed empty worktree %s", reclaimed)
+        if held:
+            # DECLINED, which is a different thing from "nothing to do" and the
+            # commonest case here: this session's job is to change the tree, so
+            # the leftover from the last one usually HAS changes, and taking it
+            # would delete them. Said now, naming the directory, instead of
+            # dying in `_bg_start` minutes later with a raw git line that lands
+            # in the notifications bell and never reaches this checklist.
+            return JSONResponse(
+                {
+                    "error": "the last fix session's workspace is still holding "
+                    "this branch and has uncommitted work in it (%s) — reopen it "
+                    "from Recent to finish or discard that work, then press Fix "
+                    "again" % held,
+                    "worktree": held,
+                },
+                status_code=409,
+            )
+        resp = await create_instance(
+            {"title": title, "repo_path": plan["repo_root"], "prompt": prompt}
+        )
+    if resp.status_code >= 400:
+        return resp
+    return JSONResponse(
+        {"ok": True, "session": title, "reclaimed": bool(reclaimed)}, status_code=202
+    )
+
+
+@app.post("/api/test-plans/{plan_id:path}/regenerate")
+async def regenerate_test_plan(
+    plan_id: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Ask the model for this plan's steps again (202 — it lands in the store).
+
+    The escape hatch for every generation failure: a timeout, a CLI with no
+    headless mode, an unparseable answer, a worktree that had already gone. It
+    is also how a plan whose steps read wrong gets a second draft.
+
+    Runs against the session's own worktree and CLI when the session is still
+    alive, and against the plan's repo otherwise (``generate`` falls back to
+    ``repo_root`` as its cwd) — so a plan can still be regenerated long after the
+    work that produced it has merged.
+
+    ``{"focus": "…"}`` IS THE POINT OF THE SECOND DRAFT. This route used to take
+    no body at all, so pressing Rewrite re-ran the identical prompt and hoped for
+    a different answer — while the person pressing it had just read the weak
+    checklist and knew exactly what should have been checked instead, which is
+    the highest-signal input available anywhere in this feature and was being
+    thrown away. It is stored on the plan rather than passed through, so a later
+    push that re-reads the branch keeps honouring it: a correction you have to
+    type twice is one you stop typing.
+
+    409 WHILE A RUN IS IN FLIGHT. ``generate`` sets ``generating``
+    unconditionally, and the run poller only ever looks at plans in ``running``
+    — so rewriting mid-run orphaned a real, billed session forever: its result
+    file was never read, the give-up clock never ran, and Cancel disappeared from
+    the row along with the state that offered it.
+    """
+    plan = _test_plans.get(plan_id)
+    if plan is None:
+        return JSONResponse(
+            {"error": "test plan not found: %s" % plan_id}, status_code=404
+        )
+    if plan["state"] == "running":
+        return JSONResponse(
+            {
+                "error": "an agent is checking this checklist right now — "
+                "cancel the run first"
+            },
+            status_code=409,
+        )
+    focus = str((payload or {}).get("focus") or "").strip()
+    if focus:
+        _test_plans.set_focus(plan_id, focus)
+    program, worktree = _test_plan_session_ctx(plan_id)
+    _start_test_plan_generation(plan_id, program, worktree)
+    return JSONResponse({"ok": True}, status_code=202)
+
+
+@app.post("/api/test-plans/{plan_id:path}/steps")
+async def add_test_plan_step(plan_id: str, payload: dict) -> JSONResponse:
+    """Append a step a person wrote to the end of a plan.
+
+    The generator knows what the diff changed and nothing about what the team
+    knows: the flow that always breaks, the report nobody remembers to open. A
+    checklist that cannot take those is a checklist people keep a second copy of
+    somewhere else, and the second copy is the one that never gets run.
+
+    ``actor`` defaults to ``"agent"`` here and only here. Everywhere else in this
+    feature an unknown actor becomes ``"human"``, because there the actor is a
+    MODEL's guess about a step it invented and the cost of being wrong is an
+    agent silently passing something it could not observe. This is a person
+    typing a step they have just decided to add; "run this for me" is what they
+    are asking for, and they can see the toggle that says otherwise.
+    """
+    payload = payload or {}
+    plan = _test_plans.get(plan_id)
+    if plan is None:
+        return JSONResponse(
+            {"error": "test plan not found: %s" % plan_id}, status_code=404
+        )
+    try:
+        updated = await asyncio.to_thread(
+            _test_plans.add_step,
+            plan_id,
+            str(payload.get("text") or ""),
+            str(payload.get("expect") or ""),
+            str(payload.get("actor") or "agent"),
+        )
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    if updated is None:
+        return JSONResponse(
+            {"error": "test plan not found: %s" % plan_id}, status_code=404
+        )
+    return JSONResponse({"ok": True, "plan": updated})
+
+
+@app.delete("/api/test-plans/{plan_id:path}/steps/{step_id}")
+async def remove_test_plan_step(plan_id: str, step_id: str) -> JSONResponse:
+    """Delete a step a person added. 400 for a generated one, 404 for neither.
+
+    Only manual steps: a generated step comes back on the next regeneration, so
+    a button that removed one would be a button whose effect quietly undoes
+    itself. See ``test_plans.remove_step``.
+    """
+    try:
+        updated = await asyncio.to_thread(_test_plans.remove_step, plan_id, step_id)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    if updated is None:
+        return JSONResponse(
+            {"error": "no such step on %s: %s" % (plan_id, step_id)}, status_code=404
+        )
+    return JSONResponse({"ok": True, "plan": updated})
+
+
+@app.patch("/api/test-plans/{plan_id:path}/steps/{step_id}")
+async def edit_test_plan_step(
+    plan_id: str, step_id: str, payload: dict
+) -> JSONResponse:
+    """Fix one step in place — ``{"text"?, "expect"?, "actor"?}``.
+
+    The proportionate alternative to Rewrite. Correcting a single wrong sentence
+    used to cost a model call, three minutes and every recorded answer on the
+    plan; this costs the answers to the one step whose QUESTION changed, and
+    nothing at all when only the actor moved. See ``test_plans.edit_step`` for
+    why an edited step then counts as yours.
+
+    An absent key means "leave it alone", which is what makes the actor toggle a
+    one-field request rather than a read-modify-write of the whole step.
+    """
+    fields = {
+        key: payload[key]
+        for key in ("text", "expect", "actor")
+        if isinstance(payload, dict) and key in payload
+    }
+    if not fields:
+        return JSONResponse(
+            {"error": "nothing to change — send text, expect or actor"},
+            status_code=400,
+        )
+    try:
+        updated = await asyncio.to_thread(
+            _test_plans.edit_step, plan_id, step_id, **fields
+        )
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    if updated is None:
+        return JSONResponse(
+            {"error": "no such step on %s: %s" % (plan_id, step_id)}, status_code=404
+        )
+    return JSONResponse({"ok": True, "plan": updated})
+
+
+@app.post("/api/test-plans/{plan_id:path}/result")
+def record_test_plan_result(plan_id: str, payload: dict) -> JSONResponse:
+    """Record one step's outcome — the human half of a run.
+
+    ``{"step_id", "result", "note"}``. Unlike the file a verify session writes
+    (whose values are coerced, because a model cannot be told it sent something
+    wrong), an unknown ``result`` here is a 400: this comes from our own UI, and
+    quietly turning a typo into "blocked" would hide the bug.
+    """
+    payload = payload or {}
+    step_id = str(payload.get("step_id", "") or "").strip()
+    result = str(payload.get("result", "") or "").strip()
+    note = str(payload.get("note", "") or "")
+    try:
+        plan = _test_plans.record_result(plan_id, step_id, result, note, by="human")
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    if plan is None:
+        # record_result returns None for both "no such plan" and "no such step"
+        # — from the caller's side they are the same mistake: it named something
+        # that isn't there.
+        return JSONResponse(
+            {"error": "test plan or step not found: %s / %s" % (plan_id, step_id)},
+            status_code=404,
+        )
+    return JSONResponse({"ok": True, "plan": plan})
+
+
+async def _end_verify_session(title: str) -> bool:
+    """End the verify session ``title`` if it is live. Returns whether it was.
+
+    ``close`` rather than DELETE, deliberately: a verify workspace is cheap but
+    it is not ours to destroy — the agent may have left notes, a log tail, a
+    half-finished repro in it, and the run being cancelled is often exactly when
+    someone wants to look. Closing keeps the worktree and puts the session in
+    the recently-closed store, so it is one click from coming back.
+    """
+    if not title or title not in ENGINE.instances:
+        return False
+    resp = await close_instance(title)
+    return resp.status_code < 400
+
+
+@app.post("/api/test-plans/{plan_id:path}/deployed")
+def mark_test_plan_deployed(plan_id: str) -> JSONResponse:
+    """ "It's out — check it now." Skip the rest of the deploy wait.
+
+    The manual counterpart to the clock in :func:`_check_test_plans_for_liveness`.
+    A per-repo delay is a good guess and never a fact: a pipeline that usually
+    takes fifteen minutes sometimes takes three, and a person watching it land
+    should not have to wait out a timer that has already been proved wrong. So
+    the wait has a door, and it is the only thing on this surface that moves a
+    plan to ``due`` by hand.
+
+    Deliberately NOT the inverse ("it hasn't deployed, wait longer"): the clock
+    already errs long, and a plan that goes due early is recoverable — the steps
+    are answerable whenever you like — while one nobody can release is not.
+
+    Refuses anything that is not still waiting, rather than being idempotent
+    about it: pressed on a plan that is already ``due`` this would be a no-op the
+    UI never offers, and pressed on a ``done`` one it would silently reopen a
+    checklist somebody had finished.
+    """
+    plan = _test_plans.get(plan_id)
+    if plan is None:
+        return JSONResponse(
+            {"error": "test plan not found: %s" % plan_id}, status_code=404
+        )
+    if plan["state"] != "generated" or not plan["merged_at"]:
+        return JSONResponse(
+            {"error": "this checklist is not waiting on a deploy"}, status_code=409
+        )
+    updated = _test_plans.mark_due(plan_id)
+    if updated is None:
+        return JSONResponse(
+            {"error": "test plan not found: %s" % plan_id}, status_code=404
+        )
+    _events.BUS.emit(
+        "session.test_plan_due",
+        session=plan_id,
+        data={
+            "plan": plan_id,
+            "title": updated["title"],
+            "live_branch": updated["live_branch"],
+        },
+    )
+    return JSONResponse({"ok": True, "plan": updated})
+
+
+@app.post("/api/test-plans/{plan_id:path}/cancel")
+async def cancel_test_plan_run(plan_id: str) -> JSONResponse:
+    """Stop the verify session working this plan and put the plan back.
+
+    Without this, a run you started by mistake — on the wrong commit, or one
+    that has wedged — could only be stopped by hunting down its session in the
+    sidebar, and the plan itself stayed ``running`` until the due loop's
+    two-hour give-up clock expired. Both halves happen here: the session ends
+    and the plan returns to the state it was in before the run.
+
+    Idempotent on purpose: a plan whose session has already gone (the user
+    ended it themselves) still gets its bookkeeping cleared, which is precisely
+    the wedge this is meant to be able to clear.
+    """
+    plan = _test_plans.get(plan_id)
+    if plan is None:
+        return JSONResponse(
+            {"error": "test plan not found: %s" % plan_id}, status_code=404
+        )
+    session_title = plan["run_session"]
+    closed = await _end_verify_session(session_title)
+    updated = await asyncio.to_thread(_test_plans.cancel_run, plan_id)
+    return JSONResponse(
+        {
+            "ok": True,
+            "session": session_title,
+            "closed": closed,
+            "plan": updated,
+        }
+    )
+
+
+@app.delete("/api/test-plans/{plan_id:path}")
+async def delete_test_plan(plan_id: str) -> JSONResponse:
+    """Forget one plan. The dismiss button — a plan the user has decided not to
+    run is noise, and there is no other way to clear one (they deliberately
+    outlive their sessions, so deleting the session does not take the plan with
+    it).
+
+    A plan being verified right now takes its verify session with it. Nothing
+    would be left to write the results into, so an agent left running would be
+    burning minutes to answer a checklist that no longer exists — and the
+    session would linger in the grid with a name pointing at a deleted plan.
+    """
+    plan = _test_plans.get(plan_id)
+    if plan is None or not _test_plans.delete(plan_id):
+        return JSONResponse(
+            {"error": "test plan not found: %s" % plan_id}, status_code=404
+        )
+    closed = await _end_verify_session(plan["run_session"])
+    return JSONResponse({"ok": True, "closed": closed})
 
 
 # --- Workspace disk management ------------------------------------------------
@@ -6266,6 +9727,21 @@ async def list_workspaces(sizes: int = 0) -> JSONResponse:
     """
     active = _active_worktree_titles()
 
+    def _mtime(path: str) -> float | None:
+        """The directory's own mtime, for the UI's "sort by date".
+
+        One stat per entry, unlike the ``du`` behind ``size_bytes`` — cheap
+        enough to always include, so the disk manager can sort by age without a
+        second round trip. It is the top-level dir's timestamp, so it tracks when
+        the workspace was created or had files added/removed at its root, not
+        every edit deep inside it. Newest-first over that is still the answer to
+        "which of these 40 worktrees is stale".
+        """
+        try:
+            return os.stat(path).st_mtime
+        except OSError:
+            return None
+
     def _entry(path: str, name: str, root: str) -> dict:
         return {
             "name": name,
@@ -6273,6 +9749,7 @@ async def list_workspaces(sizes: int = 0) -> JSONResponse:
             "root": root,
             "kind": _classify_workspace(os.path.basename(name) or name, root),
             "size_bytes": None,
+            "mtime": _mtime(path),
             "active_session": active.get(os.path.realpath(path)),
         }
 
@@ -6513,8 +9990,7 @@ def _create_inplace_session(abs_path: str):
         except Exception as err:  # noqa: BLE001
             if log.ErrorLog is not None:
                 log.ErrorLog.Printf("failed to start in-place %s: %v", title, err)
-            with ENGINE.lock:
-                ENGINE.instances.pop(title, None)
+            _drop_failed_start(title, inst)
             # The auto-adopt loop memoizes this folder's realpath in
             # ``_CURSOR_SEEN`` right after we return, so a failed start would
             # otherwise wedge the folder forever (every tick skips it) until the
@@ -6595,6 +10071,11 @@ def list_providers() -> JSONResponse:
                 # Usage-window knowledge (E): how this CLI's limits reset in time, so
                 # the UI can explain it and the scheduled refresh can pick a cadence.
                 "usage_window": p.usage_window(),
+                # Which rungs of the neutral thinking-effort ladder this CLI can
+                # actually distinguish, so a per-item Effort picker can say where
+                # a given queue's CLI tops out instead of offering six rungs that
+                # silently collapse into three (see providers/effort.py).
+                "effort": _provider_effort.capability(p),
             }
         )
     return JSONResponse({"providers": out, "default": ENGINE.default_program()})

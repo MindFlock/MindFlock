@@ -114,6 +114,8 @@ async def list_open_issues() -> dict:
 
     processed = load_processed_issues(_REPO_ROOT)
     now = datetime.now(timezone.utc)
+    # App-wide, so resolved once for the listing (see the ticket panel's twin).
+    strategy = workspace_mode()
     out = []
     for issue in sorted(issues, key=lambda i: i.created_at, reverse=True):
         reasons = skip_reasons(issue, processed, gh, now)
@@ -126,6 +128,13 @@ async def list_open_issues() -> dict:
                 "author": issue.author,
                 "created_at": issue.created_at.isoformat(),
                 "session": session_title(issue),
+                # What a run of this issue owns on disk — the branch and the
+                # workspace strategy, for the reopen probe in server.py. The
+                # repo URL is deliberately absent: an issue session provisions
+                # from the default repository (``prepare_start`` never sets one
+                # on its story), so the probe resolves the same default.
+                "branch": branch_for(issue),
+                "strategy": strategy,
                 "eligible": not reasons,
                 "reasons": reasons,
             }

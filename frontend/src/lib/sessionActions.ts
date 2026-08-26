@@ -7,12 +7,13 @@
 import { api, instApi } from "../api/client";
 import type { AutopilotRun, Caps, Config, Instance } from "../api/types";
 import { computeVisible } from "../components/grid/layout";
+import { orderWithAfter } from "../components/sidebar/ordering";
 import { patchInstance, queryClient, refreshInstances } from "../state/queries";
 import { freshStage } from "./stageWatch";
-import { useUi } from "../state/store";
+import { displayName, useUi } from "../state/store";
 import { toast } from "./toast";
 import { errMsg } from "./format";
-import { clearStep, markLoopReset, markStep } from "./stage";
+import { clearLoopReset, clearStep, markLoopReset, markStep } from "./stage";
 import { depthLabel, normalizeDepth } from "./autopilot";
 import { focusTerm, releaseTerms } from "./terminals";
 
@@ -190,7 +191,7 @@ export async function undoLastClose() {
       return;
     }
     if (!ent.exists) {
-      toast("Can’t reopen “" + (ent.title || "session") + "” — its worktree is gone", {
+      toast("Can’t reopen “" + (ent.title ? displayName(ent.title) : "session") + "” — its worktree is gone", {
         duration: 5000,
       });
       return;
@@ -202,7 +203,7 @@ export async function undoLastClose() {
       );
       await refreshInstances();
       if (inst?.title) selectSession(inst.title);
-      toast("Reopened " + (ent.title || "session"));
+      toast("Reopened " + (ent.title ? displayName(ent.title) : "session"));
     } catch (err) {
       toast("Reopen failed: " + errMsg(err), { duration: 5000 });
     }
@@ -277,19 +278,68 @@ export function failPendingSession(title: string) {
       (i) => !((i as unknown as { pending_create?: boolean }).pending_create && i.title === title)
     )
   );
+  // A duplicate reserves the guessed title a slot in the sidebar order so the
+  // row doesn't land at the bottom and then jump. If the create failed there
+  // is no session to hold it — and the name is one the NEXT duplicate of the
+  // same window will be handed, which would inherit a slot it never earned.
+  dropFromOrder(title);
 }
 
-/** Copy a window: a second session sharing this one's worktree. */
+/** Forget a title that never became a session. */
+function dropFromOrder(title: string) {
+  const ui = useUi.getState();
+  if (title && ui.order.includes(title)) ui.setOrder(ui.order.filter((t) => t !== title));
+}
+
+/** Put a freshly created session directly beneath the one it came from.
+ *
+ * The saved order is sparse — it only holds what has been dragged or placed —
+ * so it is merged with the live list first, into exactly the arrangement
+ * `orderedInstances` renders: saved slots in their saved order, then everything
+ * it has never seen in server order.
+ *
+ * Deliberately a MERGE rather than that function's `nextOrder`. nextOrder is
+ * the live list and nothing else, so persisting it would quietly erase the
+ * saved slot of every session missing from the current snapshot — a remote
+ * device that happens to be asleep, for one, whose rows would then come back at
+ * the bottom in server order with nothing the user did to explain it.
+ *
+ * Both titles have to be live. A remote row's copy is answered by the device
+ * that owns it, under its own BARE title rather than the `device::title` the
+ * rail shows, and placing that would persist a slot for a session this browser
+ * has never seen. */
+function placeAfter(title: string, after: string) {
+  const ui = useUi.getState();
+  const live = instances().map((i) => i.title);
+  if (!live.includes(title) || !live.includes(after)) return;
+  const seen = new Set(ui.order);
+  const merged = ui.order.concat(live.filter((t) => !seen.has(t)));
+  const next = orderWithAfter(merged, title, after);
+  if (next !== merged) ui.setOrder(next);
+}
+
+/** Copy a window: a second session sharing this one's worktree.
+ *
+ * The copy lands directly under its source, twice: once for the optimistic
+ * provisioning row, so it doesn't appear at the bottom and then jump, and
+ * again for the real title the server picked, which can differ from the guess. */
 export async function copySession(title: string) {
   if (!title) return;
   const guess = addPendingSession(title + "-copy");
+  placeAfter(guess, title);
   try {
     const inst = await instApi<Instance>(title, "/copy", { method: "POST" });
     // The server picks the real title (its own -copy/-copy-2 numbering), which
     // can differ from the optimistic guess — so clear that one's alias too.
     if (inst?.title) clearStaleAlias(inst.title);
     await refreshInstances();
-    if (inst?.title) selectSession(inst.title);
+    if (inst?.title) {
+      // The guessed title reserved a slot; if the server picked a different
+      // one, that slot belongs to nothing.
+      if (inst.title !== guess) dropFromOrder(guess);
+      placeAfter(inst.title, title);
+      selectSession(inst.title);
+    }
   } catch (err) {
     failPendingSession(guess);
     alert("Copy failed: " + errMsg(err));
@@ -420,6 +470,43 @@ export async function stopFastTrack(title: string) {
   }
 }
 
+/** POST /reset-stage — the ↺ control: put this window back to idle.
+ *
+ * Nothing git-facing happens; the server records a display pin it releases as
+ * soon as the worktree moves, and hands back the recomputed row. The local echo
+ * (markLoopReset) flips the header on the press so the click feels immediate,
+ * and expires by itself if the request never lands.
+ *
+ * `cleared` names the previous cycle's leftovers the server took down with it
+ * (a halted fast-track, a stale check result) — worth saying out loud, since
+ * they are badges the user can see disappear. */
+export async function resetStage(title: string, opts?: { quiet?: boolean }) {
+  if (!title || !requireGit()) return;
+  markLoopReset(title);
+  try {
+    // `method` is NOT optional here: api() only upgrades to POST when a `json`
+    // body is passed, and this route needs none — omitting it sent a GET, which
+    // the static fallback answers with a 404 ("Not Found") rather than a 405.
+    const r = await instApi<{ row?: Instance | null; cleared?: string[] }>(
+      title,
+      "/reset-stage",
+      { method: "POST" }
+    );
+    if (r?.row?.title) patchInstance(title, r.row);
+    const cleared = r?.cleared || [];
+    // `quiet` is for the automatic reset that follows a successful Make PR: the
+    // user just got a PR tab and a toast about it, and a second toast narrating
+    // a header that reset itself is noise.
+    if (!opts?.quiet)
+      toast(
+        "Back to idle" + (cleared.length ? " — also cleared " + cleared.join(" + ") : "")
+      );
+  } catch (err) {
+    clearLoopReset(title);
+    toast("Could not reset this window: " + errMsg(err), { duration: 6000 });
+  }
+}
+
 export async function ideSession(title: string, quiet = false) {
   if (!title) return;
   try {
@@ -458,10 +545,11 @@ export async function submitMakePr(title: string, base: string) {
       else toast(msg, { duration: 9000 });
     } else {
       if (r?.url) window.open(r.url, "_blank");
-      // PR is open — restart the guided cycle: pin the pill back to idle so the
+      // PR is open — restart the guided cycle: put the pill back to idle so the
       // button reads "Commit…" again and the commit→push→PR loop can repeat in
-      // this session (the pin self-clears once real new work moves the stage).
-      markLoopReset(title);
+      // this session. Server-side (the same route the ↺ button uses), so it also
+      // survives a reload and reaches /m; it self-clears once the worktree moves.
+      await resetStage(title, { quiet: true });
     }
   } catch (err) {
     clearStep(title);

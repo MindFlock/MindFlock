@@ -51,12 +51,50 @@ export function visibleBuckets(
     : buckets.filter((b) => shown.includes(b));
 }
 
+/** Whether the panel is narrowed to your own tickets. A source set to ingest
+ * anyone's tickets lists other people's work by design; this is the way back to
+ * just yours. null (nothing saved) = show everything the sources returned. */
+const MINE_LS_KEY = "mf_ticket_mine_only";
+
+export function loadMineOnly(): boolean {
+  try {
+    return localStorage.getItem(MINE_LS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveMineOnly(v: boolean) {
+  try {
+    if (v) localStorage.setItem(MINE_LS_KEY, "1");
+    else localStorage.removeItem(MINE_LS_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** The tickets on screen: in a visible bucket, and yours when narrowed to
+ * yours. The one place both the panel and the tab badge ask, because they have
+ * to agree — see the header. `mine` is absent on older payloads, which only
+ * ever contained your own tickets, so undefined reads as yours. */
+export function shownTickets<T extends { bucket?: string; mine?: boolean }>(
+  tickets: T[],
+  visible: string[],
+  mineOnly: boolean
+): T[] {
+  const set = new Set(visible);
+  return tickets.filter(
+    (t) =>
+      set.has(t.bucket || NO_STATE_BUCKET) && (!mineOnly || t.mine !== false)
+  );
+}
+
 /** How many of `tickets` fall in `visible` — the number the tab badge shows,
  * which is therefore the number of rows you'll find when you open it. */
 export function countInBuckets(
-  tickets: Array<{ bucket?: string }>,
-  visible: string[]
+  tickets: Array<{ bucket?: string; mine?: boolean }>,
+  visible: string[],
+  mineOnly = false
 ): number {
-  const set = new Set(visible);
-  return tickets.filter((t) => set.has(t.bucket || NO_STATE_BUCKET)).length;
+  return shownTickets(tickets, visible, mineOnly).length;
 }

@@ -52,6 +52,10 @@ WORKSPACE_ARTIFACTS = (
     ".mindflock_setup.json",
     ".mindflock_check.log",
     ".mindflock_check.json",
+    # Where a Verify run's agent writes its per-step results for the poller to
+    # read back (web.core.test_plans). It is a report ABOUT the change, not part
+    # of it, so it must never ride along in the diff being verified.
+    ".mindflock_verify.json",
     ".testmondata",
 )
 

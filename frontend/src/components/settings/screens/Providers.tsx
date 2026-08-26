@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../../../api/client";
 import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
+import { refreshProviders } from "../../../state/queries";
 import { joinTokens, tokenize } from "../../dialogs/FlagChips";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -117,6 +118,7 @@ export function Providers(_: ScreenProps) {
       toast("Removed provider " + name);
       load();
       window.reloadProviderPicker?.();
+      void refreshProviders();
     } catch (err) {
       toast("Delete failed: " + ((err as Error).message || name));
     }
@@ -172,6 +174,7 @@ export function Providers(_: ScreenProps) {
       }
       load();
       window.reloadProviderPicker?.();
+      void refreshProviders();
     } catch (err) {
       setError((err as Error).message || (editing ? "save failed" : "add failed"));
     }

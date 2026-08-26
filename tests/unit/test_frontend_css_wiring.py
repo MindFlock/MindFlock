@@ -70,3 +70,48 @@ def test_no_orphaned_component_stylesheet():
         and ('"./%s"' % p.name) not in modules
     )
     assert orphans == [], "stylesheets nothing imports: " + ", ".join(orphans)
+
+
+# --------------------------------------------------------------------------- #
+# Rules of Hooks — pinned by a scan, because nothing else here can catch it
+# --------------------------------------------------------------------------- #
+def test_no_component_calls_a_hook_after_an_early_return():
+    """A hook below an early return is a white screen, not a warning.
+
+    THE BUG THIS PINS. ``VerifyDialog`` returns ``null`` when the dialog is shut,
+    and a ``useQuery`` was added below that line. The hook therefore existed only
+    on the renders where the dialog was OPEN — so pressing Verify changed the
+    hook count between two renders, React threw "rendered more hooks than during
+    the previous render", and the whole app unmounted to a blank page.
+
+    Nothing else in this repo could have caught it, which is the reason this
+    exists at the same level as the orphaned-stylesheet guard above. ``tsc`` does
+    not model the Rules of Hooks; there is no eslint config in this project at
+    all, so there is no ``react-hooks/rules-of-hooks``; and vitest runs node-only
+    by design — no DOM, so no component is ever actually rendered by a test. A
+    source scan is crude, but it is the only thing between this mistake and a
+    blank screen, and it is precisely the shape the mistake takes.
+
+    Scoped to the enclosing function: the scan stops at the next top-level ``}``,
+    so a helper component declared later in the same file is judged on its own.
+    ``useUi.getState()`` and friends do not match — a hook CALL is
+    ``useThing(``, and a member access is not.
+    """
+    import re
+
+    hook = re.compile(r"\buse[A-Z]\w*\(")
+    guard = re.compile(r"^\s{2}if \([^)]*\) return null;")
+    offenders = []
+    for path in sorted((_FRONTEND_SRC / "components").rglob("*.tsx")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for i, line in enumerate(lines):
+            if not guard.match(line):
+                continue
+            for j in range(i + 1, len(lines)):
+                if lines[j].startswith("}"):
+                    break
+                if hook.search(lines[j]):
+                    offenders.append(
+                        "%s:%d %s" % (path.name, j + 1, lines[j].strip()[:60])
+                    )
+    assert not offenders, "hook called after an early return:\n" + "\n".join(offenders)

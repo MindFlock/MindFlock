@@ -137,6 +137,37 @@ class TestPipelineOrchestratorInit:
         """AssigneeFilter is initialized with the configured member id(s)."""
         assert orchestrator._assignee_filter._member_ids == {config.ticketing.member_id}
 
+    def test_an_any_assignee_source_disarms_the_filter(self, config):
+        """The net is flock-wide and the queue doesn't record which source a
+        story came from, so one source ingesting anyone's tickets has to switch
+        it off — otherwise it would reject exactly the tickets that source
+        exists to pick up."""
+        config.ticketing_sources = [
+            TicketProviderConfig(
+                provider="shortcut",
+                api_token="t",
+                member_id="member-uuid-123",
+                workflow_state="100",
+                assignee_scope="anyone",
+            )
+        ]
+        assert PipelineOrchestrator(config)._assignee_filter._member_ids == set()
+
+    def test_an_unbounded_any_assignee_source_keeps_the_filter(self, config):
+        """No ingest state means the scope never actually widened, so neither
+        does the net."""
+        config.ticketing_sources = [
+            TicketProviderConfig(
+                provider="shortcut",
+                api_token="t",
+                member_id="member-uuid-123",
+                assignee_scope="anyone",
+            )
+        ]
+        assert PipelineOrchestrator(config)._assignee_filter._member_ids == {
+            "member-uuid-123"
+        }
+
 
 class TestProcessStory:
     """Tests for the process_story method."""

@@ -198,6 +198,17 @@ def _agent_transcript_text(workdir: str, session_name: str = ""):
                     continue
                 if obj.get("type") not in ("user", "assistant"):
                     continue
+                if obj.get("toolUseResult") is not None:
+                    # A record carrying a tool RESULT is output, not something a
+                    # person typed: a fetched page body, a file dump, a stack
+                    # trace. providers/claude.py's snippet reader already skips
+                    # these; this one never did, and the only reason that has not
+                    # mattered is that no such record happens to survive the text
+                    # extraction below today — a property of the current corpus,
+                    # not of the format. It matters now because this function's
+                    # output reaches a prompt whose answer is parsed into steps an
+                    # agent then performs (test_plans._session_conversation).
+                    continue
                 content = (obj.get("message") or {}).get("content")
                 texts = []
                 if isinstance(content, str):
