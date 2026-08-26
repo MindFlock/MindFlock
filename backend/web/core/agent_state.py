@@ -114,10 +114,25 @@ def _session_find_prompt(inst, prefix: str) -> Optional[str]:
 
 
 # Layered activity detection (roadmap A1). Per-title rolling record of the
-# agent pane: {hash, changed_epoch, state, streak}. Authoritative signals (exit
-# marker, foreground process, provider hook marker) are consulted first; the
-# pane-hash fallback is hardened with noise stripping + asymmetric hysteresis
-# so a single changed frame can't flip the badge every poll.
+# agent pane. Authoritative signals (exit marker, foreground process, provider
+# hook marker) are consulted first; the pane-hash fallback is hardened with
+# noise stripping + asymmetric hysteresis so a single changed frame can't flip
+# the badge every poll.
+#
+# The record carries two independent groups of keys:
+#
+# * **pane-inspection bookkeeping**, written only by :func:`_pane_hash_activity`
+#   and meaningful only to it — ``hash`` / ``changed`` / ``state`` / ``streak``
+#   / ``size`` / ``cpu`` / ``cpu_at`` / ``busy_at`` / ``tokens``. ``state`` is
+#   *that layer's* running verdict, not the session's.
+# * **layer-wide provenance**, written by :func:`_verdict` on EVERY return path
+#   of :func:`_agent_activity` — ``created`` / ``reported`` / ``state_since`` /
+#   ``worked_at``. Before these existed only the pane path wrote anything, so a
+#   session reporting through its CLI's hooks (the common Claude case) left no
+#   trail at all: ``activity_since`` was dead for exactly those sessions, and
+#   nothing downstream could tell "this agent worked and then stopped" from
+#   "this agent has never done anything", which is precisely the distinction a
+#   notification needs (see ``server._note_turn_boundary``).
 _ACTIVITY_CACHE: Dict[str, dict] = {}
 _ACTIVITY_IDLE_AFTER = (
     8.0  # static-pane seconds before working -> idle (2x the UI's 4s poll)
@@ -141,6 +156,173 @@ _LIMIT_PROBE: Dict[str, dict] = {}  # title -> {"at": epoch, "limit": bool}
 # often per session — discovery stats on-disk stores and the id changes rarely.
 _THREAD_RECORD_EVERY_S = 20.0
 _THREAD_RECORD_AT: dict = {}
+
+
+def _activity_record(title: str, created) -> dict:
+    """The per-title rolling record, reset when the tmux INCARNATION changes.
+
+    This used to be created ad hoc inside :func:`_pane_hash_activity` and
+    POPPED on every ``offline`` poll. Both halves were wrong.
+
+    Popping meant a session whose tmux merely hiccuped — or one the user closed
+    and re-opened, which relaunches the agent through
+    ``agent_sessions._ensure_agent_session`` — came back with no hysteresis, no
+    CPU baseline and no history, straight into the pane layer's "first sighting"
+    branch. It also defeated the resize rebaseline below, which exists precisely
+    so that *clicking a tab must not read as activity*: that guard can only
+    protect a record that still exists.
+
+    But a record must not survive a RELAUNCH either. ``worked_at`` asserts "this
+    agent process was observed doing work", and ``tmux new-session`` starts a
+    different process; carrying the old answer over is how a freshly rebooted
+    session inherits the dead run's history. tmux's own ``session_created`` is
+    the incarnation id — the same fact :func:`_agent_exited` already uses to
+    reject an exit marker left by a previous session of the same name.
+
+    An EXISTING record with no ``created`` yet (a hand-seeded one in tests, or
+    the pane layer's own re-fetch) simply adopts the stamp: adopting is not a
+    reset. A record being MINTED without one is never stored at all — see below.
+    """
+    rec = _ACTIVITY_CACHE.get(title)
+    try:
+        stamp = None if created is None else float(created)
+    except (TypeError, ValueError):
+        stamp = None
+    if rec is None:
+        rec = {
+            "created": stamp,
+            "reported": None,
+            "state_since": 0.0,
+            "worked_at": None,
+        }
+        if stamp is not None:
+            _ACTIVITY_CACHE[title] = rec
+        # A brand-new record with NO incarnation stamp is never kept. That
+        # happens when `tmux display-message` fails while `has-session`
+        # succeeded, so `_pane_meta` answers all-None: the poll can still
+        # capture a pane and reach a verdict, but there is no identity to file
+        # it under. Storing it would create a record that the next successful
+        # stamp has to either adopt — smuggling a dead run's work evidence into
+        # a new incarnation through the one door this function exists to shut —
+        # or discard, which is what a throwaway does anyway, one poll earlier
+        # and without the ambiguity. Losing a poll's memory fails quiet: no
+        # evidence, so nothing can be announced.
+        return rec
+    if stamp is None:
+        rec.setdefault("reported", None)
+        rec.setdefault("state_since", 0.0)
+        rec.setdefault("worked_at", None)
+        return rec
+    if rec.get("created") is None:
+        # An EXISTING record with no stamp is a hand-seeded one (tests, and
+        # `_pane_hash_activity`'s own re-fetch). Adopting is not a reset.
+        rec.setdefault("reported", None)
+        rec.setdefault("state_since", 0.0)
+        rec.setdefault("worked_at", None)
+        rec["created"] = stamp
+        return rec
+    if rec["created"] != stamp:
+        # A new tmux session under the same name: every observation in the
+        # record describes a process that no longer exists. The limit probe
+        # goes with it — its verdict is cached for _LIMIT_RECHECK_S, and a
+        # window reopened inside that span would otherwise report a fresh
+        # process as usage-limited (and 'usage_limit' is a default-ON rule).
+        rec.clear()
+        rec.update(
+            {"created": stamp, "reported": None, "state_since": 0.0, "worked_at": None}
+        )
+        _LIMIT_PROBE.pop(title, None)
+    return rec
+
+
+def _verdict(rec: Optional[dict], value: str, now: float) -> str:
+    """Record ``value`` as this session's reading and return it.
+
+    THE SINGLE EXIT POINT for every layer of :func:`_agent_activity`, so
+    ``state_since`` and ``worked_at`` mean the same thing whether the answer
+    came from the exit marker, a hook marker, the process tree or the pane.
+
+    ``worked_at`` is stamped only by ``working`` — never by ``clarify``, and
+    never by ``idle``. It is the evidence a notification needs before it may
+    claim a turn ENDED, so it has to mean "we watched this agent work", not
+    "something happened on this pane". A trust/MCP gate on a brand-new session
+    reports ``clarify`` before the agent has been handed anything to do; a
+    session that boots to a bare prompt reports ``idle`` forever. Neither is a
+    turn, and neither may arm one.
+
+    ``limit`` actively DROPS it. A turn the account's cap cut short is not a
+    turn that finished, and the reading only says ``limit`` while the banner is
+    on the pane — press a key, or let the throttled re-check expire against a
+    redrawn prompt, and the session reads plain idle again with the cut-short
+    turn's evidence still armed, ready to report "has finished" on work that
+    was abandoned mid-thought. Autopilot drops its own idle dwell on a limit for
+    exactly this reason. A resume re-earns the evidence on the next ``working``.
+    """
+    if rec is None:
+        return value
+    if rec.get("reported") != value:
+        rec["reported"] = value
+        rec["state_since"] = now
+    if value == "working":
+        rec["worked_at"] = now
+    elif value == "limit":
+        rec["worked_at"] = None
+    return value
+
+
+def worked_at(title: str) -> Optional[float]:
+    """Epoch this session was last OBSERVED working in its current tmux
+    incarnation, or None — the provenance behind ``session.turn_ended``.
+
+    None means one of three things, and all three are "there is no turn to
+    announce": the session has never been seen working, its tmux session was
+    relaunched since (:func:`_activity_record` resets the record), or a turn
+    end has already been announced for the work we saw (:func:`claim_work`).
+
+    A read, for gating. The announcement itself must go through
+    :func:`claim_work`, which is the same question asked atomically.
+    """
+    val = (_ACTIVITY_CACHE.get(title) or {}).get("worked_at")
+    return float(val) if isinstance(val, (int, float)) else None
+
+
+#: Guards the read-and-clear in :func:`claim_work`. Nothing else needs it —
+#: every other access is a single GIL-atomic dict operation.
+_WORK_CLAIM_LOCK = threading.Lock()
+
+
+def claim_work(title: str) -> Optional[float]:
+    """Atomically SPEND this session's work evidence, or None if it is gone.
+
+    One turn-end announcement per observed work cycle; the next ``working``
+    reading re-arms it. Atomic because two unsynchronised 4s tickers
+    (``_instances_tick`` and ``_tick_state_changes``) plus an on-demand
+    ``_republish_session`` all run this check, and a plain read-then-clear lets
+    two of them satisfy the dwell in the same instant and announce twice — which
+    the per-channel dedupe would hide on the phone and not in the bell, whose
+    rows are keyed by event seq. Winning the claim IS the permission to emit.
+    """
+    with _WORK_CLAIM_LOCK:
+        rec = _ACTIVITY_CACHE.get(title)
+        val = (rec or {}).get("worked_at")
+        if not isinstance(val, (int, float)):
+            return None
+        rec["worked_at"] = None
+        return float(val)
+
+
+def state_since(title: str) -> float:
+    """Epoch the session's REPORTED activity last changed value, or 0.0.
+
+    Feeds ``/api/instances``' ``activity_since`` (attention ordering and the
+    wedged-session watchdog). Distinct from the notification layer's own
+    ``activity_at``, which stamps when the *announced* value was adopted —
+    the watchdog wants the pane's truth, the notification wants what the user
+    was told, and neither may gate the other.
+    """
+    val = (_ACTIVITY_CACHE.get(title) or {}).get("state_since")
+    return float(val) if isinstance(val, (int, float)) else 0.0
+
 
 # Last live branch observed per session title, so the stage pill can follow a
 # branch switch inside one workspace (in-place sessions especially): on drift,
@@ -587,6 +769,49 @@ def _limit_on_pane(srv, name: str, provider) -> bool:
         return False
 
 
+def _marker_is_current(provider, name: str, created) -> bool:
+    """Whether the CLI's hook marker was written by the tmux session that is
+    running RIGHT NOW.
+
+    A marker is otherwise trusted on AGE alone — an ``idle`` one at any age (a
+    Stop hook from two hours ago on a still-running CLI is genuinely idle), a
+    ``working``/``clarify`` one inside :data:`_MARKER_TRUST_WINDOW_S`. Both
+    properties have to survive. What must not survive is a marker from a
+    PREVIOUS incarnation. The marker file is keyed by tmux session name, nothing
+    deletes it (``_ensure_agent_session`` clears the exit marker and the thread
+    marker, never this one), no provider maps a session-start event to a state,
+    and it only expires after six hours. So a window closed and re-opened
+    reported the dead run's state for as long as its age allowed: an ``idle``
+    announced a turn that had ended before the session existed, and a
+    ``working`` — from a session killed mid-turn — painted a fresh CLI as
+    running for up to 45s and stamped it with work evidence it had not earned.
+
+    Same guard, same reason, as :func:`_agent_exited`'s mtime-vs-created check.
+    Unknowable inputs answer True: without a creation stamp or a marker age
+    there is nothing to compare, and the long-standing behaviour is to trust the
+    CLI. Claude's live ``agents --json`` path reports age ``0.0``, so it always
+    passes — it is real-time by construction.
+
+    The clock is sampled HERE rather than taken from the caller: the caller's
+    ``now`` predates the probes between it and this call (a pane capture, a
+    ``claude agents --json`` shell-out), and subtracting a freshly-measured age
+    from a stale ``now`` places the write earlier than it happened — rejecting,
+    of all things, the first marker of a genuinely fresh session.
+    """
+    if created is None:
+        return True
+    try:
+        age = provider.activity_state_age(name)
+    except Exception:  # noqa: BLE001 — an unreadable age is not evidence
+        return True
+    if age is None:
+        return True
+    try:
+        return (time.time() - float(age)) >= float(created)
+    except (TypeError, ValueError):
+        return True
+
+
 def _idle_or_limit(srv, title: str, name: str, provider) -> str:
     """``"limit"`` when a session that LOOKS idle is really parked on a
     usage-limit screen, else ``"idle"``.
@@ -618,8 +843,9 @@ def _pane_hash_activity(
     Reached only once the authoritative signals (exit marker, hook marker,
     process tree) are inconclusive. Captures the pane and decides:
 
-    * First sighting of ``title`` -> assume 'working' (a fresh agent usually
-      is) and seed the rolling record; it settles once CPU/pane go quiet.
+    * First sighting of this PANE -> classify from what one frame can prove
+      (limit banner / interrupt hint) and otherwise report 'idle'; never a
+      guess. See the seeding block for why.
     * A pane RESIZE (a web tab attaching reflows tmux) rebaselines the hash /
       CPU / token counter and keeps the PRIOR state — clicking a tab must not
       read as activity.
@@ -656,25 +882,58 @@ def _pane_hash_activity(
     h = _normalized_pane_hash(text)
     now = time.time()
     cpu_now = srv._pane_cpu_jiffies(pane_pid)
-    rec = _ACTIVITY_CACHE.get(title)
-    if rec is None:
-        # First sighting: assume working (a fresh agent usually is); it
-        # settles to idle once CPU (or the pane) stays quiet past the
-        # threshold.
-        _ACTIVITY_CACHE[title] = {
-            "hash": h,
-            "changed": now,
-            "state": "working",
-            "streak": 0,
-            "size": pane_size,
-            "cpu": cpu_now,
-            "cpu_at": now,
-            "busy_at": now,
-            # Baseline the turn-token counter now so the NEXT poll can already
-            # tell a climb (work) from a flat counter (idle).
-            "tokens": _parse_progress_tokens(text, provider),
-        }
-        return "working"
+    rec = _activity_record(title, None)
+    if rec.get("hash") is None:
+        # FIRST SIGHTING OF THIS PANE — classify from the evidence one frame
+        # can actually carry, and never from optimism.
+        #
+        # This used to seed 'working' outright ("a fresh agent usually is"),
+        # holding the pane text and the CPU counter and consulting neither.
+        # That guess was the phantom behind "I click an offline session and it
+        # goes running for a moment and then idle": the record is rebuilt from
+        # scratch whenever a session's tmux comes back (clicking a pane
+        # relaunches the agent through `_ensure_agent_session`), so the guess
+        # fired on a CLI that had been handed nothing to do, held the badge at
+        # 'running' for _ACTIVITY_IDLE_AFTER seconds, and then decayed — a
+        # working->idle pair the agent never earned, and a "finished" the user
+        # had no reason to be told about.
+        #
+        # Two of the four signals need two samples (CPU rate, a climbing token
+        # counter) and so cannot speak here. The other two are single-frame
+        # facts and do: a usage-limit banner, and the provider's interrupt hint
+        # ("esc to interrupt") which means a turn is live right now. A pane
+        # showing neither is, on all available evidence, parked — so we say so.
+        # 'clarify' is deliberately NOT attempted: the established path only
+        # matches a waiting prompt on a STABLE pane, and one frame cannot
+        # establish stability. The next poll catches it 4s later.
+        tokens = _parse_progress_tokens(text, provider)
+        wpats = provider.working_pane_patterns()
+        if is_limit_screen(text):
+            state = "limit"
+        elif wpats and any(re.search(p, text) for p in wpats):
+            state = "working"
+        else:
+            state = "idle"
+        rec.update(
+            {
+                "hash": h,
+                "changed": now,
+                "state": state,
+                "streak": 0,
+                "size": pane_size,
+                "cpu": cpu_now,
+                "cpu_at": now,
+                # Only a session we have PROOF is busy gets an idle-settle
+                # clock; absent it, `busy_at` stays unset and the hysteresis
+                # below falls back to `changed`, which is now — so a pane that
+                # stays quiet simply stays idle.
+                "busy_at": now if state == "working" else None,
+                # Baseline the turn-token counter now so the NEXT poll can
+                # already tell a climb (work) from a flat counter (idle).
+                "tokens": tokens,
+            }
+        )
+        return state
     # A pane RESIZE (opening/focusing the session in the web UI attaches a
     # terminal, which resizes tmux and reflows the pane) changes the captured
     # text without the agent doing anything. Rebaseline hash + CPU and DON'T
@@ -755,10 +1014,20 @@ def _pane_hash_activity(
             rec["streak"] = 0
             rec["state"] = "working"
             return "working"
+        # NO pane-change promotion here, deliberately. On this branch CPU is the
+        # authoritative signal and a changing pane is noise: an idle Claude
+        # redraws its spinner and token counter every frame at ~8 jiffies/s, so
+        # promoting on "the text moved" is precisely the bug the CPU probe was
+        # added to kill. A provider whose work is invisible to both CPU and the
+        # status line needs a ``working_patterns`` regex (Settings → Providers),
+        # not a looser rule here.
         # Otherwise keep the prior state through brief lulls (streaming
         # pauses / model round-trips), then settle to idle after the same
         # hysteresis window — regardless of cosmetic pane churn.
-        busy_at = rec.get("busy_at", rec.get("changed", now))
+        # ``or`` rather than a dict default: a pane first seen parked stores
+        # busy_at=None (no proof of work to run a clock from), and the honest
+        # fallback there is when the record itself started.
+        busy_at = rec.get("busy_at") or rec.get("changed") or now
         if now - busy_at >= _ACTIVITY_IDLE_AFTER:
             rec["streak"] = 0
             rec["state"] = "idle"
@@ -810,9 +1079,10 @@ def _agent_activity(inst, title: str) -> str:
        Code Stop/UserPromptSubmit/Notification hooks, A2) -> returned as-is
        (above the shell heuristic on purpose: the CLI's own report outvotes
        what the pane's foreground command looks like). An ``idle`` marker is
-       first re-checked against the pane for a usage-limit screen: the hook
-       fires identically whether the turn ENDED or was CUT OFF by the account's
-       limit (:func:`_idle_or_limit`);
+       first checked for belonging to the CURRENT tmux incarnation
+       (:func:`_marker_is_current`) and then re-checked against the pane for a
+       usage-limit screen: the hook fires identically whether the turn ENDED or
+       was CUT OFF by the account's limit (:func:`_idle_or_limit`);
     2. process tree — a bare shell holds the pane AND no non-shell descendant
        is alive -> the agent isn't running -> idle. A wrapper shell (the
        provisioned launcher script) with a live ``claude`` child falls through
@@ -830,6 +1100,16 @@ def _agent_activity(inst, title: str) -> str:
        Either one means the turn is still live even at ~0 CPU — the fix for
        extended thinking (work runs server-side, so the local process blocks on
        a network read and looks exactly like an idle prompt to CPU alone).
+
+    Every layer returns through :func:`_verdict`, which stamps the session's
+    rolling record with what was reported and when — and, for ``working``, that
+    the agent was OBSERVED doing something in this tmux incarnation. That trail
+    is what lets the notification layer distinguish a turn that ended from a
+    session that has simply never run one; see ``server._note_turn_boundary``.
+    The two ``offline`` returns that precede :func:`_pane_meta` (not started /
+    paused, and no tmux session) record nothing on purpose: there is no
+    incarnation to attribute a reading to, and every consumer of
+    ``activity_since`` already gates on a live state.
     """
     try:
         srv = _server()
@@ -846,30 +1126,48 @@ def _agent_activity(inst, title: str) -> str:
             == 0
         )
         if not exists:
-            _ACTIVITY_CACHE.pop(title, None)
+            # NOT a cache pop. The record used to be dropped here on every
+            # offline poll, which guaranteed that the moment the session came
+            # back the pane layer had no history and fell into its
+            # first-sighting branch — the phantom "running" flash. A record
+            # belongs to a tmux INCARNATION, and `_activity_record` retires it
+            # against tmux's own `session_created` when a genuinely new one
+            # appears; a dead session simply has no reading to report.
             return "offline"
         fg, created, pane_pid, pane_size = srv._pane_meta(name)
+        now = time.time()
+        rec = _activity_record(title, created)
         # Layer -1 (F2 safety net, startup only): auto-answer a trust/MCP gate
         # on a freshly-created session BEFORE any hook-marker short-circuit
         # below, so a seeded (PR/ticket) prompt can't sit parked behind it.
         if _startup_trust_gate_clarify(srv, inst, title, name, created):
-            return "clarify"
+            return _verdict(rec, "clarify", now)
         # Layer 0: the agent command ENDED (exit marker written this session).
         if srv._agent_exited(name, created):
-            return "idle"
+            return _verdict(rec, "idle", now)
         # Layer 1: the CLI's own report (Claude Code hook marker).
         provider = providers.resolve(getattr(inst, "Program", "") or "")
         # Bind this window to its own conversation id while it runs (throttled)
         # so a per-window `resume <id>` after a crash targets the right thread.
         _maybe_record_thread(provider, inst, name, created)
         marked = provider.activity_state(name)
+        # A marker written before this tmux session existed describes a process
+        # that no longer does — WHATEVER state it names. Discarded once, here,
+        # rather than per-branch: a stale ``working`` is every bit as wrong as a
+        # stale ``idle``, and worse in one way, because it is the reading that
+        # stamps the work evidence a turn-end announcement is later built on.
+        # (Relaunching clears the exit marker and the thread marker and not this
+        # one; see :func:`_marker_is_current`.)
+        if marked and not _marker_is_current(provider, name, created):
+            marked = None
         if marked == "idle":
-            # Stop hook fired -> the turn definitively ended; trust at any age.
+            # Stop hook fired -> the turn definitively ended; trust at any age
+            # WITHIN THIS INCARNATION (see :func:`_marker_is_current`).
             # WHY it ended is another question: a turn the account's usage limit
             # cut short fires the same hook as a completed one, so the pane is
             # checked (throttled) before this idle is passed on. See
             # :func:`_idle_or_limit`.
-            return _idle_or_limit(srv, title, name, provider)
+            return _verdict(rec, _idle_or_limit(srv, title, name, provider), now)
         if marked in ("working", "clarify"):
             # working/clarify markers only refresh on hook events (tool call,
             # prompt submit, notification). A long thinking/generating stretch
@@ -888,8 +1186,8 @@ def _agent_activity(inst, title: str) -> str:
                 # treats it as a human gate and the queue stalls behind a menu
                 # that never clears on its own, even after the window reopens.
                 if marked == "clarify" and _limit_on_pane(srv, name, provider):
-                    return "limit"
-                return marked
+                    return _verdict(rec, "limit", now)
+                return _verdict(rec, marked, now)
         # Layer 2: a bare shell holds the pane AND nothing but shells lives
         # under it -> the agent isn't running, whatever the pane looks like.
         if (
@@ -897,13 +1195,15 @@ def _agent_activity(inst, title: str) -> str:
             and fg.lower() in _BARE_SHELLS
             and not srv._pane_has_agent_process(pane_pid)
         ):
-            return "idle"
+            return _verdict(rec, "idle", now)
         # Layers 3-4: live-pane inspection (CPU rate + status-line proof under
         # asymmetric hysteresis, with a pane-hash fallback where /proc CPU is
         # unavailable). Kept in its own helper so the layered dispatch above
         # reads as a sequence of authoritative-first probes.
-        return _pane_hash_activity(
-            srv, inst, title, name, provider, pane_pid, pane_size
+        return _verdict(
+            rec,
+            _pane_hash_activity(srv, inst, title, name, provider, pane_pid, pane_size),
+            now,
         )
     except Exception:  # noqa: BLE001
         return "offline"

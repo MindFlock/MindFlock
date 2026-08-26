@@ -36,7 +36,7 @@ interface Notif {
 }
 
 /** Map a raw event envelope to a notification, or null to ignore the noise. */
-function notifFromEvent(env: EventEnvelope): { text: string; cls: string } | null {
+export function notifFromEvent(env: EventEnvelope): { text: string; cls: string } | null {
   const d = env.data || {};
   switch (env.event) {
     case "session.created":
@@ -50,9 +50,22 @@ function notifFromEvent(env: EventEnvelope): { text: string; cls: string } | nul
     case "session.deleted":
       return { text: "deleted", cls: "n-muted" };
     case "session.activity_changed":
-      if (env.new === "idle") return { text: "finished — now idle", cls: "n-done" };
       if (env.new === "clarify") return { text: "needs your input", cls: "n-warn" };
-      return null; // working / offline transitions are too noisy
+      // idle / working / offline are chip colours, not news. `new === "idle"`
+      // used to render "finished — now idle" here, with no rule gate and no
+      // dedupe — so it logged a row at the end of every assistant turn, between
+      // two prompts of a draining queue, and for a re-opened window whose agent
+      // had run nothing at all. "Finished" is a claim about work, and the event
+      // that can actually make it is session.turn_ended below.
+      return null;
+    case "session.turn_ended": {
+      // Say how long, using the dwell the event carries — the whole claim of
+      // this event is that the quiet lasted, so a bare "finished" throws away
+      // the part that makes it trustworthy.
+      const secs = Math.round(Number((d as { idle_for?: number }).idle_for) || 0);
+      const held = secs >= 90 ? Math.round(secs / 60) + "m" : secs + "s";
+      return { text: secs ? "finished — idle " + held : "finished", cls: "n-done" };
+    }
     case "session.stage_changed":
       return { text: "stage → " + (env.new || ""), cls: "n-info" };
     case "session.budget_exceeded":

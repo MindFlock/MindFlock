@@ -273,7 +273,10 @@ a feature race; those two change what your day looks like:
 - **The whole git loop is guided.** Every session carries a one-click
   commit → push → PR → merge action bar and live workflow-stage badges, so you
   drive the change home without leaving the app. The push is plain `git push`
-  over the remote your repo already has — SSH or HTTPS, your choice.
+  over the remote your repo already has — SSH or HTTPS, your choice. When you
+  want to keep working on a branch the ladder considers finished, **↺** puts the
+  window back to idle so it stops asking — nothing is undone, and it clears
+  itself the moment you commit again.
 - **Provider-agnostic by design.** A coding agent in MindFlock is just a TOML
   file — binary, launch args, prompt seeding, activity-detection hooks, model
   pricing — so it drives *any* CLI (Claude Code, Codex, Antigravity, aider,
@@ -683,6 +686,13 @@ feeds:
 - **Phone push via [ntfy](https://ntfy.sh)** — off until you turn it on. The
   *server* publishes to a topic your phone subscribes to, so an alert reaches
   you with MindFlock closed and no tab anywhere.
+
+The quietest of the opt-ins is **"a session finishes its work"**, and it means
+it. It does not fire when the chip goes grey — a coding CLI reports a turn ended
+at the end of *every* reply, so that would buzz once per exchange. MindFlock
+sends it only once it has watched that agent actually work, seen it stay idle
+for 45 seconds since, and confirmed nothing is queued to wake it back up: once
+per stretch of real work, however long the session then sits there.
 
 To set it up: install the free ntfy app, then in Settings → Notifications →
 **Phone push (ntfy)** hit **Generate** for a random topic, scan the QR into the

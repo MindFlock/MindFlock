@@ -10,6 +10,18 @@
  *     forever;
  *   - the user changed the interval in Settings → re-arm from now, because a
  *     deadline measured against the old interval means nothing.
+ *
+ * THE CLOCK ONLY RUNS WHILE THE APP DOES. A deadline is wall-clock, so on its
+ * own it keeps counting through a shut-down machine, a closed window and a
+ * slept laptop — and whoever comes back in the morning is met by a card that
+ * claims they have been at the desk for nine hours. They have not: time away
+ * from the app is time away from the desk, which is the break itself. So the
+ * app records that it is running (:data:`BREAK_SEEN_KEY`, a heartbeat), and a
+ * gap in that record re-arms the interval from now instead of resuming it.
+ *
+ * That is deliberately NOT the same as a refresh, which the rules above still
+ * refuse to let you dodge a break with: a reload lands seconds after the last
+ * heartbeat, a reopened app lands minutes or hours after it.
  */
 
 export const BREAK_MIN_MINUTES = 5;
@@ -27,6 +39,17 @@ export const IDLE_MAX_MINUTES = 480;
 export const IDLE_DEFAULT_MINUTES = 10;
 
 export const BREAK_ARM_KEY = "mf_break_due";
+/** Last time the app was known to be running — the heartbeat the away-rule
+ * reads. Its own key rather than a field on the arm: it is written every few
+ * seconds and the arm is not, and a stored deadline must stay readable even if
+ * this one is missing (an older build, cleared storage, a first run). */
+export const BREAK_SEEN_KEY = "mf_break_seen";
+
+/** How long the heartbeat can go silent before the app is assumed to have
+ * stopped counting. Comfortably longer than a hidden tab's throttled timer
+ * (browsers slow a background interval to about one tick a minute, which must
+ * not read as "away") and comfortably shorter than any real absence. */
+export const AWAY_GAP_MS = 5 * 60_000;
 
 export interface BreakArm {
   /** Epoch ms at which the break screen is due. */
@@ -93,6 +116,71 @@ export function nextArm(now: number, everyMin: number, saved: BreakArm | null): 
   return armBreak(now, every);
 }
 
+/** Was the app not running when it should have been counting?
+ *
+ * True for a heartbeat that is missing (nothing has ever run, or storage was
+ * cleared), older than {@link AWAY_GAP_MS}, or in the FUTURE — a clock that
+ * jumped backwards leaves a stamp no elapsed time can explain, and re-arming is
+ * the safe answer to "I cannot tell how long that was".
+ */
+export function wasAway(now: number, seen: number | null | undefined): boolean {
+  if (seen === null || seen === undefined || !isFinite(seen)) return true;
+  const gap = now - seen;
+  return gap < 0 || gap > AWAY_GAP_MS;
+}
+
+/** The clock a freshly loaded page should start with.
+ *
+ * One rule table, because the three ways a page can arrive want three different
+ * answers and only the middle one is obvious:
+ *
+ *   - **The app opened** (the shell launched, or a new tab): a fresh interval.
+ *     Opening MindFlock is the moment the countdown starts — you have just sat
+ *     down, whatever the deadline left behind by yesterday says.
+ *   - **The page reloaded after the app had stopped** (closed for an hour, or a
+ *     slept machine woken and refreshed): also fresh, for the same reason. The
+ *     heartbeat is what tells these apart from…
+ *   - **…a reload mid-countdown** — keep the deadline. This is the case the
+ *     stored arm exists for: a refresh, a server restart or a crash must not
+ *     buy anyone a new hour ({@link nextArm} owns the rest of that rule).
+ */
+export function openArm(
+  now: number,
+  everyMin: number,
+  saved: BreakArm | null,
+  seen: number | null | undefined,
+  reloaded: boolean
+): BreakArm {
+  const every = clampBreakMinutes(everyMin);
+  if (!reloaded) return armBreak(now, every);
+  if (wasAway(now, seen)) return armBreak(now, every);
+  return nextArm(now, every, saved);
+}
+
+/** Did this page arrive by refresh rather than by the app opening?
+ *
+ * The Navigation Timing entry answers it directly: `reload` covers F5, Ctrl+R,
+ * the palette's Reload, `location.reload()` from the API client on a lost
+ * session, and the reload every tab does when the server restarts — every path
+ * the anti-dodge rule was written for. A shell launch, a new tab and a
+ * `loadURL()` are `navigate`, which is the app opening.
+ *
+ * Unreadable (an old browser, a stripped Performance API) answers `true`: the
+ * conservative half is to keep the existing deadline, since the worst outcome
+ * is being asked to take a break slightly early.
+ */
+export function wasReload(): boolean {
+  try {
+    const nav = performance.getEntriesByType("navigation")[0] as
+      | PerformanceNavigationTiming
+      | undefined;
+    if (!nav || typeof nav.type !== "string") return true;
+    return nav.type === "reload";
+  } catch {
+    return true;
+  }
+}
+
 /** m:ss for the "you've been away N" line on the break screen. */
 export function fmtElapsed(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -110,6 +198,26 @@ export function loadArm(): BreakArm | null {
     return v;
   } catch {
     return null;
+  }
+}
+
+export function loadSeen(): number | null {
+  try {
+    const raw = localStorage.getItem(BREAK_SEEN_KEY);
+    if (!raw) return null;
+    const n = Number(raw);
+    return isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveSeen(now: number) {
+  try {
+    localStorage.setItem(BREAK_SEEN_KEY, String(now));
+  } catch {
+    /* storage unavailable — every load then reads as "away", which re-arms:
+       the same answer this whole rule gives when it cannot tell. */
   }
 }
 

@@ -23,7 +23,9 @@ List all sessions. Each item:
   "stage": "provisioning|agent|precommit|interrupt|committed|pushed|pr|merged",
   "pr_url": "…",              // when a PR exists
   "failed_step": "…",         // when stage == "interrupt" (pre-commit ✗)
+  "stage_reset": false,       // ↺ "back to idle" pin — show the ladder from the start
   "activity": "working|clarify|idle|offline",
+  "activity_since": 1756200000.0,  // epoch the reported activity last changed; 0 = no live reading
   "tokens": 0, "tokens_in": 0, "tokens_cache_read": 0, "tokens_cache_write": 0,
   "tokens_ctx": 0, "tokens_ctx_window": 200000, "tokens_cost": 0.0,
   "tokens_model": "…",
@@ -53,6 +55,17 @@ base (a configured default like `staging`, or one chosen in the dialog the
 server never sees), so a base-scoped lookup would miss the real PR and wedge the
 chip on `pushed`. The base still keys the "is there work to push" (`beyond`)
 test; only the PR lookup drops the base filter.
+`stage_reset` is the **↺ "back to idle"** pin
+(`POST /api/instances/{title}/reset-stage`, below), published *alongside*
+`stage` and never instead of it. The row's `stage` stays exactly what git says,
+so the autopilot driver, the verification-check kicker and every `*_changed`
+event keep reading the same git-derived truth; only the UI's guided ladder
+(chip, primary button, live step) honours the pin. Folding the pin into `stage`
+would let an armed fast-track chain try to commit a clean tree. The pin is
+process memory (never persisted, and pruned when its session goes) and releases
+itself against the **worktree** — a dirty tree or a moved HEAD drops it on the
+next stage read — never against the stage label, since filing a PR flips
+`pushed` → `pr` a beat after it is set.
 `activity` is layered: the provider's own authoritative signal is preferred —
 per-session `{state, ts}` markers written by the CLI's lifecycle hooks, or
 Claude's live `claude agents --json` report (see
@@ -62,6 +75,16 @@ probe memo so two consecutive activity computations never share a snapshot and
 read a zero CPU delta — phantom idle), then the pane-hash heuristic: changing
 = `working`, provider "waiting" patterns = `clarify`, static ≥ 3 s = `idle`,
 no tmux = `offline`.
+
+`activity_since` is the epoch that **reported** activity last changed value
+(`agent_state.state_since`, stamped by every classification layer, not just the
+pane one), so the UI can rank how long a session has been in its current state
+— attention ordering and the sidebar's wedged-session watchdog. It is `0` for a
+session with no live reading at all (offline, never started), and consumers
+should treat `0` as unknown rather than "changed at the epoch". **Re-check any
+consumer against live values**: this field previously read a key nothing had
+ever written, so it answered `0.0` for every session, and anything gated on
+`activity_since > 0` — the wedged-session branch included — had never once run.
 
 `diff_stat` (J3) is the total change the session has produced vs its
 per-session base — committed-beyond-base **plus** uncommitted tracked changes,
@@ -170,6 +193,7 @@ no response whose only content is "gh is not installed".
 | GET | `/api/instances/{title}/branches` | `{branches, current, default}` — the branch list backing the **Make PR** dialog's base picker. `branches` are `origin`'s remote heads (falling back to local heads when origin is unreachable, so it's never blank); `current` is the session's own branch (never a valid PR target); `default` is the pre-selected base (`repository.pr_base_branch` → the session's fork base). 404 unknown title, 409 workspace not ready |
 | POST | `/api/instances/{title}/make-pr` | Opens a PR → `{ok: true, url}` (or `note: "PR already open"`). Three tiers, in order: `gh pr create --base <base> --fill` when `gh` is installed **and** authenticated; else the GitHub REST API with a token from the usual resolution chain; else **`200 {ok: false, compare_url}`** — a prefilled compare URL the UI opens in the browser, plus the remedy sentence "add a GitHub token in Intake → Pull requests, or install the GitHub CLI". A missing `gh` is never an error status. The UI's Make-PR dialog collects `<base>` from the branch picker above (and the frontend remembers the last base per repo — `prBaseByRepo` in `localStorage`); an omitted base falls back to the session's base branch |
 | POST | `/api/instances/{title}/merge-pr` | Merges the branch's PR, same three tiers: `gh pr merge <branch> --merge`; else the REST API with a token; else **`200 {ok: false, pr_url}`** so the UI can send you to the PR page to merge it yourself |
+| POST | `/api/instances/{title}/reset-stage` | ↺ **back to idle** — pins this window's guided ladder back to its start on a clean branch, so the header stops insisting on Push / Make PR / Merge while you keep working on the same branch. **Nothing git-facing happens**: no reset, no revert, no PR close, and the published `stage` is untouched — the pin (`backend/web/core/stage_reset.py`) rides the row as `stage_reset` and only the UI ladder reads it. It releases itself when the worktree moves (dirty tree or new commit), never on the stage label. Also takes down the finished cycle's leftovers: a **halted** fast-track record (a live chain is left strictly alone) and a **stale** verification result (a current failure is never touched — the push gate reads it). → `{ok: true, pinned, dirty, cleared[], row}`, where `row` is the recomputed instance row so the presser's window flips now rather than on the next tick, and `pinned` is `false` on an already-dirty tree (that ladder is at its start already). 404 unknown title, 409 workspace not ready |
 
 ### Assigned tickets, PR auto-review + issue handling
 
@@ -181,6 +205,7 @@ no response whose only content is "gh is not installed".
 | POST | `/api/github/prs/review` | Body `{repo, number, agent?}` — force-start a review session for one open PR (**Begin review** in Intake → Pull requests), bypassing the auto filters, a non-matching base included. `agent` is this launch's coding CLI and outranks the repo card's; blank falls through to the same chain the monitor uses (`github.repo_settings[repo].agent` → `github.agent` → `[mindflock].agent` → the app default). 400 bad `owner/name`/number or an unknown `agent`, 404 no such open PR, 409 a session for it already exists |
 | GET | `/api/github/issues` | Open issues on the issue-handling repos (`github.issue_repos`), each annotated with auto-handling eligibility (`eligible`, `reasons`, `has_session`). PRs filtered out. Powers Intake → **Issues** |
 | POST | `/api/github/issues/start` | Body `{repo, number, agent?}` — force-start a coding session for one open issue on a fresh branch, bypassing the age / already-handled filters. `agent` is this launch's coding CLI, outranking the repo card's (`github.issue_repo_settings[repo].agent` → `github.issue_agent` → `[mindflock].agent` → the app default). 400 bad `owner/name` or number or an unknown `agent`, 404 issue gone, 409 a session for it already exists |
+| POST | `/api/intake/reopen` | Body `{kind}` — `tickets` \| `prs` \| `issues` — plus the same item identity that kind's start route takes (`{source, id}` for a ticket, `{repo, number}` for a PR or issue). Puts a session back on the workspace an earlier run of that item left on this machine instead of starting it over (**Reopen window**). The **server** re-resolves the workspace from the row in the panel's cached listing — never a path the client sends — so a tab left open for an hour cannot name a directory that has since been deleted: `backend/web/core/reopen.py` tries a recently-closed session for the item, then its provisioned clone directory, then a worktree still holding its branch, each gated on a real `.git`. A closed session is restored in full through the undo store (branch, program, prompt, provisioning flags); a workspace whose session was lost to a restart gets a fresh **in-place** session on the directory, in-place because the directory is not MindFlock's to delete. **200** carries the restored session's row, **202** the freshly opened one. 400 unknown `kind` or a payload that doesn't identify an item, 409 the session is already open (or the panel's list no longer holds the row — Refresh it), 410 no workspace for this item is left on this machine |
 
 The three **POST** force-start routes above share one family of *per-launch*
 overrides, each optional and each meaning "just this item, not the whole queue"
@@ -229,7 +254,14 @@ inside the 5-minute stale window, an upstream failure is logged and the last
 known list keeps being served, so a GitHub/provider blip can't empty the panel;
 the flip side is that a persistently failing upstream stays invisible to the
 client for up to 5 minutes. `has_session` is annotated on a per-request copy, so
-it stays live on cache hits.
+it stays live on cache hits. So is `workspace` — the reopenable directory an
+earlier run of the row left behind (`{kind: closed|clone|worktree, path, branch,
+entry_id?}`, absent when there is none), which is what puts **Reopen window** on
+the row. That probe is read-only and best-effort — any failure annotates
+nothing — and is per *pass*, not per row: the recently-closed store is read
+once, each candidate directory is stat'd once, and each repo answers one
+`git worktree list`, all indexed for the whole response. Rows that already have
+a live session are skipped.
 
 ### Verify — checklists for what shipped
 
@@ -356,8 +388,18 @@ usage-limit hold: a hold is armed from the provider's own usage meter **even
 when no limit banner is on the pane** (covering a session that ran out mid-turn
 and rebooted to a fresh idle prompt), and a window that reads spent but carries
 no usable reset time holds on a bounded fallback rather than sending. A meter
-that reads open — or is unavailable — leaves the queue free to send. `GET
-/api/instances` carries a per-session
+that reads open — or is unavailable — leaves the queue free to send.
+
+After MindFlock **itself** reboots a dead agent for a queued run, the drain
+holds for `_QUEUE_BOOT_GRACE` (20 s) whatever the activity probe says. A CLI
+relaunching with a large `--continue` transcript spends that time on a quiet,
+I/O-bound start, and a quiet pane is now correctly read as `idle` — nothing on
+that screen claims work is happening. Typing into a CLI that has not drawn its
+input box loses the prompt, and since the send clears the queue's `armed` flag
+the retry would only come after `_QUEUE_REARM_IDLE` (5 min). The old classifier
+bought roughly this much grace by accident, by assuming a pane it had never seen
+was working; the hold states it instead. `GET /api/instances` carries a
+per-session
 `queue: {pending, enabled, loop}` summary for the UI badge. Each auto-send emits
 `session.prompt_sent`; queue edits emit `session.queue_changed`.
 
@@ -463,7 +505,8 @@ drain-loop pass that nudges sessions parked on a limit screen to carry on
 (`data: {"resumed": <bool>}`, false when `general.resume_on_usage_reset` is
 off). It only ever fires for sessions that had actually run out, so it is the
 "your usage is back" signal; running *out* is `session.activity_changed` with
-`new == "limit"`. The notification-center
+`new == "limit"`. `session.turn_ended` is the one that says an agent has
+**finished** (`data: {"idle_for": <float>}`) — see below. The notification-center
 bell (frontend) curates these into a "what happened while I was away" feed.
 
 `session.activity_changed` transitions **into** `idle`, `clarify`, or `limit`
@@ -472,6 +515,23 @@ single poll can misread a busy pane as idle, and every consumer of this event �
 ntfy pushes, desktop notifications, clarify toasts, shell hooks — would
 otherwise fire on the flicker. A reading that reverts before it settles emits
 nothing at all; transitions back to `working`/`offline` are instant.
+
+That settle is a **flicker** filter and nothing more: it can only suppress a
+reading that reverts. "The agent has finished" is a different question, and
+`session.activity_changed` with `new == "idle"` is the wrong event to answer it
+with — the CLI's Stop hook fires at the end of every assistant turn, so the flip
+happens ten times in a ten-turn conversation, between two prompts of a draining
+queue, and once more for a window that has merely been re-opened (attaching a
+pane relaunches a dead agent, which then parks at an empty prompt). **`session.
+turn_ended`** is the fact that answers it, and it asserts three things at once:
+the agent was *observed working* in its current tmux incarnation, it has been
+idle continuously for `_TURN_END_DWELL_S` (45s), and no queued prompt is waiting
+to wake it. It is emitted once per cycle of observed work — the evidence is
+spent on emit and re-earned by the next `working` reading — so a session left
+idle overnight announces itself once. 45s is chosen to sit above every other
+idle dwell in the app (`_QUEUE_IDLE_SETTLE` 12s, `autopilot.IDLE_SETTLE_S` 30s),
+so the queue drains and a fast-track chain decides the agent is done *before*
+anyone is told the work finished.
 
 For ~30s after the server process starts (including a Settings-triggered
 restart, which re-execs), the `status/activity/stage_changed` diff events are
@@ -673,6 +733,16 @@ browser tab open. It is off until configured, resolves through
 env → `settings.json` → defaults (`MINDFLOCK_NTFY_ENABLED` / `_SERVER` /
 `_TOPIC` / `_TOKEN` / `_CLICK_URL`, where an env-supplied topic is an implicit
 opt-in for headless boxes), and is capped at 60 pushes/hour per process.
+
+Both channels collapse repeats per **(session, rule id)** for 5 s
+(`notify.py::_DEDUPE_SECONDS` / `notify.js::DEDUPE_MS`), not per (session,
+event). Three rules ride `session.activity_changed`, and an event-keyed window
+let whichever fired first swallow the rest — a default-on **ran out of usage**
+push eating a default-on **needs your input** push, and, since the same key is
+also the browser `Notification` tag, replacing its still-visible popup. The
+window is a *flap* collapser and nothing more; it is meaningless at turn
+cadence, which is why `session.turn_ended` is deduped by spending its work
+evidence instead — once per observed work cycle — rather than by a timer.
 
 Two write-path guards worth knowing: the token follows the store's secret
 convention (empty or the `•••set` sentinel keeps the saved one) **and** is

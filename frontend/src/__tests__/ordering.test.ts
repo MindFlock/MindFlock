@@ -118,12 +118,13 @@ describe("attentionItems", () => {
     expect(items).toEqual([]);
   });
 
-  it("flags a calm-but-wedged session sitting on unfinished work", () => {
+  it("flags a calm-but-wedged session sitting on uncommitted work", () => {
     const items = attentionItems([
       inst({
         title: "wedged",
         activity: "idle",
-        stage: "committed",
+        stage: "agent",
+        diff_stat: { files: 2, additions: 12, deletions: 3, uncommitted: { files: 2, additions: 12, deletions: 3 } },
         activity_since: Date.now() / 1000 - 2000,
       }),
     ]);
@@ -137,8 +138,26 @@ describe("attentionItems", () => {
       inst({
         title: "fresh",
         activity: "idle",
-        stage: "committed",
+        stage: "agent",
+        diff_stat: { files: 2, additions: 12, deletions: 3, uncommitted: { files: 2, additions: 12, deletions: 3 } },
         activity_since: Date.now() / 1000 - 10,
+      }),
+    ]);
+    expect(items).toEqual([]);
+  });
+
+  it("does not call a committed-and-left session stuck", () => {
+    // git considers a committed branch finished — the header is asking for a
+    // push, not reporting a problem. Counting it meant every session anyone
+    // had committed and walked away from landed on the bell's attention badge
+    // claiming to be wedged. (Live for the first time: activity_since used to
+    // read a key nothing wrote, so this whole branch never rendered.)
+    const items = attentionItems([
+      inst({
+        title: "done",
+        activity: "idle",
+        stage: "committed",
+        activity_since: Date.now() / 1000 - 36000,
       }),
     ]);
     expect(items).toEqual([]);

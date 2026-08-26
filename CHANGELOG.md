@@ -33,6 +33,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — launch commands and workspace scripts stay byte-identical.
   See docs/accounts.md.
 
+### Fixed
+
+- **"Your agent has finished" is now a claim MindFlock can back up.** The idle
+  notification fired on the wrong fact. A session's chip goes grey when its CLI
+  reports a turn ended, and a coding CLI reports that at the end of *every*
+  assistant reply — so a ten-turn conversation announced "finished" ten times,
+  a queue draining ten prompts announced it between each pair, and a window you
+  merely clicked back open announced it for an agent that had not run anything
+  at all.
+
+  That last one is the one people saw most, and it was two bugs standing on each
+  other. Opening a pane relaunches an agent whose tmux session has died — and
+  the activity layer *threw away everything it knew about a session* on every
+  poll while it was offline, so the relaunched CLI arrived as a stranger. Facing
+  a pane it had never seen, the classifier assumed it was working, on the theory
+  that a fresh agent usually is. It held the badge at **running** for eight
+  seconds, decayed to **idle**, and rang the bell — a whole work cycle
+  hallucinated out of a mouse click. The stale hook marker left behind by the
+  *previous* run could do the same thing on its own: nothing deletes those, and
+  they are trusted for six hours.
+
+  Three changes, one per layer. The classifier **no longer guesses**: a pane it
+  has never seen is read for the two things a single frame can actually prove —
+  a usage-limit banner, and the interrupt hint that means a turn is live right
+  now — and anything else is reported as idle, because nothing on that screen
+  says otherwise. Its memory is now scoped to a tmux **incarnation** rather than
+  wiped on every hiccup, so a session that briefly went offline comes back with
+  its history intact, while a genuinely relaunched one starts clean — and a hook
+  marker written before the current session existed no longer speaks for it.
+  Finally, "the agent has finished" became its own event, `session.turn_ended`,
+  which fires only once MindFlock has **watched that agent work**, seen it stay
+  idle for 45 seconds, and confirmed nothing is queued to wake it. Once per
+  cycle of real work, however long the session then sits there. A turn the
+  usage cap cut short does not count — it did not finish, so the evidence is
+  dropped rather than left armed to claim "done" the moment the banner scrolls
+  off the pane.
+
+  Everything that has to stay fast stayed fast. **Needs your input** and **ran
+  out of usage** still fire on the instant signal — those are "come here now",
+  and a dwell on them would be a bug of its own. The chip still flips the moment
+  the state does. What changed is only which of those moments is worth
+  interrupting you for.
+
+  Two things fixed themselves on the way. The bell's own feed had no rule and no
+  rate limit at all, so it logged "finished — now idle" even for people who had
+  never turned the notification on; it now follows the same rule as every other
+  channel. And the sidebar's **"idle 25m with unfinished work — possibly stuck"**
+  warning turns out never to have appeared once: it reads a timestamp the app
+  had never written under that name. It works now — and, on its first outing,
+  it means what it says: a *committed* branch is finished work waiting for a
+  push, not a stuck session, so only uncommitted output nobody is touching
+  earns the row.
+
+- **A "ran out of usage" push no longer swallows a "needs your input" push.**
+  Both channels collapsed repeat notifications per *(session, event)* for five
+  seconds, and three different rules ride the same activity event — so an agent
+  that hit its usage cap and then asked a question inside that window sent one
+  alert, not two, and it was the less actionable one. Worse in the browser: that
+  same key is the notification's `tag`, which Windows and macOS treat as
+  "replace the one already on screen", so a popup you were still reading was
+  overwritten. Both are keyed by **rule** now, so each rule speaks for itself.
+
+- **The break clock no longer counts the hours you were not here.** A deadline
+  is wall-clock, so on its own it kept running through a closed window, a
+  shut-down machine and a slept laptop — and whoever opened MindFlock in the
+  morning was met immediately by the break card, its away-clock already at
+  nine hours and still climbing. Time away from the app is time away from the
+  desk, which is the break itself.
+
+  The app now stamps a heartbeat while it is running, and a gap of more than
+  five minutes starts the interval over rather than resuming it: on opening, and
+  also mid-run, which is the only thing that notices a machine that slept with
+  the window open — that case takes the stale card down with it. **Opening the
+  app starts the countdown**, whatever yesterday left behind. A refresh still
+  cannot dodge a break: the two are told apart by navigation type, so every
+  reload path (F5, the palette, the reload every tab does when the server
+  restarts, the API client's reload on a lost session) keeps its deadline, while
+  a shell launch or a new tab is an open. The five-minute tolerance is wide
+  because a hidden tab's timer is throttled to about one tick a minute, which
+  must not read as an absence.
+
+- **Windows dev builds head their notifications with a name.** A toast is
+  labelled with the display name of the Start-menu shortcut registered for the
+  app id that raised it. The prod app gets one from its installer; the isolated
+  dev shell has its own app id and no installer, so Windows printed the raw
+  `ai.mindflock.desktop.dev` across the top of every toast. A dev run now writes
+  that shortcut itself — `MindFlock-dev.lnk`, rewritten only when missing or
+  stale, best-effort — and the toasts read **MindFlock-dev**. It doubles as a
+  working launcher, so it is also the thing to pin to the taskbar. Prod is
+  untouched. Development-facing only; see `electron/README.md` and
+  [docs/development.md](docs/development.md).
+
 ## [0.2.0] - 2026-08-25
 
 ### Added
@@ -101,7 +193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose description is the sentence it configures — *Reminder to take a break
   every `[N]` minutes*, with N editable in place (5–480, default 60). When it
   fires, a card asks you to get up, with the murmuration from mindflock.ai flying
-  over your actual grid. **Snooze 5 min** pushes it back; **Resumed work** (or
+  over your actual grid. **Snooze 5 min** pushes it back; **Resume Working** (or
   Escape) restarts the clock. Off by default. The countdown is wall-clock and
   survives a reload — a refresh is not a way to dodge a break — while changing
   the interval re-arms it from now.

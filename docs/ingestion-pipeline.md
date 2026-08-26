@@ -311,6 +311,28 @@ the session shows up in the grid without a reload. That start takes the row's
 own Agent CLI picker if one was used, then the repo card's, then
 `issue_agent`'s chain above.
 
+## What the sweeps will pick up next
+
+The three panel routes annotate every row with `eligible` by running the *same*
+skip filters the three flows above use (`ticket_start.skip_reasons`,
+`pr_review`, `issue_start`), so eligibility is never a second opinion about what
+the pipeline will do. **Intake → Auto-start**
+([web-ui.md](web-ui.md#intake)) rolls those scattered chips up into one
+oldest-first list — the order the flows themselves draw in — across all three
+sources.
+
+Two exclusions in that roll-up are deliberate, and both are about *work the
+pipeline has already taken*:
+
+- **Items already accepted.** `queued for ingestion (pending)` is a skip
+  *reason*, so an accepted item is no longer `eligible`; it has left the queue
+  and become a session, which is where you watch it.
+- **Items that already have a session.** Ticket eligibility rules these out
+  through the ledger, but PR and issue eligibility only consult the
+  *processed* ledger — so an item started by hand seconds ago can still read as
+  eligible. The roll-up therefore filters `has_session` itself, because calling
+  work that is being done "waiting to start" would be wrong.
+
 ## Cache refreshers
 
 Each `[[workspace.cache]]` entry with a `refresh_command` gets a background

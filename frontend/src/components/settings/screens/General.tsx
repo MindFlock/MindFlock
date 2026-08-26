@@ -181,7 +181,7 @@ function ReduceMotionRow() {
 }
 
 /** Take a break: a reminder on a timer, with the flock from mindflock.ai flying
- * over your grid. Snooze pushes it back five minutes; "Resumed work" restarts
+ * over your grid. Snooze pushes it back five minutes; "Resume Working" restarts
  * the full interval. Off by default — an app that interrupts you uninvited is a
  * worse app.
  *

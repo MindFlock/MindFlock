@@ -113,6 +113,63 @@ every stored tmux session as a side effect of changing one field.
 - CLI attach (`Attach()`): Ctrl-Q detaches; a resize monitor uses `SIGWINCH` on
   Unix and 250 ms polling on Windows (WSL follows the Unix path).
 
+### Layered activity classification
+
+`working` / `clarify` / `idle` / `limit` / `offline` is decided by
+`web/core/agent_state._agent_activity`, which consults the cheapest
+*authoritative* signal first and only falls back to looking at pixels:
+
+1. **Exit marker** — the agent command ended in this tmux session → `idle`.
+2. **The CLI's own report** — the hook marker (or Claude's live `claude agents
+   --json`), returned as-is; it outvotes what the pane's foreground command
+   looks like. It is gated on age *and* on belonging to the current tmux
+   incarnation, and an `idle` marker is re-checked against the pane for a
+   usage-limit banner, since the hook fires identically whether the turn ended
+   or was cut off (see
+   [providers.md](providers.md#activity-signal-activity_markerspy)).
+3. **Process tree** — a bare shell holds the pane and no non-shell descendant is
+   alive → the agent isn't running → `idle`.
+4. **Pane inspection** — a normalized hash of the captured pane, the pane
+   process's CPU jiffies, the provider's interrupt hint, and the turn-token
+   counter, combined with asymmetric hysteresis so one changed frame can't flip
+   the badge every poll.
+
+**Never guess on a first sighting.** The pane layer used to seed a
+never-before-seen pane as `working` ("a fresh agent usually is"). Two of its
+four signals need two samples — a CPU *rate* and a *climbing* token counter —
+so on frame one only two facts are available, and both are single-frame: a
+usage-limit banner, and the provider's `working_patterns` interrupt hint, which
+means a turn is live right now. A pane showing neither is reported `idle`, with
+no idle-settle clock started, because nothing on that screen says otherwise.
+`clarify` is deliberately not attempted there either: the waiting-prompt match
+requires a *stable* pane, and one frame cannot establish stability — the next
+poll catches it 4 s later.
+
+**The per-title rolling record has a lifecycle, and it is short.** It holds the
+pane hash, the CPU baseline, the hysteresis clocks and the layer-wide
+*provenance* (`reported` / `state_since` / `worked_at`, written on every return
+path, so a session reporting through its CLI's hooks leaves a trail too). It is
+reset:
+
+- when the **tmux incarnation** changes — the record is keyed to tmux's own
+  `session_created`, so a relaunched session starts clean (its `_LIMIT_PROBE`
+  verdict goes with it) while one whose tmux merely hiccuped keeps its history;
+- on the **delete / close / cleanup routes** (`server._forget_session_state`),
+  since titles come straight back and a namesake must not inherit a dead
+  session's state;
+- by a **per-tick sweep** (`server._prune_session_state`) for the removals that
+  never reach a route — a workspace deleted from Settings, a tombstone converged
+  from another MindFlock.
+
+It is explicitly **not** reset on an offline poll (dropping it there guaranteed
+the first-sighting branch the moment the session came back — the phantom
+"running" flash after clicking a closed window), and **not** by the git workflow
+verbs. Commit / push / make-PR / merge call `server._forget_probes`, which drops
+only memoized probe *results* so nobody is served a stale stage; forgetting the
+rolling record there would throw away `worked_at`, and with it the evidence
+behind this session's next "the agent has finished" — pressing **Commit** must
+not erase the fact that the agent worked.
+
 ## Provisioned mode (`session/provisioned.py`)
 
 Opt-in provisioning that turns a session into a **fully-loaded workspace**

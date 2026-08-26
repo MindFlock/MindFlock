@@ -22607,6 +22607,8 @@ const IDLE_MIN_MINUTES = 1;
 const IDLE_MAX_MINUTES = 480;
 const IDLE_DEFAULT_MINUTES = 10;
 const BREAK_ARM_KEY = "mf_break_due";
+const BREAK_SEEN_KEY = "mf_break_seen";
+const AWAY_GAP_MS = 5 * 6e4;
 function clampBreakMinutes(value) {
   if (value === null || value === void 0) return BREAK_DEFAULT_MINUTES;
   if (typeof value === "string" && value.trim() === "") return BREAK_DEFAULT_MINUTES;
@@ -22634,6 +22636,26 @@ function nextArm(now, everyMin, saved) {
     return { at: saved.at, every };
   return armBreak(now, every);
 }
+function wasAway(now, seen) {
+  if (seen === null || seen === void 0 || !isFinite(seen)) return true;
+  const gap = now - seen;
+  return gap < 0 || gap > AWAY_GAP_MS;
+}
+function openArm(now, everyMin, saved, seen, reloaded) {
+  const every = clampBreakMinutes(everyMin);
+  if (!reloaded) return armBreak(now, every);
+  if (wasAway(now, seen)) return armBreak(now, every);
+  return nextArm(now, every, saved);
+}
+function wasReload() {
+  try {
+    const nav = performance.getEntriesByType("navigation")[0];
+    if (!nav || typeof nav.type !== "string") return true;
+    return nav.type === "reload";
+  } catch {
+    return true;
+  }
+}
 function fmtElapsed(ms) {
   const total = Math.max(0, Math.floor(ms / 1e3));
   const m = Math.floor(total / 60);
@@ -22649,6 +22671,22 @@ function loadArm() {
     return v;
   } catch {
     return null;
+  }
+}
+function loadSeen() {
+  try {
+    const raw = localStorage.getItem(BREAK_SEEN_KEY);
+    if (!raw) return null;
+    const n = Number(raw);
+    return isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+function saveSeen(now) {
+  try {
+    localStorage.setItem(BREAK_SEEN_KEY, String(now));
+  } catch {
   }
 }
 function saveArm(arm) {
@@ -23810,7 +23848,7 @@ function attentionItems(instances2) {
     else if (act === "idle" && Number(inst.activity_since) > 0) {
       const idleFor = Date.now() / 1e3 - Number(inst.activity_since);
       const un = ((_a2 = inst.diff_stat || {}) == null ? void 0 : _a2.uncommitted) || {};
-      const unfinished = (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0 || inst.stage === "committed";
+      const unfinished = (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
       if (idleFor > WEDGE_IDLE_S && unfinished)
         items.push({
           p: 1,
@@ -25197,10 +25235,13 @@ function notifFromEvent(env) {
     case "session.deleted":
       return { text: "deleted", cls: "n-muted" };
     case "session.activity_changed":
-      if (env.new === "idle") return { text: "finished — now idle", cls: "n-done" };
       if (env.new === "clarify") return { text: "needs your input", cls: "n-warn" };
       return null;
-    // working / offline transitions are too noisy
+    case "session.turn_ended": {
+      const secs = Math.round(Number(d.idle_for) || 0);
+      const held = secs >= 90 ? Math.round(secs / 60) + "m" : secs + "s";
+      return { text: secs ? "finished — idle " + held : "finished", cls: "n-done" };
+    }
     case "session.stage_changed":
       return { text: "stage → " + (env.new || ""), cls: "n-info" };
     case "session.budget_exceeded":
@@ -43114,6 +43155,7 @@ function useIdle(ms, enabled) {
   }, [ms, enabled]);
   return idle;
 }
+const SEEN_EVERY_MS = 15e3;
 function logoPoint() {
   const el = document.getElementById("brand-logo");
   if (el) {
@@ -43128,6 +43170,7 @@ function Breaks() {
   const flockOn = useUi((s) => s.idleFlock);
   const flockAfter = useUi((s) => s.idleFlockAfterMin);
   const [dueAt, setDueAt] = reactExports.useState(null);
+  const lastSeen = reactExports.useRef(0);
   const [now, setNow] = reactExports.useState(() => Date.now());
   const [leaving, setLeaving] = reactExports.useState(false);
   const breakFlock = reactExports.useRef(null);
@@ -43138,16 +43181,31 @@ function Breaks() {
       setDueAt(null);
       return;
     }
-    const armed = nextArm(Date.now(), every, loadArm());
+    const t = Date.now();
+    const armed = openArm(t, every, loadArm(), loadSeen(), wasReload());
     saveArm(armed);
+    saveSeen(t);
+    lastSeen.current = t;
     setDueAt(armed.at);
-    setNow(Date.now());
+    setNow(t);
   }, [on, every]);
   reactExports.useEffect(() => {
     if (!on) return;
-    const id = window.setInterval(() => setNow(Date.now()), 1e3);
+    const id = window.setInterval(() => {
+      const t = Date.now();
+      if (wasAway(t, lastSeen.current)) {
+        const armed = armBreak(t, every);
+        saveArm(armed);
+        setDueAt(armed.at);
+      }
+      if (t - lastSeen.current >= SEEN_EVERY_MS) {
+        saveSeen(t);
+        lastSeen.current = t;
+      }
+      setNow(t);
+    }, 1e3);
     return () => window.clearInterval(id);
-  }, [on]);
+  }, [on, every]);
   reactExports.useEffect(() => () => window.clearTimeout(exitTimer.current), []);
   const onBreak = on && dueAt !== null && now >= dueAt;
   const idle = useIdle(flockAfter * 6e4, flockOn && !onBreak);
@@ -43255,7 +43313,7 @@ function BreakScreen({ away, leaving, flockRef, onSnooze, onResume }) {
                 ref: resumeRef,
                 disabled: leaving,
                 onClick: onResume,
-                children: "Resumed work"
+                children: "Resume Working"
               }
             )
           ] })

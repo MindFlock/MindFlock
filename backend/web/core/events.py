@@ -73,6 +73,17 @@ EVENT_NAMES = (
     # Running OUT needs no event of its own: that is
     # ``session.activity_changed`` with ``new == "limit"``.
     "session.usage_restored",
+    # A session's TURN genuinely ended: it was observed working in its current
+    # tmux incarnation, has been idle continuously since (server.
+    # _TURN_END_DWELL_S), and has nothing queued to wake it back up
+    # (data: {"idle_for": float}). Emitted once per cycle of observed work.
+    #
+    # Not the same fact as ``session.activity_changed`` with ``new == "idle"``,
+    # which is a chip colour: that fires at the end of EVERY assistant turn (a
+    # ten-turn conversation fires it ten times), on /clear, on a session that
+    # merely booted to a bare prompt, and on any reading that settles to idle
+    # out of offline. This is the one that is worth telling a human about.
+    "session.turn_ended",
     # Verify (test plans): a session's branch genuinely REACHED origin — emitted
     # by the live_stage push watcher at the instant the remote branch head equals
     # the local one (data: {"branch": str, "sha": str, "wt": str}). This is not
