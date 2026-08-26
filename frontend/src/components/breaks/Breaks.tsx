@@ -15,6 +15,10 @@
  * The break clock is wall-clock, not "time spent typing": the thing it is
  * counting is how long you have been at the desk, and a session that ran
  * itself for forty minutes while you watched still cost you forty minutes.
+ * What it does NOT count is time the app was not running — a closed window, a
+ * shut-down machine, a slept laptop. That time is the break, so it starts the
+ * interval over rather than presenting a card that has been "counting" all
+ * night (lib/breakTimer: the heartbeat, and openArm's rule table).
  *
  * Both surfaces arrive and leave the same way, and it is a round trip: the
  * flock streams OUT of the MindFlock mark in the top bar when it appears,
@@ -29,9 +33,13 @@ import {
   armBreak,
   fmtElapsed,
   loadArm,
-  nextArm,
+  loadSeen,
+  openArm,
   saveArm,
+  saveSeen,
   snoozeArm,
+  wasAway,
+  wasReload,
   type BreakArm,
 } from "../../lib/breakTimer";
 import type { FlockHandle } from "../../lib/flock";
@@ -42,6 +50,9 @@ import { useIdle } from "./useIdle";
  * rather than assumed, because on macOS the whole cluster is mirrored to the
  * right to clear the traffic lights. The fallback is the top-left corner the
  * mark sits in everywhere else. */
+/** How often the running app stamps the heartbeat. */
+const SEEN_EVERY_MS = 15_000;
+
 function logoPoint(): { x: number; y: number } {
   const el = document.getElementById("brand-logo");
   if (el) {
@@ -58,6 +69,10 @@ export function Breaks() {
   const flockAfter = useUi((s) => s.idleFlockAfterMin);
 
   const [dueAt, setDueAt] = useState<number | null>(null);
+  /** Last heartbeat this window wrote. Kept in a ref as well as in storage so
+   * the per-second check costs nothing: the tick compares against it, and a
+   * value that is suddenly minutes old is the app having been stopped. */
+  const lastSeen = useRef(0);
   const [now, setNow] = useState(() => Date.now());
   /** The break screen is on its way out: birds flying home, scrim fading, and
    * no further presses accepted. */
@@ -65,27 +80,56 @@ export function Breaks() {
   const breakFlock = useRef<FlockHandle | null>(null);
   const exitTimer = useRef(0);
 
-  // Arm at mount and re-arm whenever the setting changes. nextArm() holds the
-  // rule for which of those two a given (on, every) actually is.
+  // Arm at mount and re-arm whenever the setting changes. openArm() holds the
+  // rule for which of those a given (on, every) actually is — including the
+  // difference between this page being refreshed (keep the deadline) and the
+  // app being opened after a night with the machine off (start over).
   useEffect(() => {
     if (!on) {
       saveArm(null);
       setDueAt(null);
       return;
     }
-    const armed = nextArm(Date.now(), every, loadArm());
+    const t = Date.now();
+    const armed = openArm(t, every, loadArm(), loadSeen(), wasReload());
     saveArm(armed);
+    // Stamp the heartbeat before the first tick, so a refresh one second from
+    // now reads a live app rather than an absence.
+    saveSeen(t);
+    lastSeen.current = t;
     setDueAt(armed.at);
-    setNow(Date.now());
+    setNow(t);
   }, [on, every]);
 
   // 1 Hz while reminders are on — cheap, and it is what keeps the away-time
-  // on the card honest without a second timer.
+  // on the card honest without a second timer. It carries the heartbeat too,
+  // so there is still only the one interval.
   useEffect(() => {
     if (!on) return;
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    const id = window.setInterval(() => {
+      const t = Date.now();
+      // A gap here is the machine having slept (or this tab having been frozen)
+      // with the app open — the one case no page load will ever notice, and the
+      // one that produced a card sitting there counting up all night. Time the
+      // app was not running is time away from the desk, which IS the break, so
+      // the interval starts over. If the card was up, this takes it down: the
+      // break it was asking for has been had.
+      if (wasAway(t, lastSeen.current)) {
+        const armed = armBreak(t, every);
+        saveArm(armed);
+        setDueAt(armed.at);
+      }
+      // Written every SEEN_EVERY_MS rather than every tick: one number, but a
+      // localStorage write is a disk write, and 1 Hz of them buys nothing that
+      // a coarser stamp does not (the away rule's tolerance is minutes).
+      if (t - lastSeen.current >= SEEN_EVERY_MS) {
+        saveSeen(t);
+        lastSeen.current = t;
+      }
+      setNow(t);
+    }, 1000);
     return () => window.clearInterval(id);
-  }, [on]);
+  }, [on, every]);
 
   useEffect(() => () => window.clearTimeout(exitTimer.current), []);
 
@@ -238,7 +282,7 @@ function BreakScreen({ away, leaving, flockRef, onSnooze, onResume }: ScreenProp
             disabled={leaving}
             onClick={onResume}
           >
-            Resumed work
+            Resume Working
           </button>
         </div>
       </div>

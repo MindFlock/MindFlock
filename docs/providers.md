@@ -164,14 +164,29 @@ launch, MindFlock idempotently merges hook commands into the CLI's hooks
 config; each hook fires and writes a per-session `{state, ts}` JSON marker to
 `~/.mindflock-assistant/.activity-markers/<session>.json`
 (`MINDFLOCK_ACTIVITY_MARKER_DIR` overrides the directory), which the web layer
-trusts over pane inspection. Markers older than 6 h are ignored — an ancient
-marker belongs to a dead run and must not outvote live inspection. Every
-MindFlock-written hook command carries a `# mindflock-activity` tag so a
-re-install recognizes and replaces **only** MindFlock's own entries; user-
-authored hooks are never touched. Hook install is best-effort and can never
-break a launch. (The Claude provider re-exports these primitives — they
-historically lived in `claude.py` — so existing call-sites and tests keep
-working.)
+trusts over pane inspection. Every MindFlock-written hook command carries a
+`# mindflock-activity` tag so a re-install recognizes and replaces **only**
+MindFlock's own entries; user-authored hooks are never touched. Hook install is
+best-effort and can never break a launch. (The Claude provider re-exports these
+primitives — they historically lived in `claude.py` — so existing call-sites and
+tests keep working.)
+
+**A marker has to be both fresh and current.** Age is the first gate: markers
+older than 6 h are ignored outright, and a `working`/`clarify` one older than
+45 s is re-verified against the live pane, while an `idle` one is trusted at any
+age (a Stop hook from two hours ago on a still-running CLI is genuinely idle).
+Age alone is not enough, though — nothing ever deletes a marker file, and it is
+keyed by tmux session name, so a window you closed and re-opened would keep
+reporting the *dead* run's state for as long as its age allowed. So the web
+layer also checks the marker against the **current tmux incarnation**
+(`web/core/agent_state._marker_is_current`): a marker written before the running
+tmux session was created is discarded whatever state it names — a stale `idle`
+would announce a turn that ended before the session existed, and a stale
+`working` would paint a freshly relaunched CLI as busy and stamp it with work
+evidence it never earned. Unknowable inputs still trust the CLI: no creation
+stamp, or an unreadable marker age, and the marker stands. Claude's live
+`claude agents --json` path reports age `0.0` — it is real-time by construction
+— so it always passes.
 
 Two built-in wirings:
 
@@ -215,6 +230,7 @@ natural_codes = [0, 130]         # clean-quit codes (no auto-resume)
 trust_patterns = ["Do you trust"]  # pane substrings that mean a trust prompt
 trust_keystroke = "enter"          # enter | d_enter | y_enter
 idle_pattern = "What next?"        # pane substring meaning "waiting, idle"
+working_patterns = ["(?i)esc to interrupt"]  # status line of a LIVE turn
 
 [activity]                         # opt-in: activity via the CLI's own hooks
 hooks_file = ".mycli/hooks.json"   # repo-local hooks config, merged into at launch
@@ -225,6 +241,20 @@ state = "idle"
 event = "UserPromptSubmit"
 state = "working"
 ```
+
+**Give your CLI a `working_patterns` regex if it shows an interrupt hint.** It
+is the one signal that proves a turn is live *from a single frame*, and that
+makes it load-bearing in two places. It rescues extended thinking, where the
+work runs server-side and the local process blocks on a network read at ~0 CPU,
+looking exactly like an idle prompt. And it is the only "working" evidence
+available on the **first** captured frame of a pane: the classifier no longer
+assumes a never-before-seen pane is busy (see
+[session-engine.md](session-engine.md#layered-activity-classification)), so a
+provider with no `working_patterns` and no usage-limit banner reads `idle` on
+that frame and has to wait for the next poll (~4 s) to be classified from
+movement. The built-ins are all short and version-stable: `esc to interrupt`
+(claude), `esc to cancel`, `esc interrupt`, `(Ctrl+C to interrupt)`, `Waiting
+for LLM`.
 
 The optional `[activity]` table opts a CLI that has its own hooks engine into
 the marker mechanism above: `hooks_file` names the repo-local hooks config

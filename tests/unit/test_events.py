@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import stat
 import time
 
@@ -101,6 +102,7 @@ def test_event_names_vocabulary_is_complete():
         "session.prompt_sent",
         "session.queue_changed",
         "session.usage_restored",
+        "session.turn_ended",
         "session.autopilot_changed",
         "session.pushed",
         "session.test_plan_ready",
@@ -109,6 +111,29 @@ def test_event_names_vocabulary_is_complete():
         "session.test_plan_gave_up",
         "session.test_plan_due",
     }
+
+
+def test_the_turn_boundary_event_is_documented_for_extension_authors():
+    """``docs/extensions.md`` is the contract an addon/hook author codes
+    against, and this event exists precisely so nobody keys "the agent is done"
+    off the raw idle flip. A row nobody can find leaves them writing the bug
+    the event was added to fix, so the doc has to carry both halves: the
+    vocabulary row and the recipe that steers them away from the old signal.
+    """
+    from pathlib import Path
+
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "extensions.md").read_text(
+        encoding="utf-8"
+    )
+    rows = [ln for ln in doc.splitlines() if ln.startswith("| `session.")]
+    documented = {
+        name for ln in rows for name in re.findall(r"`(session\.[a-z_]+)`", ln)
+    }
+    assert "session.turn_ended" in documented
+    assert "session.turn_ended" in EVENT_NAMES
+    # The recipe list, where "agent has finished" is spelled out — including
+    # which event it is NOT.
+    assert "**agent has finished**: `session.turn_ended`" in doc
 
 
 # --------------------------------------------------------------------------- #

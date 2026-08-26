@@ -23,6 +23,7 @@ import pytest
 
 from backend.providers import activity_markers as am
 from backend.providers import thread_markers
+from backend.web.core import agent_state
 
 
 @pytest.fixture
@@ -199,3 +200,108 @@ def test_merge_tolerates_corrupt_settings(tmp_path, marker_dir):
     am.merge_activity_hooks(path, _EVENTS, "sess")
     data = json.loads(path.read_text())  # rewritten as valid JSON with our hooks
     assert _tagged(data["hooks"]["Stop"])
+
+
+# --------------------------------------------------------------------------- #
+# A marker belongs to a tmux INCARNATION
+# --------------------------------------------------------------------------- #
+# The marker file is keyed by tmux session name, nothing ever deletes it
+# (`_ensure_agent_session` clears the exit marker and the thread marker, never
+# this one), no provider maps a session-START event to a state, and it only
+# expires after six hours. So re-opening a window that had finished cleanly used
+# to report the DEAD run's "idle" for the seconds the new CLI took to boot —
+# announcing a turn that ended before the session existed.
+#
+# The fix is a provenance check, not an age check: an idle marker is still
+# trusted at any age, as long as it was written by the tmux session that is
+# running now.
+class _MarkerAgeProvider:
+    """A CLI whose hook marker was written ``age`` seconds ago."""
+
+    def __init__(self, age):
+        self._age = age
+
+    def activity_state_age(self, name):
+        return self._age
+
+
+@pytest.fixture()
+def at_now(monkeypatch):
+    """Pin the wall clock ``_marker_is_current`` samples for itself."""
+
+    def _set(t):
+        monkeypatch.setattr(agent_state.time, "time", lambda: t)
+
+    return _set
+
+
+def test_marker_from_this_incarnation_is_current(at_now):
+    # created at t=1000, marker written 30s ago, now t=1100 -> written at 1070,
+    # comfortably after the session started.
+    at_now(1100.0)
+    assert agent_state._marker_is_current(_MarkerAgeProvider(30.0), "s", 1000.0)
+
+
+def test_an_hours_old_marker_on_a_long_lived_session_is_still_current(at_now):
+    # "Trust at any age" has to survive: a Stop hook from two hours ago on a CLI
+    # that has been up all day is genuinely idle.
+    at_now(100000.0)
+    assert agent_state._marker_is_current(_MarkerAgeProvider(7200.0), "s", 1000.0)
+
+
+def test_a_marker_predating_the_tmux_session_is_not_current(at_now):
+    # Session created at t=5000; the marker was written 100s before now=5050,
+    # i.e. at t=4950 — by the run that used to hold this name.
+    at_now(5050.0)
+    assert not agent_state._marker_is_current(_MarkerAgeProvider(100.0), "s", 5000.0)
+
+
+def test_a_live_realtime_signal_always_passes(at_now):
+    # Claude's `agents --json` path reports age 0.0 — real-time by construction,
+    # so it can never predate anything.
+    at_now(5000.0)
+    assert agent_state._marker_is_current(_MarkerAgeProvider(0.0), "s", 5000.0)
+
+
+def test_unknowable_inputs_keep_the_old_behaviour(at_now):
+    # No creation stamp or no marker age means there is nothing to compare, and
+    # the long-standing behaviour is to trust the CLI's own report.
+    at_now(1100.0)
+    assert agent_state._marker_is_current(_MarkerAgeProvider(None), "s", 1000.0)
+    assert agent_state._marker_is_current(_MarkerAgeProvider(30.0), "s", None)
+
+
+def test_the_clock_is_sampled_at_comparison_time(at_now):
+    # The caller's `now` predates the probes between it and this call (a pane
+    # capture, a `claude agents --json` shell-out). Subtracting a freshly
+    # measured age from a stale `now` places the write earlier than it happened
+    # and would reject the FIRST marker of a genuinely fresh session — the one
+    # window the guard was written for. So the clock is read here.
+    at_now(5004.5)  # a poll that began at 5003 and spent 1.5s in probes
+    # Session created at 5000, its first hook fired at 5001 -> age 3.5s.
+    assert agent_state._marker_is_current(_MarkerAgeProvider(3.5), "s", 5000.0)
+
+
+def test_an_unreadable_age_keeps_the_old_behaviour(at_now, monkeypatch):
+    # A provider whose age probe THROWS (a stat on a file that vanished between
+    # the read and the stat, a provider that never implemented it) is the same
+    # situation as one that answers None: no evidence either way, so the CLI's
+    # own report stands. Failing the other way would blank the reading of every
+    # provider with a rough edge in a helper that exists to police one bug.
+    class _Boom:
+        def activity_state_age(self, name):
+            raise OSError("marker vanished")
+
+    at_now(5050.0)
+    assert agent_state._marker_is_current(_Boom(), "s", 5000.0)
+
+
+def test_a_marker_written_in_the_same_instant_counts_as_current(at_now):
+    # The comparison is >=, not >. A hook that fires as part of session startup
+    # writes its marker at (or within a rounding error of) `created`, and
+    # rejecting that would blank the first real reading of every session that
+    # starts fast — the opposite of what the guard is for.
+    at_now(5030.0)
+    assert agent_state._marker_is_current(_MarkerAgeProvider(30.0), "s", 5000.0)
+    # One hundredth of a second the other way is a previous run, and is not.
+    assert not agent_state._marker_is_current(_MarkerAgeProvider(30.01), "s", 5000.0)

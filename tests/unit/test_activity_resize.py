@@ -248,3 +248,36 @@ def test_permission_prompt_is_not_trust_dismissed(monkeypatch):
     inst, sent, clock = _young_gate_harness(monkeypatch, perm)
     server._agent_activity(inst, "t")
     assert not any("send-keys" in " ".join(a) for a in sent)
+
+
+def test_the_record_survives_an_offline_poll_so_a_resize_still_rebaselines(
+    monkeypatch, harness
+):
+    """The offline poll used to POP the record, which quietly disarmed this
+    whole guard.
+
+    "Clicking a tab must not read as activity" is enforced by comparing the new
+    pane size against the remembered one — and that can only protect a record
+    that still exists. The sequence the user actually performs (a session whose
+    tmux blinked out, clicked to bring it back, which attaches a terminal and
+    resizes the pane) was exactly the one that arrived with nothing remembered
+    and fell into the first-sighting branch.
+    """
+    inst, pane, clock = harness
+    _seed_idle(clock)
+    clock["t"] += 4
+    pane["cpu"] = 400  # a real burst -> working, which is what must survive
+    assert server._agent_activity(inst, "t") == "working"
+
+    dead = types.SimpleNamespace(returncode=1, stdout=b"")
+    live_run = server.subprocess.run  # the harness's tmux stand-in
+    monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: dead)
+    clock["t"] += 4
+    assert server._agent_activity(inst, "t") == "offline"
+    assert "t" in server._ACTIVITY_CACHE, "an absent reading is not an erased history"
+
+    monkeypatch.setattr(server.subprocess, "run", live_run)
+    clock["t"] += 4
+    pane["size"] = "120x30"  # the tab attaching, reflowing the pane
+    pane["text"] = "l1 l2\nl3 l4\nl5 l6\nx\ny\nz\n"
+    assert server._agent_activity(inst, "t") == "working"

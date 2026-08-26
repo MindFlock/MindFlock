@@ -479,6 +479,45 @@ def test_drain_waits_for_idle_to_settle(drain, monkeypatch):
     assert pq.list_queue("d1") == []
 
 
+def test_a_just_rebooted_agent_is_not_typed_into(drain, monkeypatch):
+    """After MindFlock relaunches a dead agent, hold the queue regardless of
+    what the activity probe says.
+
+    A CLI restarting with a large ``--continue`` transcript spends its first
+    seconds quiet and I/O-bound, and a quiet pane is — correctly — read as idle
+    now that the classifier stops guessing that an unseen pane is working. But
+    typing into a CLI that has not drawn its input box loses the prompt, and the
+    send clears ``armed``, so the retry only comes after _QUEUE_REARM_IDLE (five
+    minutes). The old guess bought roughly this grace by accident; this states
+    it.
+    """
+    import time as _t
+
+    server, sent = drain
+    clock = {"now": 1_000_000.0}
+    monkeypatch.setattr(_t, "time", lambda: clock["now"])
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: "idle")
+    # A reboot we just performed, and an idle dwell that is long since satisfied
+    # — so the grace is the only thing that can hold this prompt back.
+    server._QUEUE_STATE["d1"] = {
+        "armed": True,
+        "sent_at": 0.0,
+        "rebooted_at": clock["now"],
+        "idle_since": 1.0,
+    }
+    pq.enqueue("d1", "task one")
+
+    server._drain_one_queue("d1")
+    assert sent == []
+    clock["now"] += server._QUEUE_BOOT_GRACE - 1
+    server._drain_one_queue("d1")
+    assert sent == [], "the CLI has not drawn its prompt yet"
+
+    clock["now"] += 2  # past the grace
+    server._drain_one_queue("d1")
+    assert sent == ["task one"]
+
+
 def test_drain_resets_settle_when_agent_reworks(drain, monkeypatch):
     """A brief working blip mid-dwell resets the timer: the prompt must not slip
     through on stale idle-since accumulated across a working stretch."""

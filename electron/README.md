@@ -195,6 +195,17 @@ therefore your sessions) stays shared, which is usually what you want:
   `MINDFLOCK_DEV_ICON=/path/to/icon` (`.ico` on Windows; `.png` elsewhere).
 - **`MindFlock-DEV` wordmark** in the title bar.
 - A distinct taskbar/dock identity so it never merges with the prod app.
+- **Notifications headed `MindFlock-dev`** (Windows). A toast is headed by the
+  display name of the Start-menu shortcut registered for the AppUserModelID that
+  raised it — prod gets one from its installer, which is why its notifications
+  read *MindFlock*. Dev has its own AUMID and no installer, so Windows used to
+  print the raw id (*ai.mindflock.desktop.dev*) across the top of every toast.
+  The shell now writes that shortcut itself on a dev run, into
+  `%APPDATA%\Microsoft\Windows\Start Menu\Programs\MindFlock-dev.lnk`,
+  pointing at `electron.exe` with the app dir and `--mindflock-dev` — so it is
+  also a working launcher, and the thing to pin (see below). It is rewritten
+  only when missing or stale, and a Start menu locked down by policy costs you
+  the label, not the app.
 
 Prod is untouched: with neither the env var nor the flag set, every one of
 these is a no-op, so it is safe to ship in the packaged build.
@@ -236,7 +247,10 @@ normal (installed) app pins with its icon but an ad-hoc dev launch may not:
   the running window. The prod app pins cleanly because its installer
   registered a Start-menu shortcut carrying the app's AppUserModelID and icon.
 
-So to pin dev with the red icon, pin a shortcut that (a) targets `electron.exe`
+A dev run already writes one such shortcut — `MindFlock-dev.lnk` in your Start
+menu, for the notification name above — so the quickest path is to right-click
+that and **Pin to taskbar**. Roll your own only if you want it elsewhere or with
+different arguments; it has to be a shortcut that (a) targets `electron.exe`
 **directly** — a `.bat` makes Windows pin `cmd.exe` with cmd's icon instead —
 (b) passes the app dir plus `--mindflock-dev`, and (c) sets its `IconLocation`
 to a `.ico` of the dev badge. For example:

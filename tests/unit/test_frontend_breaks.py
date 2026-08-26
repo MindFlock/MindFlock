@@ -15,6 +15,7 @@ can do is pin the contract into the shipped bundle:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -42,10 +43,10 @@ def _css() -> str:
 def test_break_screen_ships_with_both_of_its_answers():
     js = _js()
     assert 'id: "break-screen"' in js or '"break-screen"' in js
-    # Snooze pushes it back; "Resumed work" restarts the whole interval. A
+    # Snooze pushes it back; "Resume Working" restarts the whole interval. A
     # break screen with only one way out is a trap, not a reminder.
     assert "Snooze 5 min" in js
-    assert "Resumed work" in js
+    assert "Resume Working" in js
 
 
 def test_break_settings_row_sits_in_general_with_an_interval():
@@ -56,6 +57,86 @@ def test_break_settings_row_sits_in_general_with_an_interval():
     # The two localStorage keys the setting persists under.
     assert "mf_break_on" in js
     assert "mf_break_every" in js
+
+
+def test_the_break_clock_only_runs_while_the_app_does():
+    """A deadline is wall-clock, so on its own it counts through a shut-down
+    machine and hands whoever opens the app in the morning a card that has been
+    "counting" all night. The heartbeat is what tells an absence from a refresh,
+    so both halves have to reach the bundle: the stamp, and the gap rule that
+    reads it — including the mid-run check, the only thing that notices a laptop
+    that slept with the window open."""
+    js = _js()
+    assert "mf_break_seen" in js
+    assert "wasAway" in js
+    # Mid-run, not only at mount: the tick re-arms and takes the stale card down.
+    tick = js[js.index("function Breaks(") : js.index("function Breaks(") + 4000]
+    assert "wasAway(" in tick, "a sleeping machine is only ever caught by the tick"
+
+
+def test_opening_the_app_starts_the_clock_but_a_refresh_does_not():
+    """The rule the whole thing turns on: an open is a fresh interval, a reload
+    keeps its deadline. They are told apart by navigation type rather than by
+    guesswork, so the literal the browser answers with has to be the one the
+    bundle compares against."""
+    js = _js()
+    assert (
+        'getEntriesByType("navigation")' in js or "getEntriesByType('navigation')" in js
+    )
+    at = js.index("function wasReload")
+    block = js[at : at + 500]
+    assert '"reload"' in block or "'reload'" in block
+
+
+def _bundled_const(js: str, name: str) -> float:
+    """The numeric value of a top-level ``const`` in the built bundle.
+
+    Read as a value rather than matched as a literal because the bundler
+    rewrites the source spelling: ``15_000`` ships as ``15e3`` and
+    ``5 * 60_000`` as ``5 * 6e4``. Both are valid Python arithmetic, and the
+    expression is checked to be nothing else before it is evaluated.
+    """
+    head = "const %s = " % name
+    at = js.index(head) + len(head)
+    expr = js[at : js.index(";", at)]
+    assert re.fullmatch(r"[\d.eE+*\s]+", expr), expr
+    return float(eval(expr, {"__builtins__": {}}))  # noqa: S307 — see above
+
+
+def test_the_heartbeat_is_written_coarsely_and_the_gap_is_measured_in_minutes():
+    """Two numbers hold the away rule up, and each fails a different way.
+
+    The stamp is a localStorage write, i.e. a disk write, so 1 Hz of them buys
+    nothing the away rule's minute-scale tolerance can use. The gap has to sit
+    ABOVE a hidden tab's throttled interval — browsers slow a background timer
+    to roughly one tick a minute, and a throttled tab is not an absent app —
+    and below any real absence.
+    """
+    js = _js()
+    assert _bundled_const(js, "SEEN_EVERY_MS") == 15_000
+    gap = _bundled_const(js, "AWAY_GAP_MS")
+    assert gap >= 2 * 60_000, "a throttled background tab must not read as away"
+    assert gap <= 15 * 60_000, "an absence this long is not worth missing"
+    # And the stamp has to be frequent enough that the gap can never be an
+    # artefact of the writer's own cadence.
+    assert _bundled_const(js, "SEEN_EVERY_MS") < gap / 4
+
+
+def test_the_settings_copy_and_the_button_say_the_same_thing():
+    """The Settings row documents what the button does; a rename that lands in
+    only one of the two describes a control that no longer exists."""
+    src = (
+        _ROOT
+        / "frontend"
+        / "src"
+        / "components"
+        / "settings"
+        / "screens"
+        / "General.tsx"
+    ).read_text(encoding="utf-8")
+    assert '"Resume Working"' in src or "Resume Working" in src
+    assert "Resumed work" not in src
+    assert "Resumed work" not in _js()
 
 
 def test_break_screen_counts_as_a_modal_for_the_keymap():

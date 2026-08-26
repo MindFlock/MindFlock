@@ -32,8 +32,10 @@ CLI (`claude`) and optionally `gh` (PR create/merge only — pushing is plain
 ## Dev build alongside the installed app
 
 The desktop shell can run an **isolated dev copy** next to the installed prod
-app — its own config/logs/window-state, a red **dev**-badged icon, and a
-`MindFlock-DEV` wordmark, while the server (and your sessions) stays shared.
+app — its own config/logs/window-state, a red **dev**-badged icon, a
+`MindFlock-DEV` wordmark and (on Windows) notifications headed `MindFlock-dev`
+rather than by its raw app id, while the server (and your sessions) stays
+shared.
 Turn it on with `MINDFLOCK_DEV=1` or the `--mindflock-dev` flag:
 
 ```bash

@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   armBreak,
+  AWAY_GAP_MS,
+  openArm,
+  wasAway,
   BREAK_DEFAULT_MINUTES,
   BREAK_MAX_MINUTES,
   BREAK_MIN_MINUTES,
@@ -133,5 +136,85 @@ describe("fmtElapsed", () => {
 
   it("never shows negative time", () => {
     expect(fmtElapsed(-5000)).toBe("0:00");
+  });
+});
+
+describe("wasAway", () => {
+  it("is false while the heartbeat is recent — the app has been running", () => {
+    expect(wasAway(T, T - 1000)).toBe(false);
+    expect(wasAway(T, T)).toBe(false);
+    // A hidden tab's interval is throttled to about a tick a minute; that must
+    // not read as an absence, which is the whole reason the tolerance is wide.
+    expect(wasAway(T, T - 70_000)).toBe(false);
+    expect(wasAway(T, T - AWAY_GAP_MS)).toBe(false);
+  });
+
+  it("is true once the heartbeat is older than the gap", () => {
+    expect(wasAway(T, T - AWAY_GAP_MS - 1)).toBe(true);
+    expect(wasAway(T, T - 8 * 60 * MIN)).toBe(true); // a night with the lid shut
+  });
+
+  it("is true when there is no heartbeat at all", () => {
+    // Nothing has ever run here, or storage was cleared: unknowable, and the
+    // safe answer to "how long was that?" is to start the interval over.
+    expect(wasAway(T, null)).toBe(true);
+    expect(wasAway(T, undefined)).toBe(true);
+    expect(wasAway(T, NaN)).toBe(true);
+  });
+
+  it("is true for a heartbeat in the FUTURE", () => {
+    // The clock jumped backwards (a timezone fix, an NTP correction). No
+    // elapsed time explains the stamp, so it cannot be trusted as liveness.
+    expect(wasAway(T, T + 60_000)).toBe(true);
+  });
+});
+
+describe("openArm", () => {
+  const saved = { at: T + 20 * MIN, every: 60 };
+
+  it("arms fresh when the APP OPENED, whatever was left behind", () => {
+    // The shell launching, or a new tab. Opening MindFlock is when the
+    // countdown starts — this is the case the whole change exists for.
+    expect(openArm(T, 60, saved, T - 1000, false)).toEqual({ at: T + 60 * MIN, every: 60 });
+    const overdue = { at: T - 5 * 60 * MIN, every: 60 };
+    expect(openArm(T, 60, overdue, T - 1000, false)).toEqual({ at: T + 60 * MIN, every: 60 });
+  });
+
+  it("keeps the deadline on a REFRESH mid-countdown", () => {
+    // Unchanged contract: a reload seconds after the last heartbeat is someone
+    // refreshing a running app, and must not buy them a fresh hour.
+    expect(openArm(T, 60, saved, T - 2000, true)).toEqual(saved);
+  });
+
+  it("keeps an overdue deadline on a refresh mid-countdown", () => {
+    const overdue = { at: T - 3 * MIN, every: 60 };
+    expect(openArm(T, 60, overdue, T - 2000, true)).toEqual(overdue);
+  });
+
+  it("arms fresh when the page reloaded but the app had STOPPED", () => {
+    // Closed for an hour and reopened onto a restored tab, or a slept machine
+    // woken and refreshed: a reload by navigation type, an absence in fact.
+    const overdue = { at: T - 5 * 60 * MIN, every: 60 };
+    expect(openArm(T, 60, overdue, T - 9 * 60 * MIN, true)).toEqual({
+      at: T + 60 * MIN,
+      every: 60,
+    });
+  });
+
+  it("arms fresh on a reload with no heartbeat to judge by", () => {
+    expect(openArm(T, 60, saved, null, true)).toEqual({ at: T + 60 * MIN, every: 60 });
+  });
+
+  it("still re-arms when the interval changed, on every path", () => {
+    const forNinety = { at: T + 80 * MIN, every: 90 };
+    expect(openArm(T, 30, forNinety, T - 1000, true)).toEqual({ at: T + 30 * MIN, every: 30 });
+    expect(openArm(T, 30, forNinety, T - 1000, false)).toEqual({ at: T + 30 * MIN, every: 30 });
+  });
+
+  it("clamps the interval it arms for", () => {
+    expect(openArm(T, 99999, null, null, false)).toEqual({
+      at: T + BREAK_MAX_MINUTES * MIN,
+      every: BREAK_MAX_MINUTES,
+    });
   });
 });
