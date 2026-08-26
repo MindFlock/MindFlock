@@ -39,11 +39,75 @@ const DEV_ICON = DEV
   ? (process.env.MINDFLOCK_DEV_ICON ||
      path.join(__dirname, process.platform === 'win32' ? 'dev-icon.ico' : 'dev-icon.png'))
   : null
+// The dev shell's own taskbar/toast identity. Kept STABLE: it is what a pinned
+// taskbar button and any already-registered shortcut are keyed on, so renaming
+// it silently orphans both.
+const DEV_AUMID = 'ai.mindflock.desktop.dev'
+// What Windows should PRINT above a dev notification: prod's product name with
+// the suffix this build already wears everywhere else. See ensureDevToastName().
+const DEV_TOAST_NAME = 'MindFlock-dev'
 if (DEV) {
-  app.setAppUserModelId('ai.mindflock.desktop.dev') // own taskbar group + icon
+  app.setAppUserModelId(DEV_AUMID) // own taskbar group + icon
   try {
     app.setPath('userData', path.join(app.getPath('appData'), 'MindFlock (dev)'))
   } catch (e) { /* fall back to the shared dir if this platform disallows it */ }
+}
+
+// Give the dev AUMID a NAME, or Windows prints the id itself.
+//
+// A toast is headed by the display name of the Start-menu shortcut registered
+// for the AUMID that raised it — that is the whole reason the packaged app sets
+// the installer's appId (the NSIS shortcut carries it). Dev sets an AUMID of its
+// own for a separate taskbar group, but nothing had ever written a shortcut for
+// it, so Windows fell back to printing the raw string and every dev notification
+// was headed "ai.mindflock.desktop.dev" instead of a name.
+//
+// So write that shortcut ourselves, once, into the per-user Start menu. It
+// targets electron.exe DIRECTLY with the app dir + the dev flag (the same shape
+// the README's pin-to-taskbar recipe uses — a .bat would make Windows attribute
+// the icon to cmd.exe), which also makes it a working launcher rather than a
+// decoy that exists only to be read.
+//
+// Windows-only, and only in dev: prod already has the installer's shortcut, and
+// no other platform resolves notification identity this way.
+function ensureDevToastName () {
+  if (!DEV || process.platform !== 'win32') return
+  try {
+    const programs = path.join(
+      app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs'
+    )
+    const link = path.join(programs, DEV_TOAST_NAME + '.lnk')
+    // A shortcut's icon must be an .ico; MINDFLOCK_DEV_ICON may legitimately be
+    // a .png (that override is shared with the window/dock icon, which takes
+    // either), so fall back to the exe rather than writing a broken IconLocation.
+    const icon = DEV_ICON && DEV_ICON.toLowerCase().endsWith('.ico') ? DEV_ICON : process.execPath
+    const want = {
+      target: process.execPath,
+      args: '"' + app.getAppPath() + '" --mindflock-dev',
+      cwd: path.dirname(process.execPath),
+      icon,
+      iconIndex: 0,
+      appUserModelId: DEV_AUMID,
+      description: 'MindFlock dev shell (isolated profile, shared server)'
+    }
+    // Rewrite only when it is missing or has drifted — an electron.exe that
+    // moved, an icon override that changed. Touching the .lnk on every launch
+    // would churn the Start menu's index for nothing.
+    let have = null
+    try { have = shell.readShortcutLink(link) } catch (e) { /* not there yet */ }
+    if (have &&
+        have.target === want.target &&
+        have.args === want.args &&
+        have.icon === want.icon &&
+        have.appUserModelId === want.appUserModelId) return
+    fs.mkdirSync(programs, { recursive: true })
+    shell.writeShortcutLink(link, 'create', want)
+    console.log('[mindflock] dev toast identity registered:', link)
+  } catch (e) {
+    // Cosmetic, and the Start menu can be locked down by policy: a dev run must
+    // still start (with the old raw-id heading) rather than fail over a label.
+    console.warn('[mindflock] could not register the dev toast name:', e && e.message)
+  }
 }
 
 // Log the auto-started server appends to (stdout+stderr), so a startup crash
@@ -1496,6 +1560,9 @@ app.whenReady().then(() => {
   if (DEV && DEV_ICON && process.platform === 'darwin' && app.dock) {
     try { app.dock.setIcon(DEV_ICON) } catch (e) { /* best effort */ }
   }
+  // After logger.init: this one logs whether it took, and a first dev run on a
+  // fresh machine is exactly when that line is worth having in main.log.
+  ensureDevToastName()
   createWindow()
   startUpdateChecks()
 })

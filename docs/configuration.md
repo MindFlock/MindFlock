@@ -509,7 +509,13 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   Settings → Notifications) — which session events notify you. Default-on rules
   are opt-*out* (their id lands in `muted_rules`), noisier ones are opt-*in*
   (`enabled_rules`), so a rule added in a later release starts in the state its
-  author intended. One list governs every delivery channel.
+  author intended. One list governs every delivery channel. The ids are stable
+  across releases even when a rule's *meaning* is tightened — `session_idle` is
+  now labelled **"A session finishes its work and stays idle"** and fires on
+  `session.turn_ended` (MindFlock watched the agent work, it has been idle for
+  45 s since, and nothing is queued to wake it), rather than on the activity
+  chip going grey at the end of every assistant turn. An existing opt-in simply
+  gets quieter; **no migration is needed**, by hand or otherwise.
 - **ntfy push** (`notifications.ntfy_enabled` / `_server` / `_topic` / `_token` /
   `_click_url`, Settings → Notifications) — the optional server-side push channel
   that reaches a phone with no browser tab open (see
@@ -527,7 +533,7 @@ The whole `notifications` group as it lands in `settings.json`:
 ```jsonc
 "notifications": {
   "muted_rules": ["pr_closed"],          // default-on rules switched OFF
-  "enabled_rules": ["session_idle"],     // default-off rules switched ON
+  "enabled_rules": ["session_idle"],     // default-off rules switched ON (id is stable)
   "ntfy_enabled": true,
   "ntfy_server": "https://ntfy.sh",      // omitted = the public default
   "ntfy_topic": "mindflock-xTPq…",       // on a public server this IS the credential

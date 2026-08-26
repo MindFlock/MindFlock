@@ -122,6 +122,7 @@ from backend.web.core import ntfy as _ntfy
 from backend.web.core import test_plans as _test_plans
 from backend.web.core import window_refresh as _window_refresh
 from backend.web.core import worktree_setup as _wt_setup
+from backend.web.core import agent_state as _agent_state
 from backend.web.core.agent_state import (
     _ACTIVITY_CACHE,
     _ACTIVITY_CONFIRM_POLLS,
@@ -779,6 +780,15 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
                 snap["pending_activity"] = pending
             # else: settled — snap keeps the new activity and the diff below
             # emits the transition.
+        # When the ANNOUNCED activity was adopted. Deliberately not
+        # agent_state's ``state_since`` (when the raw reading changed): the
+        # dwell below must measure how long we have been telling people this,
+        # and the wedged-session watchdog must measure what the pane is
+        # actually doing. Neither may gate the other.
+        if prev is None or snap["activity"] != prev.get("activity"):
+            snap["activity_at"] = now
+        else:
+            snap["activity_at"] = prev.get("activity_at", now)
         _EVENT_SNAPSHOT[title] = snap
     if prev is None:
         return
@@ -805,6 +815,115 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
     # this fires on a stage TRANSITION, not on every tick.
     if prev.get("stage") != stage and stage == "pushed":
         _ensure_test_plan(title)
+    # Turn boundaries are decided on every pass, not only on a transition: the
+    # dwell below is a duration, and the tick that satisfies it is by
+    # definition one where nothing changed.
+    _note_turn_boundary(title, snap, now)
+
+
+# ---- "a turn ended" vs "the activity value is idle" ----------------------- #
+# ``session.activity_changed new="idle"`` is a UI fact: paint the chip grey. It
+# fires at the end of EVERY assistant turn (claude.py's _HOOK_EVENT_STATES maps
+# both Stop and SessionEnd to idle), on /clear, on a session that merely booted
+# to a bare prompt, and on any reading that settles to idle out of offline. It
+# is the wrong fact to interrupt a human with — a ten-turn conversation
+# produced ten "finished" alerts, and re-opening a closed window produced one
+# for a session that had run nothing at all.
+#
+# ``session.turn_ended`` is the notification-grade fact, and it asserts three
+# things at once: this agent was OBSERVED working in this tmux incarnation, it
+# has been continuously idle since, and nothing is queued to wake it back up.
+# Every "the agent is done" channel keys on THIS; nothing keys on the raw idle.
+#
+# Why 45s, given the whole pipeline already debounces:
+#   * `_ACTIVITY_SETTLE_SECONDS` (3.0) is a FLICKER filter — it can only
+#     suppress a reading that reverts, and a session parked at its prompt never
+#     reverts. It is structurally incapable of answering this question.
+#   * It must exceed the inter-turn gap of an interactive conversation. A human
+#     reading a long answer and typing a follow-up is 10-30s, and the Stop hook
+#     fires in that gap every single time.
+#   * It must exceed the prompt queue's whole send path — `_QUEUE_IDLE_SETTLE`
+#     (12.0) + a 5s drain pass + `_QUEUE_SEND_COOLDOWN` (8.0) — so an
+#     unattended queued run never announces "finished" between two prompts. The
+#     queue check below makes that exact rather than a race; the number is the
+#     belt to its braces.
+#   * It must exceed autopilot's own idle settle (autopilot.IDLE_SETTLE_S, 30.0)
+#     so the order is always "the chain decided the agent was done, THEN we said
+#     so" — never the reverse.
+#   * It must be large against the 4s tick so two unsynchronised tickers plus an
+#     on-demand `_republish_session` shift the answer by ~±9%, not ±25%.
+# The cost of being wrong is 45s of latency on a "your agent is done" push. The
+# alternative was a buzz per turn.
+_TURN_END_DWELL_S = 45.0
+
+
+def _note_turn_boundary(title: str, snap: dict, now: float) -> None:
+    """Emit ``session.turn_ended`` once per observed work cycle. Never raises.
+
+    Called from the tail of :func:`_emit_state_changes` with the settled
+    snapshot, so it sees exactly the activity the rest of the app was told
+    about. Five gates, in cheapest-first order:
+
+    1. **The settled activity is idle.** ``limit`` is deliberately excluded — a
+       turn the usage cap cut short is not a turn that ended, and the
+       default-on ``usage_limit`` rule already covers it. So is ``offline``.
+    2. **Boot quiet**, for the same reason the diff events observe it: a
+       restart rediscovers every parked session and none of that is news.
+    3. **Provenance.** ``agent_state.worked_at`` is None unless this agent was
+       seen working in its CURRENT tmux incarnation. This is the whole
+       offline-click fix: re-opening a window relaunches its CLI, and the fresh
+       incarnation has no work behind it, so no amount of idling produces a
+       "finished".
+    4. **Dwell**, asked of both clocks: `_TURN_END_DWELL_S` since the announced
+       activity became idle, AND since the agent was last seen working. They can
+       disagree, and the second is what the sentence actually claims.
+    5. **Nothing queued.** An exact check, not a race against the drain's own
+       `_QUEUE_IDLE_SETTLE`: a run with prompts still to feed has not finished.
+
+    Emitting SPENDS the evidence (``agent_state.claim_work``). That, not a
+    seconds window, is the real dedupe: one announcement per cycle of observed
+    work, however long the session then sits there. The next ``working`` reading
+    re-arms it. The claim is atomic because two 4s tickers and an on-demand
+    republish all run this, and winning the claim is what grants the right to
+    speak.
+    """
+    try:
+        if snap.get("activity") != "idle" or _in_boot_quiet():
+            return
+        worked = _agent_state.worked_at(title)
+        if worked is None:
+            return
+        idle_for = now - float(snap.get("activity_at") or now)
+        if idle_for < _TURN_END_DWELL_S:
+            return
+        # The same dwell against the EVIDENCE's own clock. The two can disagree:
+        # ``activity_at`` moves only when a settled reading reaches this
+        # function, while ``worked_at`` is stamped by every ``_agent_activity``
+        # call — including the deliberately UNCACHED ones the prompt-queue drain
+        # and the autopilot driver make on their own 5s cadences, which never
+        # feed a snapshot. So a session that has been idle for ten minutes and
+        # then picks up a queued prompt can have fresh work evidence while the
+        # tickers are still serving "idle" out of the 2.5s probe memo, and the
+        # announcement would land at the moment the agent STARTED a turn. Asking
+        # both clocks closes the whole class — memo skew, snapshot lag, and the
+        # two uncached probes — with one comparison. (Epoch here, monotonic
+        # above; each is compared only against its own kind.)
+        if time.time() - float(worked) < _TURN_END_DWELL_S:
+            return
+        if _prompt_queue.peek_next(title) is not None:
+            return
+        # Claiming the evidence is what grants permission to speak: two
+        # unsynchronised tickers can reach this line in the same instant, and
+        # only one of them can win the clear.
+        if _agent_state.claim_work(title) is None:
+            return
+        _events.BUS.emit(
+            "session.turn_ended",
+            session=title,
+            data={"idle_for": round(idle_for, 1)},
+        )
+    except Exception:  # noqa: BLE001 — a notification never breaks the tick
+        pass
 
 
 def _seed_event_snapshot(title: str) -> None:
@@ -928,16 +1047,56 @@ def _drop_failed_start(title: str, inst) -> bool:
 
 
 def _forget_probes(title: str) -> None:
-    """Drop every memoized probe result for one session (kill/delete paths),
-    so a session recreated under the same title starts from fresh probes —
-    and so the per-title rolling state doesn't accumulate dead entries for
-    the server's lifetime under session churn."""
+    """Drop the memoized probe RESULTS for one session, so the next read
+    recomputes instead of serving a value from before an action.
+
+    The freshness half of what used to be one function. Its callers are the
+    workflow verbs — commit, push, make-PR, merge, and autopilot's own commit —
+    which all want the same thing: "I just changed this session's git state,
+    don't hand anyone a 2.5s-old stage". None of them wants the session's
+    ROLLING STATE forgotten, and forgetting it was actively harmful: it wiped
+    the record's ``worked_at``, so a session that had genuinely been working
+    lost the evidence behind its turn-end announcement the moment you pressed
+    Commit. That lives in :func:`_forget_session_state` now, which only the
+    delete path calls.
+    """
     with _PROBE_CACHE_LOCK:
         for k in [k for k in _PROBE_CACHE if k[1] == title]:
             _PROBE_CACHE.pop(k, None)
-    for _d in (_ACTIVITY_CACHE, _LIMIT_PROBE, _THREAD_RECORD_AT, _TRUST_DISMISS_AT):
-        _d.pop(title, None)
     _forget_tokens(title)
+
+
+def _forget_session_state(title: str) -> None:
+    """Forget a session ENTIRELY — memoized results and rolling per-title state.
+
+    For the delete path only. Titles are reused (``untitled-2`` comes straight
+    back), so a namesake must not inherit the dead session's pane hash, CPU
+    baseline, limit verdict or work history; and without this the per-title
+    dicts accumulate dead entries for the life of the server under churn.
+    """
+    _forget_probes(title)
+    for _d in (_ACTIVITY_CACHE, _LIMIT_PROBE, _TRUST_DISMISS_AT):
+        _d.pop(title, None)
+    # Keyed by TMUX SESSION NAME, not by title (see agent_state._maybe_record_
+    # thread), so it needs the translation the others do not.
+    _THREAD_RECORD_AT.pop(tmux.to_mindflock_tmux_name(title), None)
+
+
+def _prune_session_state(live_titles) -> None:
+    """Drop per-title probe state for sessions that are no longer in the engine.
+
+    The backstop behind :func:`_forget_session_state`, for the removals that
+    never reach a route: a workspace deleted from Settings, and the tombstone
+    convergence that pops instances another MindFlock deleted. Without it those
+    dicts only ever grow, for the life of the process.
+    """
+    live = set(live_titles or ())
+    live_names = {tmux.to_mindflock_tmux_name(t) for t in live}
+    for _d in (_ACTIVITY_CACHE, _LIMIT_PROBE, _TRUST_DISMISS_AT):
+        for dead in [t for t in list(_d) if t not in live]:
+            _d.pop(dead, None)
+    for dead in [n for n in list(_THREAD_RECORD_AT) if n not in live_names]:
+        _THREAD_RECORD_AT.pop(dead, None)
 
 
 def _session_stage_cached(inst) -> dict:
@@ -1059,6 +1218,16 @@ _QUEUE_REBOOT_COOLDOWN = 30.0  # min seconds between reboots of a dead session
 # re-marks "working", would otherwise let the drain fire a queued prompt prematurely.
 # Requiring idle to hold this long absorbs that flicker while still resuming promptly.
 _QUEUE_IDLE_SETTLE = 12.0
+# After WE rebooted a dead agent, hold the queue this long regardless of what the
+# activity probe says. A CLI relaunching with a large `--continue` transcript can
+# spend twenty seconds on a quiet, I/O-bound start, and a quiet pane is exactly
+# what the classifier now reports as idle — correctly, since nothing on that
+# screen says work is happening. But typing into a CLI that has not drawn its
+# input box loses the prompt, and `armed` is cleared by the send, so the retry
+# only comes after _QUEUE_REARM_IDLE (five minutes). The old classifier hid this
+# behind a guess ("a pane I have never seen is working"), which bought roughly
+# this much grace by accident; stating it here says what is actually meant.
+_QUEUE_BOOT_GRACE = 20.0
 _QUEUE_STATE: Dict[str, dict] = (
     {}
 )  # title -> {"armed", "sent_at", "rebooted_at", "idle_since"}
@@ -1369,6 +1538,8 @@ def _drain_one_queue(title: str) -> None:
     # any age — so require idle to PERSIST for _QUEUE_IDLE_SETTLE before the first send.
     # This absorbs a transient Stop between turns / the brief lull before the next
     # working marker, which otherwise let the drain fire a prompt prematurely.
+    if now - rec.get("rebooted_at", 0.0) < _QUEUE_BOOT_GRACE:
+        return  # we only just relaunched it; let the CLI draw its prompt
     if rec.get("idle_since") is None:
         rec["idle_since"] = now
         return
@@ -4349,11 +4520,14 @@ def _session_snapshot(i, queues: dict) -> dict:
     d["activity"] = _agent_activity_cached(
         i, i.Title
     )  # working | clarify | limit | idle | offline
-    # Epoch when the activity state last changed (from the pane-hash
-    # record), so the UI can rank how long a session has been waiting
-    # (attention ordering + wedged-session watchdog). 0 = unknown.
-    _act_rec = _ACTIVITY_CACHE.get(i.Title) or {}
-    d["activity_since"] = float(_act_rec.get("changed_epoch") or 0.0)
+    # Epoch when the reported activity last changed, so the UI can rank how
+    # long a session has been waiting (attention ordering + wedged-session
+    # watchdog). 0 = unknown — a session with no live reading, e.g. offline.
+    # This read used to name a key (``changed_epoch``) that nothing has ever
+    # written, so it answered 0.0 for every session and the watchdog branch it
+    # feeds never rendered once; ``agent_state.state_since`` is the real thing,
+    # and every layer now writes it (see agent_state._verdict).
+    d["activity_since"] = _agent_state.state_since(i.Title)
     # L3: latest-turn snippet (≤120 chars) for N-session triage, or null.
     d["last_turn"] = _session_last_turn_cached(i)
     # The newest USER prompt (first line) — the panes pin it above the
@@ -4430,8 +4604,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["tokens_model"] = ""
     d["budget"] = _budget_status_for(i.Title, 0.0)
     d["activity"] = "idle"
-    _act_rec = _ACTIVITY_CACHE.get(i.Title) or {}
-    d["activity_since"] = float(_act_rec.get("changed_epoch") or 0.0)
+    d["activity_since"] = _agent_state.state_since(i.Title)
     d["last_turn"] = None
     d["last_prompt"] = None
     d["last_prompt_full"] = None
@@ -4600,6 +4773,18 @@ def _instances_tick() -> None:
         _stage_reset.prune(list(ENGINE.instances.keys()))
     except Exception:  # noqa: BLE001 — housekeeping can't fail the tick
         pass
+    # Same sweep for the per-title probe state. Dropping a record used to be a
+    # side effect of the offline poll, and before that of `_forget_probes` on
+    # every commit — both gone, deliberately, because both destroyed a live
+    # session's history. Route-level teardown covers delete/close/cleanup, but
+    # not every way a session leaves: a workspace deleted from Settings, or a
+    # tombstone converged from another MindFlock on the same state file, pops
+    # the instance without passing through a route here. One set difference per
+    # tick over dicts that are normally the size of the flock.
+    try:
+        _prune_session_state(list(ENGINE.instances.keys()))
+    except Exception:  # noqa: BLE001 — housekeeping can't fail the tick
+        pass
     # Publish the freshly computed state so AppContext.sessions() (Addon API
     # v2) and GET /api/instances can serve it without recomputing it.
     _events.set_sessions_snapshot(out)
@@ -4620,11 +4805,12 @@ def _republish_session(title: str):
     by re-reading races the publish and sees the PREVIOUS snapshot. Here the row
     is in place before anyone is told to look.
 
-    Deliberately does NOT call :func:`_forget_probes`. That would pop
-    ``_ACTIVITY_CACHE[title]`` — the only source of ``activity_since``, which
-    feeds attention ordering and the wedged-session watchdog — and drop the
-    token memo, for no benefit: ``_session_stage_fresh`` already guarantees the
-    stage is current. Do not re-add it.
+    Deliberately does NOT call :func:`_forget_probes` — it would drop the token
+    memo for no benefit, since ``_session_stage_fresh`` already guarantees the
+    stage is current. Do not re-add it. (Its original reason, that popping
+    ``_ACTIVITY_CACHE`` destroys ``activity_since``, is now handled at the
+    source: only :func:`_forget_session_state`, on the delete path, touches the
+    rolling record at all.)
 
     Returns the fresh row, or None if the session is gone. Never raises.
     """
@@ -5763,7 +5949,7 @@ async def delete_instance(title: str) -> JSONResponse:
     _EVENT_SNAPSHOT.pop(title, None)
     _aliases.drop(title)
     _BUDGET_FIRED.pop(title, None)
-    _forget_probes(title)
+    _forget_session_state(title)
     # A recreated same-title session must start with a fresh branch baseline.
     _LAST_BRANCH.pop(title, None)
     _ports.release(title)
@@ -6730,6 +6916,7 @@ async def instance_cleanup(title: str) -> JSONResponse:
         ENGINE.instances.pop(title, None)
     ENGINE.save(exclude_titles={title})
     _EVENT_SNAPSHOT.pop(title, None)
+    _forget_session_state(title)
     _aliases.drop(title)
     _events.BUS.emit("session.deleted", session=title, data={"cleaned": True})
     return JSONResponse({"ok": True})
@@ -6767,6 +6954,11 @@ async def close_instance(title: str) -> JSONResponse:
         ENGINE.instances.pop(title, None)
     ENGINE.save(exclude_titles={title})
     _EVENT_SNAPSHOT.pop(title, None)
+    # Titles come straight back — a reopen restores this very one — so the
+    # rolling record goes with the session rather than lingering to be
+    # inherited. (The incarnation stamp would retire it anyway; this keeps the
+    # dicts from growing under churn.)
+    _forget_session_state(title)
     _aliases.drop(title)
     _events.BUS.emit("session.deleted", session=title, data={"closed": True})
     return JSONResponse({"ok": True})

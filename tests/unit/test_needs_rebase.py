@@ -118,14 +118,47 @@ def test_snapshot_carries_activity_since(monkeypatch):
     monkeypatch.setitem(server.ENGINE.instances, inst.Title, inst)
     # Stub the live probe so it can't overwrite the seeded cache record.
     monkeypatch.setattr(server, "_agent_activity", lambda i, t: "idle")
+    # ``state_since`` is the key every layer of _agent_activity writes through
+    # agent_state._verdict. This test used to seed ``changed_epoch``, a key
+    # nothing has ever written — which is exactly how the field stayed dead in
+    # production while its test went on passing.
     monkeypatch.setitem(
         server._ACTIVITY_CACHE,
         inst.Title,
-        {"hash": "", "changed_epoch": 1234.5, "state": "idle", "streak": 0},
+        {"hash": "", "state_since": 1234.5, "reported": "idle", "streak": 0},
     )
     snap = server._build_instances_snapshot()
     mine = [d for d in snap if d["title"] == inst.Title]
     assert mine and mine[0]["activity_since"] == 1234.5
+
+
+def test_activity_since_is_zero_for_a_session_with_no_reading(monkeypatch):
+    """0 is the "unknown" the frontend gates on — an offline session, or one the
+    poll has not classified yet, must not look like it changed state at the
+    epoch. The wedge rule reads ``Number(activity_since) > 0`` for exactly this,
+    and would otherwise call every unseen session stuck since 1970."""
+    inst = _FakeInst("", title="act-none")
+    monkeypatch.setitem(server.ENGINE.instances, inst.Title, inst)
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: "offline")
+    server._ACTIVITY_CACHE.pop(inst.Title, None)
+    snap = server._build_instances_snapshot()
+    mine = [d for d in snap if d["title"] == inst.Title]
+    assert mine and mine[0]["activity_since"] == 0.0
+
+
+def test_the_cheap_snapshot_publishes_activity_since_too(monkeypatch):
+    """The two snapshot builders are one payload as far as a client is
+    concerned. The cheap path (a session too new/paused to probe) carried the
+    same dead ``changed_epoch`` read, so a row could lose the field simply by
+    being served from the other branch."""
+    inst = _FakeInst("", title="act-cheap")
+    monkeypatch.setitem(
+        server._ACTIVITY_CACHE,
+        inst.Title,
+        {"hash": "", "state_since": 4321.0, "reported": "idle"},
+    )
+    d = server._session_snapshot_cheap(inst, {})
+    assert d["activity_since"] == 4321.0
 
 
 # --------------------------------------------------------------------------- #
@@ -152,3 +185,18 @@ def test_app_js_has_wedge_watchdog_rule():
     assert "WEDGE_IDLE_S" in js
     assert "activity_since" in js
     assert "possibly stuck" in js
+
+
+def test_a_committed_and_walked_away_session_is_not_called_stuck():
+    """This branch had never once rendered — ``activity_since`` read a key
+    nothing wrote, so it was 0 for every session. Now that it is live, what it
+    calls "unfinished work" has to be true: a COMMITTED branch is finished as
+    far as git is concerned (the header is asking for a push, not reporting a
+    problem), and counting it would put every session anyone committed and
+    walked away from on the bell's attention badge, claiming to be wedged.
+    """
+    js = client.get("/app.js").text
+    at = js.index("const unfinished = ")
+    rule = js[at : js.index(";", at)]
+    assert "un.additions" in rule and "un.deletions" in rule
+    assert "committed" not in rule

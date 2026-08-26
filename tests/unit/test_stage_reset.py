@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -289,3 +290,45 @@ def test_route_clears_a_stale_check_but_not_one_that_matches_head(routed, wt):
     _code, body = _reset("r1")
     assert body["cleared"] == []
     assert (wts.check_status(str(wt)) or {}).get("state") == "failed"
+
+
+# --------------------------------------------------------------------------- #
+# The docs. The stage/stage_reset split is the whole safety argument, and it is
+# now public prose, which makes it contractual: these guard the names a reader
+# would go looking for (and the two docs against drifting apart again).
+# --------------------------------------------------------------------------- #
+_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _doc(name: str) -> str:
+    return (_ROOT / "docs" / name).read_text(encoding="utf-8")
+
+
+def test_web_ui_docs_name_the_route_the_row_field_and_the_module():
+    text = _doc("web-ui.md")
+    assert "POST /api/instances/{title}/reset-stage" in text
+    assert "stage_reset" in text
+    assert "backend/web/core/stage_reset.py" in text
+    # The prose cites a path, so the path is part of the contract: splitting the
+    # module has to break a test rather than quietly rot the sentence.
+    assert (_ROOT / "backend" / "web" / "core" / "stage_reset.py").exists()
+
+
+def test_web_ui_docs_hold_the_two_invariants_the_pin_is_safe_because_of():
+    text = _doc("web-ui.md")
+    # (1) the pin is published ALONGSIDE the git-derived stage, never instead of
+    # it — folding it in would let an armed fast-track chain commit a clean tree;
+    assert "does **not** touch the published `stage`" in text
+    # (2) release is keyed on the worktree, because filing a PR flips the label
+    # `pushed` -> `pr` a beat after the press.
+    assert "never against the stage label" in text
+    assert "one-shot action, not a toggle" in text
+
+
+def test_web_api_docs_carry_the_route_and_the_row_field_too():
+    """web-api.md is where an API reader looks; it documented neither."""
+    text = _doc("web-api.md")
+    assert '"stage_reset"' in text  # in the GET /api/instances row shape
+    row = [ln for ln in text.splitlines() if "/api/instances/{title}/reset-stage" in ln]
+    assert row, "the guided-workflow table never mentions /reset-stage"
+    assert any("`stage` is untouched" in ln for ln in row)

@@ -603,12 +603,117 @@ def test_dispatch_respects_a_muted_rule(pushes):
 def test_dispatch_honours_an_opted_in_rule(pushes):
     """Default-off rules push only once the user turns them on."""
     S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
-    idle = {**_clarify(), "new": "idle"}
-    _addon()._on_event(idle)
+    done = {
+        "event": "session.turn_ended",
+        "session": "s1",
+        "old": None,
+        "new": None,
+        "data": {"idle_for": 46.0},
+    }
+    _addon()._on_event(done)
     assert pushes == []
     client.post("/api/notify/rules/session_idle", json={"enabled": True})
-    _addon()._on_event(idle)
+    _addon()._on_event(done)
     assert len(pushes) == 1 and pushes[0]["priority"] == 2  # ambient: no buzz
+
+
+def test_raw_idle_never_pushes_even_when_opted_in(pushes):
+    """The chip going grey is not a notification.
+
+    ``session.activity_changed new="idle"`` fires at the end of every assistant
+    turn, between two prompts of a draining queue, and for a window that merely
+    re-opened. Opting into "a session finishes" must not subscribe you to that;
+    only ``session.turn_ended`` carries the claim.
+    """
+    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    client.post("/api/notify/rules/session_idle", json={"enabled": True})
+    _addon()._on_event({**_clarify(), "new": "idle"})
+    assert pushes == []
+
+
+def _turn_ended(session="alpha", idle_for=46.0) -> dict:
+    return {
+        "seq": 2,
+        "event": "session.turn_ended",
+        "session": session,
+        "old": None,
+        "new": None,
+        "ts": 0.0,
+        "data": {"idle_for": idle_for},
+    }
+
+
+def test_the_finished_push_says_what_it_now_means(pushes):
+    """The rule's whole claim changed, so its words did too: not "is idle" (a
+    chip colour) but "has finished" (a turn that ended, quietly, with nothing
+    queued behind it)."""
+    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    client.post("/api/notify/rules/session_idle", json={"enabled": True})
+    _addon()._on_event(_turn_ended())
+    (push,) = pushes
+    assert push["title"] == "alpha has finished"
+    assert "nothing queued" in push["message"]
+    assert push["tags"] == ["zzz"]
+
+
+def test_an_existing_opt_in_carries_over_with_no_migration(pushes):
+    """The id is unchanged ON PURPOSE. A settings file written before the
+    retarget lists ``session_idle`` in ``enabled_rules``; after it, that same
+    string has to keep meaning "tell me when a session finishes" — a renamed id
+    would have silently switched every existing opt-in back off."""
+    S.update_settings(
+        notifications={
+            "ntfy_enabled": True,
+            "ntfy_topic": "t1",
+            "enabled_rules": ["session_idle"],  # written by the OLD build
+        }
+    )
+    assert "session_idle" in {r["id"] for r in notify_addon._enabled_rules()}
+    _addon()._on_event(_turn_ended())
+    assert len(pushes) == 1
+    # And the resolved config the browser channel reads agrees.
+    rules = {r["id"]: r for r in client.get("/api/notify/config").json()["rules"]}
+    assert rules["session_idle"]["enabled"] is True
+    assert rules["session_idle"]["event"] == "session.turn_ended"
+
+
+def test_dedupe_is_per_RULE_not_per_EVENT(pushes):
+    """Three rules ride ``session.activity_changed``.
+
+    Keyed by event name, the first match inside the 5s window swallowed the
+    rest — so a session that hit its usage cap and then asked a question got the
+    cap push and NOT the question, though both are default-on and only one of
+    them can be acted on. (In the browser channel the same key is the
+    Notification ``tag``, so the later rule's popup also replaced a still-visible
+    earlier one.)
+    """
+    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    addon = _addon()
+    addon._on_event({**_clarify(), "new": "limit"})
+    addon._on_event(_clarify())  # same session, same event, within the window
+    assert [p["title"] for p in pushes] == [
+        "alpha ran out of usage",
+        "alpha needs your input",
+    ]
+    # The window still collapses a flap of the SAME rule, which is all it is for.
+    addon._on_event(_clarify())
+    assert len(pushes) == 2
+
+
+def test_the_flap_window_is_not_what_dedupes_a_finished_session(pushes, monkeypatch):
+    """``turn_ended`` is already once-per-work-cycle at the source (the emitter
+    spends the session's work evidence), so the 5s window has no opinion about
+    it — and must not acquire one, or a genuine second run finishing inside a
+    long-lived process would go unannounced."""
+    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    client.post("/api/notify/rules/session_idle", json={"enabled": True})
+    addon = _addon()
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(notify_addon.time, "monotonic", lambda: clock["t"])
+    addon._on_event(_turn_ended())
+    clock["t"] += notify_addon._DEDUPE_SECONDS + 1  # a second run, later
+    addon._on_event(_turn_ended())
+    assert len(pushes) == 2
 
 
 def test_dispatch_dedupes_a_flapping_transition(pushes):

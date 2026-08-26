@@ -471,3 +471,46 @@ class TestFrontendWiring:
     def test_the_stylesheet_ships_the_demoted_start(self):
         css = client.get("/style.css").text
         assert ".ik-start-again" in css
+
+
+# --------------------------------------------------------------------------- #
+# The docs. Reopen is described in web-ui.md; web-api.md documented no
+# /api/intake/* route at all, so an API reader would have concluded it did not
+# exist. Both are guarded here, in one place, for the same reason the panels
+# share their row rendering: the two must not disagree about what exists.
+# --------------------------------------------------------------------------- #
+_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _doc(name: str) -> str:
+    return (_ROOT / "docs" / name).read_text(encoding="utf-8")
+
+
+class TestDocs:
+    def test_web_ui_names_the_route_the_module_and_the_two_refusals(self):
+        text = _doc("web-ui.md")
+        assert "POST /api/intake/reopen" in text
+        assert "backend/web/core/reopen.py" in text
+        # The identity-not-a-path rule is the reason the refusals exist at all.
+        assert "never a path from the client" in text
+        assert "**410**" in text and "**409**" in text
+        assert (_ROOT / "backend" / "web" / "core" / "reopen.py").exists()
+
+    def test_web_ui_names_the_resolution_order_it_promises(self):
+        text = _doc("web-ui.md")
+        # Most-informative first, and `.git`-gated — a half-deleted workspace
+        # must not be offered.
+        for phrase in ("recently-closed session", "provisioned clone directory"):
+            assert phrase in text, phrase
+        assert "worktree" in text and "`.git`" in text
+
+    def test_web_api_documents_the_route_it_used_to_omit(self):
+        text = _doc("web-api.md")
+        rows = [ln for ln in text.splitlines() if "/api/intake/reopen" in ln]
+        assert rows, "web-api.md never mentions POST /api/intake/reopen"
+        row = rows[0]
+        # The status codes are the contract a client codes against.
+        for code in ("400", "409", "410"):
+            assert code in row, code
+        # ...and `workspace`, the row annotation that puts the button there.
+        assert "`workspace`" in text

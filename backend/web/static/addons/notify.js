@@ -17,7 +17,13 @@
 // clicking it focuses this tab.
 
 const STORE_KEY = "mindflock.notify.enabled";
-const DEDUPE_MS = 5000; // at most one notification per (session, event) per 5s
+// At most one notification per (session, RULE) per 5s — keyed by rule id, not
+// by event name, matching _DEDUPE_SECONDS in backend/web/addons/notify.py.
+// Three rules ride session.activity_changed (needs_input, usage_limit, and
+// formerly session_idle); an event-keyed window let whichever matched first
+// swallow the rest, and since the same key is the Notification `tag`, a later
+// rule's popup also replaced a still-visible earlier one.
+const DEDUPE_MS = 5000;
 
 function isEnabled() {
   try {
@@ -134,7 +140,7 @@ window.mindflockAddons.notify = {
       for (const rule of rules) {
         if (rule.enabled === false) continue;  // user muted this rule
         if (!ruleMatches(rule, env)) continue;
-        const key = env.session + "|" + env.event;
+        const key = env.session + "|" + rule.id;
         const now = Date.now();
         if (now - (lastShown.get(key) || 0) < DEDUPE_MS) continue;
         lastShown.set(key, now);

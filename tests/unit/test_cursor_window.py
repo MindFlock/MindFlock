@@ -618,11 +618,13 @@ def test_agent_activity_offline_when_capture_fails(monkeypatch):
 def test_agent_activity_clarify_on_waiting_prompt_needs_stable_pane(monkeypatch):
     # A numbered selection cursor "❯ 1." is claude's waiting-prompt signal, but
     # it is only trusted once the pane has been STABLE for a poll — the first
-    # sighting (pane just changed) must not read as clarify (A3).
+    # sighting (pane just changed) must not read as clarify (A3). One frame
+    # cannot establish stability, so the first sighting reports the quiet
+    # verdict, 'idle', and never a guess.
     pane = _tall("Some output\n❯ 1. Yes\n  2. No")
     monkeypatch.setattr(server.subprocess, "run", _fake_tmux(pane))
     inst = _FakeInst(program="claude")
-    assert server._agent_activity(inst, "mysess") == "working"
+    assert server._agent_activity(inst, "mysess") == "idle"
     assert server._agent_activity(inst, "mysess") == "clarify"
 
 
@@ -630,19 +632,20 @@ def test_agent_activity_clarify_on_phrase_pattern(monkeypatch):
     pane = _tall("Do you want to proceed?\nNo, and tell Claude what to do differently")
     monkeypatch.setattr(server.subprocess, "run", _fake_tmux(pane))
     inst = _FakeInst(program="claude")
-    assert server._agent_activity(inst, "mysess") == "working"  # first sight
+    assert server._agent_activity(inst, "mysess") == "idle"  # first sight
     assert server._agent_activity(inst, "mysess") == "clarify"  # stable pane
 
 
 def test_agent_activity_limit_on_usage_limit_banner(monkeypatch):
     # A usage-limit SCREEN is reported as its own 'limit' state, outranking the
-    # '❯ 1.' selection menu a limit screen also shows. Like clarify, it needs a
-    # STABLE pane first (so a genuinely working turn / scrolling output is never
-    # misread), so the first sighting is 'working' and the stable poll is 'limit'.
+    # '❯ 1.' selection menu a limit screen also shows. Unlike clarify it does
+    # NOT need a stable pane: the banner is a single-frame fact and
+    # `is_limit_screen` is the high-precision match, so it is one of the two
+    # verdicts a first sighting is allowed to reach.
     pane = _tall("Claude usage limit reached · resets 3am\n❯ 1. Wait\n  2. Switch")
     monkeypatch.setattr(server.subprocess, "run", _fake_tmux(pane))
     inst = _FakeInst(program="claude")
-    assert server._agent_activity(inst, "mysess") == "working"  # first sight
+    assert server._agent_activity(inst, "mysess") == "limit"  # first sight
     assert server._agent_activity(inst, "mysess") == "limit"  # stable pane
 
 
@@ -662,32 +665,61 @@ def test_agent_activity_not_limit_on_stray_rate_limit_text(monkeypatch):
 
 def test_agent_activity_no_clarify_while_pane_scrolls(monkeypatch):
     # A numbered list scrolling by mid-generation contains "❯ 1." but the pane
-    # keeps changing -> never clarify, stays working.
+    # keeps changing -> never clarify. With no /proc CPU to read (this mock has
+    # no pane pid) the hash fallback needs _ACTIVITY_CONFIRM_POLLS changed polls
+    # before it will say "working", so the run reads idle, idle, working,
+    # working — the point being that no frame is ever mistaken for a question.
     frames = iter([_tall("❯ 1. option\nframe-%d" % i) for i in range(5)])
     monkeypatch.setattr(server.subprocess, "run", _fake_tmux(lambda: next(frames)))
     inst = _FakeInst(program="claude")
-    for _ in range(4):
-        assert server._agent_activity(inst, "scrolls") == "working"
+    seen = [server._agent_activity(inst, "scrolls") for _ in range(4)]
+    assert "clarify" not in seen
+    assert seen[-1] == "working"
 
 
-def test_agent_activity_working_on_first_capture(monkeypatch):
-    # No waiting prompt + not seen before -> "working" (pane just observed).
+def test_agent_activity_idle_on_first_capture_of_a_quiet_pane(monkeypatch):
+    # A pane never seen before, showing neither a limit banner nor the
+    # provider's interrupt hint, is reported IDLE. It used to be reported
+    # "working" on the theory that a fresh agent usually is — the phantom
+    # behind "I click an offline session and it goes running and then idle",
+    # since the record is rebuilt from scratch every time a session's tmux
+    # comes back. Nothing about this frame says work is happening, so nothing
+    # claims it is.
     monkeypatch.setattr(
         server.subprocess, "run", _fake_tmux(_tall("streaming tokens..."))
     )
     inst = _FakeInst(program="claude")
-    assert server._agent_activity(inst, "sess-A") == "working"
+    assert server._agent_activity(inst, "sess-A") == "idle"
     # Cache recorded the observation.
     assert "sess-A" in server._ACTIVITY_CACHE
+    # …and recorded that no work has been witnessed, so nothing downstream can
+    # claim a turn ended here (server._note_turn_boundary).
+    assert server._agent_state.worked_at("sess-A") is None
+
+
+def test_agent_activity_working_on_first_capture_with_interrupt_hint(monkeypatch):
+    # The other half: an interrupt hint IS single-frame proof of a live turn,
+    # so a first sighting may reach "working" — and stamps the work evidence.
+    monkeypatch.setattr(
+        server.subprocess, "run", _fake_tmux(_tall("⠋ Thinking… (esc to interrupt)"))
+    )
+    inst = _FakeInst(program="claude")
+    assert server._agent_activity(inst, "sess-A2") == "working"
+    assert server._agent_state.worked_at("sess-A2") is not None
 
 
 def test_agent_activity_working_when_pane_changes(monkeypatch):
     inst = _FakeInst(program="claude")
     state = {"pane": _tall("frame-1")}
     monkeypatch.setattr(server.subprocess, "run", _fake_tmux(lambda: state["pane"]))
-    assert server._agent_activity(inst, "sess-B") == "working"
-    # A different pane hash -> still "working" (working is sticky on change).
+    assert server._agent_activity(inst, "sess-B") == "idle"  # quiet first frame
+    # A changing pane flips to working after _ACTIVITY_CONFIRM_POLLS changed
+    # polls, and is sticky from there.
     state["pane"] = _tall("frame-2")
+    assert server._agent_activity(inst, "sess-B") == "idle"  # 1 change
+    state["pane"] = _tall("frame-3")
+    assert server._agent_activity(inst, "sess-B") == "working"  # 2 changes
+    state["pane"] = _tall("frame-4")
     assert server._agent_activity(inst, "sess-B") == "working"
 
 
@@ -700,12 +732,11 @@ def test_agent_activity_idle_when_static_beyond_threshold(monkeypatch):
     clock = {"t": 1000.0}
     monkeypatch.setattr(server.time, "time", lambda: clock["t"])
 
-    # First observation: working, timer starts at t=1000.
-    assert server._agent_activity(inst, "sess-C") == "working"
-    # Same pane, but less than idle-after later -> still working.
+    # A static screen with no proof of work reads idle from the first frame and
+    # stays there — there is no phantom "working" to wait out any more.
+    assert server._agent_activity(inst, "sess-C") == "idle"
     clock["t"] = 1000.0 + server._ACTIVITY_IDLE_AFTER - 0.5
-    assert server._agent_activity(inst, "sess-C") == "working"
-    # Same pane, now beyond the idle threshold -> idle.
+    assert server._agent_activity(inst, "sess-C") == "idle"
     clock["t"] = 1000.0 + server._ACTIVITY_IDLE_AFTER + 0.1
     assert server._agent_activity(inst, "sess-C") == "idle"
 
@@ -719,7 +750,7 @@ def test_agent_activity_single_changed_frame_keeps_idle(monkeypatch):
     clock = {"t": 1000.0}
     monkeypatch.setattr(server.time, "time", lambda: clock["t"])
 
-    server._agent_activity(inst, "sess-D")  # seed (working)
+    server._agent_activity(inst, "sess-D")  # seed (idle: a quiet first frame)
     clock["t"] += server._ACTIVITY_IDLE_AFTER + 1
     assert server._agent_activity(inst, "sess-D") == "idle"  # settled idle
     state["pane"] = _tall("screen-b")
@@ -743,7 +774,7 @@ def test_agent_activity_bottom_line_churn_is_ignored(monkeypatch):
     monkeypatch.setattr(server.subprocess, "run", _fake_tmux(pane))
     clock = {"t": 1000.0}
     monkeypatch.setattr(server.time, "time", lambda: clock["t"])
-    assert server._agent_activity(inst, "sess-E") == "working"  # seed
+    assert server._agent_activity(inst, "sess-E") == "idle"  # seed
     clock["t"] += server._ACTIVITY_IDLE_AFTER + 1
     assert server._agent_activity(inst, "sess-E") == "idle"
     clock["t"] += 4
@@ -789,7 +820,7 @@ def test_agent_activity_climbing_token_counter_is_working(monkeypatch):
     monkeypatch.setattr(server.subprocess, "run", _fake_tmux(pane))
     clock = {"t": 1000.0}
     monkeypatch.setattr(server.time, "time", lambda: clock["t"])
-    assert server._agent_activity(inst, "sess-tok") == "working"  # seed (5.0k)
+    assert server._agent_activity(inst, "sess-tok") == "idle"  # seed (5.0k)
     # Counter flat past the idle window -> idle (climb is the signal, not mere
     # presence of a number).
     clock["t"] += server._ACTIVITY_IDLE_AFTER + 2
@@ -819,6 +850,149 @@ def test_agent_activity_waiting_prompt_beats_stale_interrupt_hint(monkeypatch):
     assert server._agent_activity(inst, "sess-clar") == "working"  # seed
     # Stable pane on the next poll -> the waiting prompt wins over the hint.
     assert server._agent_activity(inst, "sess-clar") == "clarify"
+
+
+class _MarkedProvider:
+    """A CLI reporting through its hook marker, with a controllable age."""
+
+    def __init__(self, state, age):
+        self.state, self.age = state, age
+
+    def activity_state(self, name):
+        return self.state
+
+    def activity_state_age(self, name):
+        return self.age
+
+    def record_thread(self, *a, **k):
+        return None
+
+    def waiting_prompt_patterns(self):
+        return []
+
+    def working_pane_patterns(self):
+        return (r"esc to interrupt",)  # Claude's own, so the pane can speak
+
+    def progress_token_pattern(self):
+        return None
+
+
+def test_idle_marker_from_a_previous_incarnation_is_ignored(monkeypatch):
+    # Re-opening a window relaunches its CLI (`_ensure_agent_session`), and the
+    # activity marker — keyed by tmux session name, cleared by nobody, good for
+    # six hours — still holds the DEAD run's "idle". Trusting it announced a
+    # turn that had ended before this session existed. tmux's own
+    # `session_created` retires it.
+    monkeypatch.setattr(server.time, "time", lambda: 1000.0)
+    # tmux session created at t=100; the marker was written 950s ago, i.e. at
+    # t=50 — half a minute before this incarnation started.
+    monkeypatch.setattr(
+        server.providers, "resolve", lambda prog: _MarkedProvider("idle", 950.0)
+    )
+    monkeypatch.setattr(
+        server.subprocess,
+        "run",
+        _fake_tmux(_tall("⠋ Thinking… (esc to interrupt)"), created=100.0),
+    )
+    inst = _FakeInst(program="claude")
+    # Layer 1 declines, so the live pane decides — and the pane says a turn is
+    # running right now.
+    assert server._agent_activity(inst, "sess-reborn") == "working"
+
+
+def test_idle_marker_from_this_incarnation_is_still_trusted_at_any_age(monkeypatch):
+    # The property the guard must not break: a Stop hook from an hour ago on a
+    # CLI that has been up all day is genuinely idle, whatever the pane shows.
+    monkeypatch.setattr(server.time, "time", lambda: 100000.0)
+    monkeypatch.setattr(
+        server.providers, "resolve", lambda prog: _MarkedProvider("idle", 3600.0)
+    )
+    monkeypatch.setattr(
+        server.subprocess,
+        "run",
+        _fake_tmux(_tall("⠋ Thinking… (esc to interrupt)"), created=100.0),
+    )
+    inst = _FakeInst(program="claude")
+    assert server._agent_activity(inst, "sess-oldbutmine") == "idle"
+
+
+class _PatternlessProvider(_MarkedProvider):
+    """A CLI that declares no working_pane_patterns — the common shape of a
+    provider nobody has configured in Settings → Providers."""
+
+    def __init__(self):
+        super().__init__(None, None)
+
+    def working_pane_patterns(self):
+        return ()
+
+
+def test_a_provider_with_no_working_patterns_reads_idle_on_a_first_sighting(
+    monkeypatch,
+):
+    """The load-bearing consequence of dropping the first-sighting guess.
+
+    Two of the four work signals need two samples (a CPU rate, a climbing token
+    counter), so on frame one only the limit banner and the provider's own
+    interrupt hint can speak. A provider that declares no interrupt hint has
+    nothing to say — and reads idle on a pane that is, for all this frame
+    proves, parked. That is the correct answer and also the whole reason
+    working_patterns is now worth configuring: for the queue, `_QUEUE_BOOT_GRACE`
+    is what covers the gap.
+    """
+    monkeypatch.setattr(
+        server.providers, "resolve", lambda prog: _PatternlessProvider()
+    )
+    # The very text Claude's own pattern would have caught.
+    monkeypatch.setattr(
+        server.subprocess,
+        "run",
+        _fake_tmux(_tall("⠋ Thinking… (esc to interrupt)")),
+    )
+    inst = _FakeInst(program="whatever")
+    assert server._agent_activity(inst, "sess-nopat") == "idle"
+    assert server._agent_state.worked_at("sess-nopat") is None
+
+
+def test_a_quiet_first_sighting_never_decays_into_a_working_idle_pair(monkeypatch):
+    """A first sighting with no proof of work leaves ``busy_at`` UNSET.
+
+    The hysteresis further down reads ``rec["busy_at"] or rec["changed"] or
+    now``. Seeding busy_at with "now" instead would have started an idle-settle
+    clock on a session nobody had seen work — reporting working for
+    _ACTIVITY_IDLE_AFTER seconds and then idle, which is precisely the
+    working->idle pair the notification layer must never be handed.
+    """
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(server.time, "time", lambda: clock["t"])
+    monkeypatch.setattr(server.subprocess, "run", _fake_tmux(_tall("$ ")))
+    inst = _FakeInst(program="claude")
+    assert server._agent_activity(inst, "sess-quiet") == "idle"
+    assert server._ACTIVITY_CACHE["sess-quiet"]["busy_at"] is None
+    # Poll it for a minute: same pane, nothing to report, nothing reported.
+    for _ in range(15):
+        clock["t"] += 4
+        assert server._agent_activity(inst, "sess-quiet") == "idle"
+    assert server._agent_state.worked_at("sess-quiet") is None
+
+
+def test_a_first_sighting_of_a_limit_screen_is_reported_as_limit(monkeypatch):
+    """The single-frame verdict that is NOT idle, on the layer below the hook
+    marker: a reopened window parked on its cap must say so at once, because
+    `usage_limit` is a default-ON rule and the answer "idle" would instead let
+    the turn-end machinery arm on a run the cap had cut short."""
+    monkeypatch.setattr(
+        server.providers, "resolve", lambda prog: _PatternlessProvider()
+    )
+    monkeypatch.setattr(
+        server.subprocess,
+        "run",
+        _fake_tmux(_tall("Claude usage limit reached · resets 3am")),
+    )
+    inst = _FakeInst(program="whatever")
+    assert server._agent_activity(inst, "sess-cap") == "limit"
+    # And a limit is not work: nothing to announce the end of.
+    assert server._agent_state.worked_at("sess-cap") is None
 
 
 def test_agent_activity_exit_marker_wins(monkeypatch):
@@ -887,7 +1061,8 @@ _PS_SHELLS_ONLY = "  100     1 systemd\n 4242  4000 bash\n 4250  4242 sh\n"
 
 def test_agent_activity_wrapper_shell_with_claude_child_not_idle(monkeypatch):
     # fg is bash (the launcher wrapper) but claude is alive underneath -> falls
-    # through to pane inspection (first sighting => working), NOT idle.
+    # through to pane inspection, which sees the interrupt hint => working,
+    # NOT the bare-shell "idle" Layer 2 would have returned.
     monkeypatch.setattr(
         server.subprocess,
         "run",
@@ -910,7 +1085,7 @@ def test_agent_activity_wrapper_shell_clarify_flows_through(monkeypatch):
         _fake_tmux(pane, fg="bash", pid="4242", ps=_PS_WITH_CLAUDE),
     )
     inst = _FakeInst(program="claude")
-    assert server._agent_activity(inst, "sess-wrap2") == "working"  # first sight
+    assert server._agent_activity(inst, "sess-wrap2") == "idle"  # first sight
     server._PID_TREE_CACHE.clear()
     assert server._agent_activity(inst, "sess-wrap2") == "clarify"  # stable pane
 

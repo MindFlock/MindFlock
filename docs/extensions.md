@@ -45,11 +45,21 @@ Core vocabulary (emitted by the server):
 | `session.prompt_sent` | The queue drain loop auto-sends a prompt | `data: {text, remaining, loop}` |
 | `session.queue_changed` | Any prompt-queue edit | `data: {pending, enabled, loop}` |
 | `session.usage_restored` | A provider window reopened for a session that had run out | `data: {resumed}` |
+| `session.turn_ended` | A session's work really is over — observed working, idle ever since, nothing queued | `data: {idle_for}` |
 
 Addon-originated events (see `AppContext.emit`) live under the `addon.`
 namespace, e.g. `addon.notify.ping`. Notable transitions:
 
 - **agent needs you**: `session.activity_changed` with `new == "clarify"`
+- **agent has finished**: `session.turn_ended` — NOT `session.activity_changed`
+  with `new == "idle"`. The activity flip is a chip colour: the CLI's Stop hook
+  fires at the end of *every* assistant turn, so a ten-turn conversation flips
+  it ten times, and a window that has merely been re-opened flips it once
+  without having run anything at all. `session.turn_ended` is the fact worth
+  acting on — it asserts that the agent was observed working in its current tmux
+  incarnation, has been idle continuously for `server._TURN_END_DWELL_S` (45s),
+  and has no queued prompt waiting to wake it. Emitted once per cycle of
+  observed work, so a session that then sits idle all night says it once
 - **PR merged/closed**: `session.stage_changed` with `old == "pr"` (an open PR
   is stage `pr`; merging or closing it moves the stage off `pr`)
 - **out of usage**: `session.activity_changed` with `new == "limit"` — the pane
@@ -326,7 +336,7 @@ test that diffs them:
 |---|---|
 | `_matches(rule, envelope)` | `ruleMatches(rule, env)` |
 | `_fill(template, envelope)` | `fill(template, env)` |
-| `_DEDUPE_SECONDS = 5.0` | `DEDUPE_MS = 5000` |
+| `_DEDUPE_SECONDS = 5.0`, keyed `(session, rule.id)` | `DEDUPE_MS = 5000`, keyed `session + "|" + rule.id` |
 | `aliases.display_name(title, branch)` | `window.mindflock.displayName(title)` |
 
 `{session}` is the twin that bites hardest, because getting it wrong is silent:
@@ -337,6 +347,21 @@ nobody can find is worse than no push. The browser channel asks the SPA
 (`window.mindflock.displayName`, the sidebar's own resolver); the server channel
 runs a hand port of it (`core/aliases.session_label`, pinned against the
 TypeScript original's examples in `tests/unit/test_aliases.py`).
+
+The dedupe key is the **rule id**, not the event name — it was the event name,
+and three rules ride `session.activity_changed`, so whichever matched first
+swallowed the others for 5 s (`usage_limit` eating `needs_input`, both
+default-on) and, because the same key doubles as the browser `Notification`
+`tag`, the later popup also replaced a still-visible earlier one.
+
+**The `session_idle` rule kept its id and changed its event.** It now matches
+`session.turn_ended` with `old`/`new` both `null`, where it used to match
+`session.activity_changed` with `new == "idle"`; its label, title and body
+changed with it ("A session finishes its work and stays idle"). The id is
+deliberately unchanged, so an existing `notifications.enabled_rules` opt-in
+carries straight over and simply gets quieter — there is no settings migration.
+An addon or filter that keyed on the *event name* rather than the rule id does
+need updating.
 
 Any change to rule *semantics* — a new constraint field, different `{…}`
 placeholder handling, a different dedupe key or window — must land in **both**, or

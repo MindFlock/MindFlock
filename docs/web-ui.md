@@ -304,18 +304,37 @@ session (keyboard-only via a prompt).
 
 ## Notifications (🔔)
 
-The header bell keeps a running feed of notable session events — finished/idle,
+The header bell keeps a running feed of notable session events — finished,
 needs-input, stage changes, cost-over-budget, auto-sent queued prompts — fed by
 the events bus, **including the backlog replayed on connect** so it answers
 "what happened while I was away." An unread badge counts events since you last
 opened it (keyed on timestamp so it survives server restarts); clicking an entry
 focuses that session.
 
+A raw idle transition no longer produces a row at all. The feed used to log
+*finished — now idle* on every activity flip to idle, with no rule gate and no
+dedupe — so it fired at the end of every assistant turn, between two prompts of
+a draining queue, and for a re-opened window whose agent had run nothing. The
+finished row now comes from `session.turn_ended` and says how long the quiet has
+lasted — **finished — idle 45s**, **finished — idle 2m** — because the dwell is
+the part that makes the claim trustworthy. `working`/`offline` flips remain
+chip colours and are still filtered out.
+
 **One rule list, two delivery channels.** Settings → Notifications is split that
 way on purpose: *What triggers a notification* (needs-input, PR merged/closed,
 budget exceeded, pre-commit failed, ran out of usage / usage came back — plus
 the noisy opt-ins) governs **both** channels, and each channel decides only
 where an alert lands.
+
+**"A session finishes its work" is a claim, and it is checked.** The opt-in rule
+fires on `session.turn_ended`, not on the activity chip going grey. The chip
+goes grey at the end of every assistant turn — the CLI's Stop hook cannot tell
+"the work is done" from "this reply is done" — and also for a window you merely
+re-opened, since attaching its pane relaunches a dead agent that then parks at an
+empty prompt. Before the event fires, three things have to be true: MindFlock
+*watched this agent work* in the tmux session that is running now, it has been
+idle for 45 seconds since, and there is no queued prompt about to wake it. Each
+cycle of work announces itself once, however long the session then sits there.
 
 The two usage rules are a pair: **"A session runs out of usage"** fires on the
 activity flip to `limit` (the agent is parked on its CLI's usage-limit screen),
@@ -431,7 +450,17 @@ Authentication section. If the token leaks, regenerate it from Settings →
   about a window you cannot find in the rail is worse than no push.
 - **Attention** — sessions waiting on input badge the tab **title** (`● (n)`)
   *and* the **favicon** (a red dot), so a backgrounded tab is noticeable. The
-  🔔 bell keeps the durable list.
+  🔔 bell keeps the durable list, prioritized: waiting on your answer, then
+  broken (pre-commit / worktree setup), then checks failing, then ready to move.
+- **Wedged-session watchdog** — the lowest-noise entry on that list: a session
+  idle for more than **20 minutes** while still holding **uncommitted** changes
+  reads *idle 25m with unfinished work — possibly stuck*, i.e. an agent that
+  stopped in the middle of something with nobody typing. A `committed` branch
+  does **not** count as unfinished work — git considers it done and the header
+  is merely asking you to push — so committing and walking away is not flagged.
+  This rule only started rendering at all once `activity_since` was populated
+  (see [web-api.md](web-api.md#get-apiinstances)); before that it read a field
+  that was always `0` and never fired.
 - **Undo** — reversible actions (hide, bulk hide) show a *click to undo* toast
   instead of a modal; only truly destructive wipes still confirm.
 - **Hidden sessions stick** — a session you hide stays hidden across reloads
@@ -1320,10 +1349,31 @@ is running it**.
   *Reminder to take a break every `[N]` minutes*, with N editable in place
   (5–480, default 60). When it fires, a card asks you to get up, with the
   murmuration from mindflock.ai flying over your grid.
-  **Snooze 5 min** pushes it back five minutes; **Resumed work** (or
+  **Snooze 5 min** pushes it back five minutes; **Resume Working** (or
   Escape) restarts the whole interval. The clock is wall-clock and survives a
   reload — a refresh is not a way to dodge a break — but changing the interval
-  re-arms it from now. **There is no scrim**: your grid, sidebar and panes stay
+  re-arms it from now.
+
+  **It only runs while the app does.** A deadline on its own keeps counting
+  through a closed window, a shut-down machine and a slept laptop, so whoever
+  came back in the morning was met by a card claiming they had been at the desk
+  all night, its away-clock still climbing. They had not been: time away from
+  the app is time away from the desk, which is the break itself. So the app
+  stamps a heartbeat while it runs (`mf_break_seen`, every 15s), and a gap in it
+  of more than **five minutes** starts the interval over instead of resuming it
+  — on opening, and also mid-run, which is the only thing that notices a machine
+  that slept with the window open (and takes the stale card down with it).
+
+  Opening the app is itself a fresh start: the countdown begins when you sit
+  down, whatever yesterday left behind. That is not a hole in the rule above,
+  because a *refresh* is told apart from an *open* by navigation type rather
+  than by guesswork — F5, the palette's Reload, the reload every tab does when
+  the server restarts, and the API client's reload on a lost session are all
+  `reload` and all keep the deadline; a shell launch or a new tab is `navigate`.
+  The five-minute tolerance is wide on purpose: a hidden tab's timer is
+  throttled to about one tick a minute, and that must not read as an absence.
+
+  **There is no scrim**: your grid, sidebar and panes stay
   exactly as you left them and the flock flies over them, the same treatment the
   idle overlay gets; the card is the only new thing on screen. The overlay still
   swallows the pointer and the keymap stands down with it, so you can watch your

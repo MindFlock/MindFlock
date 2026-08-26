@@ -187,9 +187,13 @@ def test_notify_default_on_and_opt_in_rules():
     assert rules["needs_input"]["enabled"] is True
     assert rules["session_idle"]["enabled"] is False
     assert rules["precommit_running"]["enabled"] is False
-    # The idle rule fires on activity → idle; pre-commit on stage → precommit.
-    assert rules["session_idle"]["event"] == "session.activity_changed"
-    assert rules["session_idle"]["new"] == "idle"
+    # The idle rule fires on a real turn boundary — NOT on the raw activity
+    # flip, which is a chip colour that changes at the end of every turn;
+    # pre-commit fires on stage → precommit.
+    assert rules["session_idle"]["event"] == "session.turn_ended"
+    # The event IS the whole condition — turn_ended is only ever emitted when
+    # it is true — so the rule constrains neither old nor new.
+    assert rules["session_idle"]["new"] is None
     assert rules["precommit_running"]["new"] == "precommit"
     # Pre-commit failure is default-on and fires on stage → interrupt.
     assert rules["precommit_failed"]["enabled"] is True

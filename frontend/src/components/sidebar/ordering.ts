@@ -100,10 +100,18 @@ export function attentionItems(instances: Instance[]): AttentionItem[] {
       items.push({ p: 3, title: inst.title, reason: "pushed — ready for PR" });
     else if (act === "idle" && Number(inst.activity_since) > 0) {
       // Wedged-session watchdog: calm-looking but sitting on unfinished work.
+      //
+      // This branch had never once rendered: `activity_since` read a key nothing
+      // wrote, so it was 0 for every session and the condition was dead. Now that
+      // it is populated, "unfinished" has to mean what the row says. A COMMITTED
+      // branch is not unfinished work — git considers it done and the header is
+      // simply asking you to push — and counting it flagged every session anyone
+      // had committed and walked away from as "possibly stuck", on the bell's
+      // attention badge. Uncommitted output with nobody typing is the real
+      // signal: an agent stopped in the middle of something.
       const idleFor = Date.now() / 1000 - Number(inst.activity_since);
       const un = (inst.diff_stat || ({} as never))?.uncommitted || ({} as { additions?: number; deletions?: number });
-      const unfinished =
-        (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0 || inst.stage === "committed";
+      const unfinished = (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
       if (idleFor > WEDGE_IDLE_S && unfinished)
         items.push({
           p: 1,

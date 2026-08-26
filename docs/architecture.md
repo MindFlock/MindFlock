@@ -137,23 +137,40 @@ FastAPI app `backend.web.server:app`. Key pieces:
   single-flight slot and freeze that panel's list. Remaining sharp edge: the
   tasks are untracked at lifespan shutdown (fire-and-forget). See
   [web-api.md](web-api.md#assigned-tickets-pr-auto-review--issue-handling).
+- **Per-tick housekeeping** — `_instances_tick` runs two bounded sweeps against
+  the live title list, each swallowing its own exceptions so housekeeping can
+  never fail a tick: `_stage_reset.prune` (the ↺ display pins) and
+  `_prune_session_state` (the per-title probe/rolling state). The second is the
+  backstop for removals that never reach a route — a workspace deleted from
+  Settings, a tombstone converged from another MindFlock — now that dropping a
+  record is no longer a side effect of an offline poll or of `_forget_probes`,
+  both of which destroyed live sessions' work evidence.
 - **The rest of `core/`** — `server.py` keeps only the app assembly, the
   routes, and the always-on background loops; every other helper cluster is a
   focused module: `agent_sessions` (tmux ensure/send/kill for the agent+shell
-  panes), `agent_state` (working/clarify/idle/offline detection), `snapshot`
+  panes), `agent_state` (working/clarify/idle/offline detection — and the
+  *provenance* behind it: every classification layer stamps a per-title rolling
+  record keyed to the tmux incarnation, exposing `state_since` (what
+  `/api/instances`' `activity_since` publishes), `worked_at` ("we watched this
+  agent work in the session running now") and `claim_work()`, the atomic
+  read-and-clear `server._note_turn_boundary` spends to emit
+  `session.turn_ended` exactly once per observed work cycle), `snapshot`
   (per-session JSON descriptors + diff stat), `session_stats` (token/cost
   telemetry + transcript history), `budget` (cost guardrail + input lock),
   `usage_api` (/api/usage provider descriptors), `mobile_access` (tailnet
   URLs/QR/banner), `plain_repo` (base-folder selection), `workspaces` (roots,
   classification, guarded deletion), `recently_closed` (reopen/Ctrl+Z store),
   `uploads` (paste retention), `system_logs` (log tails), `cursor_windows`,
-  `ide_launch`, `ports`, `window_refresh`, `worktree_setup`. Two load-bearing
-  conventions keep this decomposition black-box-equivalent — hold them when
-  extracting more: **(1) no routes in `core/`** — every `APIRouter`/`@app`
-  handler stays in `server.py`; the modules are pure helpers. **(2) re-import
-  for the monkeypatch seam** — a core module calls back through the server
-  namespace (`_server()._foo(...)`) for anything tests monkeypatch, and
-  `server.py` re-imports the module's names, so
+  `ide_launch`, `ports`, `window_refresh`, `worktree_setup`, `stage_reset` (the
+  guided ladder's ↺ display pin — in-memory, pruned against the live titles) and
+  `reopen` (does an intake item still have a workspace on this machine). Both
+  obey convention (1) below: their routes (`/reset-stage`, `/api/intake/reopen`)
+  live in `server.py`. Two load-bearing conventions keep this decomposition
+  black-box-equivalent — hold them when extracting more: **(1) no routes in
+  `core/`** — every `APIRouter`/`@app` handler stays in `server.py`; the modules
+  are pure helpers. **(2) re-import for the monkeypatch seam** — a core module
+  calls back through the server namespace (`_server()._foo(...)`) for anything
+  tests monkeypatch, and `server.py` re-imports the module's names, so
   `monkeypatch.setattr(server, "_foo", …)` works no matter where `_foo` lives.
 - **Startup `PATH` enrichment** (`backend.pathenv`) — the server `lifespan`
   runs `pathenv.ensure_enriched()` (on a worker thread) **once before serving

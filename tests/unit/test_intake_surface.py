@@ -1098,3 +1098,52 @@ def test_every_intake_work_list_ships_its_filter():
     # is what makes Ctrl+F and "Escape clears, then closes" the same everywhere.
     assert "dlg-filter" in js
     assert client.get("/style.css").text.count(".pr-open-toolbar .dlg-filter") >= 1
+
+
+# --------------------------------------------------------------------------- #
+# The Auto-start tab — the cross-source roll-up of "what starts next without
+# me". Its contract is a shared rule (one module behind both the tab body and
+# the strip badge, so the count and the list cannot disagree) and one
+# three-value chip vocabulary, whichever switch is really involved. Both are now
+# documented, which makes the names load-bearing.
+# --------------------------------------------------------------------------- #
+_ROOT = Path(__file__).resolve().parents[2]
+_INTAKE_SRC = _ROOT / "frontend" / "src" / "components" / "intake"
+
+
+class TestAutoStartTabIsDocumented:
+    def test_the_docs_name_the_tab_its_key_and_its_one_vocabulary(self):
+        text = (_ROOT / "docs" / "web-ui.md").read_text(encoding="utf-8")
+        assert "`autostart`" in text
+        assert "**Auto-start**" in text
+        # Three values, and only three: an earlier cut leaked the plumbing into
+        # the labels ("ingestion paused" beside "switched off").
+        for chip in ("auto-start on", "auto-start off", "not set up"):
+            assert chip in text, chip
+        # The difference between the switches belongs in the sentence under the
+        # heading, which names the one to flip.
+        assert "Automated ingestion" in text
+        assert "Automated PR review" in text
+        assert "Automated issue handling" in text
+
+    def test_the_modules_the_docs_cite_exist(self):
+        text = (_ROOT / "docs" / "web-ui.md").read_text(encoding="utf-8")
+        assert "intake/queue.ts" in text
+        assert "components/intake/kit.tsx" in text
+        assert (_INTAKE_SRC / "queue.ts").exists()
+        assert (_INTAKE_SRC / "kit.tsx").exists()
+
+    def test_the_tab_and_its_badge_really_share_the_one_rule(self):
+        """The doc's claim — "the count and the list cannot disagree" — is only
+        true while both read `queue.ts`."""
+        dialog = (_INTAKE_SRC / "IntakeDialog.tsx").read_text(encoding="utf-8")
+        assert 'from "./queue"' in dialog
+        assert '"autostart"' in dialog
+        assert 'from "./queue"' in (_INTAKE_SRC / "QueueTab.tsx").read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_bundle_ships_the_fourth_tab(self):
+        js = client.get("/app.js").text
+        assert "Auto-start" in js
+        assert "autostart" in js

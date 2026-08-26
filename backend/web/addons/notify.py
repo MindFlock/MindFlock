@@ -131,15 +131,29 @@ NOTIFY_RULES: List[dict] = [
         "tags": ["arrows_counterclockwise"],
     },
     {
-        # Opt-in (noisy): fires whenever a session finishes its turn and goes
-        # idle — useful for babysitting a long autonomous run.
+        # Opt-in: a session's work really is over — useful for babysitting a
+        # long autonomous run.
+        #
+        # Keyed on ``session.turn_ended``, NOT on ``session.activity_changed``
+        # with ``new == "idle"``. That was the same rule this used to be, and it
+        # fired on a chip colour: at the end of every assistant turn (ten per
+        # conversation), on a session that had merely booted to a bare prompt,
+        # between two prompts of a draining queue, and on every re-opened window
+        # — because the CLI's Stop hook says a turn ENDED and says nothing about
+        # whether one ever began. ``turn_ended`` asserts the three things this
+        # sentence has always claimed: the agent was observed working, it has
+        # stayed idle since, and nothing is queued to wake it up.
+        #
+        # The id is unchanged on purpose: an existing opt-in in
+        # settings.notifications.enabled_rules carries straight over and simply
+        # gets quieter, with no migration.
         "id": "session_idle",
-        "label": "A session finishes and goes idle",
-        "event": "session.activity_changed",
+        "label": "A session finishes its work and stays idle",
+        "event": "session.turn_ended",
         "old": None,
-        "new": "idle",
-        "title": "{session} is idle",
-        "body": "The agent finished its turn and is waiting.",
+        "new": None,
+        "title": "{session} has finished",
+        "body": "The agent finished its turn and has been idle since, with nothing queued.",
         "default_enabled": False,
         "priority": 2,
         "tags": ["zzz"],
@@ -181,9 +195,16 @@ NOTIFY_RULES: List[dict] = [
 #: resolved ``enabled``) and the ntfy-only presentation hints.
 _INTERNAL_RULE_FIELDS = ("default_enabled", "priority", "tags")
 
-#: At most one push per (session, event) per this many seconds. Mirrors
-#: ``DEDUPE_MS`` in static/addons/notify.js so both channels collapse a flapping
-#: transition the same way.
+#: At most one push per (session, RULE) per this many seconds — the key is the
+#: rule id, not the event name, because three rules ride
+#: ``session.activity_changed`` and an event-keyed window lets whichever fires
+#: first swallow the others (a ``limit`` push eating a ``needs_input`` push,
+#: both default-on). ``DEDUPE_MS`` in static/addons/notify.js keys the same way,
+#: so both channels collapse a flapping transition identically.
+#:
+#: This is a FLAP collapser and nothing more. It is meaningless at turn cadence,
+#: which is why "the agent has finished" is deduped by spending its evidence
+#: instead — see ``server._note_turn_boundary``.
 _DEDUPE_SECONDS = 5.0
 
 
