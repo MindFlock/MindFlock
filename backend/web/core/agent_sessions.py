@@ -198,9 +198,9 @@ def _ensure_agent_session(inst, title: str):
         # the `||` fallback chains mean a `K=V cmd` prefix would only cover the
         # first link of the chain.
         if local_env:
-            cmd = providers.launch_script.env_exports(local_env) + cmd
+            cmd = _env_prefix(name, local_env) + cmd
     if prof_env:
-        cmd = providers.launch_script.env_exports(prof_env) + cmd
+        cmd = _env_prefix(name, prof_env) + cmd
     # (Re)install the provider's activity-reporting hooks with THIS session's
     # name right before launching, so the CLI announces working/idle/clarify
     # for the run we are about to start (Claude snapshots hook config at
@@ -212,6 +212,7 @@ def _ensure_agent_session(inst, title: str):
     # Launch through the exit-recording wrapper and drop any stale marker so the
     # next death is judged fresh.
     _clear_exit_marker(name)
+    _PENDING_SECRETS.pop(name, None)  # this relaunch's file is written
     # A FRESH start begins a new conversation — drop the recorded thread id so
     # a later crash-resume can't target a conversation this run never had.
     # (A resume keeps it: that id is exactly what the launch command targets.)
@@ -365,6 +366,46 @@ def _kill_named_session(name: str) -> None:
 def _kill_shell_session(title: str) -> None:
     srv = _server()
     srv._kill_named_session(srv._shell_tmux_name(title))
+
+
+def _env_prefix(session_name: str, env: dict) -> str:
+    """Shell that puts ``env`` in front of a relaunch command.
+
+    Splits credentials out of the literal string: this whole command becomes
+    the argv of ``sh -c``, so an inline ``export ANTHROPIC_API_KEY=…`` is
+    readable by every local user via ``ps`` for as long as the session lives.
+    Secrets are written to a 0600 file and sourced by path instead
+    (:mod:`backend.session.secret_env`); everything else is inlined exactly as
+    before.
+
+    The file is shared with the first-start path (same session name, same
+    path), and each writer replaces it wholesale — a relaunch always writes the
+    full set it is about to need, so there is no half-updated state.
+    """
+    from backend.session import secret_env
+
+    plain, secret = secret_env.split(env)
+    out = providers.launch_script.env_exports(plain)
+    if secret:
+        merged = dict(secret)
+        # Don't drop a credential the other overlay put there on this same
+        # relaunch: the profile and local-model prefixes are applied one after
+        # the other and both may carry one.
+        try:
+            existing = _PENDING_SECRETS.setdefault(session_name, {})
+            existing.update(merged)
+            merged = dict(existing)
+        except Exception:  # noqa: BLE001
+            pass
+        path = secret_env.write(session_name, merged)
+        out = secret_env.source_prefix(path) + out
+    return out
+
+
+#: Secrets accumulated while assembling ONE relaunch command, so two overlays
+#: writing the same session's file do not clobber each other. Cleared when the
+#: command is handed to tmux.
+_PENDING_SECRETS: dict = {}
 
 
 def _kill_agent_session(title: str) -> None:

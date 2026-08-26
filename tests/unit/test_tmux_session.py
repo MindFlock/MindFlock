@@ -647,3 +647,105 @@ def test_cleanup_sessions_list_error_surfaces():
     mock = cmd_pkg.MockCmdExec(output_func=output_func)
     err = tmux.cleanup_sessions(mock)
     assert "failed to list tmux sessions: tmux broken" in str(err)
+
+
+# --------------------------------------------------------------------------- #
+# Credentials must never reach argv
+#
+# A process's argv is world-readable on Linux (/proc/<pid>/cmdline, hence ps).
+# `env ANTHROPIC_API_KEY=… claude` puts the key there for the whole life of the
+# session, and `tmux set-environment` puts it in the client's. Auth profiles
+# were the first feature to send a real credential down this path.
+# --------------------------------------------------------------------------- #
+def _started_session(monkeypatch, extra_env, tmp_path):
+    exist_state = {"created": False}
+    ran: list = []
+
+    def run_func(c):
+        ran.append(c)
+        if c.args[:2] == ["tmux", "has-session"]:
+            return None if exist_state["created"] else Exception("nope")
+        return None
+
+    monkeypatch.setenv("MINDFLOCK_RUN_DIR", str(tmp_path / "run"))
+    factory = _FakePtyFactory([(_FakePtmx(), None), (_FakePtmx(), None)])
+    mock = cmd_pkg.MockCmdExec(run_func=run_func)
+    sess = tmux.NewTmuxSessionWithDeps("secretdemo", "claude", factory, mock)
+    sess.launch_command = "claude --continue"
+    sess.extra_env = dict(extra_env)
+
+    orig_start = factory.start
+
+    def wrapped_start(cmd):
+        exist_state["created"] = True
+        return orig_start(cmd)
+
+    factory.start = wrapped_start
+    assert sess.start("/work/dir") is None
+    return sess, factory, ran
+
+
+_KEY = "sk-ant-super-secret-value"  # pragma: allowlist secret
+
+
+def test_a_credential_never_appears_in_the_tmux_argv(monkeypatch, tmp_path):
+    sess, factory, ran = _started_session(
+        monkeypatch,
+        {"PORT": "8080", "ANTHROPIC_API_KEY": _KEY, "CLAUDE_CONFIG_DIR": "/tmp/w"},
+        tmp_path,
+    )
+    # Not in the new-session argv...
+    for arg in factory.started_cmds[0].args:
+        assert _KEY not in arg, "the API key reached the tmux new-session argv"
+    # ...and not in any follow-up tmux command either (set-environment).
+    for c in ran:
+        for arg in c.args:
+            assert _KEY not in arg, "the API key reached a tmux command's argv"
+
+
+def test_the_non_secret_env_still_rides_the_argv_unchanged(monkeypatch, tmp_path):
+    """Only credentials move. Everything else keeps the env(1) prefix, so a
+    session without one is byte-identical to before."""
+    _sess, factory, _ran = _started_session(
+        monkeypatch,
+        {"PORT": "8080", "ANTHROPIC_API_KEY": _KEY, "CLAUDE_CONFIG_DIR": "/tmp/w"},
+        tmp_path,
+    )
+    launch = factory.started_cmds[0].args[-1]
+    assert "env CLAUDE_CONFIG_DIR=/tmp/w PORT=8080 claude --continue" in launch
+
+
+def test_a_session_with_no_credentials_is_byte_identical(monkeypatch, tmp_path):
+    _sess, factory, _ran = _started_session(
+        monkeypatch, {"PORT": "8080", "HOST": "x y"}, tmp_path
+    )
+    assert (
+        factory.started_cmds[0].args[-1] == "env HOST='x y' PORT=8080 claude --continue"
+    )
+    # ...and nothing was written to the run dir.
+    assert not (tmp_path / "run").exists() or not list((tmp_path / "run").iterdir())
+
+
+def test_the_credential_file_is_0600_and_sourced_by_path(monkeypatch, tmp_path):
+    import os
+    import stat
+
+    _sess, factory, _ran = _started_session(
+        monkeypatch, {"ANTHROPIC_API_KEY": _KEY}, tmp_path
+    )
+    launch = factory.started_cmds[0].args[-1]
+    envfile = tmp_path / "run" / "mindflock_secretdemo.env"
+    assert str(envfile) in launch, "the launch never sources the credential file"
+    assert _KEY in envfile.read_text()
+    assert stat.S_IMODE(os.stat(envfile).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(tmp_path / "run").st_mode) == 0o700
+
+
+def test_closing_the_session_removes_its_credential_file(monkeypatch, tmp_path):
+    sess, _factory, _ran = _started_session(
+        monkeypatch, {"ANTHROPIC_API_KEY": _KEY}, tmp_path
+    )
+    envfile = tmp_path / "run" / "mindflock_secretdemo.env"
+    assert envfile.exists()
+    sess.close()
+    assert not envfile.exists()

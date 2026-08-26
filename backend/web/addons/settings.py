@@ -65,6 +65,25 @@ def _mask_profile_dict(prof: dict) -> None:
         prof["env"] = {k: _MASK for k in env}
 
 
+def _sessions_pinned_to(profile_ids: set) -> list:
+    """Titles of live sessions whose stored pin names one of ``profile_ids``.
+
+    Only an EXPLICIT pin counts: a session inheriting the app-wide default
+    ("" pin) follows whatever the default becomes, which is the behaviour it
+    asked for. Best-effort — the engine is not this addon's to depend on.
+    """
+    try:
+        from backend.web import server as _srv
+
+        return sorted(
+            title
+            for title, inst in (getattr(_srv.ENGINE, "instances", {}) or {}).items()
+            if (getattr(inst, "ProfileId", "") or "") in profile_ids
+        )
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _mask_auth_profiles(d: dict) -> None:
     """Mask the secrets of every auth profile in-place (the profiles twin of
     :func:`_mask_ticketing` — secrets inside a list need their own walk)."""
@@ -835,11 +854,27 @@ class SettingsAddon(Addon):
 
         def _auth_profiles_view() -> dict:
             s = settings_store.load_settings().auth_profiles
-            return {
+            view = {
                 "profiles": _masked_profiles(),
                 "default_profile": s.default_profile,
                 "kinds": list(settings_store.AUTH_PROFILE_KINDS),
             }
+            # $MINDFLOCK_AUTH_PROFILE beats the stored default at launch time,
+            # and it is read from the server process's own env — invisible to
+            # this endpoint unless it is reported. Without this the screen and
+            # `accounts ls` name one identity while every session runs as
+            # another, and the "Make default" button appears to do nothing.
+            try:
+                from backend.providers import auth_profiles as _ap
+
+                pinned = os.environ.get("MINDFLOCK_AUTH_PROFILE")
+                if pinned:
+                    view["default_profile"] = _ap.default_profile_id()
+                    view["default_profile_env"] = pinned
+                    view["default_profile_locked"] = True
+            except Exception:  # noqa: BLE001 — enrichment only
+                pass
+            return view
 
         @router.get("/settings/auth-profiles")
         def get_auth_profiles() -> JSONResponse:
@@ -860,6 +895,9 @@ class SettingsAddon(Addon):
                     {"error": 'expected {"profiles": [...]}'}, status_code=400
                 )
             stored_profiles = settings_store.load_settings().auth_profiles.profiles
+            stored_profiles_raw = [
+                {"id": getattr(p, "id", "")} for p in stored_profiles
+            ]
             prev = {p.id: p.api_key for p in stored_profiles}
             prev_env = {p.id: dict(p.env or {}) for p in stored_profiles}
             clean: list = []
@@ -919,8 +957,29 @@ class SettingsAddon(Addon):
                 # env KEY. A key absent from the stored env resolves to ""
                 # and is dropped by the store's serializer.
                 if isinstance(p.get("env"), dict):
+                    kept = prev_env.get(pid, {})
+                    lost = [
+                        k
+                        for k, v in p["env"].items()
+                        if isinstance(k, str) and v == _MASK and k not in kept
+                    ]
+                    if lost:
+                        # Same shape as the api_key rule below and for the same
+                        # reason: the keep-secret map is keyed by id, so an id
+                        # RENAME cannot resolve the mask. Blanking these
+                        # silently is worse than a key going missing — an empty
+                        # credential in the env can break the CLI's auth
+                        # outright.
+                        return JSONResponse(
+                            {
+                                "error": "account '%s': re-enter %s (renaming an "
+                                "id requires re-entering its secrets)"
+                                % (pid, ", ".join(sorted(lost))),
+                            },
+                            status_code=400,
+                        )
                     p["env"] = {
-                        k: (prev_env.get(pid, {}).get(k, "") if v == _MASK else v)
+                        k: (kept.get(k, "") if v == _MASK else v)
                         for k, v in p["env"].items()
                         if isinstance(k, str)
                     }
@@ -952,6 +1011,39 @@ class SettingsAddon(Addon):
                     },
                     status_code=400,
                 )
+            # Removing a profile that sessions are PINNED to is an identity
+            # change for each of them: the overlay resolves to nothing and they
+            # come back on the CLI's own login — the one thing this feature is
+            # not allowed to do quietly. Name them and refuse; `force: true`
+            # (the UI's "remove anyway") proceeds, because a user who has read
+            # the list is entitled to.
+            gone = {
+                (p.get("id") or "")
+                for p in stored_profiles_raw
+                if (p.get("id") or "") and (p.get("id") or "") not in seen
+            }
+            if gone and not bool(body.get("force")):
+                pinned = _sessions_pinned_to(gone)
+                if pinned:
+                    return JSONResponse(
+                        {
+                            "error": "still in use by %s — swap %s off it first "
+                            "(the pane's @account chip), or resend with "
+                            "force to run %s on the CLI's own login"
+                            % (
+                                ", ".join("'%s'" % t for t in pinned[:5])
+                                + (
+                                    " and %d more" % (len(pinned) - 5)
+                                    if len(pinned) > 5
+                                    else ""
+                                ),
+                                "them" if len(pinned) > 1 else "it",
+                                "them" if len(pinned) > 1 else "it",
+                            ),
+                            "in_use": pinned,
+                        },
+                        status_code=409,
+                    )
             try:
                 settings_store.set_auth_profiles(clean)
                 if "default_profile" in body:

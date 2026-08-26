@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, instApi } from "../../api/client";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
+import { accountRows, swapLabel } from "../../lib/accountRows";
 import { refreshInstances, useAuthProfiles } from "../../state/queries";
 import { UsagePopover } from "../usage/UsagePopover";
 
@@ -29,6 +30,11 @@ export function AccountChip({ inst }: { inst: Instance }) {
   const label = inst.profile_label || "default";
   const effectiveProfile = profiles.find((p) => p.id === effective);
   const modelCapable = !!effectiveProfile && effectiveProfile.kind !== "account";
+
+  // The rows are built from the session's stored PIN, not the identity it
+  // resolves to (see lib/accountRows for why that distinction is the whole
+  // point).
+  const rows = accountRows(inst.profile_id || "", data?.default_profile || "", profiles);
 
   // The OpenRouter catalog is fetched once per popover-open (the key answers
   // in ~1s; a failure just leaves the picker out — the swap rows still work).
@@ -63,17 +69,27 @@ export function AccountChip({ inst }: { inst: Instance }) {
     try {
       const body: Record<string, unknown> = { profile_id: profileId };
       if (profileModel !== undefined) body.profile_model = profileModel;
-      const r = await instApi<{ ok: boolean; note?: string }>(inst.title, "/profile", {
-        json: body,
-      });
+      const r = await instApi<{
+        ok: boolean;
+        note?: string;
+        unchanged?: boolean;
+        resumed?: boolean;
+      }>(inst.title, "/profile", { json: body });
+      if (r?.unchanged) return; // re-picked what was already running
+      // Whether the conversation came back matters more than the identity did
+      // — it is the one thing a swap changes that the pane cannot show until
+      // the agent has finished relaunching.
+      const thread =
+        profileModel !== undefined
+          ? ""
+          : r?.resumed
+            ? " — resuming its conversation"
+            : " — starting a fresh conversation";
       toast(
         r?.note ||
           (profileModel !== undefined
             ? "Now running " + (profileModel || "the account's default model")
-            : "Now running as " +
-              (profileId === "default"
-                ? "the CLI's own login"
-                : profiles.find((p) => p.id === profileId)?.label || profileId))
+            : "Now running as " + swapLabel(profileId, profiles) + thread)
       );
       void refreshInstances();
     } catch (err) {
@@ -103,23 +119,14 @@ export function AccountChip({ inst }: { inst: Instance }) {
           <div className="usage-pop-head">Run this session as</div>
           <table className="usage-pop-tbl">
             <tbody>
-              <tr
-                className="acct-pop-row"
-                style={{ cursor: "pointer" }}
-                onClick={() => swap("default")}
-              >
-                <td>CLI's own login</td>
-                <td className="num">{effective === "" ? "✓" : ""}</td>
-              </tr>
-              {profiles.map((p) => (
+              {rows.map((row) => (
                 <tr
-                  key={p.id}
-                  className="acct-pop-row"
-                  style={{ cursor: "pointer" }}
-                  onClick={() => swap(p.id)}
+                  key={row.id || "__inherit"}
+                  className={"acct-pop-row" + (row.current ? " acct-pop-current" : "")}
+                  onClick={() => swap(row.id)}
                 >
-                  <td>{p.label || p.id}</td>
-                  <td className="num">{effective === p.id ? "✓" : ""}</td>
+                  <td>{row.label}</td>
+                  <td className="num">{row.current ? "✓" : ""}</td>
                 </tr>
               ))}
             </tbody>
@@ -127,11 +134,10 @@ export function AccountChip({ inst }: { inst: Instance }) {
           {modelCapable && (
             <>
               <div className="usage-pop-head">Model</div>
-              <div style={{ padding: "4px 8px" }}>
+              <div className="acct-pop-model">
                 {models && models.length ? (
                   <select
                     id="acct-chip-model"
-                    style={{ width: "100%" }}
                     value={inst.profile_model || ""}
                     onClick={(ev) => ev.stopPropagation()}
                     onChange={(ev) =>
@@ -174,8 +180,9 @@ export function AccountChip({ inst }: { inst: Instance }) {
           )}
           <div className="usage-pop-note">
             Swapping restarts the agent under the new identity. Files, diff and
-            terminal stay; the conversation continues only if the new account
-            has seen it before (conversations live per account).
+            terminal stay. A thread belongs to the account that started it, so
+            this window keeps one conversation per account: swapping back
+            reopens the one you left, a first swap starts fresh.
           </div>
         </UsagePopover>
       )}

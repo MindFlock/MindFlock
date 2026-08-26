@@ -406,9 +406,16 @@ class AuthProfile:
         return cls(
             id=str(d.get("id", "") or ""),
             label=str(d.get("label", "") or ""),
-            # Tolerant like every coercion here: an unknown kind becomes the
-            # safe "account" (env-only overlay) rather than taking the store down.
-            kind=kind if kind in AUTH_PROFILE_KINDS else "account",
+            # Tolerant like every coercion here: an unrecognised kind is kept
+            # VERBATIM rather than taking the store down. Keeping it is also
+            # what makes it safe — no typed overlay matches an unknown kind, so
+            # `overlay_for` applies the profile's raw ``env`` and nothing else.
+            # Coercing it to "account" would do the opposite: point the CLI at
+            # ~/.mindflock/accounts/<id> via CLAUDE_CONFIG_DIR and launch it
+            # logged out. The API rejects unknown kinds on write, so this path
+            # is only reached by a hand-edited settings.json or a store written
+            # by a newer build — both of which want preservation, not a guess.
+            kind=kind,
             provider=str(d.get("provider", "") or ""),
             config_dir=str(d.get("config_dir", "") or ""),
             api_key=str(d.get("api_key", "") or ""),

@@ -50,7 +50,13 @@ class CodexProvider(GenericProvider):
             return None
 
     # --- per-session resume thread ----------------------------------------- #
-    def record_thread(self, session_name: str, workdir: str, since_ts=None) -> None:
+    def record_thread(
+        self,
+        session_name: str,
+        workdir: str,
+        since_ts=None,
+        profile_id: str = "",
+    ) -> None:
         """Bind this window to its own codex session id (from the rollout file
         created for the current run), so a crash-resume targets ``codex resume
         <id>`` instead of ``resume --last`` (which grabs whichever sibling on
@@ -64,7 +70,7 @@ class CodexProvider(GenericProvider):
                 exclude=thread_markers.claimed(exclude_session=session_name),
             )
             if sid and sid != thread_markers.read(session_name):
-                thread_markers.record(session_name, sid)
+                thread_markers.record(session_name, sid, profile_id)
         except Exception:  # noqa: BLE001 — thread binding is enrichment only
             pass
 

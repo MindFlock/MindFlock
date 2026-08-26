@@ -208,6 +208,11 @@ export interface AuthProfilesResponse {
   profiles: AuthProfile[];
   default_profile: string;
   kinds?: string[];
+  /** Set when $MINDFLOCK_AUTH_PROFILE pins the app-wide default in the
+   * server's environment: `default_profile` then reports the env value and
+   * saving a different one has no effect until the variable is unset. */
+  default_profile_env?: string;
+  default_profile_locked?: boolean;
 }
 
 export interface Device {

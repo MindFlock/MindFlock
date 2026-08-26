@@ -205,9 +205,23 @@ def profile_overlay(
     try:
         from . import auth_profiles
 
-        return auth_profiles.launch_overlay(program, profile_id, model)
+        env, args = auth_profiles.launch_overlay(program, profile_id, model)
     except Exception:  # noqa: BLE001
         return {}, ()
+    if args:
+        # Local models outrank an auth profile, on every launch path. The env
+        # halves already resolve that way (callers merge ``{**prof, **local}``),
+        # but the FLAG halves only concatenate — and a profile's ``-m``/
+        # ``--model`` landing after the local overlay's would win on every CLI
+        # that takes the last flag, quietly routing an on-machine session out
+        # to a gateway. Dropping the profile's routing flags when local models
+        # are live keeps the one flag the privacy story can't lose.
+        try:
+            if local_overlay(program)[1]:
+                args = ()
+        except Exception:  # noqa: BLE001 — a settings read must never block a launch
+            pass
+    return env, args
 
 
 def launch_command(

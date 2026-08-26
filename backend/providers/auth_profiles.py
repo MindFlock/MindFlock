@@ -66,6 +66,7 @@ __all__ = [
     "unsupported_note",
     "claude_account_roots",
     "claude_account_root_map",
+    "codex_account_root_map",
     "probe_openrouter",
 ]
 
@@ -339,6 +340,12 @@ def overlay_for(
     return env, tuple(args)
 
 
+#: Env var naming the auth profile a session is running as. Read by the
+#: activity hook (which runs inside the session) so per-account thread memories
+#: are filed correctly; never set for a session on the ambient login.
+PROFILE_ID_ENV = "MINDFLOCK_PROFILE_ID"
+
+
 def launch_overlay(
     program: str, profile_id: str = "", model: str = ""
 ) -> Tuple[Dict[str, str], Tuple[str, ...]]:
@@ -352,7 +359,8 @@ def launch_overlay(
     The single entry point the launch paths call. ``({}, ())`` when no profile
     applies.
     """
-    profile = get_profile(effective_profile_id(profile_id))
+    effective = effective_profile_id(profile_id)
+    profile = get_profile(effective)
     if profile is None:
         return {}, ()
     if (model or "").strip():
@@ -363,7 +371,19 @@ def launch_overlay(
         name = resolve(program).name
     except Exception:  # noqa: BLE001
         name = (program or "").strip()
-    return overlay_for(name, profile)
+    env, args = overlay_for(name, profile)
+    if not env and not args:
+        # No route for this CLI: the session runs on the ambient login, so it
+        # must look exactly like an unprofiled one — including to the activity
+        # hooks below.
+        return {}, ()
+    # Tell the session which identity it is running as. MindFlock's own
+    # variable, not any CLI's: the activity hook fires *inside* this session and
+    # reads it to file the conversation id under the right account, so a later
+    # swap back can restore the thread instead of starting over
+    # (:mod:`backend.providers.thread_markers`). Never set when no profile
+    # applies, so the no-profile launch stays byte-identical.
+    return {**env, PROFILE_ID_ENV: effective}, args
 
 
 def supported_agents(profile: AuthProfileConfig) -> List[str]:
@@ -448,6 +468,22 @@ def claude_account_root_map() -> Dict[str, str]:
     out: Dict[str, str] = {}
     for p in load_profiles():
         if p.kind == "account" and p.resolved_provider() == "claude":
+            out[account_dir(p)] = p.id
+    return out
+
+
+def codex_account_root_map() -> Dict[str, str]:
+    """``{CODEX_HOME: profile_id}`` for every codex ``account`` profile.
+
+    The codex counterpart of :func:`claude_account_root_map`. A codex session
+    running under an account profile writes its rollouts under that profile's
+    ``CODEX_HOME``, so a scanner that only ever looks at the server's own
+    ``$CODEX_HOME``/``~/.codex`` finds nothing for it — no tokens, no context
+    figure, no thread binding.
+    """
+    out: Dict[str, str] = {}
+    for p in load_profiles():
+        if p.kind == "account" and p.resolved_provider() == "codex":
             out[account_dir(p)] = p.id
     return out
 

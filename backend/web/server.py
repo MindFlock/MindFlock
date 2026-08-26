@@ -1072,7 +1072,29 @@ _LIMIT_FALLBACK = 600.0  # no reset time parsed -> retry after 10 min
 _LIMIT_EXHAUSTED_PCT = 99.0  # live-meter %-used at/above which a window counts as spent
 
 
-def _live_limit_reset(provider, now: float):
+def _meter_is_about_this_session(inst) -> bool:
+    """Whether the provider's usage meter describes the identity THIS session
+    runs as.
+
+    ``usage_live()`` reads whatever credentials the server process itself sees
+    — the CLI's ambient login. A session pinned to an auth profile is metered
+    somewhere else entirely, so the ambient reading is a different
+    subscription's: trusting it would release a genuinely limited session early
+    (burning the queued prompt on the limit screen) or hold a session whose own
+    account still has headroom. Detection from the session's own pane text is
+    unaffected and remains the gate for profiled sessions.
+    """
+    try:
+        from backend.providers import auth_profiles
+
+        return not auth_profiles.effective_profile_id(
+            getattr(inst, "ProfileId", "") or ""
+        )
+    except Exception:  # noqa: BLE001 — never break the drain over settings
+        return True
+
+
+def _live_limit_reset(provider, now: float, inst=None):
     """Authoritative "limited until" from the provider's own usage meter
     (``usage_live()`` — for Claude that's Anthropic's OAuth usage endpoint, the
     same source as the CLI's ``/usage`` screen), independent of whatever text
@@ -1082,7 +1104,14 @@ def _live_limit_reset(provider, now: float):
     the pane text), ``0.0`` when the meter says every window still has
     headroom (a lingering banner must be stale), or the epoch when the LAST
     exhausted window reopens — both the 5-hour and the weekly cap must have
-    reset before a send can land."""
+    reset before a send can land.
+
+    ``inst``, when given, scopes the reading: the meter is the *ambient*
+    login's, so for a session running under an auth profile there is no live
+    reading to be had and ``None`` is the honest answer (see
+    :func:`_meter_is_about_this_session`)."""
+    if inst is not None and not _meter_is_about_this_session(inst):
+        return None
     try:
         live = provider.usage_live()
     except Exception:  # noqa: BLE001 — live usage is enrichment, never a gate
@@ -1169,7 +1198,7 @@ def _refresh_limit_state(inst, title: str, name: str) -> float:
         # own meter may still END it early: if it now shows headroom, the window
         # reopened before our estimate did — release the queue.
         if prev > now:
-            if _live_limit_reset(provider, now) == 0.0:
+            if _live_limit_reset(provider, now, inst) == 0.0:
                 _LIMIT_STATE.pop(title, None)
                 return 0.0
             return prev
@@ -1181,7 +1210,7 @@ def _refresh_limit_state(inst, title: str, name: str) -> float:
         # if the limit really persists a fresh detection re-arms on the next
         # pass (bounded retry), far better than holding forever on stale text.
         if prev:
-            live = _live_limit_reset(provider, now)
+            live = _live_limit_reset(provider, now, inst)
             if live and live > now:
                 _LIMIT_STATE[title] = live
                 return live
@@ -1198,7 +1227,7 @@ def _refresh_limit_state(inst, title: str, name: str) -> float:
             parsed = float(reset_at) if reset_at is not None else None
         except (TypeError, ValueError):
             parsed = None
-        live = _live_limit_reset(provider, now)
+        live = _live_limit_reset(provider, now, inst)
         candidates = [c for c in (parsed, live) if c and c > now]
         if candidates:
             until = max(candidates)
@@ -1217,7 +1246,7 @@ def _refresh_limit_state(inst, title: str, name: str) -> float:
     # meter, which is independent of whatever text is on the pane.
     if prev and now < prev:
         # Active hold: release early only if the meter says the window reopened.
-        if _live_limit_reset(provider, now) == 0.0:
+        if _live_limit_reset(provider, now, inst) == 0.0:
             _LIMIT_STATE.pop(title, None)
             return 0.0
         return prev
@@ -1226,7 +1255,7 @@ def _refresh_limit_state(inst, title: str, name: str) -> float:
     # holds instead of burning the queued prompt on a send that lands on the wall
     # while no banner happens to be visible. A meter that reads open — or is
     # unavailable (None) — leaves the queue free to send, exactly as before.
-    live = _live_limit_reset(provider, now)
+    live = _live_limit_reset(provider, now, inst)
     if live and live > now:
         _LIMIT_STATE[title] = live
         return live
@@ -5431,6 +5460,34 @@ def _rewrite_launcher_for_profile(inst, wt: str) -> bool:
         return False
 
 
+def _session_overlay_env(inst) -> dict:
+    """The env a session's tmux needs in order to come back up as ITSELF.
+
+    ``ExtraEnv`` is deliberately not persisted — it is re-derived from settings
+    on every start — so any path that hands tmux a *fresh* env dict has to
+    rebuild these or the session quietly returns on the CLI's ambient login
+    (auth profile) and its hosted API (local models). Local wins on a key
+    collision, exactly as it does at launch.
+    """
+    env: dict = {}
+    program = getattr(inst, "Program", "") or ""
+    try:
+        prof_env, _ = providers.launch_script.profile_overlay(
+            program,
+            getattr(inst, "ProfileId", "") or "",
+            getattr(inst, "ProfileModel", "") or "",
+        )
+        env.update(prof_env)
+    except Exception:  # noqa: BLE001 — never block a resume over settings
+        pass
+    try:
+        local_env, _ = providers.launch_script.local_overlay(program)
+        env.update(local_env)
+    except Exception:  # noqa: BLE001
+        pass
+    return env
+
+
 def _profile_model_error(model: str) -> str:
     """Validate a per-session model override. Model ids are free-form (each
     gateway names its own), so only shell-hostile shapes are rejected — the
@@ -5785,7 +5842,20 @@ async def create_instance(payload: dict) -> JSONResponse:
             "provisioned": is_provisioned,
         },
     )
-    return JSONResponse(_instance_json(inst), status_code=202)
+    body = _instance_json(inst)
+    # An account with no route for this agent runs the session on the CLI's own
+    # login. The New dialog says so at selection time; API and CLI callers had
+    # no way to hear it at all, and a session quietly launching as the wrong
+    # identity is the one outcome this feature cannot be silent about.
+    try:
+        from backend.providers import auth_profiles
+
+        note = auth_profiles.unsupported_note(program or "", profile_id)
+        if note:
+            body["note"] = note
+    except Exception:  # noqa: BLE001 — the note is enrichment only
+        pass
+    return JSONResponse(body, status_code=202)
 
 
 @app.get("/api/aliases")
@@ -6028,7 +6098,11 @@ async def instance_resume(title: str) -> JSONResponse:
         return err
     # O4: ExtraEnv isn't persisted — re-derive the port block so a resumed
     # session's fresh tmux gets the same env its worktree was set up with.
-    inst.ExtraEnv = _ports.env_for(title)
+    # The auth-profile / local-model overlay has to be re-derived here for the
+    # same reason: this assignment REPLACES the dict, so a bare port block
+    # would resume a profiled session on the CLI's ambient login and a
+    # local-model session against its hosted API.
+    inst.ExtraEnv = {**_session_overlay_env(inst), **_ports.env_for(title)}
     try:
         await asyncio.to_thread(inst.Resume)
     except Exception as err:  # noqa: BLE001
@@ -6930,10 +7004,14 @@ async def set_instance_profile(title: str, payload: dict) -> JSONResponse:
     and a fresh one is started immediately — the relaunch path re-derives the
     profile overlay from the stored pin, so the CLI comes back as the new
     identity. The kill reads as an unnatural death, so the relaunch takes the
-    CLI's resume path; whether there is a conversation to resume depends on
-    the new identity (transcripts live per account — swapping back finds the
-    old thread, a first swap starts fresh via the resume chain's plain-start
-    fallback). The worktree, shell pane and diff state are untouched.
+    CLI's resume path, and the thread it names is re-pointed first: a
+    conversation belongs to the account that created it, so
+    ``thread_markers.switch_profile`` files the outgoing identity's thread
+    under its own name and restores whatever the incoming identity last had in
+    this window. A swap back therefore reopens the conversation you left; a
+    first swap to an identity has nothing to restore and starts fresh
+    (``resumed`` in the response says which). The worktree, shell pane and diff
+    state are untouched.
     """
     inst, err = _inst_or_404(title)
     if err is not None:
@@ -6944,28 +7022,64 @@ async def set_instance_profile(title: str, payload: dict) -> JSONResponse:
     if perr:
         return JSONResponse({"error": perr}, status_code=400)
     prev_profile_id = getattr(inst, "ProfileId", "") or ""
-    inst.ProfileId = profile_id
+    prev_profile_model = getattr(inst, "ProfileModel", "") or ""
     # The model override rides along only when the caller sends the key — a
     # model-only change (same identity) never has to restate the identity. An
     # IDENTITY change without an explicit model drops the pin: it belonged to
     # the old identity's catalog, and carrying e.g. "openai/gpt-5" onto a
     # Claude-subscription account would launch its CLI pinned to a model its
     # API has never heard of.
+    #
+    # Resolved BEFORE anything is mutated, so a 400 from this route means "the
+    # session is exactly as you left it" — the same contract the auth-profiles
+    # PUT keeps.
     if "profile_model" in payload:
         profile_model = str(payload.get("profile_model", "") or "").strip()
         merr = _profile_model_error(profile_model)
         if merr:
             return JSONResponse({"error": merr}, status_code=400)
-        inst.ProfileModel = profile_model
     elif profile_id != prev_profile_id:
-        inst.ProfileModel = ""
+        profile_model = ""
+    else:
+        profile_model = prev_profile_model
+
+    # Re-picking what is already running is a no-op, not a restart. The popover
+    # lists the ACTIVE identity as a clickable row like every other, so the
+    # cheapest possible misclick would otherwise hard-kill a working agent and
+    # spend its resume position to arrive back where it started.
+    if profile_id == prev_profile_id and profile_model == prev_profile_model:
+        return JSONResponse(
+            {"ok": True, "profile_id": profile_id, "note": "", "unchanged": True}
+        )
+
+    inst.ProfileId = profile_id
+    inst.ProfileModel = profile_model
     ENGINE.save()
+
+    # A conversation belongs to the account that started it: its transcript
+    # lives under that identity's config dir and the other one cannot open it.
+    # File the outgoing identity's thread under its own name and restore
+    # whatever the incoming identity last had here, so the relaunch resumes a
+    # thread it actually owns — and a swap back returns you to the conversation
+    # you left instead of a third fresh one.
+    restored = ""
+    try:
+        from backend.providers import auth_profiles as _ap
+        from backend.providers import thread_markers as _tm
+
+        restored = _tm.switch_profile(
+            tmux.to_mindflock_tmux_name(title),
+            _ap.effective_profile_id(prev_profile_id),
+            _ap.effective_profile_id(profile_id),
+        )
+    except Exception:  # noqa: BLE001 — markers are enrichment only
+        pass
 
     # Provisioned launcher scripts carry profile launch FLAGS baked in at write
     # time (env never is — it rides the relaunch exports). Rewrite the script so
     # a swap also updates flag-level routing (e.g. an OpenRouter model pin).
     # Best-effort: a rewrite failure still leaves the env swap working.
-    def _restart() -> None:
+    def _restart() -> str:
         try:
             wt = inst.GetWorktreePath()
         except Exception:  # noqa: BLE001
@@ -6974,9 +7088,23 @@ async def set_instance_profile(title: str, payload: dict) -> JSONResponse:
             _rewrite_launcher_for_profile(inst, wt)
         if inst.Started() and inst.Status == session.Running:
             _kill_agent_session(title)
-            _ensure_agent_session(inst, title)
+            _, rerr = _ensure_agent_session(inst, title)
+            if rerr is not None:
+                return str(rerr)
+        return ""
 
-    await asyncio.to_thread(_restart)
+    # The kill already happened, so a relaunch failure leaves the session with
+    # no agent at all. Answering {ok: true} there would put a cheerful "Now
+    # running as work" toast on top of a dead pane; report it instead.
+    restart_err = await asyncio.to_thread(_restart)
+    if restart_err:
+        return JSONResponse(
+            {
+                "error": "account saved, but the agent did not come back up: %s"
+                % restart_err
+            },
+            status_code=500,
+        )
     note = ""
     try:
         from backend.providers import auth_profiles
@@ -6987,9 +7115,19 @@ async def set_instance_profile(title: str, payload: dict) -> JSONResponse:
     _events.BUS.emit(
         "session.profile_changed",
         session=title,
-        data={"profile_id": profile_id},
+        data={"profile_id": profile_id, "resumed": bool(restored)},
     )
-    return JSONResponse({"ok": True, "profile_id": profile_id, "note": note})
+    return JSONResponse(
+        {
+            "ok": True,
+            "profile_id": profile_id,
+            "note": note,
+            # Whether the incoming identity had a conversation here to go back
+            # to. The UI says which of the two things just happened rather than
+            # leaving the user to discover it in the pane.
+            "resumed": bool(restored),
+        }
+    )
 
 
 # --- Recently-closed: list / reopen / forget ---------------------------------

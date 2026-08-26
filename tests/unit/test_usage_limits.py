@@ -209,7 +209,7 @@ def _inst():
 def _no_live(monkeypatch):
     """Isolate the gate from the dev machine's real Claude credentials — the
     gate now consults the provider's live usage meter when a limit shows."""
-    monkeypatch.setattr(server, "_live_limit_reset", lambda p, n: None)
+    monkeypatch.setattr(server, "_live_limit_reset", lambda p, n, i=None: None)
 
 
 def test_gate_uses_parsed_reset(monkeypatch):

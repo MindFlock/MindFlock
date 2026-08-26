@@ -129,6 +129,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="server port (default: $MINDFLOCK_PORT or 8765)",
     )
 
+    # The same two options for a NESTED subcommand (``accounts`` is the only
+    # two-level group). argparse applies a subparser's defaults over whatever
+    # the outer parser already stored, so re-using ``server_opts`` on both
+    # levels makes ``mindflock accounts --port 9999 ls`` silently reset the
+    # port to None on the way into ``ls``. SUPPRESS writes the attribute only
+    # when the flag is actually typed, so either position works and the
+    # innermost one wins.
+    server_opts_nested = argparse.ArgumentParser(add_help=False)
+    server_opts_nested.add_argument(
+        "--host", default=argparse.SUPPRESS, help=argparse.SUPPRESS
+    )
+    server_opts_nested.add_argument(
+        "--port", type=int, default=argparse.SUPPRESS, help=argparse.SUPPRESS
+    )
+
     new = sub.add_parser(
         "new",
         parents=[server_opts],
@@ -227,10 +242,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     acc_sub = accounts.add_subparsers(dest="accounts_command")
     acc_sub.add_parser(
-        "ls", parents=[server_opts], help="list configured accounts (the default)"
+        "ls",
+        parents=[server_opts_nested],
+        help="list configured accounts (the default)",
     )
     acc_add = acc_sub.add_parser(
-        "add", parents=[server_opts], help="add an account/key profile"
+        "add", parents=[server_opts_nested], help="add an account/key profile"
     )
     acc_add.add_argument("id", metavar="ID", help="short slug (e.g. work, personal)")
     acc_add.add_argument(
@@ -269,18 +286,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     acc_login = acc_sub.add_parser(
         "login",
-        parents=[server_opts],
+        parents=[server_opts_nested],
         help="run the CLI's own login for an account profile (interactive)",
     )
     acc_login.add_argument("id", metavar="ID")
     acc_use = acc_sub.add_parser(
         "use",
-        parents=[server_opts],
+        parents=[server_opts_nested],
         help="make an account the app-wide default ('default' = the CLI's own login)",
     )
     acc_use.add_argument("id", metavar="ID")
     acc_rm = acc_sub.add_parser(
-        "rm", parents=[server_opts], help="remove an account profile"
+        "rm", parents=[server_opts_nested], help="remove an account profile"
     )
     acc_rm.add_argument("id", metavar="ID")
 
@@ -494,6 +511,12 @@ def _cmd_new(args: argparse.Namespace) -> int:
     created = client.post(base, "/api/instances", payload)
     title = str((created or {}).get("title") or title)  # server may re-derive it
     print("created session %s" % title)
+    # The account/agent combination has no verified route, so the session is
+    # about to run on the CLI's own login. Loud here, because --account looks
+    # like it worked otherwise.
+    note = str((created or {}).get("note") or "")
+    if note:
+        print("  warning: %s" % note, file=sys.stderr)
     print("  attach:  mindflock attach %s" % title)
 
     # The server returns 202 and does the heavy lifting (worktree + tmux +

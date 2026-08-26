@@ -711,6 +711,21 @@ def _claude_user_config_paths():
     home = os.path.join(os.path.expanduser("~"), ".claude.json")
     if home not in paths:
         paths.append(home)
+    # Every claude auth-profile account dir too. Trust is a property of the
+    # FOLDER, not of an identity — MindFlock created the worktree, so it is
+    # trusted no matter which login opens it — and a session pinned to an
+    # account reads that account's config, where an unseeded entry means the
+    # run stalls at an invisible "do you trust this folder?" gate. Seeding all
+    # of them is idempotent and needs no knowledge of which one will run.
+    try:
+        from . import auth_profiles
+
+        for d in auth_profiles.claude_account_root_map():
+            p = os.path.join(d, ".claude.json")
+            if p not in paths:
+                paths.append(p)
+    except Exception:  # noqa: BLE001 — pre-trust is best-effort
+        pass
     return paths
 
 

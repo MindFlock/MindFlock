@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../../api/client";
-import type { AuthProfile } from "../../../api/types";
+import type { AuthProfile, AuthProfilesResponse } from "../../../api/types";
 import { toast } from "../../../lib/toast";
 import { refreshAuthProfiles, useAuthProfiles } from "../../../state/queries";
 import { SECRET_MASK } from "../useSettings";
@@ -54,6 +54,10 @@ export function Accounts(_: ScreenProps) {
   const { data } = useAuthProfiles();
   const [profiles, setProfiles] = useState<AuthProfile[]>([]);
   const [defaultId, setDefaultId] = useState("");
+  // $MINDFLOCK_AUTH_PROFILE beats the stored default at launch. Showing the
+  // picker as live would let someone "set" a default that every session then
+  // ignores.
+  const [envPinned, setEnvPinned] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [draft, setDraft] = useState<AuthProfile>({ id: "", kind: "account" });
   const [error, setError] = useState("");
@@ -63,23 +67,45 @@ export function Accounts(_: ScreenProps) {
   useEffect(() => {
     setProfiles(data?.profiles || []);
     setDefaultId(data?.default_profile || "");
+    setEnvPinned(data?.default_profile_env || "");
   }, [data]);
 
-  const save = async (next: AuthProfile[], nextDefault?: string) => {
+  const save = async (next: AuthProfile[], nextDefault?: string, force?: boolean) => {
     setError("");
     try {
       const body: Record<string, unknown> = { profiles: next };
       if (nextDefault !== undefined) body.default_profile = nextDefault;
-      const r = await api<{ profiles: AuthProfile[]; default_profile: string }>(
-        "/api/settings/auth-profiles",
-        { json: body, method: "PUT" }
-      );
+      if (force) body.force = true;
+      const r = await api<AuthProfilesResponse>("/api/settings/auth-profiles", {
+        json: body,
+        method: "PUT",
+      });
       setProfiles(r.profiles || []);
       setDefaultId(r.default_profile || "");
+      setEnvPinned(r.default_profile_env || "");
       void refreshAuthProfiles();
       toast("Accounts saved");
     } catch (err) {
-      setError((err as Error).message);
+      // 409: sessions are still pinned to an account being removed. They would
+      // silently fall back to the CLI's own login, so the server refuses until
+      // someone has actually read the list — offer that decision here rather
+      // than reporting a dead end.
+      const msg = (err as Error).message || "";
+      if (/still in use by/.test(msg)) {
+        if (
+          window.confirm(
+            msg.replace(/, or resend with force.*$/, "") +
+              ".\n\nRemove anyway? Those sessions will run on the CLI's own " +
+              "login until you give them a new account."
+          )
+        ) {
+          await save(next, nextDefault, true);
+          return;
+        }
+        setError("");
+        return;
+      }
+      setError(msg);
     }
   };
 
@@ -142,6 +168,7 @@ export function Accounts(_: ScreenProps) {
         <select
           id="acct-default"
           value={defaultId}
+          disabled={!!envPinned}
           onChange={(e) => save(profiles, e.target.value)}
         >
           <option value="">Each CLI's own login (no profile)</option>
@@ -152,7 +179,11 @@ export function Accounts(_: ScreenProps) {
           ))}
         </select>
         <span className="set-hint">
-          Sessions created without an explicit account run as this identity.
+          {envPinned
+            ? `Pinned by $MINDFLOCK_AUTH_PROFILE=${envPinned} in the server's
+               environment, which wins over anything saved here. Unset it to
+               choose from this screen.`
+            : "Sessions created without an explicit account run as this identity."}
         </span>
       </label>
 
@@ -276,13 +307,12 @@ export function Accounts(_: ScreenProps) {
                   </span>
                 )}
                 {p.id !== defaultId && (
-                  <button type="button" className="linklike" onClick={() => save(profiles, p.id)}>
+                  <button type="button" onClick={() => save(profiles, p.id)}>
                     Make default
                   </button>
                 )}
                 <button
                   type="button"
-                  className="linklike"
                   onClick={() => save(profiles.filter((x) => x.id !== p.id))}
                 >
                   Remove
@@ -366,8 +396,8 @@ export function Accounts(_: ScreenProps) {
           </div>
         </div>
       ) : (
-        <div className="set-row">
-          <button type="button" id="acct-add" className="test-btn" onClick={() => setAddOpen(true)}>
+        <div className="prov-conn-actions">
+          <button type="button" id="acct-add" onClick={() => setAddOpen(true)}>
             Add account
           </button>
         </div>

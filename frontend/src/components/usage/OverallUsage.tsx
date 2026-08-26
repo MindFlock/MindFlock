@@ -275,6 +275,12 @@ export function OverallUsage() {
                       ] as UsageRowData;
                     })}
                   />
+                  {/* These will not add up to the total above for a long
+                      period, and saying so beats letting someone hunt for the
+                      difference: days the durable ledger recorded before any
+                      account existed carry no identity, so they count in the
+                      total and in nobody's row. */}
+                  <UsagePopNote text="Split from the day accounts were configured; earlier days count in the total only." />
                 </>
               )}
               <UsagePopNote text={period === "session" ? USAGE_NOTE : USAGE_WINDOW_NOTE[period]} />

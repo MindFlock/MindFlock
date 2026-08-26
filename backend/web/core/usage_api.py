@@ -48,6 +48,32 @@ def _estimate_percent(win: Optional[dict]) -> Optional[float]:
     return min(100.0, round(100.0 * win["cost"] / budget, 1))
 
 
+def _window_account(p) -> Optional[str]:
+    """Which identity's transcripts the plan window should be estimated from.
+
+    A plan window belongs to ONE subscription, and ``usage_live()`` reads
+    whatever credentials the SERVER sees — the CLI's ambient login. With claude
+    account profiles configured, an unscoped transcript estimate would price
+    that plan's window with turns billed to a different account and anchor it
+    on a message the plan never saw. Scope it to the ambient login so the
+    dollar estimate and the live percentage describe the same subscription; the
+    other identities have their own rows in the "By account" table.
+
+    ``None`` (= the machine-wide walk, unchanged) when no account profile
+    exists, which is every install that does not use the feature.
+    """
+    if p.name != "claude":
+        return None
+    try:
+        from backend.providers import auth_profiles, usage_history
+
+        if auth_profiles.claude_account_root_map():
+            return usage_history.AMBIENT_ACCOUNT
+    except Exception:  # noqa: BLE001 — scoping is enrichment only
+        pass
+    return None
+
+
 def _usage_window_for(p) -> Optional[dict]:
     """The active usage window for provider ``p`` (or None) — the same
     computation the default provider has always used, factored out so it can run
@@ -66,7 +92,7 @@ def _usage_window_for(p) -> Optional[dict]:
         # providers get a window only from their own usage_live() (Codex reads
         # its on-disk rate_limits snapshot).
         win = (
-            usage_history.current_window(float(uw["hours"]))
+            usage_history.current_window(float(uw["hours"]), _window_account(p))
             if p.name == "claude"
             else None
         )

@@ -27178,7 +27178,8 @@ function OverallUsage() {
                   ];
                 })
               }
-            )
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(UsagePopNote, { text: "Split from the day accounts were configured; earlier days count in the total only." })
           ] }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(UsagePopNote, { text: period === "session" ? USAGE_NOTE : USAGE_WINDOW_NOTE[period] }),
           active.mode === "windowed" ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
@@ -29695,6 +29696,30 @@ function SessionUsageChip({ inst }) {
     ] })
   ] });
 }
+function accountRows(pin, defaultProfileId, profiles) {
+  const appDefault = profiles.find((p) => p.id === defaultProfileId);
+  const inheriting = pin === "" && !!appDefault;
+  const onAmbient = pin === "default" || pin === "" && !appDefault;
+  const rows = [];
+  if (appDefault) {
+    rows.push({
+      id: "",
+      label: "App default (" + (appDefault.label || appDefault.id) + ")",
+      current: inheriting
+    });
+  }
+  rows.push({ id: "default", label: "CLI's own login", current: onAmbient });
+  for (const p of profiles) {
+    rows.push({ id: p.id, label: p.label || p.id, current: pin === p.id });
+  }
+  return rows;
+}
+function swapLabel(profileId, profiles) {
+  var _a2;
+  if (profileId === "default") return "the CLI's own login";
+  if (profileId === "") return "the app default account";
+  return ((_a2 = profiles.find((p) => p.id === profileId)) == null ? void 0 : _a2.label) || profileId;
+}
 function AccountChip({ inst }) {
   const chipRef = reactExports.useRef(null);
   const [open, setOpen] = reactExports.useState(false);
@@ -29706,6 +29731,7 @@ function AccountChip({ inst }) {
   const label = inst.profile_label || "default";
   const effectiveProfile = profiles.find((p) => p.id === effective);
   const modelCapable = !!effectiveProfile && effectiveProfile.kind !== "account";
+  const rows = accountRows(inst.profile_id || "", (data == null ? void 0 : data.default_profile) || "", profiles);
   reactExports.useEffect(() => {
     if (!open || !modelCapable || models !== null) return;
     if ((effectiveProfile == null ? void 0 : effectiveProfile.kind) !== "openrouter") {
@@ -29730,17 +29756,16 @@ function AccountChip({ inst }) {
   }, [open, modelCapable, models, effective, effectiveProfile == null ? void 0 : effectiveProfile.kind]);
   if (!profiles.length) return null;
   const swap = async (profileId, profileModel) => {
-    var _a2;
     setBusy(true);
     setOpen(false);
     try {
       const body = { profile_id: profileId };
       if (profileModel !== void 0) body.profile_model = profileModel;
-      const r = await instApi(inst.title, "/profile", {
-        json: body
-      });
+      const r = await instApi(inst.title, "/profile", { json: body });
+      if (r == null ? void 0 : r.unchanged) return;
+      const thread = profileModel !== void 0 ? "" : (r == null ? void 0 : r.resumed) ? " — resuming its conversation" : " — starting a fresh conversation";
       toast(
-        (r == null ? void 0 : r.note) || (profileModel !== void 0 ? "Now running " + (profileModel || "the account's default model") : "Now running as " + (profileId === "default" ? "the CLI's own login" : ((_a2 = profiles.find((p) => p.id === profileId)) == null ? void 0 : _a2.label) || profileId))
+        (r == null ? void 0 : r.note) || (profileModel !== void 0 ? "Now running " + (profileModel || "the account's default model") : "Now running as " + swapLabel(profileId, profiles) + thread)
       );
       void refreshInstances();
     } catch (err) {
@@ -29769,40 +29794,24 @@ function AccountChip({ inst }) {
     ),
     open && chipRef.current && /* @__PURE__ */ jsxRuntimeExports.jsxs(UsagePopover, { anchor: chipRef.current, onClose: () => setOpen(false), children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-head", children: "Run this session as" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("table", { className: "usage-pop-tbl", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("tbody", { children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs(
-          "tr",
-          {
-            className: "acct-pop-row",
-            style: { cursor: "pointer" },
-            onClick: () => swap("default"),
-            children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: "CLI's own login" }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: effective === "" ? "✓" : "" })
-            ]
-          }
-        ),
-        profiles.map((p) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
-          "tr",
-          {
-            className: "acct-pop-row",
-            style: { cursor: "pointer" },
-            onClick: () => swap(p.id),
-            children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: p.label || p.id }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: effective === p.id ? "✓" : "" })
-            ]
-          },
-          p.id
-        ))
-      ] }) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("table", { className: "usage-pop-tbl", children: /* @__PURE__ */ jsxRuntimeExports.jsx("tbody", { children: rows.map((row) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "tr",
+        {
+          className: "acct-pop-row" + (row.current ? " acct-pop-current" : ""),
+          onClick: () => swap(row.id),
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("td", { children: row.label }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("td", { className: "num", children: row.current ? "✓" : "" })
+          ]
+        },
+        row.id || "__inherit"
+      )) }) }),
       modelCapable && /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-head", children: "Model" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { style: { padding: "4px 8px" }, children: models && models.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "acct-pop-model", children: models && models.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs(
           "select",
           {
             id: "acct-chip-model",
-            style: { width: "100%" },
             value: inst.profile_model || "",
             onClick: (ev) => ev.stopPropagation(),
             onChange: (ev) => swap(inst.profile_id || "", ev.target.value),
@@ -29818,7 +29827,7 @@ function AccountChip({ inst }) {
         ) : /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "usage-pop-note", children: models === null ? "loading models…" : inst.profile_model || (effectiveProfile == null ? void 0 : effectiveProfile.model) || "account default" }) }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-note", children: `Full catalog from the account's key; picking one pins it for this session (restarts the agent). On "Account default" with no pin, Claude Code's own /model shows the gateway's curated picker instead — a pinned model bypasses that menu.` })
       ] }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-note", children: "Swapping restarts the agent under the new identity. Files, diff and terminal stay; the conversation continues only if the new account has seen it before (conversations live per account)." })
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "usage-pop-note", children: "Swapping restarts the agent under the new identity. Files, diff and terminal stay. A thread belongs to the account that started it, so this window keeps one conversation per account: swapping back reopens the one you left, a first swap starts fresh." })
     ] })
   ] });
 }
@@ -36738,6 +36747,7 @@ function Accounts(_) {
   const { data } = useAuthProfiles();
   const [profiles, setProfiles] = reactExports.useState([]);
   const [defaultId, setDefaultId] = reactExports.useState("");
+  const [envPinned, setEnvPinned] = reactExports.useState("");
   const [addOpen, setAddOpen] = reactExports.useState(false);
   const [draft, setDraft] = reactExports.useState({ id: "", kind: "account" });
   const [error, setError] = reactExports.useState("");
@@ -36746,22 +36756,36 @@ function Accounts(_) {
   reactExports.useEffect(() => {
     setProfiles((data == null ? void 0 : data.profiles) || []);
     setDefaultId((data == null ? void 0 : data.default_profile) || "");
+    setEnvPinned((data == null ? void 0 : data.default_profile_env) || "");
   }, [data]);
-  const save2 = async (next, nextDefault) => {
+  const save2 = async (next, nextDefault, force) => {
     setError("");
     try {
       const body = { profiles: next };
       if (nextDefault !== void 0) body.default_profile = nextDefault;
-      const r = await api(
-        "/api/settings/auth-profiles",
-        { json: body, method: "PUT" }
-      );
+      if (force) body.force = true;
+      const r = await api("/api/settings/auth-profiles", {
+        json: body,
+        method: "PUT"
+      });
       setProfiles(r.profiles || []);
       setDefaultId(r.default_profile || "");
+      setEnvPinned(r.default_profile_env || "");
       void refreshAuthProfiles();
       toast("Accounts saved");
     } catch (err) {
-      setError(err.message);
+      const msg = err.message || "";
+      if (/still in use by/.test(msg)) {
+        if (window.confirm(
+          msg.replace(/, or resend with force.*$/, "") + ".\n\nRemove anyway? Those sessions will run on the CLI's own login until you give them a new account."
+        )) {
+          await save2(next, nextDefault, true);
+          return;
+        }
+        setError("");
+        return;
+      }
+      setError(msg);
     }
   };
   const patch = (id, p) => save2(profiles.map((x) => x.id === id ? { ...x, ...p } : x));
@@ -36811,6 +36835,7 @@ function Accounts(_) {
         {
           id: "acct-default",
           value: defaultId,
+          disabled: !!envPinned,
           onChange: (e) => save2(profiles, e.target.value),
           children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("option", { value: "", children: "Each CLI's own login (no profile)" }),
@@ -36818,7 +36843,9 @@ function Accounts(_) {
           ]
         }
       ),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: "Sessions created without an explicit account run as this identity." })
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: envPinned ? `Pinned by $MINDFLOCK_AUTH_PROFILE=${envPinned} in the server's
+               environment, which wins over anything saved here. Unset it to
+               choose from this screen.` : "Sessions created without an explicit account run as this identity." })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "prov-conn-list", id: "acct-list", children: profiles.map((p) => {
       var _a3;
@@ -36922,12 +36949,11 @@ function Accounts(_) {
             ),
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "test-result" + (probe ? probe.ok ? " ok" : " bad" : ""), children: testing === p.id ? "testing…" : probe ? probe.ok ? `✓ spent $${Number(probe.usage ?? 0).toFixed(2)}` + (probe.limit != null ? ` of $${probe.limit}` : "") + ` · ${models.length} models` : "✗ " + (probe.error || "failed") : "" })
           ] }),
-          p.id !== defaultId && /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "linklike", onClick: () => save2(profiles, p.id), children: "Make default" }),
+          p.id !== defaultId && /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", onClick: () => save2(profiles, p.id), children: "Make default" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(
             "button",
             {
               type: "button",
-              className: "linklike",
               onClick: () => save2(profiles.filter((x) => x.id !== p.id)),
               children: "Remove"
             }
@@ -37002,7 +37028,7 @@ function Accounts(_) {
         /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "test-btn", onClick: addDraft, children: "Add account" }),
         /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", className: "linklike", onClick: () => setAddOpen(false), children: "Cancel" })
       ] })
-    ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "set-row", children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "acct-add", className: "test-btn", onClick: () => setAddOpen(true), children: "Add account" }) }),
+    ] }) : /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "prov-conn-actions", children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "acct-add", onClick: () => setAddOpen(true), children: "Add account" }) }),
     error && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "error", children: error })
   ] });
 }

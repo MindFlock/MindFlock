@@ -19,10 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Pick the identity in the New dialog, set an app-wide default, or click the
   pane header's new `@account` chip to swap a **live** session — the agent
   restarts under the new identity and the worktree, diff and terminal survive
-  (conversations live per account, so swapping back finds the old thread).
+  (and so does that account's own conversation in this window).
   Each Claude account's usage is tracked separately (the cost panel's
   Claude tab grows a "By account" split), and an OpenRouter profile's Test
-  button reports the key's real spend and the models it can reach. Managed in
+  button reports the key's real spend and the models it can reach. Each window
+  keeps one conversation per account, so swapping back reopens the thread you
+  left rather than a third fresh one. Credentials never pass through a process
+  argv: a session's keys go to a 0600 file it sources, so they are not readable
+  out of `ps` by other local users. Managed in
   Settings → Accounts, `mindflock accounts` (`add`/`login`/`use`/`rm`,
   `mindflock new --account`), or `PUT /api/settings/auth-profiles`; keys are
   masked on every read. With no profiles configured, nothing anywhere changes

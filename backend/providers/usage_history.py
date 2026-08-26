@@ -166,7 +166,7 @@ def _compute() -> tuple:
     """One full transcript scan -> (rolling-window totals, recent turn list,
     per-ACCOUNT rolling-window totals).
 
-    The recent list is ``[(ts, cost, tok), ...]`` (ts-sorted) for turns in the
+    The recent list is ``[(ts, cost, tok, account), ...]`` (ts-sorted) for turns in the
     last :data:`_RECENT_LOOKBACK` seconds — the raw material for anchoring the
     provider's active rolling usage window (:func:`current_window`). The
     account breakdown attributes each transcript to the config root it lives
@@ -180,7 +180,7 @@ def _compute() -> tuple:
     earliest_day = None
     earliest_by_account: dict = {}  # account id -> its own earliest scanned day
     price_memo: dict = {}
-    recent: list = []  # (ts, cost, tok) within _RECENT_LOOKBACK, sorted below
+    recent: list = []  # (ts, cost, tok, account) in _RECENT_LOOKBACK, sorted below
 
     roots = _roots()
     for root, path in _iter_transcripts(roots):
@@ -214,7 +214,7 @@ def _compute() -> tuple:
                     model = msg.get("model") or obj.get("model") or ""
                     cost = _cost_for(tok, model, price_memo)
                     if ts >= now - _RECENT_LOOKBACK:
-                        recent.append((ts, cost, tok))
+                        recent.append((ts, cost, tok, account))
                     for k, cut in cutoffs.items():
                         if ts >= cut:
                             _add(acc[k], tok, cost)
@@ -337,7 +337,7 @@ def windows_by_account() -> dict:
         return dict(_cache.get("accounts") or {})
 
 
-def current_window(hours: float) -> "dict | None":
+def current_window(hours: float, account: "str | None" = None) -> "dict | None":
     """The ACTIVE rolling usage window, or None when idle past the window.
 
     Providers like Claude (subscription plans) meter usage in a rolling window
@@ -352,25 +352,38 @@ def current_window(hours: float) -> "dict | None":
     basis for a best-effort percent-used against a user-supplied budget);
     ``tokens`` is the in+out+cache total. Best-effort: the provider's true
     server-side window can differ — never present this as authoritative.
+
+    ``account`` restricts the walk to one identity's transcripts
+    (:data:`AMBIENT_ACCOUNT` for the CLI's own login). A plan window belongs to
+    ONE subscription: merging every account's turns into it would price a
+    personal plan's window with work billed to a work account, and anchor it on
+    a message the plan never saw. ``None`` keeps the old machine-wide walk for
+    callers that want the aggregate.
     """
     if not hours or hours <= 0:
         return None
     _refresh()
     with _lock:
         recent = list(_cache.get("recent") or ())
+    if account is not None:
+        recent = [
+            e for e in recent if (e[3] if len(e) > 3 else AMBIENT_ACCOUNT) == account
+        ]
     if not recent:
         return None
     span = hours * 3600.0
     now = time.time()
     anchor = None
-    for ts, _cost, _tok in recent:
+    for entry in recent:
+        ts = entry[0]
         if anchor is None or ts >= anchor + span:
             anchor = ts
     if anchor is None or now >= anchor + span:
         return None  # no turn in-window — the next message starts a fresh one
     cost = 0.0
     tokens = 0
-    for ts, c, tok in recent:
+    for entry in recent:
+        ts, c, tok = entry[0], entry[1], entry[2]
         if ts >= anchor:
             cost += c
             tokens += sum(tok.values())

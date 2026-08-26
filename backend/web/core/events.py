@@ -118,6 +118,12 @@ EVENT_NAMES = (
     # a chain that stops silently is the one failure mode that destroys trust in
     # the feature.
     "session.autopilot_changed",
+    # A session's auth profile changed — the identity its agent runs as (data:
+    # {"profile_id": str}, the stored pin: "" = inherit the app default,
+    # "default" = the CLI's own ambient login, anything else a configured
+    # profile id). Emitted by the hot-swap route, which restarts the agent, so
+    # a hook can re-key whatever it tracks per identity.
+    "session.profile_changed",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay
