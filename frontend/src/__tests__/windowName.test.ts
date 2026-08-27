@@ -6,7 +6,7 @@
  * under that name is the one mistake this channel cannot make.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { windowName, publishWindowName } from "../lib/windowName";
+import { slotNumber, windowName, publishWindowName } from "../lib/windowName";
 import { useUi } from "../state/store";
 
 type Row = { title: string; branch?: string; display_title?: string };
@@ -91,5 +91,53 @@ describe("publishWindowName", () => {
     expect((mf.displayName as (t: string) => string)("my-refactor")).toBe(
       "my-refactor"
     );
+  });
+});
+
+
+describe("slotNumber", () => {
+  it("numbers sessions the way the rail does: saved order first, 1-based", () => {
+    useUi.setState({ order: ["b", "a"], filter: "" });
+    withSessions([{ title: "a" }, { title: "b" }, { title: "c" }]);
+    expect(slotNumber("b")).toBe("1");
+    expect(slotNumber("a")).toBe("2");
+    expect(slotNumber("c")).toBe("3"); // unlisted-in-order rows file after
+  });
+
+  it("excludes verify sessions, exactly as the rail does", () => {
+    useUi.setState({ order: [], filter: "" });
+    withSessions([{ title: "verify-x-abc" }, { title: "real" }]);
+    expect(slotNumber("real")).toBe("1");
+    expect(slotNumber("verify-x-abc")).toBe("");
+  });
+
+  it("renumbers under the live filter — the number shown IS the number sent", () => {
+    useUi.setState({ order: [], filter: "bot", aliases: {} });
+    withSessions([{ title: "alpha" }, { title: "bot-1" }, { title: "bot-2" }]);
+    expect(slotNumber("bot-1")).toBe("1");
+    expect(slotNumber("bot-2")).toBe("2");
+    expect(slotNumber("alpha")).toBe("");
+  });
+
+  it("goes blank from the tenth row on, mirroring the rail's hotkey slots", () => {
+    useUi.setState({ order: [], filter: "" });
+    withSessions(Array.from({ length: 11 }, (_, i) => ({ title: "s" + i })));
+    expect(slotNumber("s8")).toBe("9");
+    expect(slotNumber("s9")).toBe("");
+  });
+
+  it("answers blank, never throws, for the unknown and the unlisted", () => {
+    useUi.setState({ order: [], filter: "" });
+    withSessions([{ title: "a" }]);
+    expect(slotNumber("nope")).toBe("");
+    expect(slotNumber("")).toBe("");
+    delete (globalThis as unknown as { mindflock?: unknown }).mindflock;
+    expect(slotNumber("a")).toBe("");
+  });
+
+  it("is published on the bridge next to displayName", () => {
+    publishWindowName();
+    const w = globalThis as unknown as { mindflock?: Record<string, unknown> };
+    expect(typeof w.mindflock?.slotNumber).toBe("function");
   });
 });

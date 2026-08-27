@@ -1168,9 +1168,18 @@ _FORGE_URL = "git@forge.invalid:Org/app.git"
 
 
 def _branches(repo) -> list:
-    """Local branch names in ``repo`` (works on a bare repo too)."""
-    out = _git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads").stdout
-    return [b for b in out.splitlines() if b]
+    """Local branch names in ``repo`` (works on a bare repo too).
+
+    A failed ``git`` is raised, not swallowed: this helper reads a BARE repo, and
+    anything that makes git refuse one (a leaked ``GIT_DIR``, a vanished path)
+    would otherwise return ``[]`` and be reported as "the branch never reached
+    the forge" — sending the reader after a push bug that isn't there.
+    """
+    cp = _git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+    assert cp.returncode == 0, "git for-each-ref failed in {}: {}{}".format(
+        repo, cp.stdout, cp.stderr
+    )
+    return [b for b in cp.stdout.splitlines() if b]
 
 
 @pytest.fixture

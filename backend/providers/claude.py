@@ -374,6 +374,11 @@ class ClaudeProvider(BaseProvider):
         return r"([\d.,]+\s*[kmKM]?)\s*tokens"
 
     # --- activity signal ---------------------------------------------------- #
+    def reports_activity(self) -> bool:
+        # Every launch path re-pins the hooks (see install_activity_hooks), and
+        # `claude agents --json` answers live where the binary supports it.
+        return True
+
     def activity_state(self, session_name: str) -> Optional[str]:
         # Prefer Claude Code's own real-time report from `claude agents --json`
         # (never stale — it reflects the live session, including a long think

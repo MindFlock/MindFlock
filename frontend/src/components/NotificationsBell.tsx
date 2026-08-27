@@ -9,6 +9,7 @@ import { useUi } from "../state/store";
 import { relTime } from "../lib/format";
 import { selectSession } from "../lib/sessionActions";
 import { attentionItems } from "./sidebar/ordering";
+import { slotNumber } from "../lib/windowName";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -270,7 +271,10 @@ export function NotificationsBell() {
                     data-session={n.session}
                     onClick={() => jump(n.session)}
                   >
-                    <span className="notif-sess">{aliases[n.session] || n.session || "—"}</span>
+                    <span className="notif-sess">
+                      {(slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") +
+                        (aliases[n.session] || n.session || "—")}
+                    </span>
                     <span className="notif-text">{n.text}</span>
                     <span className="notif-time">{relTime(n.ts)}</span>
                   </div>

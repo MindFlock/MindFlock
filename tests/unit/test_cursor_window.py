@@ -858,6 +858,9 @@ class _MarkedProvider:
     def __init__(self, state, age):
         self.state, self.age = state, age
 
+    def reports_activity(self):
+        return True
+
     def activity_state(self, name):
         return self.state
 

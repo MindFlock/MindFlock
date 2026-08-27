@@ -275,7 +275,7 @@ refresher re-runs suites automatically.
 | Launch behavior (golden files) | `test_launch_parity` (compares generated launchers to `tests/unit/data/*.golden.sh`), `test_provider_framework`, `test_claude_provider` |
 | Providers: pricing, usage | `test_pricing`, `test_usage_history` |
 | Web: routes, git ops, terminal, addons | `test_route_precedence`, `test_git_ops`, `test_terminal_extras`, `test_scroll_speed`, `test_addons`, `test_frontend_slots`, `test_cursor_window`, `test_webui` |
-| Pipeline: config, state, scan, validate | `test_config`, `test_state`, `test_backfill`, `test_filter`, `test_ticket_validator`, `test_logging_config` |
+| Pipeline: config, state, scan, validate | `test_config`, `test_state`, `test_backfill`, `test_filter`, `test_ticket_providers` (provider-level fetch/filter rules), `test_ticket_validator`, `test_logging_config` |
 | Pipeline: provisioning + launch | `test_environment_provisioner`, `test_session_runner`, `test_orchestrator`, `test_clarification`, `test_workspace_cleanup` |
 | PR flow | `test_pr_pipeline` |
 | Property (hypothesis) | backfill ordering, prompt construction, validation-with-context, assignee filter, timestamp persistence |

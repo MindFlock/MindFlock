@@ -22,6 +22,9 @@
  * page where the bridge has not been installed yet, keeps working.
  */
 
+import { isVerifySession } from "../components/dialogs/verify";
+import { matchesFilter, orderedInstances } from "../components/sidebar/ordering";
+import type { Instance } from "../api/types";
 import { sessionLabel } from "./sessionLabel";
 import { useUi } from "../state/store";
 
@@ -65,10 +68,46 @@ export function windowName(title: string): string {
   return sessionLabel(inst.display_title || inst.title || raw, inst.branch || "").text || raw;
 }
 
+/** The session's SLOT NUMBER in the sidebar — "1"…"9", or "" when the row
+ * shows none (tenth row onward, or not currently listed).
+ *
+ * The rail's numbers are how people locate a window ("[3] finished" → glance
+ * at row 3), so a notification carrying one must show THE number the rail
+ * shows right now. That number is client state — the drag order plus the live
+ * filter — so it is derived here, at render time, exactly the way the rail
+ * derives its rows: verify sessions excluded, the saved order applied, the
+ * filter applied. One deliberate divergence: on a tailnet with device groups
+ * the rail numbers grouped rows in section order and skips collapsed groups;
+ * this resolver lists local rows first and cannot see collapse state, so a
+ * remote session's number can drift from its row there. Local sessions — the
+ * ones this machine's events are about — always match.
+ */
+export function slotNumber(title: string): string {
+  const raw = String(title || "");
+  if (!raw) return "";
+  try {
+    const ui = useUi.getState();
+    const listed = (snapshot() as Instance[]).filter(
+      (i) => i && !isVerifySession(String(i.title || ""))
+    );
+    const { rows } = orderedInstances(listed, ui.order);
+    const filtered = rows.filter((i) => matchesFilter(i, ui.filter, ui.aliases));
+    const local = filtered.filter((i) => !(i as { device?: string }).device);
+    const remote = filtered.filter((i) => (i as { device?: string }).device);
+    const idx = [...local, ...remote].findIndex(
+      (i) => i.title === raw || (i as { display_title?: string }).display_title === raw
+    );
+    return idx >= 0 && idx < 9 ? String(idx + 1) : "";
+  } catch {
+    return "";
+  }
+}
+
 /** Publish on the extension API, next to `mf.toast`. `core/events.js` creates
  * `window.mindflock` before the bundle runs, so this only ever adds a key. */
 export function publishWindowName() {
   const w = globalThis as unknown as { mindflock?: Record<string, unknown> };
   w.mindflock = w.mindflock || {};
   w.mindflock.displayName = windowName;
+  w.mindflock.slotNumber = slotNumber;
 }

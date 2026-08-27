@@ -311,12 +311,22 @@ the events bus, **including the backlog replayed on connect** so it answers
 opened it (keyed on timestamp so it survives server restarts); clicking an entry
 focuses that session.
 
+**Every notification leads with the session's rail slot** — *[3] sitecheck-bot7
+has finished* — the same 1–9 number `Ctrl/Alt+1…9` jump to, resolved
+client-side at render time so drag order and the live sidebar filter are
+honored (the order is per-browser state the server never sees). Desktop
+popups, bell rows and in-app toasts all carry it; rows past the ninth,
+sessions the filter is hiding, and phone (ntfy) pushes — which have no rail to
+agree with — carry no number rather than a wrong one. Extension pages get the
+same resolver as `mindflock.slotNumber(title)`
+(see [extensions.md](extensions.md)).
+
 A raw idle transition no longer produces a row at all. The feed used to log
 *finished — now idle* on every activity flip to idle, with no rule gate and no
 dedupe — so it fired at the end of every assistant turn, between two prompts of
 a draining queue, and for a re-opened window whose agent had run nothing. The
 finished row now comes from `session.turn_ended` and says how long the quiet has
-lasted — **finished — idle 45s**, **finished — idle 2m** — because the dwell is
+lasted — **finished — idle 25s**, **finished — idle 2m** — because the dwell is
 the part that makes the claim trustworthy. `working`/`offline` flips remain
 chip colours and are still filtered out.
 
@@ -332,8 +342,11 @@ goes grey at the end of every assistant turn — the CLI's Stop hook cannot tell
 "the work is done" from "this reply is done" — and also for a window you merely
 re-opened, since attaching its pane relaunches a dead agent that then parks at an
 empty prompt. Before the event fires, three things have to be true: MindFlock
-*watched this agent work* in the tmux session that is running now, it has been
-idle for 45 seconds since, and there is no queued prompt about to wake it. Each
+*watched this agent work* in the tmux session that is running now — corroborated
+by the CLI's own hook report or its live-turn status line, never a bare CPU
+spike on a parked session — it has been idle since for a dwell sized to that
+evidence (12 s when the CLI reports through hooks, 25 s for a status-line read,
+45 s for the CPU backstop), and there is no queued prompt about to wake it. Each
 cycle of work announces itself once, however long the session then sits there.
 
 The two usage rules are a pair: **"A session runs out of usage"** fires on the
@@ -698,7 +711,13 @@ credential.
   its **Thinking effort**, ingest-state picker, credentials, **Test connection**,
   **Remove**), then
   **Assigned tickets** — the slowest of the three fan-outs (~3 s: a provider
-  search per source plus a `git ls-remote` per repo). A source's **Agent CLI**
+  search per source plus a `git ls-remote` per repo). A **Shortcut** source
+  lists what Shortcut's own boards show: archived stories, and stories under an
+  archived epic, no longer appear at all. Bucket counts can therefore drop
+  without anything changing in the tracker, and a source whose open work is all
+  archived now renders an empty heading. No other provider hides archived work,
+  and no setting turns this one off
+  ([ingestion-pipeline.md](ingestion-pipeline.md#providers)). A source's **Agent CLI**
   lists `GET /api/providers` (so a provider you defined yourself is selectable
   too), its unset option names the app default rather than showing a blank, and
   the collapsed card always states which CLI the queue runs — the difference
@@ -909,7 +928,11 @@ unmounts anyway); they're held in the query client
 (`frontend/src/state/queries.ts`), so reopening the dialog or switching away and
 back shows the last list **immediately** while a refresh runs behind it. The
 panel's note area says `Loading…` on a cold panel and `Refreshing…` over rows
-already on screen. Opening the Intake dialog **prefetches all three**
+already on screen. A cached list can therefore still hold a row for a story
+archived since it was fetched — and **starting that row bypasses the archived
+filter**, because a force-start goes through `fetch(ticket_id)`, which does not
+apply it. **Refresh** re-lists and the row disappears.
+Opening the Intake dialog **prefetches all three**
 (`prefetchIntakePanels()`), so clicking through to one finds it loaded — and it is
 what fills the tab strip's counts, which read the same cached query the tab does
 and therefore can never disagree with the list underneath.

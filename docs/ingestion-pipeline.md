@@ -39,7 +39,7 @@ provider is chosen by `[ticketing].provider` (see
 | Provider | How "assigned to me" is fetched |
 |---|---|
 | `github_issues` | `GET /repos/{owner}/{repo}/issues?assignee=<you>` (PRs filtered out) |
-| `shortcut` | `POST /stories/search` by `owner_id`, then per-story hydration |
+| `shortcut` | `POST /stories/search` by `owner_id`, then per-story hydration; archived stories and stories under an archived epic are excluded |
 | `jira` | `POST /rest/api/3/search/jql`, `assignee = currentUser()` (description flattened from ADF — headings keep their `#` level, which is what acceptance-criteria mining matches on) |
 | `linear` | GraphQL `viewer.assignedIssues(filter: {updatedAt})` |
 | `asana` | `GET /tasks?assignee=me&workspace=<gid>` |
@@ -134,6 +134,13 @@ carries a `source_labels` entry for EVERY configured source — including ones
 that returned nothing or errored — because a source with no tickets still needs
 a heading to say so under.
 
+Shortcut's `search_assigned_all()` applies the **same archived story + archived
+epic filter** as its poll (on both the owner-scoped and the any-assignee
+branch), so the Intake panel matches what you see in Shortcut instead of listing
+rows you cannot find there. That filtering is **Shortcut-only** — Jira, Linear,
+GitHub Issues and Asana have no equivalent — so two sources in the same panel
+are filtered by different rules.
+
 **Multiple sources.** You can configure more than one source at once — different
 providers *and* several of the same provider with different credentials (two Jira
 sites, two GitHub repos, …) — via an array of `[[ticketing.source]]` entries (or
@@ -173,6 +180,16 @@ loops: the story poller (always), the PR poller (if `[github]` is present and
 enabled), and one cache refresher per refresh-enabled `[[workspace.cache]]`
 entry.
 
+**API-call budget.** A Shortcut source costs one extra `GET /epics` per poll
+tick (default every 20 s) and one per Intake panel listing, whenever any result
+row carries an `epic_id`. `/epics` is an unpaginated whole-workspace listing, so
+the response grows with the workspace's age, and it counts against Shortcut's
+per-token rate budget. It is deliberately **not cached** on the adapter: the
+backfill scanner and the orchestrator each hold one provider for the life of the
+process, so a cached set would never notice an epic being un-archived and would
+hide those stories forever. The flip side of that decision is that un-archiving
+brings a story back on the very next poll.
+
 ## Story flow
 
 ```
@@ -186,6 +203,21 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
    `workflow_state_id`). Search results lack descriptions, so each story is
    re-fetched by id. Retries with exponential backoff; a failed scan never kills
    the pipeline.
+
+   **Archived work is excluded, at two levels**, so the pipeline sees what
+   Shortcut's own boards show. `/stories/search` returns archived stories, so
+   `_search_stories` drops every row whose own `archived` flag is truthy — a
+   *missing* flag reads as live, which fails open (it can only ever list more).
+   That is not the whole rule, though: archiving an **epic** takes its stories
+   off the boards without touching each story's `archived` flag, so one
+   `GET /epics?includes_description=false` per search resolves the archived epic
+   ids and `_drop_archived_epic_stories` removes the rows under them. The epic
+   filter runs **after** the multi-state fan-out and dedup and **before**
+   per-story hydration, so an excluded story costs no hydration request; it is
+   **skipped entirely when no row carries an `epic_id`** (the common case); and
+   any failure — non-200, network, bad token — yields an empty set, logs
+   `Could not resolve archived Shortcut epics`, and keeps every story.
+
 2. **Dedup** — a story is skipped if a remote branch `feature/sc-<id>/…` already
    exists (`git ls-remote`) or its id is in `state.json`'s `processed_stories`.
    Survivors are processed oldest-first.
@@ -333,6 +365,13 @@ pipeline has already taken*:
   eligible. The roll-up therefore filters `has_session` itself, because calling
   work that is being done "waiting to start" would be wrong.
 
+A third exclusion is **not** the roll-up's doing: archived Shortcut stories (and
+stories under an archived epic) are dropped inside the provider, before any
+eligibility is computed, so they never reach `ticket_start.skip_reasons` and get
+no skip-reason chip. They are simply absent from the list rather than shown and
+explained — the one place where the panel and the eligibility annotation are no
+longer derived from the same rule set.
+
 ## Cache refreshers
 
 Each `[[workspace.cache]]` entry with a `refresh_command` gets a background
@@ -372,6 +411,13 @@ hand-editing `state.json`.
   `mode`/`open_cursor`/`skip_permissions`; see
   [configuration.md](configuration.md)).
 - **Ingestion is polling-only** — there is no webhook listener.
+- **The Shortcut archived filter is unconditional.** No `config.toml` key or UI
+  setting turns it off, so a workspace that deliberately tracks archived stories
+  has no opt-out. `fetch(ticket_id)` does **not** apply it either — a
+  force-start by id (Intake's **Start now**, `POST /api/tickets/start`) will
+  still launch an archived story. And a failed or non-200 `/epics` call degrades
+  silently to no epic filtering: if archived rows reappear, grep the log for
+  `Could not resolve archived Shortcut epics`.
 - Only review-thread comments are actioned on PRs; top-level issue comments are
   fetched by dead code and ignored.
 - The clarification handler always continues with the original story after

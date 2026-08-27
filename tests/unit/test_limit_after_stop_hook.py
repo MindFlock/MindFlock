@@ -38,6 +38,9 @@ _CLEAN = "> summarise the diff\n\nDone — the diff touches three files.\n\n> \n
 class _StopHookProvider:
     """A CLI that reports idle through its own hook marker (Claude Code)."""
 
+    def reports_activity(self):
+        return True
+
     def activity_state(self, name):
         return "idle"
 

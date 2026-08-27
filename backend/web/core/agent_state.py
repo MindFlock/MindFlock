@@ -123,11 +123,19 @@ def _session_find_prompt(inst, prefix: str) -> Optional[str]:
 #
 # * **pane-inspection bookkeeping**, written only by :func:`_pane_hash_activity`
 #   and meaningful only to it — ``hash`` / ``changed`` / ``state`` / ``streak``
-#   / ``size`` / ``cpu`` / ``cpu_at`` / ``busy_at`` / ``tokens``. ``state`` is
-#   *that layer's* running verdict, not the session's.
+#   / ``size`` / ``cpu`` / ``cpu_at`` / ``busy_at`` / ``tokens`` /
+#   ``hard_since`` / ``proof``. ``state`` is *that layer's* running verdict, not
+#   the session's; ``hard_since`` is when its current run of proven-busy polls
+#   began and ``proof`` is what proved it — ``"status"`` for the provider's own
+#   live-turn status line (Claude's ``esc to interrupt``, a climbing token
+#   counter), ``"cpu"`` for a busy process tree and nothing else. Both are None
+#   between runs. The pair is what decides whether pane inspection may arm a
+#   turn-end announcement; see :func:`_agent_activity`.
 # * **layer-wide provenance**, written by :func:`_verdict` on EVERY return path
 #   of :func:`_agent_activity` — ``created`` / ``reported`` / ``state_since`` /
-#   ``worked_at``. Before these existed only the pane path wrote anything, so a
+#   ``worked_at`` / ``source`` (which layer produced the current reading —
+#   "marker" / "exit" / "proc" / "trust" / "pane") / ``worked_evidence`` (what
+#   corroborated the armed work — "marker" / "status" / "cpu"). Before these existed only the pane path wrote anything, so a
 #   session reporting through its CLI's hooks (the common Claude case) left no
 #   trail at all: ``activity_since`` was dead for exactly those sessions, and
 #   nothing downstream could tell "this agent worked and then stopped" from
@@ -138,6 +146,12 @@ _ACTIVITY_IDLE_AFTER = (
     8.0  # static-pane seconds before working -> idle (2x the UI's 4s poll)
 )
 _ACTIVITY_CONFIRM_POLLS = 2  # consecutive changed polls before idle -> working
+# How long a CPU-ONLY ``working`` run must last before it may ARM a turn-end
+# announcement (see :func:`_verdict`). The backstop for a CLI that does not
+# report its own state, whose only other signal is a status-line regex that may
+# simply be wrong. Well clear of the ~12s a single spike holds the state through
+# `_ACTIVITY_IDLE_AFTER`, and far below any turn worth being told about.
+_CPU_ONLY_ARMS_AFTER_S = 20.0
 _ACTIVITY_NOISE_LINES = (
     2  # bottom pane lines ignored by the hash (cursor/spinner churn)
 )
@@ -194,6 +208,7 @@ def _activity_record(title: str, created) -> dict:
             "reported": None,
             "state_since": 0.0,
             "worked_at": None,
+            "source": "",
         }
         if stamp is not None:
             _ACTIVITY_CACHE[title] = rec
@@ -212,6 +227,7 @@ def _activity_record(title: str, created) -> dict:
         rec.setdefault("reported", None)
         rec.setdefault("state_since", 0.0)
         rec.setdefault("worked_at", None)
+        rec.setdefault("source", "")
         return rec
     if rec.get("created") is None:
         # An EXISTING record with no stamp is a hand-seeded one (tests, and
@@ -219,6 +235,7 @@ def _activity_record(title: str, created) -> dict:
         rec.setdefault("reported", None)
         rec.setdefault("state_since", 0.0)
         rec.setdefault("worked_at", None)
+        rec.setdefault("source", "")
         rec["created"] = stamp
         return rec
     if rec["created"] != stamp:
@@ -229,13 +246,21 @@ def _activity_record(title: str, created) -> dict:
         # process as usage-limited (and 'usage_limit' is a default-ON rule).
         rec.clear()
         rec.update(
-            {"created": stamp, "reported": None, "state_since": 0.0, "worked_at": None}
+            {
+                "created": stamp,
+                "reported": None,
+                "state_since": 0.0,
+                "worked_at": None,
+                "source": "",
+            }
         )
         _LIMIT_PROBE.pop(title, None)
     return rec
 
 
-def _verdict(rec: Optional[dict], value: str, now: float) -> str:
+def _verdict(
+    rec: Optional[dict], value: str, now: float, arms: bool = False, source: str = ""
+) -> str:
     """Record ``value`` as this session's reading and return it.
 
     THE SINGLE EXIT POINT for every layer of :func:`_agent_activity`, so
@@ -250,40 +275,157 @@ def _verdict(rec: Optional[dict], value: str, now: float) -> str:
     session that boots to a bare prompt reports ``idle`` forever. Neither is a
     turn, and neither may arm one.
 
-    ``limit`` actively DROPS it. A turn the account's cap cut short is not a
-    turn that finished, and the reading only says ``limit`` while the banner is
-    on the pane — press a key, or let the throttled re-check expire against a
-    redrawn prompt, and the session reads plain idle again with the cut-short
-    turn's evidence still armed, ready to report "has finished" on work that
-    was abandoned mid-thought. Autopilot drops its own idle dwell on a limit for
-    exactly this reason. A resume re-earns the evidence on the next ``working``.
+    ``arms`` is the second half of that sentence, and every ``working`` reading
+    now has to earn it. A reading is enough to paint the chip; it is not by
+    itself enough to interrupt a human with "your agent finished". The caller
+    passes True only where the reading CORROBORATES work:
+
+    * the CLI's own report (a fresh hook marker / live agent query) — always;
+      a hook fires because a prompt was submitted or a tool ran;
+    * the provider's live-turn status line (Claude's ``esc to interrupt``, a
+      climbing token counter), which is on the pane BECAUSE a turn is running —
+      so it arms even where the CLI's own marker went stale mid-turn;
+    * a busy process tree and nothing else, but ONLY for a CLI that cannot
+      report for itself, and only after `_CPU_ONLY_ARMS_AFTER_S` of unbroken
+      busy polls. See :func:`_agent_activity`, which decides all three.
+
+    Everything else reports its state and arms nothing. The case that forced
+    this: a parked Claude session whose pane burned one 4s poll above
+    `_CPU_ACTIVE_JIFFIES_PER_S` (its own auto-updater, a `/clear`, GC) read as
+    ``working`` for ~12s — long enough to clear the announce path's flicker
+    settle — and 45s later announced a turn that never happened. Its transcript
+    had not been written to in 19 hours. Duration thresholds cannot separate
+    that from a short real turn; provenance can.
+
+    ``source`` names WHICH layer produced the reading — ``"marker"`` (the CLI's
+    own hook marker / live query, including the idle/limit reclassifications
+    built on it), ``"exit"`` (the launch wrapper's exit marker), ``"proc"``
+    (bare shell, no agent process), ``"trust"`` (the startup trust-gate
+    auto-answer), ``"pane"`` (live-pane inspection). It is recorded with the
+    value so downstream consumers can weigh the reading by where it came from:
+    the announce path's settle skip and the queue drain's fast tier both key on
+    :func:`reading_is_authoritative`, and the turn-end dwell tiers key on
+    ``worked_evidence`` — stamped here alongside ``worked_at`` as "marker" for
+    the CLI's own word and otherwise as the pane layer's own ``proof``
+    ("status" / "cpu"), so the announcement can be as fast as its evidence is
+    strong.
+
+    ``limit`` actively DROPS the evidence. A turn the account's cap cut short is
+    not a turn that finished, and the reading only says ``limit`` while the
+    banner is on the pane — press a key, or let the throttled re-check expire
+    against a redrawn prompt, and the session reads plain idle again with the
+    cut-short turn's evidence still armed, ready to report "has finished" on
+    work that was abandoned mid-thought. Autopilot drops its own idle dwell on a
+    limit for exactly this reason. A resume re-earns the evidence on the next
+    armed ``working``.
     """
     if rec is None:
         return value
     if rec.get("reported") != value:
         rec["reported"] = value
         rec["state_since"] = now
+    rec["source"] = source
+    # The (value, source) pair as ONE store, because it is read as one fact:
+    # `reported` and `source` are written back-to-back with no lock while the
+    # drain, autopilot and both tickers all call this concurrently, and two
+    # interleaved calls can leave one caller's value paired with the other's
+    # source — which would let a pane-derived clarify borrow marker authority
+    # for up to a poll. :func:`reading_is_authoritative` reads only this tuple.
+    rec["reading"] = (value, source)
     if value == "working":
-        rec["worked_at"] = now
-    elif value == "limit":
-        rec["worked_at"] = None
+        if arms:
+            # Evidence label BEFORE the timestamp: `_note_turn_boundary` reads
+            # them in the opposite order (evidence, then worked_at), so any
+            # interleaving pairs an old label with an old stamp, or a fresh
+            # stamp with either label — and a fresh stamp always fails the
+            # dwell, which is the conservative outcome. The dangerous pairing
+            # (old stamp judged by a new, faster label) needs the reader to see
+            # the new label before the new stamp, which these two orderings
+            # jointly rule out.
+            rec["worked_evidence"] = (
+                "marker" if source == "marker" else (rec.get("proof") or "cpu")
+            )
+            rec["worked_at"] = now
+    else:
+        # Any non-working reading ends the pane layer's proven-busy run,
+        # WHATEVER layer delivered it. These used to be cleared only by the
+        # pane path's own idle transition, so an idle delivered by the exit
+        # marker (the CLI died), a Stop hook, or the process-tree probe left
+        # `hard_since`/`proof` frozen — and a relaunch into the SAME tmux
+        # session then armed on its first startup-CPU poll, the 20s unbroken
+        # run "satisfied" by a stamp from a run that ended hours earlier.
+        # A limit or clarify interrupts the run just as thoroughly as idle.
+        rec["hard_since"] = None
+        rec["proof"] = None
+        if value == "limit":
+            rec["worked_at"] = None
     return value
 
 
 def worked_at(title: str) -> Optional[float]:
-    """Epoch this session was last OBSERVED working in its current tmux
+    """Epoch this session was last CORROBORATED working in its current tmux
     incarnation, or None — the provenance behind ``session.turn_ended``.
 
-    None means one of three things, and all three are "there is no turn to
-    announce": the session has never been seen working, its tmux session was
-    relaunched since (:func:`_activity_record` resets the record), or a turn
-    end has already been announced for the work we saw (:func:`claim_work`).
+    Corroborated, not merely reported: only readings passed to :func:`_verdict`
+    with ``arms=True`` stamp this. A pane that momentarily looks busy moves the
+    badge and leaves no evidence behind.
+
+    None means one of four things, and all four are "there is no turn to
+    announce": the session has never been seen working, nothing has corroborated
+    the work it appeared to do, its tmux session was relaunched since
+    (:func:`_activity_record` resets the record), or a turn end has already been
+    announced for the work we saw (:func:`claim_work`).
 
     A read, for gating. The announcement itself must go through
     :func:`claim_work`, which is the same question asked atomically.
     """
     val = (_ACTIVITY_CACHE.get(title) or {}).get("worked_at")
     return float(val) if isinstance(val, (int, float)) else None
+
+
+#: Reading sources whose word is the CLI's own (or the definitive record of its
+#: death) rather than an inference from what the pane looks like. These are the
+#: sources that may skip the announce path's flicker settle and take the queue
+#: drain's fast tier: a hook marker cannot flicker — it changes only when the
+#: CLI fires a hook — and an exit marker is written exactly once, by the launch
+#: wrapper, when the agent command ends. "proc" is deliberately absent: the
+#: process-tree probe can misread transiently (a ps race, a missing pane pid),
+#: which is precisely the failure the settle exists to absorb.
+_AUTHORITATIVE_SOURCES = frozenset({"marker", "exit"})
+
+
+def reading_is_authoritative(title: str, value: str) -> bool:
+    """Whether ``title``'s CURRENT recorded reading is ``value`` AND came from
+    an authoritative source (:data:`_AUTHORITATIVE_SOURCES`).
+
+    Both halves matter. The value comparison guards the memo skew the server
+    documents in ``_note_turn_boundary``: the tickers serve activity out of a
+    2.5s probe memo while the queue drain and autopilot make UNCACHED calls on
+    their own cadences, so at any instant the rolling record can describe a
+    NEWER reading than the value a caller holds. Claiming authority for a value
+    the record no longer reports would let a consumer skip its safety net on
+    the strength of a different reading entirely — so a mismatch answers False,
+    which every consumer treats as "take the slow, guarded path".
+    """
+    reading = (_ACTIVITY_CACHE.get(title) or {}).get("reading") or ()
+    return (
+        len(reading) == 2
+        and reading[0] == value
+        and reading[1] in _AUTHORITATIVE_SOURCES
+    )
+
+
+def work_evidence(title: str) -> str:
+    """What corroborated this session's ``worked_at`` evidence: ``"marker"``
+    (the CLI's own report), ``"status"`` (the provider's live-turn status
+    line), ``"cpu"`` (the sustained-CPU backstop), or ``""`` (no armed
+    evidence recorded). The turn-end announcement picks its dwell tier from
+    this — the stronger the evidence, the less time it needs to buy
+    confidence. Left in place by :func:`claim_work` on purpose: it describes
+    the last armed cycle, and it is only ever read next to ``worked_at``.
+    """
+    val = (_ACTIVITY_CACHE.get(title) or {}).get("worked_evidence")
+    return str(val) if isinstance(val, str) else ""
 
 
 #: Guards the read-and-clear in :func:`claim_work`. Nothing else needs it —
@@ -812,7 +954,7 @@ def _marker_is_current(provider, name: str, created) -> bool:
         return True
 
 
-def _idle_or_limit(srv, title: str, name: str, provider) -> str:
+def _idle_or_limit(srv, title: str, name: str, provider, force: bool = False) -> str:
     """``"limit"`` when a session that LOOKS idle is really parked on a
     usage-limit screen, else ``"idle"``.
 
@@ -826,12 +968,47 @@ def _idle_or_limit(srv, title: str, name: str, provider) -> str:
 
     Throttled to one capture per :data:`_LIMIT_RECHECK_S` per session, because
     the marker path exists precisely to avoid a pane capture on every poll.
+
+    ``force`` bypasses the throttle for one capture. The caller passes it on
+    the working→idle marker TRANSITION — the first idle reading after a turn —
+    because that is exactly where the throttle used to open a blind window: a
+    cached "no banner" verdict taken before the turn started was served for up
+    to 15s after a limit cut the turn short, and if the banner left the pane
+    inside that window (a keypress, the prompt redrawing at reset time) the
+    limit was never observed at all — the cut-short turn's work evidence
+    stayed armed and a "has finished" went out for abandoned work. Probing
+    fresh at the moment the turn ends closes the window at the moment it
+    opens. Cost: one forced capture per caller that observes the transition —
+    the first _verdict flips ``reported`` to idle, so steady-state polls never
+    re-force, but the uncached drain/autopilot probes and any memo-missing
+    poller landing inside the first capture's window each force their own
+    (bounded by caller count, a handful at worst).
     Never raises."""
     now = time.time()
     rec = _LIMIT_PROBE.get(title)
-    if rec is None or now - float(rec.get("at") or 0.0) >= _LIMIT_RECHECK_S:
-        rec = {"at": now, "limit": _limit_on_pane(srv, name, provider)}
-        _LIMIT_PROBE[title] = rec
+    stale = rec is None or now - float(rec.get("at") or 0.0) >= _LIMIT_RECHECK_S
+    if force or stale:
+        if _limit_on_pane(srv, name, provider):
+            # "Banner seen" always wins and always caches — the safe direction.
+            _LIMIT_PROBE[title] = {"at": now, "limit": True}
+            return "limit"
+        if stale:
+            _LIMIT_PROBE[title] = {"at": now, "limit": False}
+        else:
+            # A FORCED miss must not buy the throttle a fresh 15s: the one
+            # forced capture can race the CLI's banner paint (the Stop-hook
+            # marker write and the redraw are independent) or fail outright
+            # (_limit_on_pane answers False on any capture error), and the
+            # fast marker-tier dwell (12s) expires INSIDE the throttle window
+            # — announcing a limit-cut turn as finished before any re-probe
+            # could catch it. Zeroing the stamp makes the NEXT poll re-probe
+            # at tick cadence instead: one extra capture per turn end, and a
+            # late-painted banner is seen ~4s later, well inside every dwell.
+            # Never clobber a concurrent capture that DID see the banner.
+            cur = _LIMIT_PROBE.get(title)
+            if not (cur and cur.get("limit")):
+                _LIMIT_PROBE[title] = {"at": 0.0, "limit": False}
+        return "idle"
     return "limit" if rec.get("limit") else "idle"
 
 
@@ -928,6 +1105,12 @@ def _pane_hash_activity(
                 # below falls back to `changed`, which is now — so a pane that
                 # stays quiet simply stays idle.
                 "busy_at": now if state == "working" else None,
+                # Same evidence, different question: busy_at runs the idle
+                # hysteresis, hard_since runs the announce gate.
+                "hard_since": now if state == "working" else None,
+                # The only single-frame route to "working" here is the
+                # provider's own interrupt hint, which is turn-specific proof.
+                "proof": "status" if state == "working" else None,
                 # Baseline the turn-token counter now so the NEXT poll can
                 # already tell a climb (work) from a flat counter (idle).
                 "tokens": tokens,
@@ -987,6 +1170,15 @@ def _pane_hash_activity(
             rec["changed"] = now
             rec["streak"] = 0
             rec["state"] = "working"
+            if not rec.get("hard_since"):
+                rec["hard_since"] = now
+            # A busy process tree says SOMETHING is running, not that a turn is:
+            # an auto-updater, a `/clear`, a GC pause and a compile all cross
+            # this line. The status line, when the provider has one, says which.
+            if status_working:
+                rec["proof"] = "status"
+            elif not rec.get("proof"):
+                rec["proof"] = "cpu"
             return "working"
         # CPU quiet. On a STABLE pane, a usage-limit SCREEN or a visible
         # waiting-prompt means the agent has parked. The limit banner is checked
@@ -1013,6 +1205,9 @@ def _pane_hash_activity(
             rec["changed"] = now
             rec["streak"] = 0
             rec["state"] = "working"
+            if not rec.get("hard_since"):
+                rec["hard_since"] = now
+            rec["proof"] = "status"
             return "working"
         # NO pane-change promotion here, deliberately. On this branch CPU is the
         # authoritative signal and a changing pane is noise: an idle Claude
@@ -1031,6 +1226,11 @@ def _pane_hash_activity(
         if now - busy_at >= _ACTIVITY_IDLE_AFTER:
             rec["streak"] = 0
             rec["state"] = "idle"
+            # The run of proven-busy polls is over. The next one starts its own
+            # clock and earns its own proof, so two spikes either side of a lull
+            # never add up to a turn.
+            rec["hard_since"] = None
+            rec["proof"] = None
         return rec.get("state", "idle")
 
     # Fallback (no /proc CPU, e.g. macOS): pane-hash hysteresis. A usage-limit
@@ -1054,16 +1254,27 @@ def _pane_hash_activity(
         rec["changed"] = now
         rec["streak"] = 0
         rec["state"] = "working"
+        if not rec.get("hard_since"):
+            rec["hard_since"] = now
+        rec["proof"] = "status"
         return "working"
     if changed:
         rec["changed"] = now
         rec["streak"] = rec.get("streak", 0) + 1
         if rec.get("state") != "working" and rec["streak"] >= _ACTIVITY_CONFIRM_POLLS:
             rec["state"] = "working"
+            if not rec.get("hard_since"):
+                rec["hard_since"] = now
+            # "The text keeps moving" is the weakest evidence there is; it ranks
+            # with CPU, never above it.
+            if not rec.get("proof"):
+                rec["proof"] = "cpu"
     else:
         rec["streak"] = 0
         if now - rec.get("changed", now) >= _ACTIVITY_IDLE_AFTER:
             rec["state"] = "idle"
+            rec["hard_since"] = None
+            rec["proof"] = None
     return rec.get("state", "idle")
 
 
@@ -1141,10 +1352,10 @@ def _agent_activity(inst, title: str) -> str:
         # on a freshly-created session BEFORE any hook-marker short-circuit
         # below, so a seeded (PR/ticket) prompt can't sit parked behind it.
         if _startup_trust_gate_clarify(srv, inst, title, name, created):
-            return _verdict(rec, "clarify", now)
+            return _verdict(rec, "clarify", now, source="trust")
         # Layer 0: the agent command ENDED (exit marker written this session).
         if srv._agent_exited(name, created):
-            return _verdict(rec, "idle", now)
+            return _verdict(rec, "idle", now, source="exit")
         # Layer 1: the CLI's own report (Claude Code hook marker).
         provider = providers.resolve(getattr(inst, "Program", "") or "")
         # Bind this window to its own conversation id while it runs (throttled)
@@ -1165,9 +1376,28 @@ def _agent_activity(inst, title: str) -> str:
             # WITHIN THIS INCARNATION (see :func:`_marker_is_current`).
             # WHY it ended is another question: a turn the account's usage limit
             # cut short fires the same hook as a completed one, so the pane is
-            # checked (throttled) before this idle is passed on. See
-            # :func:`_idle_or_limit`.
-            return _verdict(rec, _idle_or_limit(srv, title, name, provider), now)
+            # checked before this idle is passed on. The check is throttled in
+            # steady state and FORCED fresh on the working→idle transition —
+            # ``rec["reported"]`` still holds the previous verdict here, since
+            # _verdict runs after _idle_or_limit — because the first idle after
+            # a turn is exactly where a cached pre-turn "no banner" verdict
+            # used to hide a limit that cut the turn short (and, if the banner
+            # then left the pane inside the throttle window, hide it forever).
+            # See :func:`_idle_or_limit`.
+            reading = rec.get("reading") or ()
+            ended_a_turn = (
+                len(reading) == 2
+                and reading[0] in ("working", "clarify")
+                # A trust-gate clarify precedes any turn — a fresh session
+                # resolving its gate to idle ended nothing worth a capture.
+                and reading[1] != "trust"
+            )
+            return _verdict(
+                rec,
+                _idle_or_limit(srv, title, name, provider, force=ended_a_turn),
+                now,
+                source="marker",
+            )
         if marked in ("working", "clarify"):
             # working/clarify markers only refresh on hook events (tool call,
             # prompt submit, notification). A long thinking/generating stretch
@@ -1186,8 +1416,12 @@ def _agent_activity(inst, title: str) -> str:
                 # treats it as a human gate and the queue stalls behind a menu
                 # that never clears on its own, even after the window reopens.
                 if marked == "clarify" and _limit_on_pane(srv, name, provider):
-                    return _verdict(rec, "limit", now)
-                return _verdict(rec, marked, now)
+                    return _verdict(rec, "limit", now, source="marker")
+                # The CLI said so itself, so this is the one reading allowed to
+                # arm a turn-end announcement — at any duration. A hook fires
+                # because a prompt was submitted or a tool ran; there is no
+                # cosmetic redraw or background CPU burst behind it.
+                return _verdict(rec, marked, now, arms=True, source="marker")
         # Layer 2: a bare shell holds the pane AND nothing but shells lives
         # under it -> the agent isn't running, whatever the pane looks like.
         if (
@@ -1195,16 +1429,50 @@ def _agent_activity(inst, title: str) -> str:
             and fg.lower() in _BARE_SHELLS
             and not srv._pane_has_agent_process(pane_pid)
         ):
-            return _verdict(rec, "idle", now)
+            return _verdict(rec, "idle", now, source="proc")
         # Layers 3-4: live-pane inspection (CPU rate + status-line proof under
         # asymmetric hysteresis, with a pane-hash fallback where /proc CPU is
         # unavailable). Kept in its own helper so the layered dispatch above
         # reads as a sequence of authoritative-first probes.
-        return _verdict(
-            rec,
-            _pane_hash_activity(srv, inst, title, name, provider, pane_pid, pane_size),
-            now,
+        pane_state = _pane_hash_activity(
+            srv, inst, title, name, provider, pane_pid, pane_size
         )
+        # What the pane looks like is enough to paint the chip. Whether it may
+        # also announce that a TURN ENDED depends on what proved it busy:
+        #
+        # * The provider's own live-turn status line (Claude's ``esc to
+        #   interrupt``, a climbing token counter) is turn-specific proof — it
+        #   is on screen because a turn is running — so it arms, hooks or no
+        #   hooks. That is the case where a CLI reports for itself but its
+        #   marker went stale mid-turn.
+        # * CPU alone does not. A busy process tree means something is running,
+        #   not that a turn is: a parked Claude session's own auto-updater
+        #   crossed `_CPU_ACTIVE_JIFFIES_PER_S` for ONE 4s poll, read as
+        #   ``working`` for ~12s — past the announce path's flicker settle — and
+        #   45s later announced a turn its transcript shows never happened.
+        # * A CLI that does NOT report for itself keeps a CPU backstop, because
+        #   a status-line regex is all such a provider has and a regex can be
+        #   wrong — its CLI reworded the hint, or nobody filled one in. Losing
+        #   the announcement entirely to a bad pattern is worse than the spike
+        #   it protects against, so an UNBROKEN busy run of
+        #   `_CPU_ONLY_ARMS_AFTER_S` arms there. No backstop where the CLI does
+        #   report (Claude, Codex): those have two independent signals already,
+        #   and the phantom this whole ladder exists to kill was one of theirs.
+        arms = False
+        if pane_state == "working" and rec:
+            if rec.get("proof") == "status":
+                arms = True
+            elif marked is None or not provider.reports_activity():
+                # The backstop is denied only to a CLI whose hooks are actually
+                # SPEAKING (``marked`` non-None this poll — fresh or stale, the
+                # marker machinery works). ``reports_activity`` alone is a
+                # config declaration: a codex build without the hooks engine,
+                # or a hook install that failed silently, still declares True —
+                # and denying such a session the backstop leaves it with one
+                # regex as its only route to a turn-end, forever.
+                since = rec.get("hard_since")
+                arms = bool(since) and (now - float(since)) >= _CPU_ONLY_ARMS_AFTER_S
+        return _verdict(rec, pane_state, now, arms=arms, source="pane")
     except Exception:  # noqa: BLE001
         return "offline"
 

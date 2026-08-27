@@ -261,10 +261,20 @@ def spawn_tail(path, lines: int = 500, dimensions=(24, 80)):
     )
 
 
-async def pump_pty(ws: WebSocket, proc, allow_input: bool = True) -> None:
+async def pump_pty(
+    ws: WebSocket, proc, allow_input: bool = True, on_input=None
+) -> None:
     """Bridge a PtyProcess to a websocket: PTY output -> ws, ws input -> PTY,
     resize control frames -> ioctl. ``allow_input=False`` makes it read-only
-    (used for the log stream)."""
+    (used for the log stream).
+
+    ``on_input`` (optional, no-arg) is called for every HUMAN input frame —
+    keystrokes and synthesized scroll alike, but never resize control frames,
+    which fire on layout changes with nobody at the keyboard. The server's
+    session terminals pass a presence stamp through it (a person typing in a
+    window is a person who does not need a push about that window); callers
+    with no interest in presence (the assistant pane, the log stream) pass
+    nothing. Best-effort: a failing callback must not break the pump."""
     loop = asyncio.get_running_loop()
     out_q: "asyncio.Queue[Optional[bytes]]" = asyncio.Queue()
     fd = proc.fd
@@ -305,6 +315,11 @@ async def pump_pty(ws: WebSocket, proc, allow_input: bool = True) -> None:
             b = msg.get("bytes")
             if b is not None:
                 if allow_input:
+                    if on_input is not None:
+                        try:
+                            on_input()
+                        except Exception:  # noqa: BLE001
+                            pass
                     os.write(fd, b)
                 continue
             t = msg.get("text")
@@ -319,6 +334,11 @@ async def pump_pty(ws: WebSocket, proc, allow_input: bool = True) -> None:
                     except Exception:  # noqa: BLE001
                         pass
                 elif allow_input:
+                    if on_input is not None:
+                        try:
+                            on_input()
+                        except Exception:  # noqa: BLE001
+                            pass
                     os.write(fd, t.encode("utf-8"))
     except WebSocketDisconnect:
         pass

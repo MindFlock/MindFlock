@@ -342,6 +342,18 @@ class BaseProvider:
         """
         return None
 
+    def reports_activity(self) -> bool:
+        """Whether this CLI announces its own state at all (hooks installed by
+        :meth:`install_activity_hooks`, or a live query).
+
+        NOT the same question as ``activity_state(...) is None``, which is also
+        what a CLI that DOES report says while its marker is merely stale. The
+        web layer needs the CAPABILITY: a session whose CLI can speak for itself
+        must never have a turn-end ANNOUNCEMENT built out of pane guesswork —
+        see ``agent_state._verdict``'s ``arms`` argument. Default: no.
+        """
+        return False
+
     def activity_state_age(self, session_name: str) -> Optional[float]:
         """Seconds since :meth:`activity_state` was last refreshed, or None.
 

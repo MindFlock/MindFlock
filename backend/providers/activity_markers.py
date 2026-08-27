@@ -114,12 +114,12 @@ def read_activity_marker_age(session_name: str) -> Optional[float]:
     return (time.time() - entry[1]) if entry else None
 
 
-def hook_command(state: str, marker_dir, record_thread: bool = True) -> str:
+def hook_command(state: str, marker_dir=None, record_thread: bool = True) -> str:
     """The command a CLI hook runs to record ``state``.
 
     Resolves the *live* tmux session at fire-time (``tmux display-message
     #{session_name}`` — or ``MINDFLOCK_SESSION_NAME`` when the CLI exports it)
-    and writes ``<marker_dir>/<session>.json`` — instead of baking a fixed
+    and writes ``<marker dir>/<session>.json`` — instead of baking a fixed
     per-session path. This is essential when several sessions share one working
     directory (in-place sessions on the same repo): they share one hooks config
     file, so a fixed path would route every session's events into whichever
@@ -127,6 +127,19 @@ def hook_command(state: str, marker_dir, record_thread: bool = True) -> str:
     session that actually fired it. If the session can't be resolved (hook
     running outside tmux), it no-ops (exit 0) and the web layer falls back to
     CPU/pane inspection.
+
+    The MARKER DIRECTORY is resolved at fire-time too, from the hook's own
+    environment (``MINDFLOCK_ACTIVITY_MARKER_DIR``, else the real
+    ``~/.mindflock-assistant/.activity-markers``) — never baked in at install
+    time. The install-time value was a live incident: a Verify session runs
+    its sandboxed MindFlock with ``HOME`` redirected into a scratchpad, and
+    when that instance re-pinned the SHARED repo's hooks file it embedded the
+    sandbox's absolute path — after which every cohabiting session's hooks
+    quietly wrote markers into a dead sandbox, their chips frozen on the last
+    pre-poison reading ("idle" while visibly working). Resolving in the
+    firing CLI's env gives each world its own markers: a sandboxed CLI writes
+    into its sandbox, a real one into the real home, whoever installed last.
+    ``marker_dir`` is accepted and ignored (kept for caller/test signatures).
 
     When ``record_thread`` is True (Claude), the hook also persists the payload's
     ``session_id`` as this window's resume-thread marker — the id
@@ -136,8 +149,6 @@ def hook_command(state: str, marker_dir, record_thread: bool = True) -> str:
     clobbering that with a differently-shaped id.
     """
     import json
-
-    from . import thread_markers
 
     lines = [
         "import json,sys,subprocess,os,time,re",
@@ -157,7 +168,9 @@ def hook_command(state: str, marker_dir, record_thread: bool = True) -> str:
         "if not s:",
         "    raise SystemExit(0)",
         "s=re.sub(r'[^A-Za-z0-9_.-]','_',s)",
-        "d=%s" % json.dumps(str(marker_dir)),
+        "d=os.environ.get('MINDFLOCK_ACTIVITY_MARKER_DIR') or "
+        "os.path.join(os.path.expanduser('~'),"
+        "'.mindflock-assistant','.activity-markers')",
         "os.makedirs(d,exist_ok=True)",
         "open(os.path.join(d,s+'.json'),'w').write("
         "json.dumps({'state':%s,'ts':int(time.time())}))" % json.dumps(state),
@@ -168,7 +181,9 @@ def hook_command(state: str, marker_dir, record_thread: bool = True) -> str:
         lines += [
             "sid=str(p.get('session_id') or '')",
             "if sid:",
-            "    td=%s" % json.dumps(str(thread_markers.marker_dir())),
+            "    td=os.environ.get('MINDFLOCK_THREAD_MARKER_DIR') or "
+            "os.path.join(os.path.expanduser('~'),"
+            "'.mindflock-assistant','.thread-markers')",
             "    os.makedirs(td,exist_ok=True)",
             "    open(os.path.join(td,s+'.thread'),'w').write(sid)",
             # The hook runs INSIDE the session, so it can see which auth
@@ -187,7 +202,7 @@ def hook_command(state: str, marker_dir, record_thread: bool = True) -> str:
     return "python3 -c %s || true %s" % (shlex.quote(code), _HOOK_TAG)
 
 
-def notification_hook_command(marker_dir) -> str:
+def notification_hook_command(marker_dir=None) -> str:
     """The command a Notification hook runs — records ``clarify`` only for
     notifications that genuinely need the user (permission / plan / question).
 
@@ -225,11 +240,12 @@ def notification_hook_command(marker_dir) -> str:
         "if not s:\n"
         "    sys.exit(0)\n"
         "s=re.sub(r'[^A-Za-z0-9_.-]','_',s)\n"
-        "md=%s\n"
+        "md=os.environ.get('MINDFLOCK_ACTIVITY_MARKER_DIR') or "
+        "os.path.join(os.path.expanduser('~'),"
+        "'.mindflock-assistant','.activity-markers')\n"
         "os.makedirs(md, exist_ok=True)\n"
         "open(os.path.join(md,s+'.json'), \"w\").write("
         'json.dumps({"state": "clarify", "ts": int(time.time())}))\n'
-        % (json.dumps(str(marker_dir)),)
     )
     return "python3 -c %s || true %s" % (shlex.quote(code), _HOOK_TAG)
 
@@ -415,7 +431,6 @@ def merge_activity_hooks(
     import json
     from pathlib import Path
 
-    md = marker_dir()
     settings_path = Path(settings_path)
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -434,9 +449,9 @@ def merge_activity_hooks(
             entries = []
         entries = [e for e in entries if not is_mindflock_hook_entry(e)]
         if notification_event is not None and event == notification_event:
-            cmd = notification_hook_command(md)
+            cmd = notification_hook_command()
         else:
-            cmd = hook_command(state, md, record_thread=record_thread)
+            cmd = hook_command(state, record_thread=record_thread)
         entries.append({"hooks": [{"type": "command", "command": cmd}]})
         hooks[event] = entries
     settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

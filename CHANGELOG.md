@@ -9,31 +9,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Accounts: run sessions as different identities, and hot-swap between
-  them.** A personal Claude subscription next to a work one, an OpenRouter key
-  with its own model — each is an *auth profile*, and every session runs under
-  exactly one (or under the CLI's own login, still the default). No more
-  logout/login round-trips: an `account`-kind profile is a second login of the
-  CLI itself, isolated in its own config dir (`CLAUDE_CONFIG_DIR` /
-  `CODEX_HOME`), authenticated once via `mindflock accounts login <id>`.
-  Pick the identity in the New dialog, set an app-wide default, or click the
-  pane header's new `@account` chip to swap a **live** session — the agent
-  restarts under the new identity and the worktree, diff and terminal survive
-  (and so does that account's own conversation in this window).
-  Each Claude account's usage is tracked separately (the cost panel's
-  Claude tab grows a "By account" split), and an OpenRouter profile's Test
-  button reports the key's real spend and the models it can reach. Each window
-  keeps one conversation per account, so swapping back reopens the thread you
-  left rather than a third fresh one. Credentials never pass through a process
-  argv: a session's keys go to a 0600 file it sources, so they are not readable
-  out of `ps` by other local users. Managed in
-  Settings → Accounts, `mindflock accounts` (`add`/`login`/`use`/`rm`,
-  `mindflock new --account`), or `PUT /api/settings/auth-profiles`; keys are
-  masked on every read. With no profiles configured, nothing anywhere changes
-  — launch commands and workspace scripts stay byte-identical.
-  See docs/accounts.md.
+- **Notifications carry the session's rail slot: "[3] sitecheck-bot7 has
+  finished."** The sidebar numbers its first nine rows, and those numbers are
+  how people locate a window — so the desktop notification, the bell feed, and
+  the in-app toasts now lead with the same number the rail shows at that
+  moment (drag order and the live filter applied, resolved client-side at
+  render time, because the order is per-browser state the server never sees).
+  Rows past the ninth, filtered-out sessions, and phone pushes — which have no
+  rail to agree with — carry no number rather than a wrong one. Extension
+  pages get the same resolver as `window.mindflock.slotNumber(title)`.
+
+### Changed
+
+- **The whole window state flow got significantly tighter — where the evidence
+  earns it.** "Your agent has finished" used to take ~55 seconds from the last
+  keystroke of a turn, for every agent, in every situation: a flat 45-second
+  dwell chosen as a blanket over three different hazards (a human typing a
+  follow-up, a queued prompt in flight, a fast-track chain mid-step), plus the
+  activity settle and a poll tick. Each of those hazards is now checked
+  *exactly*, so the padding survives only where the evidence is weak.
+
+  A hook CLI's finished run (Claude, Codex) now announces in **~15 seconds**;
+  a pane CLI's in ~35; the CPU backstop keeps the full 45. The chip — and the
+  default-on "needs your input" push — react within **one tick** when the
+  CLI's own hook reported the state, because a hook marker cannot misread a
+  frame the way a pane capture can (the 3s settle stays for pane-derived
+  readings, and for "ran out of usage", whose banner detection is a pane fact
+  whatever triggered it). Queued prompts go out one drain pass sooner on a
+  hook-reported idle. The exact gates that replaced the padding: recent human
+  input (the terminals, /send, send-now — and tmux's own client activity, so a
+  conversation held in a raw tmux attach doesn't buzz per turn), a send-grace
+  covering the window where the last queued prompt is typed but not yet picked
+  up (previously covered only by the blanket — announcing there was possible
+  before this release), and fast-track's own record, bounded by its driver
+  lease so a wedged chain cannot mute a session forever.
+
+  The turn's END also got a harder look at *why* it ended: the working→idle
+  hook transition now forces a fresh usage-limit probe (a miss never refreshes
+  the probe throttle), closing a window where a turn cut short by the cap
+  could be announced as finished — including the variant where the banner left
+  the screen before the throttled re-check ever saw it, which no amount of
+  dwell used to fix. And the pane layer's proven-busy bookkeeping is cleared
+  by every non-working reading, so a busy run can no longer straddle an agent
+  death or a relaunch and re-arm off stale evidence.
 
 ### Fixed
+
+- **Sessions no longer read "idle" while their agent is visibly working.** The
+  activity hooks MindFlock installs into a repo's `.claude/settings.local.json`
+  resolved their marker *directory* at install time — baked in as an absolute
+  path — while resolving the session name at fire time. One sandboxed install
+  poisoned the well: a Verify run executes with `HOME` redirected into a
+  scratchpad, and when its MindFlock instance re-pinned the SHARED repo's
+  hooks file, every cohabiting session's hooks began writing markers into a
+  dead sandbox under /tmp. The chips froze on whatever the last pre-poison
+  reading was — "idle", for a session that then worked for fifteen straight
+  minutes — and the resume-thread binding drifted the same way, so the live
+  `claude agents --json` signal (which knew the truth: `busy`) was consulted
+  under a dead conversation id and answered nothing. Both directories are now
+  resolved *inside the firing hook*, from the CLI's own environment: a
+  sandboxed CLI writes to its sandbox, a real one to the real home, no matter
+  who installed the hooks or where.
+
+- **Archived Shortcut work no longer fills the Tickets panel.** A workflow state
+  showing three stories in Shortcut listed ten in MindFlock, and the extra seven
+  could not be found in Shortcut at all — because Shortcut hides them. Six were
+  archived stories, which `/stories/search` returns and boards do not; the
+  seventh was a live story under an archived epic, which disappears from the
+  board with the epic it belongs to. Both are now filtered out of every Shortcut
+  listing.
+
+  The panel was the visible half. The same search feeds the ingestion pipeline,
+  so a story archived while it sat in the configured ingest state could still be
+  picked up and worked — archiving it being, presumably, how you meant to stop
+  that. The epic lookup is one extra call per search, skipped entirely when no
+  story carries an epic, and best-effort: if it fails you get the old, wider
+  listing rather than an empty one.
+
+- **The dev shell's notifications get their icon back.** A dev toast came up
+  headed *MindFlock-dev* and badged with the blank white document tile — the one
+  Windows draws when it cannot read the icon it was pointed at. The `.ico` was
+  fine; the *path* was not. A shortcut's `IconLocation` is resolved by the
+  Windows shell, later, in whatever process happens to be drawing a tile — and
+  on the supported Windows shape the checkout lives on a WSL share, which the
+  shell's icon extraction will not read. The window and taskbar icons were right
+  all along, because Electron loads those itself with an ordinary file read,
+  which is exactly why only the toast looked broken.
+
+  The dev shortcut now keeps a copy of its icon on the local disk, in the dev
+  profile beside the rest of the throwaway dev state, and points at that. It is
+  byte-compared rather than rewritten, so changing `MINDFLOCK_DEV_ICON` is
+  picked up and leaving it alone costs nothing; a checkout on a local drive
+  keeps using its own file. The shortcut already on disk repairs itself on the
+  next dev run.
 
 - **"Your agent has finished" is now a claim MindFlock can back up.** The idle
   notification fired on the wrong fact. A session's chip goes grey when its CLI
@@ -69,6 +137,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   usage cap cut short does not count — it did not finish, so the evidence is
   dropped rather than left armed to claim "done" the moment the banner scrolls
   off the pane.
+
+  One more way to hallucinate a work cycle turned up after that, and it needed
+  no mouse click: a session parked untouched for nineteen hours announced
+  "finished". Its own auto-updater burned a single four-second poll's worth of
+  CPU, which the classifier reads as **working** — a busy process tree is how it
+  tells a thinking agent from a parked one — and twelve seconds later it was
+  idle again with a full work cycle behind it. A `/clear`, a garbage collection
+  pause, a stray compile: all of them look the same from outside. So "watched
+  that agent work" now means **corroborated**, not merely *looked busy*. The
+  CLI's own report counts, at any duration — a hook fires because a prompt was
+  submitted or a tool ran. So does the interrupt hint on the pane, which is
+  there *because* a turn is running, and which covers a long turn whose marker
+  goes stale mid-thought. A busy process tree on its own no longer does: it
+  still turns the chip green, and it no longer earns the right to interrupt you.
+  This is not a Claude-only rule. Codex reports through hooks the same way;
+  aider, antigravity, cline, goose and opencode have no hooks, so their status
+  line is the signal — and because a regex against someone else's UI can simply
+  be wrong, those keep a backstop: twenty unbroken seconds of CPU still counts,
+  which no spike lasts. The two CLIs that report for themselves get no backstop,
+  since a spike on a parked session of exactly that kind is the bug being fixed.
+  A test pins which provider sits on which rung, so a CLI that quietly stops
+  matching its own hint shows up as a failure rather than as silence.
 
   Everything that has to stay fast stayed fast. **Needs your input** and **ran
   out of usage** still fire on the instant signal — those are "come here now",

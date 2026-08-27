@@ -45,8 +45,7 @@ Core vocabulary (emitted by the server):
 | `session.prompt_sent` | The queue drain loop auto-sends a prompt | `data: {text, remaining, loop}` |
 | `session.queue_changed` | Any prompt-queue edit | `data: {pending, enabled, loop}` |
 | `session.usage_restored` | A provider window reopened for a session that had run out | `data: {resumed}` |
-| `session.turn_ended` | A session's work really is over — observed working, idle ever since, nothing queued | `data: {idle_for}` |
-| `session.profile_changed` | A session's auth profile (the identity its agent runs as) was hot-swapped | `data: {profile_id}` — `""` inherit app default, `"default"` the CLI's own login |
+| `session.turn_ended` | A session's work really is over — corroborated work, idle ever since, nothing queued | `data: {idle_for}` |
 
 Addon-originated events (see `AppContext.emit`) live under the `addon.`
 namespace, e.g. `addon.notify.ping`. Notable transitions:
@@ -57,8 +56,12 @@ namespace, e.g. `addon.notify.ping`. Notable transitions:
   fires at the end of *every* assistant turn, so a ten-turn conversation flips
   it ten times, and a window that has merely been re-opened flips it once
   without having run anything at all. `session.turn_ended` is the fact worth
-  acting on — it asserts that the agent was observed working in its current tmux
-  incarnation, has been idle continuously for `server._TURN_END_DWELL_S` (45s),
+  acting on — it asserts that the agent's work was corroborated (its CLI's own
+  hook report, or the live-turn status line on its pane — never a CPU spike on a
+  parked session) in its current tmux
+  incarnation, has been idle continuously for the evidence-tiered dwell
+  (`server._TURN_END_DWELLS`: 12s hook-armed, 25s status-line-armed, 45s for
+  the CPU backstop — see [web-api.md](web-api.md)),
   and has no queued prompt waiting to wake it. Emitted once per cycle of
   observed work, so a session that then sits idle all night says it once
 - **PR merged/closed**: `session.stage_changed` with `old == "pr"` (an open PR
@@ -387,4 +390,5 @@ global:
 | `mindflock.events.onStatus(cb)` | Called on connect/disconnect transitions |
 | `mindflock.sessions()` | The latest instances snapshot array (same shape as `GET /api/instances`) |
 | `mindflock.displayName(title)` | What a session is **called** — its rename, else the label the rail shows (`(tix) add-dark-mode/sc-12345`), else the raw title. Published by the SPA (`lib/windowName.ts`); feature-detect it, because a non-SPA page has no rail to agree with. Use it wherever a user reads a session's name: the event envelope carries the machine slug, and naming a window nobody can find under that name is worse than saying nothing. |
+| `mindflock.slotNumber(title)` | The session's **slot number** in the rail — `"1"`…`"9"`, or `""` when the row shows none (tenth row on, filtered out, verify sessions). The rail's numbers are how people locate a window, so a notification carrying one must show the number the rail shows *right now* — drag order and the live filter applied. Same publish point and the same feature-detect rule as `displayName`; the notify addon renders it as a `[3] ` prefix on the name. |
 | `mindflock.toast(msg, opts?)` | Show a toast. Assigned by `app.js` (F3), so it's present whenever the SPA is loaded — still feature-detect in addon modules for non-SPA pages. `opts` is optional: `{onClick, duration}` makes the toast clickable and/or overrides its lifetime (ms). |

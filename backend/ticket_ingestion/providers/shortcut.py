@@ -146,7 +146,17 @@ class ShortcutProvider(TicketProvider):
         return t
 
     async def _search_stories(self, body: dict) -> list:
-        """One POST /stories/search call, returning the raw story list."""
+        """One POST /stories/search call, returning the raw story list —
+        archived stories excluded.
+
+        ``/stories/search`` returns archived stories, which Shortcut's own
+        boards hide. Listing them puts rows in the panel that cannot be found
+        in Shortcut (six of the ten in one "Unscheduled" bucket, on the
+        author's workspace) and, worse, leaves the backfill scanner free to
+        start work on a story that was archived precisely to stop it.
+        ``archived`` is absent from hand-built payloads in tests; missing reads
+        as live, which is the safe direction — it only ever lists more.
+        """
         url = f"{_SHORTCUT_API_BASE}/stories/search"
         async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
             async with session.post(url, json=body, headers=self._headers()) as resp:
@@ -156,7 +166,56 @@ class ShortcutProvider(TicketProvider):
                         f"Shortcut API returned {resp.status}: {text[:200]}"
                     )
                 data = await resp.json()
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            return []
+        return [s for s in data if not (isinstance(s, dict) and s.get("archived"))]
+
+    async def _archived_epic_ids(self) -> set:
+        """The ids of archived epics.
+
+        Archiving an epic takes its stories off Shortcut's boards without
+        touching each story's own ``archived`` flag, so the story-level filter
+        above is not the whole rule — a live story under a long-finished epic
+        is just as invisible in Shortcut as an archived one.
+
+        One extra call per search, and best-effort: a failure costs the filter,
+        never the tickets. Deliberately NOT cached on the adapter —
+        :class:`BackfillScanner` and :class:`PipelineOrchestrator` each hold one
+        for the life of the process, so a set cached here would never notice an
+        epic being un-archived and would hide those stories forever.
+        """
+        url = f"{_SHORTCUT_API_BASE}/epics?includes_description=false"
+        try:
+            async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+                async with session.get(url, headers=self._headers()) as resp:
+                    if resp.status != 200:
+                        return set()
+                    data = await resp.json()
+        except Exception as err:  # noqa: BLE001 — network / token
+            _logger.warning("Could not resolve archived Shortcut epics: %s", err)
+            return set()
+        return {
+            e["id"]
+            for e in (data if isinstance(data, list) else [])
+            if isinstance(e, dict) and e.get("archived") and e.get("id") is not None
+        }
+
+    async def _drop_archived_epic_stories(self, rows: list) -> list:
+        """``rows`` minus the stories belonging to an archived epic.
+
+        Skips the ``/epics`` call entirely when no row carries an ``epic_id``,
+        so the common case (and every test with hand-built stories) costs
+        nothing."""
+        if not any(isinstance(r, dict) and r.get("epic_id") for r in rows):
+            return rows
+        archived = await self._archived_epic_ids()
+        if not archived:
+            return rows
+        return [
+            r
+            for r in rows
+            if not (isinstance(r, dict) and r.get("epic_id") in archived)
+        ]
 
     def _ingest_state_ids(self) -> list[int]:
         """The configured ingest filter as Shortcut state ids. One or several
@@ -196,6 +255,7 @@ class ShortcutProvider(TicketProvider):
                     continue
                 seen_ids.add(sid)
                 data.append(item)
+        data = await self._drop_archived_epic_stories(data)
         # /stories/search returns StorySlim (no description). Hydrate each by id.
         slim = [story_from_api_response(item, self.cfg.api_token) for item in data]
         full: list[Ticket] = []
@@ -238,6 +298,7 @@ class ShortcutProvider(TicketProvider):
                     data.append(item)
         else:
             data = await self._search_stories({"owner_id": self.cfg.member_id})
+        data = await self._drop_archived_epic_stories(data)
         # Workflow-state id -> display name (bucket). Best-effort: an error
         # here degrades to unlabeled buckets, never an empty panel.
         try:

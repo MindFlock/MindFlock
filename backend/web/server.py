@@ -769,6 +769,29 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
             prev is not None
             and activity != prev.get("activity")
             and activity in _SETTLE_ACTIVITIES
+            # An AUTHORITATIVE idle/clarify skips the settle. The 3s parking
+            # exists for pane-derived MISREADS — a scrolling menu matched as a
+            # waiting prompt, a redraw matched as idle — and a hook marker
+            # cannot misread a frame: it changes only when the CLI fires a
+            # hook. Holding it 3s+a tick was pure latency on the chip and on
+            # the default-on "needs your input" push. Deliberately NOT
+            # "limit": both marker-branch limit reclassifications are really
+            # pane facts (a capture matched against the limit patterns — see
+            # _idle_or_limit / _limit_on_pane), and a single frame CAN misread
+            # those (scrollback in copy-mode, agent output quoting a banner),
+            # so the default-on "ran out of usage" push keeps its two-sighting
+            # guard. What a marker CAN legitimately do is flip idle→working at
+            # a chained turn boundary (Stop then an immediate
+            # UserPromptSubmit); the skip lets that pair through where the
+            # settle sometimes swallowed it — an extra chip flick per chained
+            # turn, accepted for the latency. The check binds source to THIS
+            # value atomically (see reading_is_authoritative) so a stale
+            # memoized reading can never borrow a newer reading's authority —
+            # any mismatch takes the settle, the guarded path.
+            and not (
+                activity in ("idle", "clarify")
+                and _agent_state.reading_is_authoritative(title, activity)
+            )
         ):
             pending = prev.get("pending_activity")
             if pending is None or pending[0] != activity:
@@ -835,26 +858,128 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
 # has been continuously idle since, and nothing is queued to wake it back up.
 # Every "the agent is done" channel keys on THIS; nothing keys on the raw idle.
 #
-# Why 45s, given the whole pipeline already debounces:
-#   * `_ACTIVITY_SETTLE_SECONDS` (3.0) is a FLICKER filter — it can only
-#     suppress a reading that reverts, and a session parked at its prompt never
-#     reverts. It is structurally incapable of answering this question.
-#   * It must exceed the inter-turn gap of an interactive conversation. A human
-#     reading a long answer and typing a follow-up is 10-30s, and the Stop hook
-#     fires in that gap every single time.
-#   * It must exceed the prompt queue's whole send path — `_QUEUE_IDLE_SETTLE`
-#     (12.0) + a 5s drain pass + `_QUEUE_SEND_COOLDOWN` (8.0) — so an
-#     unattended queued run never announces "finished" between two prompts. The
-#     queue check below makes that exact rather than a race; the number is the
-#     belt to its braces.
-#   * It must exceed autopilot's own idle settle (autopilot.IDLE_SETTLE_S, 30.0)
-#     so the order is always "the chain decided the agent was done, THEN we said
-#     so" — never the reverse.
-#   * It must be large against the 4s tick so two unsynchronised tickers plus an
-#     on-demand `_republish_session` shift the answer by ~±9%, not ±25%.
-# The cost of being wrong is 45s of latency on a "your agent is done" push. The
-# alternative was a buzz per turn.
+# The dwell is TIERED by how the work evidence was corroborated
+# (``agent_state.work_evidence``), because the dwell only has to buy the
+# confidence the evidence itself lacks. It used to be a flat 45s chosen as a
+# blanket over three hazards — a human typing a follow-up, the queue's send
+# path, autopilot's own settle — each of which is now checked EXACTLY by its
+# own gate below (recent human keystrokes, the drain's sent_at grace, the
+# autopilot record's state), so the time-padding survives only where the
+# evidence is weak:
+#
+#   * "marker" (the CLI's own hook report) — 12s. The Stop hook is
+#     authoritative that the turn ended; the working→idle transition also
+#     forces a FRESH limit-screen probe (see agent_state._idle_or_limit), so
+#     the old 15s probe-cache blind window no longer bounds this tier. 12s is
+#     three 4s ticks: enough that two unsynchronised tickers plus an on-demand
+#     `_republish_session` shift the answer by a tick, not by half the dwell,
+#     and enough to ride out hook-chained auto-continues (a Stop followed
+#     immediately by a UserPromptSubmit reads working again within a tick).
+#   * "status" (the provider's live-turn status line) — 25s. The turn-END
+#     detection here is itself pane-based (`_ACTIVITY_IDLE_AFTER` of static
+#     pane before idle is even reported), so the dwell carries more of the
+#     burden than it does for a hook CLI.
+#   * "cpu" (the sustained-CPU backstop), or no recorded evidence — 45s,
+#     unchanged. The weakest tier stays the slowest; that is the deal the
+#     backstop was admitted on.
+#
+# What the dwell deliberately no longer covers, because the exact gates do:
+#   * the inter-turn gap of an INTERACTIVE conversation — `_HUMAN_HOLD_S`
+#     holds the announcement while keystrokes have recently reached this
+#     session (terminal, /send, send-now, voice, mobile compose);
+#   * the queue's pop→visible-working window — `_QUEUE_SEND_GRACE_S` holds
+#     while a just-sent prompt has not yet been seen working (peek_next reads
+#     None the instant the last prompt is POPPED, which is at tmux-typing
+#     time, not at pickup time);
+#   * fast-track — held exactly while the session's autopilot record says
+#     state == "running", so the order is always "the chain decided the agent
+#     was done, THEN we said so", at any dwell.
+# `_ACTIVITY_SETTLE_SECONDS` (3.0) is a FLICKER filter — it can only suppress
+# a reading that reverts, and a session parked at its prompt never reverts. It
+# is structurally incapable of answering this question at any tier.
 _TURN_END_DWELL_S = 45.0
+_TURN_END_DWELL_MARKER_S = 12.0
+_TURN_END_DWELL_STATUS_S = 25.0
+#: Dwell per work-evidence tier; unknown/absent evidence gets the slow lane.
+_TURN_END_DWELLS = {
+    "marker": _TURN_END_DWELL_MARKER_S,
+    "status": _TURN_END_DWELL_STATUS_S,
+}
+
+# Hold "has finished" while a human has recently typed into this session — a
+# person mid-composition is about to start the next turn, and a person typing
+# in the window does not need a push about the window. Stamped by
+# `_note_human_input` from every human input path (both terminal websockets,
+# /send, queue send-now; voice dictation and the mobile composer ride the
+# terminal socket) and never by automation (queue drain, limit auto-resume and
+# the trust-gate dismissal all go through `tmux send-keys`, which touches none
+# of those paths). Presence only tunes TIMING: the hard gates above it
+# guarantee the announcement's sentence is true, so a missed stamp (a user
+# typing into tmux directly, outside the web UI) merely announces sooner, and
+# an over-eager stamp (scroll wheels ride the same socket) merely announces
+# later.
+_HUMAN_HOLD_S = 45.0
+#: Ignore terminal input for this long after a websocket attaches: tmux probes
+#: a newly attached client and xterm.js auto-answers through the same data
+#: path as keystrokes, so attach/reconnect bursts are not presence.
+_ATTACH_PROBE_GRACE_S = 2.0
+_HUMAN_INPUT_AT: Dict[str, float] = {}
+
+
+def _note_human_input(title: str) -> None:
+    """Record that a human just put input into ``title``'s window."""
+    _HUMAN_INPUT_AT[title] = time.time()
+
+
+def _tmux_client_input_recent(title: str, within: float) -> bool:
+    """Whether any tmux client attached to ``title``'s session saw input in
+    the last ``within`` seconds — the presence signal for people the web
+    surfaces cannot see: a Windows Terminal tab, a raw ``tmux attach``, SSH.
+    Their keystrokes never cross a MindFlock route, so without this the
+    presence gate would buzz a direct-tmux conversation once per turn.
+
+    Asked only at announce time (one ``list-clients`` per announce-eligible
+    tick, after every cheaper gate has passed), never on the poll path.
+    Over-counts in one known way: the web terminal is itself an attached
+    client, and its terminal emulator answers tmux's attach-time device
+    probes as client input — so a reconnect storm (wifi blip, laptop wake)
+    reads as presence and defers announcements up to ``within``. That errs
+    the direction this whole pipeline errs: late, never wrong. Best-effort:
+    any failure reads as "nobody there" and the announcement proceeds.
+    """
+    try:
+        name = tmux.to_mindflock_tmux_name(title)
+        cp = _run_capped(
+            ["tmux", "list-clients", "-t", name, "-F", "#{client_activity}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        if cp.returncode != 0:
+            return False
+        now = time.time()
+        for tok in cp.stdout.decode("utf-8", "replace").split():
+            try:
+                if now - float(tok) < within:
+                    return True
+            except ValueError:
+                continue
+    except Exception:  # noqa: BLE001 — presence is a courtesy, never a gate
+        pass
+    return False
+
+
+# Hold "has finished" while a queued prompt is in flight: `record_sent` POPS
+# the item the moment tmux typing succeeds, so `peek_next` reads None seconds
+# to minutes before the agent visibly starts the turn (or never, for a send
+# that didn't take). The drain's own record carries the exact facts — `armed`
+# flips back True only when the drain OBSERVES working, and `sent_at` stamps
+# the send — so the gate is "sent, not yet seen working, recently": precise
+# where the old flat dwell was a blanket. Past the grace with the agent never
+# seen working, the send is presumed lost (the drain's own recovery for that
+# is `_QUEUE_REARM_IDLE`) and the announcement falls through, exactly as the
+# flat 45s used to behave.
+_QUEUE_SEND_GRACE_S = 60.0
 
 
 def _note_turn_boundary(title: str, snap: dict, now: float) -> None:
@@ -862,23 +987,39 @@ def _note_turn_boundary(title: str, snap: dict, now: float) -> None:
 
     Called from the tail of :func:`_emit_state_changes` with the settled
     snapshot, so it sees exactly the activity the rest of the app was told
-    about. Five gates, in cheapest-first order:
+    about. Eight gates, in cheapest-first order:
 
     1. **The settled activity is idle.** ``limit`` is deliberately excluded — a
        turn the usage cap cut short is not a turn that ended, and the
        default-on ``usage_limit`` rule already covers it. So is ``offline``.
     2. **Boot quiet**, for the same reason the diff events observe it: a
        restart rediscovers every parked session and none of that is news.
-    3. **Provenance.** ``agent_state.worked_at`` is None unless this agent was
-       seen working in its CURRENT tmux incarnation. This is the whole
-       offline-click fix: re-opening a window relaunches its CLI, and the fresh
-       incarnation has no work behind it, so no amount of idling produces a
-       "finished".
-    4. **Dwell**, asked of both clocks: `_TURN_END_DWELL_S` since the announced
-       activity became idle, AND since the agent was last seen working. They can
-       disagree, and the second is what the sentence actually claims.
-    5. **Nothing queued.** An exact check, not a race against the drain's own
-       `_QUEUE_IDLE_SETTLE`: a run with prompts still to feed has not finished.
+    3. **Provenance.** ``agent_state.worked_at`` is None unless work by this
+       agent was CORROBORATED in its CURRENT tmux incarnation — the CLI's own
+       hook/live report, or (only for a CLI that has none) a sustained run of
+       proven-busy pane polls. Two failures live here. Re-opening a window
+       relaunches its CLI, and the fresh incarnation has no work behind it, so
+       no amount of idling produces a "finished". And a parked session that
+       merely LOOKS busy for a poll — its own auto-updater, a ``/clear``, a GC
+       pause, anything that crosses the CPU threshold — moves the badge and
+       arms nothing: the reading is enough to paint a chip, never to interrupt
+       a human.
+    4. **Dwell**, tiered by the evidence's own strength (`_TURN_END_DWELLS`
+       via ``agent_state.work_evidence``) and asked of both clocks: since the
+       announced activity became idle, AND since the agent was last seen
+       working. They can disagree, and the second is what the sentence
+       actually claims.
+    5. **Nothing queued.** An exact check of the pending list. Exact about
+       prompts still WAITING — the next gate covers the one already sent.
+    6. **No send in flight.** The drain popped a prompt (peek reads None) but
+       has not yet observed the agent working: `_QUEUE_SEND_GRACE_S` against
+       the drain's own ``sent_at``/``armed`` record.
+    7. **No human at the keys.** `_HUMAN_HOLD_S` since the last keystroke
+       reached this session — a person mid-follow-up is not a finished run,
+       and a person typing in the window does not need a push about it.
+    8. **Fast-track is not mid-chain.** Held exactly while the autopilot
+       record reads ``running`` — the chain announces its own outcome, and
+       "finished" before its commit/push/PR lands would be mistimed at best.
 
     Emitting SPENDS the evidence (``agent_state.claim_work``). That, not a
     seconds window, is the real dedupe: one announcement per cycle of observed
@@ -890,11 +1031,27 @@ def _note_turn_boundary(title: str, snap: dict, now: float) -> None:
     try:
         if snap.get("activity") != "idle" or _in_boot_quiet():
             return
+        # Evidence label BEFORE the timestamp — the mirror of _verdict's write
+        # order, so no interleaving can pair an old stamp with a newer, faster
+        # label (a fresh stamp always fails the dwell; see _verdict).
+        evidence = _agent_state.work_evidence(title)
         worked = _agent_state.worked_at(title)
         if worked is None:
             return
+        # The tier is keyed on how the WORK was corroborated, but the fast
+        # lane also needs the END to be the CLI's own word: marker-armed work
+        # whose idle reading came from the PANE (the marker went stale mid-
+        # turn and a scrolled-back capture read as parked) is a pane-detected
+        # end wearing marker-armed evidence, and 12s of that can announce —
+        # and SPEND — a turn that is still running. Mismatch takes the slow
+        # lane outright.
+        if evidence == "marker" and not _agent_state.reading_is_authoritative(
+            title, "idle"
+        ):
+            evidence = ""
+        dwell = _TURN_END_DWELLS.get(evidence, _TURN_END_DWELL_S)
         idle_for = now - float(snap.get("activity_at") or now)
-        if idle_for < _TURN_END_DWELL_S:
+        if idle_for < dwell:
             return
         # The same dwell against the EVIDENCE's own clock. The two can disagree:
         # ``activity_at`` moves only when a settled reading reaches this
@@ -908,10 +1065,37 @@ def _note_turn_boundary(title: str, snap: dict, now: float) -> None:
         # both clocks closes the whole class — memo skew, snapshot lag, and the
         # two uncached probes — with one comparison. (Epoch here, monotonic
         # above; each is compared only against its own kind.)
-        if time.time() - float(worked) < _TURN_END_DWELL_S:
+        if time.time() - float(worked) < dwell:
             return
         if _prompt_queue.peek_next(title) is not None:
             return
+        # A popped-but-not-picked-up prompt: the drain disarms on send and
+        # re-arms only when it OBSERVES working, so "disarmed and recently
+        # sent" is precisely the in-flight window peek_next cannot see.
+        q = _QUEUE_STATE.get(title)
+        if (
+            q
+            and not q.get("armed", True)
+            and time.time() - float(q.get("sent_at") or 0.0) < _QUEUE_SEND_GRACE_S
+        ):
+            return
+        if time.time() - _HUMAN_INPUT_AT.get(title, 0.0) < _HUMAN_HOLD_S:
+            return
+        if _tmux_client_input_recent(title, _HUMAN_HOLD_S):
+            return
+        # Exact, not a bigger number: while the chain runs, its own events are
+        # the narrative, and its completion releases this gate. A file read,
+        # but only reachable once every cheaper gate has passed — at most a
+        # couple of reads per announce, not per tick. Bounded by the driver's
+        # own lease: _autopilot_observe early-returns WITHOUT claiming on the
+        # paths it cannot step (budget lock, missing worktree), so a chain no
+        # driver is actually advancing goes lease-stale and announcements
+        # resume — "running" alone must not be able to mute a session forever.
+        run = _autopilot.get(title)
+        if run is not None and (run.get("state") or "") == "running":
+            owner_at = float(run.get("owner_at") or 0.0)
+            if time.time() - owner_at <= _autopilot.LEASE_STALE_S * 2:
+                return
         # Claiming the evidence is what grants permission to speak: two
         # unsynchronised tickers can reach this line in the same instant, and
         # only one of them can win the clear.
@@ -1075,7 +1259,7 @@ def _forget_session_state(title: str) -> None:
     dicts accumulate dead entries for the life of the server under churn.
     """
     _forget_probes(title)
-    for _d in (_ACTIVITY_CACHE, _LIMIT_PROBE, _TRUST_DISMISS_AT):
+    for _d in (_ACTIVITY_CACHE, _LIMIT_PROBE, _TRUST_DISMISS_AT, _HUMAN_INPUT_AT):
         _d.pop(title, None)
     # Keyed by TMUX SESSION NAME, not by title (see agent_state._maybe_record_
     # thread), so it needs the translation the others do not.
@@ -1092,7 +1276,7 @@ def _prune_session_state(live_titles) -> None:
     """
     live = set(live_titles or ())
     live_names = {tmux.to_mindflock_tmux_name(t) for t in live}
-    for _d in (_ACTIVITY_CACHE, _LIMIT_PROBE, _TRUST_DISMISS_AT):
+    for _d in (_ACTIVITY_CACHE, _LIMIT_PROBE, _TRUST_DISMISS_AT, _HUMAN_INPUT_AT):
         for dead in [t for t in list(_d) if t not in live]:
             _d.pop(dead, None)
     for dead in [n for n in list(_THREAD_RECORD_AT) if n not in live_names]:
@@ -1217,7 +1401,18 @@ _QUEUE_REBOOT_COOLDOWN = 30.0  # min seconds between reboots of a dead session
 # Stop between turns, or the ~1s lull before the next UserPromptSubmit/PreToolUse
 # re-marks "working", would otherwise let the drain fire a queued prompt prematurely.
 # Requiring idle to hold this long absorbs that flicker while still resuming promptly.
+#
+# TIERED by the reading's source: an idle the CLI reported ITSELF (a Stop-hook
+# marker, an exit marker — agent_state.reading_is_authoritative) is not a
+# flicker candidate, so it takes the fast tier and the next queued prompt goes
+# out one drain pass sooner. Pane-derived idle keeps the full settle: the pane
+# can misread a quiet moment mid-turn, and typing into a live turn is the one
+# failure this dwell exists to prevent. The premature-Stop lull the comment
+# above describes is still absorbed at the fast tier — idle_since resets on any
+# working sighting, and the drain's pass cadence plus this floor spans the
+# ~1s Stop→UserPromptSubmit gap with margin.
 _QUEUE_IDLE_SETTLE = 12.0
+_QUEUE_IDLE_SETTLE_MARKER = 4.0
 # After WE rebooted a dead agent, hold the queue this long regardless of what the
 # activity probe says. A CLI relaunching with a large `--continue` transcript can
 # spend twenty seconds on a quiet, I/O-bound start, and a quiet pane is exactly
@@ -1572,7 +1767,12 @@ def _drain_one_queue(title: str) -> None:
     if rec.get("idle_since") is None:
         rec["idle_since"] = now
         return
-    if now - rec["idle_since"] < _QUEUE_IDLE_SETTLE:
+    settle = (
+        _QUEUE_IDLE_SETTLE_MARKER
+        if _agent_state.reading_is_authoritative(title, "idle")
+        else _QUEUE_IDLE_SETTLE
+    )
+    if now - rec["idle_since"] < settle:
         return
     # A send that never started a turn (it landed while the CLI sat on a
     # usage-limit screen, or the turn finished between two 5s polls) leaves
@@ -6450,6 +6650,10 @@ async def instance_send(title: str, payload: dict) -> JSONResponse:
     name, err = await asyncio.to_thread(_agent_session_ready, inst, title)
     if err is not None:
         return JSONResponse({"error": err}, status_code=409)
+    # This route is only reachable from human surfaces (the send box, the
+    # command palette, the prompts dialog) — automation types via
+    # _send_queued_item and the limit watcher, never through here.
+    _note_human_input(title)
     ok = await asyncio.to_thread(_send_to_agent, name, text, submit)
     if not ok:
         return JSONResponse(
@@ -6627,6 +6831,7 @@ async def post_queue_send_now(title: str, payload: dict) -> JSONResponse:
     name, err = await asyncio.to_thread(_agent_session_ready, inst, title)
     if err is not None:
         return JSONResponse({"error": err}, status_code=409)
+    _note_human_input(title)  # the user clicked Send now
     ok = await asyncio.to_thread(_send_to_agent, name, it["text"], True)
     if not ok:
         return JSONResponse(
@@ -10507,7 +10712,20 @@ async def shell_ws(ws: WebSocket, title: str) -> None:
         await ws.send_text(json.dumps({"type": "error", "message": str(err)}))
         await ws.close(code=4500)
         return
-    await _serve_pty(ws, proc, allow_input=True)
+    # Typing in the session's shell is presence at the window too — a person
+    # running git commands there does not need a push about this session. Same
+    # post-attach grace as the agent terminal: tmux's client probes are
+    # answered by the emulator, not the human.
+    attached_at = time.time()
+    await _serve_pty(
+        ws,
+        proc,
+        allow_input=True,
+        on_input=lambda: (
+            time.time() - attached_at > _ATTACH_PROBE_GRACE_S
+            and _note_human_input(title)
+        ),
+    )
 
 
 # _agent_transcript_text moved to core.session_stats (imported above).
@@ -10648,6 +10866,18 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
             pass
 
     sender = asyncio.create_task(_pump_out())
+    # Presence stamps get a short post-attach grace: attaching a tmux client
+    # makes tmux probe the terminal's capabilities, and xterm.js auto-answers
+    # (DA1/DSR/CPR replies) through the SAME data path as typing — so every
+    # pane mount, wifi blip, or laptop wake would otherwise stamp "a human is
+    # here" for every open pane with nobody at any keyboard, deferring
+    # announcements it was supposed to speed up.
+    attached_at = time.time()
+
+    def note_presence() -> None:
+        if time.time() - attached_at > _ATTACH_PROBE_GRACE_S:
+            _note_human_input(title)
+
     try:
         while True:
             msg = await ws.receive()
@@ -10655,6 +10885,10 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                 break
             b = msg.get("bytes")
             if b is not None:
+                # A human is at this window (stamped even when the budget lock
+                # drops the keystroke below — presence is about the person, not
+                # about whether the bytes landed).
+                note_presence()
                 # Budget lock: drop keystrokes once the session is over its
                 # ceiling (authoritative — the UI overlay is just the visible
                 # half). Resize control frames (text/JSON) still pass below.
@@ -10668,17 +10902,25 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                 try:
                     j = json.loads(t)
                 except (ValueError, TypeError):
+                    note_presence()
                     if _budget_locked(title):
                         continue
                     os.write(fd, t.encode("utf-8"))
                     continue
                 if isinstance(j, dict) and j.get("type") == "resize":
+                    # NOT presence: resizes fire on layout changes with nobody
+                    # at the keyboard.
                     try:
                         proc.setwinsize(int(j["rows"]), int(j["cols"]))
                     except Exception:  # noqa: BLE001
                         pass
-                elif not _budget_locked(title):
-                    os.write(fd, t.encode("utf-8"))
+                else:
+                    # A keystroke that happens to parse as JSON ("1", "true",
+                    # "{}"). Stamp before the budget gate, same as the other
+                    # two input branches — presence is about the person.
+                    note_presence()
+                    if not _budget_locked(title):
+                        os.write(fd, t.encode("utf-8"))
     except WebSocketDisconnect:
         pass
     finally:

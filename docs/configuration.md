@@ -232,7 +232,7 @@ these fields and a "Test connection" button that auto-fills `member_id`.
 | Provider | Required keys | Notes |
 |---|---|---|
 | `github_issues` | **none** | The zero-config on-ramp, and the catalog's first entry. `api_token` falls back to the GitHub connection (`[github].token` / `$GH_TOKEN` / `gh auth token`); `project` falls back to the source's `repo_url`, then `[repository].url`, then this checkout's `origin`. No workflow states. |
-| `shortcut` | `api_token`, `member_id` | `workflow_state` optional (workflow-state id; integer `workflow_state_id` also works). |
+| `shortcut` | `api_token`, `member_id` | `workflow_state` optional (workflow-state id; integer `workflow_state_id` also works). Archived stories, and stories under an archived epic, are always excluded — see below. |
 | `jira` | `base_url`, `email`, `api_token` | Jira Cloud, `assignee = currentUser()`. `member_id` (accountId) optional. `workflow_state` optional (status id → `status = <id>`). |
 | `linear` | `api_token` | GraphQL `viewer.assignedIssues`. `workflow_state` optional (state id). |
 | `asana` | `api_token`, `project` (workspace gid) | Tasks with `assignee = me`. No workflow states. |
@@ -242,6 +242,14 @@ Every source also takes an OPTIONAL-in-TOML-but-required-in-the-UI `repo_url`
 global default repo. `workflow_state` gates ingestion so a ticket only gets a
 session once it reaches the chosen state (blank = any state). The Intake →
 **Tickets** tab loads the live state list per source (Shortcut/Jira/Linear).
+
+**Shortcut also filters archived work, implicitly.** Alongside `workflow_state`
+and `assignee_scope`, a Shortcut source silently narrows to what Shortcut's own
+boards show: archived stories, and stories under an archived epic, are neither
+ingested nor listed, so an otherwise-matching `workflow_state` will ingest less
+than the state's own count suggests. **No setting disables it**, it applies to
+no other provider, and it does not cover a force-start by id
+([ingestion-pipeline.md](ingestion-pipeline.md#current-behavior-caveats)).
 
 Each source also takes an optional **`agent`** — the coding CLI its sessions run
 (`claude`, `codex`, `aider`, `goose`, `opencode`, `cline`, `antigravity`, or a
@@ -490,7 +498,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_WINDOW_REFRESH_FILE` | `~/.mindflock/window_refresh.json` | Path of the scheduled window-refresh keepalive's config + per-provider `last_fired` state |
 | `MINDFLOCK_SESSION_NAME` | — | Read by the injected CLI hook commands at fire time to attribute activity/thread markers to a MindFlock window; unset, the hooks fall back to the live tmux `#{session_name}` |
 | `MINDFLOCK_PROVIDER_BIN_<NAME>` | — | Per-provider binary override (provider name uppercased, non-alphanumerics → `_`; e.g. `MINDFLOCK_PROVIDER_BIN_CLAUDE=/opt/claude`). Wins over Settings → `coding_cli.binary_paths` and the provider TOML's `binary_path` |
-| `MINDFLOCK_ACTIVITY_MARKER_DIR` | `~/.mindflock-assistant/.activity-markers` | Per-session `{state, ts}` markers the CLI activity hooks write (working/idle/clarify detection — Claude, Codex, and opt-in TOML providers; see [providers.md](providers.md)). Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
+| `MINDFLOCK_ACTIVITY_MARKER_DIR` | `~/.mindflock-assistant/.activity-markers` | Per-session `{state, ts}` markers the CLI activity hooks write (working/idle/clarify detection — Claude, Codex, and opt-in TOML providers; see [providers.md](providers.md)). Read by the hook **at fire-time from the firing CLI's environment**, not by the server at install time — so a sandboxed CLI (redirected `HOME`) writes into its own sandbox instead of poisoning the shared hooks file's path for cohabiting sessions. Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
 | `MINDFLOCK_THREAD_MARKER_DIR` | `~/.mindflock-assistant/.thread-markers` | Per-window conversation-id markers so sessions sharing a directory each resume their *own* thread. Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
 | `CODEX_HOME` | `~/.codex` | Codex CLI data dir; usage is read from `$CODEX_HOME/sessions` |
 | `ANTIGRAVITY_CLI_DIR` | `~/.gemini/antigravity-cli` | Antigravity CLI state dir (conversation DBs, usage) |
@@ -553,8 +561,10 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   author intended. One list governs every delivery channel. The ids are stable
   across releases even when a rule's *meaning* is tightened — `session_idle` is
   now labelled **"A session finishes its work and stays idle"** and fires on
-  `session.turn_ended` (MindFlock watched the agent work, it has been idle for
-  45 s since, and nothing is queued to wake it), rather than on the activity
+  `session.turn_ended` (MindFlock watched the agent work — corroborated by the
+  CLI's own hooks or its status line, not just CPU — it has been idle since for
+  a dwell sized to that evidence, 12–45 s, and nothing is queued to wake it;
+  see [web-api.md](web-api.md)), rather than on the activity
   chip going grey at the end of every assistant turn. An existing opt-in simply
   gets quieter; **no migration is needed**, by hand or otherwise.
 - **ntfy push** (`notifications.ntfy_enabled` / `_server` / `_topic` / `_token` /

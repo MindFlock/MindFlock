@@ -160,12 +160,20 @@ def test_claude_hook_persists_session_id(tmp_path, monkeypatch):
         env={
             "MINDFLOCK_SESSION_NAME": "mindflock_hooked",
             "PATH": "/usr/bin:/bin",
-            "MINDFLOCK_THREAD_MARKER_DIR": str(tmp_path / "threads_ignored"),
+            "MINDFLOCK_THREAD_MARKER_DIR": str(tmp_path / "threads_own_env"),
         },
     )
-    # The hook bakes the thread dir at INSTALL time (this process's env), so it
-    # wrote into the autouse fixture's dir regardless of the subprocess env.
-    assert thread_markers.read("mindflock_hooked") == "dead-beef-0001"
+    # The hook resolves the thread dir at FIRE time, from ITS OWN environment —
+    # never from the env of whoever installed it. Baking the installer's path
+    # was a live incident: a sandboxed Verify run (HOME redirected into a
+    # scratchpad) re-pinned a SHARED repo's hooks file with its sandbox path,
+    # and every cohabiting session's markers silently vanished into /tmp —
+    # chips frozen on the last pre-poison reading.
+    assert (tmp_path / "threads_own_env" / "mindflock_hooked.thread").read_text() == (
+        "dead-beef-0001"
+    )
+    # And nothing leaked into this process's own (autouse-fixture) dir.
+    assert not thread_markers.read("mindflock_hooked")
 
 
 def test_codex_discovery_binds_by_cwd_and_launch_time(tmp_path, monkeypatch):

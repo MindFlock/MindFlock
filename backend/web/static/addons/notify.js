@@ -74,23 +74,40 @@ function ruleMatches(rule, env) {
 // answers on a page where the bundle has not published the bridge (an older
 // build, or an event arriving before first paint).
 function sessionLabel(title) {
+  let name = "";
   try {
     const named = window.mindflock && window.mindflock.displayName;
     if (typeof named === "function") {
       const shown = named(title);
-      if (typeof shown === "string" && shown) return shown;
+      if (typeof shown === "string" && shown) name = shown;
     }
   } catch (e) {
     /* the bridge is optional by construction */
   }
-  try {
-    const aliases = JSON.parse(localStorage.getItem("mf_aliases") || "{}");
-    const alias = aliases && aliases[title];
-    if (typeof alias === "string" && alias) return alias;
-  } catch (e) {
-    /* unreadable storage: fall back to the raw title */
+  if (!name) {
+    try {
+      const aliases = JSON.parse(localStorage.getItem("mf_aliases") || "{}");
+      const alias = aliases && aliases[title];
+      if (typeof alias === "string" && alias) name = alias;
+    } catch (e) {
+      /* unreadable storage: fall back to the raw title */
+    }
   }
-  return title || "session";
+  if (!name) name = title || "session";
+  // Prefix the sidebar's slot number ("[3] name") so the notification points
+  // at a row you can find at a glance — the same 1-9 the rail shows, resolved
+  // by the app at fill time so drag reorders and filters are already applied.
+  // Feature-detected like displayName: an older bundle simply has no slots.
+  try {
+    const slot = window.mindflock && window.mindflock.slotNumber;
+    if (typeof slot === "function") {
+      const n = slot(title);
+      if (typeof n === "string" && n) return "[" + n + "] " + name;
+    }
+  } catch (e) {
+    /* slots are a garnish, never the meal */
+  }
+  return name;
 }
 
 function fill(template, env) {

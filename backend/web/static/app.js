@@ -22526,39 +22526,285 @@ function useTestPlans(enabled = true) {
 function refreshTestPlans() {
   return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
 }
-function escapeRe(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function errMsg(err) {
+  return (err == null ? void 0 : err.message) || "error";
 }
-function featureBranchName(branch, slug) {
-  const m = new RegExp(`^feature/${escapeRe(slug)}/(.+)$`).exec(branch);
-  return m ? m[1] : "";
+function fmtTokens(n) {
+  n = n || 0;
+  if (n < 1e3) return String(n);
+  if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + "k";
+  return (n / 1e6).toFixed(1) + "M";
 }
-function branchTail(branch) {
-  const parts = branch.split("/").filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : "";
+function fmtUsd(u) {
+  u = u || 0;
+  if (u <= 0) return "$0";
+  if (u < 0.01) return "<$0.01";
+  if (u < 10) return "$" + u.toFixed(2);
+  if (u < 1e3) return "$" + u.toFixed(1);
+  return "$" + (u / 1e3).toFixed(1) + "k";
 }
-function splitKind(title) {
-  if (title.startsWith("pr-")) return { kind: "pr", slug: title.slice(3) };
-  if (title.startsWith("issue-")) return { kind: "iss", slug: title.slice(6) };
-  return null;
+const PROV_LABELS = { claude: "Claude", codex: "Codex", aider: "Aider" };
+function provLabel(name) {
+  if (!name) return "";
+  return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
 }
-function sessionLabel(title, branch) {
-  const plain = { text: title, kind: "", name: "", slug: title };
-  if (!title) return plain;
-  const split = splitKind(title);
-  const ticketName = split ? "" : featureBranchName(branch, title);
-  if (!split && !ticketName) return plain;
-  const kind = split ? split.kind : "tix";
-  const slug = split ? split.slug : title;
-  if (!slug) return plain;
-  const name = split ? featureBranchName(branch, title) || branchTail(branch) : ticketName;
-  const useName = name && name !== slug && name !== title ? name : "";
-  return {
-    text: useName ? `(${kind}) ${useName}/${slug}` : `(${kind}) ${slug}`,
-    kind,
-    name: useName,
-    slug
-  };
+function relTime(ts) {
+  const secs = Math.max(0, Math.floor(Date.now() / 1e3 - ts));
+  if (secs < 60) return secs + "s ago";
+  if (secs < 3600) return Math.floor(secs / 60) + "m ago";
+  if (secs < 86400) return Math.floor(secs / 3600) + "h ago";
+  return Math.floor(secs / 86400) + "d ago";
+}
+function fmtDurationShort(ms) {
+  const mm = Math.max(1, Math.round(ms / 6e4));
+  return mm >= 60 ? Math.floor(mm / 60) + "h " + mm % 60 + "m" : "~" + mm + "m";
+}
+function displayBranch(inst) {
+  const full = inst.branch || "";
+  let m = full.match(/^feature\/sc-\d+\/(.+)$/);
+  if (m) return m[1];
+  m = full.match(/^mindflock\/(.+)$/);
+  if (m) return m[1];
+  return full || inst.program || "";
+}
+function humanSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+}
+function copyText(text) {
+  var _a2, _b2;
+  if (!text) return Promise.resolve(false);
+  if ((_a2 = window.mfclip) == null ? void 0 : _a2.writeText) {
+    try {
+      window.mfclip.writeText(text);
+      return Promise.resolve(true);
+    } catch {
+    }
+  }
+  if ((_b2 = navigator.clipboard) == null ? void 0 : _b2.writeText) {
+    return navigator.clipboard.writeText(text).then(
+      () => true,
+      () => fallbackCopy(text)
+    );
+  }
+  return Promise.resolve(fallbackCopy(text));
+}
+let clipBridgeBroken = false;
+function readClipboardText() {
+  var _a2, _b2;
+  if ((_a2 = window.mfclip) == null ? void 0 : _a2.readText) {
+    try {
+      const v = window.mfclip.readText();
+      clipBridgeBroken = false;
+      return Promise.resolve(v);
+    } catch {
+      clipBridgeBroken = true;
+    }
+  }
+  if ((_b2 = navigator.clipboard) == null ? void 0 : _b2.readText) {
+    return navigator.clipboard.readText().catch(() => "");
+  }
+  return Promise.resolve("");
+}
+function readClipboardImage() {
+  var _a2, _b2;
+  if ((_a2 = window.mfclip) == null ? void 0 : _a2.readImagePNG) {
+    try {
+      const b64 = window.mfclip.readImagePNG();
+      if (!b64) return Promise.resolve(null);
+      const bin = atob(b64);
+      const buf = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+      return Promise.resolve(new Blob([buf], { type: "image/png" }));
+    } catch {
+      clipBridgeBroken = true;
+      return Promise.resolve(null);
+    }
+  }
+  if ((_b2 = navigator.clipboard) == null ? void 0 : _b2.read) {
+    return navigator.clipboard.read().then(
+      (items) => {
+        for (const it of items) {
+          const t = (it.types || []).find((x) => x.startsWith("image/"));
+          if (t) return it.getType(t);
+        }
+        return null;
+      },
+      () => null
+    );
+  }
+  return Promise.resolve(null);
+}
+async function pasteClipboard(term, session) {
+  const text = await readClipboardText();
+  if (text) {
+    term.paste(text);
+    toast("Pasted " + text.length + " chars");
+    return;
+  }
+  const img = await readClipboardImage();
+  if (!img) {
+    toast(
+      clipBridgeBroken ? "Clipboard is unavailable in this desktop-app build — update/rebuild the app to fix paste (Ctrl+Shift+V may still work)" : "Clipboard is empty",
+      clipBridgeBroken ? { duration: 6e3 } : void 0
+    );
+    return;
+  }
+  try {
+    const q = session ? "?session=" + encodeURIComponent(session) : "";
+    const r = await api("/api/paste-image" + q, {
+      method: "POST",
+      headers: { "Content-Type": img.type || "image/png" },
+      body: img
+    });
+    term.paste(r.path);
+    toast("Pasted image → " + r.path);
+  } catch (err) {
+    toast("Image paste failed: " + ((err == null ? void 0 : err.message) || "error"));
+  }
+}
+async function uploadFileToWorkspace(blob, session, name) {
+  let q = session ? "?session=" + encodeURIComponent(session) : "";
+  if (name) q += (q ? "&" : "?") + "name=" + encodeURIComponent(name);
+  const r = await api("/api/paste-image" + q, {
+    method: "POST",
+    headers: { "Content-Type": blob.type || "application/octet-stream" },
+    body: blob
+  });
+  return r.path;
+}
+async function pasteFilesAsPaths(files, term, session) {
+  const list = Array.from(files || []);
+  if (!list.length) return;
+  toast(
+    "Uploading " + (list.length === 1 ? list[0].name || "file" : list.length + " files") + "…"
+  );
+  const paths = [];
+  for (const f of list) {
+    try {
+      paths.push(await uploadFileToWorkspace(f, session, f.name));
+    } catch (err) {
+      toast("Upload failed: " + (f.name || "file") + " — " + ((err == null ? void 0 : err.message) || "error"));
+    }
+  }
+  if (!paths.length) return;
+  term.paste(paths.map((p) => /\s/.test(p) ? '"' + p + '"' : p).join(" ") + " ");
+  toast(paths.length === 1 ? "File → " + paths[0] : paths.length + " files → workspace");
+}
+const dtHasFiles = (dt) => !!dt && Array.from(dt.types || []).indexOf("Files") !== -1;
+function installGlobalDropGuards() {
+  window.addEventListener("dragover", (ev) => {
+    if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
+  });
+  window.addEventListener("drop", (ev) => {
+    if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
+  });
+}
+function fallbackCopy(text) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+const MAX_VISIBLE = 9;
+const DROP_PH = "\0drop";
+function viewCap(viewMode) {
+  return viewMode === "auto" ? Infinity : parseInt(viewMode, 10);
+}
+function computeVisible(instances2, opts) {
+  const { rows } = orderedInstances(instances2, opts.order);
+  const shown = rows.filter((i) => !opts.hidden.has(i.title));
+  const cap = Math.min(viewCap(opts.viewMode), MAX_VISIBLE);
+  if (shown.length <= cap) return shown;
+  const shownTitles = shown.map((i) => i.title);
+  const byMru = opts.mru.filter((t) => shownTitles.includes(t));
+  const rest = shownTitles.filter((t) => !byMru.includes(t));
+  const chosen = new Set(byMru.concat(rest).slice(0, cap));
+  return shown.filter((i) => chosen.has(i.title));
+}
+function balancedRows(titles) {
+  const n = titles.length;
+  if (!n) return [];
+  const rowCount = Math.max(1, Math.round(Math.sqrt(n)));
+  const perRow = Math.ceil(n / rowCount);
+  const rows = [];
+  for (let i = 0; i < n; i += perRow) rows.push(titles.slice(i, i + perRow));
+  return rows;
+}
+function insertIntoGrid(rows, title) {
+  const n = rows.flat().length + 1;
+  const rowCount = Math.max(1, Math.round(Math.sqrt(n)));
+  const perRow = Math.ceil(n / rowCount);
+  const last = rows[rows.length - 1];
+  if (last && last.length < perRow) last.push(title);
+  else rows.push([title]);
+  return rows;
+}
+function reconcileGridRows(prev, visibleTitles) {
+  const vis = new Set(visibleTitles);
+  const kept = new Set(prev.flat().filter((t) => vis.has(t)));
+  const incoming = visibleTitles.filter((t) => !kept.has(t));
+  let rows = prev.map((r) => r.map((t) => vis.has(t) ? t : incoming.shift() || null).filter(Boolean)).filter((r) => r.length);
+  if (!rows.length) return balancedRows(visibleTitles);
+  for (const t of incoming) rows = insertIntoGrid(rows, t);
+  return rows;
+}
+function insertBeside(prev, removeTitle, token, targetTitle, side) {
+  const rows = prev.map((r) => r.filter((t) => t !== removeTitle)).filter((r) => r.length);
+  let ri = -1, ci = -1;
+  rows.forEach((r, i) => {
+    const j = r.indexOf(targetTitle);
+    if (j >= 0) {
+      ri = i;
+      ci = j;
+    }
+  });
+  if (ri < 0) rows.push([token]);
+  else if (side === "left") rows[ri].splice(ci, 0, token);
+  else if (side === "right") rows[ri].splice(ci + 1, 0, token);
+  else if (side === "top") rows.splice(ri, 0, [token]);
+  else rows.splice(ri + 1, 0, [token]);
+  return rows;
+}
+function placeInGrid(prev, dragTitle, targetTitle, side) {
+  if (!dragTitle || dragTitle === targetTitle) return prev;
+  return insertBeside(prev, dragTitle, dragTitle, targetTitle, side);
+}
+function previewRowsFor(prev, dragTitle, targetTitle, side) {
+  return insertBeside(prev, dragTitle, DROP_PH, targetTitle, side);
+}
+function dropSideFor(rect, clientX, clientY) {
+  const dx = (clientX - rect.left) / rect.width - 0.5;
+  const dy = (clientY - rect.top) / rect.height - 0.5;
+  if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? "left" : "right";
+  return dy < 0 ? "top" : "bottom";
+}
+const inflight$1 = /* @__PURE__ */ new Map();
+function freshStage(title) {
+  if (!title) return Promise.resolve(null);
+  const live = inflight$1.get(title);
+  if (live) return live;
+  const p = instApi(title, "/stage").then((row) => {
+    if (row && row.title) patchInstance(title, row);
+    return row ?? null;
+  }).catch(() => null).finally(() => {
+    inflight$1.delete(title);
+  });
+  inflight$1.set(title, p);
+  return p;
 }
 const createStoreImpl = (createState) => {
   let state;
@@ -22952,176 +23198,65 @@ function tourDecision(opts) {
   if (opts.onboarded === void 0) return "wait";
   return opts.onboarded ? "skip" : "open";
 }
-function snapshot() {
-  var _a2, _b2;
-  const w = globalThis;
-  try {
-    const list = (_b2 = (_a2 = w.mindflock) == null ? void 0 : _a2.sessions) == null ? void 0 : _b2.call(_a2);
-    return Array.isArray(list) ? list : [];
-  } catch {
-    return [];
-  }
+const DEPTHS = ["agent", "commit", "push", "pr", "merge"];
+const SESSION_DEPTHS = ["commit", "push", "pr", "merge"];
+const SOURCE_DEPTHS = ["agent", "commit", "push", "pr"];
+const DEPTH_LABELS = {
+  off: "Off",
+  agent: "Agent only",
+  commit: "Commit",
+  push: "Push",
+  pr: "Open PR",
+  merge: "Merge"
+};
+const DEPTH_STEP_LABELS = {
+  off: "Off",
+  agent: "Agent only",
+  commit: "Commit only",
+  push: "Then push",
+  pr: "Then open PR",
+  merge: "Then merge"
+};
+const DEPTH_SHORT = {
+  agent: "→ agent",
+  commit: "→ commit",
+  push: "→ push",
+  pr: "→ PR",
+  merge: "→ merge"
+};
+function depthLabel(depth) {
+  return DEPTH_LABELS[depth] || depth || "Off";
 }
-function windowName(title) {
-  const raw = String(title || "");
-  if (!raw) return "";
-  const alias = useUi.getState().aliases[raw];
-  if (alias) return alias;
-  const inst = snapshot().find(
-    (i) => i && (i.title === raw || i.display_title === raw)
-  );
-  if (!inst) return raw;
-  return sessionLabel(inst.display_title || inst.title || raw, inst.branch || "").text || raw;
+function normalizeDepth(value) {
+  const d = String(value || "").trim().toLowerCase();
+  if (d === "off") return "off";
+  return DEPTHS.includes(d) ? d : "";
 }
-function publishWindowName() {
-  const w = globalThis;
-  w.mindflock = w.mindflock || {};
-  w.mindflock.displayName = windowName;
+function autopilotChipTitle(run) {
+  var _a2;
+  const target = depthLabel(run.depth);
+  if (run.state === "halted")
+    return "Fast-track stopped: " + (run.reason || "unknown reason");
+  if (run.state === "done")
+    return "Fast-track finished at " + target + " and switched itself off.";
+  const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
+  const skipped = ((_a2 = run.skipped) == null ? void 0 : _a2.length) ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
+  return "Fast-tracking to " + target + where + "\nClick to stop." + skipped;
 }
-function copyText(text) {
-  var _a2, _b2;
-  if (!text) return Promise.resolve(false);
-  if ((_a2 = window.mfclip) == null ? void 0 : _a2.writeText) {
-    try {
-      window.mfclip.writeText(text);
-      return Promise.resolve(true);
-    } catch {
-    }
-  }
-  if ((_b2 = navigator.clipboard) == null ? void 0 : _b2.writeText) {
-    return navigator.clipboard.writeText(text).then(
-      () => true,
-      () => fallbackCopy(text)
-    );
-  }
-  return Promise.resolve(fallbackCopy(text));
-}
-let clipBridgeBroken = false;
-function readClipboardText() {
-  var _a2, _b2;
-  if ((_a2 = window.mfclip) == null ? void 0 : _a2.readText) {
-    try {
-      const v = window.mfclip.readText();
-      clipBridgeBroken = false;
-      return Promise.resolve(v);
-    } catch {
-      clipBridgeBroken = true;
-    }
-  }
-  if ((_b2 = navigator.clipboard) == null ? void 0 : _b2.readText) {
-    return navigator.clipboard.readText().catch(() => "");
-  }
-  return Promise.resolve("");
-}
-function readClipboardImage() {
-  var _a2, _b2;
-  if ((_a2 = window.mfclip) == null ? void 0 : _a2.readImagePNG) {
-    try {
-      const b64 = window.mfclip.readImagePNG();
-      if (!b64) return Promise.resolve(null);
-      const bin = atob(b64);
-      const buf = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-      return Promise.resolve(new Blob([buf], { type: "image/png" }));
-    } catch {
-      clipBridgeBroken = true;
-      return Promise.resolve(null);
-    }
-  }
-  if ((_b2 = navigator.clipboard) == null ? void 0 : _b2.read) {
-    return navigator.clipboard.read().then(
-      (items) => {
-        for (const it of items) {
-          const t = (it.types || []).find((x) => x.startsWith("image/"));
-          if (t) return it.getType(t);
-        }
-        return null;
-      },
-      () => null
-    );
-  }
-  return Promise.resolve(null);
-}
-async function pasteClipboard(term, session) {
-  const text = await readClipboardText();
-  if (text) {
-    term.paste(text);
-    toast("Pasted " + text.length + " chars");
-    return;
-  }
-  const img = await readClipboardImage();
-  if (!img) {
-    toast(
-      clipBridgeBroken ? "Clipboard is unavailable in this desktop-app build — update/rebuild the app to fix paste (Ctrl+Shift+V may still work)" : "Clipboard is empty",
-      clipBridgeBroken ? { duration: 6e3 } : void 0
-    );
-    return;
-  }
-  try {
-    const q = session ? "?session=" + encodeURIComponent(session) : "";
-    const r = await api("/api/paste-image" + q, {
-      method: "POST",
-      headers: { "Content-Type": img.type || "image/png" },
-      body: img
-    });
-    term.paste(r.path);
-    toast("Pasted image → " + r.path);
-  } catch (err) {
-    toast("Image paste failed: " + ((err == null ? void 0 : err.message) || "error"));
-  }
-}
-async function uploadFileToWorkspace(blob, session, name) {
-  let q = session ? "?session=" + encodeURIComponent(session) : "";
-  if (name) q += (q ? "&" : "?") + "name=" + encodeURIComponent(name);
-  const r = await api("/api/paste-image" + q, {
-    method: "POST",
-    headers: { "Content-Type": blob.type || "application/octet-stream" },
-    body: blob
-  });
-  return r.path;
-}
-async function pasteFilesAsPaths(files, term, session) {
-  const list = Array.from(files || []);
-  if (!list.length) return;
-  toast(
-    "Uploading " + (list.length === 1 ? list[0].name || "file" : list.length + " files") + "…"
-  );
-  const paths = [];
-  for (const f of list) {
-    try {
-      paths.push(await uploadFileToWorkspace(f, session, f.name));
-    } catch (err) {
-      toast("Upload failed: " + (f.name || "file") + " — " + ((err == null ? void 0 : err.message) || "error"));
-    }
-  }
-  if (!paths.length) return;
-  term.paste(paths.map((p) => /\s/.test(p) ? '"' + p + '"' : p).join(" ") + " ");
-  toast(paths.length === 1 ? "File → " + paths[0] : paths.length + " files → workspace");
-}
-const dtHasFiles = (dt) => !!dt && Array.from(dt.types || []).indexOf("Files") !== -1;
-function installGlobalDropGuards() {
-  window.addEventListener("dragover", (ev) => {
-    if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
-  });
-  window.addEventListener("drop", (ev) => {
-    if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
-  });
-}
-function fallbackCopy(text) {
-  try {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.top = "-1000px";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(ta);
-    return ok;
-  } catch {
-    return false;
+function mergeBlockerLabel(ms) {
+  switch (ms.state) {
+    case "dirty":
+      return "conflicts";
+    case "behind":
+      return "behind base";
+    case "draft":
+      return "draft PR";
+    case "blocked":
+      if (ms.checks === "failed") return "checks ✗";
+      if (ms.checks === "pending") return "checks…";
+      return "review needed";
+    default:
+      return ms.mergeable === null ? "checking…" : "can't merge";
   }
 }
 function cssVar(name, fallback) {
@@ -23625,388 +23760,6 @@ if (typeof document !== "undefined") {
 function focusTerm(title, kind = "agent") {
   var _a2;
   (_a2 = peekTerm(title, kind)) == null ? void 0 : _a2.term.focus();
-}
-const SURFACES = [
-  ["", "Swallow (default)", "#0f1117", "#1e222e"],
-  ["raven", "Raven", "#000000", "#141419"],
-  ["heron", "Heron", "#16181b", "#292d33"],
-  ["cardinal", "Cardinal", "#d51322", "#16060a", "#3d060d"],
-  ["macaw", "Scarlet Macaw", "#1554e0", "#06773a", "#43060a"],
-  ["pheasant", "Golden Pheasant", "#f5b800", "#05361f", "#3f070c"],
-  ["oriole", "Oriole", "#ff7a12", "#140c03", "#421d03"],
-  ["lorikeet", "Rainbow Lorikeet", "#4b1fd6", "#256e0a", "#4f1c05"],
-  ["roller", "Lilac-breasted Roller", "#9b6ef0", "#00736b", "#3a2412"],
-  ["goldfinch", "Goldfinch", "#f2e00d", "#131300", "#33350d"],
-  ["toucan", "Toco Toucan", "#ffb01f", "#08080a", "#181820"],
-  ["quetzal", "Quetzal", "#00a35c", "#4a0512", "#033524"],
-  ["greenjay", "Green Jay", "#1440d6", "#d6b800", "#103a0e"],
-  ["gouldian", "Gouldian Finch", "#00c2b2", "#52157a", "#0e3a19"],
-  ["mallard", "Mallard", "#0d9c62", "#5e330f", "#22262e"],
-  ["kingfisher", "Kingfisher", "#00a8d6", "#5e2404", "#06323f"],
-  ["peacock", "Peacock", "#0a9cb8", "#141f8f", "#05383f"],
-  ["bluejay", "Bluejay", "#1266e6", "#0a0e1c", "#071a44"],
-  ["bunting", "Indigo Bunting", "#3b2ff0", "#08061f", "#150f52"],
-  ["violetear", "Violetear", "#7c2ff0", "#0e0420", "#220c40"],
-  ["mandarin", "Mandarin Duck", "#12a85e", "#f2820f", "#3a1445"],
-  ["flamingo", "Flamingo", "#ff2d8a", "#180110", "#420527"]
-];
-function swatchGradient(tones) {
-  const step = 100 / tones.length;
-  const stops = tones.map(
-    (c, i) => `${c} ${(i * step).toFixed(1)}% ${((i + 1) * step).toFixed(1)}%`
-  );
-  return `linear-gradient(135deg,${stops.join(",")})`;
-}
-const ACCENTS = [
-  ["", "Violetear (default)", "#7d56f4"],
-  ["cardinal", "Cardinal", "#e5484d"],
-  ["oriole", "Oriole", "#f07b3c"],
-  ["goldfinch", "Goldfinch", "#f0cf28"],
-  ["quetzal", "Quetzal", "#44b556"],
-  ["bluejay", "Bluejay", "#3d8bfd"],
-  ["bunting", "Indigo Bunting", "#4f46e5"],
-  ["flamingo", "Flamingo", "#f2559b"],
-  ["pheasant", "Golden Pheasant", "linear-gradient(135deg,#f0d78a,#b8860b)"],
-  ["heron", "Heron", "linear-gradient(135deg,#e2e7ef,#8d95a3)"]
-];
-const DIMS = {
-  accent: { field: "accent", attr: "data-accent", lsKey: "cs_accent" },
-  surface: { field: "surface", attr: "data-surface", lsKey: "cs_surface" }
-};
-function applyStoredAppearance() {
-  for (const dim of Object.values(DIMS)) {
-    let saved = "";
-    try {
-      saved = localStorage.getItem(dim.lsKey) || "";
-    } catch {
-    }
-    if (saved) document.documentElement.setAttribute(dim.attr, saved);
-    else document.documentElement.removeAttribute(dim.attr);
-  }
-}
-function current(dim) {
-  return document.documentElement.getAttribute(dim.attr) || "";
-}
-function apply(dim, name) {
-  if (name) document.documentElement.setAttribute(dim.attr, name);
-  else document.documentElement.removeAttribute(dim.attr);
-  try {
-    if (name) localStorage.setItem(dim.lsKey, name);
-    else localStorage.removeItem(dim.lsKey);
-  } catch {
-  }
-  api("/api/settings", { json: { ui: { [dim.field]: name } } }).catch(() => {
-  });
-  rethemeAll();
-}
-function Appearance(_) {
-  const [accent, setAccent] = reactExports.useState(() => current(DIMS.accent));
-  const [surface, setSurface] = reactExports.useState(() => current(DIMS.surface));
-  const surfaceSwatch = ([name, label, ...tones]) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
-    "button",
-    {
-      type: "button",
-      className: "accent-swatch surface-swatch" + (surface === name ? " active" : ""),
-      "data-surface-choice": name,
-      onClick: () => {
-        setSurface(name);
-        apply(DIMS.surface, name);
-      },
-      children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "sw-dot", style: { background: swatchGradient(tones) } }),
-        label
-      ]
-    },
-    name || "default"
-  );
-  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Appearance" }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "One bird per set, painted the way the bird actually is: most give the top bar, the sidebar and the window a hue each — Scarlet Macaw is a cobalt bar over an emerald sidebar over a scarlet window. Swallow, Raven and Heron are the quiet ones. Every set has its own light-mode palette, so the moon toggle in the top bar keeps working inside all of them. Synced to all your devices." }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "surface-swatches", className: "accent-swatches", children: SURFACES.map(surfaceSwatch) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Accents recolor highlights, focus rings, buttons and the terminal cursor — mix freely with any theme set." }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "accent-swatches", className: "accent-swatches", children: ACCENTS.map(([name, label, color]) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
-      "button",
-      {
-        type: "button",
-        className: "accent-swatch" + (accent === name ? " active" : ""),
-        "data-accent-choice": name,
-        onClick: () => {
-          setAccent(name);
-          apply(DIMS.accent, name);
-        },
-        children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "sw-dot", style: { background: color } }),
-          label
-        ]
-      },
-      name || "default"
-    )) }),
-    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Dark / light mode itself is the moon toggle in the top bar." })
-  ] });
-}
-function errMsg(err) {
-  return (err == null ? void 0 : err.message) || "error";
-}
-function fmtTokens(n) {
-  n = n || 0;
-  if (n < 1e3) return String(n);
-  if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + "k";
-  return (n / 1e6).toFixed(1) + "M";
-}
-function fmtUsd(u) {
-  u = u || 0;
-  if (u <= 0) return "$0";
-  if (u < 0.01) return "<$0.01";
-  if (u < 10) return "$" + u.toFixed(2);
-  if (u < 1e3) return "$" + u.toFixed(1);
-  return "$" + (u / 1e3).toFixed(1) + "k";
-}
-const PROV_LABELS = { claude: "Claude", codex: "Codex", aider: "Aider" };
-function provLabel(name) {
-  if (!name) return "";
-  return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
-}
-function relTime(ts) {
-  const secs = Math.max(0, Math.floor(Date.now() / 1e3 - ts));
-  if (secs < 60) return secs + "s ago";
-  if (secs < 3600) return Math.floor(secs / 60) + "m ago";
-  if (secs < 86400) return Math.floor(secs / 3600) + "h ago";
-  return Math.floor(secs / 86400) + "d ago";
-}
-function fmtDurationShort(ms) {
-  const mm = Math.max(1, Math.round(ms / 6e4));
-  return mm >= 60 ? Math.floor(mm / 60) + "h " + mm % 60 + "m" : "~" + mm + "m";
-}
-function displayBranch(inst) {
-  const full = inst.branch || "";
-  let m = full.match(/^feature\/sc-\d+\/(.+)$/);
-  if (m) return m[1];
-  m = full.match(/^mindflock\/(.+)$/);
-  if (m) return m[1];
-  return full || inst.program || "";
-}
-function humanSize(bytes) {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
-}
-function orderedInstances(instances2, order) {
-  if (!instances2.length) return { rows: [], nextOrder: order };
-  const byTitle = new Map(instances2.map((i) => [i.title, i]));
-  const rows = [];
-  for (const t of order) {
-    const inst = byTitle.get(t);
-    if (inst) {
-      rows.push(inst);
-      byTitle.delete(t);
-    }
-  }
-  for (const i of instances2) {
-    if (byTitle.has(i.title)) {
-      rows.push(i);
-      byTitle.delete(i.title);
-    }
-  }
-  return { rows, nextOrder: rows.map((i) => i.title) };
-}
-function orderWithAfter(order, title, after) {
-  if (!title || !after || title === after) return order;
-  const next = order.filter((t) => t !== title);
-  const at = next.indexOf(after);
-  if (at < 0) return order;
-  next.splice(at + 1, 0, title);
-  return next;
-}
-const SEARCH_MIN = 6;
-function matchesFilter(inst, filter, aliases) {
-  if (!filter) return true;
-  const hay = [inst.title, aliases[inst.title], inst.branch].filter(Boolean).join(" ").toLowerCase();
-  return hay.indexOf(filter) >= 0;
-}
-const WEDGE_IDLE_S = 20 * 60;
-function attentionItems(instances2) {
-  var _a2;
-  const items = [];
-  for (const inst of instances2 || []) {
-    if (inst.workspace_missing || inst.status === "paused") continue;
-    const act = effectiveActivity(inst);
-    if (act === "clarify")
-      items.push({ p: 0, title: inst.title, reason: "needs your answer", snippet: inst.last_turn || "" });
-    else if (inst.stage === "interrupt")
-      items.push({
-        p: 1,
-        title: inst.title,
-        reason: "pre-commit failed" + (inst.failed_step ? " at " + inst.failed_step : "")
-      });
-    else if (inst.setup && inst.setup.state === "failed")
-      items.push({ p: 1, title: inst.title, reason: "worktree setup failed" });
-    else if (inst.check && inst.check.state === "failed" && !inst.check.stale)
-      items.push({ p: 2, title: inst.title, reason: "checks failing" });
-    else if (inst.stage === "pushed")
-      items.push({ p: 3, title: inst.title, reason: "pushed — ready for PR" });
-    else if (act === "idle" && Number(inst.activity_since) > 0) {
-      const idleFor = Date.now() / 1e3 - Number(inst.activity_since);
-      const un = ((_a2 = inst.diff_stat || {}) == null ? void 0 : _a2.uncommitted) || {};
-      const unfinished = (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
-      if (idleFor > WEDGE_IDLE_S && unfinished)
-        items.push({
-          p: 1,
-          title: inst.title,
-          reason: "idle " + relTime(Number(inst.activity_since)).replace(" ago", "") + " with unfinished work — possibly stuck",
-          snippet: inst.last_turn || ""
-        });
-    }
-  }
-  return items.sort((a, b) => a.p - b.p || a.title.localeCompare(b.title));
-}
-const MAX_VISIBLE = 9;
-const DROP_PH = "\0drop";
-function viewCap(viewMode) {
-  return viewMode === "auto" ? Infinity : parseInt(viewMode, 10);
-}
-function computeVisible(instances2, opts) {
-  const { rows } = orderedInstances(instances2, opts.order);
-  const shown = rows.filter((i) => !opts.hidden.has(i.title));
-  const cap = Math.min(viewCap(opts.viewMode), MAX_VISIBLE);
-  if (shown.length <= cap) return shown;
-  const shownTitles = shown.map((i) => i.title);
-  const byMru = opts.mru.filter((t) => shownTitles.includes(t));
-  const rest = shownTitles.filter((t) => !byMru.includes(t));
-  const chosen = new Set(byMru.concat(rest).slice(0, cap));
-  return shown.filter((i) => chosen.has(i.title));
-}
-function balancedRows(titles) {
-  const n = titles.length;
-  if (!n) return [];
-  const rowCount = Math.max(1, Math.round(Math.sqrt(n)));
-  const perRow = Math.ceil(n / rowCount);
-  const rows = [];
-  for (let i = 0; i < n; i += perRow) rows.push(titles.slice(i, i + perRow));
-  return rows;
-}
-function insertIntoGrid(rows, title) {
-  const n = rows.flat().length + 1;
-  const rowCount = Math.max(1, Math.round(Math.sqrt(n)));
-  const perRow = Math.ceil(n / rowCount);
-  const last = rows[rows.length - 1];
-  if (last && last.length < perRow) last.push(title);
-  else rows.push([title]);
-  return rows;
-}
-function reconcileGridRows(prev, visibleTitles) {
-  const vis = new Set(visibleTitles);
-  const kept = new Set(prev.flat().filter((t) => vis.has(t)));
-  const incoming = visibleTitles.filter((t) => !kept.has(t));
-  let rows = prev.map((r) => r.map((t) => vis.has(t) ? t : incoming.shift() || null).filter(Boolean)).filter((r) => r.length);
-  if (!rows.length) return balancedRows(visibleTitles);
-  for (const t of incoming) rows = insertIntoGrid(rows, t);
-  return rows;
-}
-function insertBeside(prev, removeTitle, token, targetTitle, side) {
-  const rows = prev.map((r) => r.filter((t) => t !== removeTitle)).filter((r) => r.length);
-  let ri = -1, ci = -1;
-  rows.forEach((r, i) => {
-    const j = r.indexOf(targetTitle);
-    if (j >= 0) {
-      ri = i;
-      ci = j;
-    }
-  });
-  if (ri < 0) rows.push([token]);
-  else if (side === "left") rows[ri].splice(ci, 0, token);
-  else if (side === "right") rows[ri].splice(ci + 1, 0, token);
-  else if (side === "top") rows.splice(ri, 0, [token]);
-  else rows.splice(ri + 1, 0, [token]);
-  return rows;
-}
-function placeInGrid(prev, dragTitle, targetTitle, side) {
-  if (!dragTitle || dragTitle === targetTitle) return prev;
-  return insertBeside(prev, dragTitle, dragTitle, targetTitle, side);
-}
-function previewRowsFor(prev, dragTitle, targetTitle, side) {
-  return insertBeside(prev, dragTitle, DROP_PH, targetTitle, side);
-}
-function dropSideFor(rect, clientX, clientY) {
-  const dx = (clientX - rect.left) / rect.width - 0.5;
-  const dy = (clientY - rect.top) / rect.height - 0.5;
-  if (Math.abs(dx) >= Math.abs(dy)) return dx < 0 ? "left" : "right";
-  return dy < 0 ? "top" : "bottom";
-}
-const inflight$1 = /* @__PURE__ */ new Map();
-function freshStage(title) {
-  if (!title) return Promise.resolve(null);
-  const live = inflight$1.get(title);
-  if (live) return live;
-  const p = instApi(title, "/stage").then((row) => {
-    if (row && row.title) patchInstance(title, row);
-    return row ?? null;
-  }).catch(() => null).finally(() => {
-    inflight$1.delete(title);
-  });
-  inflight$1.set(title, p);
-  return p;
-}
-const DEPTHS = ["agent", "commit", "push", "pr", "merge"];
-const SESSION_DEPTHS = ["commit", "push", "pr", "merge"];
-const SOURCE_DEPTHS = ["agent", "commit", "push", "pr"];
-const DEPTH_LABELS = {
-  off: "Off",
-  agent: "Agent only",
-  commit: "Commit",
-  push: "Push",
-  pr: "Open PR",
-  merge: "Merge"
-};
-const DEPTH_STEP_LABELS = {
-  off: "Off",
-  agent: "Agent only",
-  commit: "Commit only",
-  push: "Then push",
-  pr: "Then open PR",
-  merge: "Then merge"
-};
-const DEPTH_SHORT = {
-  agent: "→ agent",
-  commit: "→ commit",
-  push: "→ push",
-  pr: "→ PR",
-  merge: "→ merge"
-};
-function depthLabel(depth) {
-  return DEPTH_LABELS[depth] || depth || "Off";
-}
-function normalizeDepth(value) {
-  const d = String(value || "").trim().toLowerCase();
-  if (d === "off") return "off";
-  return DEPTHS.includes(d) ? d : "";
-}
-function autopilotChipTitle(run) {
-  var _a2;
-  const target = depthLabel(run.depth);
-  if (run.state === "halted")
-    return "Fast-track stopped: " + (run.reason || "unknown reason");
-  if (run.state === "done")
-    return "Fast-track finished at " + target + " and switched itself off.";
-  const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
-  const skipped = ((_a2 = run.skipped) == null ? void 0 : _a2.length) ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
-  return "Fast-tracking to " + target + where + "\nClick to stop." + skipped;
-}
-function mergeBlockerLabel(ms) {
-  switch (ms.state) {
-    case "dirty":
-      return "conflicts";
-    case "behind":
-      return "behind base";
-    case "draft":
-      return "draft PR";
-    case "blocked":
-      if (ms.checks === "failed") return "checks ✗";
-      if (ms.checks === "pending") return "checks…";
-      return "review needed";
-    default:
-      return ms.mergeable === null ? "checking…" : "can't merge";
-  }
 }
 function caps() {
   var _a2;
@@ -24793,6 +24546,274 @@ function nextStep(inst) {
       return null;
   }
 }
+function orderedInstances(instances2, order) {
+  if (!instances2.length) return { rows: [], nextOrder: order };
+  const byTitle = new Map(instances2.map((i) => [i.title, i]));
+  const rows = [];
+  for (const t of order) {
+    const inst = byTitle.get(t);
+    if (inst) {
+      rows.push(inst);
+      byTitle.delete(t);
+    }
+  }
+  for (const i of instances2) {
+    if (byTitle.has(i.title)) {
+      rows.push(i);
+      byTitle.delete(i.title);
+    }
+  }
+  return { rows, nextOrder: rows.map((i) => i.title) };
+}
+function orderWithAfter(order, title, after) {
+  if (!title || !after || title === after) return order;
+  const next = order.filter((t) => t !== title);
+  const at = next.indexOf(after);
+  if (at < 0) return order;
+  next.splice(at + 1, 0, title);
+  return next;
+}
+const SEARCH_MIN = 6;
+function matchesFilter(inst, filter, aliases) {
+  if (!filter) return true;
+  const hay = [inst.title, aliases[inst.title], inst.branch].filter(Boolean).join(" ").toLowerCase();
+  return hay.indexOf(filter) >= 0;
+}
+const WEDGE_IDLE_S = 20 * 60;
+function attentionItems(instances2) {
+  var _a2;
+  const items = [];
+  for (const inst of instances2 || []) {
+    if (inst.workspace_missing || inst.status === "paused") continue;
+    const act = effectiveActivity(inst);
+    if (act === "clarify")
+      items.push({ p: 0, title: inst.title, reason: "needs your answer", snippet: inst.last_turn || "" });
+    else if (inst.stage === "interrupt")
+      items.push({
+        p: 1,
+        title: inst.title,
+        reason: "pre-commit failed" + (inst.failed_step ? " at " + inst.failed_step : "")
+      });
+    else if (inst.setup && inst.setup.state === "failed")
+      items.push({ p: 1, title: inst.title, reason: "worktree setup failed" });
+    else if (inst.check && inst.check.state === "failed" && !inst.check.stale)
+      items.push({ p: 2, title: inst.title, reason: "checks failing" });
+    else if (inst.stage === "pushed")
+      items.push({ p: 3, title: inst.title, reason: "pushed — ready for PR" });
+    else if (act === "idle" && Number(inst.activity_since) > 0) {
+      const idleFor = Date.now() / 1e3 - Number(inst.activity_since);
+      const un = ((_a2 = inst.diff_stat || {}) == null ? void 0 : _a2.uncommitted) || {};
+      const unfinished = (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
+      if (idleFor > WEDGE_IDLE_S && unfinished)
+        items.push({
+          p: 1,
+          title: inst.title,
+          reason: "idle " + relTime(Number(inst.activity_since)).replace(" ago", "") + " with unfinished work — possibly stuck",
+          snippet: inst.last_turn || ""
+        });
+    }
+  }
+  return items.sort((a, b) => a.p - b.p || a.title.localeCompare(b.title));
+}
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function featureBranchName(branch, slug) {
+  const m = new RegExp(`^feature/${escapeRe(slug)}/(.+)$`).exec(branch);
+  return m ? m[1] : "";
+}
+function branchTail(branch) {
+  const parts = branch.split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "";
+}
+function splitKind(title) {
+  if (title.startsWith("pr-")) return { kind: "pr", slug: title.slice(3) };
+  if (title.startsWith("issue-")) return { kind: "iss", slug: title.slice(6) };
+  return null;
+}
+function sessionLabel(title, branch) {
+  const plain = { text: title, kind: "", name: "", slug: title };
+  if (!title) return plain;
+  const split = splitKind(title);
+  const ticketName = split ? "" : featureBranchName(branch, title);
+  if (!split && !ticketName) return plain;
+  const kind = split ? split.kind : "tix";
+  const slug = split ? split.slug : title;
+  if (!slug) return plain;
+  const name = split ? featureBranchName(branch, title) || branchTail(branch) : ticketName;
+  const useName = name && name !== slug && name !== title ? name : "";
+  return {
+    text: useName ? `(${kind}) ${useName}/${slug}` : `(${kind}) ${slug}`,
+    kind,
+    name: useName,
+    slug
+  };
+}
+function snapshot() {
+  var _a2, _b2;
+  const w = globalThis;
+  try {
+    const list = (_b2 = (_a2 = w.mindflock) == null ? void 0 : _a2.sessions) == null ? void 0 : _b2.call(_a2);
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+function windowName(title) {
+  const raw = String(title || "");
+  if (!raw) return "";
+  const alias = useUi.getState().aliases[raw];
+  if (alias) return alias;
+  const inst = snapshot().find(
+    (i) => i && (i.title === raw || i.display_title === raw)
+  );
+  if (!inst) return raw;
+  return sessionLabel(inst.display_title || inst.title || raw, inst.branch || "").text || raw;
+}
+function slotNumber(title) {
+  const raw = String(title || "");
+  if (!raw) return "";
+  try {
+    const ui = useUi.getState();
+    const listed = snapshot().filter(
+      (i) => i && !isVerifySession(String(i.title || ""))
+    );
+    const { rows } = orderedInstances(listed, ui.order);
+    const filtered = rows.filter((i) => matchesFilter(i, ui.filter, ui.aliases));
+    const local = filtered.filter((i) => !i.device);
+    const remote = filtered.filter((i) => i.device);
+    const idx = [...local, ...remote].findIndex(
+      (i) => i.title === raw || i.display_title === raw
+    );
+    return idx >= 0 && idx < 9 ? String(idx + 1) : "";
+  } catch {
+    return "";
+  }
+}
+function publishWindowName() {
+  const w = globalThis;
+  w.mindflock = w.mindflock || {};
+  w.mindflock.displayName = windowName;
+  w.mindflock.slotNumber = slotNumber;
+}
+const SURFACES = [
+  ["", "Swallow (default)", "#0f1117", "#1e222e"],
+  ["raven", "Raven", "#000000", "#141419"],
+  ["heron", "Heron", "#16181b", "#292d33"],
+  ["cardinal", "Cardinal", "#d51322", "#16060a", "#3d060d"],
+  ["macaw", "Scarlet Macaw", "#1554e0", "#06773a", "#43060a"],
+  ["pheasant", "Golden Pheasant", "#f5b800", "#05361f", "#3f070c"],
+  ["oriole", "Oriole", "#ff7a12", "#140c03", "#421d03"],
+  ["lorikeet", "Rainbow Lorikeet", "#4b1fd6", "#256e0a", "#4f1c05"],
+  ["roller", "Lilac-breasted Roller", "#9b6ef0", "#00736b", "#3a2412"],
+  ["goldfinch", "Goldfinch", "#f2e00d", "#131300", "#33350d"],
+  ["toucan", "Toco Toucan", "#ffb01f", "#08080a", "#181820"],
+  ["quetzal", "Quetzal", "#00a35c", "#4a0512", "#033524"],
+  ["greenjay", "Green Jay", "#1440d6", "#d6b800", "#103a0e"],
+  ["gouldian", "Gouldian Finch", "#00c2b2", "#52157a", "#0e3a19"],
+  ["mallard", "Mallard", "#0d9c62", "#5e330f", "#22262e"],
+  ["kingfisher", "Kingfisher", "#00a8d6", "#5e2404", "#06323f"],
+  ["peacock", "Peacock", "#0a9cb8", "#141f8f", "#05383f"],
+  ["bluejay", "Bluejay", "#1266e6", "#0a0e1c", "#071a44"],
+  ["bunting", "Indigo Bunting", "#3b2ff0", "#08061f", "#150f52"],
+  ["violetear", "Violetear", "#7c2ff0", "#0e0420", "#220c40"],
+  ["mandarin", "Mandarin Duck", "#12a85e", "#f2820f", "#3a1445"],
+  ["flamingo", "Flamingo", "#ff2d8a", "#180110", "#420527"]
+];
+function swatchGradient(tones) {
+  const step = 100 / tones.length;
+  const stops = tones.map(
+    (c, i) => `${c} ${(i * step).toFixed(1)}% ${((i + 1) * step).toFixed(1)}%`
+  );
+  return `linear-gradient(135deg,${stops.join(",")})`;
+}
+const ACCENTS = [
+  ["", "Violetear (default)", "#7d56f4"],
+  ["cardinal", "Cardinal", "#e5484d"],
+  ["oriole", "Oriole", "#f07b3c"],
+  ["goldfinch", "Goldfinch", "#f0cf28"],
+  ["quetzal", "Quetzal", "#44b556"],
+  ["bluejay", "Bluejay", "#3d8bfd"],
+  ["bunting", "Indigo Bunting", "#4f46e5"],
+  ["flamingo", "Flamingo", "#f2559b"],
+  ["pheasant", "Golden Pheasant", "linear-gradient(135deg,#f0d78a,#b8860b)"],
+  ["heron", "Heron", "linear-gradient(135deg,#e2e7ef,#8d95a3)"]
+];
+const DIMS = {
+  accent: { field: "accent", attr: "data-accent", lsKey: "cs_accent" },
+  surface: { field: "surface", attr: "data-surface", lsKey: "cs_surface" }
+};
+function applyStoredAppearance() {
+  for (const dim of Object.values(DIMS)) {
+    let saved = "";
+    try {
+      saved = localStorage.getItem(dim.lsKey) || "";
+    } catch {
+    }
+    if (saved) document.documentElement.setAttribute(dim.attr, saved);
+    else document.documentElement.removeAttribute(dim.attr);
+  }
+}
+function current(dim) {
+  return document.documentElement.getAttribute(dim.attr) || "";
+}
+function apply(dim, name) {
+  if (name) document.documentElement.setAttribute(dim.attr, name);
+  else document.documentElement.removeAttribute(dim.attr);
+  try {
+    if (name) localStorage.setItem(dim.lsKey, name);
+    else localStorage.removeItem(dim.lsKey);
+  } catch {
+  }
+  api("/api/settings", { json: { ui: { [dim.field]: name } } }).catch(() => {
+  });
+  rethemeAll();
+}
+function Appearance(_) {
+  const [accent, setAccent] = reactExports.useState(() => current(DIMS.accent));
+  const [surface, setSurface] = reactExports.useState(() => current(DIMS.surface));
+  const surfaceSwatch = ([name, label, ...tones]) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+    "button",
+    {
+      type: "button",
+      className: "accent-swatch surface-swatch" + (surface === name ? " active" : ""),
+      "data-surface-choice": name,
+      onClick: () => {
+        setSurface(name);
+        apply(DIMS.surface, name);
+      },
+      children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "sw-dot", style: { background: swatchGradient(tones) } }),
+        label
+      ]
+    },
+    name || "default"
+  );
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Appearance" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "One bird per set, painted the way the bird actually is: most give the top bar, the sidebar and the window a hue each — Scarlet Macaw is a cobalt bar over an emerald sidebar over a scarlet window. Swallow, Raven and Heron are the quiet ones. Every set has its own light-mode palette, so the moon toggle in the top bar keeps working inside all of them. Synced to all your devices." }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "surface-swatches", className: "accent-swatches", children: SURFACES.map(surfaceSwatch) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Accents recolor highlights, focus rings, buttons and the terminal cursor — mix freely with any theme set." }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "accent-swatches", className: "accent-swatches", children: ACCENTS.map(([name, label, color]) => /* @__PURE__ */ jsxRuntimeExports.jsxs(
+      "button",
+      {
+        type: "button",
+        className: "accent-swatch" + (accent === name ? " active" : ""),
+        "data-accent-choice": name,
+        onClick: () => {
+          setAccent(name);
+          apply(DIMS.accent, name);
+        },
+        children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "sw-dot", style: { background: color } }),
+          label
+        ]
+      },
+      name || "default"
+    )) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Dark / light mode itself is the moon toggle in the top bar." })
+  ] });
+}
 let _host = null;
 function isEditingTarget(el) {
   if (!el) return false;
@@ -25417,7 +25438,7 @@ function NotificationsBell() {
             "data-session": n.session,
             onClick: () => jump(n.session),
             children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "notif-sess", children: aliases[n.session] || n.session || "—" }),
+              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "notif-sess", children: (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (aliases[n.session] || n.session || "—") }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "notif-text", children: n.text }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "notif-time", children: relTime(n.ts) })
             ]
@@ -25560,6 +25581,10 @@ function notifyOnce(session, state, msg, opts) {
   notifyAt.set(key, now);
   toast(msg, opts);
 }
+function namedSlot(session) {
+  const n = slotNumber(session);
+  return (n ? "[" + n + "] " : "") + displayName(session);
+}
 function instByTitle(title) {
   return instances().find((i) => i.title === title) || null;
 }
@@ -25590,7 +25615,7 @@ function EventToasts() {
           markClarify(env.session);
           const inst = instByTitle(env.session);
           const snip = (inst == null ? void 0 : inst.last_turn) ? " — “" + inst.last_turn + "”" : "";
-          notifyOnce(env.session, "clarify", displayName(env.session) + " needs your input" + snip, {
+          notifyOnce(env.session, "clarify", namedSlot(env.session) + " needs your input" + snip, {
             onClick: () => selectSession(env.session)
           });
         }
@@ -25599,7 +25624,7 @@ function EventToasts() {
     unsubs.push(
       ev.subscribe("session.setup_finished", (env) => {
         if (isReplay(env) || env.new === "ok") return;
-        notifyOnce(env.session, "setupfail", "worktree setup failed on " + displayName(env.session) + " — prompts held", {
+        notifyOnce(env.session, "setupfail", "worktree setup failed on " + namedSlot(env.session) + " — prompts held", {
           onClick: () => selectSession(env.session)
         });
       })
@@ -25607,7 +25632,7 @@ function EventToasts() {
     unsubs.push(
       ev.subscribe("session.check_finished", (env) => {
         if (isReplay(env) || env.new === "ok") return;
-        notifyOnce(env.session, "checkfail", "checks failed on " + displayName(env.session), {
+        notifyOnce(env.session, "checkfail", "checks failed on " + namedSlot(env.session), {
           onClick: () => selectSession(env.session)
         });
       })
@@ -25649,7 +25674,7 @@ function EventToasts() {
           { live: true }
         );
         if (String(env.new || "") === "halted")
-          notifyOnce(env.session, "ftstop", "fast-track stopped on " + displayName(env.session), {
+          notifyOnce(env.session, "ftstop", "fast-track stopped on " + namedSlot(env.session), {
             onClick: () => selectSession(env.session)
           });
       })
@@ -25701,7 +25726,7 @@ function EventToasts() {
         notifyOnce(
           env.session,
           "budget",
-          displayName(env.session) + " exceeded its budget (" + fmtUsd(d.cost || 0) + " of " + fmtUsd(d.budget || 0) + ")",
+          namedSlot(env.session) + " exceeded its budget (" + fmtUsd(d.cost || 0) + " of " + fmtUsd(d.budget || 0) + ")",
           { onClick: () => selectSession(env.session), duration: 8e3 }
         );
       })
