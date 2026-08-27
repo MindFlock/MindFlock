@@ -576,3 +576,70 @@ def test_session_usage_skips_matching_file_without_token_count(_codex_home):
     got = api.session_usage("/repo")
     assert got is not None
     assert got["out"] == 50  # only the file with a token_count contributed
+
+
+# --------------------------------------------------------------------------- #
+# Account profiles (auth profiles)
+#
+# A codex session pinned to an `account` profile runs with CODEX_HOME pointed
+# at that profile's isolated dir, so its rollouts land there and NOWHERE else.
+# A scanner that reads only the server's own $CODEX_HOME reports such a session
+# as having no tokens, no context occupancy and no thread — it looks dead in
+# the UI while it is working.
+# --------------------------------------------------------------------------- #
+def _account_home(tmp_path, monkeypatch, profile_id="work"):
+    """Configure a codex account profile and return its config root."""
+    from backend.providers import auth_profiles
+
+    home = tmp_path / "acct-home"
+    (home / "sessions").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        auth_profiles, "codex_account_root_map", lambda: {str(home): profile_id}
+    )
+    return home
+
+
+def _one_turn(inp, out, ts="2026-07-14T10:01:00Z"):
+    return [(_tot(inp, 0, out), _tot(inp, 0, out), 272000, ts)]
+
+
+def test_session_usage_finds_a_profiled_sessions_rollouts(
+    _codex_home, tmp_path, monkeypatch
+):
+    home = _account_home(tmp_path, monkeypatch)
+    _write_rollout(home, sid="profiled", cwd="/repo/x", turns=_one_turn(111, 22))
+    got = api.session_usage("/repo/x")
+    assert got is not None, "a codex account profile's session reported no usage"
+    assert got["in"] == 111 and got["out"] == 22
+
+
+def test_find_thread_id_sees_a_profiled_sessions_rollout(
+    _codex_home, tmp_path, monkeypatch
+):
+    home = _account_home(tmp_path, monkeypatch)
+    _write_rollout(home, sid="thread-in-account", cwd="/repo/y", turns=_one_turn(1, 1))
+    assert api.find_thread_id("/repo/y", None) == "thread-in-account"
+
+
+def test_both_roots_contribute_to_one_directorys_totals(
+    _codex_home, tmp_path, monkeypatch
+):
+    home = _account_home(tmp_path, monkeypatch)
+    _write_rollout(_codex_home, sid="ambient", cwd="/repo/z", turns=_one_turn(5, 0))
+    _write_rollout(home, sid="profiled", cwd="/repo/z", turns=_one_turn(7, 0))
+    # One machine, one directory, two identities that worked in it.
+    assert api.session_usage("/repo/z")["in"] == 12
+
+
+def test_no_profiles_configured_scans_exactly_the_ambient_root(_codex_home):
+    """The pre-feature scan, unchanged."""
+    assert api._sessions_dirs() == [api._sessions_dir()]
+
+
+def test_the_plan_meter_reads_only_the_ambient_root(_codex_home, tmp_path, monkeypatch):
+    """A rate-limit snapshot describes ONE subscription. Merging accounts here
+    would report whichever identity happened to write last — the same reason
+    the queue's limit gate ignores the meter for a profiled session."""
+    _account_home(tmp_path, monkeypatch)
+    assert api._sessions_dirs(ambient_only=True) == [api._sessions_dir()]
+    assert len(api._sessions_dirs()) == 2  # ...while the per-session scan sees both

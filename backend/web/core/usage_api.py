@@ -48,6 +48,32 @@ def _estimate_percent(win: Optional[dict]) -> Optional[float]:
     return min(100.0, round(100.0 * win["cost"] / budget, 1))
 
 
+def _window_account(p) -> Optional[str]:
+    """Which identity's transcripts the plan window should be estimated from.
+
+    A plan window belongs to ONE subscription, and ``usage_live()`` reads
+    whatever credentials the SERVER sees — the CLI's ambient login. With claude
+    account profiles configured, an unscoped transcript estimate would price
+    that plan's window with turns billed to a different account and anchor it
+    on a message the plan never saw. Scope it to the ambient login so the
+    dollar estimate and the live percentage describe the same subscription; the
+    other identities have their own rows in the "By account" table.
+
+    ``None`` (= the machine-wide walk, unchanged) when no account profile
+    exists, which is every install that does not use the feature.
+    """
+    if p.name != "claude":
+        return None
+    try:
+        from backend.providers import auth_profiles, usage_history
+
+        if auth_profiles.claude_account_root_map():
+            return usage_history.AMBIENT_ACCOUNT
+    except Exception:  # noqa: BLE001 — scoping is enrichment only
+        pass
+    return None
+
+
 def _usage_window_for(p) -> Optional[dict]:
     """The active usage window for provider ``p`` (or None) — the same
     computation the default provider has always used, factored out so it can run
@@ -66,7 +92,7 @@ def _usage_window_for(p) -> Optional[dict]:
         # providers get a window only from their own usage_live() (Codex reads
         # its on-disk rate_limits snapshot).
         win = (
-            usage_history.current_window(float(uw["hours"]))
+            usage_history.current_window(float(uw["hours"]), _window_account(p))
             if p.name == "claude"
             else None
         )
@@ -133,6 +159,44 @@ def _usage_window_for(p) -> Optional[dict]:
     return None
 
 
+def _account_usage_entries(p) -> Optional[list]:
+    """Per-ACCOUNT period totals for provider ``p``, or None.
+
+    Only claude has per-account transcript attribution today (each auth-profile
+    account dir is its own scan root), and the breakdown only appears once at
+    least one claude account profile exists — a single ambient identity has
+    nothing to break down. Entries: ``{id, label, periods}``, ambient first.
+    """
+    if p.name != "claude":
+        return None
+    from backend.providers import auth_profiles, usage_history
+
+    profiles = [
+        pr
+        for pr in auth_profiles.load_profiles()
+        if pr.kind == "account" and pr.resolved_provider() == "claude"
+    ]
+    if not profiles:
+        return None
+    per = usage_history.windows_by_account()
+    out = [
+        {
+            "id": auth_profiles.AMBIENT_ID,
+            "label": "Default login",
+            "periods": per.get(usage_history.AMBIENT_ACCOUNT) or None,
+        }
+    ]
+    for pr in profiles:
+        out.append(
+            {
+                "id": pr.id,
+                "label": pr.display_label(),
+                "periods": per.get(pr.id) or None,
+            }
+        )
+    return out
+
+
 def _provider_usage_entry(p) -> dict:
     """Per-provider usage descriptor for the ``providers`` list in /api/usage."""
     srv = _server()
@@ -154,4 +218,10 @@ def _provider_usage_entry(p) -> dict:
         entry["periods"] = p.usage_periods()
     except Exception:  # noqa: BLE001 — history is enrichment only
         entry["periods"] = None
+    try:
+        accounts = _account_usage_entries(p)
+        if accounts:
+            entry["accounts"] = accounts
+    except Exception:  # noqa: BLE001 — the breakdown is enrichment only
+        pass
     return entry

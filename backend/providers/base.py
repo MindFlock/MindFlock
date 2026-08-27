@@ -413,14 +413,20 @@ class BaseProvider:
         return thread_markers.read(session_name)
 
     def record_thread(
-        self, session_name: str, workdir: str, since_ts: Optional[float] = None
+        self,
+        session_name: str,
+        workdir: str,
+        since_ts: Optional[float] = None,
+        profile_id: str = "",
     ) -> None:
         """Discover and persist the conversation id this window is running
         (feeding :meth:`resume_thread_id`). ``since_ts`` is the current tmux
         pane's creation time — only conversations started after it belong to
-        this run. Called best-effort from the UI poll; must be cheap. Default:
-        provider has no discoverable thread (Claude records via its hooks
-        instead)."""
+        this run. ``profile_id`` is the auth profile the session runs as, so
+        the id is also remembered per account and survives a swap away and
+        back (:mod:`backend.providers.thread_markers`). Called best-effort from
+        the UI poll; must be cheap. Default: provider has no discoverable
+        thread (Claude records via its hooks instead)."""
         return None
 
     # --- usage-limit detection (roadmap D) -------------------------------- #

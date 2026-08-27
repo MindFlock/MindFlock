@@ -27,6 +27,7 @@ import { DiffTab } from "./DiffTab";
 import { HistoryOverlay } from "./HistoryOverlay";
 import { QueueTab } from "./QueueTab";
 import { SessionUsageChip } from "../usage/SessionUsageChip";
+import { AccountChip } from "./AccountChip";
 
 type Tab = "agent" | "shell" | "diff" | "queue";
 
@@ -510,6 +511,7 @@ export function Pane({
             {chip.label}
           </span>
         </div>
+        <AccountChip inst={inst} />
         <SessionUsageChip inst={inst} />
         <span className={"state" + (wsState !== "connected" ? " state-bad" : "")}>{wsState}</span>
         <button

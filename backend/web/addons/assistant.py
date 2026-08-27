@@ -189,11 +189,36 @@ def _ensure_assistant_session():
     provider = providers.resolve(program)
     # Natural quit -> fresh; unnatural death -> resume the conversation.
     resume = not provider.is_natural_exit(_read_exit_marker(name))
+    # The Assistant is a session like any other as far as identity goes: with
+    # an app-wide default account configured, it runs as that account rather
+    # than quietly spending the CLI's ambient login. Same tri-state resolution
+    # as everywhere else ("" = inherit the default), and an exact no-op when no
+    # profile applies. Local-model routing composes the same way, and wins.
+    prof_env, prof_args = providers.launch_script.profile_overlay(program)
+    local_env, local_args = providers.launch_script.local_overlay(program)
     cmd = provider.build_launch_command(
-        providers.LaunchContext(program=program, resume=resume, session_name=name)
+        providers.LaunchContext(
+            program=program,
+            resume=resume,
+            session_name=name,
+            launch_args=tuple(prof_args) + tuple(local_args),
+        )
     )
     _clear_exit_marker(name)
     wrapped = _wrap_launch_cmd(cmd, name)
+    # Env goes in FRONT of the wrapped command (it runs under `sh -c`, and the
+    # `||` fallback chains mean a `K=V cmd` prefix would cover only the first
+    # link). Credentials are routed to a 0600 file instead of the argv.
+    overlay_env = {**prof_env, **local_env}
+    if overlay_env:
+        from backend.session import secret_env as _secret_env
+
+        plain, secret = _secret_env.split(overlay_env)
+        prefix = providers.launch_script.env_exports(plain)
+        path = _secret_env.write(name, secret)
+        if path:
+            prefix = _secret_env.source_prefix(path) + prefix
+        wrapped = prefix + wrapped
     try:
         created = subprocess.run(
             [

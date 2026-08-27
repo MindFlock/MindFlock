@@ -110,6 +110,7 @@ def test_event_names_vocabulary_is_complete():
         "session.test_plan_checked",
         "session.test_plan_gave_up",
         "session.test_plan_due",
+        "session.profile_changed",
     }
 
 

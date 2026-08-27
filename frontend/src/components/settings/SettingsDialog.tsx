@@ -19,6 +19,7 @@ import { Mobile } from "./screens/Mobile";
 import { Connections } from "./screens/Connections";
 import { Notifications } from "./screens/Notifications";
 import { CodingCli } from "./screens/CodingCli";
+import { Accounts } from "./screens/Accounts";
 import { LocalModel } from "./screens/LocalModel";
 import { Workspace } from "./screens/Workspace";
 import { Ide } from "./screens/Ide";
@@ -42,6 +43,7 @@ const SCREENS: Array<{ key: string; label: string; el: (p: ScreenProps) => React
   { key: "connections", label: "Connections", el: (p) => <Connections {...p} /> },
   { key: "notifications", label: "Notifications", el: (p) => <Notifications {...p} /> },
   { key: "coding", label: "Agent CLI", el: (p) => <CodingCli {...p} /> },
+  { key: "accounts", label: "Accounts", el: (p) => <Accounts {...p} /> },
   { key: "localmodel", label: "Local model", el: (p) => <LocalModel {...p} /> },
   { key: "workspace", label: "Workspace", el: (p) => <Workspace {...p} /> },
   { key: "ide", label: "IDE", el: (p) => <Ide {...p} /> },

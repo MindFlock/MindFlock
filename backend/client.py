@@ -38,6 +38,7 @@ __all__ = [
     "discover",
     "get",
     "post",
+    "put",
     "delete",
     "ws_url",
 ]
@@ -129,6 +130,18 @@ def post(
     """POST ``payload`` as JSON to ``base + path``; returns the decoded JSON body."""
     data = json.dumps(payload or {}).encode("utf-8")
     return _request(base + path, data, timeout)
+
+
+def put(
+    base: str,
+    path: str,
+    payload: Optional[dict] = None,
+    timeout: float = REQUEST_TIMEOUT_S,
+) -> Any:
+    """PUT ``payload`` as JSON to ``base + path`` (used by ``mindflock
+    accounts`` → PUT /api/settings/auth-profiles)."""
+    data = json.dumps(payload or {}).encode("utf-8")
+    return _request(base + path, data, timeout, method="PUT")
 
 
 def delete(base: str, path: str, timeout: float = REQUEST_TIMEOUT_S) -> Any:

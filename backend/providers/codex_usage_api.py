@@ -52,13 +52,61 @@ def _sessions_dir() -> Path:
     return _codex_home() / "sessions"
 
 
-def _iter_rollouts_newest_first(limit: int = 200) -> List[Path]:
-    """Rollout jsonl paths, newest mtime first (bounded)."""
-    root = _sessions_dir()
+def _codex_homes() -> List[Path]:
+    """Every Codex config root whose rollouts belong to this machine's user:
+    the ambient one, plus each codex ``account`` auth profile's isolated
+    ``CODEX_HOME``.
+
+    A session pinned to such a profile writes its rollouts there and nowhere
+    else, so a scan of the ambient root alone reports it as having no tokens,
+    no context occupancy and no thread — the session looks dead in the UI
+    while it is working. Best-effort: a settings problem degrades to the
+    ambient root rather than breaking the scan.
+    """
+    roots = [_codex_home()]
     try:
-        files = [p for p in root.rglob("rollout-*.jsonl") if p.is_file()]
-    except Exception:  # noqa: BLE001 — no sessions dir / permission: no data
-        return []
+        from . import auth_profiles
+
+        for d in auth_profiles.codex_account_root_map():
+            p = Path(d)
+            if p not in roots:
+                roots.append(p)
+    except Exception:  # noqa: BLE001 — profiles are enrichment only
+        pass
+    return roots
+
+
+def _sessions_dirs(ambient_only: bool = False) -> List:
+    """Every ``<root>/sessions`` to scan. The ambient one always comes from
+    :func:`_sessions_dir`, which stays the single seam the tests patch."""
+    dirs = [_sessions_dir()]
+    if ambient_only:
+        return dirs
+    ambient_home = _codex_home()
+    for home in _codex_homes():
+        if home != ambient_home:
+            dirs.append(home / "sessions")
+    return dirs
+
+
+def _iter_rollouts_newest_first(
+    limit: int = 200, ambient_only: bool = False
+) -> List[Path]:
+    """Rollout jsonl paths, newest mtime first (bounded), across every config
+    root — or only the ambient one when ``ambient_only``.
+
+    ``ambient_only`` exists for the plan-usage meter: a rate-limit snapshot
+    describes ONE subscription, so merging accounts there would report
+    whichever identity happened to write last. Per-session and rolling-total
+    scans want every root, because those are about this machine's work.
+    """
+    roots = _sessions_dirs(ambient_only)
+    files: List[Path] = []
+    for root in roots:
+        try:
+            files.extend(p for p in root.rglob("rollout-*.jsonl") if p.is_file())
+        except Exception:  # noqa: BLE001 — no sessions dir / permission: no data
+            continue
 
     def _mtime(p: Path) -> float:
         # A file can vanish between the glob and the stat (Codex pruning a
@@ -150,7 +198,7 @@ def _normalize_rate_limits(rl: dict) -> Optional[dict]:
 
 def _fetch() -> Optional[dict]:
     """Newest rollout file's last rate-limit snapshot, normalized, or None."""
-    for path in _iter_rollouts_newest_first(limit=8):
+    for path in _iter_rollouts_newest_first(limit=8, ambient_only=True):
         last_rl = None
         for doc in _read_jsonl(path):
             rl = _rate_limits_of(doc)

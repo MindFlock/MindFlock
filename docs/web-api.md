@@ -137,6 +137,24 @@ provider (`coding_cli.default_launch_args`, see
 [configuration.md](configuration.md)); an explicit list — **even `[]`** — is used
 verbatim, so a default the caller toggled off is honored, not re-applied.
 
+`profile_id` (optional) pins the auth profile the session's CLI runs under
+(see [accounts.md](accounts.md)), with the same tri-state: absent/`""` =
+inherit the app-wide default profile, `"default"` = explicitly the CLI's own
+login, anything else must name a configured profile → **400** on an unknown
+id.
+
+`profile_model` (optional) overrides that profile's own model pin for this
+session only — an OpenRouter model id for a gateway profile, the CLI's model
+flag elsewhere. Blank keeps the profile's pin (which blank in turn means the
+CLI's own default). Rejected with **400** when longer than 200 chars or
+carrying a newline/NUL, since the value ends up in an env var and a launch
+flag.
+
+The 202 body is the usual session object, plus a `note` when the chosen account
+has no verified route for the chosen agent — the session will run on the CLI's
+own login, and the web UI warns about that at selection time while API and CLI
+callers would otherwise never hear it.
+
 ### Lifecycle
 
 | Method | Path | Effect |
@@ -144,7 +162,8 @@ verbatim, so a default the caller toggled off is honored, not re-applied.
 | DELETE | `/api/instances/{title}` | Kill session, remove worktree + branch |
 | POST | `/api/instances/{title}/close` | End tmux, **keep** worktree; recorded in recently-closed |
 | POST | `/api/instances/{title}/cleanup` | Kill + permanently delete the workspace dir (+ close its Cursor window) |
-| POST | `/api/instances/{title}/copy` → 202 | New in-place session `<title>-copy` sharing the same worktree |
+| POST | `/api/instances/{title}/copy` → 202 | New in-place session `<title>-copy` sharing the same worktree (inherits the source's agent **and** auth profile) |
+| POST | `/api/instances/{title}/profile` | Hot-swap the session's auth profile. Body `{profile_id}` (`""` = inherit the global default, `"default"` = the CLI's own login) plus optional `profile_model` — **sending the key at all is what matters**: present sets this session's model override, absent keeps the current pin on a model-only no-op and *clears* it when the identity changes (a pin belongs to the catalog of the account it was picked from). Persists the pin and restarts the agent under the new identity; the worktree, shell pane and diff survive, and so does *that account's* conversation in this window — a thread belongs to the account that created it, so the marker is re-pointed at the incoming identity's own thread before the relaunch. → `{ok, profile_id, note, resumed}`, where `note` warns when the session's CLI has no route for the profile and `resumed` says whether the new identity had a conversation here to go back to (false = it starts fresh). Re-picking the identity and model already in force is a no-op that answers `{ok, unchanged: true}` **without** restarting the agent. 400 on an unknown id or a malformed model (nothing is mutated); 500 if the agent was killed and did not come back |
 | POST | `/api/instances/{title}/pause` | Pause (commit, detach, remove worktree, keep branch) |
 | POST | `/api/instances/{title}/resume` | Resume a paused session |
 
@@ -654,11 +673,13 @@ or the UI starts writing the literal mask into the store as a password.
 | POST | `/api/settings/test/ticketing` | Validate the active ticketing connection |
 | POST | `/api/settings/ticketing/states` | Live workflow-state list for a ticketing source |
 | GET/PUT | `/api/settings/ticketing/sources` | The multi-source ticketing config (per-source provider/repo/state) |
+| GET/PUT | `/api/settings/auth-profiles` | The auth-profiles list (multiple Claude accounts / OpenRouter keys — see [accounts.md](accounts.md)) plus `default_profile` and the `kinds` catalog. Same masked round-trip as the ticketing sources: `api_key` reads back as `•••set`, and a PUT that sends `""`/the mask keeps the stored key (matched by `id` — so **renaming** an id counts as a new profile and must re-send the real key; a key-kind profile that would land keyless is a 400, not a silent no-auth store). PUT validates everything **before writing anything** (a 400 always means nothing changed): ids (slug, unique), kinds, and a body `default_profile` against the incoming list. `account`-kind profiles get their isolated config dir created (0700). GET reports an env-pinned default as `default_profile` with `default_profile_env` + `default_profile_locked: true` when `$MINDFLOCK_AUTH_PROFILE` is set in the server's environment (it wins over the stored value at launch, so reporting the stored one would have the screen name one identity while every session runs as another). GET also derives `resolved_config_dir`, `login_command` and `supported_agents` per profile for the Settings → Accounts cards and the New dialog's agent steering. Removing a profile that live sessions are **pinned** to is a **409** naming them (`{error, in_use: [title]}`) — they would fall back to the CLI's own login without being told; resend with `force: true` to proceed anyway. Sessions that merely *inherit* the app default never block a removal |
+| POST | `/api/settings/test/openrouter` | Validate an OpenRouter key (body `{api_key}` or `{profile_id}` for the stored one, optional `base_url`) → `{ok, label, usage, limit, models, error}` — the key's real spend from OpenRouter's `/key` plus the model list that turns the profile's model field into a picker. Always 200; branch on `ok` |
 | GET | `/api/providers/manage` | Custom coding-CLI providers (user TOMLs) for the Settings CRUD screen |
 | POST/PUT/DELETE | `/api/providers` · `/api/providers/{name}` | Create / update / delete a custom provider TOML. The body may carry `launch_args` (a list of saved flag tokens) alongside `resume_flag`/`skip_perms_flag`/`trust_patterns`/…; it is validated (400 on invalid) and all string values are TOML-escaped via `json.dumps`, so quotes in names/flags/patterns can't corrupt the file. |
 | GET | `/api/providers/status` | Per-provider connection status → `{providers: [{name, aliases, binary, installed, path, authenticated, auth_detail, auth_known, login_command, install_hint, is_default}], default}`. The catch-all `generic` provider is omitted. This is the source for the Settings → **Agent CLI** default-provider picker — it reads `installed`/`path` to list only installed CLIs and self-correct a missing default. The `authenticated`/`auth_detail`/`auth_known`/`login_command` fields are still returned but **no longer read by the UI** (sign-in is delegated to each CLI; see [providers.md](providers.md)). |
-| WS | `/api/providers/{name}/login-terminal` | **Deprecated / unused by the UI.** PTY↔websocket bridge to a throwaway tmux session running the provider's login flow in `$HOME`. Still served, but no frontend surfaces the one-click login any more (each CLI prompts for sign-in itself). Closes 4500 with an `{type:"error"}` frame for an unknown provider or a spawn failure. |
-| POST | `/api/providers/{name}/login-close` | **Deprecated / unused by the UI.** Best-effort teardown of a login session. Always `200 {ok: true}`. |
+| WS | `/api/providers/{name}/login-terminal` | **Unused by the UI.** PTY↔websocket bridge to a throwaway tmux session running the provider's login flow in `$HOME`. No frontend surfaces the one-click login any more (each CLI prompts for sign-in itself), but the bridge stays served and now takes `?profile=<id>` to run the login under an auth profile's isolation env (the credential lands in that account's config dir — see [accounts.md](accounts.md)). Closes 4500 with an `{type:"error"}` frame for an unknown provider/profile or a spawn failure. |
+| POST | `/api/providers/{name}/login-close` | **Unused by the UI.** Best-effort teardown of a login session (`?profile=<id>` matches the terminal above). Always `200 {ok: true}`. |
 
 **Doctor** (addon id `doctor`) — `GET /api/doctor` (listed above). Beyond
 `checks` and `ok`, the payload carries two fields that ride along because this

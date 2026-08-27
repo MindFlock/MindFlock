@@ -176,6 +176,8 @@ def hook_command(state: str, marker_dir=None, record_thread: bool = True) -> str
         "json.dumps({'state':%s,'ts':int(time.time())}))" % json.dumps(state),
     ]
     if record_thread:
+        from . import auth_profiles
+
         lines += [
             "sid=str(p.get('session_id') or '')",
             "if sid:",
@@ -184,6 +186,17 @@ def hook_command(state: str, marker_dir=None, record_thread: bool = True) -> str
             "'.mindflock-assistant','.thread-markers')",
             "    os.makedirs(td,exist_ok=True)",
             "    open(os.path.join(td,s+'.thread'),'w').write(sid)",
+            # The hook runs INSIDE the session, so it can see which auth
+            # profile the session was launched under and file a per-account
+            # memory of this conversation beside the current marker. That is
+            # what lets a swap back to this identity resume the thread it
+            # actually owns instead of starting over. Absent for a session on
+            # the CLI's ambient login, which writes only the line above — the
+            # pre-profiles behaviour, byte for byte.
+            "    a=re.sub(r'[^A-Za-z0-9_.-]','_',os.environ.get(%s) or '')"
+            % json.dumps(auth_profiles.PROFILE_ID_ENV),
+            "    if a:",
+            "        open(os.path.join(td,s+'@'+a+'.thread'),'w').write(sid)",
         ]
     code = "\n".join(lines) + "\n"
     return "python3 -c %s || true %s" % (shlex.quote(code), _HOOK_TAG)

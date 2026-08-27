@@ -37,6 +37,7 @@ __all__ = [
     "launch_command",
     "env_exports",
     "local_overlay",
+    "profile_overlay",
 ]
 
 #: Name of the generated shell function that types the seed prompt into a CLI
@@ -189,6 +190,40 @@ def local_overlay(program: str) -> tuple[dict, tuple]:
         return {}, ()
 
 
+def profile_overlay(
+    program: str, profile_id: str = "", model: str = ""
+) -> tuple[dict, tuple]:
+    """``(env, launch_args)`` running ``program`` under an auth profile.
+
+    ``profile_id`` is the session's stored id (``""`` = inherit the global
+    default profile; ``"default"`` = explicitly none — see
+    :mod:`backend.providers.auth_profiles`); ``model`` is the session's own
+    model override of the profile's pin. Same contract and same defensive
+    posture as :func:`local_overlay`: ``({}, ())`` means "behave exactly as
+    before", and a settings read must never break a launch.
+    """
+    try:
+        from . import auth_profiles
+
+        env, args = auth_profiles.launch_overlay(program, profile_id, model)
+    except Exception:  # noqa: BLE001
+        return {}, ()
+    if args:
+        # Local models outrank an auth profile, on every launch path. The env
+        # halves already resolve that way (callers merge ``{**prof, **local}``),
+        # but the FLAG halves only concatenate — and a profile's ``-m``/
+        # ``--model`` landing after the local overlay's would win on every CLI
+        # that takes the last flag, quietly routing an on-machine session out
+        # to a gateway. Dropping the profile's routing flags when local models
+        # are live keeps the one flag the privacy story can't lose.
+        try:
+            if local_overlay(program)[1]:
+                args = ()
+        except Exception:  # noqa: BLE001 — a settings read must never block a launch
+            pass
+    return env, args
+
+
 def launch_command(
     program: str,
     prompt_path: str = "",
@@ -214,14 +249,21 @@ def launch_command(
     # Local-model routing (Ollama / LM Studio / any OpenAI-compatible server):
     # its flags ride on the base command and its env is exported in the preamble,
     # so the CLI talks to localhost and nothing leaves the machine. Empty when
-    # the feature is off.
+    # the feature is off. The auth-profile overlay composes the same way (this
+    # standalone path has no per-session pin, so it runs under the app-wide
+    # default profile).
     local_env, local_args = local_overlay(program)
-    args = tuple(local_args) + tuple(launch_args)
+    prof_env, prof_args = profile_overlay(program)
+    args = tuple(local_args) + tuple(prof_args) + tuple(launch_args)
     if args:
         base = "%s %s" % (base, " ".join(shlex.quote(str(a)) for a in args))
     if skip_permissions and spec.skip_perms_flag:
         base = "%s %s" % (base, spec.skip_perms_flag)
-    preamble = env_exports(local_env)
+    # On a key collision the LOCAL overlay wins, here and on every other launch
+    # path: local models are the privacy feature, and an auth profile quietly
+    # re-routing a session off the machine is the one outcome that story cannot
+    # afford.
+    preamble = env_exports({**prof_env, **local_env})
     if not prompt_path:
         return preamble, base
     if spec.prompt_arg:

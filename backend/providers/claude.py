@@ -716,6 +716,21 @@ def _claude_user_config_paths():
     home = os.path.join(os.path.expanduser("~"), ".claude.json")
     if home not in paths:
         paths.append(home)
+    # Every claude auth-profile account dir too. Trust is a property of the
+    # FOLDER, not of an identity — MindFlock created the worktree, so it is
+    # trusted no matter which login opens it — and a session pinned to an
+    # account reads that account's config, where an unseeded entry means the
+    # run stalls at an invisible "do you trust this folder?" gate. Seeding all
+    # of them is idempotent and needs no knowledge of which one will run.
+    try:
+        from . import auth_profiles
+
+        for d in auth_profiles.claude_account_root_map():
+            p = os.path.join(d, ".claude.json")
+            if p not in paths:
+                paths.append(p)
+    except Exception:  # noqa: BLE001 — pre-trust is best-effort
+        pass
     return paths
 
 
@@ -848,8 +863,9 @@ def _ts_epoch(s) -> Optional[float]:
 
 def _claude_project_dirs(workdir: str):
     """Claude Code transcript project dirs for ``workdir``, across every
-    ``~/.claude*`` config root (plus ``$CLAUDE_CONFIG_DIR``) — wrappers and
-    alternate installs may keep separate config dirs. Existing dirs only."""
+    ``~/.claude*`` config root (plus ``$CLAUDE_CONFIG_DIR`` and each claude
+    auth-profile account dir) — wrappers, alternate installs, and per-account
+    profiles all keep separate config dirs. Existing dirs only."""
     import os
     import re
 
@@ -867,6 +883,15 @@ def _claude_project_dirs(workdir: str):
                 d = os.path.join(home, name)
                 if os.path.isdir(d):
                     roots.add(d)
+    # Account-profile dirs live under ~/.mindflock/accounts — outside the
+    # ~/.claude* sweep — so without this a work-account session would report
+    # zero tokens.
+    try:
+        from backend.providers import auth_profiles
+
+        roots.update(auth_profiles.claude_account_roots())
+    except Exception:  # noqa: BLE001 — profiles are enrichment only
+        pass
     out = []
     for root in roots:
         proj = os.path.join(root, "projects", encoded)

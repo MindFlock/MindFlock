@@ -13,7 +13,12 @@ import {
 } from "react";
 import type { Config, Instance } from "../../api/types";
 import { api } from "../../api/client";
-import { refreshInstances, refreshConfig, queryClient } from "../../state/queries";
+import {
+  refreshInstances,
+  refreshConfig,
+  queryClient,
+  useAuthProfiles,
+} from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import {
@@ -377,6 +382,16 @@ export function NewSessionDialog() {
   const [searchSel, setSearchSel] = useState(0);
   const [presetValue, setPresetValue] = useState("");
   const [savedPresets, setSavedPresets] = useState<Preset[]>([]);
+  // Auth profile pin: "" = inherit the app-wide default account; "default" =
+  // explicitly the CLI's own login; anything else = a configured profile id.
+  const [profileId, setProfileId] = useState("");
+  // This session's model override of the account's own pin ("" = the pin).
+  const [profileModel, setProfileModel] = useState("");
+  // Model ids the selected OpenRouter key can reach, per profile id — fetched
+  // lazily on selection so the Model field is a picker, not a guess.
+  const [profileModels, setProfileModels] = useState<Record<string, string[]>>({});
+  const authProfiles = useAuthProfiles().data;
+  const selectedProfile = (authProfiles?.profiles || []).find((p) => p.id === profileId);
   const launchDefaults = useRef<Record<string, string>>({});
   const titleRef = useRef<HTMLInputElement | null>(null);
   const launchRef = useRef<HTMLDetailsElement | null>(null);
@@ -420,6 +435,11 @@ export function NewSessionDialog() {
     setSearchSel(0);
     setActiveTemplate("");
     setPresetValue("");
+    setProfileId("");
+    setProfileModel("");
+    // Refetched per open: the dialog outlives the page's whole session, and a
+    // rotated OpenRouter key must not keep offering the old key's catalog.
+    setProfileModels({});
     setSavedPresets(loadUserPresets());
     let live = true;
     // The folder suggestions get a request of their own rather than a place in
@@ -629,6 +649,75 @@ export function NewSessionDialog() {
     setLaunchArgs((launchDefaults.current[v.toLowerCase()] || "").trim());
   }, []);
 
+  /** The canonical provider name behind whatever is in the Agent field —
+   * mirrors the backend's resolve(): basename of the executable token,
+   * matched against each provider's name/aliases/command. Without this a
+   * path ("/usr/local/bin/claude") or an alias ("agy") the backend routes
+   * fine would trip the no-route warning and get auto-overwritten. */
+  const canonAgent = useCallback(
+    (raw: string): string => {
+      const tok = (raw.trim().split(/\s+/)[0] || "").toLowerCase();
+      const base = tok.split("/").pop() || tok;
+      const m = providers.find(
+        (p) =>
+          p.name.toLowerCase() === base ||
+          (p.aliases || []).some((a) => String(a).toLowerCase() === base) ||
+          String(p.command || "").toLowerCase() === base
+      );
+      return m ? m.name : base;
+    },
+    [providers]
+  );
+
+  /** Picking an account steers the Agent field: with an OpenRouter (or any
+   * key) account the identity is the choice that matters, so an agent the
+   * account can't route is auto-swapped to one it can — the alternative is a
+   * session that silently launches on the CLI's own login. A profile with raw
+   * env overrides applies to every CLI, so it never steers. */
+  const setAccount = (id: string) => {
+    setProfileId(id);
+    setProfileModel("");
+    const prof = (authProfiles?.profiles || []).find((p) => p.id === id);
+    if (!prof) return;
+    const supported = prof.supported_agents || [];
+    const hasEnv = !!prof.env && Object.keys(prof.env).length > 0;
+    if (supported.length && !hasEnv && !supported.includes(canonAgent(program))) {
+      const preferred =
+        prof.provider && supported.includes(prof.provider) ? prof.provider : supported[0];
+      setAgent(preferred);
+    }
+    // OpenRouter accounts get a model picker: ask the key what it can reach
+    // (cached per profile; a failed fetch just leaves the free-text field).
+    if (prof.kind === "openrouter" && !profileModels[id]) {
+      (async () => {
+        try {
+          const r = await api<{ ok?: boolean; models?: string[] }>(
+            "/api/settings/test/openrouter",
+            { json: { profile_id: id } }
+          );
+          if (r?.ok && r.models?.length)
+            setProfileModels((m) => ({ ...m, [id]: r.models || [] }));
+        } catch {
+          /* the free-text input still works */
+        }
+      })();
+    }
+  };
+
+  // The route warning for the CURRENT combination (the auto-swap above keeps
+  // this rare — it appears when the user manually re-picks an unrouted agent).
+  const routeWarning = (() => {
+    if (!selectedProfile) return "";
+    const supported = selectedProfile.supported_agents || [];
+    const hasEnv = !!selectedProfile.env && Object.keys(selectedProfile.env).length > 0;
+    if (hasEnv || !supported.length) return "";
+    if (supported.includes(canonAgent(program))) return "";
+    return (
+      `“${selectedProfile.label || selectedProfile.id}” has no route for ${program || "this agent"} — ` +
+      `the session would run on the CLI's own login. It works with: ${supported.join(", ")}.`
+    );
+  })();
+
   const fillFromTemplate = (t: Template) => {
     if (t.program) setAgent(t.program);
     if (t.repo_path) folderDo({ t: "user-set", path: t.repo_path });
@@ -744,6 +833,10 @@ export function NewSessionDialog() {
     if (promptVal) body.prompt = promptVal;
     // Sent EXPLICITLY (even empty) so a toggled-off default is honored.
     body.launch_args = tokenize(launchArgs);
+    // Absent = inherit the app-wide default account (same tri-state as
+    // launch_args), so only an explicit pick rides along.
+    if (profileId) body.profile_id = profileId;
+    if (profileId && profileModel.trim()) body.profile_model = profileModel.trim();
     if (provision) {
       body.provisioned = true;
       body.workspace_strategy = strategy;
@@ -1020,7 +1113,94 @@ export function NewSessionDialog() {
                 ))}
               </select>
             </label>
+            {(authProfiles?.profiles || []).length > 0 && (
+              <label className="nf-agent">
+                <span className="nf-agent-head">
+                  Account
+                  <button
+                    type="button"
+                    id="new-account-manage"
+                    className="linklike"
+                    title="Manage accounts in Settings"
+                    onClick={() => {
+                      closeDialog();
+                      useUi.getState().openDialogFor("settings", "accounts");
+                    }}
+                  >
+                    Manage
+                  </button>
+                </span>
+                <select
+                  id="new-account"
+                  title="Which identity this session's CLI runs as"
+                  value={profileId}
+                  onChange={(e) => setAccount(e.target.value)}
+                >
+                  <option value="">
+                    {authProfiles?.default_profile
+                      ? `App default (${authProfiles.default_profile})`
+                      : "App default (CLI's own login)"}
+                  </option>
+                  <option value="default">CLI's own login</option>
+                  {(authProfiles?.profiles || []).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label || p.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
+
+          {selectedProfile && selectedProfile.kind !== "account" && (
+            <div className="nf-quick">
+              <label className="nf-agent" style={{ flex: 1 }}>
+                <span className="nf-agent-head">Model</span>
+                {(profileModels[profileId] || []).length ? (
+                  <select
+                    id="new-account-model"
+                    title="Model this session runs on (through the selected account)"
+                    value={profileModel}
+                    onChange={(e) => setProfileModel(e.target.value)}
+                  >
+                    <option value="">
+                      {selectedProfile.model
+                        ? `Account default (${selectedProfile.model})`
+                        : "Account default"}
+                    </option>
+                    {/* A value typed before the catalog landed (or absent from
+                        it) stays VISIBLE and selected — coercing the display
+                        to "Account default" while still submitting it would
+                        launch a model the form no longer shows. */}
+                    {profileModel &&
+                      !(profileModels[profileId] || []).includes(profileModel) && (
+                        <option value={profileModel}>{profileModel} (custom)</option>
+                      )}
+                    {(profileModels[profileId] || []).map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    id="new-account-model"
+                    type="text"
+                    autoComplete="off"
+                    placeholder={
+                      selectedProfile.model
+                        ? `Account default (${selectedProfile.model})`
+                        : "anthropic/claude-sonnet-4.5"
+                    }
+                    value={profileModel}
+                    onChange={(e) => setProfileModel(e.target.value)}
+                  />
+                )}
+              </label>
+            </div>
+          )}
+
+          {routeWarning && <p className="nf-git-nudge">{routeWarning}</p>}
           {/* The datalist mount slots.js populates from /api/providers. */}
           <datalist id="provider-list"></datalist>
 

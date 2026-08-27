@@ -32,6 +32,7 @@ import time
 from typing import List, Optional, Tuple
 
 from backend import cmd as cmd_pkg
+from backend.session import secret_env
 from backend import log
 
 from . import pty as pty_pkg
@@ -167,14 +168,26 @@ class TmuxSession:
         # ``program`` remains the classification string used elsewhere.
         launch = self.launch_command or self.program
         if self.extra_env:
-            # tmux runs the command string through the shell, so an env(1)
-            # prefix reaches the program; values are shell-quoted. The session
-            # env is ALSO set below (post-create) for future panes/windows.
-            pairs = " ".join(
-                "%s=%s" % (k, shlex.quote(str(v)))
-                for k, v in sorted(self.extra_env.items())
-            )
-            launch = "env %s %s" % (pairs, launch)
+            # Credentials never ride argv. `env KEY=… cmd` puts the value in
+            # the child's /proc/<pid>/cmdline for the whole life of the session
+            # and in this tmux client's while it runs, so any other local user
+            # can read it out of `ps`. Those values go to a 0600 file the shell
+            # sources; only its PATH is visible. Everything else (the port
+            # block, cache tags, the profile id) keeps the env(1) prefix —
+            # unchanged, and byte-identical for a session with no credentials.
+            plain, secret = secret_env.split(self.extra_env)
+            if plain:
+                # tmux runs the command string through the shell, so an env(1)
+                # prefix reaches the program; values are shell-quoted. The
+                # session env is ALSO set below (post-create) for future
+                # panes/windows.
+                pairs = " ".join(
+                    "%s=%s" % (k, shlex.quote(str(v))) for k, v in sorted(plain.items())
+                )
+                launch = "env %s %s" % (pairs, launch)
+            secret_path = secret_env.write(self.sanitized_name, secret)
+            if secret_path:
+                launch = secret_env.source_prefix(secret_path) + launch
         c = cmd_pkg.command(
             "tmux",
             "new-session",
@@ -220,7 +233,10 @@ class TmuxSession:
 
         # Session-scoped env for panes/windows created later (the initial
         # program already got the values via the env(1) prefix above).
-        for k, v in sorted(self.extra_env.items()):
+        # Secrets are deliberately excluded: `tmux set-environment` would put
+        # the value in this client's argv, and a shell pane opened later has no
+        # business holding the agent's API key anyway.
+        for k, v in sorted(secret_env.split(self.extra_env)[0].items()):
             eerr = self._cmd_exec.run(
                 cmd_pkg.command(
                     "tmux",
@@ -574,6 +590,9 @@ class TmuxSession:
         kerr = self._cmd_exec.run(c)
         if kerr is not None:
             errs.append(Exception("error killing tmux session: {}".format(kerr)))
+
+        # The session is gone; its credential file has nothing left to serve.
+        secret_env.clear(self.sanitized_name)
 
         if len(errs) == 0:
             return None

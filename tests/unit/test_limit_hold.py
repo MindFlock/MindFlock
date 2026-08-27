@@ -309,3 +309,44 @@ def test_live_reset_no_reading_returns_none():
     assert server._live_limit_reset(_meter({"foo": "bar"}), _NOW) is None
     assert server._live_limit_reset(_meter({}), _NOW) is None
     assert server._live_limit_reset(_meter(None), _NOW) is None
+
+
+# --------------------------------------------------------------------------- #
+# The meter belongs to ONE identity
+#
+# usage_live() reads whatever credentials the server process sees — the CLI's
+# ambient login. A session pinned to an auth profile is metered on a different
+# subscription entirely, so consulting the ambient meter about it is worse than
+# consulting nothing: it releases a genuinely limited session early (burning
+# the queued prompt on the limit screen) or holds one whose own account has
+# headroom.
+# --------------------------------------------------------------------------- #
+def _inst_on(profile_id):
+    return types.SimpleNamespace(ProfileId=profile_id)
+
+
+def test_the_meter_is_read_for_a_session_on_the_ambient_login():
+    prov = _meter({"percent_used": 0.0})
+    for pin in ("", "default"):  # "" with no app default resolves to ambient
+        assert server._live_limit_reset(prov, _NOW, _inst_on(pin)) == 0.0
+
+
+def test_the_meter_is_not_read_for_a_session_on_an_auth_profile(monkeypatch):
+    """None, not 0.0. 0.0 means "the window is confirmed open" and would
+    release the hold; None means "no reading", which is the truth."""
+    from backend.providers import auth_profiles
+
+    monkeypatch.setattr(auth_profiles, "effective_profile_id", lambda pid: pid or "")
+    read: list = []
+
+    prov = types.SimpleNamespace(
+        usage_live=lambda: read.append(1) or {"percent_used": 0.0}
+    )
+    assert server._live_limit_reset(prov, _NOW, _inst_on("work")) is None
+    assert read == [], "the ambient meter was queried for a profiled session"
+
+
+def test_an_unscoped_call_still_reads_the_meter():
+    """Callers that pass no instance (and the direct tests above) are
+    unchanged — the scoping is opt-in per call site."""
+    assert server._live_limit_reset(_meter({"percent_used": 0.0}), _NOW) == 0.0

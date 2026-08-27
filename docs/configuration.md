@@ -294,6 +294,34 @@ Anthropic API, so a session on it keeps using that — `mindflock doctor`'s
 [providers.md](providers.md#local-models-local_modelspy) for the per-CLI mappings
 and where each was verified.
 
+Local models **outrank** an auth profile. Where both would route the same CLI,
+the local overlay wins on env and the profile's routing flags are dropped, so a
+session configured to stay on this machine cannot be pulled off it by an account
+pin.
+
+### Auth profiles (`[auth_profiles]`, settings store only)
+
+Which identity a session's CLI runs as — a second Claude subscription, an API
+key, an OpenRouter key. Configured in Settings → **Accounts** or
+`mindflock accounts`, stored in `~/.mindflock/settings.json` (mode 0600) and
+masked on every API read. Full guide: [accounts.md](accounts.md).
+
+| Key | Values | Notes |
+|---|---|---|
+| `default_profile` | profile id \| `default` \| `""` | The identity new sessions inherit when they pin none. `default` = the CLI's own ambient login; `""` = the same. Overridden by `$MINDFLOCK_AUTH_PROFILE` |
+| `profiles[].id` | slug | Lowercase letters/digits/`-`/`_`, max 64, unique. `default` is **reserved** (it is the "no profile" sentinel) |
+| `profiles[].kind` | `account` \| `api_key` \| `openrouter` | `account` = a second login of the CLI itself, isolated in its own config dir; the other two inject a key at launch |
+| `profiles[].provider` | `claude` \| `codex` \| … | Which CLI the profile is for. Blank = inferred |
+| `profiles[].label` | string | What the pickers and the pane chip show |
+| `profiles[].api_key` | string | Key kinds only. Reads back as a mask; a PUT that sends the mask keeps the stored value |
+| `profiles[].base_url` | URL | `openrouter` only; blank = OpenRouter's own endpoint |
+| `profiles[].model` | string | The profile's model pin, overridable per session |
+| `profiles[].config_dir` | path | `account` only; blank = `~/.mindflock/accounts/<id>` |
+| `profiles[].env` | table | Raw env overrides applied to **any** CLI — the escape hatch for user-defined providers. No UI or CLI field yet: edit `settings.json` directly |
+
+With no profiles configured every overlay is empty and every launch path is
+byte-identical to before the feature existed.
+
 Notes on individual keys:
 
 - `workflow_state` (per source) — the state a ticket must be in to be ingested.
@@ -391,6 +419,17 @@ server merges on save so multiple processes can share it.
 - `worktrees/` — worktree-mode session directories,
   `<sanitized-branch>_<hex-timestamp>`.
 - `recently_closed.json` — closed-but-reopenable sessions (cap 50).
+- `run/<tmux-session>.env` — the credentials one running session needs, as
+  sourceable `export` lines (mode 0600, dir 0700). Written at launch, replaced
+  on every relaunch, removed when the session closes; absent for a session with
+  no credentials. Exists so a key never lands in `/proc/<pid>/cmdline`. Override
+  the directory with `$MINDFLOCK_RUN_DIR`.
+- `accounts/<id>/` — an `account`-kind auth profile's isolated CLI config dir
+  (mode 0700), created on save and pointed at by `CLAUDE_CONFIG_DIR` /
+  `CODEX_HOME` when a session runs under that profile. **Holds real
+  credentials** — the CLI's own login lands here. Under the app's config dir so
+  an uninstall `--purge` sweeps it with everything else; override per profile
+  with `profiles[].config_dir`. See [accounts.md](accounts.md).
 
 ## `~/.mindflock-assistant/` — providers and small settings
 
@@ -435,6 +474,8 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `SHELL` | — | Shell used by each session's Terminal tab |
 | `MINDFLOCK_AUTH` | unset | Web auth gate override — `1` forces it on, `0` off (wins over settings) |
 | `MINDFLOCK_AUTH_TOKEN` | — | Web auth token; setting it enables the auth gate |
+| `MINDFLOCK_AUTH_PROFILE` | unset | App-wide default **auth profile** id — the identity new sessions run under when they pin none. Wins over `auth_profiles.default_profile` in settings; `default` means the CLI's own ambient login. `GET /api/settings/auth-profiles` reports it (`default_profile_env`, `default_profile_locked`) and the Accounts screen disables its picker while it is set. See [accounts.md](accounts.md) |
+| `MINDFLOCK_RUN_DIR` | `~/.mindflock/run` | Where a session's per-run credential file is written (mode 0600, removed on close) so API keys reach the CLI without passing through argv — see [accounts.md](accounts.md#where-the-credentials-go) |
 | `MINDFLOCK_HOST` / `MINDFLOCK_PORT` | `127.0.0.1` / `8765` | CLI client — where to find the running server (after `--host`/`--port` flags) |
 | `MINDFLOCK_WSL_DISTRO` | — (your default distro) | Pins the WSL distro used for terminal/server launches. Unset, `wsl.exe` picks the default one — which is where the Windows installer puts the CLI. `wsl -l -v` lists them |
 | `MINDFLOCK_WT_COMMAND` | `wt.exe` | Windows Terminal executable used to open session terminals |
