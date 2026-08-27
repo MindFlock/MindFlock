@@ -232,7 +232,7 @@ these fields and a "Test connection" button that auto-fills `member_id`.
 | Provider | Required keys | Notes |
 |---|---|---|
 | `github_issues` | **none** | The zero-config on-ramp, and the catalog's first entry. `api_token` falls back to the GitHub connection (`[github].token` / `$GH_TOKEN` / `gh auth token`); `project` falls back to the source's `repo_url`, then `[repository].url`, then this checkout's `origin`. No workflow states. |
-| `shortcut` | `api_token`, `member_id` | `workflow_state` optional (workflow-state id; integer `workflow_state_id` also works). |
+| `shortcut` | `api_token`, `member_id` | `workflow_state` optional (workflow-state id; integer `workflow_state_id` also works). Archived stories, and stories under an archived epic, are always excluded — see below. |
 | `jira` | `base_url`, `email`, `api_token` | Jira Cloud, `assignee = currentUser()`. `member_id` (accountId) optional. `workflow_state` optional (status id → `status = <id>`). |
 | `linear` | `api_token` | GraphQL `viewer.assignedIssues`. `workflow_state` optional (state id). |
 | `asana` | `api_token`, `project` (workspace gid) | Tasks with `assignee = me`. No workflow states. |
@@ -242,6 +242,14 @@ Every source also takes an OPTIONAL-in-TOML-but-required-in-the-UI `repo_url`
 global default repo. `workflow_state` gates ingestion so a ticket only gets a
 session once it reaches the chosen state (blank = any state). The Intake →
 **Tickets** tab loads the live state list per source (Shortcut/Jira/Linear).
+
+**Shortcut also filters archived work, implicitly.** Alongside `workflow_state`
+and `assignee_scope`, a Shortcut source silently narrows to what Shortcut's own
+boards show: archived stories, and stories under an archived epic, are neither
+ingested nor listed, so an otherwise-matching `workflow_state` will ingest less
+than the state's own count suggests. **No setting disables it**, it applies to
+no other provider, and it does not cover a force-start by id
+([ingestion-pipeline.md](ingestion-pipeline.md#current-behavior-caveats)).
 
 Each source also takes an optional **`agent`** — the coding CLI its sessions run
 (`claude`, `codex`, `aider`, `goose`, `opencode`, `cline`, `antigravity`, or a

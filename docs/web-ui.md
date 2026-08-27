@@ -698,7 +698,13 @@ credential.
   its **Thinking effort**, ingest-state picker, credentials, **Test connection**,
   **Remove**), then
   **Assigned tickets** — the slowest of the three fan-outs (~3 s: a provider
-  search per source plus a `git ls-remote` per repo). A source's **Agent CLI**
+  search per source plus a `git ls-remote` per repo). A **Shortcut** source
+  lists what Shortcut's own boards show: archived stories, and stories under an
+  archived epic, no longer appear at all. Bucket counts can therefore drop
+  without anything changing in the tracker, and a source whose open work is all
+  archived now renders an empty heading. No other provider hides archived work,
+  and no setting turns this one off
+  ([ingestion-pipeline.md](ingestion-pipeline.md#providers)). A source's **Agent CLI**
   lists `GET /api/providers` (so a provider you defined yourself is selectable
   too), its unset option names the app default rather than showing a blank, and
   the collapsed card always states which CLI the queue runs — the difference
@@ -909,7 +915,11 @@ unmounts anyway); they're held in the query client
 (`frontend/src/state/queries.ts`), so reopening the dialog or switching away and
 back shows the last list **immediately** while a refresh runs behind it. The
 panel's note area says `Loading…` on a cold panel and `Refreshing…` over rows
-already on screen. Opening the Intake dialog **prefetches all three**
+already on screen. A cached list can therefore still hold a row for a story
+archived since it was fetched — and **starting that row bypasses the archived
+filter**, because a force-start goes through `fetch(ticket_id)`, which does not
+apply it. **Refresh** re-lists and the row disappears.
+Opening the Intake dialog **prefetches all three**
 (`prefetchIntakePanels()`), so clicking through to one finds it loaded — and it is
 what fills the tab strip's counts, which read the same cached query the tab does
 and therefore can never disagree with the list underneath.

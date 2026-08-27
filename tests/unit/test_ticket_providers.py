@@ -9,6 +9,7 @@ import logging
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
+import aiohttp
 import pytest
 
 from backend.ticket_ingestion.config import TicketProviderConfig
@@ -30,6 +31,7 @@ from backend.ticket_ingestion.providers.github_issues import GithubIssuesProvide
 from backend.ticket_ingestion.providers.jira import JiraProvider, flatten_adf
 from backend.ticket_ingestion.providers.linear import LinearProvider
 from backend.ticket_ingestion.providers.shortcut import (
+    _SHORTCUT_API_BASE,
     ShortcutProvider,
     story_from_api_response,
 )
@@ -415,6 +417,15 @@ class _FakeSession:
         return self._post.pop(0)
 
 
+class _ExplodingSession(_FakeSession):
+    """A session whose GET raises, for the best-effort lookups that must
+    degrade rather than propagate (the non-200 path has its own branch)."""
+
+    def get(self, url, **kwargs):
+        self.get_calls.append((url, kwargs))
+        raise aiohttp.ClientError("connection reset")
+
+
 def _patch_session(session):
     """Patch aiohttp.ClientSession so ``async with aiohttp.ClientSession()``
     yields ``session``."""
@@ -422,6 +433,7 @@ def _patch_session(session):
 
 
 _SINCE = datetime(2025, 1, 1, tzinfo=timezone.utc)
+_SHORTCUT_LOGGER = "backend.ticket_ingestion.providers.shortcut"
 
 
 # --------------------------------------------------------------------------- #
@@ -540,13 +552,359 @@ class TestShortcutSearchStories:
             assert await prov._search_stories({}) == []
 
     async def test_error_status_raises_client_error(self):
-        import aiohttp
-
         prov = self._prov()
         session = _FakeSession(post_responses=[_FakeResp(500, text_data="boom")])
         with _patch_session(session):
             with pytest.raises(aiohttp.ClientError, match="500"):
                 await prov._search_stories({})
+
+
+class TestShortcutArchived:
+    """Archived work is invisible in Shortcut, so it must be invisible here.
+
+    Both halves of the rule: the story's own ``archived`` flag, and the epic's
+    — archiving an epic hides its stories on the board without flagging any of
+    them."""
+
+    def _prov(self, **cfg):
+        base = dict(provider="shortcut", api_token="t", member_id="m")
+        base.update(cfg)
+        return ShortcutProvider(TicketProviderConfig(**base))
+
+    # ----------------------------------------------------------------- #
+    # The story's own flag
+    # ----------------------------------------------------------------- #
+    async def test_search_drops_archived_stories(self):
+        prov = self._prov()
+        session = _FakeSession(
+            post_responses=[
+                _FakeResp(
+                    200,
+                    json_data=[
+                        {"id": 1},
+                        {"id": 2, "archived": True},
+                        {"id": 3, "archived": False},
+                    ],
+                )
+            ]
+        )
+        with _patch_session(session):
+            out = await prov._search_stories({"owner_id": "m"})
+        # Story 2 is gone; a missing flag (story 1) reads as live.
+        assert [s["id"] for s in out] == [1, 3]
+
+    async def test_search_keeps_non_dict_rows(self):
+        # The filter's isinstance guard is deliberate: a row that isn't a story
+        # object carries no flag to judge, and the callers already skip it.
+        prov = self._prov()
+        session = _FakeSession(post_responses=[_FakeResp(200, json_data=["junk", 5])])
+        with _patch_session(session):
+            assert await prov._search_stories({}) == ["junk", 5]
+
+    # ----------------------------------------------------------------- #
+    # The epic's flag
+    # ----------------------------------------------------------------- #
+    async def test_archived_epic_ids_selects_archived_epics_with_an_id(self):
+        prov = self._prov()
+        session = _FakeSession(
+            get_responses=[
+                _FakeResp(
+                    200,
+                    json_data=[
+                        {"id": 10, "archived": True},
+                        {"id": 11, "archived": False},
+                        {"id": 12},  # missing flag reads as live
+                        {"archived": True},  # archived but unusable — no id
+                        "junk",
+                    ],
+                )
+            ]
+        )
+        with _patch_session(session):
+            assert await prov._archived_epic_ids() == {10}
+
+    async def test_archived_epic_ids_non_list_body_is_empty(self):
+        prov = self._prov()
+        session = _FakeSession(get_responses=[_FakeResp(200, json_data={"epics": []})])
+        with _patch_session(session):
+            assert await prov._archived_epic_ids() == set()
+
+    async def test_archived_epic_ids_http_error_is_empty(self):
+        prov = self._prov()
+        session = _FakeSession(get_responses=[_FakeResp(500, text_data="boom")])
+        with _patch_session(session):
+            assert await prov._archived_epic_ids() == set()
+
+    async def test_archived_epic_ids_network_failure_is_empty_and_warns(self, caplog):
+        # The empty set fails open, so the log line is the only trace that the
+        # filter was skipped at all — without it the degradation is silent.
+        prov = self._prov()
+        caplog.set_level(logging.WARNING, logger=_SHORTCUT_LOGGER)
+        with _patch_session(_ExplodingSession()):
+            assert await prov._archived_epic_ids() == set()
+        assert "Could not resolve archived Shortcut epics" in caplog.text
+
+    async def test_epics_request_is_slim_and_authenticated(self):
+        # A refactor that drops the token would get 401 -> empty set -> a filter
+        # that fails open and never complains, so pin the request itself.
+        prov = self._prov()
+        session = _FakeSession(get_responses=[_FakeResp(200, json_data=[])])
+        with _patch_session(session):
+            await prov._archived_epic_ids()
+        url, kwargs = session.get_calls[0]
+        assert url == f"{_SHORTCUT_API_BASE}/epics?includes_description=false"
+        assert kwargs["headers"] == {"Shortcut-Token": "t"}
+
+    async def test_stories_under_an_archived_epic_are_dropped(self):
+        prov = self._prov()
+        rows = [{"id": 1, "epic_id": 10}, {"id": 2, "epic_id": 11}, {"id": 3}]
+        session = _FakeSession(
+            get_responses=[
+                _FakeResp(
+                    200,
+                    json_data=[
+                        {"id": 10, "archived": True},
+                        {"id": 11, "archived": False},
+                    ],
+                )
+            ]
+        )
+        with _patch_session(session):
+            out = await prov._drop_archived_epic_stories(rows)
+        assert [r["id"] for r in out] == [2, 3]
+        assert len(session.get_calls) == 1
+        assert (
+            session.get_calls[0][0]
+            == f"{_SHORTCUT_API_BASE}/epics?includes_description=false"
+        )
+
+    async def test_no_archived_epics_leaves_the_rows_untouched(self):
+        prov = self._prov()
+        rows = [{"id": 1, "epic_id": 10}, {"id": 2, "epic_id": 11}]
+        session = _FakeSession(
+            get_responses=[_FakeResp(200, json_data=[{"id": 10, "archived": False}])]
+        )
+        with _patch_session(session):
+            out = await prov._drop_archived_epic_stories(rows)
+        assert out is rows
+
+    async def test_no_epic_ids_means_no_epics_call(self):
+        # The common case must not pay for a lookup it cannot use — and a falsy
+        # epic_id (0, null) is "no epic", not "epic zero".
+        prov = self._prov()
+        rows = [{"id": 1}, {"id": 2, "epic_id": 0}, {"id": 3, "epic_id": None}, "junk"]
+        session = _FakeSession()
+        with _patch_session(session):
+            out = await prov._drop_archived_epic_stories(rows)
+        assert out is rows
+        assert session.get_calls == []
+        assert session.post_calls == []
+
+    async def test_epics_lookup_failure_keeps_every_story(self):
+        # Best-effort: losing the filter must never lose the tickets. (The non-200
+        # branch returns before the warning — the logging is asserted on the
+        # network-failure variant above.)
+        prov = self._prov()
+        rows = [{"id": 1, "epic_id": 10}]
+        session = _FakeSession(get_responses=[_FakeResp(500, text_data="boom")])
+        with _patch_session(session):
+            assert await prov._drop_archived_epic_stories(rows) == rows
+
+    async def test_a_string_epic_id_does_not_match_an_int_epic(self):
+        # Shortcut sends ints on both sides, so this is theory only — pinned so
+        # that a payload change surfaces as a failing test rather than as a
+        # filter that quietly stops matching.
+        prov = self._prov()
+        rows = [{"id": 1, "epic_id": "10"}]
+        session = _FakeSession(
+            get_responses=[_FakeResp(200, json_data=[{"id": 10, "archived": True}])]
+        )
+        with _patch_session(session):
+            assert await prov._drop_archived_epic_stories(rows) == rows
+
+    # ----------------------------------------------------------------- #
+    # Wiring: both callers, both assignee scopes
+    # ----------------------------------------------------------------- #
+    def _rows(self):
+        return [
+            {"id": 1, "name": "live", "created_at": "2025-01-01T00:00:00Z"},
+            {
+                "id": 2,
+                "name": "under a finished epic",
+                "created_at": "2025-01-01T00:00:00Z",
+                "epic_id": 10,
+            },
+        ]
+
+    async def test_panel_listing_applies_the_epic_filter(self, monkeypatch):
+        prov = self._prov()
+        monkeypatch.setattr(prov, "_search_stories", lambda body: _acoro(self._rows()))
+        monkeypatch.setattr(prov, "list_states", lambda: _acoro([]))
+        monkeypatch.setattr(prov, "_member_names", lambda: _acoro({}))
+        monkeypatch.setattr(prov, "_archived_epic_ids", lambda: _acoro({10}))
+        out = await prov.search_assigned_all()
+        assert [t.id for t in out] == [1]
+
+    async def test_panel_any_assignee_listing_applies_the_epic_filter(
+        self, monkeypatch
+    ):
+        # The any-assignee branch builds its own de-duped list before filtering,
+        # so it needs its own proof.
+        prov = self._prov(assignee_scope="anyone", workflow_state="100")
+        monkeypatch.setattr(prov, "_search_stories", lambda body: _acoro(self._rows()))
+        monkeypatch.setattr(prov, "list_states", lambda: _acoro([]))
+        monkeypatch.setattr(prov, "_member_names", lambda: _acoro({}))
+        monkeypatch.setattr(prov, "_archived_epic_ids", lambda: _acoro({10}))
+        out = await prov.search_assigned_all()
+        assert [t.id for t in out] == [1]
+
+    async def test_ingest_poll_drops_archived_epics_before_hydration(self, monkeypatch):
+        # The panel is only half of it: the scanner must not start a story that
+        # was archived out from under it either — and the drop happens before
+        # hydration, so an archived-epic story costs no request at all.
+        prov = self._prov(workflow_state="100")
+        hydrated: list = []
+
+        async def fake_hydrate(session, sid):
+            hydrated.append(sid)
+            return {
+                "id": sid,
+                "name": f"full-{sid}",
+                "description": "d",
+                "created_at": "2025-01-01T00:00:00Z",
+            }
+
+        monkeypatch.setattr(prov, "_search_stories", lambda body: _acoro(self._rows()))
+        monkeypatch.setattr(prov, "_hydrate_story", fake_hydrate)
+        monkeypatch.setattr(prov, "_archived_epic_ids", lambda: _acoro({10}))
+        with _patch_session(_FakeSession()):
+            out = await prov.search_assigned(_SINCE)
+        assert [t.id for t in out] == [1]
+        assert hydrated == [1]
+
+    async def test_any_assignee_poll_applies_the_epic_filter(self, monkeypatch):
+        prov = self._prov(assignee_scope="anyone", workflow_state="100")
+        monkeypatch.setattr(prov, "_search_stories", lambda body: _acoro(self._rows()))
+        monkeypatch.setattr(
+            prov,
+            "_hydrate_story",
+            lambda session, sid: _acoro({"id": sid, "name": "f"}),
+        )
+        monkeypatch.setattr(prov, "_archived_epic_ids", lambda: _acoro({10}))
+        with _patch_session(_FakeSession()):
+            out = await prov.search_assigned(_SINCE)
+        assert [t.id for t in out] == [1]
+
+    async def test_one_epics_call_per_poll_across_several_states(self, monkeypatch):
+        # The per-state fan-out is a loop of searches, but the epic lookup sits
+        # after the dedup — several ingest states must not multiply it.
+        prov = self._prov(workflow_state="100,200")
+
+        async def fake_search(body):
+            sid = body["workflow_state_id"]
+            return [
+                {
+                    "id": sid,
+                    "name": str(sid),
+                    "created_at": "2025-01-01T00:00:00Z",
+                    "epic_id": 10,
+                }
+            ]
+
+        monkeypatch.setattr(prov, "_search_stories", fake_search)
+        monkeypatch.setattr(
+            prov, "_hydrate_story", lambda session, s: _acoro({"id": s, "name": "f"})
+        )
+        session = _FakeSession(
+            get_responses=[_FakeResp(200, json_data=[{"id": 10, "archived": False}])]
+        )
+        with _patch_session(session):
+            out = await prov.search_assigned(_SINCE)
+        assert sorted(t.id for t in out) == [100, 200]
+        assert len(session.get_calls) == 1
+
+    async def test_both_filters_compose_over_the_real_http_path(self):
+        # No monkeypatched provider methods here: the real _search_stories and
+        # the real _archived_epic_ids run against scripted responses, so the
+        # wiring (search -> epic lookup -> filter) is exercised, not assumed.
+        prov = self._prov()
+        session = _FakeSession(
+            post_responses=[
+                _FakeResp(
+                    200,
+                    json_data=[
+                        {"id": 1, "name": "live"},
+                        {"id": 2, "name": "archived story", "archived": True},
+                        {"id": 3, "name": "under a finished epic", "epic_id": 10},
+                        {"id": 4, "name": "under a live epic", "epic_id": 11},
+                        "junk",  # non-dict rows survive both filters...
+                    ],
+                )
+            ],
+            get_responses=[
+                _FakeResp(
+                    200,
+                    json_data=[
+                        {"id": 10, "archived": True},
+                        {"id": 11, "archived": False},
+                    ],
+                ),
+                _FakeResp(200, json_data=[]),  # /workflows
+                _FakeResp(200, json_data=[]),  # /members
+            ],
+        )
+        with _patch_session(session):
+            out = await prov.search_assigned_all()
+        # ...and are skipped here, without raising.
+        assert [t.id for t in out] == [1, 4]
+        assert session.post_calls[0][0].endswith("/stories/search")
+        assert [url for url, _ in session.get_calls] == [
+            f"{_SHORTCUT_API_BASE}/epics?includes_description=false",
+            f"{_SHORTCUT_API_BASE}/workflows",
+            f"{_SHORTCUT_API_BASE}/members",
+        ]
+
+    async def test_a_story_with_no_epic_never_triggers_the_lookup_in_the_panel(self):
+        prov = self._prov()
+        session = _FakeSession(
+            post_responses=[_FakeResp(200, json_data=[{"id": 1, "name": "live"}])],
+            get_responses=[
+                _FakeResp(200, json_data=[]),  # /workflows
+                _FakeResp(200, json_data=[]),  # /members
+            ],
+        )
+        with _patch_session(session):
+            out = await prov.search_assigned_all()
+        assert [t.id for t in out] == [1]
+        assert [url for url, _ in session.get_calls] == [
+            f"{_SHORTCUT_API_BASE}/workflows",
+            f"{_SHORTCUT_API_BASE}/members",
+        ]
+
+    # ----------------------------------------------------------------- #
+    # The gap this change leaves open
+    # ----------------------------------------------------------------- #
+    async def test_fetch_by_id_still_returns_an_archived_story(self):
+        # Known and deliberate: the filters live in the two *search* paths, so a
+        # force-start by id — including one fired from a panel row cached before
+        # the story was archived — still launches the work. Pinned so closing
+        # the gap is a visible decision rather than a silent behaviour change.
+        prov = self._prov()
+        session = _FakeSession(
+            get_responses=[
+                _FakeResp(
+                    200,
+                    json_data={
+                        "id": 9,
+                        "name": "shipped last quarter",
+                        "archived": True,
+                    },
+                )
+            ]
+        )
+        with _patch_session(session):
+            t = await prov.fetch("9")
+        assert t.id == 9 and t.slug == "sc-9"
 
 
 class TestShortcutSearchAssigned:

@@ -793,6 +793,82 @@ def test_every_configured_source_gets_a_label_even_when_it_fails(monkeypatch):
     assert [e["source"] for e in out["errors"]] == ["linear"]
 
 
+def test_a_shortcut_source_of_only_archived_stories_still_gets_a_heading(monkeypatch):
+    """The Shortcut adapter hides archived work, so a source whose every story
+    is archived is a *successful* listing that returns nothing — the panel must
+    show it as an empty heading, not drop it. A vanished source reads as "not
+    configured" rather than "nothing to do", and an all-archived source is
+    exactly the case the archive filter creates."""
+    from backend.ticket_ingestion.config import TicketProviderConfig
+    from backend.ticket_ingestion.providers.shortcut import ShortcutProvider
+    from backend.web.core import ticket_start
+
+    src = types.SimpleNamespace(
+        id="shortcut", provider="shortcut", label="", repo_url="", member_id="m"
+    )
+    cfg = types.SimpleNamespace(ticketing_sources=[src], repo_url="")
+    monkeypatch.setattr(ticket_start, "_load_config", lambda: cfg)
+    monkeypatch.setattr(
+        "backend.ticket_ingestion.providers.get_provider",
+        lambda _s: ShortcutProvider(
+            TicketProviderConfig(provider="shortcut", api_token="t", member_id="m")
+        ),
+    )
+
+    class _Resp:
+        """One canned aiohttp response, used as an async context manager."""
+
+        def __init__(self, payload):
+            self.status = 200
+            self._payload = payload
+
+        async def json(self):
+            return self._payload
+
+        async def text(self):
+            return ""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+    class _Session:
+        """Every story archived; /workflows and /members answer empty."""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_a):
+            return False
+
+        def post(self, _url, **_kw):
+            return _Resp([{"id": 1, "name": "shipped last quarter", "archived": True}])
+
+        def get(self, _url, **_kw):
+            return _Resp([])
+
+    monkeypatch.setattr("aiohttp.ClientSession", lambda *a, **k: _Session())
+    monkeypatch.setattr(
+        "backend.ticket_ingestion.state.load_processed_story_statuses", lambda _r: {}
+    )
+    monkeypatch.setattr(
+        "backend.ticket_ingestion.state.load_processed_story_failures", lambda _r: {}
+    )
+    monkeypatch.setattr(
+        "backend.ticket_ingestion.state.load_pending_stories", lambda _r: []
+    )
+
+    out = _run(ticket_start.list_assigned_tickets())
+    assert out["tickets"] == []
+    # Empty, not broken: no error row, and the heading is still there under the
+    # provider's own label (the source left its label blank).
+    assert out["errors"] == []
+    assert out["sources"] == ["shortcut"]
+    assert out["source_labels"]["shortcut"] == "Shortcut"
+
+
 # --------------------------------------------------------------------------- #
 # The Intake dialog itself (asserted on the built bundle, like the other frontend
 # contracts in this suite)
