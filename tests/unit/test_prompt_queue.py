@@ -453,6 +453,70 @@ def test_drain_sends_when_idle(drain, monkeypatch):
     assert pq.list_queue("d1") == []
 
 
+def test_drain_sends_sooner_on_an_authoritative_idle(drain, monkeypatch):
+    """The settle is TIERED by the reading's source: an idle the CLI reported
+    itself (a Stop-hook marker) is not a flicker candidate, so the next queued
+    prompt goes out on the fast tier — one drain pass sooner — while a
+    pane-derived idle keeps the full guard below."""
+    import time as _t
+
+    from backend.web.core import agent_state
+
+    server, sent = drain
+    server._QUEUE_STATE.pop("d1", None)
+    clock = {"now": 1_000_000.0}
+    monkeypatch.setattr(_t, "time", lambda: clock["now"])
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: "idle")
+    agent_state._ACTIVITY_CACHE["d1"] = {
+        "created": 1.0,
+        "reported": "idle",
+        "state_since": 0.0,
+        "worked_at": None,
+        "reading": ("idle", "marker"),
+    }
+    try:
+        pq.enqueue("d1", "task one")
+        server._drain_one_queue("d1")  # first idle tick: arm the dwell timer
+        assert sent == []
+        clock["now"] += server._QUEUE_IDLE_SETTLE_MARKER + 1
+        server._drain_one_queue("d1")
+        assert sent == ["task one"], "marker-sourced idle takes the fast tier"
+    finally:
+        agent_state._ACTIVITY_CACHE.pop("d1", None)
+
+
+def test_drain_keeps_the_full_settle_for_a_pane_idle(drain, monkeypatch):
+    # The pane can misread a quiet moment mid-turn, and typing into a live
+    # turn is the one failure this dwell exists to prevent.
+    import time as _t
+
+    from backend.web.core import agent_state
+
+    server, sent = drain
+    server._QUEUE_STATE.pop("d1", None)
+    clock = {"now": 1_000_000.0}
+    monkeypatch.setattr(_t, "time", lambda: clock["now"])
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: "idle")
+    agent_state._ACTIVITY_CACHE["d1"] = {
+        "created": 1.0,
+        "reported": "idle",
+        "state_since": 0.0,
+        "worked_at": None,
+        "reading": ("idle", "pane"),
+    }
+    try:
+        pq.enqueue("d1", "task one")
+        server._drain_one_queue("d1")
+        clock["now"] += server._QUEUE_IDLE_SETTLE_MARKER + 1
+        server._drain_one_queue("d1")
+        assert sent == [], "pane-sourced idle must wait out the full settle"
+        clock["now"] += server._QUEUE_IDLE_SETTLE
+        server._drain_one_queue("d1")
+        assert sent == ["task one"]
+    finally:
+        agent_state._ACTIVITY_CACHE.pop("d1", None)
+
+
 def test_drain_waits_for_idle_to_settle(drain, monkeypatch):
     """A fresh idle must PERSIST for _QUEUE_IDLE_SETTLE before the first send, so a
     transient Stop between turns can't fire a queued prompt prematurely."""

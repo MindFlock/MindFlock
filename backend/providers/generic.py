@@ -192,6 +192,11 @@ class GenericProvider(BaseProvider):
         except Exception:  # noqa: BLE001 — never break a launch over hook install
             return
 
+    def reports_activity(self) -> bool:
+        # Configured hooks are the whole capability here: without them this CLI
+        # never writes a marker and pane inspection is all there is.
+        return bool(self.cfg.activity_hooks_file)
+
     def activity_state(self, session_name: str) -> Optional[str]:
         # Only trust a marker when this CLI actually writes one (hooks declared);
         # otherwise no signal, so the web layer uses pane inspection unchanged.

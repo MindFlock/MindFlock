@@ -60,6 +60,14 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "MINDFLOCK_TEST_PLANS_FILE", str(tmp_path / "mindflock" / "test_plans.json")
     )
+    # The autopilot store, for the same reason as the rest: server code that
+    # consults _autopilot.get() (the turn-end announcement gate does) must read
+    # an empty per-test store, never the developer's live ~/.mindflock/
+    # autopilot.json — a real armed run on this machine would silently gate a
+    # test's events. Tests that fake their own store re-set this themselves.
+    monkeypatch.setenv(
+        "MINDFLOCK_AUTOPILOT_FILE", str(tmp_path / "mindflock" / "autopilot.json")
+    )
     # Neutralize the web auth gate's enable signals so the suite never depends on
     # the ambient shell. auth.auth_enabled() turns on when CS_WEB_MODE is a
     # non-local mode (a dev shell often exports CS_WEB_MODE=tailscale), when an

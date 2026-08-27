@@ -147,9 +147,23 @@ poll catches it 4 s later.
 
 **The per-title rolling record has a lifecycle, and it is short.** It holds the
 pane hash, the CPU baseline, the hysteresis clocks and the layer-wide
-*provenance* (`reported` / `state_since` / `worked_at`, written on every return
-path, so a session reporting through its CLI's hooks leaves a trail too). It is
-reset:
+*provenance* (`reported` / `state_since` / `worked_at` / `reading` — the
+`(value, source)` pair as ONE atomic store, since it is read as one fact — /
+`worked_evidence`, written on every return path, so a session reporting through
+its CLI's hooks leaves a trail too), plus what the pane layer used to *prove*
+its current busy run (`hard_since` / `proof`, cleared by every non-working
+reading so a proven-busy run can never straddle an agent death or a relaunch).
+`worked_at` is stamped only by a reading that CORROBORATES work — the CLI's own
+report, or its live-turn status line; a busy process tree on its own moves the
+chip and arms nothing (see `_verdict`'s `arms`, and the ladder in
+[web-api.md](web-api.md)). `source` names the layer that produced the current
+reading ("marker" / "exit" / "proc" / "trust" / "pane");
+`reading_is_authoritative` is how the settle skip and the queue drain's fast
+tier ask about it. Arming decides only that a turn-end *may* be announced;
+whether it actually fires also passes the web layer's exact gates — recent
+human input (either terminal socket, `/send`, send-now, raw tmux client
+activity), the queue's send-grace, and fast-track's own record — see
+[web-api.md](web-api.md). It is reset:
 
 - when the **tmux incarnation** changes — the record is keyed to tmux's own
   `session_created`, so a relaunched session starts clean (its `_LIMIT_PROBE`

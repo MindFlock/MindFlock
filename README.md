@@ -690,9 +690,11 @@ feeds:
 The quietest of the opt-ins is **"a session finishes its work"**, and it means
 it. It does not fire when the chip goes grey — a coding CLI reports a turn ended
 at the end of *every* reply, so that would buzz once per exchange. MindFlock
-sends it only once it has watched that agent actually work, seen it stay idle
-for 45 seconds since, and confirmed nothing is queued to wake it back up: once
-per stretch of real work, however long the session then sits there.
+sends it only once it has watched that agent actually work — corroborated by
+the CLI's own hooks or its status line, not just a CPU blip — seen it stay
+idle since (12–45 seconds, shorter the stronger the evidence), and confirmed
+nothing is queued to wake it back up: once per stretch of real work, however
+long the session then sits there.
 
 To set it up: install the free ntfy app, then in Settings → Notifications →
 **Phone push (ntfy)** hit **Generate** for a random topic, scan the QR into the

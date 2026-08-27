@@ -12,6 +12,11 @@ from backend.web import server
 
 
 class _FakeProvider:
+    # A CLI that says nothing about itself: these tests are the pure pane path,
+    # and it is the only path allowed to arm a turn end for such a CLI.
+    def reports_activity(self):
+        return False
+
     def activity_state(self, name):
         return None
 

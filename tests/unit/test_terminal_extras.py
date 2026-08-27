@@ -361,6 +361,62 @@ async def test_pump_pty_forwards_output_and_input(monkeypatch):
     os.close(r)
 
 
+async def test_pump_pty_on_input_fires_for_input_and_never_for_resize(monkeypatch):
+    # The presence callback: keystrokes (bytes and text alike) count, resize
+    # control frames never do (they fire on layout changes with nobody at the
+    # keyboard), and a read-only pump never calls it at all. A raising
+    # callback must not break the pump.
+    r, w = os.pipe()
+    os.close(w)
+    monkeypatch.setattr(terminal.os, "write", lambda fd, data: None)
+    proc = _FakeProc(r)
+    hits = []
+    frames = [
+        {"type": "websocket.receive", "bytes": b"typed"},
+        {
+            "type": "websocket.receive",
+            "text": json.dumps({"type": "resize", "rows": 30, "cols": 100}),
+        },
+        {"type": "websocket.receive", "text": "plain"},
+    ]
+    await terminal.pump_pty(
+        _FakeWS(list(frames), []),
+        proc,
+        allow_input=True,
+        on_input=lambda: hits.append(1),
+    )
+    assert len(hits) == 2, "bytes + plain text fire; the resize frame does not"
+    os.close(r)
+
+    r2, w2 = os.pipe()
+    os.close(w2)
+    proc2 = _FakeProc(r2)
+    await terminal.pump_pty(
+        _FakeWS(list(frames), []),
+        proc2,
+        allow_input=False,
+        on_input=lambda: hits.append(1),
+    )
+    assert len(hits) == 2, "a read-only pump never reports presence"
+    os.close(r2)
+
+    r3, w3 = os.pipe()
+    os.close(w3)
+    proc3 = _FakeProc(r3)
+
+    def _boom():
+        raise RuntimeError("presence stamp failed")
+
+    await terminal.pump_pty(
+        _FakeWS([{"type": "websocket.receive", "bytes": b"x"}], []),
+        proc3,
+        allow_input=True,
+        on_input=_boom,
+    )
+    assert proc3.terminated, "a raising callback never breaks the pump"
+    os.close(r3)
+
+
 async def test_pump_pty_read_only_drops_input(monkeypatch):
     r, w = os.pipe()
     os.close(w)  # immediate EOF; no output needed for this case

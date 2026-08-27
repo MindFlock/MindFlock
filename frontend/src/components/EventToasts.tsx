@@ -12,6 +12,7 @@ import {
   type EventEnvelope,
 } from "../state/queries";
 import { displayName, useUi } from "../state/store";
+import { slotNumber } from "../lib/windowName";
 import { fmtUsd } from "../lib/format";
 import {
   dropActivity,
@@ -156,6 +157,15 @@ function notifyOnce(session: string, state: string, msg: string, opts?: ToastOpt
   toast(msg, opts);
 }
 
+// The name with its rail slot in front — "[3] sitecheck-bot7" — so a toast
+// points at a row you can find at a glance. Same live resolver the OS
+// notification and the bell use; blank slot (filtered out, tenth row on)
+// degrades to the bare name.
+function namedSlot(session: string): string {
+  const n = slotNumber(session);
+  return (n ? "[" + n + "] " : "") + displayName(session);
+}
+
 function instByTitle(title: string): Instance | null {
   return instances().find((i) => i.title === title) || null;
 }
@@ -196,7 +206,7 @@ export function EventToasts() {
           markClarify(env.session);
           const inst = instByTitle(env.session);
           const snip = inst?.last_turn ? " — “" + inst.last_turn + "”" : "";
-          notifyOnce(env.session, "clarify", displayName(env.session) + " needs your input" + snip, {
+          notifyOnce(env.session, "clarify", namedSlot(env.session) + " needs your input" + snip, {
             onClick: () => selectSession(env.session),
           });
         }
@@ -205,7 +215,7 @@ export function EventToasts() {
     unsubs.push(
       ev.subscribe("session.setup_finished", (env) => {
         if (isReplay(env) || env.new === "ok") return;
-        notifyOnce(env.session, "setupfail", "worktree setup failed on " + displayName(env.session) + " — prompts held", {
+        notifyOnce(env.session, "setupfail", "worktree setup failed on " + namedSlot(env.session) + " — prompts held", {
           onClick: () => selectSession(env.session),
         });
       })
@@ -213,7 +223,7 @@ export function EventToasts() {
     unsubs.push(
       ev.subscribe("session.check_finished", (env) => {
         if (isReplay(env) || env.new === "ok") return;
-        notifyOnce(env.session, "checkfail", "checks failed on " + displayName(env.session), {
+        notifyOnce(env.session, "checkfail", "checks failed on " + namedSlot(env.session), {
           onClick: () => selectSession(env.session),
         });
       })
@@ -260,7 +270,7 @@ export function EventToasts() {
           { live: true }
         );
         if (String(env.new || "") === "halted")
-          notifyOnce(env.session, "ftstop", "fast-track stopped on " + displayName(env.session), {
+          notifyOnce(env.session, "ftstop", "fast-track stopped on " + namedSlot(env.session), {
             onClick: () => selectSession(env.session),
           });
       })
@@ -321,7 +331,7 @@ export function EventToasts() {
         notifyOnce(
           env.session,
           "budget",
-          displayName(env.session) + " exceeded its budget (" + fmtUsd(d.cost || 0) + " of " + fmtUsd(d.budget || 0) + ")",
+          namedSlot(env.session) + " exceeded its budget (" + fmtUsd(d.cost || 0) + " of " + fmtUsd(d.budget || 0) + ")",
           { onClick: () => selectSession(env.session), duration: 8000 }
         );
       })

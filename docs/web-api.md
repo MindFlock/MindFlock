@@ -361,7 +361,12 @@ survives server restarts. Events: `session.setup_started/finished`,
 | DELETE | `/api/instances/{title}/queue?item=<id>` | Remove one item; omit `item` to clear the whole queue |
 
 A background drain loop feeds the queue into the agent whenever it is **idle**
-(finished a turn / at its prompt): it never interrupts `working`/`clarify`, and
+(finished a turn / at its prompt) — idle that has *persisted*: for
+`_QUEUE_IDLE_SETTLE` (12s) before the first send, dropped to
+`_QUEUE_IDLE_SETTLE_MARKER` (4s) when the idle reading is authoritative
+(`agent_state.reading_is_authoritative` — the CLI's own hook said so), so a
+hook CLI's queue drains one pass sooner. It never interrupts
+`working`/`clarify`, and
 if a started session's agent tmux has died (e.g. the CLI exited when usage ran
 out) it reboots it — rate-limited — so a queued run resumes on its own the
 moment usage returns. Before each would-be send the drain re-checks the
@@ -505,14 +510,74 @@ happens ten times in a ten-turn conversation, between two prompts of a draining
 queue, and once more for a window that has merely been re-opened (attaching a
 pane relaunches a dead agent, which then parks at an empty prompt). **`session.
 turn_ended`** is the fact that answers it, and it asserts three things at once:
-the agent was *observed working* in its current tmux incarnation, it has been
-idle continuously for `_TURN_END_DWELL_S` (45s), and no queued prompt is waiting
-to wake it. It is emitted once per cycle of observed work — the evidence is
-spent on emit and re-earned by the next `working` reading — so a session left
-idle overnight announces itself once. 45s is chosen to sit above every other
-idle dwell in the app (`_QUEUE_IDLE_SETTLE` 12s, `autopilot.IDLE_SETTLE_S` 30s),
-so the queue drains and a fast-track chain decides the agent is done *before*
-anyone is told the work finished.
+work by the agent was *corroborated* in its current tmux incarnation, it has been
+idle continuously for the evidence-tiered dwell (next paragraph), and no queued
+prompt is waiting to wake it. It is emitted once per cycle of observed work — the evidence is
+spent on emit and re-earned by the next armed `working` reading — so a session
+left idle overnight announces itself once.
+
+The dwell is **tiered by the evidence's strength** — `agent_state.work_evidence`
+— because it only has to buy the confidence the evidence lacks: 12s when the
+CLI's own hook report both armed the work AND delivered the idle (the fast lane
+requires the END to be authoritative too — marker-armed work whose idle came
+from a pane misread takes the slow lane outright), 25s for status-line-armed
+work (pane CLIs), 45s for the CPU backstop. The hazards the old flat 45s
+blanketed are now **exact gates**: recent human input (both terminal
+websockets, `/send`, send-now — plus `tmux list-clients` client activity at
+announce time, for people attached to tmux directly), a queue send-grace
+(`peek_next` reads None the instant the last prompt is *popped*, which is at
+tmux-typing time — the drain's own `armed`/`sent_at` record covers the
+in-flight window), and fast-track (held exactly while the autopilot record
+reads `running` *and its driver lease is live* — a wedged chain the driver
+cannot step goes lease-stale and announcements resume). The working→idle
+marker transition also forces a **fresh limit-screen probe** (a forced miss
+never refreshes the probe throttle, so a banner that paints late is caught by
+the next tick's re-probe), closing the old 15s probe-cache blind window.
+
+An **authoritative idle/clarify skips the 3s activity settle** entirely — a
+hook marker cannot misread a frame, so the chip and the default-on
+"needs your input" push react within one tick. `limit` never skips: both
+marker-branch limit reclassifications are pane captures, and one frame can
+misread scrollback or quoted output — so the default-on "ran out of usage"
+push keeps its two-sighting guard whatever triggered the reading.
+
+*Corroborated*, because a `working` reading is not by itself evidence of a turn.
+A reading paints the chip; only some readings may interrupt a human. The ladder
+(`agent_state._verdict`'s `arms` argument):
+
+- the **CLI's own report** — a fresh hook marker or live agent query — arms at
+  any duration. A hook fires because a prompt was submitted or a tool ran;
+- the provider's **live-turn status line** (Claude's `esc to interrupt`, a
+  climbing token counter) arms too: it is on screen *because* a turn is running,
+  which covers a marker that went stale mid-turn;
+- a **busy process tree alone does not**. A parked Claude session's own
+  auto-updater crossed `_CPU_ACTIVE_JIFFIES_PER_S` for one 4s poll, read as
+  `working` for ~12s — past the settle above — and 45s later announced a turn
+  its transcript shows never happened. `/clear`, a GC pause and a compile all
+  cross that line as well;
+- a CLI that does **not** report for itself keeps a CPU backstop: an unbroken
+  busy run of `_CPU_ONLY_ARMS_AFTER_S` (20s) arms, which no single spike
+  survives (`hard_since`/`proof` are cleared by EVERY non-working reading,
+  whatever layer delivered it, so a run can never straddle an agent death, a
+  Stop hook, or a relaunch). Such a provider's only other signal is a
+  status-line regex, and a regex can be wrong — losing the announcement to a
+  reworded hint would be worse than the spike the strict rule guards against.
+  No backstop where the CLI's hooks are actually *speaking* (a marker was read
+  this poll): those have two independent signals already, and the phantom this
+  ladder exists to kill was one of theirs. A CLI that merely *declares* hooks
+  while its marker never appears (an older codex build, a failed install)
+  keeps the backstop — declared capability is not observed capability.
+
+Of the bundled providers, Claude and Codex report through hooks; aider,
+antigravity, cline, goose and opencode are covered by their status line, with
+the CPU backstop behind it. `test_provider_activity_patterns.py` pins that
+roster, so a provider added with no signal at all shows up as a failing test
+rather than a silent notification. The backstop's 45s is chosen to sit above
+every other idle dwell in the app (`_QUEUE_IDLE_SETTLE` 12s,
+`autopilot.IDLE_SETTLE_S` 30s), so the queue drains and a fast-track chain
+decides the agent is done *before* anyone is told the work finished; the
+faster tiers don't need that ordering, because the send-grace and fast-track
+gates above check those hazards exactly instead of outwaiting them.
 
 For ~30s after the server process starts (including a Settings-triggered
 restart, which re-execs), the `status/activity/stage_changed` diff events are

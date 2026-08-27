@@ -134,6 +134,72 @@ def test_hook_command_record_thread_false_skips_thread_marker(marker_dir, thread
     assert thread_markers.read("sess_b") == ""
 
 
+def test_hook_command_never_bakes_the_passed_marker_dir(tmp_path):
+    """THE SANDBOX-POISONING REGRESSION.
+
+    An install-time marker dir baked into the command was a live incident: a
+    sandboxed run (HOME redirected into a scratchpad) re-pinned a SHARED
+    repo's hooks file with its sandbox's absolute path, and every cohabiting
+    session's markers silently routed into a dead sandbox — chips frozen on
+    the last pre-poison reading. ``marker_dir`` is now accepted and IGNORED;
+    the emitted command must never contain the passed path.
+    """
+    poisoned = str(tmp_path / "verify-sandbox" / "markers")
+    for cmd in (
+        am.hook_command("working", poisoned),
+        am.hook_command("idle", poisoned, record_thread=False),
+        am.notification_hook_command(poisoned),
+    ):
+        assert poisoned not in cmd, "an install-time path must never be baked in"
+    # And the new default (marker_dir=None) is a valid command, not a
+    # TypeError or a literal 'None' path component.
+    cmd = am.hook_command("working")
+    assert "None" not in cmd
+    assert shlex.split(cmd)[0] == "python3"
+
+
+def test_hook_command_resolves_marker_dir_in_the_firing_env(marker_dir, tmp_path):
+    # The dir comes from the FIRING shell's environment, not the installer's:
+    # this process (the installer) points at `marker_dir`, the firing shell
+    # points elsewhere, and the marker must land in the firing shell's world.
+    cmd = am.hook_command("working", record_thread=False)
+    fire_dir = tmp_path / "firing-world"
+    subprocess.run(
+        ["sh", "-c", cmd],
+        input=b"{}",
+        check=True,
+        env={
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "MINDFLOCK_SESSION_NAME": "sess_fire",
+            "MINDFLOCK_ACTIVITY_MARKER_DIR": str(fire_dir),
+        },
+    )
+    obj = json.loads((fire_dir / "sess_fire.json").read_text(encoding="utf-8"))
+    assert obj["state"] == "working"
+    # Nothing leaked into the installer's own (fixture) dir.
+    assert am.read_activity_marker("sess_fire") is None
+
+
+def test_hook_command_falls_back_to_the_firing_homes_default(marker_dir, tmp_path):
+    # With no env override in the firing shell, the marker lands under the
+    # firing process's OWN home — a sandboxed CLI writes into its sandbox, a
+    # real one into the real home, whoever installed the hooks last.
+    cmd = am.hook_command("idle", record_thread=False)
+    home = tmp_path / "other-home"
+    subprocess.run(
+        ["sh", "-c", cmd],
+        input=b"{}",
+        check=True,
+        env={
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(home),
+            "MINDFLOCK_SESSION_NAME": "sess_home",
+        },
+    )
+    p = home / ".mindflock-assistant" / ".activity-markers" / "sess_home.json"
+    assert json.loads(p.read_text(encoding="utf-8"))["state"] == "idle"
+
+
 # --------------------------------------------------------------------------- #
 # merge_activity_hooks: the shared settings-file merge
 # --------------------------------------------------------------------------- #

@@ -162,9 +162,18 @@ possible, from the CLI's own lifecycle hooks rather than pane scraping. The
 machinery is provider-agnostic (`providers/activity_markers.py`): at every
 launch, MindFlock idempotently merges hook commands into the CLI's hooks
 config; each hook fires and writes a per-session `{state, ts}` JSON marker to
-`~/.mindflock-assistant/.activity-markers/<session>.json`
-(`MINDFLOCK_ACTIVITY_MARKER_DIR` overrides the directory), which the web layer
-trusts over pane inspection. Every MindFlock-written hook command carries a
+`<marker dir>/<session>.json`, which the web layer trusts over pane inspection.
+Both halves of that path are resolved **inside the firing hook**, never baked
+in at install time: the session name from `MINDFLOCK_SESSION_NAME` (falling
+back to the live tmux `#{session_name}`), and the directory from the firing
+CLI's own environment — `MINDFLOCK_ACTIVITY_MARKER_DIR`, else the real
+`~/.mindflock-assistant/.activity-markers`. The install-time alternative was a
+live incident: sessions sharing a repo share one hooks file, and a sandboxed
+MindFlock (a Verify run with `HOME` redirected) re-pinning that shared file
+baked its sandbox path in — after which every cohabiting session's markers
+went into a dead sandbox and their chips froze. Resolving at fire-time gives
+each world its own markers, whoever installed last; `hook_command`'s
+`marker_dir` parameter is accordingly accepted and **ignored**. Every MindFlock-written hook command carries a
 `# mindflock-activity` tag so a re-install recognizes and replaces **only**
 MindFlock's own entries; user-authored hooks are never touched. Hook install is
 best-effort and can never break a launch. (The Claude provider re-exports these
@@ -187,6 +196,15 @@ evidence it never earned. Unknowable inputs still trust the CLI: no creation
 stamp, or an unreadable marker age, and the marker stands. Claude's live
 `claude agents --json` path reports age `0.0` — it is real-time by construction
 — so it always passes.
+
+**`reports_activity()` is the capability question**, distinct from any one
+reading: whether this CLI can announce its own state at all (hooks installed,
+or a live query) — not whether a marker happens to be fresh right now.
+Returning True is a promise the web layer leans on: a turn-end *announcement*
+for such a CLI is never built out of pane guesswork alone (see the arming
+ladder in [web-api.md](web-api.md)). Claude returns True outright;
+`GenericProvider` derives it from whether the TOML declares an
+`activity.hooks_file`; the base default is False (pane inspection only).
 
 Two built-in wirings:
 
@@ -259,7 +277,9 @@ for LLM`.
 The optional `[activity]` table opts a CLI that has its own hooks engine into
 the marker mechanism above: `hooks_file` names the repo-local hooks config
 (e.g. Codex's `.codex/hooks.json`) and each `[[activity.events]]` maps a hook
-event to the state it records (`working`/`idle`/`clarify`). An empty/omitted
+event to the state it records (`working`/`idle`/`clarify`). Declaring a
+`hooks_file` is also what flips the provider's `reports_activity()` capability
+(above). An empty/omitted
 `hooks_file` means pane-inspection only (unchanged behaviour); the `[classify]`
 pane patterns remain as a fallback for CLI builds without hooks.
 
