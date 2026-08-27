@@ -207,6 +207,14 @@ therefore your sessions) stays shared, which is usually what you want:
   only when missing or stale, and a Start menu locked down by policy costs you
   the label, not the app.
 
+  Its icon is **staged onto the local disk** first (into the dev profile dir).
+  A shortcut's `IconLocation` is read by the Windows shell, not by us, and the
+  shell will not extract an icon from the WSL share the checkout lives on — so
+  pointing it at `dev-icon.ico` in place left the toast headed correctly and
+  badged with the blank white document tile. The window and taskbar icons are
+  unaffected either way: Electron loads those itself, with an ordinary file
+  read. A checkout on a local drive keeps using its own file.
+
 Prod is untouched: with neither the env var nor the flag set, every one of
 these is a no-op, so it is safe to ship in the packaged build.
 

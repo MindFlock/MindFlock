@@ -70,6 +70,47 @@ if (DEV) {
 //
 // Windows-only, and only in dev: prod already has the installer's shortcut, and
 // no other platform resolves notification identity this way.
+// A shortcut's icon has to live where the Windows SHELL can read it.
+//
+// `IconLocation` is not loaded by us — we hand Windows a path and the shell
+// extracts the icon from it later, in whatever process is drawing a Start-menu
+// tile, a taskbar button, or the app logo on a toast. On the supported Windows
+// shape that path was the checkout itself, which is a WSL share
+// (`\\wsl.localhost\<Distro>\...`), and the shell's icon extraction does not
+// resolve it: the toast came up headed correctly and badged with the generic
+// white document icon. Nothing was wrong with the .ico — the window and taskbar
+// icons load the very same file and always looked right, because Electron reads
+// those itself with an ordinary file read.
+//
+// So for a UNC source, keep a copy on the local disk — in the dev profile dir,
+// which is per-user, always local, and thrown away with the rest of the dev
+// state — and point the shortcut at that. Byte-compared rather than blindly
+// rewritten, so a changed MINDFLOCK_DEV_ICON is picked up and an unchanged one
+// costs a 77KB read. Returns null if it cannot be staged, and the caller falls
+// back to the exe's own icon rather than writing a path that renders as blank.
+//
+// A local checkout keeps using its own file: the copy is a workaround for the
+// share, not an improvement. (A mapped network drive would need it too and does
+// not get it — no one runs the supported shape that way.)
+function stageShortcutIcon (src) {
+  try {
+    if (!src || !fs.existsSync(src)) return null
+    if (!src.startsWith('\\\\')) return src // already local — nothing to fix
+    const dst = path.join(app.getPath('userData'), 'dev-icon.ico')
+    const from = fs.readFileSync(src)
+    let have = null
+    try { have = fs.readFileSync(dst) } catch (e) { /* first run */ }
+    if (!have || !have.equals(from)) {
+      fs.mkdirSync(path.dirname(dst), { recursive: true })
+      fs.writeFileSync(dst, from)
+    }
+    return dst
+  } catch (e) {
+    console.warn('[mindflock] could not stage the dev shortcut icon:', e && e.message)
+    return null
+  }
+}
+
 function ensureDevToastName () {
   if (!DEV || process.platform !== 'win32') return
   try {
@@ -80,7 +121,8 @@ function ensureDevToastName () {
     // A shortcut's icon must be an .ico; MINDFLOCK_DEV_ICON may legitimately be
     // a .png (that override is shared with the window/dock icon, which takes
     // either), so fall back to the exe rather than writing a broken IconLocation.
-    const icon = DEV_ICON && DEV_ICON.toLowerCase().endsWith('.ico') ? DEV_ICON : process.execPath
+    const ico = DEV_ICON && DEV_ICON.toLowerCase().endsWith('.ico') ? DEV_ICON : null
+    const icon = (ico && stageShortcutIcon(ico)) || process.execPath
     const want = {
       target: process.execPath,
       args: '"' + app.getAppPath() + '" --mindflock-dev',

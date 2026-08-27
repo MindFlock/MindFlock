@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The dev shell's notifications get their icon back.** A dev toast came up
+  headed *MindFlock-dev* and badged with the blank white document tile — the one
+  Windows draws when it cannot read the icon it was pointed at. The `.ico` was
+  fine; the *path* was not. A shortcut's `IconLocation` is resolved by the
+  Windows shell, later, in whatever process happens to be drawing a tile — and
+  on the supported Windows shape the checkout lives on a WSL share, which the
+  shell's icon extraction will not read. The window and taskbar icons were right
+  all along, because Electron loads those itself with an ordinary file read,
+  which is exactly why only the toast looked broken.
+
+  The dev shortcut now keeps a copy of its icon on the local disk, in the dev
+  profile beside the rest of the throwaway dev state, and points at that. It is
+  byte-compared rather than rewritten, so changing `MINDFLOCK_DEV_ICON` is
+  picked up and leaving it alone costs nothing; a checkout on a local drive
+  keeps using its own file. The shortcut already on disk repairs itself on the
+  next dev run.
+
 - **"Your agent has finished" is now a claim MindFlock can back up.** The idle
   notification fired on the wrong fact. A session's chip goes grey when its CLI
   reports a turn ended, and a coding CLI reports that at the end of *every*

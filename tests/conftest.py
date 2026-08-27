@@ -1,5 +1,6 @@
 """Shared test fixtures for the ticket-ingestion-pipeline test suite."""
 
+import os
 import subprocess
 import sys
 import tempfile
@@ -182,14 +183,45 @@ def _isolate_git_config(_isolated_gitconfig_path, monkeypatch):
     function of each test's own repo. A test that needs different global config
     (e.g. ``test_git_ops`` probing origin state) still overrides these via its own
     ``monkeypatch.setenv`` in the test body — which runs after this fixture.
+
+    Config does not only arrive in FILES. ``git -c k=v`` re-exports its options
+    to every child process as ``GIT_CONFIG_PARAMETERS``, and
+    ``GIT_CONFIG_COUNT``/``KEY_n``/``VALUE_n`` inject config the same way — so a
+    suite launched from inside any git process (a hook, a ``!`` alias, a wrapper)
+    silently inherits that repo's overrides no matter what the file variables
+    say. That hole has bitten once already: an inherited
+    ``safe.bareRepository=explicit`` makes every ``git -C <bare repo>`` in the
+    suite fail, which surfaced as five provisioning tests reporting that a push
+    never reached its (bare) test forge.
     """
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(_isolated_gitconfig_path))
     monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     # A stray process/shell must not be able to redirect these subprocesses at the
-    # repo or index level either.
-    for _var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG"):
+    # repo, index, object-store or ref-namespace level either — nor inject config
+    # through the environment, which bypasses the file variables set above.
+    for _var in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_CONFIG",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_QUARANTINE_PATH",
+        "GIT_TEMPLATE_DIR",
+    ):
         monkeypatch.delenv(_var, raising=False)
+    # GIT_CONFIG_COUNT=n is read together with GIT_CONFIG_KEY_i/VALUE_i; dropping
+    # the count alone disarms the pairs, but they are cheap to clear too.
+    _count = os.environ.get("GIT_CONFIG_COUNT", "")
+    monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+    if _count.isdigit():
+        for _i in range(int(_count)):
+            monkeypatch.delenv("GIT_CONFIG_KEY_{}".format(_i), raising=False)
+            monkeypatch.delenv("GIT_CONFIG_VALUE_{}".format(_i), raising=False)
 
 
 def _real_repo_worktree_paths():
