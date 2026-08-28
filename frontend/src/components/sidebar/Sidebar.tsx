@@ -15,6 +15,7 @@ import { SidebarRow } from "./SidebarRow";
 import { SessionFilter } from "./SessionFilter";
 import { SidebarResizer } from "./SidebarResizer";
 import { BulkBar } from "./BulkBar";
+import { useExtensionBarDefs } from "../../extensions/ExtensionBar";
 import { BarSlot, barContent, SECTION_MIME } from "./SidebarBars";
 import { orderedSections, SESSIONS_KEY } from "./barDefs";
 import { FooterCustomize } from "./FooterCustomize";
@@ -45,6 +46,10 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // The addon-bars mount is created once and never re-rendered: core/slots.js
   // owns its children.
   const addonBarsRef = useRef<HTMLDivElement | null>(null);
+  // Extension bars (Addon API v3): extra section keys threaded through every
+  // orderedSections call so they order and drag like the built-ins.
+  const extBars = useExtensionBarDefs();
+  const extKeys = useMemo(() => extBars.map((b) => b.key), [extBars]);
 
   // Sessions the rail is FOR: the user's work. A verify run is a real session
   // (it needs a worktree and an agent that can run commands) but it is not work
@@ -118,7 +123,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // "sessions" anchor). Only bars are draggable, so dragKey is never sessions.
   const moveSection = (dragKey: string, targetKey: string, before: boolean) => {
     if (!dragKey || dragKey === targetKey) return;
-    const order = orderedSections(ui.barOrder).filter((k) => k !== dragKey);
+    const order = orderedSections(ui.barOrder, extKeys).filter((k) => k !== dragKey);
     let to = order.indexOf(targetKey);
     if (to < 0) to = order.length;
     else if (!before) to += 1;
@@ -223,7 +228,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
         <b>Welcome to MindFlock.</b> Connect your coding CLI and tools in Settings,
         then start a session to get going.
       </Hint>
-      {orderedSections(ui.barOrder).map((key) => {
+      {orderedSections(ui.barOrder, extKeys).map((key) => {
         if (key === SESSIONS_KEY) {
           return (
             <div

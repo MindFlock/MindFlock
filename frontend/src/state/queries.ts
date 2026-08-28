@@ -11,6 +11,7 @@ import { toast } from "../lib/toast";
 import { errorPop } from "../lib/errorPop";
 import { isVerifySession } from "../components/dialogs/verify";
 import type { EffortCap } from "../lib/effort";
+import type { ExtensionInfo, ExtensionSpec } from "../extensions/types";
 import type {
   AuthProfilesResponse,
   Config,
@@ -151,6 +152,54 @@ export function useAgentChoices() {
       fallback: d?.default || "",
     }),
   });
+}
+
+/** The extension manifests (Addon API v3), one row per addon whose manifest
+ * carries a non-null `extension` — the sidebar bars, the palette entries, the
+ * Settings screen and the runtime host all read this one cache. Same shape as
+ * the providers query above: the manifest changes only on a server restart or
+ * an enable/disable toggle (which calls refreshExtensions), so a long
+ * staleTime keeps it from being refetched on every consumer mount. */
+interface AddonsResponse {
+  addons?: Array<{
+    id?: string;
+    label?: string;
+    enabled?: boolean;
+    origin?: string;
+    extension?: ExtensionSpec | null;
+  }>;
+}
+
+const EXTENSIONS_STALE_MS = 300_000;
+
+function extensionsQuery() {
+  return {
+    queryKey: ["addons"],
+    queryFn: () => api<AddonsResponse>("/api/addons"),
+    staleTime: EXTENSIONS_STALE_MS,
+  } as const;
+}
+
+export function useExtensions() {
+  return useQuery({
+    ...extensionsQuery(),
+    select: (d: AddonsResponse): ExtensionInfo[] =>
+      (d?.addons || [])
+        .filter((a) => a && a.id && a.extension)
+        .map((a) => ({
+          id: String(a.id),
+          label: a.label || String(a.id),
+          // Absent on a pre-v3 server: an addon you can't disable is enabled.
+          enabled: a.enabled !== false,
+          origin: a.origin === "user" ? ("user" as const) : ("builtin" as const),
+          extension: a.extension as ExtensionSpec,
+        })),
+  });
+}
+
+/** Re-read the manifests after an enable/disable toggle. */
+export function refreshExtensions() {
+  return queryClient.invalidateQueries({ queryKey: ["addons"] });
 }
 
 export function useDevices() {

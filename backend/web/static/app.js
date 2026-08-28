@@ -3185,15 +3185,15 @@ function requireReactDomClient_production() {
     return value;
   }
   var AbortControllerLocal = "undefined" !== typeof AbortController ? AbortController : function() {
-    var listeners = [], signal = this.signal = {
+    var listeners2 = [], signal = this.signal = {
       aborted: false,
       addEventListener: function(type, listener) {
-        listeners.push(listener);
+        listeners2.push(listener);
       }
     };
     this.abort = function() {
       signal.aborted = true;
-      listeners.forEach(function(listener) {
+      listeners2.forEach(function(listener) {
         return listener();
       });
     };
@@ -3239,33 +3239,33 @@ function requireReactDomClient_production() {
   function pingEngtangledActionScope() {
     if (0 === --currentEntangledPendingCount && null !== currentEntangledListeners) {
       null !== currentEntangledActionThenable && (currentEntangledActionThenable.status = "fulfilled");
-      var listeners = currentEntangledListeners;
+      var listeners2 = currentEntangledListeners;
       currentEntangledListeners = null;
       currentEntangledLane = 0;
       currentEntangledActionThenable = null;
-      for (var i = 0; i < listeners.length; i++) (0, listeners[i])();
+      for (var i = 0; i < listeners2.length; i++) (0, listeners2[i])();
     }
   }
   function chainThenableValue(thenable, result) {
-    var listeners = [], thenableWithOverride = {
+    var listeners2 = [], thenableWithOverride = {
       status: "pending",
       value: null,
       reason: null,
       then: function(resolve) {
-        listeners.push(resolve);
+        listeners2.push(resolve);
       }
     };
     thenable.then(
       function() {
         thenableWithOverride.status = "fulfilled";
         thenableWithOverride.value = result;
-        for (var i = 0; i < listeners.length; i++) (0, listeners[i])(result);
+        for (var i = 0; i < listeners2.length; i++) (0, listeners2[i])(result);
       },
       function(error) {
         thenableWithOverride.status = "rejected";
         thenableWithOverride.reason = error;
-        for (error = 0; error < listeners.length; error++)
-          (0, listeners[error])(void 0);
+        for (error = 0; error < listeners2.length; error++)
+          (0, listeners2[error])(void 0);
       }
     );
     return thenableWithOverride;
@@ -10206,15 +10206,15 @@ function requireReactDomClient_production() {
     };
   }
   function accumulateTwoPhaseListeners(targetFiber, reactName) {
-    for (var captureName = reactName + "Capture", listeners = []; null !== targetFiber; ) {
+    for (var captureName = reactName + "Capture", listeners2 = []; null !== targetFiber; ) {
       var _instance2 = targetFiber, stateNode = _instance2.stateNode;
       _instance2 = _instance2.tag;
-      5 !== _instance2 && 26 !== _instance2 && 27 !== _instance2 || null === stateNode || (_instance2 = getListener(targetFiber, captureName), null != _instance2 && listeners.unshift(
+      5 !== _instance2 && 26 !== _instance2 && 27 !== _instance2 || null === stateNode || (_instance2 = getListener(targetFiber, captureName), null != _instance2 && listeners2.unshift(
         createDispatchListener(targetFiber, _instance2, stateNode)
-      ), _instance2 = getListener(targetFiber, reactName), null != _instance2 && listeners.push(
+      ), _instance2 = getListener(targetFiber, reactName), null != _instance2 && listeners2.push(
         createDispatchListener(targetFiber, _instance2, stateNode)
       ));
-      if (3 === targetFiber.tag) return listeners;
+      if (3 === targetFiber.tag) return listeners2;
       targetFiber = targetFiber.return;
     }
     return [];
@@ -10227,18 +10227,18 @@ function requireReactDomClient_production() {
     return inst ? inst : null;
   }
   function accumulateEnterLeaveListenersForEvent(dispatchQueue, event, target, common, inCapturePhase) {
-    for (var registrationName = event._reactName, listeners = []; null !== target && target !== common; ) {
+    for (var registrationName = event._reactName, listeners2 = []; null !== target && target !== common; ) {
       var _instance3 = target, alternate = _instance3.alternate, stateNode = _instance3.stateNode;
       _instance3 = _instance3.tag;
       if (null !== alternate && alternate === common) break;
-      5 !== _instance3 && 26 !== _instance3 && 27 !== _instance3 || null === stateNode || (alternate = stateNode, inCapturePhase ? (stateNode = getListener(target, registrationName), null != stateNode && listeners.unshift(
+      5 !== _instance3 && 26 !== _instance3 && 27 !== _instance3 || null === stateNode || (alternate = stateNode, inCapturePhase ? (stateNode = getListener(target, registrationName), null != stateNode && listeners2.unshift(
         createDispatchListener(target, stateNode, alternate)
-      )) : inCapturePhase || (stateNode = getListener(target, registrationName), null != stateNode && listeners.push(
+      )) : inCapturePhase || (stateNode = getListener(target, registrationName), null != stateNode && listeners2.push(
         createDispatchListener(target, stateNode, alternate)
       )));
       target = target.return;
     }
-    0 !== listeners.length && dispatchQueue.push({ event, listeners });
+    0 !== listeners2.length && dispatchQueue.push({ event, listeners: listeners2 });
   }
   var NORMALIZE_NEWLINES_REGEX = /\r\n?/g, NORMALIZE_NULL_AND_REPLACEMENT_REGEX = /\u0000|\uFFFD/g;
   function normalizeMarkupForTextOrAttribute(markup) {
@@ -22205,6 +22205,30 @@ function useAgentChoices$1() {
     })
   });
 }
+const EXTENSIONS_STALE_MS = 3e5;
+function extensionsQuery() {
+  return {
+    queryKey: ["addons"],
+    queryFn: () => api("/api/addons"),
+    staleTime: EXTENSIONS_STALE_MS
+  };
+}
+function useExtensions() {
+  return useQuery({
+    ...extensionsQuery(),
+    select: (d) => ((d == null ? void 0 : d.addons) || []).filter((a) => a && a.id && a.extension).map((a) => ({
+      id: String(a.id),
+      label: a.label || String(a.id),
+      // Absent on a pre-v3 server: an addon you can't disable is enabled.
+      enabled: a.enabled !== false,
+      origin: a.origin === "user" ? "user" : "builtin",
+      extension: a.extension
+    }))
+  });
+}
+function refreshExtensions() {
+  return queryClient.invalidateQueries({ queryKey: ["addons"] });
+}
 function useDevices() {
   return useQuery({
     queryKey: ["devices"],
@@ -22455,12 +22479,12 @@ function bridgeTestPlanEvents() {
   const ev = (_a2 = window.mindflock) == null ? void 0 : _a2.events;
   if (testPlansBridged || !ev) return;
   testPlansBridged = true;
-  const bump = (env) => {
+  const bump2 = (env) => {
     if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
     refreshTestPlans();
   };
-  ev.subscribe("session.test_plan_ready", bump);
-  ev.subscribe("session.test_plan_due", bump);
+  ev.subscribe("session.test_plan_ready", bump2);
+  ev.subscribe("session.test_plan_due", bump2);
   const say = (env, text) => {
     if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
     refreshTestPlans();
@@ -22808,20 +22832,20 @@ function freshStage(title) {
 }
 const createStoreImpl = (createState) => {
   let state;
-  const listeners = /* @__PURE__ */ new Set();
+  const listeners2 = /* @__PURE__ */ new Set();
   const setState = (partial, replace) => {
     const nextState = typeof partial === "function" ? partial(state) : partial;
     if (!Object.is(nextState, state)) {
       const previousState = state;
       state = (replace != null ? replace : typeof nextState !== "object" || nextState === null) ? nextState : Object.assign({}, state, nextState);
-      listeners.forEach((listener) => listener(state, previousState));
+      listeners2.forEach((listener) => listener(state, previousState));
     }
   };
   const getState = () => state;
   const getInitialState = () => initialState;
   const subscribe = (listener) => {
-    listeners.add(listener);
-    return () => listeners.delete(listener);
+    listeners2.add(listener);
+    return () => listeners2.delete(listener);
   };
   const api2 = { setState, getState, getInitialState, subscribe };
   const initialState = state = createState(setState, getState, api2);
@@ -22963,24 +22987,36 @@ const DEFAULT_SECTION_ORDER = [
   ...SIDEBAR_BARS.map((b) => b.key),
   SESSIONS_KEY
 ];
-const KNOWN = new Set(DEFAULT_SECTION_ORDER);
-const BY_KEY = new Map(SIDEBAR_BARS.map((b) => [b.key, b]));
-function orderedSections(order) {
+const EXT_BAR_PREFIX = "ext:";
+function orderedSections(order, extraKeys = []) {
+  const known2 = /* @__PURE__ */ new Set([...DEFAULT_SECTION_ORDER, ...extraKeys]);
   const seen = /* @__PURE__ */ new Set();
   const out = [];
   for (const key of order) {
-    if (KNOWN.has(key) && !seen.has(key)) {
+    if (known2.has(key) && !seen.has(key)) {
       out.push(key);
       seen.add(key);
     }
   }
   for (const key of DEFAULT_SECTION_ORDER) {
-    if (!seen.has(key)) out.push(key);
+    if (!seen.has(key)) {
+      out.push(key);
+      seen.add(key);
+    }
+  }
+  const missingExtras = extraKeys.filter((key) => {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (missingExtras.length) {
+    out.splice(out.indexOf(SESSIONS_KEY), 0, ...missingExtras);
   }
   return out;
 }
-function orderedBars(order) {
-  return orderedSections(order).map((key) => BY_KEY.get(key)).filter((b) => !!b);
+function orderedBars(order, extraDefs = []) {
+  const byKey = new Map([...SIDEBAR_BARS, ...extraDefs].map((b) => [b.key, b]));
+  return orderedSections(order, extraDefs.map((b) => b.key)).map((key) => byKey.get(key)).filter((b) => !!b);
 }
 const SIDEBAR_MIN_W = 260;
 const SIDEBAR_MAX_W = 560;
@@ -23022,6 +23058,7 @@ const useUi = create((set, get) => ({
   filter: "",
   hidden: new Set(load("mf_hidden", [])),
   verifyPanes: [],
+  extPanes: [],
   bulkSelected: /* @__PURE__ */ new Set(),
   aliases: load("mf_aliases", {}),
   collapsedDevices: new Set(load("cs_devcollapse", [])),
@@ -23098,6 +23135,19 @@ const useUi = create((set, get) => ({
     set({ verifyPanes: [...get().verifyPanes, title] });
   },
   closeVerifyPane: (title) => set({ verifyPanes: get().verifyPanes.filter((t) => t !== title) }),
+  openExtPane: (key, title) => {
+    if (!key) return;
+    const cur = get().extPanes;
+    const existing = cur.find((p) => p.key === key);
+    if (existing) {
+      if (existing.title !== title)
+        set({ extPanes: cur.map((p) => p.key === key ? { ...p, title } : p) });
+      return;
+    }
+    set({ extPanes: [...cur, { key, title }] });
+  },
+  closeExtPane: (key) => set({ extPanes: get().extPanes.filter((p) => p.key !== key) }),
+  retitleExtPane: (key, title) => set({ extPanes: get().extPanes.map((p) => p.key === key ? { ...p, title } : p) }),
   toggleBulk: (title) => {
     const next = new Set(get().bulkSelected);
     if (next.has(title)) next.delete(title);
@@ -24836,7 +24886,10 @@ const MODAL_DIALOG_NAMES = [
   "intake",
   // Same shape as Intake: a full-page surface with per-plan Delete buttons, and
   // nothing about it suggests the session behind is still taking keystrokes.
-  "verify"
+  "verify",
+  // An extension's dialog body is arbitrary UI (forms, editable grids) — a
+  // stray Delete or Ctrl+W meant for it must never reach the session behind.
+  "extension"
 ];
 const MODAL_DOM_IDS = [
   "new-dialog",
@@ -25236,6 +25289,637 @@ function installKeymap(host2) {
     _chordPending = false;
     clearTimeout(_chordTimer);
   };
+}
+const HOST_API_VERSION = 1;
+const records = /* @__PURE__ */ new Map();
+let known = /* @__PURE__ */ new Map();
+let epochCounter = 0;
+let version = 0;
+const listeners = /* @__PURE__ */ new Set();
+function subscribeHost(cb) {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+function hostVersion() {
+  return version;
+}
+function bump() {
+  version++;
+  for (const cb of listeners) cb();
+}
+function buildTarget(extId, surfaceId, ref2) {
+  return extId + ":" + surfaceId + (ref2 ? ":" + ref2 : "");
+}
+function parseTarget(target) {
+  const a = target.indexOf(":");
+  if (a < 0) return { extId: target, surfaceId: "" };
+  const b = target.indexOf(":", a + 1);
+  if (b < 0) return { extId: target.slice(0, a), surfaceId: target.slice(a + 1) };
+  return {
+    extId: target.slice(0, a),
+    surfaceId: target.slice(a + 1, b),
+    ref: target.slice(b + 1)
+  };
+}
+function extError(extId, msg, err) {
+  if (err !== void 0) console.error("[extension " + extId + "] " + msg, err);
+  else console.error("[extension " + extId + "] " + msg);
+}
+function errText(err) {
+  return String((err == null ? void 0 : err.message) || err);
+}
+function getRecord(ext) {
+  let rec = records.get(ext.id);
+  if (!rec) {
+    rec = {
+      ext,
+      status: "idle",
+      commands: /* @__PURE__ */ new Map(),
+      surfaces: /* @__PURE__ */ new Map(),
+      disposables: [],
+      panes: /* @__PURE__ */ new Map(),
+      refCounters: /* @__PURE__ */ new Map()
+    };
+    records.set(ext.id, rec);
+  }
+  return rec;
+}
+function syncExtensions(list) {
+  known = new Map(list.filter((e) => e.enabled).map((e) => [e.id, e]));
+  for (const id of [...records.keys()]) {
+    if (!known.has(id)) deactivateExtension(id);
+  }
+  for (const [id, rec] of records) {
+    const ext = known.get(id);
+    if (ext) rec.ext = ext;
+  }
+}
+function injectStylesheet(rec, spec) {
+  if (rec.style || typeof document === "undefined") return;
+  const dir = spec.module.slice(0, spec.module.lastIndexOf("/") + 1);
+  const el = document.createElement("style");
+  el.dataset.mfx = rec.ext.id;
+  el.textContent = '@import url("' + dir + 'style.css") layer(components);';
+  document.head.appendChild(el);
+  rec.style = el;
+}
+function activateExtension(ext) {
+  const rec = getRecord(ext);
+  if (rec.activation) return rec.activation;
+  if (rec.status === "error") return Promise.resolve();
+  rec.status = "loading";
+  bump();
+  rec.activation = (async () => {
+    var _a2;
+    try {
+      const spec = ext.extension;
+      if ((spec.api_version || 1) > HOST_API_VERSION) {
+        throw new Error(
+          "needs host API level " + spec.api_version + " (this app provides " + HOST_API_VERSION + ")"
+        );
+      }
+      if (spec.stylesheet) injectStylesheet(rec, spec);
+      const mod = await import(
+        /* @vite-ignore */
+        spec.module
+      );
+      const entry = (mod == null ? void 0 : mod.default) ?? ((_a2 = window.mindflockExtensions) == null ? void 0 : _a2[ext.id]);
+      if (!entry || typeof entry.activate !== "function") {
+        throw new Error("module exports no activate()");
+      }
+      const apiObj = rec.api ?? (rec.api = makeApi(ext));
+      rec.status = "active";
+      rec.activating = true;
+      try {
+        await entry.activate(apiObj);
+      } finally {
+        rec.activating = false;
+      }
+      bump();
+    } catch (err) {
+      rec.status = "error";
+      rec.error = errText(err);
+      extError(ext.id, "activation failed", err);
+      toast("Extension " + (ext.label || ext.id) + " failed: " + rec.error);
+      drainRegistrations(rec);
+      bump();
+    }
+  })();
+  return rec.activation;
+}
+function drainRegistrations(rec) {
+  for (const d of rec.disposables.splice(0)) {
+    try {
+      d.dispose();
+    } catch (err) {
+      extError(rec.ext.id, "dispose failed", err);
+    }
+  }
+  rec.commands.clear();
+  rec.surfaces.clear();
+}
+function deactivateExtension(extId) {
+  var _a2;
+  const rec = records.get(extId);
+  if (!rec) return;
+  records.delete(extId);
+  drainRegistrations(rec);
+  for (const [key, runtime] of rec.panes) {
+    disposeRuntime(extId, runtime);
+    useUi.getState().closeExtPane(key);
+  }
+  rec.panes.clear();
+  if (rec.dialog) {
+    const s = useUi.getState();
+    if (s.openDialog === "extension" && s.dialogTarget === rec.dialog.target) s.closeDialog();
+    disposeRuntime(extId, rec.dialog);
+    rec.dialog = void 0;
+  }
+  (_a2 = rec.style) == null ? void 0 : _a2.remove();
+  bump();
+}
+function routeCommand(commandId, view) {
+  if (view.registered) return { kind: "handler" };
+  const cmd = view.spec.commands.find((c) => c.id === commandId);
+  if (cmd == null ? void 0 : cmd.surface) {
+    const surface = view.spec.surfaces.find((s) => s.id === cmd.surface);
+    if (surface) {
+      return surface.kind === "dialog" ? { kind: "dialog", surfaceId: surface.id, ref: cmd.ref || void 0 } : { kind: "pane", surfaceId: surface.id, ref: cmd.ref || void 0 };
+    }
+  }
+  if (view.status === "idle" || view.status === "loading") return { kind: "activate" };
+  return { kind: "unknown" };
+}
+async function runCommand(extId, commandId, ...args) {
+  const ext = known.get(extId);
+  if (!ext) {
+    extError(extId, "runCommand: unknown or disabled extension");
+    return;
+  }
+  const rec = getRecord(ext);
+  const invoke = () => {
+    const handler = rec.commands.get(commandId);
+    if (!handler) return false;
+    try {
+      handler(...args);
+    } catch (err) {
+      extError(extId, "command " + commandId + " failed", err);
+      toast("Extension " + (ext.label || extId) + ": " + commandId + " failed");
+    }
+    return true;
+  };
+  const route = routeCommand(commandId, {
+    registered: rec.commands.has(commandId),
+    status: rec.status,
+    spec: ext.extension
+  });
+  switch (route.kind) {
+    case "handler":
+      invoke();
+      return;
+    case "dialog":
+      openExtDialog(extId, route.surfaceId, route.ref);
+      return;
+    case "pane":
+      openExtPane(extId, route.surfaceId, { ref: route.ref });
+      return;
+    case "activate":
+      if (rec.activating) {
+        extError(extId, "command " + commandId + " ran during activate() before being registered");
+        return;
+      }
+      await activateExtension(ext);
+      if (!invoke() && rec.status === "active") {
+        extError(extId, "command " + commandId + " is not registered");
+        toast("Extension " + (ext.label || extId) + ": unknown command " + commandId);
+      }
+      return;
+    default:
+      extError(extId, "command " + commandId + " is not registered");
+      if (rec.status === "active") {
+        toast("Extension " + (ext.label || extId) + ": unknown command " + commandId);
+      }
+  }
+}
+function makeSurfaceEl(extId) {
+  const el = document.createElement("div");
+  el.className = "ext-surface mfx-" + extId;
+  return el;
+}
+function openExtPane(extId, surfaceId, opts) {
+  const ext = known.get(extId);
+  if (!ext) {
+    extError(extId, "openPane: unknown or disabled extension");
+    return "";
+  }
+  const rec = getRecord(ext);
+  const surface = ext.extension.surfaces.find((s) => s.id === surfaceId && s.kind === "pane");
+  if (!surface) {
+    extError(extId, "openPane: no pane surface " + JSON.stringify(surfaceId));
+    return "";
+  }
+  let ref2 = opts == null ? void 0 : opts.ref;
+  if (surface.multi) {
+    if (!ref2) {
+      const n = (rec.refCounters.get(surfaceId) || 0) + 1;
+      rec.refCounters.set(surfaceId, n);
+      ref2 = "#" + n;
+    }
+  } else if (ref2) {
+    extError(extId, "openPane: surface " + surfaceId + " is single-instance — ref not allowed");
+    return "";
+  }
+  const key = buildTarget(extId, surfaceId, ref2);
+  const title = (opts == null ? void 0 : opts.title) || surface.title || ext.label;
+  if (!rec.panes.has(key)) {
+    rec.panes.set(key, {
+      kind: "pane",
+      el: makeSurfaceEl(extId),
+      surfaceId,
+      ref: ref2,
+      ctx: opts == null ? void 0 : opts.ctx,
+      started: false,
+      epoch: ++epochCounter
+    });
+  }
+  useUi.getState().openExtPane(key, title);
+  const ui = useUi.getState();
+  if (ui.openDialog === "extension" && ui.dialogTarget && parseTarget(ui.dialogTarget).extId === extId) {
+    ui.closeDialog();
+  }
+  void activateExtension(ext);
+  bump();
+  return key;
+}
+function closeExtPane(extId, surfaceId, ref2) {
+  var _a2;
+  const ext = known.get(extId) || ((_a2 = records.get(extId)) == null ? void 0 : _a2.ext);
+  const surface = ext == null ? void 0 : ext.extension.surfaces.find((s) => s.id === surfaceId && s.kind === "pane");
+  if ((surface == null ? void 0 : surface.multi) && !ref2) {
+    extError(extId, "closePane: surface " + surfaceId + " is multi-instance — a ref is required");
+    return;
+  }
+  closeExtPaneByKey(buildTarget(extId, surfaceId, ref2));
+}
+function closeExtPaneByKey(key) {
+  const { extId } = parseTarget(key);
+  const rec = records.get(extId);
+  const runtime = rec == null ? void 0 : rec.panes.get(key);
+  if (rec && runtime) {
+    rec.panes.delete(key);
+    disposeRuntime(extId, runtime);
+  }
+  useUi.getState().closeExtPane(key);
+  bump();
+}
+function openExtDialog(extId, surfaceId, ref2, ctx) {
+  const ext = known.get(extId);
+  if (!ext) {
+    extError(extId, "openDialog: unknown or disabled extension");
+    return;
+  }
+  const rec = getRecord(ext);
+  const surface = surfaceId ? ext.extension.surfaces.find((s) => s.id === surfaceId && s.kind === "dialog") : ext.extension.surfaces.find((s) => s.kind === "dialog");
+  if (!surface) {
+    extError(extId, "openDialog: no dialog surface" + (surfaceId ? " " + JSON.stringify(surfaceId) : ""));
+    return;
+  }
+  const target = buildTarget(extId, surface.id, ref2);
+  ensureDialogRuntime(rec, target, surface.id, ref2, ctx);
+  useUi.getState().openDialogFor("extension", target);
+  void activateExtension(ext);
+  bump();
+}
+function ensureDialogRuntime(rec, target, surfaceId, ref2, ctx) {
+  if (rec.dialog && rec.dialog.target !== target) {
+    disposeRuntime(rec.ext.id, rec.dialog);
+    rec.dialog = void 0;
+  }
+  if (!rec.dialog) {
+    const surface = rec.ext.extension.surfaces.find((s) => s.id === surfaceId);
+    rec.dialog = {
+      kind: "dialog",
+      target,
+      el: makeSurfaceEl(rec.ext.id),
+      surfaceId,
+      ref: ref2,
+      ctx,
+      started: false,
+      epoch: ++epochCounter,
+      title: (surface == null ? void 0 : surface.title) || rec.ext.label
+    };
+  }
+}
+function closeExtDialog(extId) {
+  const s = useUi.getState();
+  if (s.openDialog !== "extension" || !s.dialogTarget) return;
+  if (parseTarget(s.dialogTarget).extId !== extId) return;
+  s.closeDialog();
+}
+function releaseDialogTarget(target) {
+  const { extId } = parseTarget(target);
+  const rec = records.get(extId);
+  if ((rec == null ? void 0 : rec.dialog) && rec.dialog.target === target) {
+    disposeRuntime(extId, rec.dialog);
+    rec.dialog = void 0;
+    bump();
+  }
+}
+function liveRuntime(extId, key, kind) {
+  var _a2;
+  const rec = records.get(extId);
+  if (!rec) return void 0;
+  if (kind === "pane") return rec.panes.get(key);
+  return ((_a2 = rec.dialog) == null ? void 0 : _a2.target) === key ? rec.dialog : void 0;
+}
+function mountExtPane(key, host2) {
+  const { extId } = parseTarget(key);
+  const rec = records.get(extId);
+  const runtime = rec == null ? void 0 : rec.panes.get(key);
+  if (!rec || !runtime) return () => {
+  };
+  host2.appendChild(runtime.el);
+  void startRuntime(rec, key, runtime);
+  return () => {
+    runtime.el.remove();
+  };
+}
+function mountExtDialog(target, host2) {
+  const { extId, surfaceId, ref: ref2 } = parseTarget(target);
+  const ext = known.get(extId);
+  if (!ext) return () => {
+  };
+  const rec = getRecord(ext);
+  ensureDialogRuntime(rec, target, surfaceId, ref2);
+  const runtime = rec.dialog;
+  host2.appendChild(runtime.el);
+  void activateExtension(ext);
+  void startRuntime(rec, target, runtime);
+  return () => {
+    runtime.el.remove();
+  };
+}
+async function startRuntime(rec, key, runtime) {
+  if (runtime.started || runtime.disposed) return;
+  const token = runtime.epoch;
+  await activateExtension(rec.ext);
+  const live = liveRuntime(rec.ext.id, key, runtime.kind);
+  if (!live || live.epoch !== token) {
+    disposeRuntime(rec.ext.id, runtime);
+    return;
+  }
+  const liveRec = records.get(rec.ext.id);
+  if (!liveRec || liveRec.status !== "active") {
+    bump();
+    return;
+  }
+  if (runtime.started) return;
+  const renderer = liveRec.surfaces.get(runtime.surfaceId);
+  if (!renderer) {
+    runtime.error = "surface " + JSON.stringify(runtime.surfaceId) + " was never registered";
+    extError(rec.ext.id, runtime.error);
+    bump();
+    return;
+  }
+  runtime.started = true;
+  try {
+    runtime.cleanup = renderer(makeSurfaceHost(liveRec, key, runtime));
+  } catch (err) {
+    runtime.error = errText(err);
+    extError(rec.ext.id, "surface " + runtime.surfaceId + " failed to render", err);
+  }
+  bump();
+}
+function makeSurfaceHost(rec, key, runtime) {
+  return {
+    el: runtime.el,
+    surfaceId: runtime.surfaceId,
+    ref: runtime.ref,
+    ctx: runtime.ctx,
+    setTitle(title) {
+      if (runtime.kind === "pane") {
+        useUi.getState().retitleExtPane(key, title);
+      } else {
+        runtime.title = title;
+        bump();
+      }
+    },
+    close() {
+      if (runtime.kind === "pane") closeExtPaneByKey(key);
+      else closeExtDialog(rec.ext.id);
+    }
+  };
+}
+function disposeRuntime(extId, runtime) {
+  if (runtime.disposed) return;
+  runtime.disposed = true;
+  if (runtime.cleanup) {
+    try {
+      runtime.cleanup.dispose();
+    } catch (err) {
+      extError(extId, "surface " + runtime.surfaceId + " dispose failed", err);
+    }
+  }
+  runtime.cleanup = void 0;
+  runtime.el.remove();
+}
+const NOOP_DISPOSABLE = { dispose() {
+} };
+function registerCommand(extId, commandId, handler) {
+  const rec = records.get(extId);
+  if (!rec) return NOOP_DISPOSABLE;
+  if (!commandId.startsWith(extId + ".")) {
+    extError(extId, "commands.register: " + commandId + " must carry the " + extId + ". prefix");
+    return NOOP_DISPOSABLE;
+  }
+  rec.commands.set(commandId, handler);
+  const d = {
+    dispose() {
+      if (rec.commands.get(commandId) === handler) rec.commands.delete(commandId);
+    }
+  };
+  rec.disposables.push(d);
+  return d;
+}
+function registerSurface(extId, surfaceId, renderer) {
+  const rec = records.get(extId);
+  if (!rec) return NOOP_DISPOSABLE;
+  rec.surfaces.set(surfaceId, renderer);
+  const d = {
+    dispose() {
+      if (rec.surfaces.get(surfaceId) === renderer) rec.surfaces.delete(surfaceId);
+    }
+  };
+  rec.disposables.push(d);
+  for (const [key, runtime] of rec.panes) {
+    if (runtime.surfaceId === surfaceId && !runtime.started && runtime.el.isConnected) {
+      runtime.error = void 0;
+      void startRuntime(rec, key, runtime);
+    }
+  }
+  if (rec.dialog && rec.dialog.surfaceId === surfaceId && !rec.dialog.started && rec.dialog.el.isConnected) {
+    rec.dialog.error = void 0;
+    void startRuntime(rec, rec.dialog.target, rec.dialog);
+  }
+  bump();
+  return d;
+}
+function makeStorage(extId) {
+  const prefix = "mfx:" + extId + ":";
+  return {
+    get(key, fallback) {
+      try {
+        const raw = localStorage.getItem(prefix + key);
+        return raw === null ? fallback : JSON.parse(raw);
+      } catch {
+        return fallback;
+      }
+    },
+    set(key, value) {
+      try {
+        localStorage.setItem(prefix + key, JSON.stringify(value));
+      } catch {
+      }
+    }
+  };
+}
+function deepFreeze(obj) {
+  if (obj && typeof obj === "object" && !Object.isFrozen(obj)) {
+    Object.freeze(obj);
+    for (const v of Object.values(obj)) deepFreeze(v);
+  }
+  return obj;
+}
+function makeApi(ext) {
+  const extId = ext.id;
+  const manifest = deepFreeze(structuredClone(ext.extension));
+  const apiObj = {
+    id: extId,
+    apiVersion: HOST_API_VERSION,
+    manifest,
+    ui: {
+      registerSurface: (surfaceId, renderer) => registerSurface(extId, surfaceId, renderer),
+      openDialog: (surfaceId, ref2, ctx) => openExtDialog(extId, surfaceId, ref2, ctx),
+      closeDialog: () => closeExtDialog(extId),
+      openPane: (surfaceId, opts) => openExtPane(extId, surfaceId, opts),
+      closePane: (surfaceId, ref2) => closeExtPane(extId, surfaceId, ref2),
+      toast: (msg, opts) => toast(msg, { duration: opts == null ? void 0 : opts.duration })
+    },
+    commands: {
+      register: (commandId, handler) => registerCommand(extId, commandId, handler),
+      run: (commandId, ...args) => {
+        if (!commandId.startsWith(extId + ".")) {
+          extError(extId, "commands.run: " + commandId + " is not this extension's command");
+          return Promise.resolve();
+        }
+        return runCommand(extId, commandId, ...args);
+      }
+    },
+    request: (path, opts) => api(path, opts),
+    storage: makeStorage(extId),
+    log: { error: (msg, err) => extError(extId, msg, err) }
+  };
+  const mf = window.mindflock;
+  if (mf == null ? void 0 : mf.events) apiObj.events = mf.events;
+  if (typeof (mf == null ? void 0 : mf.sessions) === "function") apiObj.sessions = mf.sessions;
+  Object.freeze(apiObj.ui);
+  Object.freeze(apiObj.commands);
+  Object.freeze(apiObj.storage);
+  Object.freeze(apiObj.log);
+  Object.freeze(apiObj);
+  return apiObj;
+}
+function surfaceView(extId, runtime) {
+  const ext = known.get(extId);
+  const label = (ext == null ? void 0 : ext.label) || extId;
+  const rec = records.get(extId);
+  if (!rec || !runtime || runtime.disposed) {
+    return { status: "error", error: "this window's extension is gone", label };
+  }
+  if (rec.status === "error") {
+    return { status: "error", error: rec.error, label, title: runtime.title };
+  }
+  if (runtime.error) return { status: "error", error: runtime.error, label, title: runtime.title };
+  if (!runtime.started) return { status: "loading", label, title: runtime.title };
+  return { status: "ready", label, title: runtime.title };
+}
+function extPaneView(key) {
+  var _a2;
+  const { extId } = parseTarget(key);
+  return surfaceView(extId, (_a2 = records.get(extId)) == null ? void 0 : _a2.panes.get(key));
+}
+function extDialogView(target) {
+  var _a2;
+  const { extId } = parseTarget(target);
+  const rec = records.get(extId);
+  return surfaceView(extId, ((_a2 = rec == null ? void 0 : rec.dialog) == null ? void 0 : _a2.target) === target ? rec.dialog : void 0);
+}
+function extActivationError(extId) {
+  const rec = records.get(extId);
+  return (rec == null ? void 0 : rec.status) === "error" ? rec.error || "activation failed" : void 0;
+}
+function ExtensionDialog() {
+  const open = useUi((s) => s.openDialog === "extension");
+  const target = useUi((s) => s.dialogTarget);
+  const closeDialog = useUi((s) => s.closeDialog);
+  reactExports.useSyncExternalStore(subscribeHost, hostVersion);
+  const bodyRef = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    if (!open || !target) return;
+    const el = bodyRef.current;
+    const detach = el ? mountExtDialog(target, el) : void 0;
+    return () => {
+      detach == null ? void 0 : detach();
+      releaseDialogTarget(target);
+    };
+  }, [open, target]);
+  reactExports.useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        closeDialog();
+        e.preventDefault();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, closeDialog]);
+  if (!open || !target) return null;
+  const view = extDialogView(target);
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "div",
+    {
+      id: "ext-dialog",
+      className: "modal",
+      onClick: (e) => {
+        if (e.target === e.currentTarget) closeDialog();
+      },
+      children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "ext-dialog-panel", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ws-head", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { children: view.title || view.label }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "ext-dialog-close", "aria-label": "Close", onClick: closeDialog, children: "✕" })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "ext-dialog-body", children: [
+          view.status === "loading" && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "ext-surface-status muted", children: [
+            "Loading ",
+            view.label,
+            "…"
+          ] }),
+          view.status === "error" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ext-surface-status ext-surface-error", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
+              view.label,
+              " failed: ",
+              view.error || "no reason recorded"
+            ] }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "See Settings → Extensions for details." })
+          ] }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "ext-surface-mount", ref: bodyRef })
+        ] })
+      ] })
+    }
+  );
 }
 var reactDomExports = requireReactDom();
 const NOTIF_CAP = 100;
@@ -25774,7 +26458,7 @@ function TopBar() {
   const ui = useUi();
   const [light, setLight] = reactExports.useState(() => document.documentElement.classList.contains("light"));
   const [recentOpen, setRecentOpen] = reactExports.useState(false);
-  const [version, setVersion] = reactExports.useState(engineVersion);
+  const [version2, setVersion] = reactExports.useState(engineVersion);
   const dropRef = reactExports.useRef(null);
   const { data: testPlans } = useTestPlans();
   const due = dueCount((testPlans == null ? void 0 : testPlans.plans) || []);
@@ -26011,9 +26695,9 @@ function TopBar() {
     /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "tb-brand", children: [
       "MindFlock",
       ((_a2 = window.mfshell) == null ? void 0 : _a2.dev) && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { style: { color: "var(--red)", fontWeight: 700 }, children: "-DEV" }),
-      version && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "tb-version", children: [
+      version2 && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "tb-version", children: [
         "v",
-        version
+        version2
       ] })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "tb-drag" }),
@@ -26845,6 +27529,35 @@ function BulkBar() {
     ] })
   ] });
 }
+function useExtensionBarDefs() {
+  const { data: extensions } = useExtensions();
+  return reactExports.useMemo(
+    () => (extensions || []).filter((e) => e.enabled).map((e) => ({
+      key: EXT_BAR_PREFIX + e.id,
+      label: e.extension.bar_label || e.label
+    })),
+    [extensions]
+  );
+}
+function ExtensionBar({ extId }) {
+  const { data: extensions } = useExtensions();
+  const ext = extensions == null ? void 0 : extensions.find((e) => e.id === extId && e.enabled);
+  if (!ext) return null;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ext-bar", id: "ext-bar-" + ext.id, children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ext-label", children: ext.extension.bar_label || ext.label }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ext-actions", children: ext.extension.buttons.map((b) => /* @__PURE__ */ jsxRuntimeExports.jsx(
+      "button",
+      {
+        type: "button",
+        className: "ext-btn",
+        title: b.title || void 0,
+        onClick: () => void runCommand(ext.id, b.command),
+        children: b.label
+      },
+      b.command
+    )) })
+  ] });
+}
 let closeCurrent = null;
 function UsagePopover({ anchor, onClose, children }) {
   const popRef = reactExports.useRef(null);
@@ -27650,6 +28363,9 @@ function VerifyBar() {
 }
 const SECTION_MIME = "application/x-mf-section";
 function barContent(key, cbs) {
+  if (key.startsWith(EXT_BAR_PREFIX)) {
+    return /* @__PURE__ */ jsxRuntimeExports.jsx(ExtensionBar, { extId: key.slice(EXT_BAR_PREFIX.length) });
+  }
   switch (key) {
     case "usage":
       return /* @__PURE__ */ jsxRuntimeExports.jsx(OverallUsage, {});
@@ -27769,6 +28485,7 @@ function FooterCustomize() {
   const hiddenBars = useUi((s) => s.hiddenBars);
   const toggleBarHidden = useUi((s) => s.toggleBarHidden);
   const barOrder = useUi((s) => s.barOrder);
+  const extBars = useExtensionBarDefs();
   const [open, setOpen] = reactExports.useState(false);
   const ref2 = reactExports.useRef(null);
   reactExports.useEffect(() => {
@@ -27802,7 +28519,7 @@ function FooterCustomize() {
     ),
     open && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "foot-customize-menu", role: "menu", children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "fc-title", children: "Show in sidebar" }),
-      orderedBars(barOrder).map((b) => /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "fc-item", children: [
+      orderedBars(barOrder, extBars).map((b) => /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "fc-item", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx(
           "input",
           {
@@ -28150,6 +28867,8 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
   const [secDrag, setSecDrag] = reactExports.useState(null);
   const [secCue, setSecCue] = reactExports.useState(null);
   const addonBarsRef = reactExports.useRef(null);
+  const extBars = useExtensionBarDefs();
+  const extKeys = reactExports.useMemo(() => extBars.map((b) => b.key), [extBars]);
   const listed = reactExports.useMemo(() => instances2.filter((i) => !isVerifySession(i.title)), [instances2]);
   const { rows: allRows } = reactExports.useMemo(
     () => orderedInstances(listed, ui.order),
@@ -28202,7 +28921,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
   const cueFor = (title) => dropCue && dropCue.title === title && dragging !== title ? dropCue.cue : null;
   const moveSection = (dragKey, targetKey, before) => {
     if (!dragKey || dragKey === targetKey) return;
-    const order = orderedSections(ui.barOrder).filter((k) => k !== dragKey);
+    const order = orderedSections(ui.barOrder, extKeys).filter((k) => k !== dragKey);
     let to = order.indexOf(targetKey);
     if (to < 0) to = order.length;
     else if (!before) to += 1;
@@ -28296,7 +29015,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
         ]
       }
     ),
-    orderedSections(ui.barOrder).map((key) => {
+    orderedSections(ui.barOrder, extKeys).map((key) => {
       var _a2;
       if (key === SESSIONS_KEY) {
         return /* @__PURE__ */ jsxRuntimeExports.jsxs(
@@ -29279,14 +29998,14 @@ const HEADER_WORDS = /* @__PURE__ */ new Set([
 function promptsFromFile(name, text) {
   let lines;
   if (/\.csv$/i.test(name)) {
-    const records = csvRecords(text).map(
+    const records2 = csvRecords(text).map(
       (cells) => cells.map((c) => c.trim()).filter(Boolean)
     );
-    const first = records[0];
+    const first = records2[0];
     if ((first == null ? void 0 : first.length) && first.every((c) => HEADER_WORDS.has(c.toLowerCase()))) {
-      records.shift();
+      records2.shift();
     }
-    lines = records.map((cells) => cells.join(" "));
+    lines = records2.map((cells) => cells.join(" "));
   } else {
     lines = text.split(/\r\n|\r|\n/);
   }
@@ -30629,8 +31348,34 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
   }, [hostRef, wsPath, interactive, reconnect]);
   return state;
 }
+function ExtPaneBody({ extKey }) {
+  reactExports.useSyncExternalStore(subscribeHost, hostVersion);
+  const mountRef = reactExports.useRef(null);
+  reactExports.useEffect(() => {
+    const el = mountRef.current;
+    if (!el) return;
+    return mountExtPane(extKey, el);
+  }, [extKey]);
+  const view = extPaneView(extKey);
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ext-pane-body", children: [
+    view.status === "loading" && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "ext-surface-status muted", children: [
+      "Loading ",
+      view.label,
+      "…"
+    ] }),
+    view.status === "error" && /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ext-surface-status ext-surface-error", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { children: [
+        view.label,
+        " failed: ",
+        view.error || "no reason recorded"
+      ] }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "See Settings → Extensions for details." })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "ext-surface-mount", ref: mountRef })
+  ] });
+}
 function SpecialPane({ desc, drag }) {
-  const title = sentinel(desc.kind, desc.session);
+  const title = sentinel(desc.kind, (desc.kind === "ext" ? desc.extKey : desc.session) || "");
   const paneRef = reactExports.useRef(null);
   const headDrag = {
     draggable: true,
@@ -30663,14 +31408,15 @@ function SpecialPane({ desc, drag }) {
     "section",
     {
       ref: paneRef,
-      className: "pane focused " + (desc.kind === "logs" ? "logs-pane" : desc.kind === "syslogs" ? "syslogs-pane" : desc.kind === "verify" ? "verify-pane" : "chat-pane"),
+      className: "pane focused " + (desc.kind === "logs" ? "logs-pane" : desc.kind === "syslogs" ? "syslogs-pane" : desc.kind === "verify" ? "verify-pane" : desc.kind === "ext" ? "ext-pane" : "chat-pane"),
       "data-title": title,
       ...paneDrag,
       children: [
         desc.kind === "verify" && /* @__PURE__ */ jsxRuntimeExports.jsx(VerifyBody, { desc, headDrag }),
         desc.kind === "logs" && /* @__PURE__ */ jsxRuntimeExports.jsx(LogsBody, { desc, headDrag }),
         desc.kind === "syslogs" && /* @__PURE__ */ jsxRuntimeExports.jsx(SysLogsBody, { desc, headDrag }),
-        desc.kind === "chat" && /* @__PURE__ */ jsxRuntimeExports.jsx(ChatBody, { desc, headDrag })
+        desc.kind === "chat" && /* @__PURE__ */ jsxRuntimeExports.jsx(ChatBody, { desc, headDrag }),
+        desc.kind === "ext" && /* @__PURE__ */ jsxRuntimeExports.jsx(ExtBody, { desc, headDrag })
       ]
     }
   );
@@ -30752,6 +31498,62 @@ function ChatBody({ desc, headDrag }) {
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-body", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-term", ref: hostRef }) })
   ] });
 }
+function ExtBody({ desc, headDrag }) {
+  var _a2;
+  const extKey = desc.extKey || "";
+  const { data: extensions } = useExtensions();
+  const { extId, surfaceId } = parseTarget(extKey);
+  const ext = extensions == null ? void 0 : extensions.find((e) => e.id === extId);
+  const surface = ext == null ? void 0 : ext.extension.surfaces.find((s) => s.id === surfaceId && s.kind === "pane");
+  const backCommand = (surface == null ? void 0 : surface.back_command) || "";
+  const backTitle = (_a2 = ext == null ? void 0 : ext.extension.commands.find((c) => c.id === backCommand)) == null ? void 0 : _a2.title;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pane-head", ...headDrag, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "grip", title: "Drag to move this window", children: "⠿" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", children: desc.title }),
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "actions", children: [
+        backCommand && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+          "button",
+          {
+            className: "act ext-pane-back",
+            title: backTitle || "Back",
+            onClick: (e) => {
+              e.stopPropagation();
+              void runCommand(extId, backCommand);
+            },
+            children: [
+              /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { width: "10", height: "10", viewBox: "0 0 10 10", "aria-hidden": "true", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+                "path",
+                {
+                  d: "M6.5 1.5 3 5l3.5 3.5",
+                  fill: "none",
+                  stroke: "currentColor",
+                  strokeWidth: "1.5",
+                  strokeLinecap: "round",
+                  strokeLinejoin: "round"
+                }
+              ) }),
+              "Back"
+            ]
+          }
+        ),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            className: "act ext-pane-close",
+            title: "Close this window",
+            onClick: (e) => {
+              e.stopPropagation();
+              desc.onClose();
+            },
+            children: "Close"
+          }
+        )
+      ] })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-body", children: /* @__PURE__ */ jsxRuntimeExports.jsx(ExtPaneBody, { extKey }) })
+  ] });
+}
 function SysLogsBody({ desc, headDrag }) {
   const [sources, setSources] = reactExports.useState([]);
   const [selected, setSelected] = reactExports.useState("server");
@@ -30814,6 +31616,9 @@ function SysLogsBody({ desc, headDrag }) {
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-body", children: /* @__PURE__ */ jsxRuntimeExports.jsx("pre", { className: "syslogs-view", ref: viewRef, children: text }) })
   ] });
 }
+function sentinelRef(p) {
+  return (p.kind === "ext" ? p.extKey : p.session) || "";
+}
 function TerminalGrid({ specialPanes }) {
   const { data: instances2, isSuccess } = useInstances();
   const { data: config } = useConfig();
@@ -30834,7 +31639,7 @@ function TerminalGrid({ specialPanes }) {
   );
   const byTitle = reactExports.useMemo(() => new Map(visible.map((i) => [i.title, i])), [visible]);
   const specialByKey = reactExports.useMemo(
-    () => new Map(specialPanes.map((p) => [sentinel(p.kind, p.session), p])),
+    () => new Map(specialPanes.map((p) => [sentinel(p.kind, sentinelRef(p)), p])),
     [specialPanes]
   );
   const slotTitles = reactExports.useMemo(
@@ -30952,7 +31757,7 @@ function TerminalGrid({ specialPanes }) {
   );
 }
 function sentinel(kind, ref2 = "") {
-  return kind === "logs" ? "\0mindflock-logs" : kind === "syslogs" ? "\0system-logs" : kind === "verify" ? "\0verify:" + ref2 : "\0assistant-chat";
+  return kind === "logs" ? "\0mindflock-logs" : kind === "syslogs" ? "\0system-logs" : kind === "verify" ? "\0verify:" + ref2 : kind === "ext" ? "\0ext:" + ref2 : "\0assistant-chat";
 }
 async function sendMessagePrompt(title) {
   const text = window.prompt("Send a message to " + displayName(title) + ":");
@@ -30993,6 +31798,7 @@ function CommandPalette({ host: host2 }) {
   const open = useUi((s) => s.openDialog === "palette");
   const closeDialog = useUi((s) => s.closeDialog);
   const { data: config } = useConfig();
+  const { data: extensions } = useExtensions();
   const [query, setQuery] = reactExports.useState("");
   const [sel, setSel] = reactExports.useState(0);
   const inputRef = reactExports.useRef(null);
@@ -31059,8 +31865,18 @@ function CommandPalette({ host: host2 }) {
     acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
     acts.push({ label: "New from Recently closed…", run: () => ui.openDialogFor("recent") });
+    for (const ext of extensions || []) {
+      if (!ext.enabled) continue;
+      for (const cmd of ext.extension.commands) {
+        acts.push({
+          label: cmd.title || cmd.id,
+          hint: ext.label,
+          run: () => void runCommand(ext.id, cmd.id)
+        });
+      }
+    }
     return acts;
-  }, [open, config, host2]);
+  }, [open, config, host2, extensions]);
   const filtered = reactExports.useMemo(() => {
     const scored = actions.map((a, i) => ({ a, i, s: fuzzyScore(query, a.label) })).filter((x) => x.s >= 0);
     scored.sort((x, y) => x.s - y.s || x.i - y.i);
@@ -38116,6 +38932,87 @@ function UninstallSection() {
     }, children: isWindows ? "Open Windows uninstall…" : "Uninstall MindFlock…" })
   ] });
 }
+function readDisabled(raw) {
+  return Array.isArray(raw) ? raw.map((x) => String(x)) : void 0;
+}
+function Extensions(_) {
+  const s = useSettings();
+  const { data: extensions, isLoading, isError } = useExtensions();
+  reactExports.useSyncExternalStore(subscribeHost, hostVersion);
+  const disabled = readDisabled(s.get("extensions", "disabled"));
+  const setEnabled = async (ext, on) => {
+    const cur = disabled ?? (extensions || []).filter((e) => !e.enabled).map((e) => e.id);
+    const next = on ? cur.filter((id) => id !== ext.id) : cur.includes(ext.id) ? cur : [...cur, ext.id];
+    await s.saveGroup(
+      "extensions",
+      { disabled: next },
+      (on ? "Enabled " : "Disabled ") + ext.label
+    );
+    void refreshExtensions();
+  };
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Extensions" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Each extension adds one sidebar bar whose buttons run its commands, and opens its own dialogs and grid windows. Its bar drags and hides like the built-in ones (footer Customize); its commands are in the command palette." }),
+    isLoading && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Loading…" }),
+    isError && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Could not read the extension list from the server." }),
+    extensions && !extensions.length && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "No extensions installed." }),
+    extensions && extensions.length > 0 && /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "prov-conn-list", id: "ext-list", children: extensions.map((ext) => {
+      const on = disabled ? !disabled.includes(ext.id) : ext.enabled;
+      const err = extActivationError(ext.id);
+      const spec = ext.extension;
+      const n = spec.commands.length;
+      return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "prov-conn", "data-extension": ext.id, children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "prov-conn-head ext-row-head", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "prov-name", children: ext.label }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "prov-badge", children: ext.origin === "user" ? "~/.mindflock/extensions" : "built-in" }),
+          !on && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "prov-badge", children: "disabled" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("label", { className: "ca-switch", title: on ? "Disable this extension" : "Enable this extension", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("input", { type: "checkbox", checked: on, onChange: (e) => void setEnabled(ext, e.target.checked) }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ca-slider" })
+          ] })
+        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint", children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: ext.id }),
+          ' · bar "',
+          spec.bar_label || ext.label,
+          '" · ',
+          n,
+          " ",
+          n === 1 ? "command" : "commands"
+        ] }),
+        err && /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint ext-row-error", children: [
+          "Failed to activate: ",
+          err,
+          ". Turn it off and on again to retry after fixing the module."
+        ] }),
+        ext.origin === "user" && /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "set-hint", children: "Disabling removes its bar, commands and windows here; its backend (routes, event subscriptions) stays loaded until MindFlock restarts." })
+      ] }, ext.id);
+    }) }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx("h3", { className: "set-section-title", children: "Create an extension" }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { className: "set-hint", children: [
+      "Make a folder ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "~/.mindflock/extensions/<id>/" }),
+      " containing an",
+      " ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "extension.py" }),
+      " that exposes ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "build(ctx)" }),
+      " and returns an Addon whose",
+      " ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "extension()" }),
+      " declares the bar, commands and surfaces. Put the ES module and its ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "style.css" }),
+      " in an optional ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "frontend/" }),
+      " folder next to it (served at ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "/extensions/<id>/" }),
+      "). Extensions are discovered once at startup: restart MindFlock to load a new one. The manifest and API reference is in",
+      " ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "docs/extensions.md" }),
+      "."
+    ] })
+  ] });
+}
 function hasVisitorData(data) {
   var _a2;
   return !!((_a2 = data == null ? void 0 : data.clicks) == null ? void 0 : _a2.totals);
@@ -38775,6 +39672,7 @@ const SCREENS = [
   { key: "doctor", label: "Doctor", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Doctor, { ...p }) },
   { key: "logs", label: "System logs", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(SystemLogs, { ...p }) },
   { key: "advanced", label: "Advanced", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Advanced, { ...p }) },
+  { key: "extensions", label: "Extensions", el: (p) => /* @__PURE__ */ jsxRuntimeExports.jsx(Extensions, { ...p }) },
   // Maintainer-only: MindFlock's own reach (stars, downloads, tracked-link
   // clicks), not something an end user's build needs — filtered out below
   // unless this is a --mindflock-dev shell.
@@ -43432,6 +44330,12 @@ function App() {
   }, [instances2]);
   const [openSpecial, setOpenSpecial] = reactExports.useState(/* @__PURE__ */ new Set());
   const verifyPanes = useUi((s) => s.verifyPanes);
+  const extPanes = useUi((s) => s.extPanes);
+  const extQuery = useExtensions();
+  reactExports.useEffect(() => {
+    if (!extQuery.isSuccess || !extQuery.data) return;
+    syncExtensions(extQuery.data);
+  }, [extQuery.isSuccess, extQuery.data]);
   reactExports.useEffect(() => {
     if (!instances2 || !instances2.length || !verifyPanes.length) return;
     const live = new Set(instances2.map((i) => i.title));
@@ -43466,14 +44370,21 @@ function App() {
       session,
       onClose: () => useUi.getState().closeVerifyPane(session)
     }));
-    return fixed.concat(runs);
-  }, [openSpecial, toggleSpecial, verifyPanes]);
+    const ext = extPanes.map((p) => ({
+      key: "ext:" + p.key,
+      kind: "ext",
+      title: p.title,
+      extKey: p.key,
+      onClose: () => closeExtPaneByKey(p.key)
+    }));
+    return fixed.concat(runs, ext);
+  }, [openSpecial, toggleSpecial, verifyPanes, extPanes]);
   const host2 = reactExports.useMemo(() => {
     const stableTitles = () => {
       const order = useUi.getState().order;
       const list = instances$1().map((i) => i.title).filter((t) => !isVerifySession(t));
-      const known = order.filter((t) => list.includes(t));
-      return [...known, ...list.filter((t) => !known.includes(t))];
+      const known2 = order.filter((t) => list.includes(t));
+      return [...known2, ...list.filter((t) => !known2.includes(t))];
     };
     const toggleDialog = (name) => {
       const s = useUi.getState();
@@ -43526,6 +44437,7 @@ function App() {
     /* @__PURE__ */ jsxRuntimeExports.jsx(SetupDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(TodoDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(AssistantAgentDialog, {}),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(ExtensionDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(CommandPalette, { host: host2 }),
     /* @__PURE__ */ jsxRuntimeExports.jsx(ShortcutsSheet, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(WelcomeTour, {}),

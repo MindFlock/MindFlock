@@ -1,0 +1,1214 @@
+/* dbclient extension styles.
+ *
+ * Loaded by the host as `@import url(…/style.css) layer(components)`, so every
+ * rule here sits in the app's components layer and loses to the theme layer.
+ * EVERY selector is scoped under .mfx-dbclient (the class the host puts on
+ * each surface root) — nothing in this file can reach the rest of the app.
+ * Colors come only from the app's tokens (frontend/src/styles/tokens.css):
+ * --panel, --panel-2, --border, --text, --muted, --accent, --accent-rgb,
+ * --green, --red, --gold, --bg. Tints are color-mix()es of those tokens so
+ * they follow the light theme and every accent set for free. */
+
+/* --- root + layout primitives ------------------------------------------- */
+.mfx-dbclient {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.mfx-dbclient .mono {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.mfx-dbclient .muted {
+  color: var(--muted);
+}
+
+.mfx-dbclient .dbc-spacer {
+  flex: 1;
+}
+
+.mfx-dbclient .dbc-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 2px 2px;
+}
+
+.mfx-dbclient .dbc-pad {
+  padding: 12px;
+}
+
+.mfx-dbclient .dbc-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mfx-dbclient .dbc-hint.inline {
+  margin-left: 6px;
+}
+
+.mfx-dbclient .dbc-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+/* --- controls ------------------------------------------------------------ */
+.mfx-dbclient .dbc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.mfx-dbclient .dbc-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.mfx-dbclient .dbc-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mfx-dbclient .dbc-btn.primary {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.18);
+}
+
+.mfx-dbclient .dbc-btn.primary:hover:not(:disabled) {
+  background: rgba(var(--accent-rgb), 0.3);
+}
+
+.mfx-dbclient .dbc-btn.danger {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 16%, transparent);
+}
+
+.mfx-dbclient .dbc-btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 28%, transparent);
+}
+
+.mfx-dbclient .dbc-btn.icon {
+  padding: 4px 6px;
+}
+
+.mfx-dbclient .dbc-btn.active {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+.mfx-dbclient .dbc-btn.danger-hover:hover:not(:disabled) {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.mfx-dbclient .dbc-input,
+.mfx-dbclient .dbc-select,
+.mfx-dbclient textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.mfx-dbclient .dbc-input:focus,
+.mfx-dbclient .dbc-select:focus,
+.mfx-dbclient textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.mfx-dbclient .dbc-input.narrow {
+  width: 6em;
+}
+
+.mfx-dbclient .dbc-select {
+  max-width: 200px;
+}
+
+/* --- toolbar / badges / notices ----------------------------------------- */
+.mfx-dbclient .dbc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex-wrap: wrap;
+  flex: none;
+}
+
+.mfx-dbclient .dbc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
+.mfx-dbclient .dbc-badge.ro {
+  color: var(--gold);
+  border-color: color-mix(in srgb, var(--gold) 50%, var(--border));
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.mfx-dbclient .dbc-badge.kind {
+  text-transform: uppercase;
+}
+
+.mfx-dbclient .dbc-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 12px 8px;
+}
+
+.mfx-dbclient .dbc-notice {
+  margin: 6px 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  flex: none;
+}
+
+.mfx-dbclient .dbc-notice.error {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 50%, var(--border));
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+.mfx-dbclient .dbc-notice.warn {
+  color: var(--gold);
+  border-color: color-mix(in srgb, var(--gold) 50%, var(--border));
+  background: color-mix(in srgb, var(--gold) 10%, transparent);
+}
+
+.mfx-dbclient .dbc-notice.ok {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 50%, var(--border));
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+}
+
+.mfx-dbclient .dbc-notice.info {
+  color: var(--muted);
+}
+
+.mfx-dbclient .dbc-chip {
+  display: inline-block;
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+/* --- confirm bar --------------------------------------------------------- */
+.mfx-dbclient .dbc-confirm-slot {
+  flex: none;
+}
+
+.mfx-dbclient .dbc-confirm {
+  margin: 6px 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent);
+  background: rgba(var(--accent-rgb), 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mfx-dbclient .dbc-confirm.danger {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.mfx-dbclient .dbc-confirm-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.mfx-dbclient .dbc-confirm.danger .dbc-confirm-head .dbc-icon {
+  color: var(--red);
+}
+
+.mfx-dbclient .dbc-confirm-body {
+  margin: 0;
+  color: var(--muted);
+}
+
+.mfx-dbclient .dbc-confirm-pre,
+.mfx-dbclient .dbc-code {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.mfx-dbclient .dbc-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* --- read-only overlay ---------------------------------------------------- */
+.mfx-dbclient .dbc-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  flex: 1;
+}
+
+.mfx-dbclient .dbc-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  outline: none;
+}
+
+.mfx-dbclient .dbc-overlay-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.mfx-dbclient .dbc-overlay-title {
+  font-weight: 600;
+}
+
+.mfx-dbclient .dbc-overlay-note {
+  color: var(--muted);
+  flex: 1;
+}
+
+.mfx-dbclient .dbc-overlay-pre {
+  flex: 1;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- data grid ------------------------------------------------------------ */
+.mfx-dbclient .dbc-grid {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.mfx-dbclient .dbc-grid-notice {
+  flex: none;
+  padding: 4px 10px;
+  color: var(--gold);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.mfx-dbclient .dbc-grid-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.mfx-dbclient .dbc-grid-empty {
+  position: absolute;
+  inset: 40px 0 0 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 24px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.mfx-dbclient .dbc-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 11.5px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  min-width: 100%;
+}
+
+.mfx-dbclient .dbc-table th,
+.mfx-dbclient .dbc-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  white-space: nowrap;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.mfx-dbclient .dbc-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.mfx-dbclient .dbc-table thead .dbc-filter-row th {
+  top: 27px;
+  padding: 2px 4px;
+  font-weight: 400;
+  background: var(--panel);
+}
+
+.mfx-dbclient .dbc-th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.mfx-dbclient .dbc-th.sortable:hover {
+  color: var(--accent);
+}
+
+.mfx-dbclient .dbc-th[data-sort] {
+  color: var(--accent);
+}
+
+.mfx-dbclient .dbc-col-name {
+  margin-right: 6px;
+}
+
+.mfx-dbclient .dbc-col-type {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 10px;
+}
+
+.mfx-dbclient .dbc-sort-icon,
+.mfx-dbclient .dbc-pk-icon {
+  width: 12px;
+  height: 12px;
+  vertical-align: -2px;
+}
+
+.mfx-dbclient .dbc-pk-icon {
+  color: var(--gold);
+  margin-right: 4px;
+}
+
+.mfx-dbclient .dbc-sort-icon {
+  margin-left: 4px;
+}
+
+.mfx-dbclient .dbc-table .dbc-sel,
+.mfx-dbclient .dbc-table .dbc-rownum {
+  width: 1%;
+  text-align: center;
+  color: var(--muted);
+  background: var(--panel);
+}
+
+.mfx-dbclient .dbc-table .dbc-sel input {
+  accent-color: var(--accent);
+  margin: 0;
+  vertical-align: middle;
+}
+
+.mfx-dbclient .dbc-filter-cell {
+  min-width: 140px;
+}
+
+.mfx-dbclient .dbc-filter-op,
+.mfx-dbclient .dbc-filter-val {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 1px 4px;
+  font-family: inherit;
+}
+
+.mfx-dbclient .dbc-filter-op {
+  max-width: 82px;
+  margin-right: 3px;
+}
+
+.mfx-dbclient .dbc-filter-val {
+  width: calc(100% - 90px);
+  min-width: 50px;
+}
+
+.mfx-dbclient .dbc-filter-val:focus,
+.mfx-dbclient .dbc-filter-op:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.mfx-dbclient .dbc-table tbody tr:hover td {
+  background: rgba(var(--accent-rgb), 0.07);
+}
+
+.mfx-dbclient .dbc-table tbody tr.selected td {
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+.mfx-dbclient .dbc-table tbody tr.deleted td {
+  text-decoration: line-through;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+
+.mfx-dbclient .dbc-table tbody tr.inserted td {
+  background: color-mix(in srgb, var(--green) 9%, transparent);
+}
+
+.mfx-dbclient .dbc-table tbody tr.inserted .dbc-rownum {
+  color: var(--green);
+}
+
+.mfx-dbclient .dbc-cell.num {
+  text-align: right;
+}
+
+.mfx-dbclient .dbc-cell.dirty {
+  box-shadow: inset 0 0 0 1px var(--gold);
+  background: color-mix(in srgb, var(--gold) 14%, transparent);
+}
+
+.mfx-dbclient .dbc-cell.editing {
+  padding: 0;
+  overflow: visible;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.mfx-dbclient .dbc-null,
+.mfx-dbclient .dbc-unset,
+.mfx-dbclient .dbc-empty-str {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 10.5px;
+}
+
+.mfx-dbclient .dbc-cell.truncated {
+  position: relative;
+  padding-right: 26px;
+}
+
+.mfx-dbclient .dbc-cell-text {
+  display: inline-block;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+.mfx-dbclient .dbc-magnify {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.mfx-dbclient .dbc-magnify:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.mfx-dbclient .dbc-editor {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  min-width: 160px;
+}
+
+.mfx-dbclient .dbc-edit-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  padding: 2px 6px;
+  outline: none;
+}
+
+.mfx-dbclient .dbc-null-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+
+.mfx-dbclient .dbc-null-btn:hover {
+  color: var(--accent);
+}
+
+/* --- footer --------------------------------------------------------------- */
+.mfx-dbclient .dbc-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  flex: none;
+}
+
+/* --- tabs (table pane) ---------------------------------------------------- */
+.mfx-dbclient .dbc-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  flex: none;
+  min-height: 30px;
+}
+
+.mfx-dbclient .dbc-tab {
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  padding: 7px 10px 5px;
+  cursor: pointer;
+}
+
+.mfx-dbclient .dbc-tab:hover {
+  color: var(--text);
+}
+
+.mfx-dbclient .dbc-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.mfx-dbclient .dbc-ident {
+  margin-left: auto;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.mfx-dbclient .dbc-tabs .dbc-badge {
+  margin-left: 8px;
+}
+
+.mfx-dbclient .dbc-tab-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mfx-dbclient .dbc-tab-body[hidden] {
+  display: none;
+}
+
+.mfx-dbclient .dbc-tab-body.structure,
+.mfx-dbclient .dbc-tab-body.ddl {
+  overflow: auto;
+}
+
+.mfx-dbclient .dbc-ddl-pre {
+  margin: 8px;
+  max-height: none;
+}
+
+.mfx-dbclient .dbc-struct {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mfx-dbclient .dbc-struct-title {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.mfx-dbclient .dbc-picker {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mfx-dbclient .dbc-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* --- query pad ----------------------------------------------------------- */
+.mfx-dbclient .dbc-scope {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.mfx-dbclient .dbc-sql {
+  flex: none;
+  width: 100%;
+  min-height: 90px;
+  height: 150px;
+  resize: vertical;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  padding: 8px 10px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  tab-size: 2;
+}
+
+.mfx-dbclient .dbc-results {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mfx-dbclient .dbc-info {
+  flex: none;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mfx-dbclient .dbc-history {
+  max-width: 180px;
+}
+
+.mfx-dbclient .busy .dbc-info {
+  color: var(--accent);
+}
+
+/* --- explorer dialog ------------------------------------------------------ */
+.mfx-dbclient .dbc-explorer {
+  display: grid;
+  grid-template-columns: minmax(220px, 30%) minmax(0, 1fr);
+  height: 100%;
+  min-height: min(560px, 70vh);
+  width: 100%;
+  min-width: min(860px, 88vw);
+}
+
+.mfx-dbclient .dbc-explorer-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.mfx-dbclient .dbc-side-tools {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.mfx-dbclient .dbc-filter-box {
+  flex: 1;
+  min-width: 0;
+}
+
+.mfx-dbclient .dbc-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0;
+}
+
+.mfx-dbclient .dbc-tree-empty {
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+  color: var(--muted);
+}
+
+.mfx-dbclient .dbc-tree-empty p {
+  margin: 0;
+}
+
+.mfx-dbclient .dbc-node,
+.mfx-dbclient .dbc-node-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px calc(6px + var(--depth, 0) * 14px);
+  cursor: pointer;
+  user-select: none;
+  min-height: 24px;
+}
+
+.mfx-dbclient .dbc-node:hover {
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.mfx-dbclient .dbc-node.selected {
+  background: rgba(var(--accent-rgb), 0.18);
+}
+
+.mfx-dbclient .dbc-node-status {
+  cursor: default;
+  color: var(--muted);
+  padding-left: calc(28px + var(--depth, 0) * 14px);
+  font-size: 11px;
+}
+
+.mfx-dbclient .dbc-node-status.error {
+  color: var(--red);
+}
+
+.mfx-dbclient .dbc-chevron,
+.mfx-dbclient .dbc-chevron-spacer {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 0;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.mfx-dbclient .dbc-chevron:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+.mfx-dbclient .dbc-node-icon {
+  color: var(--muted);
+}
+
+.mfx-dbclient .dbc-node.kind-conn .dbc-node-icon {
+  color: var(--accent);
+}
+
+.mfx-dbclient .dbc-node.kind-view .dbc-node-icon {
+  color: var(--green);
+}
+
+.mfx-dbclient .dbc-node-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mfx-dbclient .dbc-node.kind-conn .dbc-node-name {
+  font-weight: 600;
+}
+
+.mfx-dbclient .dbc-node-badge {
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.mfx-dbclient .dbc-node-badge.rows {
+  border-color: transparent;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.mfx-dbclient .dbc-node-lock {
+  color: var(--gold);
+  width: 12px;
+  height: 12px;
+}
+
+.mfx-dbclient .dbc-node-act {
+  display: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 2px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.mfx-dbclient .dbc-node:hover .dbc-node-act {
+  display: inline-flex;
+}
+
+.mfx-dbclient .dbc-node-act:hover {
+  color: var(--accent);
+}
+
+.mfx-dbclient .dbc-explorer-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--panel);
+}
+
+.mfx-dbclient .dbc-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.mfx-dbclient .dbc-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  flex-wrap: wrap;
+}
+
+.mfx-dbclient .dbc-panel-icon {
+  color: var(--accent);
+  width: 16px;
+  height: 16px;
+}
+
+.mfx-dbclient .dbc-panel-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.mfx-dbclient .dbc-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mfx-dbclient .dbc-panel > .dbc-hint {
+  padding: 12px;
+}
+
+.mfx-dbclient .dbc-detail-body {
+  padding: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* connection cards (the .prov-conn vocabulary, scoped) */
+.mfx-dbclient .dbc-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.mfx-dbclient .dbc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.mfx-dbclient .dbc-card.detailed {
+  margin: 12px;
+}
+
+.mfx-dbclient .dbc-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mfx-dbclient .dbc-card-head .dbc-icon {
+  color: var(--accent);
+}
+
+.mfx-dbclient .dbc-card-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.mfx-dbclient .dbc-card-sub {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mfx-dbclient .dbc-card-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mfx-dbclient .dbc-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mfx-dbclient .dbc-notice-slot {
+  padding: 0 4px;
+}
+
+/* connection form */
+.mfx-dbclient .dbc-seg-strip {
+  display: inline-flex;
+  margin: 12px 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  align-self: flex-start;
+}
+
+.mfx-dbclient .dbc-seg {
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
+.mfx-dbclient .dbc-seg:last-child {
+  border-right: none;
+}
+
+.mfx-dbclient .dbc-seg.active {
+  background: rgba(var(--accent-rgb), 0.2);
+  color: var(--text);
+}
+
+.mfx-dbclient .dbc-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}
+
+.mfx-dbclient .dbc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mfx-dbclient .dbc-field-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.mfx-dbclient .dbc-field-row {
+  display: flex;
+  gap: 10px;
+}
+
+.mfx-dbclient .dbc-field-row .dbc-field:last-child {
+  flex: 0 0 auto;
+}
+
+.mfx-dbclient .dbc-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.mfx-dbclient .dbc-check input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+.mfx-dbclient .dbc-form-actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px 12px;
+  align-items: center;
+}
+
+.mfx-dbclient .dbc-driver-note {
+  display: flex;
+  gap: 8px;
+  margin: 10px 12px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--gold) 50%, var(--border));
+  background: color-mix(in srgb, var(--gold) 8%, transparent);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.mfx-dbclient .dbc-driver-note > .dbc-icon {
+  color: var(--gold);
+  margin-top: 2px;
+}
+
+.mfx-dbclient .dbc-driver-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.mfx-dbclient .dbc-driver-hint code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  word-break: break-all;
+}
+
+/* column summary tables (explorer detail + STRUCTURE tab) */
+.mfx-dbclient .dbc-cols-wrap {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.mfx-dbclient .dbc-cols-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11.5px;
+}
+
+.mfx-dbclient .dbc-cols-table th,
+.mfx-dbclient .dbc-cols-table td {
+  padding: 3px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.mfx-dbclient .dbc-cols-table thead th {
+  background: var(--panel-2);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  position: sticky;
+  top: 0;
+}
+
+.mfx-dbclient .dbc-cols-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.mfx-dbclient .dbc-pk-cell {
+  width: 1%;
+}
+
+.mfx-dbclient .dbc-ddl {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mfx-dbclient .dbc-ddl-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-weight: 600;
+}

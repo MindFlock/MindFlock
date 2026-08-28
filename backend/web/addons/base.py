@@ -14,7 +14,8 @@ protocol (start/stop/status), which lets a generic start/stop/logs UI drive it.
 from __future__ import annotations
 
 import abc
-from dataclasses import asdict, dataclass
+import re
+from dataclasses import asdict, dataclass, field
 from typing import Callable, List, Optional, Protocol, runtime_checkable
 
 from fastapi import APIRouter
@@ -50,6 +51,171 @@ class FrontendDescriptor:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+# --------------------------------------------------------------------------- #
+# Addon API v3: extensions. A VSCode-like contribution model layered over the
+# v2 descriptors — an extension declares ONE sidebar bar (label + buttons),
+# commands, and dialog/pane surfaces in a static manifest; the host renders all
+# chrome and lazily imports the extension's ES module on first use. Everything
+# here is data, not behaviour: the SPA host (frontend/src/extensions/) owns the
+# lifecycle. slots.js ignores the new ``extension`` manifest key, so v2 addons
+# are untouched.
+# --------------------------------------------------------------------------- #
+
+#: Shape of an extension id and a surface id. Deliberately narrow (lowercase
+#: slug, no dots): the id doubles as a URL segment (``/extensions/<id>/``), an
+#: event namespace (``addon.<id>.*``) and a CSS prefix (``.mfx-<id>``).
+EXTENSION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+#: Vocabulary of a surface's ``kind`` — the house words (a *dialog* is the
+#: modal popup, a *pane* is a grid window), never "popup"/"window".
+EXTENSION_SURFACE_KINDS = ("dialog", "pane")
+
+
+@dataclass
+class ExtensionButton:
+    """One button on the extension's sidebar bar. Buttons never carry code —
+    they reference a command id, the universal verb."""
+
+    command: str  # command id this button runs
+    label: str
+    title: str = ""  # tooltip
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class ExtensionCommand:
+    """One command. ``id`` is ``<ext-id>.<verb>``. A command with ``surface``
+    set is *declarative*: the host opens that surface without loading the
+    extension's module first (``ref`` optionally names the instance). Without
+    ``surface`` the command runs code the module registers at activation."""
+
+    id: str  # "<ext-id>.<verb>" — see validate_extension_spec
+    title: str  # palette text, "Database: Explorer" style
+    surface: Optional[str] = None  # declarative: surface id to open
+    ref: Optional[str] = None  # declarative: instance ref (surface must be set)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class ExtensionSurface:
+    """One host-owned container the extension renders into: a ``dialog``
+    (modal popup) or a ``pane`` (grid window). ``multi`` panes support many
+    live instances (the host mints refs); ``back_command`` makes the host draw
+    a back button in the pane head running that command (the verify-pane-back
+    precedent)."""
+
+    id: str
+    kind: str  # "dialog" | "pane" (house vocabulary, NOT popup/window)
+    title: str  # default chrome title
+    multi: bool = False  # pane only: many instances (host mints refs)
+    back_command: Optional[str] = None  # pane only: back button in the head
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class ExtensionSpec:
+    """The whole static manifest of one extension — everything the host needs
+    to render its chrome without executing extension code. Serialized verbatim
+    into ``/api/addons`` under the ``extension`` key."""
+
+    module: str  # e.g. "/extensions/dbclient/index.js"
+    bar_label: str
+    buttons: List[ExtensionButton] = field(default_factory=list)
+    commands: List[ExtensionCommand] = field(default_factory=list)
+    surfaces: List[ExtensionSurface] = field(default_factory=list)
+    #: Host injects ``<module dir>/style.css`` into ``layer(components)`` (so a
+    #: sloppy selector loses to the theme layer instead of beating the app).
+    stylesheet: bool = False
+    #: MINIMUM host API level required — the host refuses activation when its
+    #: own level is lower.
+    api_version: int = 1
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def validate_extension_spec(addon_id: str, spec: ExtensionSpec) -> List[str]:
+    """Every problem with ``spec`` (empty list = valid).
+
+    Returns problems rather than raising because the two callers want opposite
+    severities: a *built-in* spec is developer error (register_addons raises on
+    a non-empty list), while a *discovered* extension's bad spec must only skip
+    that extension, never take the server down.
+    """
+    problems: List[str] = []
+    if not EXTENSION_ID_RE.match(addon_id or ""):
+        problems.append(
+            "extension id %r must match %s" % (addon_id, EXTENSION_ID_RE.pattern)
+        )
+    # Command ids are namespaced under the extension id: "<ext-id>.<verb>".
+    command_re = re.compile(r"^" + re.escape(addon_id or "") + r"\.[a-z0-9][a-z0-9-]*$")
+
+    surfaces_by_id = {}
+    for s in spec.surfaces:
+        if not EXTENSION_ID_RE.match(s.id or ""):
+            problems.append(
+                "surface id %r must match %s" % (s.id, EXTENSION_ID_RE.pattern)
+            )
+        if s.id in surfaces_by_id:
+            problems.append("duplicate surface id %r" % s.id)
+        surfaces_by_id[s.id] = s
+        if s.kind not in EXTENSION_SURFACE_KINDS:
+            problems.append(
+                "surface %r has kind %r (expected one of %s)"
+                % (s.id, s.kind, ", ".join(EXTENSION_SURFACE_KINDS))
+            )
+        if s.multi and s.kind != "pane":
+            problems.append("surface %r: multi is pane-only" % s.id)
+
+    command_ids = set()
+    for c in spec.commands:
+        if not command_re.match(c.id or ""):
+            problems.append(
+                "command id %r must match '%s.<verb>' (verb: [a-z0-9][a-z0-9-]*)"
+                % (c.id, addon_id)
+            )
+        if c.id in command_ids:
+            problems.append("duplicate command id %r" % c.id)
+        command_ids.add(c.id)
+
+    for c in spec.commands:
+        if c.ref is not None and c.surface is None:
+            problems.append("command %r has a ref but no surface" % c.id)
+        if c.surface is None:
+            continue
+        surface = surfaces_by_id.get(c.surface)
+        if surface is None:
+            problems.append("command %r opens unknown surface %r" % (c.id, c.surface))
+        elif surface.multi and c.ref is None:
+            # A multi surface has no single instance a declarative open could
+            # mean, and the manifest defines no ref-minting — the command must
+            # pin one explicitly (or run code that calls openPane itself).
+            problems.append(
+                "command %r opens multi surface %r without a ref" % (c.id, c.surface)
+            )
+
+    for b in spec.buttons:
+        if b.command not in command_ids:
+            problems.append("button %r references unknown command" % b.command)
+
+    for s in spec.surfaces:
+        if s.back_command is None:
+            continue
+        if s.kind != "pane":
+            problems.append("surface %r: back_command is pane-only" % s.id)
+        if s.back_command not in command_ids:
+            problems.append(
+                "surface %r has unknown back_command %r" % (s.id, s.back_command)
+            )
+    return problems
 
 
 @runtime_checkable
@@ -154,6 +320,11 @@ class Addon(abc.ABC):
 
     id: str = ""
     label: str = ""
+    #: Where the addon came from: ``"builtin"`` (shipped in this package) or
+    #: ``"user"`` (discovered under ``~/.mindflock/extensions/``). The registrar
+    #: (``discover_extensions``) stamps discovered addons ``"user"``; the class
+    #: default keeps every existing addon a builtin with zero edits.
+    origin: str = "builtin"
 
     def __init__(self, ctx: Optional[AppContext] = None) -> None:
         self.ctx = ctx
@@ -169,6 +340,11 @@ class Addon(abc.ABC):
         """UI contributions (0..n). Default: none."""
         return []
 
+    def extension(self) -> Optional[ExtensionSpec]:
+        """The Addon API v3 contribution (sidebar bar + commands + surfaces),
+        or ``None`` for addons without one. Default: none."""
+        return None
+
     async def on_startup(self, ctx: AppContext) -> None:
         """Run once at app startup (idempotent). Default: no-op."""
 
@@ -176,9 +352,22 @@ class Addon(abc.ABC):
         """Run once at app shutdown (cleanup). Default: no-op."""
 
     def manifest(self) -> dict:
+        # Local import — the house pattern for settings readers: a module-level
+        # name here would be one refactor away from the silent-fallback
+        # NameError trap (see backend/web/server.py's settings readers), and
+        # manifest() must always read the store fresh so a toggle flip lands on
+        # the next /api/addons fetch without a restart.
+        from backend.config.settings import load_settings
+
+        spec = self.extension()
         return {
             "id": self.id,
             "label": self.label,
             "managed": isinstance(self, ManagedProcess),
             "frontend": [d.to_dict() for d in self.frontend()],
+            "extension": spec.to_dict() if spec else None,
+            # Enabled is the absence of an opt-out: extensions are on by
+            # default, and the Settings screen only ever writes the OFF list.
+            "enabled": self.id not in load_settings().extensions.disabled,
+            "origin": self.origin,
         }

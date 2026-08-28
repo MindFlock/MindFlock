@@ -1,14 +1,17 @@
 /** App shell — composes the ported components and owns cross-cutting wiring:
- * capability body-classes, activity debounce feed, keymap installation, and
- * which special panes (logs / system logs / assistant chat) are open. */
+ * capability body-classes, activity debounce feed, keymap installation, which
+ * special panes (logs / system logs / assistant chat / verify / extension) are
+ * open, and feeding the extension host its enabled set. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api/client";
-import { useConfig, useInstances, useIntakeWarm } from "./state/queries";
+import { useConfig, useExtensions, useInstances, useIntakeWarm } from "./state/queries";
 import { tourDecision, useUi } from "./state/store";
 import { followAutopilot, noteActivity, reconcileLoopReset } from "./lib/stage";
 import { installKeymap, type KeymapHost } from "./lib/keymap";
 import { selectSession, instances as instancesSnapshot } from "./lib/sessionActions";
+import { closeExtPaneByKey, syncExtensions } from "./extensions/host";
+import { ExtensionDialog } from "./extensions/ExtensionDialog";
 import { TopBar } from "./components/TopBar";
 import { ConnBanner } from "./components/ConnBanner";
 import { StateNotice } from "./components/StateNotice";
@@ -125,9 +128,30 @@ export default function App() {
     }
   }, [instances]);
 
-  // Special panes (logs / system logs / assistant chat / verify runs).
+  // Special panes (logs / system logs / assistant chat / verify runs /
+  // extension panes).
   const [openSpecial, setOpenSpecial] = useState<Set<string>>(new Set());
   const verifyPanes = useUi((s) => s.verifyPanes);
+  const extPanes = useUi((s) => s.extPanes);
+
+  // FEED THE EXTENSION HOST ITS ENABLED SET. syncExtensions() is what
+  // deactivates an extension that was disabled or removed — draining its
+  // registrations and closing its panes and dialog — so this effect is also
+  // the reap for extension windows: there is no separate "close panes whose
+  // extension left" pass, deactivateExtension does it. Driven from the query,
+  // not from the Settings toggle, so a disable made in another tab lands here
+  // on the next manifest refetch.
+  //
+  // Guarded on a SUCCESSFUL query, deliberately (the verify reap's non-empty
+  // guard, same reason): `data` is undefined while the first fetch is in
+  // flight, and on a failed refetch the query reports an error while keeping
+  // the last good data — syncing either would tear every extension down over
+  // a network hiccup, dirty grid cells and typed SQL included.
+  const extQuery = useExtensions();
+  useEffect(() => {
+    if (!extQuery.isSuccess || !extQuery.data) return;
+    syncExtensions(extQuery.data);
+  }, [extQuery.isSuccess, extQuery.data]);
 
   // REAP A WATCH WINDOW WHOSE SESSION HAS GONE. A verify run is a real session
   // and it can end without anybody closing its pane: it finishes, it is
@@ -180,8 +204,18 @@ export default function App() {
       session,
       onClose: () => useUi.getState().closeVerifyPane(session),
     }));
-    return fixed.concat(runs);
-  }, [openSpecial, toggleSpecial, verifyPanes]);
+    // Extension panes: one per open pane key, titled live from the store.
+    // Close goes through the host (not the store directly) so the keep-alive
+    // body behind the pane is disposed along with its grid slot.
+    const ext: SpecialPaneDesc[] = extPanes.map((p) => ({
+      key: "ext:" + p.key,
+      kind: "ext",
+      title: p.title,
+      extKey: p.key,
+      onClose: () => closeExtPaneByKey(p.key),
+    }));
+    return fixed.concat(runs, ext);
+  }, [openSpecial, toggleSpecial, verifyPanes, extPanes]);
 
   // Keyboard: the host object gives the keymap reach into UI it can't import.
   const host = useMemo<KeymapHost>(() => {
@@ -249,6 +283,7 @@ export default function App() {
       <SetupDialog />
       <TodoDialog />
       <AssistantAgentDialog />
+      <ExtensionDialog />
       <CommandPalette host={host} />
       <ShortcutsSheet />
       <WelcomeTour />

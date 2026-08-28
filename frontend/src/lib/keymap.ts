@@ -120,6 +120,9 @@ const MODAL_DIALOG_NAMES: DialogName[] = [
   // Same shape as Intake: a full-page surface with per-plan Delete buttons, and
   // nothing about it suggests the session behind is still taking keystrokes.
   "verify",
+  // An extension's dialog body is arbitrary UI (forms, editable grids) — a
+  // stray Delete or Ctrl+W meant for it must never reach the session behind.
+  "extension",
 ];
 const MODAL_DOM_IDS = [
   "new-dialog",

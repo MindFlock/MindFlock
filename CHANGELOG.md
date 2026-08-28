@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Extensions (Addon API v3).** An addon can now contribute UI the way a
+  VSCode extension does: one draggable/hideable sidebar bar with buttons,
+  commands in the command palette, and dialog and grid-window surfaces whose
+  bodies it renders into host-owned keep-alive containers — so typed text and
+  unsaved edits survive a grid drag, because the drag remounts the window's
+  React shell and never touches the extension's DOM. Everything is declared
+  in a static manifest served by `GET /api/addons`, which is what lets a bar
+  button and a palette entry exist, and a declared dialog open, before the
+  extension's ES module has loaded; the module is imported lazily on first
+  use, `activate(api)` runs once against a small frozen API object, every
+  registration returns a disposable, and every callback runs in a host
+  `try/catch` attributed to the extension — a broken extension toasts once
+  and shows its error on its Settings row instead of taking the app down.
+
+  User extensions are discovered once at startup from
+  `~/.mindflock/extensions/<id>/extension.py` (`build(ctx) -> Addon`; an
+  optional `frontend/` is served at `/extensions/<id>/`), with ids that
+  collide with the core API refused, and toggled on **Settings →
+  Extensions** (`extensions.disabled` in settings.json — the only
+  per-extension state that file ever carries; an extension's own
+  configuration is its own file). A disable tears down the frontend
+  completely; a discovered extension's backend stays loaded until the next
+  restart, which the row says out loud. The manifest's `api_version` is the
+  minimum host API level the module needs, so an extension written against a
+  newer app fails with one clear message rather than a `TypeError` mid-click.
+  Existing addons are untouched. Reference: docs/extensions.md § 4, including
+  a two-file starter extension.
+- **Database Client**, the first extension — a **Database** bar (Explorer,
+  SQL) with SQLite, PostgreSQL (psycopg) and MySQL (pymysql) connection
+  profiles kept in `~/.mindflock/dbclient.json` (0600, passwords never sent
+  back; read-only profiles enforced at connect), a lazy schema tree, an
+  editable table grid (sort, filter, paging, insert/update/delete previewed as
+  SQL and applied in one transaction with stale-row detection; views and
+  tables without a primary key read-only, and say so), a SQL query pad
+  (statement at cursor, run all, history, a needs-confirmation guard for a
+  no-WHERE `UPDATE`/`DELETE` judged after stripping string literals), and
+  CSV/JSON export. Every statement goes through one server-side chokepoint:
+  single statement only, 1–300 s timeouts, a 10 000-row cap, identifiers
+  validated against the introspected schema, values always bound. Drivers are
+  detected, not required — the connection form names the missing one and how
+  to install it.
+
 ## [0.2.1] - 2026-08-28
 
 ### Added

@@ -32,6 +32,7 @@ def test_manifest_lists_migrated_addons():
         "templates",
         "notify",
         "traffic",
+        "dbclient",
     ]
     # Each UI addon contributes a frontend descriptor with a known slot. The
     # "connections" addon is API-only (its list renders inline in the Settings →
@@ -39,6 +40,11 @@ def test_manifest_lists_migrated_addons():
     api_only = {"connections"}
     for a in data["addons"]:
         if a["id"] in api_only:
+            assert a["frontend"] == [], a["id"]
+            continue
+        if a["extension"] is not None:
+            # An Addon API v3 extension contributes through its manifest, not
+            # through v2 descriptors (slots.js ignores it by design).
             assert a["frontend"] == [], a["id"]
             continue
         assert a["frontend"], a["id"]

@@ -1,15 +1,19 @@
 /** Special grid panes (ports app.js sections 17/18's logs / system-logs /
- * assistant-chat panes). They hold grid slots and drag like session panes. */
+ * assistant-chat panes, plus verify watch windows and extension panes). They
+ * hold grid slots and drag like session panes. */
 
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { useWsTerm } from "../../lib/wsTerm";
 import { useUi } from "../../state/store";
+import { useExtensions } from "../../state/queries";
+import { ExtPaneBody } from "../../extensions/ExtPaneBody";
+import { parseTarget, runCommand } from "../../extensions/host";
 import { dropSideFor } from "./layout";
 import { sentinel, type DragCtx, type SpecialPaneDesc } from "./TerminalGrid";
 
 export function SpecialPane({ desc, drag }: { desc: SpecialPaneDesc; drag: DragCtx }) {
-  const title = sentinel(desc.kind, desc.session);
+  const title = sentinel(desc.kind, (desc.kind === "ext" ? desc.extKey : desc.session) || "");
   const paneRef = useRef<HTMLElement | null>(null);
 
   const headDrag = {
@@ -51,7 +55,9 @@ export function SpecialPane({ desc, drag }: { desc: SpecialPaneDesc; drag: DragC
             ? "syslogs-pane"
             : desc.kind === "verify"
               ? "verify-pane"
-              : "chat-pane")
+              : desc.kind === "ext"
+                ? "ext-pane"
+                : "chat-pane")
       }
       data-title={title}
       {...paneDrag}
@@ -60,6 +66,7 @@ export function SpecialPane({ desc, drag }: { desc: SpecialPaneDesc; drag: DragC
       {desc.kind === "logs" && <LogsBody desc={desc} headDrag={headDrag} />}
       {desc.kind === "syslogs" && <SysLogsBody desc={desc} headDrag={headDrag} />}
       {desc.kind === "chat" && <ChatBody desc={desc} headDrag={headDrag} />}
+      {desc.kind === "ext" && <ExtBody desc={desc} headDrag={headDrag} />}
     </section>
   );
 }
@@ -172,6 +179,73 @@ function ChatBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadDra
       </div>
       <div className="pane-body">
         <div className="pane-term" ref={hostRef} />
+      </div>
+    </>
+  );
+}
+
+/** An extension pane (Addon API v3). The chrome is the host's — grip, title,
+ * an optional back button and Close — and the body is the extension's
+ * keep-alive container, adopted by ExtPaneBody. The title lives in the UI
+ * store (retitleExtPane) so an extension's setTitle lands here without the
+ * host reaching into its DOM.
+ *
+ * The back button is the verify-pane-back precedent generalised: a surface
+ * that declares `back_command` gets a button running it. It exists for the
+ * same reason Verify's does — the explorer dialog has to CLOSE to open this
+ * pane (it is a full-screen modal), so without it the dialog→pane flow is a
+ * one-way trip. The label stays a plain "Back" because the host does not know
+ * the extension's nouns; the command's palette title rides in the tooltip. */
+function ExtBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadDrag }) {
+  const extKey = desc.extKey || "";
+  const { data: extensions } = useExtensions();
+  const { extId, surfaceId } = parseTarget(extKey);
+  const ext = extensions?.find((e) => e.id === extId);
+  const surface = ext?.extension.surfaces.find((s) => s.id === surfaceId && s.kind === "pane");
+  const backCommand = surface?.back_command || "";
+  const backTitle = ext?.extension.commands.find((c) => c.id === backCommand)?.title;
+  return (
+    <>
+      <div className="pane-head" {...headDrag}>
+        <span className="grip" title="Drag to move this window">⠿</span>
+        <span className="title">{desc.title}</span>
+        <div className="actions">
+          {backCommand && (
+            <button
+              className="act ext-pane-back"
+              title={backTitle || "Back"}
+              onClick={(e) => {
+                e.stopPropagation();
+                void runCommand(extId, backCommand);
+              }}
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <path
+                  d="M6.5 1.5 3 5l3.5 3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              Back
+            </button>
+          )}
+          <button
+            className="act ext-pane-close"
+            title="Close this window"
+            onClick={(e) => {
+              e.stopPropagation();
+              desc.onClose();
+            }}
+          >
+            Close
+          </button>
+        </div>
+      </div>
+      <div className="pane-body">
+        <ExtPaneBody extKey={extKey} />
       </div>
     </>
   );

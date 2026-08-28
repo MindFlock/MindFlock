@@ -34,6 +34,9 @@ export default defineConfig({
         "/api",
         "/core",
         "/addons",
+        // Extension frontends (Addon API v3): built-in ones under static/, user
+        // ones mounted per directory by register_addons — both server-served.
+        "/extensions",
         "/vendor",
         "/theme.css",
         "/mobile.css",

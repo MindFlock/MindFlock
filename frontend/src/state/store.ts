@@ -82,7 +82,10 @@ export type DialogName =
   | "todo"
   | "assistant-agent"
   | "palette"
-  | "shortcuts";
+  | "shortcuts"
+  // The one dialog every extension's dialog surfaces share; the extension id +
+  // surface ride in dialogTarget ("<ext>:<surface>[:<ref>]").
+  | "extension";
 
 interface UiState {
   /** Logically focused session title (keyboard target, MRU head). */
@@ -110,6 +113,12 @@ interface UiState {
    * persisted — a run you were watching yesterday is not something to reopen on
    * launch, and the Verify dialog can always reopen one that still exists. */
   verifyPanes: string[];
+  /** Extension panes (grid windows an extension opened), by pane key
+   * ("<ext>:<surface>[:<ref>]") with a live chrome title. Deliberately not
+   * persisted, like verifyPanes: the keep-alive DOM behind them lives only in
+   * this page, so a reload could only restore an empty shell — the extension
+   * reopens them on demand. */
+  extPanes: Array<{ key: string; title: string }>;
   /** Bulk-selected titles (sidebar checkboxes). */
   bulkSelected: Set<string>;
   /** Display aliases: title -> custom label. */
@@ -170,6 +179,12 @@ interface UiState {
   /** Show a verify run's read-only pane (idempotent), or close it. */
   openVerifyPane(title: string): void;
   closeVerifyPane(title: string): void;
+  /** Open (idempotent by key; a same-key open just applies the new title) /
+   * close / retitle an extension pane. The extension host (extensions/host.ts)
+   * owns the pane BODIES; these only manage the grid slots. */
+  openExtPane(key: string, title: string): void;
+  closeExtPane(key: string): void;
+  retitleExtPane(key: string, title: string): void;
   toggleBulk(title: string): void;
   clearBulk(): void;
   setAlias(title: string, alias: string): void;
@@ -211,6 +226,7 @@ export const useUi = create<UiState>((set, get) => ({
   filter: "",
   hidden: new Set(load<string[]>("mf_hidden", [])),
   verifyPanes: [],
+  extPanes: [],
   bulkSelected: new Set<string>(),
   aliases: load<Record<string, string>>("mf_aliases", {}),
   collapsedDevices: new Set(load<string[]>("cs_devcollapse", [])),
@@ -289,6 +305,22 @@ export const useUi = create<UiState>((set, get) => ({
   },
   closeVerifyPane: (title) =>
     set({ verifyPanes: get().verifyPanes.filter((t) => t !== title) }),
+  openExtPane: (key, title) => {
+    if (!key) return;
+    const cur = get().extPanes;
+    const existing = cur.find((p) => p.key === key);
+    if (existing) {
+      // Same-key open = reveal (the pane already holds its grid slot) +
+      // retitle; the body is never touched.
+      if (existing.title !== title)
+        set({ extPanes: cur.map((p) => (p.key === key ? { ...p, title } : p)) });
+      return;
+    }
+    set({ extPanes: [...cur, { key, title }] });
+  },
+  closeExtPane: (key) => set({ extPanes: get().extPanes.filter((p) => p.key !== key) }),
+  retitleExtPane: (key, title) =>
+    set({ extPanes: get().extPanes.map((p) => (p.key === key ? { ...p, title } : p)) }),
   toggleBulk: (title) => {
     const next = new Set(get().bulkSelected);
     if (next.has(title)) next.delete(title);

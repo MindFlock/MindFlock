@@ -11895,7 +11895,173 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   border-color: var(--accent);
 }
 } /* 300 — after
-   NewSessionDialog.css, whose .modal backdrop the break screen overrides */ @layer theme{
+   NewSessionDialog.css, whose .modal backdrop the break screen overrides */ @layer components{
+
+/* Extension host chrome (Addon API v3): the sidebar bar, the shared dialog,
+   the pane body and the Settings rows. Everything an extension draws lives
+   under its own `.mfx-<id>` root inside `.ext-surface` (host.ts creates it and
+   the extension's stylesheet is imported into this same layer); nothing here
+   reaches inside that root. Tokens only. */
+
+/* Sidebar bar — mirrors #assistant-bar / #addon-bars .addon-bar exactly, so a
+   brand-new extension keeps the sidebar rhythm with zero CSS of its own. */
+.ext-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.ext-bar .ext-label {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ext-bar .ext-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.ext-bar .ext-btn {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+}
+
+.ext-bar .ext-btn:hover {
+  border-color: var(--accent);
+}
+
+/* The shared extension dialog: a FIXED-size centered card like #settings-panel
+   and #intake-panel — the body scrolls, the frame never resizes with what the
+   extension renders (an explorer tree that grows on expand must not walk the
+   dialog around the screen). Wider than both because a database explorer is a
+   tree beside a form. */
+#ext-dialog-panel {
+  width: min(960px, 94vw);
+  height: min(86vh, 720px);
+  padding: 18px 22px 20px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#ext-dialog-panel .ws-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: none;
+}
+
+#ext-dialog-panel .ws-head h2 {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: 14.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#ext-dialog-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+/* Pane body: fill the .pane-body slot (which is a plain positioned block, not
+   a flex parent — hence height: 100%) and hand the whole area to the mount. */
+.ext-pane-body {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+/* The adoption target React never renders into: the extension's keep-alive
+   root is appended here imperatively and fills it. Flex column so a surface
+   that lays itself out as a column (toolbar / grid / footer) gets a real
+   height to divide, not an auto one. */
+.ext-surface-mount {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ext-surface-mount > .ext-surface {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+/* "Loading <label>…" and the inline failure — rendered by the host above the
+   (empty) mount, so a broken extension reads as broken instead of blank. */
+.ext-surface-status {
+  margin: 0;
+  padding: 14px 16px;
+  font-size: 12px;
+  flex: none;
+}
+
+.ext-surface-error {
+  color: var(--red);
+}
+
+.ext-surface-error p {
+  margin: 0 0 4px;
+}
+
+.ext-surface-error .muted {
+  color: var(--muted);
+}
+
+/* The host-rendered back button (surface.back_command) — a plain .act with a
+   chevron; same size and hover as its Close neighbour. */
+.pane-head .act.ext-pane-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pane-head .act.ext-pane-back svg {
+  display: block;
+}
+
+/* Settings → Extensions rows: the switch sits against the right edge of the
+   card head (the .prov-dot slot in the provider cards). */
+.ext-row-head .ca-switch {
+  margin-left: auto;
+  flex: none;
+}
+
+.ext-row-error {
+  color: var(--red);
+}
+} /* 310 — after
+   Pane.css (.pane-head .act) and screens.css (.prov-conn), both of which the
+   extension host chrome extends */ @layer theme{
 /* ---------------------------------------------------------------------------
  * Region hues — the one file that knows how a multi-color theme set reaches
  * the pixels.
