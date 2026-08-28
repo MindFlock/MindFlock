@@ -7,7 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-28
+
 ### Added
+
+- **Sessions can run as different identities — a second Claude subscription
+  beside a work one, a metered API key, an OpenRouter key — without logging any
+  CLI out.** An **auth profile** names one identity, and every session runs
+  under exactly one of them or under none, which is each CLI's own ambient
+  login and remains the default. Three kinds: an `account` is a second login of
+  the CLI itself, kept in its own isolated config dir and reached through
+  `CLAUDE_CONFIG_DIR` / `CODEX_HOME`; `api_key` and `openrouter` inject a key at
+  launch, the latter through OpenRouter's Anthropic-compatible endpoint. Any
+  profile can also carry raw `env` overrides, which apply to any CLI at all —
+  the escape hatch for a user-defined provider the typed kinds have never heard
+  of. A combination with no route (an OpenRouter profile on `cline`, say) is
+  reported out loud and left on the CLI's own login rather than launched with
+  invented env.
+
+  Set them up in Settings → **Accounts** or with `mindflock accounts`, which is
+  the same store and goes through the running server so the app picks a change
+  up immediately. An `account` card shows the login command to paste into a
+  terminal, because the CLI's OAuth flow is interactive and cannot run through
+  an API; an OpenRouter card's **Test key** reports the key's real spend and
+  turns its model field into a picker over the models that key can actually
+  reach. Pick a session's identity in the **New session** dialog — which also
+  steers the agent picker to a CLI the chosen account can route — or swap a
+  *live* one from the `@account` chip in the pane header: the agent restarts
+  under the new identity while the worktree, diff and shell pane survive. A
+  swap starts a fresh conversation, since a transcript belongs to the account
+  that created it, so each window keeps a thread per identity.
+
+  Secrets live in `~/.mindflock/settings.json` at mode 0600 and read back
+  masked, and a save that resends the mask keeps the stored value. A key
+  reaches its CLI through a per-run file rather than argv, so it never lands in
+  `/proc/<pid>/cmdline`. A local model still outranks a profile — a session
+  pinned to this machine cannot be pulled off it by an account pin — and with
+  no profiles configured every overlay is empty and every launch path is
+  byte-identical to before the feature existed. Full guide:
+  [docs/accounts.md](docs/accounts.md).
 
 - **Notifications carry the session's rail slot: "[3] sitecheck-bot7 has
   finished."** The sidebar numbers its first nine rows, and those numbers are
@@ -1651,7 +1689,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.2.1
 [0.2.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.2.0
 [0.1.17]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.17
 [0.1.16]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.16
