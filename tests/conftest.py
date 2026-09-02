@@ -19,6 +19,19 @@ for _p in (_REPO_ROOT,):
     if _p.is_dir() and _ps not in sys.path:
         sys.path.insert(0, _ps)
 
+# Point extension discovery at an EMPTY directory before anything can import
+# backend.web.server. Discovery runs once at server import (register_addons at
+# module scope), so this cannot be a fixture: by the time any fixture runs, the
+# first ``from backend.web import server`` in a collected module has already
+# scanned — and without this it would execute whatever the developer keeps in
+# their real ``~/.mindflock/extensions/``. setdefault, not overwrite, so a run
+# that deliberately targets a fixture tree can still export its own. Ad-hoc
+# TestClient scripts need the same var set alongside MINDFLOCK_SETTINGS_FILE.
+os.environ.setdefault(
+    "MINDFLOCK_EXTENSIONS_DIR",
+    tempfile.mkdtemp(prefix="mindflock-test-extensions-"),
+)
+
 
 @pytest.fixture(autouse=True)
 def _redirect_tempfiles(tmp_path, monkeypatch):

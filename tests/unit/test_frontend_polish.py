@@ -163,7 +163,11 @@ def test_api_config_has_no_deprecated_alias():
 def test_workspace_manager_copy_is_repo_neutral():
     js = client.get("/app.js").text
     assert "shared base clone" in js
-    assert "cache refresher workspace" in js
+    # The disk manager's per-row confirmations went with it — the merged
+    # Recently-closed page does not show protected dirs at all. What replaced
+    # them is the unused-worktree sweep's copy, which has to be just as
+    # repo-neutral: it names kinds of directory, never a repo or a cache.
+    assert "never a repository" in js
     assert "testmon refresher" not in js
 
 

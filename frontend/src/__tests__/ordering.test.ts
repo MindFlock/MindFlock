@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import type { Instance } from "../api/types";
 import {
+  movedRailOrder,
   orderedInstances,
+  orderedKeys,
   orderWithAfter,
   matchesFilter,
   attentionItems,
@@ -28,6 +30,89 @@ describe("orderedInstances", () => {
     const { rows, nextOrder } = orderedInstances([], ["x", "y"]);
     expect(rows).toEqual([]);
     expect(nextOrder).toEqual(["x", "y"]);
+  });
+});
+
+describe("orderedKeys", () => {
+  it("puts saved keys first, then unseen keys in the order given", () => {
+    expect(orderedKeys(["a", "b", "c"], ["c", "a"])).toEqual(["c", "a", "b"]);
+  });
+
+  it("interleaves window sentinels with session titles — one namespace", () => {
+    const CHAT = "\u0000assistant-chat";
+    expect(orderedKeys(["a", "b", CHAT], ["a", CHAT])).toEqual(["a", CHAT, "b"]);
+  });
+
+  it("ignores saved keys no longer present and tolerates duplicates", () => {
+    expect(orderedKeys(["a"], ["ghost", "a", "a"])).toEqual(["a"]);
+    expect(orderedKeys(["a", "a", "b"], [])).toEqual(["a", "b"]);
+  });
+});
+
+describe("movedRailOrder", () => {
+  const CHAT = "\u0000assistant-chat";
+  const VER = "\u0000verify:dead-run";
+
+  it("drops a window above a session and persists the arrangement", () => {
+    expect(
+      movedRailOrder({ saved: [], live: ["a", "b", CHAT], drag: CHAT, target: "b", before: true })
+    ).toEqual(["a", CHAT, "b"]);
+  });
+
+  it("splices below the target when `before` is false", () => {
+    expect(
+      movedRailOrder({
+        saved: ["a", "b", "c"],
+        live: ["a", "b", "c"],
+        drag: "a",
+        target: "b",
+        before: false,
+      })
+    ).toEqual(["b", "a", "c"]);
+  });
+
+  it("MERGES with the saved order — an absent row keeps its slot", () => {
+    // "asleep" is a sleeping remote device's session, missing from this
+    // snapshot; the old materialize-and-replace wiped its slot on every drag.
+    expect(
+      movedRailOrder({ saved: ["asleep", "a"], live: ["a", "b"], drag: "b", target: "a", before: true })
+    ).toEqual(["asleep", "b", "a"]);
+  });
+
+  it("prunes stale keys via the callback, keeps everything else", () => {
+    expect(
+      movedRailOrder({
+        saved: [VER, "asleep", "a"],
+        live: ["a", CHAT],
+        drag: CHAT,
+        target: "a",
+        before: false,
+        stale: (k) => k === VER,
+      })
+    ).toEqual(["asleep", "a", CHAT]);
+  });
+
+  it("a session drag does not bake a trailing never-dragged window in", () => {
+    // The assistant merely being open must not claim a persisted slot from
+    // someone ELSE's drag — new sessions would file below it forever.
+    expect(
+      movedRailOrder({ saved: [], live: ["a", "b", CHAT], drag: "a", target: "b", before: false })
+    ).toEqual(["b", "a"]);
+  });
+
+  it("a window already in the saved order keeps its trailing slot", () => {
+    expect(
+      movedRailOrder({ saved: ["a", CHAT], live: ["a", CHAT, "b"], drag: "b", target: CHAT, before: true })
+    ).toEqual(["a", "b", CHAT]);
+  });
+
+  it("appends when the target is gone, and refuses a self-drop", () => {
+    expect(
+      movedRailOrder({ saved: ["a"], live: ["a", "b"], drag: "b", target: "ghost", before: true })
+    ).toEqual(["a", "b"]);
+    expect(
+      movedRailOrder({ saved: ["a", "b"], live: ["a", "b"], drag: "a", target: "a", before: true })
+    ).toEqual(["a", "b"]);
   });
 });
 

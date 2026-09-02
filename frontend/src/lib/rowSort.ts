@@ -1,5 +1,6 @@
-/** Sorting for the list dialogs (Recently closed, Workspaces on disk) — the
- * pure half, so the null and natural-order rules can be tested without a DOM. */
+/** Sorting for the list dialogs — Recently closed, which is also the disk
+ * manager since the two were merged. The pure half, so the null and
+ * natural-order rules can be tested without a DOM. */
 
 export type SortDir = "asc" | "desc";
 

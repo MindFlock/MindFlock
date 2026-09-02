@@ -1,15 +1,22 @@
 /** Special grid panes (ports app.js sections 17/18's logs / system-logs /
- * assistant-chat panes). They hold grid slots and drag like session panes. */
+ * assistant-chat panes, plus verify watch windows and extension panes). They
+ * hold grid slots and drag like session panes. Every head carries the same ✕
+ * its sidebar window row has — both close the WINDOW only (a verify run
+ * keeps going, a log keeps tailing). */
 
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { useWsTerm } from "../../lib/wsTerm";
 import { useUi } from "../../state/store";
+import { useExtensions } from "../../state/queries";
+import { ExtPaneBody } from "../../extensions/ExtPaneBody";
+import { closeExtPaneByKey, parseTarget, runCommand } from "../../extensions/host";
+import { selectWindow } from "../../lib/sessionActions";
 import { dropSideFor } from "./layout";
 import { sentinel, type DragCtx, type SpecialPaneDesc } from "./TerminalGrid";
 
 export function SpecialPane({ desc, drag }: { desc: SpecialPaneDesc; drag: DragCtx }) {
-  const title = sentinel(desc.kind, desc.session);
+  const title = sentinel(desc.kind, (desc.kind === "ext" ? desc.extKey : desc.session) || "");
   const paneRef = useRef<HTMLElement | null>(null);
 
   const headDrag = {
@@ -51,15 +58,23 @@ export function SpecialPane({ desc, drag }: { desc: SpecialPaneDesc; drag: DragC
             ? "syslogs-pane"
             : desc.kind === "verify"
               ? "verify-pane"
-              : "chat-pane")
+              : desc.kind === "ext"
+                ? "ext-pane"
+                : "chat-pane")
       }
       data-title={title}
+      // Interacting with a window pane selects it (MRU head), exactly as a
+      // session pane's mousedown runs selectSession — it's what makes a
+      // following Ctrl+Tab step from HERE rather than from the row selected
+      // before it.
+      onMouseDown={() => selectWindow(title)}
       {...paneDrag}
     >
       {desc.kind === "verify" && <VerifyBody desc={desc} headDrag={headDrag} />}
-      {desc.kind === "logs" && <LogsBody desc={desc} headDrag={headDrag} />}
-      {desc.kind === "syslogs" && <SysLogsBody desc={desc} headDrag={headDrag} />}
-      {desc.kind === "chat" && <ChatBody desc={desc} headDrag={headDrag} />}
+      {desc.kind === "logs" && <LogsBody headDrag={headDrag} />}
+      {desc.kind === "syslogs" && <SysLogsBody headDrag={headDrag} />}
+      {desc.kind === "chat" && <ChatBody headDrag={headDrag} />}
+      {desc.kind === "ext" && <ExtBody desc={desc} headDrag={headDrag} />}
     </section>
   );
 }
@@ -69,6 +84,32 @@ type HeadDrag = {
   onDragStart(ev: React.DragEvent): void;
   onDragEnd(): void;
 };
+
+/** The header ✕ — the exact action the window's sidebar Windows row runs, so
+ * the two controls can never drift: it closes the WINDOW, never the work
+ * behind it (a verify run keeps going, an extension body is disposed through
+ * the host so its keep-alive DOM goes with the slot). Wrapped in .head-tail
+ * so it stays pinned to the right edge while the header scrolls. */
+function CloseBtn({ desc }: { desc: Pick<SpecialPaneDesc, "kind" | "session" | "extKey"> }) {
+  return (
+    <div className="head-tail">
+      <button
+        className="act pane-close"
+        type="button"
+        aria-label="Close window"
+        title="Close window"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (desc.kind === "verify") useUi.getState().closeVerifyPane(desc.session || "");
+          else if (desc.kind === "ext") closeExtPaneByKey(desc.extKey || "");
+          else useUi.getState().toggleSpecial(desc.kind);
+        }}
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
 
 /** A verify run, watched. Read-only ON PURPOSE.
  *
@@ -102,7 +143,8 @@ function VerifyBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadD
               has to close to open this pane (it is a full-screen modal, so a
               pane opened behind it is a press with no visible effect), which
               leaves somebody who was triaging three checklists with no route
-              back to the other two except remembering Alt+V. */}
+              back to the other two except remembering Alt+V. (The head's ✕
+              closes the window; the run keeps going either way.) */}
           <button
             className="act verify-pane-back"
             title="Back to Verify (Alt+V)"
@@ -113,17 +155,8 @@ function VerifyBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadD
           >
             Verify
           </button>
-          <button
-            className="act verify-pane-close"
-            title="Close this window — the run keeps going"
-            onClick={(e) => {
-              e.stopPropagation();
-              desc.onClose();
-            }}
-          >
-            Close
-          </button>
         </div>
+        <CloseBtn desc={desc} />
       </div>
       <div className="pane-body">
         <div className="pane-term" ref={hostRef} />
@@ -132,7 +165,7 @@ function VerifyBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadD
   );
 }
 
-function LogsBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadDrag }) {
+function LogsBody({ headDrag }: { headDrag: HeadDrag }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const state = useWsTerm(hostRef, "/api/mindflock/logs", false);
   return (
@@ -142,11 +175,7 @@ function LogsBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadDra
         <span className="title">MindFlock logs</span>
         <span className="branch">logs/mindflock-ui.log</span>
         <span className="state">{state}</span>
-        <div className="actions">
-          <button className="act logs-close" title="Close logs" onClick={(e) => { e.stopPropagation(); desc.onClose(); }}>
-            Close
-          </button>
-        </div>
+        <CloseBtn desc={{ kind: "logs" }} />
       </div>
       <div className="pane-body">
         <div className="pane-term" ref={hostRef} />
@@ -155,7 +184,7 @@ function LogsBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadDra
   );
 }
 
-function ChatBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadDrag }) {
+function ChatBody({ headDrag }: { headDrag: HeadDrag }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const state = useWsTerm(hostRef, "/api/assistant/terminal", true);
   return (
@@ -164,14 +193,67 @@ function ChatBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadDra
         <span className="grip" title="Drag to move this window">⠿</span>
         <span className="title">Assistant</span>
         <span className="state">{state}</span>
-        <div className="actions">
-          <button className="act chat-close" title="Close chat" onClick={(e) => { e.stopPropagation(); desc.onClose(); }}>
-            Close
-          </button>
-        </div>
+        <CloseBtn desc={{ kind: "chat" }} />
       </div>
       <div className="pane-body">
         <div className="pane-term" ref={hostRef} />
+      </div>
+    </>
+  );
+}
+
+/** An extension pane (Addon API v3). The chrome is the host's — grip, title,
+ * an optional back button and the ✕ — and the body is the extension's
+ * keep-alive container, adopted by ExtPaneBody. The title lives in the UI store (retitleExtPane) so an
+ * extension's setTitle lands here without the host reaching into its DOM.
+ *
+ * The back button is the verify-pane-back precedent generalised: a surface
+ * that declares `back_command` gets a button running it. It exists for the
+ * same reason Verify's does — the explorer dialog has to CLOSE to open this
+ * pane (it is a full-screen modal), so without it the dialog→pane flow is a
+ * one-way trip. The label stays a plain "Back" because the host does not know
+ * the extension's nouns; the command's palette title rides in the tooltip. */
+function ExtBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadDrag }) {
+  const extKey = desc.extKey || "";
+  const { data: extensions } = useExtensions();
+  const { extId, surfaceId } = parseTarget(extKey);
+  const ext = extensions?.find((e) => e.id === extId);
+  const surface = ext?.extension.surfaces.find((s) => s.id === surfaceId && s.kind === "pane");
+  const backCommand = surface?.back_command || "";
+  const backTitle = ext?.extension.commands.find((c) => c.id === backCommand)?.title;
+  return (
+    <>
+      <div className="pane-head" {...headDrag}>
+        <span className="grip" title="Drag to move this window">⠿</span>
+        <span className="title">{desc.title}</span>
+        <div className="actions">
+          {backCommand && (
+            <button
+              className="act ext-pane-back"
+              title={backTitle || "Back"}
+              onClick={(e) => {
+                e.stopPropagation();
+                void runCommand(extId, backCommand);
+              }}
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <path
+                  d="M6.5 1.5 3 5l3.5 3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              Back
+            </button>
+          )}
+        </div>
+        <CloseBtn desc={desc} />
+      </div>
+      <div className="pane-body">
+        <ExtPaneBody extKey={extKey} />
       </div>
     </>
   );
@@ -186,7 +268,7 @@ interface LogsPayload {
   truncated?: boolean;
 }
 
-function SysLogsBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadDrag }) {
+function SysLogsBody({ headDrag }: { headDrag: HeadDrag }) {
   const [sources, setSources] = useState<Array<{ name: string; label: string }>>([]);
   const [selected, setSelected] = useState("server");
   const [text, setText] = useState("Loading…");
@@ -248,11 +330,7 @@ function SysLogsBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: Head
           ))}
         </select>
         <span className="state">{meta}</span>
-        <div className="actions">
-          <button className="act syslogs-close" title="Close logs" onClick={(e) => { e.stopPropagation(); desc.onClose(); }}>
-            Close
-          </button>
-        </div>
+        <CloseBtn desc={{ kind: "syslogs" }} />
       </div>
       <div className="pane-body">
         <pre className="syslogs-view" ref={viewRef}>

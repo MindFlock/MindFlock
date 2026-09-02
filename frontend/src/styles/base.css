@@ -37,3 +37,26 @@ body {
   width: 100%;
   height: 100%;
 }
+
+/* An inline spinner for a button that is mid-request ("Writing…"). The pane
+   overlays' .spinner is a 28px block for an empty pane; this one is sized in
+   `em` so it rides the button's own text, and borrows `currentColor` so it
+   tints with whatever button it sits in. Shares the .spinner keyframes.
+   `prefers-reduced-motion` gets a static ring rather than nothing: the ring is
+   the "still working" cue, the rotation only makes it lively. */
+.btn-spin {
+  display: inline-block;
+  vertical-align: -0.12em;
+  width: 0.9em;
+  height: 0.9em;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  animation: cs-spin 0.7s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-spin {
+    animation: none;
+  }
+}

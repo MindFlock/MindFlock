@@ -66,6 +66,33 @@ function save(key: string, value: unknown, stringify = true) {
   }
 }
 
+/** The three fixed special windows (one instance each; verify and extension
+ * windows are per-instance lists of their own). */
+export type SpecialKind = "logs" | "syslogs" | "chat";
+
+/** The grid token for a window that is not a session — a "\u0000" prefix no
+ * tmux session title can carry, so window keys and session titles share one
+ * namespace (the MRU, the row layout, the view cap) without ever colliding.
+ *
+ * `verify` and `ext` carry a per-instance ref because, unlike the other three,
+ * several can be open at once: one per plan being watched, one per extension
+ * pane. Lives here rather than in the grid because OPENING a window has to
+ * select it (below), and the store cannot import a component. */
+export function windowKey(
+  kind: SpecialKind | "verify" | "ext",
+  ref = ""
+): string {
+  return kind === "logs"
+    ? "\u0000mindflock-logs"
+    : kind === "syslogs"
+      ? "\u0000system-logs"
+      : kind === "verify"
+        ? "\u0000verify:" + ref
+        : kind === "ext"
+          ? "\u0000ext:" + ref
+          : "\u0000assistant-chat";
+}
+
 export type DialogName =
   | "new-session"
   | "settings"
@@ -75,14 +102,17 @@ export type DialogName =
   | "make-pr"
   | "rename"
   | "device"
-  | "workspaces"
+  // "workspaces" (the disk manager) was folded into "recent" — one page.
   | "recent"
   | "prompts"
   | "setup"
   | "todo"
   | "assistant-agent"
   | "palette"
-  | "shortcuts";
+  | "shortcuts"
+  // The one dialog every extension's dialog surfaces share; the extension id +
+  // surface ride in dialogTarget ("<ext>:<surface>[:<ref>]").
+  | "extension";
 
 interface UiState {
   /** Logically focused session title (keyboard target, MRU head). */
@@ -94,8 +124,15 @@ interface UiState {
   sidebarHidden: boolean;
   /** Sidebar column width in px (drag the right edge; SIDEBAR_MIN_W…MAX_W). */
   sidebarWidth: number;
-  /** User drag order of sidebar rows (stable; selection never reorders). */
+  /** User drag order of sidebar rows (stable; selection never reorders).
+   * Holds session titles AND window sentinels — one rail, one order. */
   order: string[];
+  /** The rail's rows exactly as rendered and numbered (display order, with
+   * device grouping, collapse and the filter applied) — session titles and
+   * window sentinels. Published by the Sidebar after each render; the
+   * keymap's Alt+N / Ctrl+Tab and the notification "[N]" prefixes read it,
+   * so a number can never point at a row the badge doesn't show. Transient. */
+  railOrder: string[];
   /** Most-recently-used order (selection updates it; fills fixed views). */
   mru: string[];
   /** Sidebar filter text, lowercased. */
@@ -110,6 +147,17 @@ interface UiState {
    * persisted — a run you were watching yesterday is not something to reopen on
    * launch, and the Verify dialog can always reopen one that still exists. */
   verifyPanes: string[];
+  /** Extension panes (grid windows an extension opened), by pane key
+   * ("<ext>:<surface>[:<ref>]") with a live chrome title. Deliberately not
+   * persisted, like verifyPanes: the keep-alive DOM behind them lives only in
+   * this page, so a reload could only restore an empty shell — the extension
+   * reopens them on demand. */
+  extPanes: Array<{ key: string; title: string }>;
+  /** The fixed special windows that are open (MindFlock logs / system logs /
+   * assistant chat). In the store — not component state — because the sidebar
+   * lists every open window with its ✕ while other components open them.
+   * Not persisted, same reasoning as verifyPanes. */
+  specialOpen: SpecialKind[];
   /** Bulk-selected titles (sidebar checkboxes). */
   bulkSelected: Set<string>;
   /** Display aliases: title -> custom label. */
@@ -164,12 +212,22 @@ interface UiState {
   /** Set the sidebar width (clamped + persisted). */
   setSidebarWidth(px: number): void;
   setOrder(order: string[]): void;
+  /** Publish the rendered rail (no-op unless the rows actually changed). */
+  setRailOrder(keys: string[]): void;
   moveInOrder(title: string, before: string | null): void;
   setFilter(f: string): void;
   setHidden(title: string, hidden: boolean): void;
   /** Show a verify run's read-only pane (idempotent), or close it. */
   openVerifyPane(title: string): void;
   closeVerifyPane(title: string): void;
+  /** Open (idempotent by key; a same-key open just applies the new title) /
+   * close / retitle an extension pane. The extension host (extensions/host.ts)
+   * owns the pane BODIES; these only manage the grid slots. */
+  openExtPane(key: string, title: string): void;
+  closeExtPane(key: string): void;
+  retitleExtPane(key: string, title: string): void;
+  /** Toggle one of the fixed special windows (logs / system logs / chat). */
+  toggleSpecial(kind: SpecialKind): void;
   toggleBulk(title: string): void;
   clearBulk(): void;
   setAlias(title: string, alias: string): void;
@@ -207,10 +265,13 @@ export const useUi = create<UiState>((set, get) => ({
   sidebarHidden: load<string>("cs_sidebar", "", false) === "hidden",
   sidebarWidth: clampSidebarWidth(load<number>("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
   order: load<string[]>("cs_order", []),
+  railOrder: [],
   mru: load<string[]>("cs_mru", []),
   filter: "",
   hidden: new Set(load<string[]>("mf_hidden", [])),
   verifyPanes: [],
+  extPanes: [],
+  specialOpen: [],
   bulkSelected: new Set<string>(),
   aliases: load<Record<string, string>>("mf_aliases", {}),
   collapsedDevices: new Set(load<string[]>("cs_devcollapse", [])),
@@ -268,6 +329,11 @@ export const useUi = create<UiState>((set, get) => ({
     save("cs_order", order);
     set({ order });
   },
+  setRailOrder: (keys) => {
+    const cur = get().railOrder;
+    if (cur.length === keys.length && cur.every((k, i) => k === keys[i])) return;
+    set({ railOrder: keys });
+  },
   moveInOrder: (title, before) => {
     const order = get().order.filter((t) => t !== title);
     const i = before === null ? order.length : order.indexOf(before);
@@ -284,11 +350,41 @@ export const useUi = create<UiState>((set, get) => ({
     set({ hidden: next });
   },
   openVerifyPane: (title) => {
-    if (!title || get().verifyPanes.includes(title)) return;
+    if (!title) return;
+    // Selected either way — an already-open pane behind a capped view has to
+    // come forward, exactly as clicking its sidebar row would.
+    get().touchMru(windowKey("verify", title));
+    if (get().verifyPanes.includes(title)) return;
     set({ verifyPanes: [...get().verifyPanes, title] });
   },
   closeVerifyPane: (title) =>
     set({ verifyPanes: get().verifyPanes.filter((t) => t !== title) }),
+  openExtPane: (key, title) => {
+    if (!key) return;
+    get().touchMru(windowKey("ext", key));
+    const cur = get().extPanes;
+    const existing = cur.find((p) => p.key === key);
+    if (existing) {
+      // Same-key open = reveal (the pane already holds its grid slot) +
+      // retitle; the body is never touched.
+      if (existing.title !== title)
+        set({ extPanes: cur.map((p) => (p.key === key ? { ...p, title } : p)) });
+      return;
+    }
+    set({ extPanes: [...cur, { key, title }] });
+  },
+  closeExtPane: (key) => set({ extPanes: get().extPanes.filter((p) => p.key !== key) }),
+  retitleExtPane: (key, title) =>
+    set({ extPanes: get().extPanes.map((p) => (p.key === key ? { ...p, title } : p)) }),
+  toggleSpecial: (kind) => {
+    const cur = get().specialOpen;
+    // Opening one selects it: these windows compete for grid slots like any
+    // session, so at "view: 1" an unselected open is an open you cannot see.
+    if (!cur.includes(kind)) get().touchMru(windowKey(kind));
+    set({
+      specialOpen: cur.includes(kind) ? cur.filter((k) => k !== kind) : [...cur, kind],
+    });
+  },
   toggleBulk: (title) => {
     const next = new Set(get().bulkSelected);
     if (next.has(title)) next.delete(title);

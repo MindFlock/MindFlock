@@ -52,6 +52,7 @@ __all__ = [
     "PlatformSettings",
     "GeneralSettings",
     "NotificationSettings",
+    "ExtensionsSettings",
     "Settings",
     "settings_path",
     "load_settings",
@@ -1104,6 +1105,30 @@ class NotificationSettings:
 
 
 @dataclass
+class ExtensionsSettings:
+    """Which Addon API v3 extensions the user has switched OFF.
+
+    Membership in ``disabled`` is the opt-out (extension ids — see
+    ``backend.web.addons.base``); everything else is enabled, so a fresh
+    install writes nothing and an extension added later starts on. This is the
+    ONLY per-extension state settings.json ever carries: an extension's own
+    configuration lives in its own file under ``~/.mindflock/`` (the
+    namespaced-everything rule), never in a per-extension settings group.
+    """
+
+    disabled: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        # Emit-on-deviation, like every group here: an empty list is the
+        # default and stays unwritten.
+        return {"disabled": list(self.disabled)} if self.disabled else {}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ExtensionsSettings":
+        return cls(disabled=_str_list(d.get("disabled")))
+
+
+@dataclass
 class Settings:
     """The whole user settings document. All groups default to empty.
 
@@ -1126,6 +1151,7 @@ class Settings:
     platform: PlatformSettings = field(default_factory=PlatformSettings)
     general: GeneralSettings = field(default_factory=GeneralSettings)
     notifications: NotificationSettings = field(default_factory=NotificationSettings)
+    extensions: ExtensionsSettings = field(default_factory=ExtensionsSettings)
     schema_version: int = 1
 
     def to_dict(self) -> dict:
@@ -1153,6 +1179,7 @@ class Settings:
             "platform": self.platform,
             "general": self.general,
             "notifications": self.notifications,
+            "extensions": self.extensions,
         }
 
     @classmethod
@@ -1192,6 +1219,7 @@ class Settings:
             platform=PlatformSettings.from_dict(_group(d, "platform")),
             general=GeneralSettings.from_dict(_group(d, "general")),
             notifications=NotificationSettings.from_dict(_group(d, "notifications")),
+            extensions=ExtensionsSettings.from_dict(_group(d, "extensions")),
             schema_version=version,
         )
 

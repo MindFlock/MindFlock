@@ -522,6 +522,48 @@ def _track_pr_state(title: str, branch: str, info) -> None:
         pass
 
 
+# Last review verdict per session title, as ``(branch, verdict)`` — the memory
+# behind ``session.pr_review_changed``. Same shape and same rules as
+# _LAST_PR_STATE above, for the same reason: the interesting fact is the
+# TRANSITION ("someone just approved it"), not the standing state, which would
+# otherwise be re-announced on every poll and on every restart.
+_LAST_PR_REVIEW: Dict[str, tuple] = {}
+_LAST_PR_REVIEW_LOCK = threading.Lock()
+
+
+def _track_pr_review(title: str, branch: str, verdict: str) -> None:
+    """Emit ``session.pr_review_changed`` when a reviewer's verdict really moved.
+
+    ``verdict`` is :func:`server._pr_review_state`'s answer: "approved",
+    "changes_requested", or "" for "nobody has decided OR we could not ask".
+    That ambiguity is why an EMPTY verdict never transitions: an expired token
+    or a rate limit would otherwise read as "the approval was withdrawn".
+
+    First sighting seeds silently (a restart must not re-announce an approval
+    that was already there), and so does a branch change — a different branch is
+    a different pull request. Never raises: a notification must never break the
+    stage probe.
+    """
+    verdict = str(verdict or "")
+    if not title or not branch or not verdict:
+        return
+    with _LAST_PR_REVIEW_LOCK:
+        prev = _LAST_PR_REVIEW.get(title)
+        _LAST_PR_REVIEW[title] = (branch, verdict)
+        if prev is None or prev[0] != branch or prev[1] == verdict:
+            return
+        old = prev[1]
+    try:
+        _events.BUS.emit(
+            "session.pr_review_changed",
+            session=title,
+            old=old,
+            new=verdict,
+        )
+    except Exception:  # noqa: BLE001 — an event never breaks the stage probe
+        pass
+
+
 # Foreground commands that mean "no agent is running in this pane" — the CLI
 # exited (or its launcher dropped to a shell), so the pane can't be 'working'.
 _BARE_SHELLS = frozenset({"bash", "zsh", "sh", "dash", "fish", "ksh", "tcsh", "csh"})
@@ -1968,6 +2010,15 @@ def _session_stage(inst) -> dict:
         # from the stage leaving "pr", which that very return makes it do on
         # every edit — see _track_pr_state.
         _track_pr_state(getattr(inst, "Title", "") or "", branch, info)
+        # And where the reviewers stand on it — only while the PR is actually
+        # open (a merged PR's approval is history, and the lookup costs a
+        # GitHub call). Cached for two minutes inside _pr_review_state.
+        if info and str(info.get("state") or "").upper() == "OPEN":
+            _track_pr_review(
+                getattr(inst, "Title", "") or "",
+                branch,
+                srv._pr_review_state(wt, branch, info),
+            )
         # Surface the PR's URL so the chip can link to it whatever its state
         # (open / merged / closed) — a PR-review session has one from the start.
         if info and info.get("url"):

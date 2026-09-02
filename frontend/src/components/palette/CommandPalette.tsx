@@ -4,9 +4,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { instApi } from "../../api/client";
-import { useConfig } from "../../state/queries";
+import { useConfig, useExtensions } from "../../state/queries";
 import { displayName, useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
+import { runCommand } from "../../extensions/host";
 import type { KeymapHost } from "../../lib/keymap";
 import {
   commitSession,
@@ -73,6 +74,9 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
   const open = useUi((s) => s.openDialog === "palette");
   const closeDialog = useUi((s) => s.closeDialog);
   const { data: config } = useConfig();
+  // Same cache the sidebar bars and Settings → Extensions read; no fetch of
+  // its own.
+  const { data: extensions } = useExtensions();
   const [query, setQuery] = useState("");
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -147,8 +151,22 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
     acts.push({ label: "New from Recently closed…", run: () => ui.openDialogFor("recent") });
+    // Extensions (Addon API v3): every command of every ENABLED extension,
+    // under the manifest's palette title ("Database: Explorer" style). Listing
+    // needs no extension code — a declarative command opens its surface from
+    // the manifest alone, and the rest activate the module on first run.
+    for (const ext of extensions || []) {
+      if (!ext.enabled) continue;
+      for (const cmd of ext.extension.commands) {
+        acts.push({
+          label: cmd.title || cmd.id,
+          hint: ext.label,
+          run: () => void runCommand(ext.id, cmd.id),
+        });
+      }
+    }
     return acts;
-  }, [open, config, host]);
+  }, [open, config, host, extensions]);
 
   const filtered = useMemo(() => {
     const scored = actions

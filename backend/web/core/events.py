@@ -67,6 +67,14 @@ EVENT_NAMES = (
     # Emitted only when the PR lookup itself reports a different state, so it
     # fires once per real transition.
     "session.pr_state_changed",
+    # A reviewer decided: ``old``/``new`` are "" | "approved" |
+    # "changes_requested", data: {"url": str}. Read from the PR's review list
+    # (github_pr.pr_review_state), which is the only place the verdict lives —
+    # ``mergeable_state`` says "blocked" for a missing review but says nothing
+    # at all once one arrives, and it also says "blocked" for a failing required
+    # CHECK, which is not a review. Seeded silently per branch, so a restart
+    # never re-announces an approval that was already there.
+    "session.pr_review_changed",
     # Usage limits (roadmap D): the provider's window reopened for a session
     # that had run out — emitted once per reopening, by the drain-loop watcher
     # that also nudges such a session to carry on (data: {"resumed": bool}).

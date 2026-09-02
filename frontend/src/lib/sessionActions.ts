@@ -6,11 +6,11 @@
 
 import { api, instApi } from "../api/client";
 import type { AutopilotRun, Caps, Config, Instance } from "../api/types";
-import { computeVisible } from "../components/grid/layout";
+import { computeVisibleSlots } from "../components/grid/layout";
 import { orderWithAfter } from "../components/sidebar/ordering";
 import { patchInstance, queryClient, refreshInstances } from "../state/queries";
 import { freshStage } from "./stageWatch";
-import { displayName, useUi } from "../state/store";
+import { displayName, useUi, windowKey } from "../state/store";
 import { toast } from "./toast";
 import { errMsg } from "./format";
 import { clearLoopReset, clearStep, markLoopReset, markStep } from "./stage";
@@ -43,12 +43,25 @@ export function instances(): Instance[] {
 export function selectSession(title: string, opts?: { noKeyboard?: boolean }) {
   const ui = useUi.getState();
   ui.setHidden(title, false);
-  const visible = computeVisible(instances(), {
+  // Visibility is judged over the UNION the grid actually renders — sessions
+  // AND open windows, one cap, one MRU (computeVisibleSlots, exactly as
+  // TerminalGrid calls it). Judging with sessions-only computeVisible
+  // over-reported: a session whose slot a window held counted as visible, so
+  // the demotion below promoted that phantom and shoved the on-screen window
+  // under the demoted focused session — selecting a session evicted the
+  // window you had just picked. The keys must cover every open window kind
+  // (the same three lists windowRows in sidebar/WindowList.tsx renders).
+  const windowKeys = [
+    ...ui.specialOpen.map((k) => windowKey(k)),
+    ...ui.verifyPanes.map((t) => windowKey("verify", t)),
+    ...ui.extPanes.map((p) => windowKey("ext", p.key)),
+  ];
+  const visible = computeVisibleSlots(instances(), windowKeys, {
     hidden: ui.hidden,
     viewMode: ui.viewMode,
     mru: ui.mru,
     order: ui.order,
-  }).map((i) => i.title);
+  });
   const focused = ui.focused;
   if (!visible.includes(title) && focused && focused !== title && visible.includes(focused)) {
     const keep = visible.filter((t) => t !== focused);
@@ -61,6 +74,38 @@ export function selectSession(title: string, opts?: { noKeyboard?: boolean }) {
   ui.touchMru(title);
   ui.setFocused(title);
   if (!opts?.noKeyboard) focusTerm(title);
+}
+
+/** Select a non-session window by its grid sentinel: top of the MRU, so a
+ * capped view ("1", "2", "4") gives it a slot — the same thing selecting a
+ * session does — and then bring it on screen. Deliberately NOT `setFocused`:
+ * focus is the KEYBOARD target and the shortcuts behind it (Ctrl+W closes the
+ * focused session) only mean anything for a session.
+ *
+ * The scroll is best-effort and NOT a CSS attribute selector: the sentinel
+ * starts with U+0000, which CSS.escape must replace with U+FFFD (per spec), so
+ * a selector can never match it — compare the attribute value directly. */
+export function selectWindow(sent: string) {
+  useUi.getState().touchMru(sent);
+  // After the store update the pane may not exist yet (it was outside the cap
+  // a moment ago), so look for it on the next frame.
+  requestAnimationFrame(() => {
+    for (const pane of document.querySelectorAll(".pane")) {
+      if (pane.getAttribute("data-title") === sent) {
+        pane.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return;
+      }
+    }
+  });
+}
+
+/** Select any rail row by its order key — a session title, or a window's
+ * NUL-prefixed sentinel. What Alt+N / Ctrl+N / Ctrl+Tab dispatch through:
+ * the rail numbers sessions and windows in one list, so its shortcuts have
+ * to land on either kind. */
+export function selectRailKey(key: string) {
+  if (key.startsWith("\u0000")) selectWindow(key);
+  else selectSession(key);
 }
 
 export function requireGit(): boolean {

@@ -37,11 +37,21 @@ TWO MODEL INTERACTIONS, OPPOSITE POSTURES. That asymmetry is the whole design:
   polls. Asking *what to check* is cheap and safe; *checking* is neither.
 
 WHAT THE MODEL IS NOT ALLOWED TO DECIDE. Every step carries an ``actor``:
-``"agent"`` for anything a shell can settle, ``"human"`` for visual judgement, a
-real browser, or an external service. An unknown or missing actor becomes
-``"human"`` — see :func:`parse_plan`. A human being asked to confirm something
-an agent could have checked wastes thirty seconds; an agent silently passing
-something it had no way to observe destroys the entire point of the feature.
+``"agent"`` for anything a shell or the agent's own tools can settle,
+``"human"`` for what only an eye on a real screen can. An unknown or missing
+actor becomes ``"human"`` — see :func:`parse_plan` — because an agent silently
+passing something it had no way to observe destroys the entire point of the
+feature.
+
+That coercion is a PARSE default, not a preference, and the two must not be
+confused: the generation prompt pushes the other way as hard as it can. A plan
+is only worth what somebody actually answers, and every step handed to a person
+is a step that waits on a person — so the model is told to look for the thing
+the product WROTE DOWN when the behaviour ran (the response, the row, the log
+line, the metric) and check THAT, to cap human steps at two, and to justify each
+one it does write in the step's own text. Human is where a step lands when
+nothing else can settle it, not where it lands when the model did not look for
+the evidence.
 
 STORAGE. Its own JSON file (``~/.mindflock/test_plans.json``), never the
 engine's ``state.json``: plans deliberately **outlive their sessions** — by the
@@ -351,8 +361,9 @@ _EXAMPLE_TEXTS = frozenset(
         'post /api/orders/42/discount with {"code":"expired2023"}',
         "on a deployment where save10 was applied to order 42 within the last "
         'hour, search the log explorer for "discount.applied"',
-        "on an order that already has save10 applied, type save10 into the "
-        "discount field at checkout and submit",
+        "on an order that already has save10 applied, open its checkout page "
+        "in a browser and look at the discount row (visual: whether the "
+        "struck-through total reads clearly is not settleable from a shell)",
     }
 )
 
@@ -3059,6 +3070,27 @@ def build_generation_prompt(
     a command that really fires during deploy is checked by that run's own
     evidence on the deployment.
 
+    THE THIRD FAILURE CLASS is the one those rules create if left alone:
+    CORRECT STEPS NOBODY CAN RUN. Once "real usage" is the bar, the cheapest
+    way to satisfy it is to describe the product being used by somebody else —
+    wait for the nightly job, have a customer place an order, get a teammate to
+    post in the channel, watch the screen while it happens — and then, because
+    a person is evidently involved, mark it ``human``. The owner's report was
+    that the plans were good and largely unexecutable, and that what they
+    wanted was log lines and behaviour the agent can exercise itself. Two rules
+    answer it. The first: a step's input should be one anybody can produce
+    RIGHT NOW through the product's own surfaces, and where the behaviour
+    genuinely only fires on a schedule or on a real user's action, the check is
+    the evidence the last real run already LEFT — its log lines, its rows, its
+    metric — which is an observation available at any moment rather than an
+    appointment. The second: ``human`` is for what no machine can settle (how a
+    screen looks, a real signed-in browser, a device, a third-party product
+    with no tool), never for what is merely fiddly — so the model hunts for the
+    agent-checkable twin one layer down before writing a person's step, keeps
+    at most two, and ends each one's text with the reason no agent-observable
+    evidence exists. That reason does double duty: a step that cannot state one
+    is a step that should have been the agent's, so writing it is the test.
+
     WHY THE DIFF IS NO LONGER THE ONLY AUTHORITY. This prompt used to carry a
     rule reading "the diff is the only statement of what SHIPPED… never write a
     step for behaviour you cannot point at in the diff", with the ticket placed
@@ -3247,12 +3279,42 @@ def build_generation_prompt(
         'exists. Never "it works", never "no errors", never "the response looks '
         'correct".',
         '- "actor" is "agent" for anything settleable from a shell or from the '
-        "agent's own tools: commands, files, HTTP endpoints, exit codes — and "
-        "log searches, dashboard panels and metric queries, which the agent "
-        "reaches through its Grafana tooling. A step that looks for a log line "
-        "or reads a panel is the agent's, not a person's.",
-        '- "actor" is "human" ONLY for visual judgement, a real browser, or an '
-        "external service the agent has no tool for. When in doubt, say human.",
+        "agent's own tools: commands, files, HTTP endpoints, exit codes, "
+        "database rows — and log searches, dashboard panels and metric "
+        "queries, which the agent reaches through its Grafana tooling. A step "
+        "that looks for a log line or reads a panel is the agent's, not a "
+        "person's.",
+        '- "actor" is "human" ONLY when what the step judges is something no '
+        "machine can settle: how a screen LOOKS or is laid out, a flow that "
+        "genuinely needs a real browser session or a real login, a physical "
+        "device, or a third-party product the agent has no tool or credentials "
+        "for. Being fiddly, long or multi-part is NOT a reason to hand a step "
+        "to a person — that is what the agent is for.",
+        "- WRITE THE PLAN SO THE AGENT CAN RUN IT. Before writing a step for a "
+        "person, ask what the product WROTE DOWN when that behaviour ran — the "
+        "request it sent, the row it changed, the line it logged, the metric it "
+        "moved, the file it produced — and write THAT as an agent step instead. "
+        'Nearly every "click it and see" check has an agent-checkable twin one '
+        "layer down, and the twin is the better step: it names exact text to "
+        "compare instead of asking somebody to squint at a screen.",
+        "- HUMAN STEPS ARE A COST, NOT A SAFETY NET. A checklist full of them "
+        "is a checklist nobody finishes, and the answers never come back. At "
+        "most 2 in a plan, and a plan with none is a good plan rather than a "
+        'suspicious one. Every human step\'s "text" ends with a short '
+        "parenthetical saying why no agent-observable evidence exists for it — "
+        '"(visual: the agent cannot judge spacing)", "(needs a real signed-in '
+        'browser session)". If you cannot write that reason, it is an agent '
+        "step.",
+        "- PREFER A CHECK THAT CAN BE RUN ON DEMAND. Where two steps would "
+        "prove the same thing, choose the one whose input anybody can produce "
+        "right now through the product's own surfaces over one that waits on "
+        "something outside their control — a real customer, tomorrow's "
+        "scheduled run, a colleague, a state production only reaches by chance. "
+        "When the behaviour genuinely only happens on a schedule or on a real "
+        "user's action, do not ask for it to be staged: check the evidence the "
+        "last real run already left — its log lines, the rows it wrote, the "
+        "metric it moved. That is an observation available now, and it is an "
+        "agent step.",
         "- At most 12 steps. Fewer, sharper steps beat a checklist nobody " "finishes.",
         "",
         "Shape — this is the FORMAT, and the flavour of a good step: an input "
@@ -3260,8 +3322,10 @@ def build_generation_prompt(
         "getting the product running. Note the third step reads the "
         "deployment's own log search rather than a file a step created, and it "
         "and the last step state the state they need as a CONDITION rather "
-        "than as a command. It is about a DIFFERENT product from the one "
-        "below: never reuse its nouns.",
+        "than as a command. Note too that three of the four are the AGENT's, "
+        "and the one human step is a person's only because it is a judgement "
+        "about how something looks — and it says so in the step. It is about a "
+        "DIFFERENT product from the one below: never reuse its nouns.",
         "<testplan>",
         "{",
         '  "summary": "A discount code can be applied at checkout and the order '
@@ -3280,10 +3344,12 @@ def build_generation_prompt(
         '\\"discount.applied\\"", "expect": "One line \\"discount.applied '
         'code=SAVE10 order=42 amount=-4.20\\", and no \\"discount.failed\\" '
         'line for order 42", "actor": "agent"},',
-        '    {"text": "On an order that already has SAVE10 applied, type SAVE10 '
-        'into the discount field at checkout and submit", "expect": "The total '
-        'stays at 37.80 and the page says the code is already applied", '
-        '"actor": "human"}',
+        '    {"text": "On an order that already has SAVE10 applied, open its '
+        "checkout page in a browser and look at the discount row (visual: "
+        "whether the struck-through total reads clearly is not settleable from "
+        'a shell)", "expect": "The row reads \\"SAVE10 -4.20\\" directly under '
+        "the subtotal, and the old 42.00 is struck through rather than "
+        'overlapping the new 37.80", "actor": "human"}',
         "  ]",
         "}",
         "</testplan>",
@@ -4739,7 +4805,9 @@ def build_run_prompt(
         "and judge it against the expected result. A [YOURS] step about log "
         "lines, dashboards or metrics is no exception: use your "
         "Grafana/observability tools (MCP) to run the query it names, and only "
-        'when no tool of yours can reach the thing is it "blocked".',
+        'when no tool of yours can reach the thing is it "blocked". A step '
+        "being long, fiddly or multi-part is not a reason to hand it back — "
+        "work it.",
         '4. Steps marked [human] or [skip] are NOT yours. Answer them "blocked", '
         "with a one-line note saying what a person has to do. They are printed "
         "only so the steps that are yours make sense in context. Do not guess at "

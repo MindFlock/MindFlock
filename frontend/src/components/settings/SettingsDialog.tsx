@@ -28,6 +28,7 @@ import { Security } from "./screens/Security";
 import { Doctor } from "./screens/Doctor";
 import { SystemLogs } from "./screens/SystemLogs";
 import { Advanced } from "./screens/Advanced";
+import { Extensions } from "./screens/Extensions";
 import { Traffic } from "./screens/Traffic";
 
 export interface ScreenProps {
@@ -54,6 +55,7 @@ const SCREENS: Array<{ key: string; label: string; el: (p: ScreenProps) => React
   { key: "doctor", label: "Doctor", el: (p) => <Doctor {...p} /> },
   { key: "logs", label: "System logs", el: (p) => <SystemLogs {...p} /> },
   { key: "advanced", label: "Advanced", el: (p) => <Advanced {...p} /> },
+  { key: "extensions", label: "Extensions", el: (p) => <Extensions {...p} /> },
   // Maintainer-only: MindFlock's own reach (stars, downloads, tracked-link
   // clicks), not something an end user's build needs — filtered out below
   // unless this is a --mindflock-dev shell.

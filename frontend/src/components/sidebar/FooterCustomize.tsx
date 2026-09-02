@@ -5,12 +5,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useUi } from "../../state/store";
+import { useExtensionBarDefs } from "../../extensions/ExtensionBar";
 import { orderedBars } from "./barDefs";
 
 export function FooterCustomize() {
   const hiddenBars = useUi((s) => s.hiddenBars);
   const toggleBarHidden = useUi((s) => s.toggleBarHidden);
   const barOrder = useUi((s) => s.barOrder);
+  // Extension bars appear here too — same defs the sidebar renders, so the
+  // menu order mirrors the live order, extensions included.
+  const extBars = useExtensionBarDefs();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
 
@@ -46,7 +50,7 @@ export function FooterCustomize() {
       {open && (
         <div id="foot-customize-menu" role="menu">
           <div className="fc-title">Show in sidebar</div>
-          {orderedBars(barOrder).map((b) => (
+          {orderedBars(barOrder, extBars).map((b) => (
             <label key={b.key} className="fc-item">
               <input
                 type="checkbox"

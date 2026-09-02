@@ -55,7 +55,7 @@ import type {
   TestStepResult,
   TestStepResultEntry,
 } from "../../api/types";
-// The list dialogs' shared matcher (Recently closed, Workspaces on disk): every
+// The list dialogs' shared matcher (Recently closed, Verify): every
 // whitespace-separated token has to appear somewhere in the row, so "sitecheck
 // grafana" narrows without anybody having to remember the separator. Verify is
 // the third list to grow a filter and it must not be the one that behaves

@@ -13,8 +13,8 @@ and the contracts to preserve.
 
 **Top bar** — on the left: the brand logo, the sidebar toggle (`Ctrl+B` / `⌘B`),
 the theme toggle 🌙 and the notifications 🔔 bell. Then the menu — **New**,
-**Intake** (`Alt+I`; see [Intake](#intake)), **Recent ▾** (Recently closed… /
-Workspaces on disk…), **Prompts**, **Command**, **Settings**. **Intake** sits
+**Intake** (`Alt+I`; see [Intake](#intake)), **Recent** (see [Recently
+closed](#recently-closed)), **Prompts**, **Command**, **Settings**. **Intake** sits
 beside **New** because both are about starting sessions — one from scratch, one
 from what came in. The **MindFlock** wordmark (carrying the *running engine's*
 version, plus a red `-DEV` badge under a dev shell) sits centered, and the empty
@@ -59,12 +59,9 @@ bar (pipeline on/off switch, state dot, Logs pane), the **PR Review** and
 on plain-http origins, "Blocked" when the browser denies permission).
 Below: view-mode buttons (Auto/1/2/4/9), the session count, a **⚙ Customize**
 button (sidebar bars — see below) and **⌨ Shortcuts**. (Recently closed, the
-workspace manager, the command palette, Intake and settings live in
-the top bar's menu, not down here.) The workspace manager lists each managed
-workspace with its size and a per-row delete, plus a **Clear** button that
-bulk-removes every unprotected, idle workspace in one sweep
-(`POST /api/workspaces/clear`) — protected base clones / cache refreshers and any
-dir a live session is using are left alone.
+command palette, Intake and settings live in the top bar's menu, not down here.)
+Disk management is not a screen of its own any more: it is the same page as
+[Recently closed](#recently-closed).
 
 **Customizable bars** — the sidebar bars are movable and hideable, driven by a
 shared registry (`sidebar/barDefs.ts`: Usage, Ticket Ingestion, PR Review, Issue
@@ -81,6 +78,26 @@ the only door — Intake is in the top bar whether or not its bar is showing.
 Turning a feature's bar on is still how you get an at-a-glance dot for PR review
 and issue handling once you've connected them; the first-run footer hint points
 only at those still-hidden bars.
+
+**Window rows** — every open non-session window (MindFlock logs, System
+logs, the Assistant chat, a verify watch window, an extension pane such as a
+database table) gets a row IN the session list (`sidebar/WindowList.tsx`),
+a first-class member of the rail: it carries the same `Ctrl/Alt+1…9` number
+badge, drags to reorder among the sessions (one saved order holds both — a
+never-dragged window still starts below the sessions), is toured by
+`Ctrl+Tab`, and narrows under the sidebar filter by its title. Clicking a row
+selects the window (top of the MRU, so a capped view brings it on screen) and
+its ✕ closes the window — the same ✕ every pane head carries at its top
+right, next to copy-all (a session pane's hides the window; the session keeps
+running). Closing a verify row closes only the watch window; the run keeps
+going and the Verify dialog reopens it. Verify *sessions* stay off the session
+rail (they are not work); their open windows list here like any other window.
+
+A drop **merges into** the saved order rather than replacing it: the browser
+only ever sees the rows it currently has, so replacing would drop everything it
+cannot see — the sessions of a sleeping remote device, a filtered-out row —
+and reordering two rows would silently shuffle rows that were not on screen.
+Merging keeps the absent ones where they were.
 
 **Command palette** — `Ctrl+P` or `Ctrl+Shift+P` (`Cmd` on Mac, or the top bar's
 **Command** button) opens a fuzzy-filtered palette over everything: jump to
@@ -162,6 +179,16 @@ keep working through the browser. Live agent **activity** overlays the stage chi
 `running`, `clarify` (the agent is asking you something), `idle`,
 `offline`, `paused` — detected from the CLI's own activity hooks where
 available, with CPU/pane-hash fallback (see [providers.md](providers.md)).
+
+**Ctrl+C on a running hook gives the button back.** The commit chain holds a lock
+file while the hooks run, which is what keeps the pill on `pre-commit`; the whole
+chain runs in a subshell trapping `INT`/`HUP`/`TERM`, so cancelling it drops that
+lock and the pill is back to `commit` within one poll. Cancelling used to leave
+the lock behind — an interactive shell abandons the rest of a `;` list, so the
+chain's own cleanup never ran — and the window looked wedged for most of a minute
+while the **stale-lock self-heal** (a liveness grace plus a persistence debounce)
+noticed. That self-heal stays, as the net for what a trap cannot catch: a
+`SIGKILL`, or the pane being killed out from under the hooks.
 
 **↺ — back to idle, when the cycle is finished and you are not.** The stage is
 re-derived from git on every pass and self-heals, so "let me keep working" needs
@@ -331,10 +358,37 @@ the part that makes the claim trustworthy. `working`/`offline` flips remain
 chip colours and are still filtered out.
 
 **One rule list, two delivery channels.** Settings → Notifications is split that
-way on purpose: *What triggers a notification* (needs-input, PR merged/closed,
-budget exceeded, pre-commit failed, ran out of usage / usage came back — plus
-the noisy opt-ins) governs **both** channels, and each channel decides only
-where an alert lands.
+way on purpose: *What triggers a notification* (needs-input, PR approved, PR
+merged/closed, budget exceeded, pre-commit failed, ran out of usage / usage came
+back — plus the noisy opt-ins, among them "changes requested") governs **both**
+channels, and each channel decides only where an alert lands.
+
+**"Your PR was approved" comes from the reviews, not from the merge button.**
+The verdict is read off the pull request's own review list (the latest review
+per reviewer; a standing "changes requested" outranks an approval, a comment is
+not a decision) rather than from GitHub's `mergeable_state`, which reports
+`blocked` both for a missing review and for a failing required check — and says
+nothing at all once the approval lands. Like every PR signal it is seeded
+silently on first sight, so a restart never re-announces an approval that was
+already there, and a failed lookup is never a withdrawal.
+
+**Verify has four rules of its own, all default-off.** They ride the same narrow
+events the Verify dialog refetches on, one rule per event — folding the halves
+together would silence the case most worth hearing about:
+
+| Rule | Event | Means |
+|---|---|---|
+| `verify_plan_ready` | `session.test_plan_ready` | A checklist got written — there are steps worth showing |
+| `verify_plan_failed` | `session.test_plan_failed` | The generation or rewrite produced no checklist at all |
+| `verify_run_finished` | `session.test_plan_checked` | An agent finished working a checklist |
+| `verify_run_gave_up` | `session.test_plan_gave_up` | A run was released without ever writing its answers |
+
+They are opt-in because a flock that pushes all day writes one plan per session
+per branch, which is ambient rather than actionable. A **push cannot carry the
+numbers**: the templates fill `{session}` and nothing else, so where the in-app
+toast says "8 passed, 3 need your eyes" the push says to open Verify — the
+envelope's `failed` / `needs_you` are for the browser, and a body that invented
+counts would be worse than one that points at them.
 
 **"A session finishes its work" is a claim, and it is checked.** The opt-in rule
 fires on `session.turn_ended`, not on the activity chip going grey. The chip
@@ -380,10 +434,12 @@ notification fires either way.
   strips an `?token=` from whatever you paste, since that URL is stored on the
   ntfy server. (The automatic URL is bare for the same reason.)
 
-  Priority is per rule: "needs your input", "budget exceeded" and "pre-commit
-  failed" go out at ntfy priority 4 (buzzes through most do-not-disturb
-  setups), PR merged/closed and the two usage rules at 3, and the ambient
-  opt-ins (idle, pre-commit running) at 2 so they arrive quietly.
+  Priority is per rule: "needs your input", "budget exceeded", "pre-commit
+  failed" and "PR approved" go out at ntfy priority 4 (buzzes through most
+  do-not-disturb setups), PR merged/closed, changes requested, the two usage
+  rules and the three verify rules that report an *outcome* at 3, and the
+  ambient opt-ins (idle, pre-commit running, "verification plan ready") at 2 so
+  they arrive quietly.
 
   You also get one push carrying the phone URL whenever it becomes newly
   reachable — at server start, when you switch this channel on, and when you
@@ -507,8 +563,8 @@ built-in alias.
 | `Ctrl+B` | Toggle sidebar |
 | `Ctrl+N` / `Alt+N` | New-session dialog |
 | `Alt+I` | Intake — tickets, PRs and issues waiting to become sessions |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous session |
-| `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar session |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous window — sessions and open windows (assistant, logs, extension panes), one list |
+| `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar row — a session or a window, matching the number badges |
 | `/` | Focus the sidebar session filter (when it's showing) |
 | `?` | Keyboard-shortcut cheat-sheet |
 | `Ctrl+R` | Reload the app — only while no terminal is focused; in a terminal it stays shell reverse-i-search |
@@ -518,7 +574,7 @@ built-in alias.
 | `Ctrl+K O` | Open/focus IDE |
 | `Ctrl+K D` | Duplicate session |
 | `Ctrl+K H` | Hide/show window |
-| `Ctrl+W` / `Delete` | Close the focused window (`Delete` only when not typing) |
+| `Ctrl+W` / `Delete` | End the focused session (`Delete` only when not typing; never fires for a selected non-session window — those close from their ✕) |
 | `Ctrl+Shift+T` | Reopen the last-closed session |
 | `Ctrl+Enter` | Submit the commit dialog |
 
@@ -594,6 +650,58 @@ also just type a name. The session's own branch is flagged and can't be the
 target. The **last base chosen per repo is remembered** (`prBaseByRepo`,
 persisted) and pre-selected next time (falling back to the server-computed
 default); submitting calls `submitMakePr` → `POST /api/instances/{title}/make-pr`.
+
+## Recently closed
+
+One page for closed sessions **and** what they left on disk. "Workspaces on
+disk" used to be a second, near-identical list of the same directories seen from
+the other end, so the two were folded together: *can I have this work back* and
+*can I have this disk back* are the same question about the same directory.
+Opened from **Recent** in the top bar; rows come from `GET /api/recent`.
+
+Each row carries both identities — the saved name / branch / session title, then
+badges for what the directory is (`worktree`, `workspace`, `pr`, `in-place`,
+`provisioned`, `worktree gone`, `in use: <session>`), when it was last used
+("closed 3d ago" for a session, "used 5d ago" for a leftover directory), and its
+size once the second `?sizes=1` pass lands. `Ctrl+F` filters, the sort picker
+orders by last used / name / size, and the checkboxes drive the same bulk bar the
+other list dialogs use (**Forget selected** · **Delete from disk**).
+
+Two things are deliberately NOT rows. Protected shared infrastructure (base
+clones, cache refreshers): not yours to delete, and a row whose only ever action
+is "protected" is noise. And any workspace a **live** session is working in: that
+one is in the sidebar, and killing a running agent is not something a page about
+closed work should offer. The header says how many of each it withheld — and
+names the protected ones on hover, with their size — so the disk total is never
+quietly under-reported.
+
+Per row: **Reopen** (a closed session whose directory is still there), **Delete**
+(the directory — absent for an in-place session, whose folder is your own repo,
+and for a directory a running session shares) and **Forget** (drop the closed
+session from the list; the directory stays, and comes back as an on-disk row).
+
+**Remove unused worktrees** is the page's one bulk action and its only git-gated
+control (`POST /api/workspaces/prune-worktrees`). It removes every worktree no
+session is using and nothing has touched for over a week. What it may take is
+decided by the server, twice — once to build the list, again immediately before
+each delete — and the rule is structural rather than a matter of naming: the
+directory's `.git` has to be a gitdir **file**, which is what `git worktree add`
+writes. A repository, a clone, a `_base_*` mirror, a `pr-*` review clone and any
+folder git did not make all have a `.git` directory (or none) and are excluded by
+that one test; nothing outside MindFlock's own worktrees root is looked at at
+all.
+
+It asks twice when it has to. The first confirmation names every directory it
+will remove, states what can never be removed, and says what a removal costs: a
+worktree's branch and commits live in the repository it came from and survive, so
+only what was never committed goes with the directory. Anything holding
+uncommitted work — or a detached HEAD whose commit no ref contains — is reported
+separately and held back unless a second confirmation says to include it, so
+"remove all unused worktrees" never silently does the destructive half of itself.
+Rows the sweep would take are badged **unused Nd**, and the button carries the
+count, so the number is checkable against what is on screen. When it finds
+nothing it says why: how many are in use, how many were used this week, how many
+are repositories it will never touch.
 
 ## Intake
 
@@ -895,6 +1003,19 @@ nothing. The rungs come from `GET /api/providers` (`effort.levels`); the
 translation table is in [providers.md](providers.md). All three pickers share one
 line-and-a-half above a button that hugs its label: they used to stretch the
 primary button to their own width, which turned **Begin work** into a bar.
+
+**An intake-armed run no longer commits under the item's name.** A run started
+from a ticket, PR or issue used to carry that item's name as its commit message,
+and a run armed with ⏩ carried a generated *"Work on `<session>`"* — both
+describe the *request*, not the change that was made. Those are now marked as
+**placeholders**, and at commit time — the one moment the diff is final — the
+placeholder is replaced by a message written from that diff (the same generator
+the ✨ button uses), with the item's id and title passed in as context and kept
+as the fallback if the generator fails or times out. A message **you typed** is
+never touched, and neither is the on-disk one a blocked commit left behind for
+its retry. Re-arming with ⏩ inherits the previously armed message *along with
+its placeholder flag*, so pressing it again cannot freeze a placeholder into the
+commit.
 
 **Failures pop up bottom-right**, as a card with a red rule — the corner the
 connection-lost card already owns (`lib/errorPop.ts`), not the 1.4s bottom-centre
@@ -1228,14 +1349,18 @@ these used to be silent:
   a real agent in it.
 - **An open verify session whose workspace was cleared.** The record outlives the
   worktree, so "re-check one step" answered *workspace no longer exists* for ever;
-  the husk is closed and a fresh session takes its place.
+  the husk is closed and a fresh session takes its place. (Clearing worktrees is
+  [Recently closed](#recently-closed)'s **Remove unused worktrees**, which is why
+  a checklist has to survive one.)
 - **A run that never comes back.** The agent's window dying (a usage limit, a
   killed pane) is noticed within a couple of minutes instead of waiting out the
   two-hour deadline, and either way the plan is released **with the reason on
   it** and a `session.test_plan_gave_up` event — a billed session that ran for
   two hours and reported nothing used to be indistinguishable from a button
-  nobody pressed. The abandoned session is then closed by the sweep like any
-  other stray.
+  nobody pressed. That event carries the opt-in `verify_run_gave_up`
+  notification rule (see [Notifications](#notifications-)), so a run that gives
+  up can reach you rather than only the dialog. The abandoned session is then
+  closed by the sweep like any other stray.
 
 **What the agent is told about the environment** is now true, which it was not
 before. A fresh worktree has nothing running in it, so the run prompt says so and

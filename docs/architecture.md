@@ -159,7 +159,12 @@ FastAPI app `backend.web.server:app`. Key pieces:
   telemetry + transcript history), `budget` (cost guardrail + input lock),
   `usage_api` (/api/usage provider descriptors), `mobile_access` (tailnet
   URLs/QR/banner), `plain_repo` (base-folder selection), `workspaces` (roots,
-  classification, guarded deletion), `recently_closed` (reopen/Ctrl+Z store),
+  the disk scan itself — `scan_workspaces`, lifted out of the route, so
+  `server.list_workspaces` is now a thin wrapper and the scanning logic has one
+  home — classification, guarded deletion, the merged Recently-closed row list
+  (`recent_rows`, `last_used`), and the unused-worktree sweep
+  (`prune_stale_worktrees`) — gated on a `.git` gitdir FILE so it can only ever
+  remove a worktree git generated), `recently_closed` (reopen/Ctrl+Z store),
   `uploads` (paste retention), `system_logs` (log tails), `cursor_windows`,
   `ide_launch`, `ports`, `window_refresh`, `worktree_setup`, `stage_reset` (the
   guided ladder's ↺ display pin — in-memory, pruned against the live titles) and

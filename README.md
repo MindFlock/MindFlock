@@ -366,7 +366,12 @@ a feature race; those two change what your day looks like:
   the app (`new`, `ls`, `attach`, `rm`, `open`, `events`), so terminal and UI
   stay one system.
 - 🧩 **Extensible** — shell hooks on every session event, a `WS /api/events`
-  stream, and in-process Python + ES-module addons.
+  stream, in-process Python + ES-module addons, and **extensions**: an addon
+  that declares a sidebar bar, palette commands and dialog/grid windows in a
+  manifest and renders their bodies itself, dropped into
+  `~/.mindflock/extensions/` and toggled in Settings. The bundled **Database
+  Client** (SQLite / PostgreSQL / MySQL explorer, editable grid, SQL pad) is
+  the first.
 
 ## Quick Start
 
@@ -677,8 +682,9 @@ directory (`.mindflock-pipeline.lock`); a second copy exits cleanly.
 ### Notifications & phone push (ntfy)
 
 Settings → **Notifications** holds one rule list — *What triggers a
-notification* (needs-input, PR merged/closed, budget exceeded, pre-commit
-failed, out of usage / usage back, plus quieter opt-ins) — and two channels it
+notification* (needs-input, PR approved, PR merged/closed, budget exceeded,
+pre-commit failed, out of usage / usage back, plus quieter opt-ins such as
+changes-requested and the verification-plan rules) — and two channels it
 feeds:
 
 - **Browser / desktop** popups, which need a tab open on a secure origin
@@ -732,7 +738,7 @@ variable and its precedence over the Settings values.
 ### Extensions & hooks
 
 Every session event (created, status/activity/stage changed, paused, deleted…)
-flows through a server-side event bus with three extension seams:
+flows through a server-side event bus with four extension seams:
 
 1. **Shell hooks** — drop an executable in `~/.mindflock/hooks/<event>/`
    (env vars + JSON envelope on stdin — e.g. a desktop notification when an
@@ -740,6 +746,13 @@ flows through a server-side event bus with three extension seams:
 2. **WebSocket** — subscribe an external tool to the `WS /api/events` stream.
 3. **In-process addons** — a Python `Addon` + an ES module the UI loads
    generically (the bundled **notify** addon is the worked example).
+4. **Extensions (Addon API v3)** — an addon that also contributes UI: one
+   sidebar bar with buttons, commands in the command palette, and dialog /
+   grid-window surfaces it renders, all declared in a manifest the host draws
+   without running extension code. Put `extension.py` (+ an optional
+   `frontend/`) in `~/.mindflock/extensions/<id>/`, restart, toggle it in
+   Settings → Extensions. The bundled **Database Client** is the worked
+   example.
 
 See [docs/extensions.md](docs/extensions.md) for the full guide.
 
@@ -781,7 +794,7 @@ On macOS the desktop app additionally leaves `/Applications/MindFlock.app`,
 | Doc | Contents |
 |---|---|
 | [docs/architecture.md](docs/architecture.md) | System overview, components, data flow, on-disk state map |
-| [docs/extensions.md](docs/extensions.md) | Extension guide: shell hooks, `/api/events` WebSocket, in-process addons, `window.mindflock` client API |
+| [docs/extensions.md](docs/extensions.md) | Extension guide: shell hooks, `/api/events` WebSocket, in-process addons, extensions (Addon API v3: manifest, `ExtensionApi`, surfaces, discovery, the Database Client), `window.mindflock` client API |
 | [docs/configuration.md](docs/configuration.md) | `config.toml` reference, `~/.mindflock/` + `~/.mindflock-assistant/`, environment variables |
 | [docs/session-engine.md](docs/session-engine.md) | Instance lifecycle, git worktrees, tmux/PTY, provisioned mode |
 | [docs/cli.md](docs/cli.md) | `mindflock` CLI: serve, doctor, uninstall, and terminal session control (new/ls/attach/rm/open/events) |

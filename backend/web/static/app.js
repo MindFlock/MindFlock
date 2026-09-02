@@ -20318,6 +20318,29 @@ function useAgentChoices$1() {
 		})
 	});
 }
+var EXTENSIONS_STALE_MS = 3e5;
+function extensionsQuery() {
+	return {
+		queryKey: ["addons"],
+		queryFn: () => api("/api/addons"),
+		staleTime: EXTENSIONS_STALE_MS
+	};
+}
+function useExtensions() {
+	return useQuery({
+		...extensionsQuery(),
+		select: (d) => (d?.addons || []).filter((a) => a && a.id && a.extension).map((a) => ({
+			id: String(a.id),
+			label: a.label || String(a.id),
+			enabled: a.enabled !== false,
+			origin: a.origin === "user" ? "user" : "builtin",
+			extension: a.extension
+		}))
+	});
+}
+function refreshExtensions() {
+	return queryClient.invalidateQueries({ queryKey: ["addons"] });
+}
 function useDevices() {
 	return useQuery({
 		queryKey: ["devices"],
@@ -20384,6 +20407,9 @@ function refreshAuthProfiles() {
 }
 function refreshInstances() {
 	return queryClient.invalidateQueries({ queryKey: ["instances"] });
+}
+function refreshRecentlyClosed() {
+	return queryClient.invalidateQueries({ queryKey: ["recently-closed"] });
 }
 function useTraffic(enabled, days = 90) {
 	return useQuery({
@@ -20629,6 +20655,11 @@ function humanSize(bytes) {
 	if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB";
 	return (bytes / 1073741824).toFixed(2) + " GB";
 }
+function pathBasename(p) {
+	const s = (p || "").replace(/[\\/]+$/, "");
+	const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+	return i >= 0 ? s.slice(i + 1) : s;
+}
 //#endregion
 //#region src/lib/clipboard.ts
 function copyText(text) {
@@ -20753,16 +20784,22 @@ var DROP_PH = "\0drop";
 function viewCap(viewMode) {
 	return viewMode === "auto" ? Infinity : parseInt(viewMode, 10);
 }
+function capTitles(all, cap, mru) {
+	if (all.length <= cap) return all;
+	const byMru = mru.filter((t) => all.includes(t));
+	const rest = all.filter((t) => !byMru.includes(t));
+	const chosen = new Set(byMru.concat(rest).slice(0, cap));
+	return all.filter((t) => chosen.has(t));
+}
 function computeVisible(instances, opts) {
 	const { rows } = orderedInstances(instances, opts.order);
 	const shown = rows.filter((i) => !opts.hidden.has(i.title));
 	const cap = Math.min(viewCap(opts.viewMode), MAX_VISIBLE);
-	if (shown.length <= cap) return shown;
-	const shownTitles = shown.map((i) => i.title);
-	const byMru = opts.mru.filter((t) => shownTitles.includes(t));
-	const rest = shownTitles.filter((t) => !byMru.includes(t));
-	const chosen = new Set(byMru.concat(rest).slice(0, cap));
+	const chosen = new Set(capTitles(shown.map((i) => i.title), cap, opts.mru));
 	return shown.filter((i) => chosen.has(i.title));
+}
+function computeVisibleSlots(instances, specialKeys, opts) {
+	return capTitles(orderedKeys(instances.map((i) => i.title).concat(specialKeys), opts.order).filter((t) => !opts.hidden.has(t)), Math.min(viewCap(opts.viewMode), MAX_VISIBLE), opts.mru);
 }
 function balancedRows(titles) {
 	const n = titles.length;
@@ -21023,20 +21060,30 @@ function defaultHiddenBars() {
 }
 var SESSIONS_KEY = "sessions";
 var DEFAULT_SECTION_ORDER = [...SIDEBAR_BARS.map((b) => b.key), SESSIONS_KEY];
-var KNOWN = new Set(DEFAULT_SECTION_ORDER);
-var BY_KEY = new Map(SIDEBAR_BARS.map((b) => [b.key, b]));
-function orderedSections(order) {
+var EXT_BAR_PREFIX = "ext:";
+function orderedSections(order, extraKeys = []) {
+	const known = /* @__PURE__ */ new Set([...DEFAULT_SECTION_ORDER, ...extraKeys]);
 	const seen = /* @__PURE__ */ new Set();
 	const out = [];
-	for (const key of order) if (KNOWN.has(key) && !seen.has(key)) {
+	for (const key of order) if (known.has(key) && !seen.has(key)) {
 		out.push(key);
 		seen.add(key);
 	}
-	for (const key of DEFAULT_SECTION_ORDER) if (!seen.has(key)) out.push(key);
+	for (const key of DEFAULT_SECTION_ORDER) if (!seen.has(key)) {
+		out.push(key);
+		seen.add(key);
+	}
+	const missingExtras = extraKeys.filter((key) => {
+		if (seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
+	if (missingExtras.length) out.splice(out.indexOf(SESSIONS_KEY), 0, ...missingExtras);
 	return out;
 }
-function orderedBars(order) {
-	return orderedSections(order).map((key) => BY_KEY.get(key)).filter((b) => !!b);
+function orderedBars(order, extraDefs = []) {
+	const byKey = new Map([...SIDEBAR_BARS, ...extraDefs].map((b) => [b.key, b]));
+	return orderedSections(order, extraDefs.map((b) => b.key)).map((key) => byKey.get(key)).filter((b) => !!b);
 }
 //#endregion
 //#region src/state/store.ts
@@ -21068,6 +21115,9 @@ function save(key, value, stringify = true) {
 		localStorage.setItem(key, stringify ? JSON.stringify(value) : String(value));
 	} catch {}
 }
+function windowKey(kind, ref = "") {
+	return kind === "logs" ? "\0mindflock-logs" : kind === "syslogs" ? "\0system-logs" : kind === "verify" ? "\0verify:" + ref : kind === "ext" ? "\0ext:" + ref : "\0assistant-chat";
+}
 var useUi = create((set, get) => ({
 	focused: null,
 	viewMode: load("cs_viewmode", "auto", false),
@@ -21075,10 +21125,13 @@ var useUi = create((set, get) => ({
 	sidebarHidden: load("cs_sidebar", "", false) === "hidden",
 	sidebarWidth: clampSidebarWidth(load("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
 	order: load("cs_order", []),
+	railOrder: [],
 	mru: load("cs_mru", []),
 	filter: "",
 	hidden: new Set(load("mf_hidden", [])),
 	verifyPanes: [],
+	extPanes: [],
+	specialOpen: [],
 	bulkSelected: /* @__PURE__ */ new Set(),
 	aliases: load("mf_aliases", {}),
 	collapsedDevices: new Set(load("cs_devcollapse", [])),
@@ -21130,6 +21183,11 @@ var useUi = create((set, get) => ({
 		save("cs_order", order);
 		set({ order });
 	},
+	setRailOrder: (keys) => {
+		const cur = get().railOrder;
+		if (cur.length === keys.length && cur.every((k, i) => k === keys[i])) return;
+		set({ railOrder: keys });
+	},
 	moveInOrder: (title, before) => {
 		const order = get().order.filter((t) => t !== title);
 		const i = before === null ? order.length : order.indexOf(before);
@@ -21146,10 +21204,39 @@ var useUi = create((set, get) => ({
 		set({ hidden: next });
 	},
 	openVerifyPane: (title) => {
-		if (!title || get().verifyPanes.includes(title)) return;
+		if (!title) return;
+		get().touchMru(windowKey("verify", title));
+		if (get().verifyPanes.includes(title)) return;
 		set({ verifyPanes: [...get().verifyPanes, title] });
 	},
 	closeVerifyPane: (title) => set({ verifyPanes: get().verifyPanes.filter((t) => t !== title) }),
+	openExtPane: (key, title) => {
+		if (!key) return;
+		get().touchMru(windowKey("ext", key));
+		const cur = get().extPanes;
+		const existing = cur.find((p) => p.key === key);
+		if (existing) {
+			if (existing.title !== title) set({ extPanes: cur.map((p) => p.key === key ? {
+				...p,
+				title
+			} : p) });
+			return;
+		}
+		set({ extPanes: [...cur, {
+			key,
+			title
+		}] });
+	},
+	closeExtPane: (key) => set({ extPanes: get().extPanes.filter((p) => p.key !== key) }),
+	retitleExtPane: (key, title) => set({ extPanes: get().extPanes.map((p) => p.key === key ? {
+		...p,
+		title
+	} : p) }),
+	toggleSpecial: (kind) => {
+		const cur = get().specialOpen;
+		if (!cur.includes(kind)) get().touchMru(windowKey(kind));
+		set({ specialOpen: cur.includes(kind) ? cur.filter((k) => k !== kind) : [...cur, kind] });
+	},
 	toggleBulk: (title) => {
 		const next = new Set(get().bulkSelected);
 		if (next.has(title)) next.delete(title);
@@ -21841,12 +21928,17 @@ function instances$1() {
 function selectSession(title, opts) {
 	const ui = useUi.getState();
 	ui.setHidden(title, false);
-	const visible = computeVisible(instances$1(), {
+	const windowKeys = [
+		...ui.specialOpen.map((k) => windowKey(k)),
+		...ui.verifyPanes.map((t) => windowKey("verify", t)),
+		...ui.extPanes.map((p) => windowKey("ext", p.key))
+	];
+	const visible = computeVisibleSlots(instances$1(), windowKeys, {
 		hidden: ui.hidden,
 		viewMode: ui.viewMode,
 		mru: ui.mru,
 		order: ui.order
-	}).map((i) => i.title);
+	});
 	const focused = ui.focused;
 	if (!visible.includes(title) && focused && focused !== title && visible.includes(focused)) {
 		const keep = visible.filter((t) => t !== focused);
@@ -21857,6 +21949,22 @@ function selectSession(title, opts) {
 	ui.touchMru(title);
 	ui.setFocused(title);
 	if (!opts?.noKeyboard) focusTerm(title);
+}
+function selectWindow(sent) {
+	useUi.getState().touchMru(sent);
+	requestAnimationFrame(() => {
+		for (const pane of document.querySelectorAll(".pane")) if (pane.getAttribute("data-title") === sent) {
+			pane.scrollIntoView({
+				block: "nearest",
+				behavior: "smooth"
+			});
+			return;
+		}
+	});
+}
+function selectRailKey(key) {
+	if (key.startsWith("\0")) selectWindow(key);
+	else selectSession(key);
 }
 function requireGit() {
 	if (caps().git) return true;
@@ -22634,28 +22742,48 @@ function nextStep(inst) {
 }
 //#endregion
 //#region src/components/sidebar/ordering.ts
+function orderedKeys(keys, order) {
+	const present = new Set(keys);
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const k of order) if (present.has(k) && !seen.has(k)) {
+		out.push(k);
+		seen.add(k);
+	}
+	for (const k of keys) if (!seen.has(k)) {
+		out.push(k);
+		seen.add(k);
+	}
+	return out;
+}
 function orderedInstances(instances, order) {
 	if (!instances.length) return {
 		rows: [],
 		nextOrder: order
 	};
 	const byTitle = new Map(instances.map((i) => [i.title, i]));
-	const rows = [];
-	for (const t of order) {
-		const inst = byTitle.get(t);
-		if (inst) {
-			rows.push(inst);
-			byTitle.delete(t);
-		}
-	}
-	for (const i of instances) if (byTitle.has(i.title)) {
-		rows.push(i);
-		byTitle.delete(i.title);
-	}
+	const rows = orderedKeys([...byTitle.keys()], order).map((t) => byTitle.get(t));
 	return {
 		rows,
 		nextOrder: rows.map((i) => i.title)
 	};
+}
+function movedRailOrder(opts) {
+	const { saved, live, drag, target, before, stale } = opts;
+	if (!drag || drag === target) return saved;
+	const seen = new Set(saved);
+	const order = saved.concat(live.filter((k) => !seen.has(k))).filter((k) => k !== drag && !(stale && stale(k)));
+	let to = order.indexOf(target);
+	if (to < 0) to = order.length;
+	else if (!before) to += 1;
+	order.splice(to, 0, drag);
+	const savedSet = new Set(saved);
+	while (order.length) {
+		const last = order[order.length - 1];
+		if (last !== drag && last.startsWith("\0") && !savedSet.has(last)) order.pop();
+		else break;
+	}
+	return order;
 }
 function orderWithAfter(order, title, after) {
 	if (!title || !after || title === after) return order;
@@ -22792,6 +22920,15 @@ function slotNumber(title) {
 	if (!raw) return "";
 	try {
 		const ui = useUi.getState();
+		const rail = ui.railOrder;
+		if (rail.length) {
+			let idx = rail.indexOf(raw);
+			if (idx < 0) {
+				const inst = snapshot().find((i) => i && i.display_title === raw);
+				if (inst) idx = rail.indexOf(inst.title);
+			}
+			return idx >= 0 && idx < 9 ? String(idx + 1) : "";
+		}
 		const { rows } = orderedInstances(snapshot().filter((i) => i && !isVerifySession(String(i.title || ""))), ui.order);
 		const filtered = rows.filter((i) => matchesFilter(i, ui.filter, ui.aliases));
 		const local = filtered.filter((i) => !i.device);
@@ -23125,17 +23262,16 @@ function terminalFocused() {
 }
 var MODAL_DIALOG_NAMES = [
 	"new-session",
-	"workspaces",
 	"recent",
 	"commit",
 	"rename",
 	"device",
 	"intake",
-	"verify"
+	"verify",
+	"extension"
 ];
 var MODAL_DOM_IDS = [
 	"new-dialog",
-	"workspaces-dialog",
 	"recent-dialog",
 	"commit-dialog",
 	"rename-dialog",
@@ -23365,16 +23501,16 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Ctrl+Tab / Ctrl+Shift+Tab",
-			"Next / previous session"
+			"Next / previous window"
 		],
-		run: () => _host?.cycleSession(1)
+		run: () => _host?.cycleWindow(1)
 	},
 	{
 		key: "Tab",
 		mod: "ctrl",
 		shift: true,
 		pairOf: "cycle",
-		run: () => _host?.cycleSession(-1)
+		run: () => _host?.cycleWindow(-1)
 	},
 	{
 		key: "PageDown",
@@ -23382,14 +23518,14 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Ctrl+PgDn / Ctrl+PgUp",
-			"Next / previous session (also)"
+			"Next / previous window (also)"
 		],
-		run: () => _host?.cycleSession(1)
+		run: () => _host?.cycleWindow(1)
 	},
 	{
 		key: "PageUp",
 		mod: "ctrl",
-		run: () => _host?.cycleSession(-1)
+		run: () => _host?.cycleWindow(-1)
 	},
 	{
 		key: "/",
@@ -23443,7 +23579,7 @@ var KEYMAP = [
 		help: [
 			"Focused session",
 			"Ctrl+W / Delete",
-			"Close focused window (undo: Ctrl+Shift+T)"
+			"End the focused session (undo: Ctrl+Shift+T)"
 		],
 		when: () => !!useUi.getState().focused && !modalOpen(),
 		run: () => {
@@ -23482,15 +23618,15 @@ var KEYMAP = [
 	}
 ];
 "123456789".split("").forEach((d, i) => {
-	const when = () => !!(_host && _host.sessionAt(i));
+	const when = () => !!(_host && _host.rowAt(i));
 	const run = () => {
-		const t = _host?.sessionAt(i);
-		if (t) selectSession(t);
+		const t = _host?.rowAt(i);
+		if (t) selectRailKey(t);
 	};
 	const help = i === 0 ? [
 		"Navigation",
 		"Ctrl+1 … 9 / Alt+1 … 9",
-		"Focus the Nth session"
+		"Focus the Nth window"
 	] : void 0;
 	KEYMAP.push({
 		key: d,
@@ -23498,14 +23634,14 @@ var KEYMAP = [
 		when,
 		run,
 		help,
-		label: "Focus the Nth session"
+		label: "Focus the Nth window"
 	});
 	KEYMAP.push({
 		key: d,
 		alt: true,
 		when,
 		run,
-		label: "Focus the Nth session"
+		label: "Focus the Nth window"
 	});
 });
 function effBindings(b) {
@@ -23598,6 +23734,709 @@ function installKeymap(host) {
 		_chordPending = false;
 		clearTimeout(_chordTimer);
 	};
+}
+//#endregion
+//#region \0vite/preload-helper.js
+var scriptRel = "modulepreload";
+var assetsURL = function(dep) {
+	return "/" + dep;
+};
+var seen = {};
+var __vitePreload = function preload(baseModule, deps, importerUrl) {
+	let promise = Promise.resolve();
+	if (deps && deps.length > 0) {
+		const links = document.getElementsByTagName("link");
+		const cspNonceMeta = document.querySelector("meta[property=csp-nonce]");
+		const cspNonce = cspNonceMeta?.nonce || cspNonceMeta?.getAttribute("nonce");
+		function allSettled(promises) {
+			return Promise.all(promises.map((p) => Promise.resolve(p).then((value) => ({
+				status: "fulfilled",
+				value
+			}), (reason) => ({
+				status: "rejected",
+				reason
+			}))));
+		}
+		function importMetaResolve(specifier) {
+			if (import.meta.resolve) return import.meta.resolve(specifier);
+			return new URL(specifier, import.meta.url).href;
+		}
+		promise = allSettled(deps.map((dep) => {
+			dep = assetsURL(dep, importerUrl);
+			dep = importMetaResolve(dep);
+			if (dep in seen) return;
+			seen[dep] = true;
+			const isCss = dep.endsWith(".css");
+			for (let i = links.length - 1; i >= 0; i--) {
+				const link = links[i];
+				if (link.href === dep && (!isCss || link.rel === "stylesheet")) return;
+			}
+			const link = document.createElement("link");
+			link.rel = isCss ? "stylesheet" : scriptRel;
+			if (!isCss) link.as = "script";
+			link.crossOrigin = "";
+			link.href = dep;
+			if (cspNonce) link.setAttribute("nonce", cspNonce);
+			document.head.appendChild(link);
+			if (isCss) return new Promise((res, rej) => {
+				link.addEventListener("load", res);
+				link.addEventListener("error", () => rej(/* @__PURE__ */ new Error(`Unable to preload CSS for ${dep}`)));
+			});
+		}));
+	}
+	function handlePreloadError(err) {
+		const e = new Event("vite:preloadError", { cancelable: true });
+		e.payload = err;
+		window.dispatchEvent(e);
+		if (!e.defaultPrevented) throw err;
+	}
+	return promise.then((res) => {
+		for (const item of res || []) {
+			if (item.status !== "rejected") continue;
+			handlePreloadError(item.reason);
+		}
+		return baseModule().catch(handlePreloadError);
+	});
+};
+//#endregion
+//#region src/extensions/host.ts
+var HOST_API_VERSION = 1;
+var records = /* @__PURE__ */ new Map();
+var known = /* @__PURE__ */ new Map();
+var epochCounter = 0;
+var version = 0;
+var listeners = /* @__PURE__ */ new Set();
+function subscribeHost(cb) {
+	listeners.add(cb);
+	return () => {
+		listeners.delete(cb);
+	};
+}
+function hostVersion() {
+	return version;
+}
+function bump() {
+	version++;
+	for (const cb of listeners) cb();
+}
+function buildTarget(extId, surfaceId, ref) {
+	return extId + ":" + surfaceId + (ref ? ":" + ref : "");
+}
+function parseTarget(target) {
+	const a = target.indexOf(":");
+	if (a < 0) return {
+		extId: target,
+		surfaceId: ""
+	};
+	const b = target.indexOf(":", a + 1);
+	if (b < 0) return {
+		extId: target.slice(0, a),
+		surfaceId: target.slice(a + 1)
+	};
+	return {
+		extId: target.slice(0, a),
+		surfaceId: target.slice(a + 1, b),
+		ref: target.slice(b + 1)
+	};
+}
+function extError(extId, msg, err) {
+	if (err !== void 0) console.error("[extension " + extId + "] " + msg, err);
+	else console.error("[extension " + extId + "] " + msg);
+}
+function errText(err) {
+	return String(err?.message || err);
+}
+function getRecord(ext) {
+	let rec = records.get(ext.id);
+	if (!rec) {
+		rec = {
+			ext,
+			status: "idle",
+			commands: /* @__PURE__ */ new Map(),
+			surfaces: /* @__PURE__ */ new Map(),
+			disposables: [],
+			panes: /* @__PURE__ */ new Map(),
+			refCounters: /* @__PURE__ */ new Map()
+		};
+		records.set(ext.id, rec);
+	}
+	return rec;
+}
+function syncExtensions(list) {
+	known = new Map(list.filter((e) => e.enabled).map((e) => [e.id, e]));
+	for (const id of [...records.keys()]) if (!known.has(id)) deactivateExtension(id);
+	for (const [id, rec] of records) {
+		const ext = known.get(id);
+		if (ext) rec.ext = ext;
+	}
+}
+function injectStylesheet(rec, spec) {
+	if (rec.style || typeof document === "undefined") return;
+	const dir = spec.module.slice(0, spec.module.lastIndexOf("/") + 1);
+	const el = document.createElement("style");
+	el.dataset.mfx = rec.ext.id;
+	el.textContent = "@import url(\"" + dir + "style.css\") layer(components);";
+	document.head.appendChild(el);
+	rec.style = el;
+}
+function activateExtension(ext) {
+	const rec = getRecord(ext);
+	if (rec.activation) return rec.activation;
+	if (rec.status === "error") return Promise.resolve();
+	rec.status = "loading";
+	bump();
+	rec.activation = (async () => {
+		try {
+			const spec = ext.extension;
+			if ((spec.api_version || 1) > HOST_API_VERSION) throw new Error("needs host API level " + spec.api_version + " (this app provides 1)");
+			if (spec.stylesheet) injectStylesheet(rec, spec);
+			const entry = (await __vitePreload(() => import(
+				/* @vite-ignore */
+				spec.module
+), []))?.default ?? window.mindflockExtensions?.[ext.id];
+			if (!entry || typeof entry.activate !== "function") throw new Error("module exports no activate()");
+			const apiObj = rec.api ?? (rec.api = makeApi(ext));
+			rec.status = "active";
+			rec.activating = true;
+			try {
+				await entry.activate(apiObj);
+			} finally {
+				rec.activating = false;
+			}
+			bump();
+		} catch (err) {
+			rec.status = "error";
+			rec.error = errText(err);
+			extError(ext.id, "activation failed", err);
+			toast("Extension " + (ext.label || ext.id) + " failed: " + rec.error);
+			drainRegistrations(rec);
+			bump();
+		}
+	})();
+	return rec.activation;
+}
+function drainRegistrations(rec) {
+	for (const d of rec.disposables.splice(0)) try {
+		d.dispose();
+	} catch (err) {
+		extError(rec.ext.id, "dispose failed", err);
+	}
+	rec.commands.clear();
+	rec.surfaces.clear();
+}
+function deactivateExtension(extId) {
+	const rec = records.get(extId);
+	if (!rec) return;
+	records.delete(extId);
+	drainRegistrations(rec);
+	for (const [key, runtime] of rec.panes) {
+		disposeRuntime(extId, runtime);
+		useUi.getState().closeExtPane(key);
+	}
+	rec.panes.clear();
+	if (rec.dialog) {
+		const s = useUi.getState();
+		if (s.openDialog === "extension" && s.dialogTarget === rec.dialog.target) s.closeDialog();
+		disposeRuntime(extId, rec.dialog);
+		rec.dialog = void 0;
+	}
+	rec.style?.remove();
+	bump();
+}
+function routeCommand(commandId, view) {
+	if (view.registered) return { kind: "handler" };
+	const cmd = view.spec.commands.find((c) => c.id === commandId);
+	if (cmd?.surface) {
+		const surface = view.spec.surfaces.find((s) => s.id === cmd.surface);
+		if (surface) return surface.kind === "dialog" ? {
+			kind: "dialog",
+			surfaceId: surface.id,
+			ref: cmd.ref || void 0
+		} : {
+			kind: "pane",
+			surfaceId: surface.id,
+			ref: cmd.ref || void 0
+		};
+	}
+	if (view.status === "idle" || view.status === "loading") return { kind: "activate" };
+	return { kind: "unknown" };
+}
+async function runCommand(extId, commandId, ...args) {
+	const ext = known.get(extId);
+	if (!ext) {
+		extError(extId, "runCommand: unknown or disabled extension");
+		return;
+	}
+	const rec = getRecord(ext);
+	const invoke = () => {
+		const handler = rec.commands.get(commandId);
+		if (!handler) return false;
+		try {
+			handler(...args);
+		} catch (err) {
+			extError(extId, "command " + commandId + " failed", err);
+			toast("Extension " + (ext.label || extId) + ": " + commandId + " failed");
+		}
+		return true;
+	};
+	const route = routeCommand(commandId, {
+		registered: rec.commands.has(commandId),
+		status: rec.status,
+		spec: ext.extension
+	});
+	switch (route.kind) {
+		case "handler":
+			invoke();
+			return;
+		case "dialog":
+			openExtDialog(extId, route.surfaceId, route.ref);
+			return;
+		case "pane":
+			openExtPane(extId, route.surfaceId, { ref: route.ref });
+			return;
+		case "activate":
+			if (rec.activating) {
+				extError(extId, "command " + commandId + " ran during activate() before being registered");
+				return;
+			}
+			await activateExtension(ext);
+			if (!invoke() && rec.status === "active") {
+				extError(extId, "command " + commandId + " is not registered");
+				toast("Extension " + (ext.label || extId) + ": unknown command " + commandId);
+			}
+			return;
+		default:
+			extError(extId, "command " + commandId + " is not registered");
+			if (rec.status === "active") toast("Extension " + (ext.label || extId) + ": unknown command " + commandId);
+	}
+}
+function makeSurfaceEl(extId) {
+	const el = document.createElement("div");
+	el.className = "ext-surface mfx-" + extId;
+	return el;
+}
+function openExtPane(extId, surfaceId, opts) {
+	const ext = known.get(extId);
+	if (!ext) {
+		extError(extId, "openPane: unknown or disabled extension");
+		return "";
+	}
+	const rec = getRecord(ext);
+	const surface = ext.extension.surfaces.find((s) => s.id === surfaceId && s.kind === "pane");
+	if (!surface) {
+		extError(extId, "openPane: no pane surface " + JSON.stringify(surfaceId));
+		return "";
+	}
+	let ref = opts?.ref;
+	if (surface.multi) {
+		if (!ref) {
+			const n = (rec.refCounters.get(surfaceId) || 0) + 1;
+			rec.refCounters.set(surfaceId, n);
+			ref = "#" + n;
+		}
+	} else if (ref) {
+		extError(extId, "openPane: surface " + surfaceId + " is single-instance — ref not allowed");
+		return "";
+	}
+	const key = buildTarget(extId, surfaceId, ref);
+	const title = opts?.title || surface.title || ext.label;
+	if (!rec.panes.has(key)) rec.panes.set(key, {
+		kind: "pane",
+		el: makeSurfaceEl(extId),
+		surfaceId,
+		ref,
+		ctx: opts?.ctx,
+		started: false,
+		epoch: ++epochCounter
+	});
+	useUi.getState().openExtPane(key, title);
+	const ui = useUi.getState();
+	if (ui.openDialog === "extension" && ui.dialogTarget && parseTarget(ui.dialogTarget).extId === extId) ui.closeDialog();
+	activateExtension(ext);
+	bump();
+	return key;
+}
+function closeExtPane(extId, surfaceId, ref) {
+	if (((known.get(extId) || records.get(extId)?.ext)?.extension.surfaces.find((s) => s.id === surfaceId && s.kind === "pane"))?.multi && !ref) {
+		extError(extId, "closePane: surface " + surfaceId + " is multi-instance — a ref is required");
+		return;
+	}
+	closeExtPaneByKey(buildTarget(extId, surfaceId, ref));
+}
+function closeExtPaneByKey(key) {
+	const { extId } = parseTarget(key);
+	const rec = records.get(extId);
+	const runtime = rec?.panes.get(key);
+	if (rec && runtime) {
+		rec.panes.delete(key);
+		disposeRuntime(extId, runtime);
+	}
+	useUi.getState().closeExtPane(key);
+	bump();
+}
+function openExtDialog(extId, surfaceId, ref, ctx) {
+	const ext = known.get(extId);
+	if (!ext) {
+		extError(extId, "openDialog: unknown or disabled extension");
+		return;
+	}
+	const rec = getRecord(ext);
+	const surface = surfaceId ? ext.extension.surfaces.find((s) => s.id === surfaceId && s.kind === "dialog") : ext.extension.surfaces.find((s) => s.kind === "dialog");
+	if (!surface) {
+		extError(extId, "openDialog: no dialog surface" + (surfaceId ? " " + JSON.stringify(surfaceId) : ""));
+		return;
+	}
+	const target = buildTarget(extId, surface.id, ref);
+	ensureDialogRuntime(rec, target, surface.id, ref, ctx);
+	useUi.getState().openDialogFor("extension", target);
+	activateExtension(ext);
+	bump();
+}
+function ensureDialogRuntime(rec, target, surfaceId, ref, ctx) {
+	if (rec.dialog && rec.dialog.target !== target) {
+		disposeRuntime(rec.ext.id, rec.dialog);
+		rec.dialog = void 0;
+	}
+	if (!rec.dialog) {
+		const surface = rec.ext.extension.surfaces.find((s) => s.id === surfaceId);
+		rec.dialog = {
+			kind: "dialog",
+			target,
+			el: makeSurfaceEl(rec.ext.id),
+			surfaceId,
+			ref,
+			ctx,
+			started: false,
+			epoch: ++epochCounter,
+			title: surface?.title || rec.ext.label
+		};
+	}
+}
+function closeExtDialog(extId) {
+	const s = useUi.getState();
+	if (s.openDialog !== "extension" || !s.dialogTarget) return;
+	if (parseTarget(s.dialogTarget).extId !== extId) return;
+	s.closeDialog();
+}
+function releaseDialogTarget(target) {
+	const { extId } = parseTarget(target);
+	const rec = records.get(extId);
+	if (rec?.dialog && rec.dialog.target === target) {
+		disposeRuntime(extId, rec.dialog);
+		rec.dialog = void 0;
+		bump();
+	}
+}
+function liveRuntime(extId, key, kind) {
+	const rec = records.get(extId);
+	if (!rec) return void 0;
+	if (kind === "pane") return rec.panes.get(key);
+	return rec.dialog?.target === key ? rec.dialog : void 0;
+}
+function mountExtPane(key, host) {
+	const { extId } = parseTarget(key);
+	const rec = records.get(extId);
+	const runtime = rec?.panes.get(key);
+	if (!rec || !runtime) return () => {};
+	host.appendChild(runtime.el);
+	startRuntime(rec, key, runtime);
+	return () => {
+		runtime.el.remove();
+	};
+}
+function mountExtDialog(target, host) {
+	const { extId, surfaceId, ref } = parseTarget(target);
+	const ext = known.get(extId);
+	if (!ext) return () => {};
+	const rec = getRecord(ext);
+	ensureDialogRuntime(rec, target, surfaceId, ref);
+	const runtime = rec.dialog;
+	host.appendChild(runtime.el);
+	activateExtension(ext);
+	startRuntime(rec, target, runtime);
+	return () => {
+		runtime.el.remove();
+	};
+}
+async function startRuntime(rec, key, runtime) {
+	if (runtime.started || runtime.disposed) return;
+	const token = runtime.epoch;
+	await activateExtension(rec.ext);
+	const live = liveRuntime(rec.ext.id, key, runtime.kind);
+	if (!live || live.epoch !== token) {
+		disposeRuntime(rec.ext.id, runtime);
+		return;
+	}
+	const liveRec = records.get(rec.ext.id);
+	if (!liveRec || liveRec.status !== "active") {
+		bump();
+		return;
+	}
+	if (runtime.started) return;
+	const renderer = liveRec.surfaces.get(runtime.surfaceId);
+	if (!renderer) {
+		runtime.error = "surface " + JSON.stringify(runtime.surfaceId) + " was never registered";
+		extError(rec.ext.id, runtime.error);
+		bump();
+		return;
+	}
+	runtime.started = true;
+	try {
+		runtime.cleanup = renderer(makeSurfaceHost(liveRec, key, runtime));
+	} catch (err) {
+		runtime.error = errText(err);
+		extError(rec.ext.id, "surface " + runtime.surfaceId + " failed to render", err);
+	}
+	bump();
+}
+function makeSurfaceHost(rec, key, runtime) {
+	return {
+		el: runtime.el,
+		surfaceId: runtime.surfaceId,
+		ref: runtime.ref,
+		ctx: runtime.ctx,
+		setTitle(title) {
+			if (runtime.kind === "pane") useUi.getState().retitleExtPane(key, title);
+			else {
+				runtime.title = title;
+				bump();
+			}
+		},
+		close() {
+			if (runtime.kind === "pane") closeExtPaneByKey(key);
+			else closeExtDialog(rec.ext.id);
+		}
+	};
+}
+function disposeRuntime(extId, runtime) {
+	if (runtime.disposed) return;
+	runtime.disposed = true;
+	if (runtime.cleanup) try {
+		runtime.cleanup.dispose();
+	} catch (err) {
+		extError(extId, "surface " + runtime.surfaceId + " dispose failed", err);
+	}
+	runtime.cleanup = void 0;
+	runtime.el.remove();
+}
+var NOOP_DISPOSABLE = { dispose() {} };
+function registerCommand(extId, commandId, handler) {
+	const rec = records.get(extId);
+	if (!rec) return NOOP_DISPOSABLE;
+	if (!commandId.startsWith(extId + ".")) {
+		extError(extId, "commands.register: " + commandId + " must carry the " + extId + ". prefix");
+		return NOOP_DISPOSABLE;
+	}
+	rec.commands.set(commandId, handler);
+	const d = { dispose() {
+		if (rec.commands.get(commandId) === handler) rec.commands.delete(commandId);
+	} };
+	rec.disposables.push(d);
+	return d;
+}
+function registerSurface(extId, surfaceId, renderer) {
+	const rec = records.get(extId);
+	if (!rec) return NOOP_DISPOSABLE;
+	rec.surfaces.set(surfaceId, renderer);
+	const d = { dispose() {
+		if (rec.surfaces.get(surfaceId) === renderer) rec.surfaces.delete(surfaceId);
+	} };
+	rec.disposables.push(d);
+	for (const [key, runtime] of rec.panes) if (runtime.surfaceId === surfaceId && !runtime.started && runtime.el.isConnected) {
+		runtime.error = void 0;
+		startRuntime(rec, key, runtime);
+	}
+	if (rec.dialog && rec.dialog.surfaceId === surfaceId && !rec.dialog.started && rec.dialog.el.isConnected) {
+		rec.dialog.error = void 0;
+		startRuntime(rec, rec.dialog.target, rec.dialog);
+	}
+	bump();
+	return d;
+}
+function makeStorage(extId) {
+	const prefix = "mfx:" + extId + ":";
+	return {
+		get(key, fallback) {
+			try {
+				const raw = localStorage.getItem(prefix + key);
+				return raw === null ? fallback : JSON.parse(raw);
+			} catch {
+				return fallback;
+			}
+		},
+		set(key, value) {
+			try {
+				localStorage.setItem(prefix + key, JSON.stringify(value));
+			} catch {}
+		}
+	};
+}
+function deepFreeze(obj) {
+	if (obj && typeof obj === "object" && !Object.isFrozen(obj)) {
+		Object.freeze(obj);
+		for (const v of Object.values(obj)) deepFreeze(v);
+	}
+	return obj;
+}
+function makeApi(ext) {
+	const extId = ext.id;
+	const apiObj = {
+		id: extId,
+		apiVersion: HOST_API_VERSION,
+		manifest: deepFreeze(structuredClone(ext.extension)),
+		ui: {
+			registerSurface: (surfaceId, renderer) => registerSurface(extId, surfaceId, renderer),
+			openDialog: (surfaceId, ref, ctx) => openExtDialog(extId, surfaceId, ref, ctx),
+			closeDialog: () => closeExtDialog(extId),
+			openPane: (surfaceId, opts) => openExtPane(extId, surfaceId, opts),
+			closePane: (surfaceId, ref) => closeExtPane(extId, surfaceId, ref),
+			toast: (msg, opts) => toast(msg, { duration: opts?.duration })
+		},
+		commands: {
+			register: (commandId, handler) => registerCommand(extId, commandId, handler),
+			run: (commandId, ...args) => {
+				if (!commandId.startsWith(extId + ".")) {
+					extError(extId, "commands.run: " + commandId + " is not this extension's command");
+					return Promise.resolve();
+				}
+				return runCommand(extId, commandId, ...args);
+			}
+		},
+		request: (path, opts) => api(path, opts),
+		storage: makeStorage(extId),
+		log: { error: (msg, err) => extError(extId, msg, err) }
+	};
+	const mf = window.mindflock;
+	if (mf?.events) apiObj.events = mf.events;
+	if (typeof mf?.sessions === "function") apiObj.sessions = mf.sessions;
+	Object.freeze(apiObj.ui);
+	Object.freeze(apiObj.commands);
+	Object.freeze(apiObj.storage);
+	Object.freeze(apiObj.log);
+	Object.freeze(apiObj);
+	return apiObj;
+}
+function surfaceView(extId, runtime) {
+	const label = known.get(extId)?.label || extId;
+	const rec = records.get(extId);
+	if (!rec || !runtime || runtime.disposed) return {
+		status: "error",
+		error: "this window's extension is gone",
+		label
+	};
+	if (rec.status === "error") return {
+		status: "error",
+		error: rec.error,
+		label,
+		title: runtime.title
+	};
+	if (runtime.error) return {
+		status: "error",
+		error: runtime.error,
+		label,
+		title: runtime.title
+	};
+	if (!runtime.started) return {
+		status: "loading",
+		label,
+		title: runtime.title
+	};
+	return {
+		status: "ready",
+		label,
+		title: runtime.title
+	};
+}
+function extPaneView(key) {
+	const { extId } = parseTarget(key);
+	return surfaceView(extId, records.get(extId)?.panes.get(key));
+}
+function extDialogView(target) {
+	const { extId } = parseTarget(target);
+	const rec = records.get(extId);
+	return surfaceView(extId, rec?.dialog?.target === target ? rec.dialog : void 0);
+}
+function extActivationError(extId) {
+	const rec = records.get(extId);
+	return rec?.status === "error" ? rec.error || "activation failed" : void 0;
+}
+//#endregion
+//#region src/extensions/ExtensionDialog.tsx
+function ExtensionDialog() {
+	const open = useUi((s) => s.openDialog === "extension");
+	const target = useUi((s) => s.dialogTarget);
+	const closeDialog = useUi((s) => s.closeDialog);
+	(0, import_react.useSyncExternalStore)(subscribeHost, hostVersion);
+	const bodyRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (!open || !target) return;
+		const el = bodyRef.current;
+		const detach = el ? mountExtDialog(target, el) : void 0;
+		return () => {
+			detach?.();
+			releaseDialogTarget(target);
+		};
+	}, [open, target]);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const onKey = (e) => {
+			if (e.key === "Escape") {
+				closeDialog();
+				e.preventDefault();
+			}
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [open, closeDialog]);
+	if (!open || !target) return null;
+	const view = extDialogView(target);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		id: "ext-dialog",
+		className: "modal",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) closeDialog();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "ext-dialog-panel",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: view.title || view.label }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					id: "ext-dialog-close",
+					"aria-label": "Close",
+					onClick: closeDialog,
+					children: "✕"
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				id: "ext-dialog-body",
+				children: [
+					view.status === "loading" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "ext-surface-status muted",
+						children: [
+							"Loading ",
+							view.label,
+							"…"
+						]
+					}),
+					view.status === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ext-surface-status ext-surface-error",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+							view.label,
+							" failed: ",
+							view.error || "no reason recorded"
+						] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "muted",
+							children: "See Settings → Extensions for details."
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "ext-surface-mount",
+						ref: bodyRef
+					})
+				]
+			})]
+		})
+	});
 }
 //#endregion
 //#region src/components/NotificationsBell.tsx
@@ -24138,9 +24977,7 @@ var engineVersion = "";
 function TopBar() {
 	const ui = useUi();
 	const [light, setLight] = (0, import_react.useState)(() => document.documentElement.classList.contains("light"));
-	const [recentOpen, setRecentOpen] = (0, import_react.useState)(false);
 	const [version, setVersion] = (0, import_react.useState)(engineVersion);
-	const dropRef = (0, import_react.useRef)(null);
 	const { data: testPlans } = useTestPlans();
 	const due = dueCount(testPlans?.plans || []);
 	const [mac] = (0, import_react.useState)(hasNativeWindowControls);
@@ -24170,21 +25007,6 @@ function TopBar() {
 			live = false;
 		};
 	}, []);
-	(0, import_react.useEffect)(() => {
-		if (!recentOpen) return;
-		const close = (e) => {
-			if (!dropRef.current?.contains(e.target)) setRecentOpen(false);
-		};
-		const onKey = (e) => {
-			if (e.key === "Escape") setRecentOpen(false);
-		};
-		document.addEventListener("click", close);
-		document.addEventListener("keydown", onKey);
-		return () => {
-			document.removeEventListener("click", close);
-			document.removeEventListener("keydown", onKey);
-		};
-	}, [recentOpen]);
 	const toggleTheme = () => {
 		const next = !light;
 		setLight(next);
@@ -24298,46 +25120,13 @@ function TopBar() {
 								children: due
 							})]
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "tb-drop" + (recentOpen ? " open" : ""),
-							id: "recent-menu",
-							ref: dropRef,
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "tb-item tb-drop-btn",
-								id: "recent-menu-btn",
-								"aria-haspopup": "true",
-								"aria-expanded": recentOpen,
-								title: "Reopen a recent session or manage workspaces on disk",
-								onClick: (e) => {
-									e.stopPropagation();
-									setRecentOpen((v) => !v);
-								},
-								children: "Recent"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "tb-drop-panel",
-								role: "menu",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									id: "recent-btn",
-									role: "menuitem",
-									onClick: () => {
-										setRecentOpen(false);
-										ui.openDialogFor("recent");
-									},
-									children: "Recently closed…"
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									id: "workspaces-btn",
-									role: "menuitem",
-									"data-caps": "git",
-									onClick: () => {
-										setRecentOpen(false);
-										ui.openDialogFor("workspaces");
-									},
-									children: "Workspaces on disk…"
-								})]
-							})]
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							id: "recent-btn",
+							className: "tb-item",
+							type: "button",
+							title: "Recently closed — reopen closed work, or clear out what it left on disk",
+							onClick: () => ui.openDialogFor("recent"),
+							children: "Recent"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							id: "prompts-btn",
@@ -24687,6 +25476,40 @@ function VoiceInput() {
 	})] });
 }
 //#endregion
+//#region src/components/sidebar/rowDnd.ts
+var ROW_MIME = "application/x-mf-row";
+function rowDndProps(key, cbs, draggable = true) {
+	return {
+		draggable,
+		onDragStart: (ev) => {
+			ev.dataTransfer.setData(ROW_MIME, key);
+			ev.dataTransfer.setData("text/plain", key);
+			ev.dataTransfer.effectAllowed = "move";
+			cbs.onDragState(key);
+		},
+		onDragEnd: () => {
+			cbs.onDragState(null);
+			cbs.onDropCue(key, null);
+		},
+		onDragOver: (ev) => {
+			if (!ev.dataTransfer.types.includes(ROW_MIME)) return;
+			ev.preventDefault();
+			const rect = ev.currentTarget.getBoundingClientRect();
+			cbs.onDropCue(key, ev.clientY - rect.top < rect.height / 2 ? "above" : "below");
+		},
+		onDragLeave: (ev) => {
+			if (!ev.currentTarget.contains(ev.relatedTarget)) cbs.onDropCue(key, null);
+		},
+		onDrop: (ev) => {
+			if (!ev.dataTransfer.types.includes(ROW_MIME)) return;
+			ev.preventDefault();
+			const rect = ev.currentTarget.getBoundingClientRect();
+			cbs.onDropRow(ev.dataTransfer.getData(ROW_MIME), key, ev.clientY - rect.top < rect.height / 2);
+			cbs.onDropCue(key, null);
+		}
+	};
+}
+//#endregion
 //#region src/components/sidebar/SidebarRow.tsx
 var DBLCLICK_MS = 300;
 function displayTitle(inst) {
@@ -24760,32 +25583,11 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: rowCls,
 		"data-title": title,
-		draggable: !editing,
-		onDragStart: (ev) => {
-			ev.dataTransfer.setData("text/plain", title);
-			ev.dataTransfer.effectAllowed = "move";
-			onDragState(title);
-		},
-		onDragEnd: () => {
-			onDragState(null);
-			onDropCue(title, null);
-		},
-		onDragOver: (ev) => {
-			if (ev.dataTransfer.types.includes("application/x-mf-section")) return;
-			ev.preventDefault();
-			const rect = ev.currentTarget.getBoundingClientRect();
-			onDropCue(title, ev.clientY - rect.top < rect.height / 2 ? "above" : "below");
-		},
-		onDragLeave: (ev) => {
-			if (!ev.currentTarget.contains(ev.relatedTarget)) onDropCue(title, null);
-		},
-		onDrop: (ev) => {
-			if (ev.dataTransfer.types.includes("application/x-mf-section")) return;
-			ev.preventDefault();
-			const rect = ev.currentTarget.getBoundingClientRect();
-			onDropRow(ev.dataTransfer.getData("text/plain"), title, ev.clientY - rect.top < rect.height / 2);
-			onDropCue(title, null);
-		},
+		...rowDndProps(title, {
+			onDragState,
+			onDropCue,
+			onDropRow
+		}, !editing),
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "inst-row",
 			onClick: () => {
@@ -25018,6 +25820,85 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	});
 });
 //#endregion
+//#region src/components/sidebar/WindowList.tsx
+var FIXED_TITLES = {
+	logs: "MindFlock logs",
+	syslogs: "System logs",
+	chat: "Assistant"
+};
+function windowRows(s) {
+	return [
+		...s.specialOpen.map((kind) => ({
+			key: windowKey(kind),
+			title: FIXED_TITLES[kind],
+			kind: "",
+			close: () => useUi.getState().toggleSpecial(kind)
+		})),
+		...s.verifyPanes.map((session) => ({
+			key: windowKey("verify", session),
+			title: session,
+			kind: "verify",
+			close: () => useUi.getState().closeVerifyPane(session)
+		})),
+		...s.extPanes.map((p) => ({
+			key: windowKey("ext", p.key),
+			title: p.title,
+			kind: "",
+			close: () => closeExtPaneByKey(p.key)
+		}))
+	];
+}
+function WindowRowItem({ row, idx, onScreen, dropCue, ...dnd }) {
+	const num = idx < 9 ? String(idx + 1) : "";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+		className: "inst window-row" + (onScreen ? " active" : "") + (dropCue ? ` drop-${dropCue}` : ""),
+		"data-title": row.key,
+		...rowDndProps(row.key, dnd),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "inst-row",
+			onClick: () => selectWindow(row.key),
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "grip",
+					title: "Drag to reorder",
+					children: "⠿"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "idx",
+					title: num ? `Ctrl+${num} / Alt+${num} to focus` : "",
+					children: num
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "win-icon",
+					"aria-hidden": "true",
+					children: "▦"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "meta",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "title",
+						title: row.title,
+						children: row.title
+					})
+				}),
+				row.kind && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "stagechip win-kind",
+					children: row.kind
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					className: "kill",
+					title: "Close window",
+					onClick: (e) => {
+						e.stopPropagation();
+						row.close();
+					},
+					children: "✕"
+				})
+			]
+		})
+	});
+}
+//#endregion
 //#region src/components/sidebar/SessionFilter.tsx
 function SessionFilter() {
 	const filter = useUi((s) => s.filter);
@@ -25205,6 +26086,37 @@ function BulkBar() {
 					children: "Clear"
 				})
 			]
+		})]
+	});
+}
+//#endregion
+//#region src/extensions/ExtensionBar.tsx
+function useExtensionBarDefs() {
+	const { data: extensions } = useExtensions();
+	return (0, import_react.useMemo)(() => (extensions || []).filter((e) => e.enabled).map((e) => ({
+		key: EXT_BAR_PREFIX + e.id,
+		label: e.extension.bar_label || e.label
+	})), [extensions]);
+}
+function ExtensionBar({ extId }) {
+	const { data: extensions } = useExtensions();
+	const ext = extensions?.find((e) => e.id === extId && e.enabled);
+	if (!ext) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ext-bar",
+		id: "ext-bar-" + ext.id,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ext-label",
+			children: ext.extension.bar_label || ext.label
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ext-actions",
+			children: ext.extension.buttons.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "ext-btn",
+				title: b.title || void 0,
+				onClick: () => void runCommand(ext.id, b.command),
+				children: b.label
+			}, b.command))
 		})]
 	});
 }
@@ -25935,6 +26847,7 @@ function VerifyBar() {
 //#region src/components/sidebar/SidebarBars.tsx
 var SECTION_MIME = "application/x-mf-section";
 function barContent(key, cbs) {
+	if (key.startsWith(EXT_BAR_PREFIX)) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtensionBar, { extId: key.slice(EXT_BAR_PREFIX.length) });
 	switch (key) {
 		case "usage": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverallUsage, {});
 		case "ingestion": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationBar, {});
@@ -26023,6 +26936,7 @@ function FooterCustomize() {
 	const hiddenBars = useUi((s) => s.hiddenBars);
 	const toggleBarHidden = useUi((s) => s.toggleBarHidden);
 	const barOrder = useUi((s) => s.barOrder);
+	const extBars = useExtensionBarDefs();
 	const [open, setOpen] = (0, import_react.useState)(false);
 	const ref = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
@@ -26058,7 +26972,7 @@ function FooterCustomize() {
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "fc-title",
 				children: "Show in sidebar"
-			}), orderedBars(barOrder).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			}), orderedBars(barOrder, extBars).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "fc-item",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 					type: "checkbox",
@@ -26498,12 +27412,29 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	const [secDrag, setSecDrag] = (0, import_react.useState)(null);
 	const [secCue, setSecCue] = (0, import_react.useState)(null);
 	const addonBarsRef = (0, import_react.useRef)(null);
+	const extBars = useExtensionBarDefs();
+	const extKeys = (0, import_react.useMemo)(() => extBars.map((b) => b.key), [extBars]);
 	const listed = (0, import_react.useMemo)(() => instances.filter((i) => !isVerifySession(i.title)), [instances]);
 	const { rows: allRows } = (0, import_react.useMemo)(() => orderedInstances(listed, ui.order), [listed, ui.order]);
 	const filtered = (0, import_react.useMemo)(() => allRows.filter((i) => matchesFilter(i, ui.filter, ui.aliases)), [
 		allRows,
 		ui.filter,
 		ui.aliases
+	]);
+	const windows = (0, import_react.useMemo)(() => windowRows({
+		specialOpen: ui.specialOpen,
+		verifyPanes: ui.verifyPanes,
+		extPanes: ui.extPanes
+	}), [
+		ui.specialOpen,
+		ui.verifyPanes,
+		ui.extPanes
+	]);
+	const winFiltered = (0, import_react.useMemo)(() => windows.filter((w) => !ui.filter || w.title.toLowerCase().includes(ui.filter)), [windows, ui.filter]);
+	const railKeys = (0, import_react.useMemo)(() => orderedKeys([...allRows.map((i) => i.title), ...windows.map((w) => w.key)], ui.order), [
+		allRows,
+		windows,
+		ui.order
 	]);
 	const onScreen = (0, import_react.useMemo)(() => new Set(computeVisible(instances, {
 		hidden: ui.hidden,
@@ -26536,19 +27467,22 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		for (const d of remoteDevs) m.set(d.host || "", (m.get(d.host || "") || 0) + 1);
 		return m;
 	}, [devices, remoteDevs]);
-	const moveInOrder = (dragTitle, targetTitle, before) => {
-		if (!dragTitle || dragTitle === targetTitle) return;
-		const order = allRows.map((i) => i.title).filter((t) => t !== dragTitle);
-		let to = order.indexOf(targetTitle);
-		if (to < 0) to = order.length;
-		else if (!before) to += 1;
-		order.splice(to, 0, dragTitle);
-		ui.setOrder(order);
+	const openWins = (0, import_react.useMemo)(() => new Set(windows.map((w) => w.key)), [windows]);
+	const moveInOrder = (dragKey, targetKey, before) => {
+		if (!dragKey || dragKey === targetKey) return;
+		ui.setOrder(movedRailOrder({
+			saved: ui.order,
+			live: railKeys,
+			drag: dragKey,
+			target: targetKey,
+			before,
+			stale: (k) => (k.startsWith(windowKey("verify")) || k.startsWith(windowKey("ext"))) && !openWins.has(k)
+		}));
 	};
 	const cueFor = (title) => dropCue && dropCue.title === title && dragging !== title ? dropCue.cue : null;
 	const moveSection = (dragKey, targetKey, before) => {
 		if (!dragKey || dragKey === targetKey) return;
-		const order = orderedSections(ui.barOrder).filter((k) => k !== dragKey);
+		const order = orderedSections(ui.barOrder, extKeys).filter((k) => k !== dragKey);
 		let to = order.indexOf(targetKey);
 		if (to < 0) to = order.length;
 		else if (!before) to += 1;
@@ -26587,16 +27521,48 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		} : null),
 		onDropRow: moveInOrder
 	};
+	const winOnScreen = new Set(ui.gridRows.flat());
+	const toRail = (sessionRows, wins) => {
+		const byKey = /* @__PURE__ */ new Map();
+		for (const i of sessionRows) byKey.set(i.title, {
+			key: i.title,
+			inst: i
+		});
+		for (const w of wins) byKey.set(w.key, {
+			key: w.key,
+			win: w
+		});
+		return railKeys.filter((k) => byKey.has(k)).map((k) => byKey.get(k));
+	};
+	const localRail = toRail(localRows, winFiltered);
+	const devRails = remoteDevs.map((dev) => {
+		const dkey = dev.device || dev.name;
+		return {
+			dkey,
+			rail: toRail(byDev.get(dkey) || [], [])
+		};
+	});
+	const displayedKeys = grouped ? (ui.collapsedDevices.has("__self") ? [] : localRail.map((r) => r.key)).concat(...devRails.map(({ dkey, rail }) => ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key))) : localRail.map((r) => r.key);
+	const railSig = JSON.stringify(displayedKeys);
+	(0, import_react.useEffect)(() => {
+		useUi.getState().setRailOrder(displayedKeys);
+	}, [railSig]);
 	let rowIdx = -1;
-	const renderRows = (list) => list.map((inst) => {
+	const renderRail = (list) => list.map((r) => {
 		rowIdx += 1;
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarRow, {
-			inst,
+		return r.inst ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarRow, {
+			inst: r.inst,
 			idx: rowIdx,
-			onScreen: onScreen.has(inst.title),
-			dropCue: cueFor(inst.title),
+			onScreen: onScreen.has(r.key),
+			dropCue: cueFor(r.key),
 			...rowProps
-		}, inst.title);
+		}, r.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WindowRowItem, {
+			row: r.win,
+			idx: rowIdx,
+			onScreen: winOnScreen.has(r.key),
+			dropCue: cueFor(r.key),
+			...rowProps
+		}, r.key);
 	});
 	const cap = viewCap(ui.viewMode);
 	const shownCount = listed.filter((i) => !ui.hidden.has(i.title)).length;
@@ -26638,7 +27604,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 				},
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Welcome to MindFlock." }), " Connect your coding CLI and tools in Settings, then start a session to get going."]
 			}),
-			orderedSections(ui.barOrder).map((key) => {
+			orderedSections(ui.barOrder, extKeys).map((key) => {
 				if (key === SESSIONS_KEY) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "sessions-block" + (secCue && secCue.key === SESSIONS_KEY ? ` drop-${secCue.cue}` : ""),
 					...sessionsDrop,
@@ -26661,8 +27627,8 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 									showForget: false,
 									onToggle: () => ui.toggleDeviceCollapsed("__self")
 								}),
-								!ui.collapsedDevices.has("__self") && renderRows(localRows),
-								remoteDevs.map((dev) => {
+								!ui.collapsedDevices.has("__self") && renderRail(localRail),
+								remoteDevs.map((dev, di) => {
 									const devRows = byDev.get(dev.device || dev.name) || [];
 									const dkey = dev.device || dev.name;
 									const collapsed = ui.collapsedDevices.has(dkey);
@@ -26696,10 +27662,10 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 										note,
 										connectBtn,
 										onToggle: () => ui.toggleDeviceCollapsed(dkey),
-										children: !collapsed && renderRows(devRows)
+										children: !collapsed && renderRail(devRails[di].rail)
 									}, dkey);
 								})
-							] }) : renderRows(localRows), ui.filter && !filtered.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+							] }) : renderRail(localRail), ui.filter && !filtered.length && !winFiltered.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 								className: "filter-empty muted",
 								children: [
 									"No sessions match “",
@@ -28564,6 +29530,20 @@ function Pane({ inst, drag, dragging }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "state",
 					children: "workspace gone"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "head-tail",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						className: "act pane-close",
+						type: "button",
+						"aria-label": "Hide window",
+						title: "Hide this window (show it again from its sidebar row)",
+						onClick: (e) => {
+							e.stopPropagation();
+							useUi.getState().setHidden(title, true);
+						},
+						children: "✕"
+					})
 				})
 			]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -28614,6 +29594,20 @@ function Pane({ inst, drag, dragging }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "state",
 					children: "provisioning…"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "head-tail",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						className: "act pane-close",
+						type: "button",
+						"aria-label": "Hide window",
+						title: "Hide this window — provisioning keeps going (show it again from its sidebar row)",
+						onClick: (e) => {
+							e.stopPropagation();
+							useUi.getState().setHidden(title, true);
+						},
+						children: "✕"
+					})
 				})
 			]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -28785,72 +29779,88 @@ function Pane({ inst, drag, dragging }) {
 					className: "state" + (wsState !== "connected" ? " state-bad" : ""),
 					children: wsState
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "act copyhist",
-					type: "button",
-					title: "Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)",
-					onClick: (e) => {
-						e.stopPropagation();
-						setHistPane({
-							kind: tab === "shell" ? "shell" : "agent",
-							dragSel: null
-						});
-					},
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-						width: "12",
-						height: "12",
-						viewBox: "0 0 24 24",
-						fill: "none",
-						stroke: "currentColor",
-						strokeWidth: "2",
-						strokeLinecap: "round",
-						strokeLinejoin: "round",
-						"aria-hidden": "true",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 8v4l2 2" }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 22v-6h6" })
-						]
-					})
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "act copyhist",
-					type: "button",
-					title: "Copy this pane's whole history to the clipboard",
-					onClick: (e) => {
-						e.stopPropagation();
-						const which = tab === "shell" ? "shell" : "agent";
-						fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${which}`).then((r) => {
-							if (!r.ok) return r.text().then((t) => {
-								throw new Error(t || "HTTP " + r.status);
-							});
-							return r.text();
-						}).then((text) => {
-							if (!text.trim()) {
-								toast("No history to copy");
-								return;
-							}
-							copyText(text).then((ok) => toast(ok ? `Copied full ${which} history (${text.length} chars)` : "Copy failed"));
-						}).catch((err) => toast("History copy failed: " + err.message));
-					},
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-						width: "12",
-						height: "12",
-						viewBox: "0 0 24 24",
-						fill: "none",
-						stroke: "currentColor",
-						strokeWidth: "2",
-						strokeLinecap: "round",
-						strokeLinejoin: "round",
-						"aria-hidden": "true",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-							x: "8",
-							y: "2",
-							width: "8",
-							height: "4",
-							rx: "1"
-						})]
-					})
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "head-tail",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "act copyhist",
+							type: "button",
+							title: "Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)",
+							onClick: (e) => {
+								e.stopPropagation();
+								setHistPane({
+									kind: tab === "shell" ? "shell" : "agent",
+									dragSel: null
+								});
+							},
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+								width: "12",
+								height: "12",
+								viewBox: "0 0 24 24",
+								fill: "none",
+								stroke: "currentColor",
+								strokeWidth: "2",
+								strokeLinecap: "round",
+								strokeLinejoin: "round",
+								"aria-hidden": "true",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 8v4l2 2" }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 22v-6h6" })
+								]
+							})
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "act copyhist",
+							type: "button",
+							title: "Copy this pane's whole history to the clipboard",
+							onClick: (e) => {
+								e.stopPropagation();
+								const which = tab === "shell" ? "shell" : "agent";
+								fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${which}`).then((r) => {
+									if (!r.ok) return r.text().then((t) => {
+										throw new Error(t || "HTTP " + r.status);
+									});
+									return r.text();
+								}).then((text) => {
+									if (!text.trim()) {
+										toast("No history to copy");
+										return;
+									}
+									copyText(text).then((ok) => toast(ok ? `Copied full ${which} history (${text.length} chars)` : "Copy failed"));
+								}).catch((err) => toast("History copy failed: " + err.message));
+							},
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+								width: "12",
+								height: "12",
+								viewBox: "0 0 24 24",
+								fill: "none",
+								stroke: "currentColor",
+								strokeWidth: "2",
+								strokeLinecap: "round",
+								strokeLinejoin: "round",
+								"aria-hidden": "true",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+									x: "8",
+									y: "2",
+									width: "8",
+									height: "4",
+									rx: "1"
+								})]
+							})
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "act pane-close",
+							type: "button",
+							"aria-label": "Hide window",
+							title: "Hide this window — the session keeps running (show it again from its sidebar row)",
+							onClick: (e) => {
+								e.stopPropagation();
+								useUi.getState().setHidden(title, true);
+							},
+							children: "✕"
+						})
+					]
 				})
 			]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -29223,9 +30233,49 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 	return state;
 }
 //#endregion
+//#region src/extensions/ExtPaneBody.tsx
+function ExtPaneBody({ extKey }) {
+	(0, import_react.useSyncExternalStore)(subscribeHost, hostVersion);
+	const mountRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const el = mountRef.current;
+		if (!el) return;
+		return mountExtPane(extKey, el);
+	}, [extKey]);
+	const view = extPaneView(extKey);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ext-pane-body",
+		children: [
+			view.status === "loading" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "ext-surface-status muted",
+				children: [
+					"Loading ",
+					view.label,
+					"…"
+				]
+			}),
+			view.status === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ext-surface-status ext-surface-error",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+					view.label,
+					" failed: ",
+					view.error || "no reason recorded"
+				] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "muted",
+					children: "See Settings → Extensions for details."
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ext-surface-mount",
+				ref: mountRef
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/grid/SpecialPane.tsx
 function SpecialPane({ desc, drag }) {
-	const title = sentinel(desc.kind, desc.session);
+	const title = sentinel(desc.kind, (desc.kind === "ext" ? desc.extKey : desc.session) || "");
 	const paneRef = (0, import_react.useRef)(null);
 	const headDrag = {
 		draggable: true,
@@ -29242,8 +30292,9 @@ function SpecialPane({ desc, drag }) {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		ref: paneRef,
-		className: "pane focused " + (desc.kind === "logs" ? "logs-pane" : desc.kind === "syslogs" ? "syslogs-pane" : desc.kind === "verify" ? "verify-pane" : "chat-pane"),
+		className: "pane focused " + (desc.kind === "logs" ? "logs-pane" : desc.kind === "syslogs" ? "syslogs-pane" : desc.kind === "verify" ? "verify-pane" : desc.kind === "ext" ? "ext-pane" : "chat-pane"),
 		"data-title": title,
+		onMouseDown: () => selectWindow(title),
 		onDragOver: (ev) => {
 			if (!drag.dragTitle) return;
 			ev.preventDefault();
@@ -29260,19 +30311,32 @@ function SpecialPane({ desc, drag }) {
 				desc,
 				headDrag
 			}),
-			desc.kind === "logs" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LogsBody, {
-				desc,
-				headDrag
-			}),
-			desc.kind === "syslogs" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SysLogsBody, {
-				desc,
-				headDrag
-			}),
-			desc.kind === "chat" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatBody, {
+			desc.kind === "logs" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LogsBody, { headDrag }),
+			desc.kind === "syslogs" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SysLogsBody, { headDrag }),
+			desc.kind === "chat" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatBody, { headDrag }),
+			desc.kind === "ext" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtBody, {
 				desc,
 				headDrag
 			})
 		]
+	});
+}
+function CloseBtn({ desc }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "head-tail",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			className: "act pane-close",
+			type: "button",
+			"aria-label": "Close window",
+			title: "Close window",
+			onClick: (e) => {
+				e.stopPropagation();
+				if (desc.kind === "verify") useUi.getState().closeVerifyPane(desc.session || "");
+				else if (desc.kind === "ext") closeExtPaneByKey(desc.extKey || "");
+				else useUi.getState().toggleSpecial(desc.kind);
+			},
+			children: "✕"
+		})
 	});
 }
 function VerifyBody({ desc, headDrag }) {
@@ -29300,9 +30364,9 @@ function VerifyBody({ desc, headDrag }) {
 				className: "state",
 				children: state
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "act verify-pane-back",
 					title: "Back to Verify (Alt+V)",
 					onClick: (e) => {
@@ -29310,16 +30374,9 @@ function VerifyBody({ desc, headDrag }) {
 						useUi.getState().openDialogFor("verify");
 					},
 					children: "Verify"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "act verify-pane-close",
-					title: "Close this window — the run keeps going",
-					onClick: (e) => {
-						e.stopPropagation();
-						desc.onClose();
-					},
-					children: "Close"
-				})]
-			})
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CloseBtn, { desc })
 		]
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "pane-body",
@@ -29329,7 +30386,7 @@ function VerifyBody({ desc, headDrag }) {
 		})
 	})] });
 }
-function LogsBody({ desc, headDrag }) {
+function LogsBody({ headDrag }) {
 	const hostRef = (0, import_react.useRef)(null);
 	const state = useWsTerm(hostRef, "/api/mindflock/logs", false);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -29353,18 +30410,7 @@ function LogsBody({ desc, headDrag }) {
 				className: "state",
 				children: state
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "actions",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "act logs-close",
-					title: "Close logs",
-					onClick: (e) => {
-						e.stopPropagation();
-						desc.onClose();
-					},
-					children: "Close"
-				})
-			})
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CloseBtn, { desc: { kind: "logs" } })
 		]
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "pane-body",
@@ -29374,7 +30420,7 @@ function LogsBody({ desc, headDrag }) {
 		})
 	})] });
 }
-function ChatBody({ desc, headDrag }) {
+function ChatBody({ headDrag }) {
 	const hostRef = (0, import_react.useRef)(null);
 	const state = useWsTerm(hostRef, "/api/assistant/terminal", true);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -29394,18 +30440,7 @@ function ChatBody({ desc, headDrag }) {
 				className: "state",
 				children: state
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "actions",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "act chat-close",
-					title: "Close chat",
-					onClick: (e) => {
-						e.stopPropagation();
-						desc.onClose();
-					},
-					children: "Close"
-				})
-			})
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CloseBtn, { desc: { kind: "chat" } })
 		]
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "pane-body",
@@ -29415,7 +30450,59 @@ function ChatBody({ desc, headDrag }) {
 		})
 	})] });
 }
-function SysLogsBody({ desc, headDrag }) {
+function ExtBody({ desc, headDrag }) {
+	const extKey = desc.extKey || "";
+	const { data: extensions } = useExtensions();
+	const { extId, surfaceId } = parseTarget(extKey);
+	const ext = extensions?.find((e) => e.id === extId);
+	const backCommand = (ext?.extension.surfaces.find((s) => s.id === surfaceId && s.kind === "pane"))?.back_command || "";
+	const backTitle = ext?.extension.commands.find((c) => c.id === backCommand)?.title;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pane-head",
+		...headDrag,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "grip",
+				title: "Drag to move this window",
+				children: "⠿"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "title",
+				children: desc.title
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "actions",
+				children: backCommand && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					className: "act ext-pane-back",
+					title: backTitle || "Back",
+					onClick: (e) => {
+						e.stopPropagation();
+						runCommand(extId, backCommand);
+					},
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+						width: "10",
+						height: "10",
+						viewBox: "0 0 10 10",
+						"aria-hidden": "true",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+							d: "M6.5 1.5 3 5l3.5 3.5",
+							fill: "none",
+							stroke: "currentColor",
+							strokeWidth: "1.5",
+							strokeLinecap: "round",
+							strokeLinejoin: "round"
+						})
+					}), "Back"]
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CloseBtn, { desc })
+		]
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "pane-body",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtPaneBody, { extKey })
+	})] });
+}
+function SysLogsBody({ headDrag }) {
 	const [sources, setSources] = (0, import_react.useState)([]);
 	const [selected, setSelected] = (0, import_react.useState)("server");
 	const [text, setText] = (0, import_react.useState)("Loading…");
@@ -29481,18 +30568,7 @@ function SysLogsBody({ desc, headDrag }) {
 				className: "state",
 				children: meta
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "actions",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "act syslogs-close",
-					title: "Close logs",
-					onClick: (e) => {
-						e.stopPropagation();
-						desc.onClose();
-					},
-					children: "Close"
-				})
-			})
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CloseBtn, { desc: { kind: "syslogs" } })
 		]
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "pane-body",
@@ -29505,27 +30581,34 @@ function SysLogsBody({ desc, headDrag }) {
 }
 //#endregion
 //#region src/components/grid/TerminalGrid.tsx
+function sentinelRef(p) {
+	return (p.kind === "ext" ? p.extKey : p.session) || "";
+}
 function TerminalGrid({ specialPanes }) {
 	const { data: instances, isSuccess } = useInstances();
 	const { data: config } = useConfig();
 	const ui = useUi();
 	const [drag, setDrag] = (0, import_react.useState)(null);
 	const workable = (0, import_react.useMemo)(() => (instances || []).filter((i) => !isVerifySession(i.title)), [instances]);
-	const visible = (0, import_react.useMemo)(() => computeVisible(workable, {
+	const specialByKey = (0, import_react.useMemo)(() => new Map(specialPanes.map((p) => [sentinel(p.kind, sentinelRef(p)), p])), [specialPanes]);
+	const slotTitles = (0, import_react.useMemo)(() => computeVisibleSlots(workable, [...specialByKey.keys()], {
 		hidden: ui.hidden,
 		viewMode: ui.viewMode,
 		mru: ui.mru,
 		order: ui.order
 	}), [
 		workable,
+		specialByKey,
 		ui.hidden,
 		ui.viewMode,
 		ui.mru,
 		ui.order
 	]);
-	const byTitle = (0, import_react.useMemo)(() => new Map(visible.map((i) => [i.title, i])), [visible]);
-	const specialByKey = (0, import_react.useMemo)(() => new Map(specialPanes.map((p) => [sentinel(p.kind, p.session), p])), [specialPanes]);
-	const slotTitles = (0, import_react.useMemo)(() => visible.map((i) => i.title).concat([...specialByKey.keys()]), [visible, specialByKey]);
+	const byTitle = (0, import_react.useMemo)(() => {
+		const all = new Map(workable.map((i) => [i.title, i]));
+		return new Map(slotTitles.filter((t) => all.has(t)).map((t) => [t, all.get(t)]));
+	}, [workable, slotTitles]);
+	const visible = (0, import_react.useMemo)(() => [...byTitle.values()], [byTitle]);
 	const rows = (0, import_react.useMemo)(() => {
 		if (!isSuccess) return ui.gridRows;
 		return reconcileGridRows(ui.gridRows, slotTitles);
@@ -29644,7 +30727,7 @@ function TerminalGrid({ specialPanes }) {
 	});
 }
 function sentinel(kind, ref = "") {
-	return kind === "logs" ? "\0mindflock-logs" : kind === "syslogs" ? "\0system-logs" : kind === "verify" ? "\0verify:" + ref : "\0assistant-chat";
+	return windowKey(kind, ref);
 }
 //#endregion
 //#region src/components/palette/CommandPalette.tsx
@@ -29687,6 +30770,7 @@ function CommandPalette({ host }) {
 	const open = useUi((s) => s.openDialog === "palette");
 	const closeDialog = useUi((s) => s.closeDialog);
 	const { data: config } = useConfig();
+	const { data: extensions } = useExtensions();
 	const [query, setQuery] = (0, import_react.useState)("");
 	const [sel, setSel] = (0, import_react.useState)(0);
 	const inputRef = (0, import_react.useRef)(null);
@@ -29831,11 +30915,20 @@ function CommandPalette({ host }) {
 			label: "New from Recently closed…",
 			run: () => ui.openDialogFor("recent")
 		});
+		for (const ext of extensions || []) {
+			if (!ext.enabled) continue;
+			for (const cmd of ext.extension.commands) acts.push({
+				label: cmd.title || cmd.id,
+				hint: ext.label,
+				run: () => void runCommand(ext.id, cmd.id)
+			});
+		}
 		return acts;
 	}, [
 		open,
 		config,
-		host
+		host,
+		extensions
 	]);
 	const filtered = (0, import_react.useMemo)(() => {
 		const scored = actions.map((a, i) => ({
@@ -37865,6 +38958,140 @@ function UninstallSection() {
 	] });
 }
 //#endregion
+//#region src/components/settings/screens/Extensions.tsx
+function readDisabled(raw) {
+	return Array.isArray(raw) ? raw.map((x) => String(x)) : void 0;
+}
+function Extensions(_) {
+	const s = useSettings();
+	const { data: extensions, isLoading, isError } = useExtensions();
+	(0, import_react.useSyncExternalStore)(subscribeHost, hostVersion);
+	const disabled = readDisabled(s.get("extensions", "disabled"));
+	const setEnabled = async (ext, on) => {
+		const cur = disabled ?? (extensions || []).filter((e) => !e.enabled).map((e) => e.id);
+		const next = on ? cur.filter((id) => id !== ext.id) : cur.includes(ext.id) ? cur : [...cur, ext.id];
+		await s.saveGroup("extensions", { disabled: next }, (on ? "Enabled " : "Disabled ") + ext.label);
+		refreshExtensions();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Extensions"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Each extension adds one sidebar bar whose buttons run its commands, and opens its own dialogs and grid windows. Its bar drags and hides like the built-in ones (footer Customize); its commands are in the command palette."
+		}),
+		isLoading && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Loading…"
+		}),
+		isError && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "Could not read the extension list from the server."
+		}),
+		extensions && !extensions.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint",
+			children: "No extensions installed."
+		}),
+		extensions && extensions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "prov-conn-list",
+			id: "ext-list",
+			children: extensions.map((ext) => {
+				const on = disabled ? !disabled.includes(ext.id) : ext.enabled;
+				const err = extActivationError(ext.id);
+				const spec = ext.extension;
+				const n = spec.commands.length;
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "prov-conn",
+					"data-extension": ext.id,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "prov-conn-head ext-row-head",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "prov-name",
+									children: ext.label
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "prov-badge",
+									children: ext.origin === "user" ? "~/.mindflock/extensions" : "built-in"
+								}),
+								!on && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "prov-badge",
+									children: "disabled"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+									className: "ca-switch",
+									title: on ? "Disable this extension" : "Enable this extension",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+										type: "checkbox",
+										checked: on,
+										onChange: (e) => void setEnabled(ext, e.target.checked)
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "set-hint",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: ext.id }),
+								" · bar \"",
+								spec.bar_label || ext.label,
+								"\" · ",
+								n,
+								" ",
+								n === 1 ? "command" : "commands"
+							]
+						}),
+						err && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "set-hint ext-row-error",
+							children: [
+								"Failed to activate: ",
+								err,
+								". Turn it off and on again to retry after fixing the module."
+							]
+						}),
+						ext.origin === "user" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "set-hint",
+							children: "Disabling removes its bar, commands and windows here; its backend (routes, event subscriptions) stays loaded until MindFlock restarts."
+						})
+					]
+				}, ext.id);
+			})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Create an extension"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint",
+			children: [
+				"Make a folder ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "~/.mindflock/extensions/<id>/" }),
+				" containing an",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "extension.py" }),
+				" that exposes ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "build(ctx)" }),
+				" and returns an Addon whose",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "extension()" }),
+				" declares the bar, commands and surfaces. Put the ES module and its ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "style.css" }),
+				" in an optional ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "frontend/" }),
+				" folder next to it (served at ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "/extensions/<id>/" }),
+				"). Extensions are discovered once at startup: restart MindFlock to load a new one. The manifest and API reference is in",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "docs/extensions.md" }),
+				"."
+			]
+		})
+	] });
+}
+//#endregion
 //#region src/lib/traffic.ts
 function hasVisitorData(data) {
 	return !!data?.clicks?.totals;
@@ -37927,7 +39154,7 @@ function fmtPct(part, whole) {
 	if (!whole) return "—";
 	return (part / whole * 100).toFixed(1) + "%";
 }
-function plural(n, word) {
+function plural$1(n, word) {
 	return `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
 }
 var CHART_W = 640;
@@ -38276,7 +39503,7 @@ function VisitorsChart({ days }) {
 				children: hovered ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: fmtDate(hovered.day) }),
 					" — ",
-					plural(hovered.visitors, "visitor"),
+					plural$1(hovered.visitors, "visitor"),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "traffic-tooltip-detail",
 						children: [
@@ -38864,6 +40091,11 @@ var SCREENS = [
 		key: "advanced",
 		label: "Advanced",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Advanced, { ...p })
+	},
+	{
+		key: "extensions",
+		label: "Extensions",
+		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Extensions, { ...p })
 	},
 	{
 		key: "traffic",
@@ -40422,7 +41654,10 @@ function NewPlanBar({ candidates, closed, reason }) {
 				className: "test-btn",
 				disabled: !!busy || !candidates.length,
 				onClick: () => void write(),
-				children: busy ? "Writing…" : "Write it"
+				children: busy ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "btn-spin",
+					"aria-hidden": "true"
+				}), " Writing…"] }) : "Write it"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint",
@@ -40890,7 +42125,10 @@ function CommitDialog() {
 							disabled: writing,
 							"aria-busy": writing || void 0,
 							title: "Read the diff and write the commit message, using this session's coding CLI. Replaces what's in the box.",
-							children: writing ? "Writing…" : "✨ Write it"
+							children: writing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "btn-spin",
+								"aria-hidden": "true"
+							}), " Writing…"] }) : "✨ Write it"
 						})]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
 						id: "commit-msg",
@@ -41409,21 +42647,124 @@ function SortPicker({ id, options, pref, onKey, onFlip }) {
 	});
 }
 //#endregion
-//#region src/components/dialogs/WorkspacesDialog.tsx
-var SORTS$1 = [
-	{
-		key: "name",
-		label: "Name",
-		defaultDir: "asc",
-		asc: "A → Z",
-		desc: "Z → A"
-	},
+//#region src/components/dialogs/recentRows.ts
+function entryLabel(e, alias = "") {
+	return alias || e.branch || e.title || e.name || "(untitled)";
+}
+function rowSortValue(e, key, alias = "") {
+	if (key === "name") return entryLabel(e, alias);
+	if (key === "size") return e.size_bytes ?? null;
+	return e.last_used ?? null;
+}
+function rowSearchFields(e, alias = "") {
+	return [
+		alias,
+		e.branch,
+		e.title,
+		e.name,
+		e.path,
+		e.kind,
+		e.in_place ? "in-place" : "",
+		e.provisioned ? "provisioned" : "",
+		e.exists ? "" : "worktree gone",
+		e.stale ? "unused" : "",
+		e.source === "disk" ? "on disk" : "closed"
+	];
+}
+function dirNote(e, alias = "") {
+	const base = pathBasename(e.path || "");
+	if (!base) return "";
+	return entryLabel(e, alias).includes(base) || base === e.title ? "" : base;
+}
+function sumBytes(rows) {
+	const seen = /* @__PURE__ */ new Set();
+	let total = 0;
+	for (const e of rows) {
+		const key = e.path || e.id;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		total += e.size_bytes || 0;
+	}
+	return total;
+}
+function staleDays(e, nowMs = Date.now()) {
+	if (!e.last_used) return null;
+	return Math.floor(Math.max(0, nowMs / 1e3 - e.last_used) / 86400);
+}
+function closedMs(e) {
+	if (!e.closed_at) return null;
+	const t = new Date(e.closed_at).getTime();
+	return isNaN(t) ? null : t;
+}
+function whenText(e) {
+	if (e.source === "closed") {
+		const ms = closedMs(e);
+		return ms ? "closed " + relTime(ms / 1e3) : "";
+	}
+	return e.last_used ? "used " + relTime(e.last_used) : "";
+}
+function whenTitle(e) {
+	const ms = closedMs(e);
+	return [ms ? "Closed " + new Date(ms).toLocaleString() : "", e.last_used ? "Last touched " + (/* @__PURE__ */ new Date(e.last_used * 1e3)).toLocaleString() : ""].filter(Boolean).join("\n");
+}
+var plural = (n, one, many = one + "s") => n === 1 ? one : many;
+function nothingMessage(r) {
+	const k = r.kept || {
+		active: [],
+		recent: 0,
+		not_worktree: 0,
+		protected: 0
+	};
+	const outside = k.outside_root || 0;
+	const days = Math.round(r.days);
+	const parts = [];
+	if (k.active.length) parts.push(`${k.active.length} in use by a running session (${k.active.join(", ")})`);
+	if (k.recent) parts.push(`${k.recent} used within the last ${days} days`);
+	if (k.not_worktree) parts.push(`${k.not_worktree} that ${plural(k.not_worktree, "is", "are")} not a worktree — a repository or a clone, which this never removes`);
+	if (outside) parts.push(`${outside} outside MindFlock's own worktrees folder (one you made yourself — never removed from here)`);
+	if (k.protected) parts.push(`${k.protected} protected base ${plural(k.protected, "clone")}`);
+	return `No unused worktrees to remove.\n\n` + (parts.length ? "Kept: " + parts.join("; ") + "." : `Nothing is older than ${days} days.`);
+}
+function pruneMessage(r) {
+	const n = r.candidates.length;
+	const days = Math.round(r.days);
+	const size = r.total_bytes ? ` (${humanSize(r.total_bytes)})` : "";
+	const dirty = r.dirty_count || 0;
+	return `Delete ${n} unused ${plural(n, "worktree")}${size}?\n\n` + previewList(r.candidates.map((c) => c.name)) + `
+
+Only worktrees git generated are ever removed — never a repository, a clone, or a folder git did not make. Left alone: anything a session is using, and anything touched in the last ${days} days.\n\nEach branch and its commits stay in the repository the worktree came from, so it is the checkout that goes, not the work. Files git ignores (build output, a local database, the .env copied in at setup) go with it.` + (dirty ? `\n\n${dirty} of ${plural(n, "it", "them")} ${plural(dirty, "has", "have")} uncommitted changes, which would be lost — asked about separately.` : "") + `\n\nThis cannot be undone.`;
+}
+function dirtyMessage(r) {
+	const dirty = r.candidates.filter((c) => c.dirty);
+	const clean = r.candidates.length - dirty.length;
+	if (!clean) return `All ${dirty.length} unused ${plural(dirty.length, "worktree")} ${plural(dirty.length, "has", "have")} uncommitted changes. Delete ${plural(dirty.length, "it", "them")} anyway?\n\n` + previewList(dirty.map((c) => c.name)) + "\n\nCommitted work stays on the branch; these changes do not.\n\nThis cannot be undone.";
+	return `Include the ${dirty.length} ${plural(dirty.length, "worktree")} with uncommitted changes?\n\n` + previewList(dirty.map((c) => c.name)) + `\n\nOK — delete all ${r.candidates.length}.\nCancel — delete only the ${clean} that ${plural(clean, "is", "are")} clean.`;
+}
+function prunedMessage(r) {
+	const n = r.removed_count || 0;
+	return [
+		n ? `Removed ${n} ${plural(n, "worktree")}` : "Removed nothing",
+		r.freed_bytes ? humanSize(r.freed_bytes) + " freed" : "",
+		r.kept_dirty && r.kept_dirty.length ? `kept ${r.kept_dirty.length} with uncommitted work` : "",
+		r.failed && r.failed.length ? `${r.failed.length} failed` : ""
+	].filter(Boolean).join(" · ");
+}
+//#endregion
+//#region src/components/dialogs/RecentDialog.tsx
+var SORTS = [
 	{
 		key: "date",
-		label: "Last modified",
+		label: "Last used",
 		defaultDir: "desc",
 		asc: "oldest first",
 		desc: "newest first"
+	},
+	{
+		key: "name",
+		label: "Branch / name",
+		defaultDir: "asc",
+		asc: "A → Z",
+		desc: "Z → A"
 	},
 	{
 		key: "size",
@@ -41433,316 +42774,53 @@ var SORTS$1 = [
 		desc: "largest first"
 	}
 ];
-function isProtected(w) {
-	return w.kind === "base" || w.kind === "refresher";
+function deletable(e) {
+	return e.exists && !e.in_place && !!e.path && !e.active_session;
 }
-function WorkspacesDialog() {
-	const open = useUi((s) => s.openDialog === "workspaces");
-	const closeDialog = useUi((s) => s.closeDialog);
-	const [ws, setWs] = (0, import_react.useState)(null);
-	const [total, setTotal] = (0, import_react.useState)("");
-	const [error, setError] = (0, import_react.useState)("");
-	const [clearBusy, setClearBusy] = (0, import_react.useState)(false);
-	const [query, setQuery] = (0, import_react.useState)("");
-	const sort = useSortPref("mf_sort_workspaces", SORTS$1);
-	const seq = (0, import_react.useRef)(0);
-	const load = (0, import_react.useCallback)(async () => {
-		const mySeq = ++seq.current;
-		setError("");
-		setWs(null);
-		let data;
-		try {
-			data = await api("/api/workspaces");
-		} catch (e) {
-			setWs([]);
-			setError(e.message);
-			return;
-		}
-		if (mySeq !== seq.current) return;
-		const list = data.workspaces || [];
-		setWs(list);
-		setTotal(list.length + " dir" + (list.length === 1 ? "" : "s"));
-		let sized;
-		try {
-			sized = await api("/api/workspaces?sizes=1");
-		} catch {
-			return;
-		}
-		if (mySeq !== seq.current) return;
-		const byPath = new Map((sized.workspaces || []).map((s) => [s.path, s.size_bytes || 0]));
-		let sum = 0;
-		for (const v of byPath.values()) sum += v;
-		setWs(list.map((w) => ({
-			...w,
-			size_bytes: byPath.get(w.path) ?? w.size_bytes
-		})));
-		setTotal(list.length + " dir" + (list.length === 1 ? "" : "s") + " · " + humanSize(sum));
-	}, []);
-	(0, import_react.useEffect)(() => {
-		if (open) load();
-	}, [open, load]);
-	(0, import_react.useEffect)(() => {
-		if (!open) setQuery("");
-	}, [open]);
-	const sorted = (0, import_react.useMemo)(() => sortRows(ws || [], (w) => sort.pref.key === "name" ? w.name : sort.pref.key === "size" ? w.size_bytes : w.mtime, sort.pref.dir), [ws, sort.pref]);
-	const shown = (0, import_react.useMemo)(() => {
-		const tokens = searchTokens(query);
-		return sorted.filter((w) => matchesTokens([
-			w.name,
-			w.path,
-			w.kind,
-			w.active_session
-		], tokens));
-	}, [sorted, query]);
-	const byPath = (0, import_react.useMemo)(() => new Map((ws || []).map((w) => [w.path, w])), [ws]);
-	const sel = useRowSelection((0, import_react.useMemo)(() => sorted.filter((w) => !isProtected(w)).map((w) => w.path), [sorted]), (0, import_react.useMemo)(() => shown.filter((w) => !isProtected(w)).map((w) => w.path), [shown]));
-	if (!open) return null;
-	const picked = sel.keys.map((p) => byPath.get(p)).filter(Boolean);
-	const delSelected = async () => {
-		if (!picked.length) return;
-		const active = picked.filter((w) => w.active_session);
-		const sized = picked.filter((w) => w.size_bytes != null);
-		const sum = sized.reduce((n, w) => n + (w.size_bytes || 0), 0);
-		const msg = `Permanently delete ${picked.length} workspace${picked.length === 1 ? "" : "s"}` + (sized.length ? ` (${humanSize(sum)}${sized.length < picked.length ? "+" : ""})` : "") + "?\n\n" + previewList(picked.map((w) => w.name)) + "\n" + (active.length ? `\n${active.length} of these ${active.length === 1 ? "is an ACTIVE session" : "are ACTIVE sessions"} (${active.map((w) => w.active_session).join(", ")}) — ${active.length === 1 ? "it" : "they"} will be killed first.\n` : "") + "\nThis cannot be undone.";
-		if (!confirm(msg)) return;
-		setError("");
-		setClearBusy(true);
-		const results = await Promise.all(picked.map((w) => api("/api/workspaces/delete", { json: { path: w.path } }).then(() => "").catch((e) => e.message)));
-		setClearBusy(false);
-		const failed = results.filter(Boolean);
-		if (failed.length) setError(`${failed.length} delete(s) failed: ${failed[0]}`);
-		toast(`Deleted ${results.length - failed.length}/${results.length} workspace(s)`);
-		sel.clear();
-		await load();
-		refreshInstances();
-	};
-	const del = async (w) => {
-		const szNote = w.size_bytes == null ? "" : " (" + humanSize(w.size_bytes) + ")";
-		let msg = `Permanently delete '${w.name}'${szNote}?`;
-		if (w.active_session) msg = `'${w.name}' is the ACTIVE session '${w.active_session}'. Kill it and delete the directory?`;
-		else if (w.kind === "base") msg = "This is the shared base clone — deleting it forces a fresh clone on the next worktree session. Continue?";
-		else if (w.kind === "refresher") msg = "This is the cache refresher workspace — deleting it re-seeds the test cache on the next refresh. Continue?";
-		if (!confirm(msg + "\nThis cannot be undone.")) return;
-		try {
-			await api("/api/workspaces/delete", { json: { path: w.path } });
-		} catch (e) {
-			alert("Delete failed: " + e.message);
-			return;
-		}
-		await load();
-		refreshInstances();
-	};
-	const clearAll = async () => {
-		if (!confirm("Delete ALL unprotected, idle workspaces?\n\nKept: protected base clones / cache refreshers, and any workspace with a running session.\n" + (query ? "\nThe filter does not limit this — every unprotected, idle workspace goes.\n" : "") + "\nThis cannot be undone.")) return;
-		setError("");
-		setClearBusy(true);
-		let r;
-		try {
-			r = await api("/api/workspaces/clear", { json: {} });
-		} catch (e) {
-			setError(e.message);
-			setClearBusy(false);
-			return;
-		}
-		setClearBusy(false);
-		const n = r?.removed_count || 0;
-		const kept = r?.kept_active || [];
-		let msg = n ? `Removed ${n} workspace${n === 1 ? "" : "s"}` : "Nothing to remove";
-		if (kept.length) msg += ` · kept ${kept.length} active session${kept.length === 1 ? "" : "s"}`;
-		toast(msg);
-		await load();
-		refreshInstances();
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		id: "workspaces-dialog",
-		className: "modal",
-		onClick: (e) => {
-			if (e.target === e.currentTarget) closeDialog();
-		},
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "workspaces-panel",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "ws-head",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Workspaces on disk" }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							id: "ws-total",
-							className: "muted",
-							children: query && total ? `${shown.length} of ${total}` : total
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "ws-clear",
-							title: "Delete all unprotected, idle workspaces (keeps protected dirs and any running session)",
-							disabled: clearBusy,
-							onClick: clearAll,
-							children: "Clear unprotected"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "ws-refresh",
-							onClick: load,
-							children: "Refresh"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "ws-close",
-							onClick: closeDialog,
-							children: "Close"
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "dlg-filter-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SelectAllCheck, {
-							state: sel.allState,
-							onChange: sel.setAllVisible,
-							label: "Select every deletable workspace shown"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DialogFilter, {
-							id: "ws-filter",
-							value: query,
-							onChange: setQuery,
-							placeholder: "Filter by name, path, or session…  ( Ctrl+F )",
-							onEscape: closeDialog
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SortPicker, {
-							id: "ws-sort",
-							options: SORTS$1,
-							pref: sort.pref,
-							onKey: sort.setKey,
-							onFlip: sort.flip
-						})
-					]
-				}),
-				!!picked.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BulkRowBar, {
-					count: picked.length,
-					hiddenCount: sel.hiddenCount,
-					noun: "workspace",
-					onClear: sel.clear,
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "danger",
-						title: "Permanently delete the selected workspaces",
-						disabled: clearBusy,
-						onClick: delSelected,
-						children: "Delete selected"
-					})
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					id: "ws-list",
-					children: ws === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "muted",
-						children: "Loading…"
-					}) : !shown.length && !error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "muted",
-						children: query && ws.length ? `No workspace matches “${query}”.` : "No workspace directories on disk."
-					}) : shown.map((w) => {
-						const prot = isProtected(w);
-						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "ws-row" + (sel.has(w.path) ? " picked" : ""),
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowCheck, {
-									checked: sel.has(w.path),
-									disabled: prot,
-									title: prot ? "Protected — cannot be deleted" : "Select (Shift-click to extend the range)",
-									onToggle: (shift) => sel.toggle(w.path, shift)
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-									className: "ws-info",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "ws-name",
-											title: w.path,
-											children: w.name
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "ws-badge kind",
-											children: w.kind
-										}),
-										w.active_session && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-											className: "ws-badge active",
-											children: ["active: ", w.active_session]
-										})
-									]
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "ws-when muted",
-									title: w.mtime ? "Modified " + (/* @__PURE__ */ new Date(w.mtime * 1e3)).toLocaleString() : "",
-									children: w.mtime ? relTime(w.mtime) : ""
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "ws-size",
-									children: w.size_bytes == null ? "…" : humanSize(w.size_bytes)
-								}),
-								prot ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "ws-protected",
-									title: "Protected — needed by the engine",
-									children: "protected"
-								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									className: "ws-del",
-									onClick: () => del(w),
-									children: "Delete"
-								})
-							]
-						}, w.path);
-					})
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					id: "ws-error",
-					className: "error",
-					children: error
-				})
-			]
-		})
-	});
-}
-//#endregion
-//#region src/components/dialogs/RecentDialog.tsx
-function fmtClosedAt(iso) {
-	if (!iso) return "";
-	const d = new Date(iso);
-	return isNaN(d.getTime()) ? "" : d.toLocaleString();
-}
-function closedMs(e) {
-	if (!e.closed_at) return null;
-	const t = new Date(e.closed_at).getTime();
-	return isNaN(t) ? null : t;
-}
-function entryLabel(e, alias = "") {
-	return alias || e.branch || e.title || "(untitled)";
-}
-var SORTS = [{
-	key: "date",
-	label: "Date closed",
-	defaultDir: "desc",
-	asc: "oldest first",
-	desc: "newest first"
-}, {
-	key: "name",
-	label: "Branch / name",
-	defaultDir: "asc",
-	asc: "A → Z",
-	desc: "Z → A"
-}];
 function RecentDialog() {
 	const open = useUi((s) => s.openDialog === "recent");
 	const closeDialog = useUi((s) => s.closeDialog);
 	const aliases = useUi((s) => s.aliases);
-	const [list, setList] = (0, import_react.useState)(null);
+	const [data, setData] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [query, setQuery] = (0, import_react.useState)("");
 	const sort = useSortPref("mf_sort_recent", SORTS);
-	const load = (0, import_react.useCallback)(async () => {
+	const seq = (0, import_react.useRef)(0);
+	const load = (0, import_react.useCallback)(async (keepError = false) => {
+		const mySeq = ++seq.current;
+		if (!keepError) setError("");
+		setData(null);
+		let first;
 		try {
-			const data = await api("/api/recently-closed");
-			setError("");
-			setList(Array.isArray(data) ? data : []);
-		} catch (e) {
-			setError(e.message);
+			first = await api("/api/recent");
+		} catch (err) {
+			if (mySeq !== seq.current) return;
+			setError(err.message);
+			setData({
+				rows: [],
+				stale_days: 7,
+				hidden: {
+					protected: 0,
+					protected_names: [],
+					protected_bytes: 0,
+					active: 0,
+					active_titles: []
+				},
+				roots: []
+			});
+			return;
 		}
+		if (mySeq !== seq.current) return;
+		setData(first);
+		let sized;
+		try {
+			sized = await api("/api/recent?sizes=1");
+		} catch {
+			return;
+		}
+		if (mySeq !== seq.current) return;
+		setData(sized);
 	}, []);
 	(0, import_react.useEffect)(() => {
 		if (open) load();
@@ -41750,59 +42828,107 @@ function RecentDialog() {
 	(0, import_react.useEffect)(() => {
 		if (!open) setQuery("");
 	}, [open]);
-	const all = list || [];
+	const all = data?.rows || [];
 	const aliasOf = (0, import_react.useCallback)((e) => e.title && aliases[e.title] || "", [aliases]);
-	const sorted = (0, import_react.useMemo)(() => sortRows(all, (e) => sort.pref.key === "name" ? entryLabel(e, aliasOf(e)) : closedMs(e), sort.pref.dir), [
+	const sorted = (0, import_react.useMemo)(() => sortRows(all, (e) => rowSortValue(e, sort.pref.key, aliasOf(e)), sort.pref.dir), [
 		all,
 		sort.pref,
 		aliasOf
 	]);
-	const data = (0, import_react.useMemo)(() => {
+	const shown = (0, import_react.useMemo)(() => {
 		const tokens = searchTokens(query);
-		return sorted.filter((e) => matchesTokens([
-			aliasOf(e),
-			e.branch,
-			e.title,
-			e.folder,
-			e.in_place ? "in-place" : "",
-			e.provisioned ? "provisioned" : "",
-			e.exists ? "" : "worktree gone"
-		], tokens));
+		return sorted.filter((e) => matchesTokens(rowSearchFields(e, aliasOf(e)), tokens));
 	}, [
 		sorted,
 		query,
 		aliasOf
 	]);
 	const byId = (0, import_react.useMemo)(() => new Map(all.map((e) => [e.id, e])), [all]);
-	const sel = useRowSelection((0, import_react.useMemo)(() => sorted.map((e) => e.id), [sorted]), (0, import_react.useMemo)(() => data.map((e) => e.id), [data]));
+	const sel = useRowSelection((0, import_react.useMemo)(() => sorted.map((e) => e.id), [sorted]), (0, import_react.useMemo)(() => shown.map((e) => e.id), [shown]));
+	const totalBytes = (0, import_react.useMemo)(() => sumBytes(all), [all]);
+	const staleCount = (0, import_react.useMemo)(() => new Set(all.filter((e) => e.stale).map((e) => e.path)).size, [all]);
 	if (!open) return null;
 	const picked = sel.keys.map((id) => byId.get(id)).filter(Boolean);
 	const label = (e) => entryLabel(e, aliasOf(e));
-	const runBulk = async (wipe, verb) => {
-		const targets = wipe ? picked.filter((e) => e.exists && !e.in_place) : picked;
+	const hidden = data?.hidden;
+	const hiddenNote = [hidden?.protected ? `${hidden.protected} protected` + (hidden.protected_bytes ? ` (${humanSize(hidden.protected_bytes)})` : "") : "", hidden?.active ? `${hidden.active} in use` : ""].filter(Boolean).join(" + ");
+	const removeOne = (e) => e.source === "closed" ? api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, { json: { wipe: true } }) : api("/api/workspaces/delete", { json: { path: e.path } });
+	const runBulk = async (targets, verb, act) => {
 		if (!targets.length) return;
-		const results = await Promise.all(targets.map((e) => api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, { json: { wipe } }).then(() => "").catch((err) => err.message)));
+		setBusy(true);
+		const results = await Promise.all(targets.map((e) => act(e).then(() => "").catch((err) => err.message)));
+		setBusy(false);
 		const failed = results.filter(Boolean);
 		if (failed.length) setError(`${failed.length} ${verb} failed: ${failed[0]}`);
-		toast(`${verb} ${results.length - failed.length}/${results.length} session(s)`);
+		toast(`${verb} ${results.length - failed.length}/${results.length} item(s)`);
 		sel.clear();
-		load();
+		await load(failed.length > 0);
+		refreshInstances();
+		refreshRecentlyClosed();
 	};
-	const wipeSelected = async () => {
-		const targets = picked.filter((e) => e.exists && !e.in_place);
+	const deleteSelected = async () => {
+		const targets = picked.filter(deletable);
 		const skipped = picked.length - targets.length;
 		if (!targets.length) {
-			alert("None of the selected sessions has a worktree to wipe — they are in-place or already gone.\n\nUse Forget to drop them from this list.");
+			alert("None of the selected rows has a directory this app may delete — an in-place session runs in your own repo, and the others are already gone or still in use by a running session.\n\nUse Forget to drop a closed session from this list.");
 			return;
 		}
-		const msg = `Permanently delete ${targets.length} worktree${targets.length === 1 ? "" : "s"}?\n\n` + previewList(targets.map(label)) + "\n" + (skipped ? `\n${skipped} selected row${skipped === 1 ? " is" : "s are"} in-place or already gone and will be left alone.\n` : "") + "\nThis cannot be undone.";
+		const sized = targets.filter((e) => e.size_bytes != null);
+		const sum = sumBytes(sized);
+		const msg = `Permanently delete ${targets.length} director${targets.length === 1 ? "y" : "ies"}` + (sized.length ? ` (${humanSize(sum)}${sized.length < targets.length ? "+" : ""})` : "") + "?\n\n" + previewList(targets.map(label)) + "\n" + (skipped ? `\n${skipped} selected row${skipped === 1 ? " has" : "s have"} no directory this app may delete (an in-place session runs in your own repo, and one may be gone already or still in use by a running session) — ${skipped === 1 ? "it" : "they"} will be left alone.\n` : "") + (targets.every((e) => e.worktree) ? "\nA worktree's branch and commits stay in the repository it came from; anything uncommitted, and anything git ignores, does not.\n" : "\nSome of these are clones, not worktrees — for those, everything goes with the directory, committed or not.\n") + "\nThis cannot be undone.";
 		if (!confirm(msg)) return;
-		await runBulk(true, "Wiped");
+		await runBulk(targets, "Deleted", removeOne);
 	};
 	const forgetSelected = async () => {
-		const msg = `Forget ${picked.length} closed session${picked.length === 1 ? "" : "s"}?\n\n` + previewList(picked.map(label)) + "\n\nWorktrees stay on disk; the rows leave this list, so Reopen is no longer offered.";
+		const targets = picked.filter((e) => e.source === "closed");
+		if (!targets.length) {
+			alert("None of the selected rows is a closed session — there is nothing to forget.\n\nUse Delete to remove a leftover directory from disk.");
+			return;
+		}
+		const msg = `Forget ${targets.length} closed session${targets.length === 1 ? "" : "s"}?\n\n` + previewList(targets.map(label)) + "\n\nThe directories stay on disk (they come back as on-disk rows); the sessions leave this list, so Reopen is no longer offered.";
 		if (!confirm(msg)) return;
-		await runBulk(false, "Forgot");
+		await runBulk(targets, "Forgot", (e) => api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, { json: { wipe: false } }));
+	};
+	const pruneUnused = async () => {
+		setError("");
+		setBusy(true);
+		let pre;
+		try {
+			pre = await api("/api/workspaces/prune-worktrees", { json: { dry_run: true } });
+		} catch (err) {
+			setBusy(false);
+			setError(err.message);
+			return;
+		}
+		setBusy(false);
+		if (!pre.candidates?.length) {
+			alert(nothingMessage(pre));
+			return;
+		}
+		if (!confirm(pruneMessage(pre))) return;
+		let includeDirty = false;
+		if (pre.dirty_count) {
+			includeDirty = confirm(dirtyMessage(pre));
+			if (!includeDirty && pre.dirty_count === pre.candidates.length) return;
+		}
+		setBusy(true);
+		let done;
+		try {
+			done = await api("/api/workspaces/prune-worktrees", { json: {
+				dry_run: false,
+				include_dirty: includeDirty
+			} });
+		} catch (err) {
+			setBusy(false);
+			setError(err.message);
+			return;
+		}
+		setBusy(false);
+		toast(prunedMessage(done));
+		if (done.failed?.length) setError(`Could not remove: ${done.failed.join(", ")}`);
+		await load(!!done.failed?.length);
+		refreshInstances();
+		refreshRecentlyClosed();
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		id: "recent-dialog",
@@ -41820,16 +42946,28 @@ function RecentDialog() {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							id: "recent-total",
 							className: "muted",
+							title: hidden?.protected_names?.length ? "Not listed (protected, the engine needs them): " + hidden.protected_names.join(", ") : "",
 							children: [
-								query ? `${data.length} of ${all.length}` : data.length,
-								" session",
-								(query ? all.length : data.length) === 1 ? "" : "s"
+								query ? `${shown.length} of ${all.length}` : all.length,
+								" item",
+								(query ? all.length : shown.length) === 1 ? "" : "s",
+								totalBytes ? ` · ${humanSize(totalBytes)}` : "",
+								hiddenNote ? ` · ${hiddenNote} hidden` : ""
 							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							id: "recent-prune",
+							"data-caps": "git",
+							title: `Delete every worktree no session is using and nothing has touched in ${Math.round(data?.stale_days ?? 7)} days. Repositories and clones are never touched.`,
+							disabled: busy,
+							onClick: pruneUnused,
+							children: ["Remove unused worktrees", staleCount ? ` (${staleCount})` : ""]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							id: "recent-refresh",
-							onClick: load,
+							onClick: () => load(),
 							children: "Refresh"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -41846,7 +42984,7 @@ function RecentDialog() {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SelectAllCheck, {
 							state: sel.allState,
 							onChange: sel.setAllVisible,
-							label: "Select every session shown"
+							label: "Select every row shown"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DialogFilter, {
 							id: "recent-filter",
@@ -41867,32 +43005,35 @@ function RecentDialog() {
 				!!picked.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(BulkRowBar, {
 					count: picked.length,
 					hiddenCount: sel.hiddenCount,
-					noun: "session",
+					noun: "row",
 					onClear: sel.clear,
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						title: "Drop the selected rows from this list (worktrees stay on disk)",
+						title: "Drop the selected closed sessions from this list (directories stay on disk)",
+						disabled: busy,
 						onClick: forgetSelected,
 						children: "Forget selected"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "danger",
-						title: "Permanently delete the selected sessions' worktrees",
-						onClick: wipeSelected,
-						children: "Wipe worktrees"
+						title: "Permanently delete the selected directories",
+						disabled: busy,
+						onClick: deleteSelected,
+						children: "Delete from disk"
 					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					id: "recent-list",
-					children: list === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					children: data === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "muted",
 						children: "Loading…"
-					}) : !data.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					}) : !shown.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "muted",
-						children: query && all.length ? `No closed session matches “${query}”.` : "No recently closed sessions."
-					}) : data.map((e) => {
+						children: query && all.length ? `Nothing matches “${query}”.` : "No closed sessions, and nothing left on disk."
+					}) : shown.map((e) => {
 						const gone = !e.exists;
 						const a = aliasOf(e);
+						const days = e.stale ? staleDays(e) : null;
 						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "recent-row" + (sel.has(e.id) ? " picked" : ""),
 							children: [
@@ -41909,7 +43050,7 @@ function RecentDialog() {
 											a ? "Saved name: " + a : "",
 											e.branch ? "Branch: " + e.branch : "",
 											e.title ? "Session: " + e.title : "",
-											e.folder || ""
+											e.path || ""
 										].filter(Boolean).join("\n"),
 										children: label(e)
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -41923,6 +43064,14 @@ function RecentDialog() {
 												className: "recent-slug muted",
 												children: e.title
 											}),
+											dirNote(e, a) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "recent-slug muted",
+												children: dirNote(e, a)
+											}),
+											e.kind && e.kind !== "in-place" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "ws-badge kind",
+												children: e.kind
+											}),
 											e.in_place && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 												className: "ws-badge kind",
 												children: "in-place"
@@ -41935,9 +43084,28 @@ function RecentDialog() {
 												className: "ws-badge gone",
 												children: "worktree gone"
 											}),
+											e.active_session && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+												className: "ws-badge active",
+												title: "A running session is still working in this directory",
+												children: ["in use: ", e.active_session]
+											}),
+											e.stale && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+												className: "ws-badge stale",
+												title: "No session is using this and nothing has touched it for over a week — Remove unused worktrees would take it",
+												children: [
+													"unused ",
+													days,
+													"d"
+												]
+											}),
 											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 												className: "recent-when muted",
-												children: fmtClosedAt(e.closed_at)
+												title: whenTitle(e),
+												children: whenText(e)
+											}),
+											e.size_bytes != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "recent-size muted",
+												children: humanSize(e.size_bytes)
 											})
 										]
 									})]
@@ -41945,9 +43113,9 @@ function RecentDialog() {
 								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 									className: "recent-actions",
 									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										e.source === "closed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 											className: "recent-reopen",
-											disabled: gone,
+											disabled: gone || busy,
 											onClick: async () => {
 												try {
 													const inst = await api(`/api/recently-closed/${encodeURIComponent(e.id)}/reopen`, { method: "POST" });
@@ -41961,22 +43129,28 @@ function RecentDialog() {
 											},
 											children: "Reopen"
 										}),
-										!e.in_place && !gone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										deletable(e) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 											className: "recent-wipe danger",
+											disabled: busy,
+											title: e.worktree ? "Permanently delete this worktree directory (its branch and commits stay in the repository it came from)" : "Permanently delete this directory",
 											onClick: async () => {
-												if (!confirm(`Permanently delete the worktree for '${label(e)}'?\nThis cannot be undone.`)) return;
+												if (!confirm(`Permanently delete '${label(e)}'` + (e.size_bytes != null ? ` (${humanSize(e.size_bytes)})` : "") + "?\nThis cannot be undone.")) return;
 												try {
-													await api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, { json: { wipe: true } });
+													await removeOne(e);
 												} catch (err) {
-													alert("Wipe failed: " + err.message);
+													alert("Delete failed: " + err.message);
 													return;
 												}
 												load();
+												refreshInstances();
+												refreshRecentlyClosed();
 											},
-											children: "Wipe worktree"
+											children: "Delete"
 										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										e.source === "closed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 											className: "recent-forget",
+											disabled: busy,
+											title: "Drop this closed session from the list (its directory stays on disk)",
 											onClick: async () => {
 												try {
 													await api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, { json: { wipe: false } });
@@ -41985,6 +43159,7 @@ function RecentDialog() {
 													return;
 												}
 												load();
+												refreshRecentlyClosed();
 											},
 											children: "Forget"
 										})
@@ -43655,53 +44830,51 @@ function App() {
 			followAutopilot(inst);
 		}
 	}, [instances]);
-	const [openSpecial, setOpenSpecial] = (0, import_react.useState)(/* @__PURE__ */ new Set());
+	const specialOpen = useUi((s) => s.specialOpen);
 	const verifyPanes = useUi((s) => s.verifyPanes);
+	const extPanes = useUi((s) => s.extPanes);
+	const extQuery = useExtensions();
+	(0, import_react.useEffect)(() => {
+		if (!extQuery.isSuccess || !extQuery.data) return;
+		syncExtensions(extQuery.data);
+	}, [extQuery.isSuccess, extQuery.data]);
 	(0, import_react.useEffect)(() => {
 		if (!instances || !instances.length || !verifyPanes.length) return;
 		const live = new Set(instances.map((i) => i.title));
 		for (const session of verifyPanes) if (!live.has(session)) useUi.getState().closeVerifyPane(session);
 	}, [instances, verifyPanes]);
-	const toggleSpecial = (0, import_react.useCallback)((kind) => {
-		setOpenSpecial((prev) => {
-			const next = new Set(prev);
-			if (next.has(kind)) next.delete(kind);
-			else next.add(kind);
-			return next;
-		});
-	}, []);
+	const toggleSpecial = (0, import_react.useCallback)((kind) => useUi.getState().toggleSpecial(kind), []);
 	const specialPanes = (0, import_react.useMemo)(() => {
 		const meta = {
 			logs: { title: "MindFlock logs" },
 			syslogs: { title: "System logs" },
 			chat: { title: "Assistant" }
 		};
-		const fixed = [...openSpecial].map((kind) => ({
+		const fixed = specialOpen.map((kind) => ({
 			key: kind,
 			kind,
-			title: meta[kind].title,
-			onClose: () => toggleSpecial(kind)
+			title: meta[kind].title
 		}));
 		const runs = verifyPanes.map((session) => ({
 			key: "verify:" + session,
 			kind: "verify",
 			title: session,
-			session,
-			onClose: () => useUi.getState().closeVerifyPane(session)
+			session
 		}));
-		return fixed.concat(runs);
+		const ext = extPanes.map((p) => ({
+			key: "ext:" + p.key,
+			kind: "ext",
+			title: p.title,
+			extKey: p.key
+		}));
+		return fixed.concat(runs, ext);
 	}, [
-		openSpecial,
-		toggleSpecial,
-		verifyPanes
+		specialOpen,
+		verifyPanes,
+		extPanes
 	]);
 	const host = (0, import_react.useMemo)(() => {
-		const stableTitles = () => {
-			const order = useUi.getState().order;
-			const list = instances$1().map((i) => i.title).filter((t) => !isVerifySession(t));
-			const known = order.filter((t) => list.includes(t));
-			return [...known, ...list.filter((t) => !known.includes(t))];
-		};
+		const stableKeys = () => useUi.getState().railOrder;
 		const toggleDialog = (name) => {
 			const s = useUi.getState();
 			if (s.openDialog === name) s.closeDialog();
@@ -43711,13 +44884,14 @@ function App() {
 			togglePalette: () => toggleDialog("palette"),
 			toggleShortcuts: () => toggleDialog("shortcuts"),
 			focusFilter: () => document.getElementById("session-filter")?.focus(),
-			cycleSession: (dir) => {
-				const titles = stableTitles();
-				if (!titles.length) return;
-				const cur = useUi.getState().focused;
-				selectSession(titles[((cur ? titles.indexOf(cur) : -1) + dir + titles.length) % titles.length]);
+			cycleWindow: (dir) => {
+				const keys = stableKeys();
+				if (!keys.length) return;
+				const s = useUi.getState();
+				const cur = keys.includes(s.mru[0]) ? s.mru[0] : s.focused;
+				selectRailKey(keys[((cur ? keys.indexOf(cur) : -1) + dir + keys.length) % keys.length]);
 			},
-			sessionAt: (index) => stableTitles()[index] ?? null,
+			rowAt: (index) => stableKeys()[index] ?? null,
 			openDoctor: () => useUi.getState().openDialogFor("settings", "doctor")
 		};
 	}, []);
@@ -43740,12 +44914,12 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MakePrDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RenameDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceDialog, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkspacesDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RecentDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TodoDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssistantAgentDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtensionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandPalette, { host }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutsSheet, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WelcomeTour, {}),

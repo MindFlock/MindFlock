@@ -144,6 +144,25 @@ def test_a_typed_message_is_never_a_placeholder(inst, wt):
     assert rec["message_auto"] is False
 
 
+def test_rearming_an_intake_run_keeps_its_placeholder_flag(inst, wt):
+    """⏩ on a session intake already armed adopts the ticket's name — and must
+    carry its placeholder flag across, or re-arming would freeze the request's
+    title into the commit that the generator was meant to replace."""
+    (wt / "b.txt").write_text("uncommitted\n")
+    ap.arm(
+        "ft-session",
+        "pr",
+        source="tix",
+        item="sc-1421",
+        message="Add customer phone numbers to intake",
+        message_auto=True,
+    )
+    _post("ft-session", {"depth": "pr"})
+    rec = ap.get("ft-session")
+    assert rec["message"] == "Add customer phone numbers to intake"
+    assert rec["message_auto"] is True
+
+
 def test_a_recovered_message_is_never_a_placeholder(inst, wt):
     (wt / "b.txt").write_text("uncommitted\n")
     (wt / server._COMMIT_MSG_FILE).write_text("recovered subject\n")
@@ -239,23 +258,72 @@ class TestTheCommitStepsMessage:
         self._run(wt, {"message": "Fix the login redirect"})
         assert committed == ["Fix the login redirect"]
 
-    def test_an_intake_items_own_name_is_left_alone(
+    def test_an_intake_items_own_name_is_replaced_by_the_written_message(
         self, inst, wt, committed, monkeypatch
     ):
-        """An ingested ticket's title is the best subject available — better than
-        anything a model would infer from the diff alone."""
+        """An ingested ticket's title is the work as REQUESTED, not as MADE — and
+        it is the same sentence for every commit in the run. So an intake message
+        is a placeholder like the button's: the commit gets the ✨ generator's
+        sentence, written from the final diff."""
         monkeypatch.setattr(
-            server._commit_message, "suggest_or_none", lambda *a, **k: "something else"
+            server._commit_message, "suggest_or_none", lambda *a, **k: "Add a b.txt"
         )
         self._run(
             wt,
             {
                 "message": "Add customer phone numbers to intake",
+                "message_auto": True,
+                "source": "tix",
+                "item": "sc-1421",
+            },
+        )
+        assert committed == ["Add a b.txt"]
+
+    def test_an_intake_items_name_is_the_fallback_when_no_model_answers(
+        self, inst, wt, committed, monkeypatch
+    ):
+        """…and it is a much better fallback than "Work on sc-1421", so it stays
+        on the record for exactly that."""
+        monkeypatch.setattr(
+            server._commit_message, "suggest_or_none", lambda *a, **k: None
+        )
+        self._run(
+            wt,
+            {
+                "message": "Add customer phone numbers to intake",
+                "message_auto": True,
                 "source": "tix",
                 "item": "sc-1421",
             },
         )
         assert committed == ["Add customer phone numbers to intake"]
+
+    def test_the_intake_items_name_reaches_the_generator_as_context(
+        self, inst, wt, committed, monkeypatch
+    ):
+        """The ticket title says what the work was ASKED to be — real context for
+        a model reading the diff. The ⏩ button's own placeholder is not, so it is
+        never passed."""
+        hints: list[str] = []
+
+        def spy(*a, **k):
+            hints.append(k.get("hint") or "")
+            return "Add a b.txt"
+
+        monkeypatch.setattr(server._commit_message, "suggest_or_none", spy)
+        self._run(
+            wt,
+            {
+                "message": "Add customer phone numbers to intake",
+                "message_auto": True,
+                "source": "tix",
+                "item": "sc-1421",
+            },
+        )
+        assert hints == ["sc-1421 — Add customer phone numbers to intake"]
+        hints.clear()
+        self._run(wt, {"message": "Work on ft-session", "message_auto": True})
+        assert hints == [""]
 
     def test_the_placeholder_still_commits_when_no_model_answers(
         self, inst, wt, committed, monkeypatch

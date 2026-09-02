@@ -52,31 +52,55 @@ export const DEFAULT_SECTION_ORDER: string[] = [
   SESSIONS_KEY,
 ];
 
-const KNOWN = new Set(DEFAULT_SECTION_ORDER);
-const BY_KEY = new Map(SIDEBAR_BARS.map((b) => [b.key, b]));
+/** Key prefix for extension-contributed bars ("ext:" + extension id) — the
+ * extra keys the resolvers below accept alongside the built-ins. */
+export const EXT_BAR_PREFIX = "ext:";
 
 /** Resolve a persisted order into the concrete section sequence: honour the
  * saved order, drop keys we no longer know, and append any section added since
- * the order was saved (including the sessions anchor for older saves). */
-export function orderedSections(order: string[]): string[] {
+ * the order was saved (including the sessions anchor for older saves).
+ *
+ * `extraKeys` are the extension bars currently installed. They count as known
+ * (a saved order that mentions one keeps its place), but ones the saved order
+ * has never seen are inserted immediately BEFORE the sessions anchor rather
+ * than appended at the tail: a user with a years-old saved order would
+ * otherwise get a brand-new extension's bar below the session list, where
+ * nothing suggests it exists. Missing BUILT-IN keys keep the existing
+ * tail-append so older saves resolve exactly as they always have. */
+export function orderedSections(order: string[], extraKeys: string[] = []): string[] {
+  const known = new Set([...DEFAULT_SECTION_ORDER, ...extraKeys]);
   const seen = new Set<string>();
   const out: string[] = [];
   for (const key of order) {
-    if (KNOWN.has(key) && !seen.has(key)) {
+    if (known.has(key) && !seen.has(key)) {
       out.push(key);
       seen.add(key);
     }
   }
   for (const key of DEFAULT_SECTION_ORDER) {
-    if (!seen.has(key)) out.push(key);
+    if (!seen.has(key)) {
+      out.push(key);
+      seen.add(key);
+    }
+  }
+  const missingExtras = extraKeys.filter((key) => {
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (missingExtras.length) {
+    // The built-in pass above guarantees the anchor is present.
+    out.splice(out.indexOf(SESSIONS_KEY), 0, ...missingExtras);
   }
   return out;
 }
 
 /** The bar defs alone, in section order (drops the sessions anchor) — used by
- * the Customize menu so it mirrors the sidebar's live order. */
-export function orderedBars(order: string[]): BarDef[] {
-  return orderedSections(order)
-    .map((key) => BY_KEY.get(key))
+ * the Customize menu so it mirrors the sidebar's live order. `extraDefs` are
+ * the extension bars (key + label), resolved by the same rules as above. */
+export function orderedBars(order: string[], extraDefs: BarDef[] = []): BarDef[] {
+  const byKey = new Map([...SIDEBAR_BARS, ...extraDefs].map((b) => [b.key, b]));
+  return orderedSections(order, extraDefs.map((b) => b.key))
+    .map((key) => byKey.get(key))
     .filter((b): b is BarDef => !!b);
 }

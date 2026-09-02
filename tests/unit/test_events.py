@@ -98,6 +98,7 @@ def test_event_names_vocabulary_is_complete():
         "session.activity_changed",
         "session.stage_changed",
         "session.pr_state_changed",
+        "session.pr_review_changed",
         "session.budget_exceeded",
         "session.prompt_sent",
         "session.queue_changed",

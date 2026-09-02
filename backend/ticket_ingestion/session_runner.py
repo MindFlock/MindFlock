@@ -320,7 +320,19 @@ class SessionRunner:
             # provider or repo slug the DEPTH is configured against. Passing the
             # lookup as the source silently coerced it to "session", losing which
             # surface the run came from.
-            _autopilot.arm(title, depth, source=kind, item=item, message=message or "")
+            # `message` is the ITEM'S name — the work as requested, not as made,
+            # and identical for every commit the run produces. So it is armed as a
+            # PLACEHOLDER: the commit step replaces it with a message written from
+            # the final diff (the ✨ button's generator) and falls back to this
+            # name when no model answers.
+            _autopilot.arm(
+                title,
+                depth,
+                source=kind,
+                item=item,
+                message=message or "",
+                message_auto=bool(message),
+            )
             logger.info("Autopilot armed for %s: will carry it to %s", title, depth)
         except Exception:  # noqa: BLE001
             # WARNING, not debug. This used to fail invisibly: a long-running

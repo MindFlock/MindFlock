@@ -84,16 +84,27 @@
 
 .pane-head {
   flex-wrap: nowrap;
-  /* Backstop only. With the title able to shrink to 2.5rem and the container
-     queries below shedding the optional bits, this should never engage — but a
-     header that spills past the pane's rounded corner looks broken, so clip. */
-  overflow: hidden;
+  /* Scroll, never clip: in a narrow pane every header control stays reachable
+     by scrolling sideways (shift+wheel / trackpad swipe) instead of being cut
+     off past the edge. The scrollbar itself is hidden so the header keeps its
+     one-line height — content cut mid-glyph at the edge is the affordance —
+     and .head-tail stays pinned to the right so the window controls (history,
+     copy-all, ✕) never leave view. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
 
-/* Normal right padding. (The old 54px gutter reserved room for the floating
-   #mic-btn, which is now hidden — reclaim the space so headers fit more.) */
+.pane-head::-webkit-scrollbar {
+  display: none;
+}
+
+/* The right gutter lives on .head-tail (every head renders one), not here:
+   the head scrolls horizontally and the tail is sticky, so padding on the
+   container would be a 12px strip past the tail where scrolled content peeks
+   out from under it. */
 .pane-head {
-  padding-right: 12px;
+  padding-right: 0;
 }
 
 /* The title is the ONE thing in this header that yields.
@@ -184,47 +195,19 @@
   display: none;
 }
 
-/* Progressive disclosure as a pane narrows (multiple windows): drop the least
-   useful bits first so nothing gets clipped. Priority kept longest: title,
-   view tabs, and the status chip. Order of removal:
-     560px — diff-stats line + the per-window token/cost counter
-     420px — next-step (Commit/Push/…) button — kept longest so the primary
-             action stays reachable when several windows are tiled tight
-     360px — tighten the tabs so all four still fit */
+/* The header scrolls sideways now, so NOTHING is display:none'd away as a
+   pane narrows — everything stays clickable, just possibly a scroll away.
+   (The old progressive-disclosure rules hid the token chip and the live-step
+   text at 560/360px, which made them unreachable in tiled layouts.) Narrow
+   panes only tighten spacing: */
 .pane {
   container-type: inline-size;
 }
 
 @container (max-width: 560px) {
-  .pane-head .tok {
-    display: none;
-  }
-
-  .pane-head .actions .stepnow-target {
-    display: none;
-  }
-
   .pane-head .actions .stepnow-text {
     max-width: 12ch;
   }
-}
-
-/* Tightest layout: the dot alone still says "running / blocked", and the tooltip
-   still carries the detail. Deliberately NOT hidden with .nextstep at 420px —
-   once the action button is gone this is the only signal left. */
-@container (max-width: 360px) {
-  .pane-head .actions .stepnow-text {
-    display: none;
-  }
-}
-
-/* Between the fixed breakpoints a header can still overflow (long titles,
-   wide next-step labels) and the chip would render half a word ("Claud").
-   makePane's fitTok() marks it .tok-clip whenever the header content is wider
-   than the pane; visibility (not display) keeps its width in the layout so
-   the overflow measurement doesn't oscillate. */
-.pane-head .tok.tok-clip {
-  visibility: hidden;
 }
 
 @container (max-width: 360px) {
@@ -701,6 +684,48 @@
 .pane-head .act:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* The right-edge control cluster (history, copy-all, ✕). Sticky against the
+   header's own horizontal scroll so these stay visible while the rest of the
+   header slides beneath; the opaque background is what masks that content.
+   margin-left:auto pins it right in heads with no .tok (special panes); when
+   a chip already carries the auto margin the sibling rule zeroes this one so
+   the free space isn't split between two auto margins (see the .tok note). */
+.pane-head .head-tail {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 6px;
+  /* The head's right gutter — carried here (see the padding-right: 0 note on
+     .pane-head) so the opaque tail runs flush to the pane edge. */
+  padding-right: 12px;
+  background: var(--panel-2);
+}
+
+.pane-head .tok ~ .head-tail {
+  margin-left: 0;
+}
+
+/* The window ✕: hide (sessions) / close (special windows). Same glyph and
+   hover treatment as the sidebar rows' .kill so it reads as the same verb. */
+.pane-head .act.pane-close {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 7px;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.pane-head .act.pane-close:hover {
+  color: var(--red);
+  border-color: var(--red);
+  background: rgba(222, 97, 62, 0.12);
 }
 
 /* Icon-only copy-history button: center the SVG, muted like the other glyphs. */

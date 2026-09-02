@@ -7,6 +7,193 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Window rows are first-class sidebar rows.** The Assistant chat, the log
+  tails, verify watch windows and extension panes now behave exactly like
+  session rows in the rail: they carry the same `Ctrl/Alt+1…9` number badge
+  (and those shortcuts focus them), drag to reorder anywhere among the
+  sessions — one saved order holds both, and the grid's slot order follows
+  it — are toured by `Ctrl+Tab`, and narrow under the sidebar filter. A
+  reordered assistant even reopens where you left it. En route, dragging a
+  session row no longer silently erases the saved position of rows absent
+  from the current snapshot (e.g. a sleeping remote device's sessions): the
+  drop merges into the saved order instead of replacing it.
+
+- **"Your PR was approved."** A notification when a reviewer approves the pull
+  request of a session you have open — the moment that is actually waiting on a
+  human, and the one the app could not see before. The verdict is read from the
+  pull request's own review list (latest review per reviewer; a standing
+  "changes requested" outranks an approval; a comment is not a decision), since
+  GitHub's `mergeable_state` says `blocked` both for a missing review and for a
+  failing required check, and says nothing once the approval lands. Off the
+  same rule list as every other notification, so it reaches the browser and
+  ntfy alike, and there is an opt-in twin for "changes requested". New event:
+  `session.pr_review_changed`.
+- **Resizable columns in the database client.** Drag a header's right edge in
+  any result grid (the SQL results and the table view are the same grid);
+  double-click that edge to fit the column to its widest value. Widths are
+  keyed by column name, so they survive a sort, a page turn and a reload of the
+  same query. Columns now also START at the width of their own NAME rather than
+  their content: a header you cannot read is worse than a value you cannot, and
+  the value is one double-click away.
+
+- **One page for closed work and disk.** **Recently closed** now lists closed
+  sessions *and* the workspace directories no closed session accounts for — the
+  separate "Workspaces on disk" manager is gone, and the top bar's **Recent**
+  dropdown is a single button. Rows carry both identities (branch/session name,
+  what the directory is, when it was last used, its size) with the same filter,
+  sort and bulk selection the list dialogs share. Protected base clones and cache
+  refreshers are no longer rows at all — they are counted and named in the header
+  instead, along with anything a live session is using, which the page leaves to
+  the sidebar. New: `GET /api/recent`.
+- **Remove unused worktrees**, in that page: one sweep for every worktree no
+  session is using and nothing has touched for over a week
+  (`POST /api/workspaces/prune-worktrees`). It can only ever remove a worktree
+  *git generated* — the test is that the directory's `.git` is a gitdir FILE, as
+  `git worktree add` writes it, so a repository, a clone, a `_base_*` mirror, a
+  `pr-*` review clone and any folder git did not make are all excluded
+  structurally, and nothing outside MindFlock's own worktrees root is looked at.
+  The candidate list is resolved on the server (never a path the page sends) and
+  re-verified immediately before each delete; the confirmation names every
+  directory and says what a removal costs, since a worktree's branch and commits
+  live in the repository it came from and survive. Anything holding uncommitted
+  work, or a detached HEAD no ref contains, is held back unless a second
+  confirmation includes it. Staleness is the newest of the directory's mtime and
+  the worktree's own git index/HEAD/reflog — the directory's mtime alone runs days
+  behind real use.
+
+- **Extensions (Addon API v3).** An addon can now contribute UI the way a
+  VSCode extension does: one draggable/hideable sidebar bar with buttons,
+  commands in the command palette, and dialog and grid-window surfaces whose
+  bodies it renders into host-owned keep-alive containers — so typed text and
+  unsaved edits survive a grid drag, because the drag remounts the window's
+  React shell and never touches the extension's DOM. Everything is declared
+  in a static manifest served by `GET /api/addons`, which is what lets a bar
+  button and a palette entry exist, and a declared dialog open, before the
+  extension's ES module has loaded; the module is imported lazily on first
+  use, `activate(api)` runs once against a small frozen API object, every
+  registration returns a disposable, and every callback runs in a host
+  `try/catch` attributed to the extension — a broken extension toasts once
+  and shows its error on its Settings row instead of taking the app down.
+
+  User extensions are discovered once at startup from
+  `~/.mindflock/extensions/<id>/extension.py` (`build(ctx) -> Addon`; an
+  optional `frontend/` is served at `/extensions/<id>/`), with ids that
+  collide with the core API refused, and toggled on **Settings →
+  Extensions** (`extensions.disabled` in settings.json — the only
+  per-extension state that file ever carries; an extension's own
+  configuration is its own file). A disable tears down the frontend
+  completely; a discovered extension's backend stays loaded until the next
+  restart, which the row says out loud. The manifest's `api_version` is the
+  minimum host API level the module needs, so an extension written against a
+  newer app fails with one clear message rather than a `TypeError` mid-click.
+  Existing addons are untouched. Reference: docs/extensions.md § 4, including
+  a two-file starter extension.
+- **Database Client**, the first extension — a **Database** bar (Explorer,
+  SQL) with SQLite, PostgreSQL (psycopg) and MySQL (pymysql) connection
+  profiles kept in `~/.mindflock/dbclient.json` (0600, passwords never sent
+  back; read-only profiles enforced at connect), a lazy schema tree, an
+  editable table grid (sort, filter, paging, insert/update/delete previewed as
+  SQL and applied in one transaction with stale-row detection; views and
+  tables without a primary key read-only, and say so), a SQL query pad
+  (statement at cursor, run all, history, a needs-confirmation guard for a
+  no-WHERE `UPDATE`/`DELETE` judged after stripping string literals), and
+  CSV/JSON export. Every statement goes through one server-side chokepoint:
+  single statement only, 1–300 s timeouts, a 10 000-row cap, identifiers
+  validated against the introspected schema, values always bound. Drivers are
+  detected, not required — the connection form names a missing one and offers
+  an **Install driver** button that puts it into the environment already
+  running the app (`uv pip install --python <this interpreter>`, falling back
+  to pip), re-checks importability in the live process so nothing restarts,
+  and shows the installer's own output when it fails. Where an in-app install
+  would mean breaking a system-managed Python it says so and keeps to the
+  copyable command.
+- **Database Client: an IDE-grade tree, the query unified with the table, and
+  in-place table detail.** The explorer tree now groups a schema's objects
+  under **Tables (n)** / **Views (n)** nodes, tables unfold into their columns
+  (type badges, a key on the primary key), databases and schemas carry a size
+  badge where the engine answers it from cheap statistics (`pg_database_size`,
+  summed `pg_total_relation_size`, `information_schema` lengths — never a
+  scan), and every scope row grows hover actions (New query here, Refresh).
+  The table view and the query are one page: a **SQL bar** above the grid
+  shows the SELECT behind it and is visibly rewritten by every sort click,
+  filter, page turn and page-size change; edit it and Ctrl+Enter runs a
+  custom query in the same grid (read-only, with a badge), and any managed
+  action — or the Table button — returns to the page. Selecting a table in
+  the explorer embeds that unified view right where the column summary used
+  to be; the old **View data** button is now **Open as window**, which opens
+  the same view as a grid window.
+- **Windows in the sidebar.** Every open non-session window — MindFlock
+  logs, System logs, the Assistant chat, a verify watch window, an extension
+  pane such as a database table — now gets a row under a **Windows** header
+  at the tail of the session list, closable with the same ✕ a session row
+  has; clicking a row scrolls its window into view. The panes themselves no
+  longer draw their own Close buttons — the rail is the one place windows
+  are controlled, exactly like sessions.
+
+### Changed
+
+- **Every window closes from its own header.** Each grid window — session panes
+  included — now carries a ✕ at its top right, next to the copy-all button. It
+  is the same action as the window's sidebar row: session windows hide (the
+  session keeps running), special windows close (a verify run keeps going).
+- **Window headers scroll sideways instead of clipping.** In a narrow pane the
+  tab bar and chips used to be cut off past the right edge — and the old
+  narrow-pane rules hid the usage chip and live-step text entirely. Everything
+  now stays rendered and reachable by horizontal scroll, while the history /
+  copy-all / ✕ cluster stays pinned to the right edge.
+- The Database bar no longer has a **SQL** button; the query pad is still one
+  step away via the Explorer, the command palette (`Database: SQL query pad`),
+  and each table view's SQL bar.
+- Deleting a workspace now also has to name a directory the server *lists* as a
+  workspace — a flat child of a provisioning root, or a worktree leaf. A deeper
+  path (`<workspace_dir>/_base_repo/src`) used to pass every guard, because the
+  containment check accepted any descendant while the base-clone protection
+  looked only at the last path segment. This is the "direct child" rule the
+  endpoint and its docs always claimed.
+- Deleting a worktree now prunes the stale registration from the repository the
+  worktree's own `gitdir:` pointer names. The old test ("is my parent directory
+  called `worktrees`") is false for every branch name containing a slash, so
+  nested worktrees left registrations behind, which then made a later
+  `git worktree add` for the same branch fail. Empty branch-slug directories left
+  under the worktrees root are collected too.
+- Wiping a closed session's worktree is refused with **409** when a still-running
+  session shares that directory (a session and its copy keep one worktree).
+- Non-session windows (the assistant, log tails, verify watches, an extension's
+  table) are rows in the sidebar's own list instead of a separate "Windows"
+  group, and they take a grid slot like any session: they share one cap and one
+  MRU, so at "view: 1" the window on screen is the one you picked, and opening
+  one selects it. Previously they were appended after the cap, so "1" meant one
+  session plus however many windows happened to be open.
+- The database client's CSV and JSON downloads are one control instead of two
+  buttons that broke onto separate lines in a narrow toolbar.
+- Forgetting a closed session re-reads the store before writing it back, so
+  deleting several rows at once no longer resurrects the entries whose
+  directories just went (each would have offered a Reopen that could only 410).
+- **An ingested run's commits get a written message, not the ticket's title.**
+  A fast-track run started from a ticket, PR or issue used to commit under the
+  item's own name — the work as *requested*, repeated verbatim on every commit
+  it made. The item's name is now the fallback: at commit time, with the diff
+  final, the run asks the same generator the ✨ **Write it** button uses, and
+  the item's id and name go along as context. If no model answers (a CLI with
+  no text-only mode, a logged-out one, a timeout), the commit still lands under
+  the item's name exactly as before.
+- Cancelling a commit with `Ctrl+C` clears the "pre-commit" chip within a poll
+  instead of leaving the session looking wedged for most of a minute. The
+  commit chain now drops its own lock from a trap, so an interrupted commit
+  cleans up at the moment it is interrupted rather than waiting for the
+  stale-lock self-heal (which stays, for what a trap cannot catch — a `SIGKILL`,
+  a killed pane).
+- The ✨ **Write it** buttons (Commit, and the verify-plan writer) show a
+  spinner while a message is being written. "Writing…" alone read as a dead
+  button on a cold CLI start.
+- **Shift-click extends the selection in the database client's grid.** Tick one
+  row's checkbox, shift-click another, and everything between takes the state
+  the clicked box just took — so it unticks a run as readily as it ticks one.
+  Deleting twenty rows was twenty clicks. The anchor is the last row you ticked
+  plainly, and it survives the extend; a new page of rows clears it.
+
 ## [0.2.1] - 2026-08-28
 
 ### Added
@@ -93,6 +280,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Database Client: the tree indents for real.** Row depth was set as a CSS
+  custom property through `Object.assign(el.style, …)`, which is a silent
+  no-op for `--` properties (no named setter on `CSSStyleDeclaration`) — the
+  entire tree had been rendering flat at one padding since it shipped. The
+  element builder now routes `--` keys through `style.setProperty`.
+- **Database Client: "Add connection" opens the form instead of failing.**
+  Opening the explorer on the new-connection form (the palette command, or a
+  saved link with `ref="new"`) called into the form before the dialog's root
+  element existed — a temporal-dead-zone `ReferenceError` the host reported
+  as "surface failed to render". The jump now happens after the dialog is
+  built.
+- **Database Client: hidden means hidden.** Elements toggled with the
+  `hidden` attribute but styled with their own `display` rule (the grid's
+  "No rows" note, the read-only badge) stayed visible — author display beats
+  the UA's `[hidden]` rule — so an empty lock chip sat in the tabs row and
+  "No rows" floated over full grids. One scoped `[hidden]{display:none
+  !important}` guard restores the attribute for the whole extension.
+- **Database Client: no more silent edit loss.** Typing a per-column filter,
+  and (new) switching tables in the explorer while the embedded grid holds
+  unsaved changes, now ask before discarding — the same confirm every other
+  managed action already had; declining the page-size confirm also snaps the
+  selector back. Saving with a cell editor still open now commits that cell
+  into the batch instead of dropping it, and typing in a filter box no longer
+  loses focus after every pause while the page reloads under it.
+- **Database Client: stale-response and stale-cache holes.** A slow page
+  response can no longer repaint over a newer one (or over a custom result) —
+  loads carry a generation token; Refresh after a custom *write* statement
+  reloads the table instead of silently executing the statement again;
+  refreshing a scope in the tree also drops the cached table_info beneath it
+  (stale column leaves); and refreshing schema "auth" no longer also forgets
+  sibling "auth_archive" (prefix over-match). The Postgres/MySQL size
+  queries run under a 5 s statement timeout and fall back to plain names.
 - **Sessions no longer read "idle" while their agent is visibly working.** The
   activity hooks MindFlock installs into a repo's `.claude/settings.local.json`
   resolved their marker *directory* at install time — baked in as an absolute

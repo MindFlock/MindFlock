@@ -211,7 +211,10 @@ def test_index_has_caps_gates_and_tags():
     assert '"data-caps-gate": "ticketing"' in client.get("/app.js").text
     # Feature entry points that vanish entirely without git.
     assert 'id: "new-advanced"' in client.get("/app.js").text
-    assert 'id: "workspaces-btn"' in client.get("/app.js").text
+    # The disk manager's own menu item was folded into Recently closed, so the
+    # git-only entry point in that family is now the unused-worktree sweep
+    # inside that page — the one action there that cannot exist without git.
+    assert 'id: "recent-prune"' in client.get("/app.js").text
     # Gate links jump to the screen where the integration is set up.
     assert '"data-goto-screen"' in client.get("/app.js").text
 

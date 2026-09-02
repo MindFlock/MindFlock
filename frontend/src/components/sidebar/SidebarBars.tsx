@@ -10,8 +10,10 @@
 
 import { type DragEvent, type ReactNode } from "react";
 import type { DialogName } from "../../state/store";
+import { ExtensionBar } from "../../extensions/ExtensionBar";
 import { OverallUsage } from "../usage/OverallUsage";
 import { AutomationBar } from "./AutomationBar";
+import { EXT_BAR_PREFIX } from "./barDefs";
 import { GitIssueBar } from "./GitIssueBar";
 import { PrReviewBar } from "./PrReviewBar";
 import { VerifyBar } from "./VerifyBar";
@@ -29,6 +31,10 @@ interface ContentCbs {
  * AutomationBar/PrReviewBar return null when unavailable, collapsing the slot
  * via `.bar-slot:empty`). */
 export function barContent(key: string, cbs: ContentCbs): ReactNode {
+  // Extension bars share one host-rendered component, keyed "ext:<id>".
+  if (key.startsWith(EXT_BAR_PREFIX)) {
+    return <ExtensionBar extId={key.slice(EXT_BAR_PREFIX.length)} />;
+  }
   switch (key) {
     case "usage":
       return <OverallUsage />;

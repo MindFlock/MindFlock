@@ -85,6 +85,40 @@ NOTIFY_RULES: List[dict] = [
         "tags": ["white_check_mark"],
     },
     {
+        # The other side of a PR's life, and the one that is actually waiting on
+        # a human: somebody approved it. Keyed on the REVIEW verdict rather than
+        # on `mergeable_state`, which says "blocked" both for a missing review
+        # and for a failing required check, and says nothing at all once the
+        # approval lands. Emitted per real transition (agent_state.
+        # _track_pr_review), so an approval that was already there when the
+        # server started is never re-announced.
+        "id": "pr_approved",
+        "label": "A pull request is approved",
+        "event": "session.pr_review_changed",
+        "old": None,
+        "new": "approved",
+        "title": "{session}: PR approved",
+        "body": "A reviewer approved the pull request — it is ready to merge.",
+        "default_enabled": True,
+        "priority": 4,
+        "tags": ["white_check_mark"],
+    },
+    {
+        # Opt-in twin: the review came back asking for changes. Off by default
+        # because the agent is usually still working in that session anyway, so
+        # for most people it lands on a window they are already looking at.
+        "id": "pr_changes_requested",
+        "label": "A pull request gets changes requested",
+        "event": "session.pr_review_changed",
+        "old": None,
+        "new": "changes_requested",
+        "title": "{session}: changes requested",
+        "body": "A reviewer asked for changes on the pull request.",
+        "default_enabled": False,
+        "priority": 3,
+        "tags": ["memo"],
+    },
+    {
         # J5 — cost guardrail: emitted once per session when its estimated
         # cost crosses the configured per-session budget (data: {cost, budget}).
         "id": "budget_exceeded",
@@ -188,6 +222,85 @@ NOTIFY_RULES: List[dict] = [
         "default_enabled": True,
         "priority": 4,
         "tags": ["x"],
+    },
+    {
+        # Verify, opt-in: the headless one-shot finished WRITING a checklist.
+        # ``session.test_plan_ready`` means "there are steps worth showing" —
+        # the same narrow meaning the Verify dialog refetches on.
+        #
+        # Worth a rule because generation announces itself nowhere a human is:
+        # a push kicks it off, it runs on a thread for up to
+        # ``test_plans.TIMEOUT_GENERATE``, and the row says "writing…" until
+        # somebody happens to be looking at it. Opt-in because a flock that
+        # pushes all day writes one of these per session per branch, which is
+        # ambient rather than actionable.
+        "id": "verify_plan_ready",
+        "label": "A verification plan is ready",
+        "event": "session.test_plan_ready",
+        "old": None,
+        "new": None,
+        "title": "{session}: verification plan ready",
+        "body": "The agent finished writing the checklist for this work.",
+        "default_enabled": False,
+        "priority": 2,
+        "tags": ["clipboard"],
+    },
+    {
+        # The failure half of that same moment, and its own rule because a rule
+        # matches exactly ONE event and ``test_plan_ready`` deliberately keeps
+        # its success-only meaning (see ``server._generate_test_plan``).
+        # Folded in, "tell me when the plan is written" would go silent in the
+        # one case most worth telling a human about: the attempt that produced
+        # no checklist at all.
+        "id": "verify_plan_failed",
+        "label": "A verification plan fails to generate",
+        "event": "session.test_plan_failed",
+        "old": None,
+        "new": None,
+        "title": "{session}: verification plan failed",
+        "body": "No checklist was written — open Verify for the reason.",
+        "default_enabled": False,
+        "priority": 3,
+        "tags": ["warning"],
+    },
+    {
+        # Verify, opt-in: an agent finished WORKING a checklist — the far end of
+        # a run. Starting one is loud (a toast, a row that changes, a terminal
+        # that opens) and it lands its answers minutes later in a dialog the
+        # user has almost certainly navigated away from.
+        #
+        # The envelope carries ``failed`` and ``needs_you``, which is what lets
+        # the in-app toast say "8 passed, 3 need your eyes". A push cannot: the
+        # templates fill ``{session}`` and nothing else. So the body says where
+        # the numbers are rather than inventing them.
+        "id": "verify_run_finished",
+        "label": "An agent finishes checking a verification plan",
+        "event": "session.test_plan_checked",
+        "old": None,
+        "new": None,
+        "title": "{session}: verification run finished",
+        "body": "The agent worked the checklist — open Verify for what it found.",
+        "default_enabled": False,
+        "priority": 3,
+        "tags": ["ballot_box_with_check"],
+    },
+    {
+        # …and the way a run ends having reported NOTHING: the agent window died,
+        # or the two-hour deadline released it. Separate for the same reason as
+        # ``verify_plan_failed`` — one rule, one event — and it earns the switch
+        # more than most, because a released run reverts the plan to "not checked
+        # yet", making a run that was started, billed and abandoned
+        # indistinguishable from a button nobody ever pressed.
+        "id": "verify_run_gave_up",
+        "label": "A verification run ends without reporting",
+        "event": "session.test_plan_gave_up",
+        "old": None,
+        "new": None,
+        "title": "{session}: verification run gave up",
+        "body": "The run recorded no answers — the plan is back to unchecked.",
+        "default_enabled": False,
+        "priority": 3,
+        "tags": ["warning"],
     },
 ]
 

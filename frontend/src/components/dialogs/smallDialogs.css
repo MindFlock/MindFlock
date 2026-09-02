@@ -51,6 +51,11 @@
    should still land on Commit. Sized to the label row it sits on. */
 #commit-form #commit-write {
   flex: none;
+  /* inline-flex + gap so the "Writing…" spinner sits on the text's line without
+     the button jumping height mid-generation. */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -290,22 +295,8 @@
   cursor: default;
 }
 
-/* Workspaces / disk manager */
-#workspaces-panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 18px;
-  /* Was 580px; the rows now carry a checkbox and a modified-date column, and
-     the header a filter and a sort picker. */
-  width: 760px;
-  max-width: 92vw;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
+/* Dialog header row — shared by every list dialog (Recently closed,
+   Intake, Verify, Prompts, Settings…). */
 .ws-head {
   display: flex;
   align-items: center;
@@ -315,13 +306,6 @@
 .ws-head h2 {
   margin: 0;
   font-size: 16px;
-}
-
-.ws-head #ws-total {
-  flex: 1;
-  font-size: 12px;
-  /* "37 dirs · 243.80 GB" was breaking between the number and its unit. */
-  white-space: nowrap;
 }
 
 .ws-head button {
@@ -399,14 +383,6 @@
   border-color: var(--accent);
 }
 
-.ws-when {
-  font-size: 11px;
-  flex: none;
-  min-width: 58px;
-  text-align: right;
-  white-space: nowrap;
-}
-
 .row-check {
   flex: none;
   width: 14px;
@@ -436,7 +412,6 @@
 
 /* A picked row has to be obvious from across the list: the checkbox alone is
    14px of signal for an action that can delete a dozen worktrees. */
-.ws-row.picked,
 .recent-row.picked {
   border-color: var(--accent);
   background: rgba(var(--accent-rgb), 0.1);
@@ -474,39 +449,6 @@
   border-color: var(--accent);
 }
 
-#ws-list {
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 60px;
-}
-
-.ws-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-}
-
-.ws-info {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.ws-name {
-  font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .ws-badge {
   font-size: 10px;
   padding: 1px 7px;
@@ -521,55 +463,9 @@
   color: #c4b3ff;
 }
 
-.ws-size {
-  font-size: 12px;
-  color: var(--muted);
-  flex: none;
-  min-width: 64px;
-  text-align: right;
-}
-
-.ws-del {
-  border-radius: 6px;
-  padding: 5px 12px;
-  font-size: 12px;
-  cursor: pointer;
-  flex: none;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--red);
-}
-
-.ws-del:hover {
-  border-color: var(--red);
-  background: rgba(222, 97, 62, 0.12);
-}
-
-.ws-protected {
-  font-size: 11px;
-  color: var(--muted);
-  flex: none;
-  padding: 5px 8px;
-}
-
 .ws-badge.gone {
   background: rgba(222, 97, 62, 0.18);
   color: #f0a08a;
-}
-
-/* Recent… footer button */
-#recent-btn {
-  cursor: pointer;
-  font-size: 11px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-}
-
-#recent-btn:hover {
-  border-color: var(--accent);
 }
 
 /* Cursor auto-adopt on/off switch (sidebar footer) */
@@ -620,7 +516,7 @@
   background: #fff;
 }
 
-/* Recently-closed panel (reuses .ws-head from the disk manager) */
+/* Recently-closed panel — closed sessions AND what is left on disk. */
 #recent-panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -697,9 +593,17 @@
   font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
-.recent-when {
+.recent-when,
+.recent-size {
   font-size: 11px;
   flex: none;
+}
+
+/* The rows "Remove unused worktrees" would take. Muted amber, not the red of
+   .ws-badge.gone: this is a row you can still reopen, not one already lost. */
+.ws-badge.stale {
+  background: rgba(214, 158, 46, 0.18);
+  color: #e6c15e;
 }
 
 .recent-actions {

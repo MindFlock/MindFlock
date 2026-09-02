@@ -1,5 +1,5 @@
-/** Row matching for the list dialogs' Ctrl+F filter (Recently closed,
- * Workspaces on disk).
+/** Row matching for the list dialogs' Ctrl+F filter — Recently closed, which
+ * lists both closed sessions and the workspace directories left on disk.
  *
  * Whitespace-separated tokens, ALL of which must appear somewhere in the row —
  * "shortcut 210" finds `shortcut-21018` without the user having to remember

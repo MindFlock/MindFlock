@@ -16,6 +16,7 @@ claude session in tests. Every path that would reach ``cs_session.NewInstance``
 
 from __future__ import annotations
 
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -471,3 +472,71 @@ def test_run_story_end_to_end_through_shims(config, monkeypatch):
     assert inst.Title == "sc-101"
     inst.Start.assert_called_once_with(True)
     assert options_seen[0].kwargs["new_branch"] == branch
+
+
+# --------------------------------------------------------------------------- #
+# Arming the autopilot for an auto-ingested item                               #
+# --------------------------------------------------------------------------- #
+def test_arming_marks_the_items_name_as_a_placeholder(config, monkeypatch, tmp_path):
+    """The ticket's own name is what the work was ASKED to be — the same sentence
+    for every commit the run makes. It is armed as a placeholder so the commit
+    step replaces it with a message written from the final diff, keeping the name
+    only as the fallback."""
+    from backend.web.core import autopilot as ap
+
+    monkeypatch.setenv("MINDFLOCK_AUTOPILOT_FILE", str(tmp_path / "autopilot.json"))
+    runner = SessionRunner(config)
+    monkeypatch.setattr(runner, "_depth_for", lambda lookup: "pr")
+
+    runner._arm_autopilot("sc-42", "tix", "shortcut", "sc-42", "Fix the login loop")
+
+    rec = ap.get("sc-42")
+    assert rec["message"] == "Fix the login loop"
+    assert rec["message_auto"] is True
+    assert rec["source"] == "tix"
+
+
+def test_arming_without_a_name_does_not_invent_a_placeholder(
+    config, monkeypatch, tmp_path
+):
+    """``message_auto`` says "replace this at commit time". An item with no name
+    has no message to replace, so the flag has to be False — otherwise the commit
+    step is told a placeholder is waiting and the empty string becomes the
+    fallback a failed generation lands on."""
+    from backend.web.core import autopilot as ap
+
+    monkeypatch.setenv("MINDFLOCK_AUTOPILOT_FILE", str(tmp_path / "autopilot.json"))
+    runner = SessionRunner(config)
+    monkeypatch.setattr(runner, "_depth_for", lambda lookup: "pr")
+
+    runner._arm_autopilot("sc-43", "tix", "shortcut", "sc-43", "")
+
+    rec = ap.get("sc-43")
+    assert rec["message"] == ""
+    assert rec["message_auto"] is False
+
+
+def test_a_failed_arm_is_logged_at_warning_and_does_not_stop_the_run(
+    config, monkeypatch, tmp_path, caplog
+):
+    """This used to fail invisibly — a pipeline predating the feature simply
+    never armed anything, and the only symptom was the fast-track toggle sitting
+    off with no explanation anywhere. It still must not abort the ingestion: an
+    automation preference cannot be allowed to cost the user the ticket."""
+    from backend.web.core import autopilot as ap
+
+    monkeypatch.setenv("MINDFLOCK_AUTOPILOT_FILE", str(tmp_path / "autopilot.json"))
+    runner = SessionRunner(config)
+    monkeypatch.setattr(runner, "_depth_for", lambda lookup: "pr")
+
+    def _boom(*a, **k):
+        raise OSError("the autopilot store is read-only")
+
+    monkeypatch.setattr(ap, "arm", _boom)
+
+    with caplog.at_level(logging.WARNING):
+        runner._arm_autopilot("sc-44", "tix", "shortcut", "sc-44", "Fix it")
+
+    assert ap.get("sc-44") is None
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warnings and "sc-44" in warnings[-1].getMessage()
