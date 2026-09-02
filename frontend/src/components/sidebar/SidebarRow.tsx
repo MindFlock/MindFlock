@@ -8,9 +8,9 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type DragEvent,
   type MouseEvent,
 } from "react";
+import { rowDndProps } from "./rowDnd";
 import type { Instance } from "../../api/types";
 import { instApi } from "../../api/client";
 import { refreshInstances, useConfig } from "../../state/queries";
@@ -163,41 +163,12 @@ export const SidebarRow = memo(function SidebarRow({
     <li
       className={rowCls}
       data-title={title}
-      // Row drag would hijack text selection inside the rename input.
-      draggable={!editing}
-      onDragStart={(ev: DragEvent) => {
-        ev.dataTransfer.setData("text/plain", title);
-        ev.dataTransfer.effectAllowed = "move";
-        onDragState(title);
-      }}
-      onDragEnd={() => {
-        onDragState(null);
-        onDropCue(title, null);
-      }}
-      onDragOver={(ev: DragEvent) => {
-        // A section (bar) is being dragged over the list — let it bubble to the
-        // sessions-block drop target; rows aren't a target for it.
-        if (ev.dataTransfer.types.includes("application/x-mf-section")) return;
-        ev.preventDefault();
-        const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
-        onDropCue(title, ev.clientY - rect.top < rect.height / 2 ? "above" : "below");
-      }}
-      onDragLeave={(ev: DragEvent) => {
-        if (!(ev.currentTarget as HTMLElement).contains(ev.relatedTarget as Node))
-          onDropCue(title, null);
-      }}
-      onDrop={(ev: DragEvent) => {
-        // Section drags are handled by the sessions-block, not by rows.
-        if (ev.dataTransfer.types.includes("application/x-mf-section")) return;
-        ev.preventDefault();
-        const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
-        onDropRow(
-          ev.dataTransfer.getData("text/plain"),
-          title,
-          ev.clientY - rect.top < rect.height / 2
-        );
-        onDropCue(title, null);
-      }}
+      {...rowDndProps(
+        title,
+        { onDragState, onDropCue, onDropRow },
+        // Row drag would hijack text selection inside the rename input.
+        !editing
+      )}
     >
       <div
         className="inst-row"

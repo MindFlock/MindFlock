@@ -415,6 +415,53 @@ async def find_pr(wt: str, branch: str) -> Optional[dict]:
     }
 
 
+async def pr_review_state(wt: str, number: Optional[int]) -> str:
+    """Where a pull request's REVIEWS stand: ``"approved"``,
+    ``"changes_requested"``, or ``""`` (nobody has decided, or we could not ask).
+
+    GitHub's own one-word verdict (``reviewDecision``) is GraphQL-only, so this
+    reads the REST review list and applies the rule the PR page shows: only the
+    LATEST review per reviewer counts, a standing "changes requested" outranks
+    any approval, and a comment-only review is not a decision. A dismissed
+    approval stops counting, which is why DISMISSED overwrites rather than being
+    skipped.
+
+    Never asserts an approval it is not sure about: no token, no GitHub remote,
+    a rate limit or a bad response all answer ``""``.
+    """
+    ref = repo_ref(wt)
+    if ref is None or not number:
+        return ""
+    token = await api_token()
+    if not token:
+        return ""
+    status, data = await _request(
+        "GET",
+        "/repos/{}/pulls/{}/reviews".format(ref.slug, number),
+        token=token,
+        params={"per_page": "100"},
+    )
+    if status != 200 or not isinstance(data, list):
+        return ""
+    # Chronological, so the last write per reviewer IS their current position.
+    latest: dict = {}
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        state = str(item.get("state") or "").upper()
+        if state not in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+            continue  # COMMENTED / PENDING are not a decision
+        who = str((item.get("user") or {}).get("login") or "")
+        if who:
+            latest[who] = state
+    states = set(latest.values())
+    if "CHANGES_REQUESTED" in states:
+        return "changes_requested"
+    if "APPROVED" in states:
+        return "approved"
+    return ""
+
+
 async def pr_checks(wt: str, branch: str) -> str:
     """Verdict on the CI checks for ``branch``'s head commit.
 
@@ -617,6 +664,18 @@ def pr_merge_state_sync(wt: str, branch: str) -> Optional[dict]:
         return _run_sync(pr_merge_state(wt, branch))
     except Exception:  # noqa: BLE001
         return None
+
+
+def pr_review_state_sync(wt: str, number: Optional[int]) -> str:
+    """:func:`pr_review_state` for synchronous callers (the stage probe).
+
+    Any failure answers ``""`` — "we could not find out". An approval is a thing
+    the user is TOLD about, so a network blip must never manufacture one.
+    """
+    try:
+        return _run_sync(pr_review_state(wt, number))
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def pr_checks_sync(wt: str, branch: str) -> str:

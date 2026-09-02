@@ -29,7 +29,7 @@ import {
   killSession,
   makePrSession,
   pushSession,
-  selectSession,
+  selectRailKey,
   undoLastClose,
 } from "./sessionActions";
 import { toast } from "./toast";
@@ -74,12 +74,14 @@ export interface KeymapHost {
   toggleShortcuts(): void;
   /** "/" — focus the sidebar filter box (#session-filter). */
   focusFilter(): void;
-  /** Ctrl+Tab / Ctrl+PgDn — next/previous session in STABLE sidebar order
-   * (selecting never reorders it, so repeated presses tour the list). */
-  cycleSession(dir: 1 | -1): void;
-  /** Title of the Nth session (0-based) in stable sidebar order, for
-   * Ctrl+1..9 / Alt+1..9; null when there is no Nth session. */
-  sessionAt(index: number): string | null;
+  /** Ctrl+Tab / Ctrl+PgDn — next/previous rail row in STABLE sidebar order
+   * (selecting never reorders it, so repeated presses tour the list —
+   * sessions and windows alike, one list). */
+  cycleWindow(dir: 1 | -1): void;
+  /** Order key of the Nth rail row (0-based, sessions and windows in one
+   * stable sidebar order — a session title or a window's sentinel), for
+   * Ctrl+1..9 / Alt+1..9; null when there is no Nth row. */
+  rowAt(index: number): string | null;
   /** Palette "Open Doctor" — jump to Settings → Doctor. */
   openDoctor(): void;
 }
@@ -109,7 +111,6 @@ export function terminalFocused(): boolean {
  * still live outside the store (vanilla partials / addons). */
 const MODAL_DIALOG_NAMES: DialogName[] = [
   "new-session",
-  "workspaces",
   "recent",
   "commit",
   "rename",
@@ -126,7 +127,6 @@ const MODAL_DIALOG_NAMES: DialogName[] = [
 ];
 const MODAL_DOM_IDS = [
   "new-dialog",
-  "workspaces-dialog",
   "recent-dialog",
   "commit-dialog",
   "rename-dialog",
@@ -377,17 +377,17 @@ export const KEYMAP: KeymapEntry[] = [
     key: "Tab",
     mod: "ctrl",
     id: "cycle",
-    help: ["Navigation", "Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous session"],
-    run: () => _host?.cycleSession(1),
+    help: ["Navigation", "Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous window"],
+    run: () => _host?.cycleWindow(1),
   },
-  { key: "Tab", mod: "ctrl", shift: true, pairOf: "cycle", run: () => _host?.cycleSession(-1) },
+  { key: "Tab", mod: "ctrl", shift: true, pairOf: "cycle", run: () => _host?.cycleWindow(-1) },
   {
     key: "PageDown",
     mod: "ctrl",
-    help: ["Navigation", "Ctrl+PgDn / Ctrl+PgUp", "Next / previous session (also)"],
-    run: () => _host?.cycleSession(1),
+    help: ["Navigation", "Ctrl+PgDn / Ctrl+PgUp", "Next / previous window (also)"],
+    run: () => _host?.cycleWindow(1),
   },
-  { key: "PageUp", mod: "ctrl", run: () => _host?.cycleSession(-1) },
+  { key: "PageUp", mod: "ctrl", run: () => _host?.cycleWindow(-1) },
   {
     key: "/",
     id: "filter",
@@ -428,7 +428,10 @@ export const KEYMAP: KeymapEntry[] = [
     key: "w",
     mod: true,
     id: "close",
-    help: ["Focused session", "Ctrl+W / Delete", "Close focused window (undo: Ctrl+Shift+T)"],
+    // "Session", not "window": the Alt+1..9 rows above use "window" for any
+    // rail row (the assistant, a log tail), and this one only ever ends the
+    // focused SESSION — a selected window never takes keyboard focus.
+    help: ["Focused session", "Ctrl+W / Delete", "End the focused session (undo: Ctrl+Shift+T)"],
     when: () => !!useUi.getState().focused && !modalOpen(),
     run: () => {
       const f = useUi.getState().focused;
@@ -467,17 +470,19 @@ export const KEYMAP: KeymapEntry[] = [
   },
 ];
 // Ctrl+1..9 (VSCode focus-group style) and Alt+1..9 (browser-safe; matches
-// the sidebar number badges) focus the Nth session in stable sidebar order.
+// the sidebar number badges) focus the Nth rail row in stable sidebar order —
+// a session or a window (the assistant, a log tail, a database table), which
+// is why the dispatch goes through selectRailKey rather than selectSession.
 "123456789".split("").forEach((d, i) => {
-  const when = () => !!(_host && _host.sessionAt(i));
+  const when = () => !!(_host && _host.rowAt(i));
   const run = () => {
-    const t = _host?.sessionAt(i);
-    if (t) selectSession(t);
+    const t = _host?.rowAt(i);
+    if (t) selectRailKey(t);
   };
   const help: [string, string, string] | undefined =
-    i === 0 ? ["Navigation", "Ctrl+1 … 9 / Alt+1 … 9", "Focus the Nth session"] : undefined;
-  KEYMAP.push({ key: d, mod: true, when, run, help, label: "Focus the Nth session" });
-  KEYMAP.push({ key: d, alt: true, when, run, label: "Focus the Nth session" });
+    i === 0 ? ["Navigation", "Ctrl+1 … 9 / Alt+1 … 9", "Focus the Nth window"] : undefined;
+  KEYMAP.push({ key: d, mod: true, when, run, help, label: "Focus the Nth window" });
+  KEYMAP.push({ key: d, alt: true, when, run, label: "Focus the Nth window" });
 });
 
 /** Resolve an entry's *effective* triggers under the user's overrides (see

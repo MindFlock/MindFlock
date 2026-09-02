@@ -415,6 +415,19 @@ def content_disposition(filename: str) -> str:
     )
 
 
+def tree_items(items: Iterable[Any]) -> List[dict]:
+    """Normalize one tree level's items: adapters may return bare names or
+    ``{name, …}`` dicts (``size_bytes`` when the engine has cheap statistics);
+    the wire shape is always a dict with at least ``name``."""
+    out: List[dict] = []
+    for item in items:
+        if isinstance(item, dict):
+            out.append(item if "name" in item else {**item, "name": ""})
+        else:
+            out.append({"name": str(item)})
+    return out
+
+
 def _scope(
     adapter: Adapter, database: Any, schema: Any
 ) -> Tuple[Optional[str], Optional[str]]:
@@ -583,13 +596,13 @@ class DbClientService:
             with self.connection(profile) as (adapter, conn):
                 return {
                     "level": "databases",
-                    "items": [{"name": n} for n in adapter.list_databases(conn)],
+                    "items": tree_items(adapter.list_databases(conn)),
                 }
         with self.connection(profile, database) as (adapter, conn):
             if "schema" in adapter.hierarchy and not schema:
                 return {
                     "level": "schemas",
-                    "items": [{"name": n} for n in adapter.list_schemas(conn)],
+                    "items": tree_items(adapter.list_schemas(conn)),
                 }
             return {"level": "tables", "items": adapter.list_tables(conn, schema)}
 

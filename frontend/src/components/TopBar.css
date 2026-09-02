@@ -126,8 +126,8 @@ body #mf-winctl {
 
 /* The menu carries seven items now (New, Intake, Verify, Recent, Prompts,
    Command, Settings), so the type and the spacing are deliberately tighter than
-   the rest of the app — here, on #topbar button, on .tb-item / .tb-drop-btn and
-   on #new-btn, which must all move together or the row goes ragged.
+   the rest of the app — here, on #topbar button, on .tb-item and on #new-btn,
+   which must all move together or the row goes ragged.
    The bar must stay ONE line at the narrowest window anyone actually uses: it is
    fixed and full-width, so an item that wraps does not push anything down, it
    disappears under the edge of the window. 11px is the floor — these are the
@@ -145,8 +145,7 @@ body #mf-winctl {
 }
 
 /* Everything clickable opts out of the drag region. */
-#topbar button,
-#topbar .tb-drop {
+#topbar button {
   -webkit-app-region: no-drag;
 }
 
@@ -160,8 +159,7 @@ body #mf-winctl {
 }
 
 /* Icon/label buttons in the top bar. */
-#topbar .tb-item,
-#topbar .tb-drop-btn {
+#topbar .tb-item {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -177,8 +175,7 @@ body #mf-winctl {
   cursor: pointer;
 }
 
-#topbar .tb-item:hover,
-#topbar .tb-drop-btn:hover {
+#topbar .tb-item:hover {
   background: var(--panel-2);
   border-color: var(--border);
 }
@@ -294,46 +291,5 @@ body #mf-winctl {
 
 #topbar #notif-btn {
   position: relative;
-}
-
-/* Top-bar dropdown (combined Recent / Disk menu). */
-#topbar .tb-drop {
-  position: relative;
-}
-
-#topbar .tb-drop-panel {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 3200;
-  display: none;
-  flex-direction: column;
-  min-width: 190px;
-  padding: 4px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-}
-
-#topbar .tb-drop.open .tb-drop-panel {
-  display: flex;
-}
-
-#topbar .tb-drop-panel button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 7px 10px;
-  background: transparent;
-  color: var(--text);
-  border: 0;
-  border-radius: 6px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-#topbar .tb-drop-panel button:hover {
-  background: var(--panel-2);
 }
 

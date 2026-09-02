@@ -36,6 +36,12 @@ CONNECT_TIMEOUT_S = 5
 KIND_TABLE = "table"
 KIND_VIEW = "view"
 
+#: Cap on the size-statistics catalog queries (pg_database_size walks files;
+#: information_schema.tables can crawl on huge catalogs). They run on the
+#: pooled connection under its lock, so a hang here would wedge the whole
+#: tree — on timeout the except falls back to plain names.
+SIZE_STATS_TIMEOUT_S = 5.0
+
 
 class DriverMissing(RuntimeError):
     """The engine's Python driver is not importable in the serving venv.
@@ -52,9 +58,11 @@ class DriverMissing(RuntimeError):
 
 
 def _install_hint(package: str) -> str:
-    """The pip command for the venv that serves the app. Best-effort guidance:
-    it assumes the ``mindflock`` entry point on PATH belongs to that venv (true
-    for the ``uv tool install`` layout, which is the documented install)."""
+    """The pip command for the venv that serves the app — the manual fallback
+    shown when ``installer.py`` cannot run the install itself (and the thing a
+    user can paste into a shell). Best-effort guidance: it assumes the
+    ``mindflock`` entry point on PATH belongs to that venv (true for the ``uv
+    tool install`` layout, which is the documented install)."""
     return (
         'uv pip install --python "$(command -v mindflock | xargs dirname)/python" %s'
         % package
@@ -116,10 +124,14 @@ class Adapter:
         return ""
 
     # --- introspection ----------------------------------------------------- #
-    def list_databases(self, conn: Any) -> List[str]:
+    def list_databases(self, conn: Any) -> List[Any]:
+        """Names, or ``{name, size_bytes}`` dicts where the engine can answer
+        the size from cheap statistics (the service normalizes either shape).
+        ``size_bytes`` may be ``None`` when the engine cannot say."""
         return []
 
-    def list_schemas(self, conn: Any) -> List[str]:
+    def list_schemas(self, conn: Any) -> List[Any]:
+        """Same contract as :meth:`list_databases`, one level down."""
         return []
 
     def list_tables(self, conn: Any, schema: Optional[str] = None) -> List[dict]:
@@ -397,21 +409,67 @@ class PostgresAdapter(Adapter):
         row = cur.fetchone()
         return str(row[0]).split(" on ")[0] if row else "PostgreSQL"
 
-    def list_databases(self, conn: Any) -> List[str]:
+    def list_databases(self, conn: Any) -> List[Any]:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT datname FROM pg_database WHERE NOT datistemplate AND datallowconn ORDER BY datname"
-        )
-        return [r[0] for r in cur.fetchall()]
+        try:
+            # Size from the catalog, guarded per row: pg_database_size raises
+            # for a database this role cannot CONNECT to. Bounded — it stats
+            # every file of every database.
+            self.set_statement_timeout(conn, SIZE_STATS_TIMEOUT_S)
+            try:
+                cur.execute(
+                    "SELECT datname, CASE WHEN has_database_privilege(datname, 'CONNECT') "
+                    "THEN pg_database_size(datname) END "
+                    "FROM pg_database WHERE NOT datistemplate AND datallowconn ORDER BY datname"
+                )
+                rows = cur.fetchall()
+            finally:
+                self.clear_statement_timeout(conn)
+            return [
+                {"name": r[0], "size_bytes": None if r[1] is None else int(r[1])}
+                for r in rows
+            ]
+        except Exception:  # noqa: BLE001 — sizes are decoration, names are not
+            self.rollback(conn)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT datname FROM pg_database WHERE NOT datistemplate AND datallowconn ORDER BY datname"
+            )
+            return [r[0] for r in cur.fetchall()]
 
-    def list_schemas(self, conn: Any) -> List[str]:
+    def list_schemas(self, conn: Any) -> List[Any]:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT nspname FROM pg_namespace "
-            "WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' "
-            "ORDER BY (nspname <> 'public'), nspname"
-        )
-        return [r[0] for r in cur.fetchall()]
+        try:
+            # pg_total_relation_size (heap + toast + indexes) summed over the
+            # schema's plain/partition/materialized relations — never a row
+            # scan, but it stats files, so it gets the same bound. NULL (no
+            # relations) stays NULL.
+            self.set_statement_timeout(conn, SIZE_STATS_TIMEOUT_S)
+            try:
+                cur.execute(
+                    "SELECT n.nspname, SUM(pg_total_relation_size(c.oid))::bigint "
+                    "FROM pg_namespace n "
+                    "LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relkind IN ('r', 'p', 'm') "
+                    "WHERE n.nspname NOT LIKE 'pg\\_%' AND n.nspname <> 'information_schema' "
+                    "GROUP BY n.nspname "
+                    "ORDER BY (n.nspname <> 'public'), n.nspname"
+                )
+                rows = cur.fetchall()
+            finally:
+                self.clear_statement_timeout(conn)
+            return [
+                {"name": r[0], "size_bytes": None if r[1] is None else int(r[1])}
+                for r in rows
+            ]
+        except Exception:  # noqa: BLE001
+            self.rollback(conn)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT nspname FROM pg_namespace "
+                "WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' "
+                "ORDER BY (nspname <> 'public'), nspname"
+            )
+            return [r[0] for r in cur.fetchall()]
 
     def list_tables(self, conn: Any, schema: Optional[str] = None) -> List[dict]:
         cur = conn.cursor()
@@ -637,10 +695,30 @@ class MysqlAdapter(Adapter):
         row = cur.fetchone()
         return "MySQL " + str(row[0]) if row else "MySQL"
 
-    def list_databases(self, conn: Any) -> List[str]:
+    def list_databases(self, conn: Any) -> List[Any]:
         cur = conn.cursor()
         cur.execute("SHOW DATABASES")
-        return [r[0] for r in cur.fetchall()]
+        names = [r[0] for r in cur.fetchall()]
+        sizes: Dict[str, int] = {}
+        try:
+            # information_schema statistics (same source as table_rows): data +
+            # index length per schema, one grouped read, never a scan — but it
+            # can crawl on a huge catalog, so it gets the size-stats bound.
+            self.set_statement_timeout(conn, SIZE_STATS_TIMEOUT_S)
+            try:
+                cur.execute(
+                    "SELECT table_schema, SUM(data_length + index_length) "
+                    "FROM information_schema.tables GROUP BY table_schema"
+                )
+                rows = cur.fetchall()
+            finally:
+                self.clear_statement_timeout(conn)
+            for schema_name, size in rows:
+                if size is not None:
+                    sizes[str(schema_name)] = int(size)
+        except Exception:  # noqa: BLE001 — sizes are decoration, names are not
+            return names
+        return [{"name": n, "size_bytes": sizes.get(str(n))} for n in names]
 
     def list_tables(self, conn: Any, schema: Optional[str] = None) -> List[dict]:
         cur = conn.cursor()

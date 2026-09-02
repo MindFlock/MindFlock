@@ -5,11 +5,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useConfig, useInstances } from "../../state/queries";
-import { useUi } from "../../state/store";
+import { windowKey, useUi } from "../../state/store";
 import { releaseTerms } from "../../lib/terminals";
 import { dropActivity } from "../../lib/stage";
 import {
-  computeVisible,
+  computeVisibleSlots,
   DROP_PH,
   placeInGrid,
   previewRowsFor,
@@ -29,7 +29,9 @@ export interface SpecialPaneDesc {
   session?: string;
   /** `ext` only: the extension pane key ("<ext>:<surface>[:<ref>]"). */
   extKey?: string;
-  onClose(): void;
+  // No close callback: the pane head's ✕ (SpecialPane's CloseBtn) and the
+  // sidebar's Windows rows both derive the close action from kind+ref, so the
+  // two controls can never disagree.
 }
 
 /** The per-instance token a desc's sentinel is built from (verify: the watched
@@ -61,30 +63,37 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
     () => (instances || []).filter((i) => !isVerifySession(i.title)),
     [instances]
   );
-  const visible = useMemo(
-    () =>
-      computeVisible(workable, {
-        hidden: ui.hidden,
-        viewMode: ui.viewMode,
-        mru: ui.mru,
-        order: ui.order,
-      }),
-    [workable, ui.hidden, ui.viewMode, ui.mru, ui.order]
-  );
-
-  const byTitle = useMemo(() => new Map(visible.map((i) => [i.title, i])), [visible]);
   const specialByKey = useMemo(
     () => new Map(specialPanes.map((p) => [sentinel(p.kind, sentinelRef(p)), p])),
     [specialPanes]
   );
 
-  // Reconcile the persisted row layout against the visible set + specials.
+  // ONE capped list for every window, sessions and specials alike — the
+  // assistant and a database table take a slot exactly like a session does, so
+  // at "view: 1" the one you last picked is the one on screen.
+  const slotTitles = useMemo(
+    () =>
+      computeVisibleSlots(workable, [...specialByKey.keys()], {
+        hidden: ui.hidden,
+        viewMode: ui.viewMode,
+        mru: ui.mru,
+        order: ui.order,
+      }),
+    [workable, specialByKey, ui.hidden, ui.viewMode, ui.mru, ui.order]
+  );
+  const byTitle = useMemo(() => {
+    const all = new Map(workable.map((i) => [i.title, i]));
+    return new Map(
+      slotTitles.filter((t) => all.has(t)).map((t) => [t, all.get(t)!])
+    );
+  }, [workable, slotTitles]);
+  /** The SESSIONS on screen — terminal teardown and keyboard focus are about
+   * those, never about a log tail or an extension pane. */
+  const visible = useMemo(() => [...byTitle.values()], [byTitle]);
+
+  // Reconcile the persisted row layout against that set.
   // (Skipped before the first snapshot: painting a stale [] would wipe the
   // persisted layout — the "windows reorder after reload" bug.)
-  const slotTitles = useMemo(
-    () => visible.map((i) => i.title).concat([...specialByKey.keys()]),
-    [visible, specialByKey]
-  );
   const rows = useMemo(() => {
     if (!isSuccess) return ui.gridRows;
     return reconcileGridRows(ui.gridRows, slotTitles);
@@ -223,19 +232,9 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
   );
 }
 
+/** The grid token for a special pane. Defined in the store (windowKey), which
+ * is what lets OPENING a window select it; re-exported here because the panes
+ * and the sidebar have always asked the grid for it. */
 export function sentinel(kind: SpecialPaneDesc["kind"], ref = ""): string {
-  // Same sentinel scheme as the vanilla app: a "\u0000" prefix no tmux session
-  // title can carry.
-  // `verify` and `ext` carry a per-instance ref in their key because, unlike
-  // the other three, several can be open at once — one per plan being
-  // watched, one per extension pane.
-  return kind === "logs"
-    ? "\u0000mindflock-logs"
-    : kind === "syslogs"
-      ? "\u0000system-logs"
-      : kind === "verify"
-        ? "\u0000verify:" + ref
-        : kind === "ext"
-          ? "\u0000ext:" + ref
-          : "\u0000assistant-chat";
+  return windowKey(kind, ref);
 }

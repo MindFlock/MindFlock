@@ -682,8 +682,9 @@ directory (`.mindflock-pipeline.lock`); a second copy exits cleanly.
 ### Notifications & phone push (ntfy)
 
 Settings → **Notifications** holds one rule list — *What triggers a
-notification* (needs-input, PR merged/closed, budget exceeded, pre-commit
-failed, out of usage / usage back, plus quieter opt-ins) — and two channels it
+notification* (needs-input, PR approved, PR merged/closed, budget exceeded,
+pre-commit failed, out of usage / usage back, plus quieter opt-ins such as
+changes-requested and the verification-plan rules) — and two channels it
 feeds:
 
 - **Browser / desktop** popups, which need a tab open on a secure origin

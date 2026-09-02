@@ -5,6 +5,7 @@ import {
   DROP_PH,
   viewCap,
   computeVisible,
+  computeVisibleSlots,
   balancedRows,
   reconcileGridRows,
   placeInGrid,
@@ -61,6 +62,69 @@ describe("computeVisible", () => {
     const many = insts(...Array.from({ length: 12 }, (_, i) => `w${i}`));
     const out = computeVisible(many, opts({ viewMode: "auto" }));
     expect(out).toHaveLength(MAX_VISIBLE);
+  });
+});
+
+describe("computeVisibleSlots", () => {
+  // The sentinels the grid uses for non-session windows (assistant, logs, an
+  // extension's table). Their shape does not matter here — only that they
+  // compete for the same slots.
+  const CHAT = "\u0000chat";
+  const DB = "\u0000ext:dbclient:table";
+
+  it("counts a window against the cap, like a session", () => {
+    // Before, specials were appended AFTER the cap: "view: 1" meant one session
+    // PLUS every open window.
+    expect(computeVisibleSlots(insts("a", "b"), [CHAT], opts({ viewMode: "1" }))).toEqual(["a"]);
+    expect(
+      computeVisibleSlots(insts("a", "b"), [CHAT, DB], opts({ viewMode: "2" }))
+    ).toEqual(["a", "b"]);
+  });
+
+  it("gives a window the slot when it is the one most recently picked", () => {
+    expect(
+      computeVisibleSlots(insts("a", "b"), [CHAT], opts({ viewMode: "1", mru: [CHAT] }))
+    ).toEqual([CHAT]);
+    expect(
+      computeVisibleSlots(insts("a", "b"), [CHAT, DB], opts({ viewMode: "2", mru: [DB, "b"] }))
+    ).toEqual(["b", DB]);
+  });
+
+  it("keeps the display order whatever the MRU says", () => {
+    // The MRU decides WHO is on screen, never WHERE — a window must not hop
+    // around the grid because you clicked it.
+    expect(
+      computeVisibleSlots(insts("a", "b"), [CHAT], opts({ viewMode: "auto", mru: [CHAT, "b"] }))
+    ).toEqual(["a", "b", CHAT]);
+  });
+
+  it("shows everything when uncapped, and never more than MAX_VISIBLE", () => {
+    const many = insts(...Array.from({ length: MAX_VISIBLE + 4 }, (_, i) => "s" + i));
+    expect(computeVisibleSlots(many, [CHAT], opts({ viewMode: "auto" })).length).toBe(MAX_VISIBLE);
+    expect(computeVisibleSlots(insts("a"), [CHAT], opts({ viewMode: "auto" }))).toEqual(["a", CHAT]);
+  });
+
+  it("leaves hidden windows out", () => {
+    expect(
+      computeVisibleSlots(insts("a", "b"), [CHAT], opts({ hidden: new Set(["b", CHAT]) }))
+    ).toEqual(["a"]);
+  });
+
+  it("drag order decides who fills the cap when the MRU is short", () => {
+    // The window sits first in the saved order and the MRU says nothing: it
+    // fills the cap ahead of session b — where a window sits is now
+    // something a drag can change.
+    expect(
+      computeVisibleSlots(insts("a", "b"), [CHAT], opts({ viewMode: "2", order: [CHAT, "a"] }))
+    ).toEqual([CHAT, "a"]);
+  });
+
+  it("interleaves windows by the saved drag order, like the rail", () => {
+    // A window dragged between two sessions keeps that slot here too; one the
+    // order has never seen still lands after the sessions (the old append).
+    expect(
+      computeVisibleSlots(insts("a", "b"), [CHAT, DB], opts({ order: ["a", CHAT, "b"] }))
+    ).toEqual(["a", CHAT, "b", DB]);
   });
 });
 

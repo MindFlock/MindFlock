@@ -18,7 +18,7 @@ function withSessions(rows: Row[]) {
 }
 
 beforeEach(() => {
-  useUi.setState({ aliases: {} });
+  useUi.setState({ aliases: {}, railOrder: [] });
   withSessions([]);
 });
 
@@ -96,6 +96,21 @@ describe("publishWindowName", () => {
 
 
 describe("slotNumber", () => {
+  it("reads the rail's published order — a window row shifts session numbers", () => {
+    // Once the sidebar has published railOrder (sessions AND window rows,
+    // grouping and filter applied), the number comes from THAT, verbatim.
+    useUi.setState({ railOrder: ["\u0000assistant-chat", "a", "b"] });
+    withSessions([{ title: "a" }, { title: "b" }]);
+    expect(slotNumber("a")).toBe("2");
+    expect(slotNumber("b")).toBe("3");
+  });
+
+  it("resolves a display_title through the snapshot against the rail", () => {
+    useUi.setState({ railOrder: ["raw-slug"] });
+    withSessions([{ title: "raw-slug", display_title: "Nice Name" }]);
+    expect(slotNumber("Nice Name")).toBe("1");
+  });
+
   it("numbers sessions the way the rail does: saved order first, 1-based", () => {
     useUi.setState({ order: ["b", "a"], filter: "" });
     withSessions([{ title: "a" }, { title: "b" }, { title: "c" }]);

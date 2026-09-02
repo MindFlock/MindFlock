@@ -52,6 +52,8 @@ Core vocabulary (emitted by the server):
 | `session.queue_changed` | Any prompt-queue edit | `data: {pending, enabled, loop}` |
 | `session.usage_restored` | A provider window reopened for a session that had run out | `data: {resumed}` |
 | `session.turn_ended` | A session's work really is over — corroborated work, idle ever since, nothing queued | `data: {idle_for}` |
+| `session.pr_state_changed` | The branch's PR genuinely moved | `"" · OPEN · MERGED · CLOSED`, `data: {url}` |
+| `session.pr_review_changed` | A reviewer decided on the branch's open PR | `"" · approved · changes_requested` |
 
 Addon-originated events (see `AppContext.emit`) live under the `addon.`
 namespace, e.g. `addon.notify.ping`. Notable transitions:
@@ -456,8 +458,6 @@ ExtensionSpec(
     buttons=[
         ExtensionButton(command="dbclient.explorer", label="Explorer",
                         title="Browse connections, tables and data"),
-        ExtensionButton(command="dbclient.sql", label="SQL",
-                        title="Open the SQL query pad"),
     ],
     commands=[
         # Declarative: the host opens the surface before the module has loaded.
@@ -845,38 +845,75 @@ strokes; no emoji in chrome.
 
 `dbclient` (label "Database Client") is a DBeaver-style client inside
 MindFlock and the reference for every piece above. Its manifest is the code
-block at the top of this section: a **Database** bar with Explorer and SQL,
-two declarative commands and two code-backed ones, one dialog, and two
-`multi` panes whose Back button runs the explorer command.
+block at the top of this section: a **Database** bar with an Explorer button,
+two declarative commands and two code-backed ones (the SQL query pad rides the
+palette and the Explorer, not the bar), one dialog, and two `multi` panes
+whose Back button runs the explorer command.
 
 **Surfaces.**
 
 - **`main` — the Explorer dialog.** Left, the connection tree: connections →
-  [databases → [schemas →]] tables and views, one lazy level per `/tree`
-  call, an approximate row-count badge only when the engine had a cheap
-  estimate, a filter box and a Reload. Right, a context panel that follows
+  [databases → [schemas →]] then **"Tables (n)" / "Views (n)"** group nodes
+  (expanded by default; the Views group only where views exist) whose tables
+  unfold one level further into their **columns** (name · type, a key icon on
+  the primary key, one lazy `/table` call per unfolded table); one lazy
+  `/tree` call per scope level; an approximate row-count badge only when the
+  engine had a cheap estimate, and a size badge on databases and schemas
+  where the engine has cheap size statistics — that catalog query runs on the
+  pooled connection under its lock, so it is capped by
+  `SIZE_STATS_TIMEOUT_S` (5 s, `adapters.py`) and falls back to plain names on
+  timeout: a size badge can silently disappear on a slow catalog, and a level
+  of the tree is never held up by one; a filter box (matching real
+  objects, never group labels or columns) and a Reload, plus per-scope hover
+  actions (New query here, Refresh). Right, a context panel that follows
   the selection: the connection list with New connection; the connection
   form (an engine strip SQLite | PostgreSQL | MySQL, per-engine fields, a
-  read-only toggle, Test and Save, and a driver-missing notice carrying the
-  install hint) — `ref="new"` opens the dialog straight onto it; or a table's
-  column summary with View Data / New Query / DDL. Expanded nodes, fetched
-  levels and the selection live in module state keyed by connection, so a
-  reopened dialog repaints instantly even though dialog bodies are disposed
-  on close. Opening a pane from here goes through `api.ui.openPane` with
-  `ctx = {connId, database, schema, table}`, and the host closes the dialog.
-- **`table` — the table pane** (`multi`, Back → explorer): DATA | STRUCTURE |
-  DDL. DATA is the editable page grid — header-click sort, a per-column
-  filter row, checkbox selection, double-click editing with a Set-NULL
-  control, Insert / Delete selected / Save, CSV/JSON export through a plain
-  anchor GET, and a footer with prev/next and "rows X–Y" (" of ~N" only when
-  the server had an estimate). Save is a two-step conversation with `/rows`:
-  `preview: true` returns the generated SQL, shown in a confirm bar; the
-  confirmation resends for real. Views and tables without a primary key
-  render read-only with a badge saying why. Bytes cells are chips; strings
-  past 8 KB get a magnifier to a read-only overlay; the first 200 columns
-  render, with a notice (`RENDER_CAP` in `grid.js`). Identity comes from
-  `host.ctx`; a pane opened with none (from the palette) asks with a picker
-  first.
+  read-only toggle, Test and Save, and a driver-missing notice with an
+  **Install driver** button — one click puts the driver into the server's own
+  environment; the paste-into-a-shell command stays underneath as the
+  fallback, and is all the notice shows where an in-app install would have to
+  break a system-managed Python) — `ref="new"` opens the dialog straight onto
+  it; or, for a table, the **unified table view embedded in place** (the same
+  view the `table` pane renders — SQL bar, grid, STRUCTURE/DDL tabs) with an
+  **Open as window** action that opens it as a grid window instead. Expanded
+  nodes, fetched levels and the selection live in module state keyed by
+  connection, so a reopened dialog repaints instantly even though dialog
+  bodies are disposed on close. Opening a pane from here goes through
+  `api.ui.openPane` with `ctx = {connId, database, schema, table}`, and the
+  host closes the dialog.
+- **`table` — the unified table view** (`multi`, Back → explorer; the same
+  renderer is embedded in the explorer's table detail): DATA | STRUCTURE |
+  DDL. DATA leads with the **SQL bar** — the SELECT behind the page
+  (`buildTableSql` in `sql.js`), visibly regenerated by every sort click,
+  filter, page turn and page-size change; the page itself still loads
+  through `/table-data` with bound parameters, the bar is the faithful,
+  runnable mirror. The text is editable: Ctrl/Cmd+Enter (or Run) with
+  pristine text reloads the page, with edited text runs a **custom query**
+  through `/query` whose result set renders read-only in the same grid (a
+  badge says so) until the Table button — or any sort/filter/page action —
+  returns to the managed page. Below the bar, the editable page grid —
+  header-click sort, a per-column filter row, checkbox selection,
+  double-click editing with a Set-NULL control, Insert / Delete selected /
+  Save, CSV/JSON export through a plain anchor GET, and a footer with
+  prev/next and "rows X–Y" (" of ~N" only when the server had an estimate).
+  Save is a two-step conversation with `/rows`: `preview: true` returns the
+  generated SQL, shown in a confirm bar; the confirmation resends for real.
+  Views and tables without a primary key render read-only with a badge
+  saying why. Bytes cells are chips; strings past 8 KB get a magnifier to a
+  read-only overlay; the first 200 columns render, with a notice
+  (`RENDER_CAP` in `grid.js`). **Columns are resizable** — drag a header's
+  right edge to size one, double-click that edge to fit it to its widest
+  rendered value. A column's *default* width is the width of its own **name**
+  (header text + type + the pk key, capped), not of its content: a column is a
+  header you cannot read yet, and sizing to content spends the window on
+  whichever column holds a long URL while ellipsising every other header. The
+  table runs in fixed layout with a filler column taking the slack, so one drag
+  moves one edge instead of nudging its neighbours, and widths are keyed by
+  **column name** — one survives a sort, a filter, a page turn and a re-run of
+  the same query, while a result set with different columns simply starts from
+  the name-width defaults again. This lives in `grid.js`, so it is the same
+  behaviour in the SQL pane's results. Identity comes from `host.ctx`; a pane
+  opened with none (from the palette) asks with a picker first.
 - **`query` — the SQL pane** (`multi`, Back → explorer): connection, database
   (and schema, where the engine has them) selectors; a monospace textarea;
   Run (Ctrl/Cmd+Enter — the statement under the caret, found by the splitter
@@ -895,10 +932,11 @@ never stalls the event loop):
 
 | Route | Purpose |
 |---|---|
-| `GET /drivers` | `{drivers: [{engine, available, driver, install_hint}]}`. Drivers are import-detected, never required; sqlite always works. |
+| `GET /drivers` | `{drivers: [{engine, available, driver, install_hint, can_install, install_blocked}], installer, install_blocked, target}`. Drivers are import-detected, never required; sqlite always works. `can_install` says whether the server can install the missing driver itself; when it cannot, `install_blocked` says why and the UI shows only the command. |
+| `POST /drivers/install` | `{engine}` → `{ok, engine, driver, target, already?, method?, output?, error?, install_hint?, busy?}`. Installs that engine's driver into the venv serving the app (`uv pip install --python sys.executable`, falling back to `pip`, then `ensurepip` + `pip`) and re-checks importability in-process, so no restart is needed. The body names an *engine*, never a package spec — the spec comes from the adapter, which is the whole security model. A failure is a report carrying the installer's own output, not an exception. Capped at `INSTALL_TIMEOUT_S` (300 s — a wheel is seconds, a source build is not); one install runs at a time, so a second click while one is going gets `busy: true` rather than racing it. The install lands in the **live** process (import caches invalidated, `available()` re-checked), but it lands in that venv only: re-running `uv tool install --force` later replaces the environment and takes the driver with it. Where the server runs on a PEP 668 system interpreter the route refuses rather than breaking the OS's Python, `can_install` is false, and the driver-missing notice shows only the paste-into-a-shell command. |
 | `GET /connections` · `POST /connections` · `DELETE /connections/{id}` | Profile CRUD. Reads mask `password` with `SECRET_MASK`; a write carrying the mask (or `""`) keeps the stored one; a *new* id with a masked password on a password engine is a 400 naming the field. |
 | `POST /connections/{id}/test` | `{ok, error?, server?}` |
-| `GET /connections/{id}/tree?database=&schema=` | One lazy level following the engine's hierarchy: `{level: "databases" \| "schemas" \| "tables", items}`. Table items are `{name, kind, approx_rows \| null}` — never a `COUNT(*)`. |
+| `GET /connections/{id}/tree?database=&schema=` | One lazy level following the engine's hierarchy: `{level: "databases" \| "schemas" \| "tables", items}`. Table items are `{name, kind, approx_rows \| null}` — never a `COUNT(*)`. Database and schema items are `{name, size_bytes?}` — the size only where the engine answers it from cheap statistics (`pg_database_size` / summed `pg_total_relation_size` / `information_schema.tables` lengths), `null`/absent otherwise, and never a scan. |
 | `GET /connections/{id}/table?database=&schema=&table=` | `{columns: [{name, type, nullable, default, pk, autoinc}], indexes: [{name, columns, unique}], ddl, kind}` |
 | `POST /connections/{id}/query` | `{sql, database?, schema?, max_rows?, timeout_s?, confirm?}` → `{ok, columns: [{name, type}], rows, row_count, affected, elapsed_ms, truncated, needs_confirm?, error?}` |
 | `POST /connections/{id}/table-data` | `{database, schema?, table, page, page_size, sort: [{column, dir}], filters: [{column, op, value}]}` → `{columns, pk, kind, rows, page, page_size, has_more, total_approx \| null}`. `has_more` comes from fetching one row past the page; `total_approx` only from a cheap estimate, and never once a filter is set. |
@@ -960,8 +998,9 @@ chokepoint behind the query pad, the table page, the row batch and export:
 It emits `addon.dbclient.query` with `{connection, elapsed_ms, ok}` — timing
 and outcome only, never SQL text.
 
-Files: `backend/web/addons/dbclient/{__init__,store,adapters,service}.py`
-(manifest and router; profile store; one adapter per engine; the chokepoint)
+Files: `backend/web/addons/dbclient/{__init__,store,adapters,installer,
+service}.py` (manifest and router; profile store; one adapter per engine;
+the one-click driver install; the chokepoint)
 and `backend/web/static/extensions/dbclient/{index,explorer,tableview,
 querypad,grid,sql,ui}.js` + `style.css` (entry; the three surfaces; the
 shared grid; pure SQL text utilities; DOM helpers and the monochrome SVG icon

@@ -210,7 +210,16 @@ export function CommitDialog() {
                 " coding CLI. Replaces what's in the box."
               }
             >
-              {writing ? "Writing…" : "✨ Write it"}
+              {writing ? (
+                <>
+                  {/* The label alone read as a dead button on a slow CLI start
+                      (the generator's budget is 120s) — the ring is what says
+                      it is still running. */}
+                  <span className="btn-spin" aria-hidden="true" /> Writing…
+                </>
+              ) : (
+                "✨ Write it"
+              )}
             </button>
           </div>
           <textarea

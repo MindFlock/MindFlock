@@ -42,7 +42,6 @@
    app-wide palette through the unshadowed --app-* copies. A declaration on the
    element itself always beats the region's inherited one, so this needs no
    specificity or layer juggling. */
-#topbar .tb-drop-panel,
 .notif-pop,
 #foot-customize-menu {
   --panel: var(--app-panel);

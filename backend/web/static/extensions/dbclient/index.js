@@ -18,6 +18,7 @@
  * both default-exports its {activate} object and registers it on
  * window.mindflockExtensions.dbclient. */
 
+import { tableLabel } from "./sql.js";
 import { renderExplorer } from "./explorer.js";
 import { renderQueryPad } from "./querypad.js";
 import { renderTableView } from "./tableview.js";
@@ -74,8 +75,23 @@ const shared = {
   },
   /** A table pane. ctx: {connId, database?, schema?, table, kind?}. */
   openTable(ctx) {
-    const title = (ctx.schema ? ctx.schema + "." : "") + ctx.table;
+    const title = tableLabel(ctx.schema, ctx.table);
     return api.ui.openPane("table", { title, ctx });
+  },
+  /** The same table view, embedded in a caller-owned container (the
+   * explorer's detail panel) instead of a pane. The host shim is chrome-less:
+   * there is no pane title to set and no window to close — the caller
+   * disposes the returned handle when it repaints. Wired here, not imported
+   * by explorer.js, so the module graph stays acyclic. */
+  embedTable(container, ctx) {
+    return renderTableView(shared, {
+      el: container,
+      surfaceId: "table",
+      ref: "",
+      ctx: ctx || {},
+      setTitle() {},
+      close() {},
+    });
   },
 };
 

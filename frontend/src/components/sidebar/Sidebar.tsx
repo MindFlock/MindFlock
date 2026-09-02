@@ -4,14 +4,15 @@
  * mount, filter, bulk bar, device-grouped session list, and the footer
  * (view modes + count + customize + shortcuts). */
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Instance } from "../../api/types";
 import { api } from "../../api/client";
 import { refreshInstances, useDevices, useInstances } from "../../state/queries";
-import { useUi, type ViewMode } from "../../state/store";
+import { useUi, windowKey, type ViewMode } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { viewCap } from "../grid/layout";
 import { SidebarRow } from "./SidebarRow";
+import { windowRows, WindowRowItem, type WindowRow } from "./WindowList";
 import { SessionFilter } from "./SessionFilter";
 import { SidebarResizer } from "./SidebarResizer";
 import { BulkBar } from "./BulkBar";
@@ -19,7 +20,13 @@ import { useExtensionBarDefs } from "../../extensions/ExtensionBar";
 import { BarSlot, barContent, SECTION_MIME } from "./SidebarBars";
 import { orderedSections, SESSIONS_KEY } from "./barDefs";
 import { FooterCustomize } from "./FooterCustomize";
-import { matchesFilter, orderedInstances, SEARCH_MIN } from "./ordering";
+import {
+  matchesFilter,
+  movedRailOrder,
+  orderedInstances,
+  orderedKeys,
+  SEARCH_MIN,
+} from "./ordering";
 import { computeVisible } from "../grid/layout";
 import { useDoctorWarn } from "../dialogs/SetupDialog";
 import { isVerifySession } from "../dialogs/verify";
@@ -69,6 +76,33 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     () => allRows.filter((i) => matchesFilter(i, ui.filter, ui.aliases)),
     [allRows, ui.filter, ui.aliases]
   );
+  // Open windows (logs / chat / verify watchers / extension panes) as rail
+  // rows, interleaved with the sessions by the ONE saved order — a window's
+  // order key is its grid sentinel, the key it already answers to in the MRU
+  // and the grid rows. The filter narrows them by title, like any other row.
+  const windows = useMemo(
+    () =>
+      windowRows({
+        specialOpen: ui.specialOpen,
+        verifyPanes: ui.verifyPanes,
+        extPanes: ui.extPanes,
+      }),
+    [ui.specialOpen, ui.verifyPanes, ui.extPanes]
+  );
+  const winFiltered = useMemo(
+    () => windows.filter((w) => !ui.filter || w.title.toLowerCase().includes(ui.filter)),
+    [windows, ui.filter]
+  );
+  // The full rail in display order, UNFILTERED — what a drag reorders (the
+  // filter narrows what you see, never what a drop writes back).
+  const railKeys = useMemo(
+    () =>
+      orderedKeys(
+        [...allRows.map((i) => i.title), ...windows.map((w) => w.key)],
+        ui.order
+      ),
+    [allRows, windows, ui.order]
+  );
   const onScreen = useMemo(
     () =>
       new Set(
@@ -106,14 +140,29 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     return m;
   }, [devices, remoteDevs]);
 
-  const moveInOrder = (dragTitle: string, targetTitle: string, before: boolean) => {
-    if (!dragTitle || dragTitle === targetTitle) return;
-    const order = allRows.map((i) => i.title).filter((t) => t !== dragTitle);
-    let to = order.indexOf(targetTitle);
-    if (to < 0) to = order.length;
-    else if (!before) to += 1;
-    order.splice(to, 0, dragTitle);
-    ui.setOrder(order);
+  // One drop handler for the whole rail — session rows and window rows hand it
+  // the same (dragKey, targetKey, before) shape, and movedRailOrder does the
+  // merge (never wiping the slot of a row that isn't in this snapshot) plus
+  // the stale-sentinel prune.
+  const openWins = useMemo(() => new Set(windows.map((w) => w.key)), [windows]);
+  const moveInOrder = (dragKey: string, targetKey: string, before: boolean) => {
+    if (!dragKey || dragKey === targetKey) return;
+    ui.setOrder(
+      movedRailOrder({
+        saved: ui.order,
+        live: railKeys,
+        drag: dragKey,
+        target: targetKey,
+        before,
+        // Closed verify/ext panes don't survive a reload, so their sentinels
+        // must not pile up in the saved order. Session titles and the three
+        // fixed windows keep their slots even while absent — a sleeping remote
+        // device's rows, a closed assistant that reopens where you left it.
+        stale: (k) =>
+          (k.startsWith(windowKey("verify")) || k.startsWith(windowKey("ext"))) &&
+          !openWins.has(k),
+      })
+    );
   };
 
   const cueFor = (title: string) =>
@@ -167,17 +216,63 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     onDropRow: moveInOrder,
   };
 
+  // One rail, two row kinds. The hybrid lists are materialized from railKeys
+  // so sessions and windows interleave by the saved order, and rowIdx numbers
+  // straight across both. Each section's list is built ONCE, here, because the
+  // render below and the published railOrder must count the same rows.
+  const winOnScreen = new Set(ui.gridRows.flat());
+  const toRail = (sessionRows: Instance[], wins: WindowRow[]) => {
+    const byKey = new Map<string, { key: string; inst?: Instance; win?: WindowRow }>();
+    for (const i of sessionRows) byKey.set(i.title, { key: i.title, inst: i });
+    for (const w of wins) byKey.set(w.key, { key: w.key, win: w });
+    return railKeys.filter((k) => byKey.has(k)).map((k) => byKey.get(k)!);
+  };
+  // Windows are local by definition, so under device grouping they ride in
+  // this device's section; a remote group holds sessions only.
+  const localRail = toRail(localRows, winFiltered);
+  const devRails = remoteDevs.map((dev) => {
+    const dkey = (dev as { device?: string }).device || dev.name;
+    return { dkey, rail: toRail(byDev.get(dkey) || [], []) };
+  });
+  // PUBLISH the rendered row order — grouping, collapse and filter applied,
+  // i.e. exactly the sequence renderRail numbers below. The keymap's
+  // Alt+N / Ctrl+Tab and the notification "[N]" prefixes read railOrder
+  // instead of re-deriving it, so a number can never point at a row the
+  // badge doesn't show.
+  const displayedKeys: string[] = grouped
+    ? (ui.collapsedDevices.has("__self") ? [] : localRail.map((r) => r.key)).concat(
+        ...devRails.map(({ dkey, rail }) =>
+          ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key)
+        )
+      )
+    : localRail.map((r) => r.key);
+  // Keyed by content: the array is rebuilt every render, and the store's
+  // setRailOrder already no-ops on equal rows.
+  const railSig = JSON.stringify(displayedKeys);
+  useEffect(() => {
+    useUi.getState().setRailOrder(displayedKeys);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [railSig]);
   let rowIdx = -1;
-  const renderRows = (list: Instance[]) =>
-    list.map((inst) => {
+  const renderRail = (list: Array<{ key: string; inst?: Instance; win?: WindowRow }>) =>
+    list.map((r) => {
       rowIdx += 1;
-      return (
+      return r.inst ? (
         <SidebarRow
-          key={inst.title}
-          inst={inst}
+          key={r.key}
+          inst={r.inst}
           idx={rowIdx}
-          onScreen={onScreen.has(inst.title)}
-          dropCue={cueFor(inst.title)}
+          onScreen={onScreen.has(r.key)}
+          dropCue={cueFor(r.key)}
+          {...rowProps}
+        />
+      ) : (
+        <WindowRowItem
+          key={r.key}
+          row={r.win!}
+          idx={rowIdx}
+          onScreen={winOnScreen.has(r.key)}
+          dropCue={cueFor(r.key)}
           {...rowProps}
         />
       );
@@ -258,8 +353,8 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                       showForget={false}
                       onToggle={() => ui.toggleDeviceCollapsed("__self")}
                     />
-                    {!ui.collapsedDevices.has("__self") && renderRows(localRows)}
-                    {remoteDevs.map((dev) => {
+                    {!ui.collapsedDevices.has("__self") && renderRail(localRail)}
+                    {remoteDevs.map((dev, di) => {
                       const devRows =
                         byDev.get((dev as { device?: string }).device || dev.name) || [];
                       const dkey = (dev as { device?: string }).device || dev.name;
@@ -305,15 +400,15 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                           connectBtn={connectBtn}
                           onToggle={() => ui.toggleDeviceCollapsed(dkey)}
                         >
-                          {!collapsed && renderRows(devRows)}
+                          {!collapsed && renderRail(devRails[di].rail)}
                         </DeviceSection>
                       );
                     })}
                   </>
                 ) : (
-                  renderRows(localRows)
+                  renderRail(localRail)
                 )}
-                {ui.filter && !filtered.length && (
+                {ui.filter && !filtered.length && !winFiltered.length && (
                   <li className="filter-empty muted">No sessions match “{ui.filter}”</li>
                 )}
               </ul>

@@ -2599,7 +2599,13 @@ function NewPlanBar({
         disabled={!!busy || !candidates.length}
         onClick={() => void write()}
       >
-        {busy ? "Writing…" : "Write it"}
+        {busy ? (
+          <>
+            <span className="btn-spin" aria-hidden="true" /> Writing…
+          </>
+        ) : (
+          "Write it"
+        )}
       </button>
       {/* Why you cannot, when you cannot — and it is three different reasons.
           One sentence covered all of them and was simply false for the commonest

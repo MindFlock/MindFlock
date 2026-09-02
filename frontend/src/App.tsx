@@ -1,16 +1,17 @@
 /** App shell — composes the ported components and owns cross-cutting wiring:
- * capability body-classes, activity debounce feed, keymap installation, which
- * special panes (logs / system logs / assistant chat / verify / extension) are
- * open, and feeding the extension host its enabled set. */
+ * capability body-classes, activity debounce feed, keymap installation, the
+ * special-pane descriptor list (logs / system logs / assistant chat / verify /
+ * extension — open state lives in the UI store; the sidebar's Windows rows
+ * close them), and feeding the extension host its enabled set. */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { api } from "./api/client";
 import { useConfig, useExtensions, useInstances, useIntakeWarm } from "./state/queries";
-import { tourDecision, useUi } from "./state/store";
+import { tourDecision, useUi, type SpecialKind } from "./state/store";
 import { followAutopilot, noteActivity, reconcileLoopReset } from "./lib/stage";
 import { installKeymap, type KeymapHost } from "./lib/keymap";
-import { selectSession, instances as instancesSnapshot } from "./lib/sessionActions";
-import { closeExtPaneByKey, syncExtensions } from "./extensions/host";
+import { selectRailKey } from "./lib/sessionActions";
+import { syncExtensions } from "./extensions/host";
 import { ExtensionDialog } from "./extensions/ExtensionDialog";
 import { TopBar } from "./components/TopBar";
 import { ConnBanner } from "./components/ConnBanner";
@@ -25,12 +26,10 @@ import { NewSessionDialog } from "./components/dialogs/NewSessionDialog";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { IntakeDialog } from "./components/intake/IntakeDialog";
 import { VerifyDialog } from "./components/dialogs/VerifyDialog";
-import { isVerifySession } from "./components/dialogs/verify";
 import { CommitDialog } from "./components/dialogs/CommitDialog";
 import { MakePrDialog } from "./components/dialogs/MakePrDialog";
 import { RenameDialog } from "./components/dialogs/RenameDialog";
 import { DeviceDialog } from "./components/dialogs/DeviceDialog";
-import { WorkspacesDialog } from "./components/dialogs/WorkspacesDialog";
 import { RecentDialog } from "./components/dialogs/RecentDialog";
 import { PromptsDialog } from "./components/dialogs/PromptsDialog";
 import { SetupDialog, useDoctorAutoShow } from "./components/dialogs/SetupDialog";
@@ -129,8 +128,9 @@ export default function App() {
   }, [instances]);
 
   // Special panes (logs / system logs / assistant chat / verify runs /
-  // extension panes).
-  const [openSpecial, setOpenSpecial] = useState<Set<string>>(new Set());
+  // extension panes). All in the store: the sidebar's Windows rows are what
+  // close them, so their open state can't live in this component.
+  const specialOpen = useUi((s) => s.specialOpen);
   const verifyPanes = useUi((s) => s.verifyPanes);
   const extPanes = useUi((s) => s.extPanes);
 
@@ -173,65 +173,52 @@ export default function App() {
       if (!live.has(session)) useUi.getState().closeVerifyPane(session);
     }
   }, [instances, verifyPanes]);
-  const toggleSpecial = useCallback((kind: "logs" | "syslogs" | "chat") => {
-    setOpenSpecial((prev) => {
-      const next = new Set(prev);
-      if (next.has(kind)) next.delete(kind);
-      else next.add(kind);
-      return next;
-    });
-  }, []);
+  const toggleSpecial = useCallback(
+    (kind: SpecialKind) => useUi.getState().toggleSpecial(kind),
+    []
+  );
+  // The descs carry no close callback: the pane head's ✕ (SpecialPane's
+  // CloseBtn) and the sidebar's window rows both derive the close action from
+  // kind+ref, so the two controls can never disagree.
   const specialPanes = useMemo<SpecialPaneDesc[]>(() => {
     const meta: Record<string, { title: string }> = {
       logs: { title: "MindFlock logs" },
       syslogs: { title: "System logs" },
       chat: { title: "Assistant" },
     };
-    const fixed: SpecialPaneDesc[] = [...openSpecial].map((kind) => ({
+    const fixed: SpecialPaneDesc[] = specialOpen.map((kind) => ({
       key: kind,
       kind: kind as SpecialPaneDesc["kind"],
       title: meta[kind].title,
-      onClose: () => toggleSpecial(kind as "logs" | "syslogs" | "chat"),
     }));
-    // Verify runs are watch windows: read-only, closable, never in the sidebar.
-    // They live in the store rather than in `openSpecial` because there is one
-    // per session being watched, and the Verify dialog (which has no reach into
-    // this component's state) is what opens them.
+    // Verify runs are watch windows: read-only, closable, absent from the
+    // session rail as SESSIONS (they are not work) — but their WINDOWS get a
+    // sidebar row like every other open window.
     const runs: SpecialPaneDesc[] = verifyPanes.map((session) => ({
       key: "verify:" + session,
       kind: "verify",
       title: session,
       session,
-      onClose: () => useUi.getState().closeVerifyPane(session),
     }));
     // Extension panes: one per open pane key, titled live from the store.
-    // Close goes through the host (not the store directly) so the keep-alive
-    // body behind the pane is disposed along with its grid slot.
     const ext: SpecialPaneDesc[] = extPanes.map((p) => ({
       key: "ext:" + p.key,
       kind: "ext",
       title: p.title,
       extKey: p.key,
-      onClose: () => closeExtPaneByKey(p.key),
     }));
     return fixed.concat(runs, ext);
-  }, [openSpecial, toggleSpecial, verifyPanes, extPanes]);
+  }, [specialOpen, verifyPanes, extPanes]);
 
   // Keyboard: the host object gives the keymap reach into UI it can't import.
   const host = useMemo<KeymapHost>(() => {
-    // Stable sidebar order: user drag order first, unknown titles appended in
-    // snapshot order (mirrors ordering.ts; selection never reorders). Verify
-    // sessions are excluded to match the rail: it hides them, so its Alt+N
-    // number badges are painted over the filtered list — a live verify run in
-    // this list shifted every badge after it off by one.
-    const stableTitles = () => {
-      const order = useUi.getState().order;
-      const list = instancesSnapshot()
-        .map((i) => i.title)
-        .filter((t) => !isVerifySession(t));
-      const known = order.filter((t) => list.includes(t));
-      return [...known, ...list.filter((t) => !known.includes(t))];
-    };
+    // The rail EXACTLY as the sidebar rendered and numbered it — sessions and
+    // windows, drag order, device grouping, collapse and filter applied. Read
+    // from railOrder (the sidebar publishes it after each render) rather than
+    // re-derived, so the Alt+N number badges and the shortcuts cannot
+    // disagree about what the Nth row is. Every earlier re-derivation drifted
+    // somewhere: verify sessions, device grouping, the live filter.
+    const stableKeys = () => useUi.getState().railOrder;
     const toggleDialog = (name: "palette" | "shortcuts") => {
       const s = useUi.getState();
       if (s.openDialog === name) s.closeDialog();
@@ -242,14 +229,18 @@ export default function App() {
       toggleShortcuts: () => toggleDialog("shortcuts"),
       focusFilter: () =>
         (document.getElementById("session-filter") as HTMLInputElement | null)?.focus(),
-      cycleSession: (dir) => {
-        const titles = stableTitles();
-        if (!titles.length) return;
-        const cur = useUi.getState().focused;
-        const i = cur ? titles.indexOf(cur) : -1;
-        selectSession(titles[(i + dir + titles.length) % titles.length]);
+      cycleWindow: (dir) => {
+        const keys = stableKeys();
+        if (!keys.length) return;
+        const s = useUi.getState();
+        // The cursor is the last-SELECTED row: the MRU head while it's still
+        // on the rail (selecting a window never moves `focused` — that's the
+        // keyboard target, a session-only concept), else the focused session.
+        const cur = keys.includes(s.mru[0]) ? s.mru[0] : s.focused;
+        const i = cur ? keys.indexOf(cur) : -1;
+        selectRailKey(keys[(i + dir + keys.length) % keys.length]);
       },
-      sessionAt: (index) => stableTitles()[index] ?? null,
+      rowAt: (index) => stableKeys()[index] ?? null,
       openDoctor: () => useUi.getState().openDialogFor("settings", "doctor"),
     };
   }, []);
@@ -277,7 +268,6 @@ export default function App() {
       <MakePrDialog />
       <RenameDialog />
       <DeviceDialog />
-      <WorkspacesDialog />
       <RecentDialog />
       <PromptsDialog />
       <SetupDialog />

@@ -143,6 +143,20 @@ def test_commit_command_is_byte_identical_without_a_skip():
     assert 'echo $rc > .mindflock_commit_status; rm -f "$L"' in cmd
 
 
+def test_the_commit_chain_drops_its_lock_when_interrupted():
+    """Ctrl+C on a running hook makes the interactive shell abandon the rest of
+    the `;` list, so the chain's own `rm -f "$L"` never fired and the pill stayed
+    on "pre-commit" until the stale-lock self-heal caught up (most of a minute
+    after a deliberate cancel). The trapping subshell is what removes the lock at
+    the moment of the cancel; the self-heal remains for SIGKILL."""
+    cmd = server._commit_shell_command()
+    assert "( trap 'rm -f \"$L\"; exit 130' INT HUP TERM; " in cmd
+    # The trap has to wrap everything that can be interrupted — the whole loop,
+    # not just the commit — and the subshell has to close.
+    assert cmd.index("trap") < cmd.index("git add -A")
+    assert cmd.rstrip().endswith(")")
+
+
 def test_a_landed_commit_clears_its_message_file():
     """A leftover message must only survive a FAILURE. It used to survive success
     and unrelated work, so the next commit arriving without a message silently

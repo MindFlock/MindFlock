@@ -600,6 +600,58 @@ def test_the_prompt_rejects_rehearsal_dressed_as_usage():
     assert "never when that command is the repo testing itself" in prompt
 
 
+def test_the_prompt_pushes_work_onto_the_agent_and_rations_human_steps():
+    """The third observed failure: plans that were RIGHT and unexecutable.
+
+    "Real usage" is cheapest to satisfy by describing somebody else using the
+    product — wait for the nightly run, have a customer order, watch the screen
+    — and then marking the step ``human`` because a person is evidently
+    involved. The owner's report was that the checklists were good and that the
+    steps were hard to actually carry out; what they wanted instead was log
+    lines and behaviour an agent can exercise, with people kept for the few
+    checks that genuinely need one. So the actor rule is inverted from the old
+    "when in doubt, say human", human steps are capped and have to justify
+    themselves in their own text, and a schedule-only behaviour is checked by
+    the evidence its last real run left rather than by an appointment."""
+    prompt = tp.build_generation_prompt("", "app.py | 4 +-", "@@", "feature/x")
+    # The old wording — the single sentence this change exists to delete.
+    assert "When in doubt, say human" not in prompt
+    # Human is what no machine can settle, and explicitly NOT what is awkward.
+    assert "Being fiddly, long or multi-part is NOT a reason" in prompt
+    # ...find the agent-checkable twin one layer down before writing a person's
+    # step. This is the rule that turns "click it and see" into a log line.
+    assert "WRITE THE PLAN SO THE AGENT CAN RUN IT" in prompt
+    assert "the line it logged" in prompt
+    # A ration, plus the reason-in-the-text that makes the ration self-policing.
+    assert "HUMAN STEPS ARE A COST, NOT A SAFETY NET" in prompt
+    assert "At most 2 in a plan" in prompt
+    assert "why no agent-observable evidence exists" in prompt
+    # Executable NOW, rather than an appointment with a real customer or the
+    # nightly run — and when it really is schedule-only, read what it left.
+    assert "PREFER A CHECK THAT CAN BE RUN ON DEMAND" in prompt
+    assert "the evidence the last real run already left" in prompt
+
+
+def test_the_prompts_own_example_spends_one_step_of_four_on_a_person():
+    """The shape block teaches more than the rules do, so it has to model the
+    ration as well as state it — and the one human step has to carry the
+    parenthetical reason the rules demand of every human step."""
+    steps = tp.parse_plan(
+        tp.build_generation_prompt("", "app.py | 4 +-", "@@", "feature/x")
+    )
+    human = [s for s in steps if s["actor"] == "human"]
+    assert len(human) == 1 and len(steps) == 4
+    assert "(visual:" in human[0]["text"]
+
+
+def test_the_run_prompt_does_not_let_the_agent_hand_back_awkward_steps():
+    """The generation prompt now routes more work to the agent, so the run
+    prompt's ``blocked`` escape hatch has to stay narrow: it is for something
+    the agent cannot REACH, never for something it would rather not do."""
+    prompt = tp.build_run_prompt(_plan("sc-1", state="due", live_at=50.0))
+    assert "not a reason to hand it back" in prompt
+
+
 def test_the_generation_prompts_own_example_is_a_plan_it_would_accept():
     """The shape block is the only concrete step the model sees, so it teaches
     more than the rules do — and it has to survive the parser it is teaching."""

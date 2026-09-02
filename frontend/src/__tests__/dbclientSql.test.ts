@@ -180,3 +180,170 @@ describe("stripLiterals / classifyStatement", () => {
     expect(classifyStatement("-- note\nSELECT 1")).toEqual({ verb: "SELECT", hasWhere: false, isWrite: false });
   });
 });
+
+describe("identifiers", () => {
+  const quoteIdent = sqlMod.quoteIdent as (engine: string, name: string) => string;
+  const qualifiedName = sqlMod.qualifiedName as (
+    engine: string,
+    schema: string | null,
+    table: string
+  ) => string;
+  const tableLabel = sqlMod.tableLabel as (
+    schema: string | null,
+    table: string,
+    engine?: string
+  ) => string;
+
+  it("leaves a plain lowercase name alone", () => {
+    expect(quoteIdent("postgres", "abuse_reports")).toBe("abuse_reports");
+    expect(quoteIdent("mysql", "abuse_reports")).toBe("abuse_reports");
+  });
+
+  it("quotes what the engine would otherwise mangle or reject", () => {
+    expect(quoteIdent("postgres", "AbuseReports")).toBe('"AbuseReports"'); // folded
+    expect(quoteIdent("postgres", "select")).toBe('"select"'); // keyword
+    expect(quoteIdent("postgres", "user")).toBe('"user"'); // keyword people use
+    expect(quoteIdent("postgres", "2fa")).toBe('"2fa"'); // leading digit
+    expect(quoteIdent("mysql", "my table")).toBe("`my table`");
+    expect(quoteIdent("postgres", 'we"ird')).toBe('"we""ird"'); // still escaped
+  });
+
+  it("drops the schema the engine already assumes, and keeps every other", () => {
+    expect(qualifiedName("postgres", "public", "abuse_reports")).toBe("abuse_reports");
+    expect(qualifiedName("sqlite", "main", "people")).toBe("people");
+    expect(qualifiedName("postgres", "analytics", "hits")).toBe("analytics.hits");
+    // A MySQL "schema" is a database: dropping it names a different table.
+    expect(qualifiedName("mysql", "shop", "orders")).toBe("shop.orders");
+    // "public" is not special to MySQL, so it stays there too.
+    expect(qualifiedName("mysql", "public", "orders")).toBe("public.orders");
+  });
+
+  it("labels are the same rule without the quotes", () => {
+    expect(tableLabel("public", "abuse_reports")).toBe("abuse_reports");
+    expect(tableLabel("analytics", "order")).toBe("analytics.order");
+    // No engine (a pane title, built before the connection loads): every
+    // engine's default counts as "nothing worth saying".
+    expect(tableLabel("main", "people")).toBe("people");
+  });
+});
+
+describe("buildTableSql", () => {
+  const buildTableSql = sqlMod.buildTableSql as (opts: {
+    engine?: string;
+    schema?: string | null;
+    table: string;
+    filters?: Array<{ column: string; op: string; value?: unknown }>;
+    sort?: { column: string; dir?: string } | null;
+    limit?: number;
+    offset?: number;
+  }) => string;
+
+  it("renders the plain first page the way a person would type it", () => {
+    // No quotes and no `public.`: both are noise on a name that needs neither,
+    // and this text exists to be read and edited by hand.
+    expect(buildTableSql({ engine: "postgres", schema: "public", table: "ad_origin_seen", limit: 100 })).toBe(
+      "SELECT * FROM ad_origin_seen LIMIT 100"
+    );
+  });
+
+  it("keeps the schema when it is NOT the one the engine assumes", () => {
+    expect(buildTableSql({ engine: "postgres", schema: "analytics", table: "hits", limit: 100 })).toBe(
+      "SELECT * FROM analytics.hits LIMIT 100"
+    );
+    // MySQL's "schema" IS a database — dropping it names a different table, so
+    // it always stays.
+    expect(buildTableSql({ engine: "mysql", schema: "shop", table: "orders", limit: 100 })).toBe(
+      "SELECT * FROM shop.orders LIMIT 100"
+    );
+  });
+
+  it("quotes what would not survive unquoted", () => {
+    // A capital (postgres folds it), a keyword, and punctuation.
+    expect(buildTableSql({ engine: "postgres", table: "Orders", limit: 1 })).toBe(
+      'SELECT * FROM "Orders" LIMIT 1'
+    );
+    expect(buildTableSql({ engine: "postgres", table: "order", limit: 1 })).toBe(
+      'SELECT * FROM "order" LIMIT 1'
+    );
+    expect(buildTableSql({ engine: "mysql", table: "my table", limit: 1 })).toBe(
+      "SELECT * FROM `my table` LIMIT 1"
+    );
+    expect(buildTableSql({ engine: "postgres", table: "t", sort: { column: "Created At" }, limit: 1 })).toBe(
+      'SELECT * FROM t ORDER BY "Created At" ASC LIMIT 1'
+    );
+  });
+
+  it("adds ORDER BY and OFFSET as sort and page change", () => {
+    expect(
+      buildTableSql({
+        engine: "sqlite",
+        table: "people",
+        sort: { column: "age", dir: "desc" },
+        limit: 50,
+        offset: 100,
+      })
+    ).toBe("SELECT * FROM people ORDER BY age DESC LIMIT 50 OFFSET 100");
+  });
+
+  it("inlines filters the way the server binds them", () => {
+    expect(
+      buildTableSql({
+        engine: "postgres",
+        schema: "public",
+        table: "t",
+        filters: [
+          { column: "name", op: "contains", value: "o'brien_50%" },
+          { column: "age", op: "gt", value: "21" },
+          { column: "note", op: "null" },
+        ],
+        limit: 100,
+      })
+    ).toBe(
+      "SELECT * FROM t WHERE CAST(name AS TEXT) ILIKE '%o''brien\\_50\\%%' ESCAPE '\\'" +
+        " AND age > 21 AND note IS NULL LIMIT 100"
+    );
+  });
+
+  it("quotes per engine and doubles backslashes for mysql literals", () => {
+    expect(
+      buildTableSql({
+        engine: "mysql",
+        table: "t",
+        filters: [{ column: "path", op: "eq", value: "a\\b" }],
+        limit: 100,
+      })
+    ).toBe("SELECT * FROM t WHERE path = 'a\\\\b' LIMIT 100");
+  });
+
+  it("keeps numeric comparison values bare and quotes the rest", () => {
+    expect(buildTableSql({ table: "t", filters: [{ column: "a", op: "ne", value: "x" }], limit: 10 })).toBe(
+      "SELECT * FROM t WHERE a <> 'x' LIMIT 10"
+    );
+    expect(buildTableSql({ table: "t", filters: [{ column: "a", op: "lt", value: "-3.5" }], limit: 10 })).toBe(
+      "SELECT * FROM t WHERE a < -3.5 LIMIT 10"
+    );
+  });
+
+  it("quotes by declared column type when types are given", () => {
+    // "007" against a TEXT column must stay a string literal (the server
+    // binds by declared type); against an INTEGER column it renders bare.
+    expect(
+      buildTableSql({
+        table: "t",
+        filters: [{ column: "code", op: "eq", value: "007" }],
+        limit: 10,
+        // @ts-expect-error columnTypes is a JS-side extension of the opts bag
+        columnTypes: { code: "TEXT" },
+      })
+    ).toBe("SELECT * FROM t WHERE code = '007' LIMIT 10");
+    expect(
+      buildTableSql({
+        table: "t",
+        filters: [{ column: "n", op: "gt", value: "5" }],
+        limit: 10,
+        // @ts-expect-error same
+        columnTypes: { n: "INTEGER" },
+      })
+    ).toBe("SELECT * FROM t WHERE n > 5 LIMIT 10");
+  });
+});

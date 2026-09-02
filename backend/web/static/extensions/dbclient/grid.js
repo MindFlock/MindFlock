@@ -91,7 +91,8 @@ export function createGrid(opts = {}) {
   const notice = el("div", { class: "dbc-grid-notice", hidden: true });
   const thead = el("thead");
   const tbody = el("tbody");
-  const table = el("table", { class: "dbc-table" }, thead, tbody);
+  const colgroup = el("colgroup");
+  const table = el("table", { class: "dbc-table" }, colgroup, thead, tbody);
   const scroller = el("div", { class: "dbc-grid-scroll" }, table);
   const empty = el("div", { class: "dbc-grid-empty", hidden: true, text: "No rows" });
   const root = el("div", { class: "dbc-grid" }, notice, scroller, empty);
@@ -106,10 +107,206 @@ export function createGrid(opts = {}) {
   let startIndex = 1;
   let editor = null; // {td, row, colIdx, input, done}
   let selectAllBox = null;
+  /** Column name -> px, set by dragging a header edge. Keyed by NAME, not
+   * index, so a width survives a reload, a sort, a page change and a re-render
+   * — and a result set with different columns simply has none, and lays itself
+   * out content-first again. */
+  const widths = new Map();
+  /** Measured "wide enough to read the name" width per column — the default,
+   * recomputed on every render because it depends on the font and the names. */
+  let defaults = new Map();
+  /** The two fixed helper columns (checkbox, row number), measured the same
+   * way: under fixed layout every column needs a width or the browser hands
+   * them an equal share. */
+  let helperPx = null;
+  let colFor = new Map(); // column name -> its <col>
 
   const emitChange = () => {
     if (o.onChange) o.onChange();
   };
+
+  // --- column widths ---------------------------------------------------------
+  // A column starts exactly wide enough to READ ITS NAME (name + type + the pk
+  // key), because that is what a column IS until you look at it: a header you
+  // cannot read is worse than a value you cannot, and the value is one drag or
+  // one double-click away. Sizing to content instead — the browser's default —
+  // spends the width on whichever column happens to hold a long URL and
+  // ellipsises the headers of all the others.
+  //
+  // So every column is measured and pinned on each load, and the table runs in
+  // fixed layout from the first paint: dragging one edge then moves one edge
+  // (auto layout re-solves the whole grid on every mousemove), and the filler
+  // column takes whatever is left over.
+
+  const MIN_COL_PX = 48;
+  const MAX_COL_PX = 1200;
+  /** A default never exceeds this — a 60-character column name is not a reason
+   * to give one column the whole window. */
+  const MAX_DEFAULT_PX = 320;
+  /** Room for the grip so it never sits on top of the last letter. */
+  const GRIP_PX = 9;
+  /** What the filter row's select + input need to stay usable; a column narrows
+   * below it only when the user drags it there. */
+  const FILTER_ROW_PX = 150;
+  /** Cells before the first data column: the select box (optional) and "#". */
+  const leadCells = () => (o.selectable ? 2 : 1);
+
+  /** The width of what a cell actually CONTAINS, ignoring how wide the cell
+   * happens to be.
+   *
+   * `scrollWidth` cannot answer this — for a cell wider than its content it
+   * returns the cell — and neither can a Range over the whole cell, which would
+   * union in the absolutely-positioned grip sitting at the right edge. So: sum
+   * the flow children (with their margins) and any text nodes.
+   */
+  function contentWidth(cell) {
+    let w = 0;
+    for (const node of cell.childNodes) {
+      if (node.nodeType === 1) {
+        if (node.classList.contains("dbc-col-resize")) continue;
+        const cs = getComputedStyle(node);
+        w +=
+          node.getBoundingClientRect().width +
+          (parseFloat(cs.marginLeft) || 0) +
+          (parseFloat(cs.marginRight) || 0);
+      } else if (node.nodeType === 3 && node.textContent.trim()) {
+        const range = document.createRange();
+        range.selectNode(node);
+        w += range.getBoundingClientRect().width;
+      }
+    }
+    const cs = getComputedStyle(cell);
+    return w + (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+  }
+
+  /** Measure every header cell and keep it as that column's default width.
+   * Called after each render; a grid that is not on screen yet measures zero,
+   * and then simply keeps the auto layout until the next one. */
+  function measureDefaults() {
+    const cells = [...thead.querySelectorAll("tr:first-child > th")];
+    if (!cells.length || !cells[0].getBoundingClientRect().width) return;
+    const lead = leadCells();
+    // The row-number column is the one helper whose CONTENT outgrows its
+    // header: "#" is 8px wide and "1,234" is not, so it is measured against the
+    // widest number on the page rather than against its own title.
+    let rownum = Math.ceil(contentWidth(cells[lead - 1]));
+    for (const tr of tbody.rows) {
+      const cell = tr.cells[lead - 1];
+      if (cell) rownum = Math.max(rownum, cell.scrollWidth + 2);
+    }
+    helperPx = {
+      sel: o.selectable ? Math.ceil(contentWidth(cells[0])) + 2 : 0,
+      rownum,
+    };
+    defaults = new Map();
+    shown.forEach((c, i) => {
+      const th = cells[lead + i];
+      if (!th) return;
+      const want = Math.ceil(contentWidth(th)) + GRIP_PX;
+      const floor = filtersShown ? FILTER_ROW_PX : MIN_COL_PX;
+      defaults.set(c.name, Math.max(floor, Math.min(MAX_DEFAULT_PX, want)));
+    });
+    renderCols();
+  }
+
+  /** A user's width if they set one, else the measured default. */
+  function widthOf(name) {
+    return widths.has(name) ? widths.get(name) : defaults.get(name);
+  }
+
+  function renderCols() {
+    colgroup.replaceChildren();
+    colFor = new Map();
+    const sized = defaults.size > 0;
+    if (o.selectable) {
+      colgroup.appendChild(
+        el("col", sized && helperPx ? { style: "width:" + helperPx.sel + "px" } : null)
+      );
+    }
+    colgroup.appendChild(
+      el("col", sized && helperPx ? { style: "width:" + helperPx.rownum + "px" } : null)
+    );
+    for (const c of shown) {
+      const w = widthOf(c.name);
+      const col = el("col", w ? { style: "width:" + w + "px" } : null);
+      colFor.set(c.name, col);
+      colgroup.appendChild(col);
+    }
+    // The filler. Under fixed layout the table still stretches to fill its
+    // scroller (min-width: 100%), and without somewhere for that slack to go it
+    // is shared across the columns — so dragging one edge 200px moved it 60 and
+    // nudged every other column. This one column takes all of it, and collapses
+    // to nothing the moment the real columns are wider than the view.
+    colgroup.appendChild(el("col", { class: "dbc-col-filler" }));
+    table.classList.toggle("cols-fixed", sized);
+    // A DEFINITE width, which fixed layout needs before it will honour a <col>
+    // at all: with `width: auto` the browser first solves the table by content
+    // and then scales the columns to fit it, so a 200px drag came out as a 60px
+    // nudge. 100% of the scroller, with the table free to grow past it (the
+    // spec takes the max of the specified width and the sum of the columns) so
+    // widening a column scrolls instead of squeezing its neighbours.
+    table.style.width = sized ? "100%" : "";
+  }
+
+  function setColWidth(name, px) {
+    const w = Math.max(MIN_COL_PX, Math.min(MAX_COL_PX, Math.round(px)));
+    widths.set(name, w);
+    const col = colFor.get(name);
+    if (col) col.style.width = w + "px";
+  }
+
+  /** Widen (or narrow) a column to its widest value ON THIS PAGE — the escape
+   * hatch from a name-width default when it is the values you want to read. A
+   * cell is nowrap and clipped, so its scrollWidth is the full text width even
+   * when the ellipsis is showing, which is exactly the number wanted here. */
+  function autoFitColumn(name) {
+    const idx = shown.findIndex((c) => c.name === name);
+    if (idx < 0) return;
+    const at = leadCells() + idx;
+    let px = defaults.get(name) || MIN_COL_PX;
+    for (const tr of tbody.rows) {
+      const cell = tr.cells[at];
+      if (cell) px = Math.max(px, cell.scrollWidth + 6);
+    }
+    setColWidth(name, px);
+  }
+
+  function resizeHandle(c, th) {
+    const grip = el("span", {
+      class: "dbc-col-resize",
+      title: "Drag to resize this column · double-click to fit its widest value",
+    });
+    grip.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation(); // never a sort click
+      const startX = ev.clientX;
+      const startW = widthOf(c.name) || Math.round(th.getBoundingClientRect().width);
+      const move = (e) => setColWidth(c.name, startW + (e.clientX - startX));
+      const up = () => {
+        document.removeEventListener("pointermove", move);
+        document.removeEventListener("pointerup", up);
+        document.removeEventListener("pointercancel", up);
+        root.classList.remove("resizing");
+      };
+      document.addEventListener("pointermove", move);
+      document.addEventListener("pointerup", up);
+      document.addEventListener("pointercancel", up);
+      root.classList.add("resizing");
+    });
+    // The th's click sorts; the grip's must not reach it (pointerdown alone
+    // does not stop the click that follows the mouseup).
+    grip.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+    });
+    grip.addEventListener("dblclick", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      autoFitColumn(c.name);
+    });
+    return grip;
+  }
 
   // --- header ---------------------------------------------------------------
 
@@ -145,10 +342,13 @@ export function createGrid(opts = {}) {
         th.appendChild(svgIcon(sort.dir === "desc" ? "sort-desc" : "sort-asc", "dbc-sort-icon"));
       }
       if (o.sortable && o.onSort) th.addEventListener("click", () => o.onSort(c.name));
+      th.appendChild(resizeHandle(c, th));
       tr.appendChild(th);
     }
+    tr.appendChild(el("th", { class: "dbc-filler", "aria-hidden": "true" }));
     thead.appendChild(tr);
     if (o.filterable && filtersShown) thead.appendChild(renderFilterRow());
+    renderCols();
   }
 
   function renderFilterRow() {
@@ -178,6 +378,7 @@ export function createGrid(opts = {}) {
       });
       tr.appendChild(el("th", { class: "dbc-filter-cell" }, sel, input));
     }
+    tr.appendChild(el("th", { class: "dbc-filler", "aria-hidden": "true" }));
     return tr;
   }
 
@@ -226,9 +427,12 @@ export function createGrid(opts = {}) {
     shown.forEach((c, colIdx) => {
       const td = el("td", { class: "dbc-cell" });
       renderCell(td, r, colIdx);
-      if (o.editable) td.addEventListener("dblclick", () => openEditor(td, r, colIdx));
+      // Attached unconditionally: cellEditable gates at click time, so a
+      // later setEditable(true) works on rows rendered while read-only.
+      td.addEventListener("dblclick", () => openEditor(td, r, colIdx));
       tr.appendChild(td);
     });
+    tr.appendChild(el("td", { class: "dbc-filler" }));
     updateRowClass(r);
     return tr;
   }
@@ -415,6 +619,15 @@ export function createGrid(opts = {}) {
 
   function setData(data) {
     closeEditor(false);
+    // The rebuild below replaces the filter row; if the user is mid-typing in
+    // one of its inputs (the debounced reload path), losing focus after every
+    // keystroke-pause makes filters untypeable — put the caret back.
+    let refocus = null;
+    const active = document.activeElement;
+    if (active && thead.contains(active) && active.classList.contains("dbc-filter-val")) {
+      const cells = [...thead.querySelectorAll(".dbc-filter-cell")];
+      refocus = { idx: cells.indexOf(active.closest(".dbc-filter-cell")), pos: active.selectionStart };
+    }
     columns = normalizeColumns(data.columns);
     pk = Array.isArray(data.pk) ? data.pk.map(String) : [];
     startIndex = typeof data.startIndex === "number" ? data.startIndex : 1;
@@ -428,6 +641,10 @@ export function createGrid(opts = {}) {
       notice.hidden = true;
       notice.textContent = "";
     }
+    // A width belongs to a column that is still here; anything else is a
+    // leftover from an unrelated result set.
+    const names = new Set(shown.map((c) => c.name));
+    for (const name of [...widths.keys()]) if (!names.has(name)) widths.delete(name);
     rows = (data.rows || []).map((raw) => ({
       values: rowValues(raw, columns),
       edits: new Map(),
@@ -438,7 +655,22 @@ export function createGrid(opts = {}) {
     }));
     renderHead();
     renderBody();
+    // After the rows exist: the header cells are laid out, so their names can
+    // be measured and every column pinned to the width of its own.
+    measureDefaults();
     syncSelectAll();
+    if (refocus && refocus.idx >= 0) {
+      const cell = thead.querySelectorAll(".dbc-filter-cell")[refocus.idx];
+      const input = cell && cell.querySelector("input.dbc-filter-val");
+      if (input) {
+        input.focus();
+        try {
+          input.setSelectionRange(refocus.pos, refocus.pos);
+        } catch (e) {
+          /* selection is a nicety */
+        }
+      }
+    }
     emitChange();
   }
 
@@ -562,11 +794,22 @@ export function createGrid(opts = {}) {
     filtersShown = !!on;
     if (!filtersShown) filters = [];
     renderHead();
+    // The filter row's select + input need more than a short name does, so the
+    // defaults have a floor while it is showing (a width the user set stands).
+    measureDefaults();
   }
 
   function destroy() {
     closeEditor(false);
     root.remove();
+  }
+
+  /** Flip editing on/off after creation (read-only tables, ad-hoc results).
+   * Off also closes any open editor — a cell must not stay editable into a
+   * result set that can no longer be saved. */
+  function setEditable(on) {
+    if (!on) closeEditor(false);
+    o.editable = !!on;
   }
 
   return {
@@ -575,6 +818,7 @@ export function createGrid(opts = {}) {
     setSort,
     setFilters,
     showFilters,
+    setEditable,
     filtersVisible: () => filtersShown,
     getFilters: () => filters.slice(),
     insertRow,

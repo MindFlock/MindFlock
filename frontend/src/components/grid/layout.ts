@@ -4,7 +4,7 @@
 
 import type { Instance } from "../../api/types";
 import type { ViewMode } from "../../state/store";
-import { orderedInstances } from "../sidebar/ordering";
+import { orderedInstances, orderedKeys } from "../sidebar/ordering";
 
 /** Hard ceiling on simultaneously-rendered panes ("Auto" grows only to this). */
 export const MAX_VISIBLE = 9;
@@ -23,6 +23,17 @@ export interface VisibleOpts {
   order: string[];
 }
 
+/** Keep the `cap` most-recently-selected of `all`, in the ORDER GIVEN (the MRU
+ * decides who stays, never where they sit — a window must not jump around the
+ * grid because you looked at it). */
+function capTitles(all: string[], cap: number, mru: string[]): string[] {
+  if (all.length <= cap) return all;
+  const byMru = mru.filter((t) => all.includes(t));
+  const rest = all.filter((t) => !byMru.includes(t));
+  const chosen = new Set(byMru.concat(rest).slice(0, cap));
+  return all.filter((t) => chosen.has(t));
+}
+
 /** Which instances get a pane: hidden never; fixed views cap to the N
  * most-recently-selected (MRU, filled from stable order), displayed in
  * stable sidebar order. */
@@ -30,12 +41,33 @@ export function computeVisible(instances: Instance[], opts: VisibleOpts): Instan
   const { rows } = orderedInstances(instances, opts.order);
   const shown = rows.filter((i) => !opts.hidden.has(i.title));
   const cap = Math.min(viewCap(opts.viewMode), MAX_VISIBLE);
-  if (shown.length <= cap) return shown;
-  const shownTitles = shown.map((i) => i.title);
-  const byMru = opts.mru.filter((t) => shownTitles.includes(t));
-  const rest = shownTitles.filter((t) => !byMru.includes(t));
-  const chosen = new Set(byMru.concat(rest).slice(0, cap));
+  const chosen = new Set(capTitles(shown.map((i) => i.title), cap, opts.mru));
   return shown.filter((i) => chosen.has(i.title));
+}
+
+/** Every window that gets a slot, sessions and non-sessions together.
+ *
+ * `specialKeys` are the grid tokens of the windows that are not sessions — the
+ * assistant, the log tails, a verify watch, an extension's table. They used to
+ * be appended AFTER the cap, so "view: 1" showed one session plus however many
+ * of those happened to be open. A window is a window: they compete for the same
+ * slots, on the same MRU, and one of them is on screen at "1" only when it is
+ * the one you picked.
+ *
+ * Ordered over the UNION: the saved drag order holds window sentinels next to
+ * session titles (the rail interleaves them), so a window dragged between two
+ * sessions keeps that position here too — never-dragged windows still land
+ * after the sessions, exactly where the old append put them. */
+export function computeVisibleSlots(
+  instances: Instance[],
+  specialKeys: string[],
+  opts: VisibleOpts
+): string[] {
+  const all = orderedKeys(
+    instances.map((i) => i.title).concat(specialKeys),
+    opts.order
+  ).filter((t) => !opts.hidden.has(t));
+  return capTitles(all, Math.min(viewCap(opts.viewMode), MAX_VISIBLE), opts.mru);
 }
 
 /** Balanced default: 2 windows -> one row of two; 4 -> 2x2; etc. */

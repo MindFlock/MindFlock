@@ -22303,6 +22303,9 @@ function refreshAuthProfiles() {
 function refreshInstances() {
   return queryClient.invalidateQueries({ queryKey: ["instances"] });
 }
+function refreshRecentlyClosed() {
+  return queryClient.invalidateQueries({ queryKey: ["recently-closed"] });
+}
 function useTraffic(enabled, days = 90) {
   return useQuery({
     queryKey: ["traffic", days],
@@ -22597,6 +22600,11 @@ function humanSize(bytes) {
   if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
   return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
 }
+function pathBasename(p) {
+  const s = (p || "").replace(/[\\/]+$/, "");
+  const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+  return i >= 0 ? s.slice(i + 1) : s;
+}
 function copyText(text) {
   var _a2, _b2;
   if (!text) return Promise.resolve(false);
@@ -22748,16 +22756,26 @@ const DROP_PH = "\0drop";
 function viewCap(viewMode) {
   return viewMode === "auto" ? Infinity : parseInt(viewMode, 10);
 }
+function capTitles(all, cap, mru) {
+  if (all.length <= cap) return all;
+  const byMru = mru.filter((t) => all.includes(t));
+  const rest = all.filter((t) => !byMru.includes(t));
+  const chosen = new Set(byMru.concat(rest).slice(0, cap));
+  return all.filter((t) => chosen.has(t));
+}
 function computeVisible(instances2, opts) {
   const { rows } = orderedInstances(instances2, opts.order);
   const shown = rows.filter((i) => !opts.hidden.has(i.title));
   const cap = Math.min(viewCap(opts.viewMode), MAX_VISIBLE);
-  if (shown.length <= cap) return shown;
-  const shownTitles = shown.map((i) => i.title);
-  const byMru = opts.mru.filter((t) => shownTitles.includes(t));
-  const rest = shownTitles.filter((t) => !byMru.includes(t));
-  const chosen = new Set(byMru.concat(rest).slice(0, cap));
+  const chosen = new Set(capTitles(shown.map((i) => i.title), cap, opts.mru));
   return shown.filter((i) => chosen.has(i.title));
+}
+function computeVisibleSlots(instances2, specialKeys, opts) {
+  const all = orderedKeys(
+    instances2.map((i) => i.title).concat(specialKeys),
+    opts.order
+  ).filter((t) => !opts.hidden.has(t));
+  return capTitles(all, Math.min(viewCap(opts.viewMode), MAX_VISIBLE), opts.mru);
 }
 function balancedRows(titles) {
   const n = titles.length;
@@ -23047,6 +23065,9 @@ function save(key, value, stringify = true) {
   } catch {
   }
 }
+function windowKey(kind, ref2 = "") {
+  return kind === "logs" ? "\0mindflock-logs" : kind === "syslogs" ? "\0system-logs" : kind === "verify" ? "\0verify:" + ref2 : kind === "ext" ? "\0ext:" + ref2 : "\0assistant-chat";
+}
 const useUi = create((set, get) => ({
   focused: null,
   viewMode: load("cs_viewmode", "auto", false),
@@ -23054,11 +23075,13 @@ const useUi = create((set, get) => ({
   sidebarHidden: load("cs_sidebar", "", false) === "hidden",
   sidebarWidth: clampSidebarWidth(load("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
   order: load("cs_order", []),
+  railOrder: [],
   mru: load("cs_mru", []),
   filter: "",
   hidden: new Set(load("mf_hidden", [])),
   verifyPanes: [],
   extPanes: [],
+  specialOpen: [],
   bulkSelected: /* @__PURE__ */ new Set(),
   aliases: load("mf_aliases", {}),
   collapsedDevices: new Set(load("cs_devcollapse", [])),
@@ -23115,6 +23138,11 @@ const useUi = create((set, get) => ({
     save("cs_order", order);
     set({ order });
   },
+  setRailOrder: (keys) => {
+    const cur = get().railOrder;
+    if (cur.length === keys.length && cur.every((k, i) => k === keys[i])) return;
+    set({ railOrder: keys });
+  },
   moveInOrder: (title, before) => {
     const order = get().order.filter((t) => t !== title);
     const i = before === null ? order.length : order.indexOf(before);
@@ -23131,12 +23159,15 @@ const useUi = create((set, get) => ({
     set({ hidden: next });
   },
   openVerifyPane: (title) => {
-    if (!title || get().verifyPanes.includes(title)) return;
+    if (!title) return;
+    get().touchMru(windowKey("verify", title));
+    if (get().verifyPanes.includes(title)) return;
     set({ verifyPanes: [...get().verifyPanes, title] });
   },
   closeVerifyPane: (title) => set({ verifyPanes: get().verifyPanes.filter((t) => t !== title) }),
   openExtPane: (key, title) => {
     if (!key) return;
+    get().touchMru(windowKey("ext", key));
     const cur = get().extPanes;
     const existing = cur.find((p) => p.key === key);
     if (existing) {
@@ -23148,6 +23179,13 @@ const useUi = create((set, get) => ({
   },
   closeExtPane: (key) => set({ extPanes: get().extPanes.filter((p) => p.key !== key) }),
   retitleExtPane: (key, title) => set({ extPanes: get().extPanes.map((p) => p.key === key ? { ...p, title } : p) }),
+  toggleSpecial: (kind) => {
+    const cur = get().specialOpen;
+    if (!cur.includes(kind)) get().touchMru(windowKey(kind));
+    set({
+      specialOpen: cur.includes(kind) ? cur.filter((k) => k !== kind) : [...cur, kind]
+    });
+  },
   toggleBulk: (title) => {
     const next = new Set(get().bulkSelected);
     if (next.has(title)) next.delete(title);
@@ -23830,12 +23868,17 @@ function instances$1() {
 function selectSession(title, opts) {
   const ui = useUi.getState();
   ui.setHidden(title, false);
-  const visible = computeVisible(instances$1(), {
+  const windowKeys = [
+    ...ui.specialOpen.map((k) => windowKey(k)),
+    ...ui.verifyPanes.map((t) => windowKey("verify", t)),
+    ...ui.extPanes.map((p) => windowKey("ext", p.key))
+  ];
+  const visible = computeVisibleSlots(instances$1(), windowKeys, {
     hidden: ui.hidden,
     viewMode: ui.viewMode,
     mru: ui.mru,
     order: ui.order
-  }).map((i) => i.title);
+  });
   const focused = ui.focused;
   if (!visible.includes(title) && focused && focused !== title && visible.includes(focused)) {
     const keep = visible.filter((t) => t !== focused);
@@ -23848,6 +23891,21 @@ function selectSession(title, opts) {
   ui.touchMru(title);
   ui.setFocused(title);
   if (!(opts == null ? void 0 : opts.noKeyboard)) focusTerm(title);
+}
+function selectWindow(sent) {
+  useUi.getState().touchMru(sent);
+  requestAnimationFrame(() => {
+    for (const pane of document.querySelectorAll(".pane")) {
+      if (pane.getAttribute("data-title") === sent) {
+        pane.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        return;
+      }
+    }
+  });
+}
+function selectRailKey(key) {
+  if (key.startsWith("\0")) selectWindow(key);
+  else selectSession(key);
 }
 function requireGit() {
   if (caps().git) return true;
@@ -24596,24 +24654,46 @@ function nextStep(inst) {
       return null;
   }
 }
+function orderedKeys(keys, order) {
+  const present = new Set(keys);
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const k of order) {
+    if (present.has(k) && !seen.has(k)) {
+      out.push(k);
+      seen.add(k);
+    }
+  }
+  for (const k of keys) {
+    if (!seen.has(k)) {
+      out.push(k);
+      seen.add(k);
+    }
+  }
+  return out;
+}
 function orderedInstances(instances2, order) {
   if (!instances2.length) return { rows: [], nextOrder: order };
   const byTitle = new Map(instances2.map((i) => [i.title, i]));
-  const rows = [];
-  for (const t of order) {
-    const inst = byTitle.get(t);
-    if (inst) {
-      rows.push(inst);
-      byTitle.delete(t);
-    }
-  }
-  for (const i of instances2) {
-    if (byTitle.has(i.title)) {
-      rows.push(i);
-      byTitle.delete(i.title);
-    }
-  }
+  const rows = orderedKeys([...byTitle.keys()], order).map((t) => byTitle.get(t));
   return { rows, nextOrder: rows.map((i) => i.title) };
+}
+function movedRailOrder(opts) {
+  const { saved, live, drag, target, before, stale } = opts;
+  if (!drag || drag === target) return saved;
+  const seen = new Set(saved);
+  const order = saved.concat(live.filter((k) => !seen.has(k))).filter((k) => k !== drag && !(stale && stale(k)));
+  let to = order.indexOf(target);
+  if (to < 0) to = order.length;
+  else if (!before) to += 1;
+  order.splice(to, 0, drag);
+  const savedSet = new Set(saved);
+  while (order.length) {
+    const last = order[order.length - 1];
+    if (last !== drag && last.startsWith("\0") && !savedSet.has(last)) order.pop();
+    else break;
+  }
+  return order;
 }
 function orderWithAfter(order, title, after) {
   if (!title || !after || title === after) return order;
@@ -24725,6 +24805,17 @@ function slotNumber(title) {
   if (!raw) return "";
   try {
     const ui = useUi.getState();
+    const rail = ui.railOrder;
+    if (rail.length) {
+      let idx2 = rail.indexOf(raw);
+      if (idx2 < 0) {
+        const inst = snapshot().find(
+          (i) => i && i.display_title === raw
+        );
+        if (inst) idx2 = rail.indexOf(inst.title);
+      }
+      return idx2 >= 0 && idx2 < 9 ? String(idx2 + 1) : "";
+    }
     const listed = snapshot().filter(
       (i) => i && !isVerifySession(String(i.title || ""))
     );
@@ -24876,7 +24967,6 @@ function terminalFocused() {
 }
 const MODAL_DIALOG_NAMES = [
   "new-session",
-  "workspaces",
   "recent",
   "commit",
   "rename",
@@ -24893,7 +24983,6 @@ const MODAL_DIALOG_NAMES = [
 ];
 const MODAL_DOM_IDS = [
   "new-dialog",
-  "workspaces-dialog",
   "recent-dialog",
   "commit-dialog",
   "rename-dialog",
@@ -25093,17 +25182,17 @@ const KEYMAP = [
     key: "Tab",
     mod: "ctrl",
     id: "cycle",
-    help: ["Navigation", "Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous session"],
-    run: () => _host == null ? void 0 : _host.cycleSession(1)
+    help: ["Navigation", "Ctrl+Tab / Ctrl+Shift+Tab", "Next / previous window"],
+    run: () => _host == null ? void 0 : _host.cycleWindow(1)
   },
-  { key: "Tab", mod: "ctrl", shift: true, pairOf: "cycle", run: () => _host == null ? void 0 : _host.cycleSession(-1) },
+  { key: "Tab", mod: "ctrl", shift: true, pairOf: "cycle", run: () => _host == null ? void 0 : _host.cycleWindow(-1) },
   {
     key: "PageDown",
     mod: "ctrl",
-    help: ["Navigation", "Ctrl+PgDn / Ctrl+PgUp", "Next / previous session (also)"],
-    run: () => _host == null ? void 0 : _host.cycleSession(1)
+    help: ["Navigation", "Ctrl+PgDn / Ctrl+PgUp", "Next / previous window (also)"],
+    run: () => _host == null ? void 0 : _host.cycleWindow(1)
   },
-  { key: "PageUp", mod: "ctrl", run: () => _host == null ? void 0 : _host.cycleSession(-1) },
+  { key: "PageUp", mod: "ctrl", run: () => _host == null ? void 0 : _host.cycleWindow(-1) },
   {
     key: "/",
     id: "filter",
@@ -25145,7 +25234,10 @@ const KEYMAP = [
     key: "w",
     mod: true,
     id: "close",
-    help: ["Focused session", "Ctrl+W / Delete", "Close focused window (undo: Ctrl+Shift+T)"],
+    // "Session", not "window": the Alt+1..9 rows above use "window" for any
+    // rail row (the assistant, a log tail), and this one only ever ends the
+    // focused SESSION — a selected window never takes keyboard focus.
+    help: ["Focused session", "Ctrl+W / Delete", "End the focused session (undo: Ctrl+Shift+T)"],
     when: () => !!useUi.getState().focused && !modalOpen(),
     run: () => {
       const f = useUi.getState().focused;
@@ -25184,14 +25276,14 @@ const KEYMAP = [
   }
 ];
 "123456789".split("").forEach((d, i) => {
-  const when = () => !!(_host && _host.sessionAt(i));
+  const when = () => !!(_host && _host.rowAt(i));
   const run = () => {
-    const t = _host == null ? void 0 : _host.sessionAt(i);
-    if (t) selectSession(t);
+    const t = _host == null ? void 0 : _host.rowAt(i);
+    if (t) selectRailKey(t);
   };
-  const help = i === 0 ? ["Navigation", "Ctrl+1 … 9 / Alt+1 … 9", "Focus the Nth session"] : void 0;
-  KEYMAP.push({ key: d, mod: true, when, run, help, label: "Focus the Nth session" });
-  KEYMAP.push({ key: d, alt: true, when, run, label: "Focus the Nth session" });
+  const help = i === 0 ? ["Navigation", "Ctrl+1 … 9 / Alt+1 … 9", "Focus the Nth window"] : void 0;
+  KEYMAP.push({ key: d, mod: true, when, run, help, label: "Focus the Nth window" });
+  KEYMAP.push({ key: d, alt: true, when, run, label: "Focus the Nth window" });
 });
 function effBindings(b) {
   if (b.id && _keyOv.keys[b.id]) return _keyOv.keys[b.id];
@@ -26457,9 +26549,7 @@ function TopBar() {
   var _a2;
   const ui = useUi();
   const [light, setLight] = reactExports.useState(() => document.documentElement.classList.contains("light"));
-  const [recentOpen, setRecentOpen] = reactExports.useState(false);
   const [version2, setVersion] = reactExports.useState(engineVersion);
-  const dropRef = reactExports.useRef(null);
   const { data: testPlans } = useTestPlans();
   const due = dueCount((testPlans == null ? void 0 : testPlans.plans) || []);
   const [mac] = reactExports.useState(hasNativeWindowControls);
@@ -26490,22 +26580,6 @@ function TopBar() {
       live = false;
     };
   }, []);
-  reactExports.useEffect(() => {
-    if (!recentOpen) return;
-    const close = (e) => {
-      var _a3;
-      if (!((_a3 = dropRef.current) == null ? void 0 : _a3.contains(e.target))) setRecentOpen(false);
-    };
-    const onKey = (e) => {
-      if (e.key === "Escape") setRecentOpen(false);
-    };
-    document.addEventListener("click", close);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("click", close);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [recentOpen]);
   const toggleTheme = () => {
     const next = !light;
     setLight(next);
@@ -26607,53 +26681,17 @@ function TopBar() {
             ]
           }
         ),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tb-drop" + (recentOpen ? " open" : ""), id: "recent-menu", ref: dropRef, children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              type: "button",
-              className: "tb-item tb-drop-btn",
-              id: "recent-menu-btn",
-              "aria-haspopup": "true",
-              "aria-expanded": recentOpen,
-              title: "Reopen a recent session or manage workspaces on disk",
-              onClick: (e) => {
-                e.stopPropagation();
-                setRecentOpen((v) => !v);
-              },
-              children: "Recent"
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "tb-drop-panel", role: "menu", children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "button",
-              {
-                type: "button",
-                id: "recent-btn",
-                role: "menuitem",
-                onClick: () => {
-                  setRecentOpen(false);
-                  ui.openDialogFor("recent");
-                },
-                children: "Recently closed…"
-              }
-            ),
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "button",
-              {
-                type: "button",
-                id: "workspaces-btn",
-                role: "menuitem",
-                "data-caps": "git",
-                onClick: () => {
-                  setRecentOpen(false);
-                  ui.openDialogFor("workspaces");
-                },
-                children: "Workspaces on disk…"
-              }
-            )
-          ] })
-        ] }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            id: "recent-btn",
+            className: "tb-item",
+            type: "button",
+            title: "Recently closed — reopen closed work, or clear out what it left on disk",
+            onClick: () => ui.openDialogFor("recent"),
+            children: "Recent"
+          }
+        ),
         /* @__PURE__ */ jsxRuntimeExports.jsx(
           "button",
           {
@@ -26988,6 +27026,43 @@ function VoiceInput() {
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "mic-caption", className: caption == null ? "hidden" : "", children: caption || "" })
   ] });
 }
+const ROW_MIME = "application/x-mf-row";
+function rowDndProps(key, cbs, draggable = true) {
+  return {
+    draggable,
+    onDragStart: (ev) => {
+      ev.dataTransfer.setData(ROW_MIME, key);
+      ev.dataTransfer.setData("text/plain", key);
+      ev.dataTransfer.effectAllowed = "move";
+      cbs.onDragState(key);
+    },
+    onDragEnd: () => {
+      cbs.onDragState(null);
+      cbs.onDropCue(key, null);
+    },
+    onDragOver: (ev) => {
+      if (!ev.dataTransfer.types.includes(ROW_MIME)) return;
+      ev.preventDefault();
+      const rect = ev.currentTarget.getBoundingClientRect();
+      cbs.onDropCue(key, ev.clientY - rect.top < rect.height / 2 ? "above" : "below");
+    },
+    onDragLeave: (ev) => {
+      if (!ev.currentTarget.contains(ev.relatedTarget))
+        cbs.onDropCue(key, null);
+    },
+    onDrop: (ev) => {
+      if (!ev.dataTransfer.types.includes(ROW_MIME)) return;
+      ev.preventDefault();
+      const rect = ev.currentTarget.getBoundingClientRect();
+      cbs.onDropRow(
+        ev.dataTransfer.getData(ROW_MIME),
+        key,
+        ev.clientY - rect.top < rect.height / 2
+      );
+      cbs.onDropCue(key, null);
+    }
+  };
+}
 const DBLCLICK_MS = 300;
 function displayTitle(inst) {
   return inst.display_title || inst.title || "";
@@ -27072,37 +27147,12 @@ const SidebarRow = reactExports.memo(function SidebarRow2({
     {
       className: rowCls,
       "data-title": title,
-      draggable: !editing,
-      onDragStart: (ev) => {
-        ev.dataTransfer.setData("text/plain", title);
-        ev.dataTransfer.effectAllowed = "move";
-        onDragState(title);
-      },
-      onDragEnd: () => {
-        onDragState(null);
-        onDropCue(title, null);
-      },
-      onDragOver: (ev) => {
-        if (ev.dataTransfer.types.includes("application/x-mf-section")) return;
-        ev.preventDefault();
-        const rect = ev.currentTarget.getBoundingClientRect();
-        onDropCue(title, ev.clientY - rect.top < rect.height / 2 ? "above" : "below");
-      },
-      onDragLeave: (ev) => {
-        if (!ev.currentTarget.contains(ev.relatedTarget))
-          onDropCue(title, null);
-      },
-      onDrop: (ev) => {
-        if (ev.dataTransfer.types.includes("application/x-mf-section")) return;
-        ev.preventDefault();
-        const rect = ev.currentTarget.getBoundingClientRect();
-        onDropRow(
-          ev.dataTransfer.getData("text/plain"),
-          title,
-          ev.clientY - rect.top < rect.height / 2
-        );
-        onDropCue(title, null);
-      },
+      ...rowDndProps(
+        title,
+        { onDragState, onDropCue, onDropRow },
+        // Row drag would hijack text selection inside the rename input.
+        !editing
+      ),
       children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs(
           "div",
@@ -27335,6 +27385,67 @@ This also closes its ${ideName2} window. This cannot be undone.`
     }
   );
 });
+const FIXED_TITLES = {
+  logs: "MindFlock logs",
+  syslogs: "System logs",
+  chat: "Assistant"
+};
+function windowRows(s) {
+  return [
+    ...s.specialOpen.map((kind) => ({
+      key: windowKey(kind),
+      title: FIXED_TITLES[kind],
+      kind: "",
+      close: () => useUi.getState().toggleSpecial(kind)
+    })),
+    ...s.verifyPanes.map((session) => ({
+      key: windowKey("verify", session),
+      title: session,
+      kind: "verify",
+      // Closes the WINDOW; the verify run keeps going and the Verify dialog
+      // can reopen it for as long as the session exists.
+      close: () => useUi.getState().closeVerifyPane(session)
+    })),
+    ...s.extPanes.map((p) => ({
+      key: windowKey("ext", p.key),
+      title: p.title,
+      kind: "",
+      // Through the host, not the store: the keep-alive body behind the pane
+      // must be disposed along with its grid slot.
+      close: () => closeExtPaneByKey(p.key)
+    }))
+  ];
+}
+function WindowRowItem({ row, idx, onScreen, dropCue, ...dnd }) {
+  const num = idx < 9 ? String(idx + 1) : "";
+  return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "li",
+    {
+      className: "inst window-row" + (onScreen ? " active" : "") + (dropCue ? ` drop-${dropCue}` : ""),
+      "data-title": row.key,
+      ...rowDndProps(row.key, dnd),
+      children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "inst-row", onClick: () => selectWindow(row.key), children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "grip", title: "Drag to reorder", children: "⠿" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "idx", title: num ? `Ctrl+${num} / Alt+${num} to focus` : "", children: num }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "win-icon", "aria-hidden": "true", children: "▦" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "meta", children: /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", title: row.title, children: row.title }) }),
+        row.kind && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "stagechip win-kind", children: row.kind }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(
+          "button",
+          {
+            className: "kill",
+            title: "Close window",
+            onClick: (e) => {
+              e.stopPropagation();
+              row.close();
+            },
+            children: "✕"
+          }
+        )
+      ] })
+    }
+  );
+}
 function SessionFilter() {
   const filter = useUi((s) => s.filter);
   const setFilter = useUi((s) => s.setFilter);
@@ -28878,6 +28989,25 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
     () => allRows.filter((i) => matchesFilter(i, ui.filter, ui.aliases)),
     [allRows, ui.filter, ui.aliases]
   );
+  const windows = reactExports.useMemo(
+    () => windowRows({
+      specialOpen: ui.specialOpen,
+      verifyPanes: ui.verifyPanes,
+      extPanes: ui.extPanes
+    }),
+    [ui.specialOpen, ui.verifyPanes, ui.extPanes]
+  );
+  const winFiltered = reactExports.useMemo(
+    () => windows.filter((w) => !ui.filter || w.title.toLowerCase().includes(ui.filter)),
+    [windows, ui.filter]
+  );
+  const railKeys = reactExports.useMemo(
+    () => orderedKeys(
+      [...allRows.map((i) => i.title), ...windows.map((w) => w.key)],
+      ui.order
+    ),
+    [allRows, windows, ui.order]
+  );
   const onScreen = reactExports.useMemo(
     () => new Set(
       computeVisible(instances2, {
@@ -28909,14 +29039,23 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
     for (const d of remoteDevs) m.set(d.host || "", (m.get(d.host || "") || 0) + 1);
     return m;
   }, [devices, remoteDevs]);
-  const moveInOrder = (dragTitle, targetTitle, before) => {
-    if (!dragTitle || dragTitle === targetTitle) return;
-    const order = allRows.map((i) => i.title).filter((t) => t !== dragTitle);
-    let to = order.indexOf(targetTitle);
-    if (to < 0) to = order.length;
-    else if (!before) to += 1;
-    order.splice(to, 0, dragTitle);
-    ui.setOrder(order);
+  const openWins = reactExports.useMemo(() => new Set(windows.map((w) => w.key)), [windows]);
+  const moveInOrder = (dragKey, targetKey, before) => {
+    if (!dragKey || dragKey === targetKey) return;
+    ui.setOrder(
+      movedRailOrder({
+        saved: ui.order,
+        live: railKeys,
+        drag: dragKey,
+        target: targetKey,
+        before,
+        // Closed verify/ext panes don't survive a reload, so their sentinels
+        // must not pile up in the saved order. Session titles and the three
+        // fixed windows keep their slots even while absent — a sleeping remote
+        // device's rows, a closed assistant that reopens where you left it.
+        stale: (k) => (k.startsWith(windowKey("verify")) || k.startsWith(windowKey("ext"))) && !openWins.has(k)
+      })
+    );
   };
   const cueFor = (title) => dropCue && dropCue.title === title && dragging !== title ? dropCue.cue : null;
   const moveSection = (dragKey, targetKey, before) => {
@@ -28959,19 +29098,50 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
     onDropCue: (title, cue) => setDropCue(cue ? { title, cue } : null),
     onDropRow: moveInOrder
   };
+  const winOnScreen = new Set(ui.gridRows.flat());
+  const toRail = (sessionRows, wins) => {
+    const byKey = /* @__PURE__ */ new Map();
+    for (const i of sessionRows) byKey.set(i.title, { key: i.title, inst: i });
+    for (const w of wins) byKey.set(w.key, { key: w.key, win: w });
+    return railKeys.filter((k) => byKey.has(k)).map((k) => byKey.get(k));
+  };
+  const localRail = toRail(localRows, winFiltered);
+  const devRails = remoteDevs.map((dev) => {
+    const dkey = dev.device || dev.name;
+    return { dkey, rail: toRail(byDev.get(dkey) || [], []) };
+  });
+  const displayedKeys = grouped ? (ui.collapsedDevices.has("__self") ? [] : localRail.map((r) => r.key)).concat(
+    ...devRails.map(
+      ({ dkey, rail }) => ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key)
+    )
+  ) : localRail.map((r) => r.key);
+  const railSig = JSON.stringify(displayedKeys);
+  reactExports.useEffect(() => {
+    useUi.getState().setRailOrder(displayedKeys);
+  }, [railSig]);
   let rowIdx = -1;
-  const renderRows = (list) => list.map((inst) => {
+  const renderRail = (list) => list.map((r) => {
     rowIdx += 1;
-    return /* @__PURE__ */ jsxRuntimeExports.jsx(
+    return r.inst ? /* @__PURE__ */ jsxRuntimeExports.jsx(
       SidebarRow,
       {
-        inst,
+        inst: r.inst,
         idx: rowIdx,
-        onScreen: onScreen.has(inst.title),
-        dropCue: cueFor(inst.title),
+        onScreen: onScreen.has(r.key),
+        dropCue: cueFor(r.key),
         ...rowProps
       },
-      inst.title
+      r.key
+    ) : /* @__PURE__ */ jsxRuntimeExports.jsx(
+      WindowRowItem,
+      {
+        row: r.win,
+        idx: rowIdx,
+        onScreen: winOnScreen.has(r.key),
+        dropCue: cueFor(r.key),
+        ...rowProps
+      },
+      r.key
     );
   });
   const cap = viewCap(ui.viewMode);
@@ -29041,8 +29211,8 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
                       onToggle: () => ui.toggleDeviceCollapsed("__self")
                     }
                   ),
-                  !ui.collapsedDevices.has("__self") && renderRows(localRows),
-                  remoteDevs.map((dev) => {
+                  !ui.collapsedDevices.has("__self") && renderRail(localRail),
+                  remoteDevs.map((dev, di) => {
                     const devRows = byDev.get(dev.device || dev.name) || [];
                     const dkey = dev.device || dev.name;
                     const collapsed = ui.collapsedDevices.has(dkey);
@@ -29079,13 +29249,13 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
                         note,
                         connectBtn,
                         onToggle: () => ui.toggleDeviceCollapsed(dkey),
-                        children: !collapsed && renderRows(devRows)
+                        children: !collapsed && renderRail(devRails[di].rail)
                       },
                       dkey
                     );
                   })
-                ] }) : renderRows(localRows),
-                ui.filter && !filtered.length && /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { className: "filter-empty muted", children: [
+                ] }) : renderRail(localRail),
+                ui.filter && !filtered.length && !winFiltered.length && /* @__PURE__ */ jsxRuntimeExports.jsxs("li", { className: "filter-empty muted", children: [
                   "No sessions match “",
                   ui.filter,
                   "”"
@@ -30798,7 +30968,21 @@ function Pane({
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "grip", title: "Drag to move this window", children: "⠿" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", children: displayName2 }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "stagechip s-missing", title: "Workspace directory no longer exists", children: "missing workspace" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state", children: "workspace gone" })
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state", children: "workspace gone" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "head-tail", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                className: "act pane-close",
+                type: "button",
+                "aria-label": "Hide window",
+                title: "Hide this window (show it again from its sidebar row)",
+                onClick: (e) => {
+                  e.stopPropagation();
+                  useUi.getState().setHidden(title, true);
+                },
+                children: "✕"
+              }
+            ) })
           ] }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-body", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "missing-body", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("p", { children: "Workspace directory no longer exists." }),
@@ -30833,7 +31017,21 @@ function Pane({
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "grip", title: "Drag to move this window", children: "⠿" }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", children: displayName2 }),
             /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "branch", children: inst.branch ? "(" + displayBranch(inst) + ")" : "" }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state", children: "provisioning…" })
+            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state", children: "provisioning…" }),
+            /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "head-tail", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                className: "act pane-close",
+                type: "button",
+                "aria-label": "Hide window",
+                title: "Hide this window — provisioning keeps going (show it again from its sidebar row)",
+                onClick: (e) => {
+                  e.stopPropagation();
+                  useUi.getState().setHidden(title, true);
+                },
+                children: "✕"
+              }
+            ) })
           ] }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-body", children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "provisioning", children: [
             /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "spinner" }),
@@ -30975,82 +31173,98 @@ function Pane({
           /* @__PURE__ */ jsxRuntimeExports.jsx(AccountChip, { inst }),
           /* @__PURE__ */ jsxRuntimeExports.jsx(SessionUsageChip, { inst }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state" + (wsState !== "connected" ? " state-bad" : ""), children: wsState }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              className: "act copyhist",
-              type: "button",
-              title: "Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)",
-              onClick: (e) => {
-                e.stopPropagation();
-                setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
-              },
-              children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
-                "svg",
-                {
-                  width: "12",
-                  height: "12",
-                  viewBox: "0 0 24 24",
-                  fill: "none",
-                  stroke: "currentColor",
-                  strokeWidth: "2",
-                  strokeLinecap: "round",
-                  strokeLinejoin: "round",
-                  "aria-hidden": "true",
-                  children: [
-                    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M12 8v4l2 2" }),
-                    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
-                    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M3 22v-6h6" })
-                  ]
-                }
-              )
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              className: "act copyhist",
-              type: "button",
-              title: "Copy this pane's whole history to the clipboard",
-              onClick: (e) => {
-                e.stopPropagation();
-                const which = tab === "shell" ? "shell" : "agent";
-                fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${which}`).then((r) => {
-                  if (!r.ok)
-                    return r.text().then((t) => {
-                      throw new Error(t || "HTTP " + r.status);
-                    });
-                  return r.text();
-                }).then((text) => {
-                  if (!text.trim()) {
-                    toast("No history to copy");
-                    return;
+          /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "head-tail", children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                className: "act copyhist",
+                type: "button",
+                title: "Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)",
+                onClick: (e) => {
+                  e.stopPropagation();
+                  setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
+                },
+                children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  "svg",
+                  {
+                    width: "12",
+                    height: "12",
+                    viewBox: "0 0 24 24",
+                    fill: "none",
+                    stroke: "currentColor",
+                    strokeWidth: "2",
+                    strokeLinecap: "round",
+                    strokeLinejoin: "round",
+                    "aria-hidden": "true",
+                    children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M12 8v4l2 2" }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M3 22v-6h6" })
+                    ]
                   }
-                  copyText(text).then(
-                    (ok) => toast(ok ? `Copied full ${which} history (${text.length} chars)` : "Copy failed")
-                  );
-                }).catch((err) => toast("History copy failed: " + err.message));
-              },
-              children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
-                "svg",
-                {
-                  width: "12",
-                  height: "12",
-                  viewBox: "0 0 24 24",
-                  fill: "none",
-                  stroke: "currentColor",
-                  strokeWidth: "2",
-                  strokeLinecap: "round",
-                  strokeLinejoin: "round",
-                  "aria-hidden": "true",
-                  children: [
-                    /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }),
-                    /* @__PURE__ */ jsxRuntimeExports.jsx("rect", { x: "8", y: "2", width: "8", height: "4", rx: "1" })
-                  ]
-                }
-              )
-            }
-          )
+                )
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                className: "act copyhist",
+                type: "button",
+                title: "Copy this pane's whole history to the clipboard",
+                onClick: (e) => {
+                  e.stopPropagation();
+                  const which = tab === "shell" ? "shell" : "agent";
+                  fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${which}`).then((r) => {
+                    if (!r.ok)
+                      return r.text().then((t) => {
+                        throw new Error(t || "HTTP " + r.status);
+                      });
+                    return r.text();
+                  }).then((text) => {
+                    if (!text.trim()) {
+                      toast("No history to copy");
+                      return;
+                    }
+                    copyText(text).then(
+                      (ok) => toast(ok ? `Copied full ${which} history (${text.length} chars)` : "Copy failed")
+                    );
+                  }).catch((err) => toast("History copy failed: " + err.message));
+                },
+                children: /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                  "svg",
+                  {
+                    width: "12",
+                    height: "12",
+                    viewBox: "0 0 24 24",
+                    fill: "none",
+                    stroke: "currentColor",
+                    strokeWidth: "2",
+                    strokeLinecap: "round",
+                    strokeLinejoin: "round",
+                    "aria-hidden": "true",
+                    children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }),
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("rect", { x: "8", y: "2", width: "8", height: "4", rx: "1" })
+                    ]
+                  }
+                )
+              }
+            ),
+            /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "button",
+              {
+                className: "act pane-close",
+                type: "button",
+                "aria-label": "Hide window",
+                title: "Hide this window — the session keeps running (show it again from its sidebar row)",
+                onClick: (e) => {
+                  e.stopPropagation();
+                  useUi.getState().setHidden(title, true);
+                },
+                children: "✕"
+              }
+            )
+          ] })
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pane-body", ref: bodyRef, children: [
           /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pane-term agent-term" + (tab !== "agent" ? " hidden" : ""), ref: adopt("agent"), children: [
@@ -31410,16 +31624,35 @@ function SpecialPane({ desc, drag }) {
       ref: paneRef,
       className: "pane focused " + (desc.kind === "logs" ? "logs-pane" : desc.kind === "syslogs" ? "syslogs-pane" : desc.kind === "verify" ? "verify-pane" : desc.kind === "ext" ? "ext-pane" : "chat-pane"),
       "data-title": title,
+      onMouseDown: () => selectWindow(title),
       ...paneDrag,
       children: [
         desc.kind === "verify" && /* @__PURE__ */ jsxRuntimeExports.jsx(VerifyBody, { desc, headDrag }),
-        desc.kind === "logs" && /* @__PURE__ */ jsxRuntimeExports.jsx(LogsBody, { desc, headDrag }),
-        desc.kind === "syslogs" && /* @__PURE__ */ jsxRuntimeExports.jsx(SysLogsBody, { desc, headDrag }),
-        desc.kind === "chat" && /* @__PURE__ */ jsxRuntimeExports.jsx(ChatBody, { desc, headDrag }),
+        desc.kind === "logs" && /* @__PURE__ */ jsxRuntimeExports.jsx(LogsBody, { headDrag }),
+        desc.kind === "syslogs" && /* @__PURE__ */ jsxRuntimeExports.jsx(SysLogsBody, { headDrag }),
+        desc.kind === "chat" && /* @__PURE__ */ jsxRuntimeExports.jsx(ChatBody, { headDrag }),
         desc.kind === "ext" && /* @__PURE__ */ jsxRuntimeExports.jsx(ExtBody, { desc, headDrag })
       ]
     }
   );
+}
+function CloseBtn({ desc }) {
+  return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "head-tail", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+    "button",
+    {
+      className: "act pane-close",
+      type: "button",
+      "aria-label": "Close window",
+      title: "Close window",
+      onClick: (e) => {
+        e.stopPropagation();
+        if (desc.kind === "verify") useUi.getState().closeVerifyPane(desc.session || "");
+        else if (desc.kind === "ext") closeExtPaneByKey(desc.extKey || "");
+        else useUi.getState().toggleSpecial(desc.kind);
+      },
+      children: "✕"
+    }
+  ) });
 }
 function VerifyBody({ desc, headDrag }) {
   const hostRef = reactExports.useRef(null);
@@ -31435,37 +31668,24 @@ function VerifyBody({ desc, headDrag }) {
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", children: "Verifying" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "branch", children: session }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state", children: state }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "actions", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "button",
-          {
-            className: "act verify-pane-back",
-            title: "Back to Verify (Alt+V)",
-            onClick: (e) => {
-              e.stopPropagation();
-              useUi.getState().openDialogFor("verify");
-            },
-            children: "Verify"
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "button",
-          {
-            className: "act verify-pane-close",
-            title: "Close this window — the run keeps going",
-            onClick: (e) => {
-              e.stopPropagation();
-              desc.onClose();
-            },
-            children: "Close"
-          }
-        )
-      ] })
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "actions", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+        "button",
+        {
+          className: "act verify-pane-back",
+          title: "Back to Verify (Alt+V)",
+          onClick: (e) => {
+            e.stopPropagation();
+            useUi.getState().openDialogFor("verify");
+          },
+          children: "Verify"
+        }
+      ) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(CloseBtn, { desc })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-body", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-term", ref: hostRef }) })
   ] });
 }
-function LogsBody({ desc, headDrag }) {
+function LogsBody({ headDrag }) {
   const hostRef = reactExports.useRef(null);
   const state = useWsTerm(hostRef, "/api/mindflock/logs", false);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
@@ -31474,15 +31694,12 @@ function LogsBody({ desc, headDrag }) {
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", children: "MindFlock logs" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "branch", children: "logs/mindflock-ui.log" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state", children: state }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "actions", children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "act logs-close", title: "Close logs", onClick: (e) => {
-        e.stopPropagation();
-        desc.onClose();
-      }, children: "Close" }) })
+      /* @__PURE__ */ jsxRuntimeExports.jsx(CloseBtn, { desc: { kind: "logs" } })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-body", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-term", ref: hostRef }) })
   ] });
 }
-function ChatBody({ desc, headDrag }) {
+function ChatBody({ headDrag }) {
   const hostRef = reactExports.useRef(null);
   const state = useWsTerm(hostRef, "/api/assistant/terminal", true);
   return /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
@@ -31490,10 +31707,7 @@ function ChatBody({ desc, headDrag }) {
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "grip", title: "Drag to move this window", children: "⠿" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", children: "Assistant" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state", children: state }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "actions", children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "act chat-close", title: "Close chat", onClick: (e) => {
-        e.stopPropagation();
-        desc.onClose();
-      }, children: "Close" }) })
+      /* @__PURE__ */ jsxRuntimeExports.jsx(CloseBtn, { desc: { kind: "chat" } })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-body", children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-term", ref: hostRef }) })
   ] });
@@ -31511,50 +31725,37 @@ function ExtBody({ desc, headDrag }) {
     /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "pane-head", ...headDrag, children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "grip", title: "Drag to move this window", children: "⠿" }),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "title", children: desc.title }),
-      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "actions", children: [
-        backCommand && /* @__PURE__ */ jsxRuntimeExports.jsxs(
-          "button",
-          {
-            className: "act ext-pane-back",
-            title: backTitle || "Back",
-            onClick: (e) => {
-              e.stopPropagation();
-              void runCommand(extId, backCommand);
-            },
-            children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { width: "10", height: "10", viewBox: "0 0 10 10", "aria-hidden": "true", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
-                "path",
-                {
-                  d: "M6.5 1.5 3 5l3.5 3.5",
-                  fill: "none",
-                  stroke: "currentColor",
-                  strokeWidth: "1.5",
-                  strokeLinecap: "round",
-                  strokeLinejoin: "round"
-                }
-              ) }),
-              "Back"
-            ]
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(
-          "button",
-          {
-            className: "act ext-pane-close",
-            title: "Close this window",
-            onClick: (e) => {
-              e.stopPropagation();
-              desc.onClose();
-            },
-            children: "Close"
-          }
-        )
-      ] })
+      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "actions", children: backCommand && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+        "button",
+        {
+          className: "act ext-pane-back",
+          title: backTitle || "Back",
+          onClick: (e) => {
+            e.stopPropagation();
+            void runCommand(extId, backCommand);
+          },
+          children: [
+            /* @__PURE__ */ jsxRuntimeExports.jsx("svg", { width: "10", height: "10", viewBox: "0 0 10 10", "aria-hidden": "true", children: /* @__PURE__ */ jsxRuntimeExports.jsx(
+              "path",
+              {
+                d: "M6.5 1.5 3 5l3.5 3.5",
+                fill: "none",
+                stroke: "currentColor",
+                strokeWidth: "1.5",
+                strokeLinecap: "round",
+                strokeLinejoin: "round"
+              }
+            ) }),
+            "Back"
+          ]
+        }
+      ) }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(CloseBtn, { desc })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-body", children: /* @__PURE__ */ jsxRuntimeExports.jsx(ExtPaneBody, { extKey }) })
   ] });
 }
-function SysLogsBody({ desc, headDrag }) {
+function SysLogsBody({ headDrag }) {
   const [sources, setSources] = reactExports.useState([]);
   const [selected, setSelected] = reactExports.useState("server");
   const [text, setText] = reactExports.useState("Loading…");
@@ -31608,10 +31809,7 @@ function SysLogsBody({ desc, headDrag }) {
         }
       ),
       /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "state", children: meta }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "actions", children: /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "act syslogs-close", title: "Close logs", onClick: (e) => {
-        e.stopPropagation();
-        desc.onClose();
-      }, children: "Close" }) })
+      /* @__PURE__ */ jsxRuntimeExports.jsx(CloseBtn, { desc: { kind: "syslogs" } })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "pane-body", children: /* @__PURE__ */ jsxRuntimeExports.jsx("pre", { className: "syslogs-view", ref: viewRef, children: text }) })
   ] });
@@ -31628,24 +31826,26 @@ function TerminalGrid({ specialPanes }) {
     () => (instances2 || []).filter((i) => !isVerifySession(i.title)),
     [instances2]
   );
-  const visible = reactExports.useMemo(
-    () => computeVisible(workable, {
-      hidden: ui.hidden,
-      viewMode: ui.viewMode,
-      mru: ui.mru,
-      order: ui.order
-    }),
-    [workable, ui.hidden, ui.viewMode, ui.mru, ui.order]
-  );
-  const byTitle = reactExports.useMemo(() => new Map(visible.map((i) => [i.title, i])), [visible]);
   const specialByKey = reactExports.useMemo(
     () => new Map(specialPanes.map((p) => [sentinel(p.kind, sentinelRef(p)), p])),
     [specialPanes]
   );
   const slotTitles = reactExports.useMemo(
-    () => visible.map((i) => i.title).concat([...specialByKey.keys()]),
-    [visible, specialByKey]
+    () => computeVisibleSlots(workable, [...specialByKey.keys()], {
+      hidden: ui.hidden,
+      viewMode: ui.viewMode,
+      mru: ui.mru,
+      order: ui.order
+    }),
+    [workable, specialByKey, ui.hidden, ui.viewMode, ui.mru, ui.order]
   );
+  const byTitle = reactExports.useMemo(() => {
+    const all = new Map(workable.map((i) => [i.title, i]));
+    return new Map(
+      slotTitles.filter((t) => all.has(t)).map((t) => [t, all.get(t)])
+    );
+  }, [workable, slotTitles]);
+  const visible = reactExports.useMemo(() => [...byTitle.values()], [byTitle]);
   const rows = reactExports.useMemo(() => {
     if (!isSuccess) return ui.gridRows;
     return reconcileGridRows(ui.gridRows, slotTitles);
@@ -31757,7 +31957,7 @@ function TerminalGrid({ specialPanes }) {
   );
 }
 function sentinel(kind, ref2 = "") {
-  return kind === "logs" ? "\0mindflock-logs" : kind === "syslogs" ? "\0system-logs" : kind === "verify" ? "\0verify:" + ref2 : kind === "ext" ? "\0ext:" + ref2 : "\0assistant-chat";
+  return windowKey(kind, ref2);
 }
 async function sendMessagePrompt(title) {
   const text = window.prompt("Send a message to " + displayName(title) + ":");
@@ -39061,7 +39261,7 @@ function fmtPct(part, whole) {
   if (!whole) return "—";
   return (part / whole * 100).toFixed(1) + "%";
 }
-function plural(n, word) {
+function plural$1(n, word) {
   return `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
 }
 const CHART_W = 640;
@@ -39309,7 +39509,7 @@ function VisitorsChart({ days }) {
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "traffic-tooltip", "aria-live": "polite", children: hovered ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
       /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: fmtDate(hovered.day) }),
       " — ",
-      plural(hovered.visitors, "visitor"),
+      plural$1(hovered.visitors, "visitor"),
       /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "traffic-tooltip-detail", children: [
         " ",
         "(",
@@ -41302,7 +41502,10 @@ function NewPlanBar({
         className: "test-btn",
         disabled: !!busy || !candidates.length,
         onClick: () => void write(),
-        children: busy ? "Writing…" : "Write it"
+        children: busy ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "btn-spin", "aria-hidden": "true" }),
+          " Writing…"
+        ] }) : "Write it"
       }
     ),
     /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "set-hint", children: reason || "Reads the branch's diff and writes a checklist of what to check." })
@@ -41795,7 +41998,10 @@ function CommitDialog() {
                     disabled: writing,
                     "aria-busy": writing || void 0,
                     title: "Read the diff and write the commit message, using this session's coding CLI. Replaces what's in the box.",
-                    children: writing ? "Writing…" : "✨ Write it"
+                    children: writing ? /* @__PURE__ */ jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, { children: [
+                      /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "btn-spin", "aria-hidden": "true" }),
+                      " Writing…"
+                    ] }) : "✨ Write it"
                   }
                 )
               ] }),
@@ -42253,15 +42459,148 @@ function SortPicker({
     )
   ] });
 }
-const SORTS$1 = [
-  { key: "name", label: "Name", defaultDir: "asc", asc: "A → Z", desc: "Z → A" },
+function entryLabel(e, alias = "") {
+  return alias || e.branch || e.title || e.name || "(untitled)";
+}
+function rowSortValue(e, key, alias = "") {
+  if (key === "name") return entryLabel(e, alias);
+  if (key === "size") return e.size_bytes ?? null;
+  return e.last_used ?? null;
+}
+function rowSearchFields(e, alias = "") {
+  return [
+    alias,
+    e.branch,
+    e.title,
+    e.name,
+    e.path,
+    e.kind,
+    e.in_place ? "in-place" : "",
+    e.provisioned ? "provisioned" : "",
+    e.exists ? "" : "worktree gone",
+    e.stale ? "unused" : "",
+    e.source === "disk" ? "on disk" : "closed"
+  ];
+}
+function dirNote(e, alias = "") {
+  const base = pathBasename(e.path || "");
+  if (!base) return "";
+  const shown = entryLabel(e, alias);
+  return shown.includes(base) || base === e.title ? "" : base;
+}
+function sumBytes(rows) {
+  const seen = /* @__PURE__ */ new Set();
+  let total = 0;
+  for (const e of rows) {
+    const key = e.path || e.id;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    total += e.size_bytes || 0;
+  }
+  return total;
+}
+function staleDays(e, nowMs = Date.now()) {
+  if (!e.last_used) return null;
+  return Math.floor(Math.max(0, nowMs / 1e3 - e.last_used) / 86400);
+}
+function closedMs(e) {
+  if (!e.closed_at) return null;
+  const t = new Date(e.closed_at).getTime();
+  return isNaN(t) ? null : t;
+}
+function whenText(e) {
+  if (e.source === "closed") {
+    const ms = closedMs(e);
+    return ms ? "closed " + relTime(ms / 1e3) : "";
+  }
+  return e.last_used ? "used " + relTime(e.last_used) : "";
+}
+function whenTitle(e) {
+  const ms = closedMs(e);
+  return [
+    ms ? "Closed " + new Date(ms).toLocaleString() : "",
+    e.last_used ? "Last touched " + new Date(e.last_used * 1e3).toLocaleString() : ""
+  ].filter(Boolean).join("\n");
+}
+const plural = (n, one, many = one + "s") => n === 1 ? one : many;
+function nothingMessage(r) {
+  const k = r.kept || { active: [], recent: 0, not_worktree: 0, protected: 0 };
+  const outside = k.outside_root || 0;
+  const days = Math.round(r.days);
+  const parts = [];
+  if (k.active.length)
+    parts.push(
+      `${k.active.length} in use by a running session (${k.active.join(", ")})`
+    );
+  if (k.recent) parts.push(`${k.recent} used within the last ${days} days`);
+  if (k.not_worktree)
+    parts.push(
+      `${k.not_worktree} that ${plural(k.not_worktree, "is", "are")} not a worktree — a repository or a clone, which this never removes`
+    );
+  if (outside)
+    parts.push(
+      `${outside} outside MindFlock's own worktrees folder (one you made yourself — never removed from here)`
+    );
+  if (k.protected) parts.push(`${k.protected} protected base ${plural(k.protected, "clone")}`);
+  return `No unused worktrees to remove.
+
+` + (parts.length ? "Kept: " + parts.join("; ") + "." : `Nothing is older than ${days} days.`);
+}
+function pruneMessage(r) {
+  const n = r.candidates.length;
+  const days = Math.round(r.days);
+  const size = r.total_bytes ? ` (${humanSize(r.total_bytes)})` : "";
+  const dirty = r.dirty_count || 0;
+  return `Delete ${n} unused ${plural(n, "worktree")}${size}?
+
+` + previewList(r.candidates.map((c) => c.name)) + `
+
+Only worktrees git generated are ever removed — never a repository, a clone, or a folder git did not make. Left alone: anything a session is using, and anything touched in the last ${days} days.
+
+Each branch and its commits stay in the repository the worktree came from, so it is the checkout that goes, not the work. Files git ignores (build output, a local database, the .env copied in at setup) go with it.` + (dirty ? `
+
+${dirty} of ${plural(n, "it", "them")} ${plural(dirty, "has", "have")} uncommitted changes, which would be lost — asked about separately.` : "") + `
+
+This cannot be undone.`;
+}
+function dirtyMessage(r) {
+  const dirty = r.candidates.filter((c) => c.dirty);
+  const clean = r.candidates.length - dirty.length;
+  if (!clean) {
+    return `All ${dirty.length} unused ${plural(dirty.length, "worktree")} ${plural(dirty.length, "has", "have")} uncommitted changes. Delete ${plural(dirty.length, "it", "them")} anyway?
+
+` + previewList(dirty.map((c) => c.name)) + `
+
+Committed work stays on the branch; these changes do not.
+
+This cannot be undone.`;
+  }
+  return `Include the ${dirty.length} ${plural(dirty.length, "worktree")} with uncommitted changes?
+
+` + previewList(dirty.map((c) => c.name)) + `
+
+OK — delete all ${r.candidates.length}.
+Cancel — delete only the ${clean} that ${plural(clean, "is", "are")} clean.`;
+}
+function prunedMessage(r) {
+  const n = r.removed_count || 0;
+  const bits = [
+    n ? `Removed ${n} ${plural(n, "worktree")}` : "Removed nothing",
+    r.freed_bytes ? humanSize(r.freed_bytes) + " freed" : "",
+    r.kept_dirty && r.kept_dirty.length ? `kept ${r.kept_dirty.length} with uncommitted work` : "",
+    r.failed && r.failed.length ? `${r.failed.length} failed` : ""
+  ];
+  return bits.filter(Boolean).join(" · ");
+}
+const SORTS = [
   {
     key: "date",
-    label: "Last modified",
+    label: "Last used",
     defaultDir: "desc",
     asc: "oldest first",
     desc: "newest first"
   },
+  { key: "name", label: "Branch / name", defaultDir: "asc", asc: "A → Z", desc: "Z → A" },
   {
     key: "size",
     label: "Size on disk",
@@ -42270,47 +42609,54 @@ const SORTS$1 = [
     desc: "largest first"
   }
 ];
-function isProtected(w) {
-  return w.kind === "base" || w.kind === "refresher";
+function deletable(e) {
+  return e.exists && !e.in_place && !!e.path && !e.active_session;
 }
-function WorkspacesDialog() {
-  const open = useUi((s) => s.openDialog === "workspaces");
+function RecentDialog() {
+  var _a2;
+  const open = useUi((s) => s.openDialog === "recent");
   const closeDialog = useUi((s) => s.closeDialog);
-  const [ws, setWs] = reactExports.useState(null);
-  const [total, setTotal] = reactExports.useState("");
+  const aliases = useUi((s) => s.aliases);
+  const [data, setData] = reactExports.useState(null);
   const [error, setError] = reactExports.useState("");
-  const [clearBusy, setClearBusy] = reactExports.useState(false);
+  const [busy, setBusy] = reactExports.useState(false);
   const [query, setQuery] = reactExports.useState("");
-  const sort = useSortPref("mf_sort_workspaces", SORTS$1);
+  const sort = useSortPref("mf_sort_recent", SORTS);
   const seq = reactExports.useRef(0);
-  const load2 = reactExports.useCallback(async () => {
+  const load2 = reactExports.useCallback(async (keepError = false) => {
     const mySeq = ++seq.current;
-    setError("");
-    setWs(null);
-    let data;
+    if (!keepError) setError("");
+    setData(null);
+    let first;
     try {
-      data = await api("/api/workspaces");
-    } catch (e) {
-      setWs([]);
-      setError(e.message);
+      first = await api("/api/recent");
+    } catch (err) {
+      if (mySeq !== seq.current) return;
+      setError(err.message);
+      setData({
+        rows: [],
+        stale_days: 7,
+        hidden: {
+          protected: 0,
+          protected_names: [],
+          protected_bytes: 0,
+          active: 0,
+          active_titles: []
+        },
+        roots: []
+      });
       return;
     }
     if (mySeq !== seq.current) return;
-    const list = data.workspaces || [];
-    setWs(list);
-    setTotal(list.length + " dir" + (list.length === 1 ? "" : "s"));
+    setData(first);
     let sized;
     try {
-      sized = await api("/api/workspaces?sizes=1");
+      sized = await api("/api/recent?sizes=1");
     } catch {
       return;
     }
     if (mySeq !== seq.current) return;
-    const byPath2 = new Map((sized.workspaces || []).map((s) => [s.path, s.size_bytes || 0]));
-    let sum = 0;
-    for (const v of byPath2.values()) sum += v;
-    setWs(list.map((w) => ({ ...w, size_bytes: byPath2.get(w.path) ?? w.size_bytes })));
-    setTotal(list.length + " dir" + (list.length === 1 ? "" : "s") + " · " + humanSize(sum));
+    setData(sized);
   }, []);
   reactExports.useEffect(() => {
     if (open) load2();
@@ -42318,333 +42664,136 @@ function WorkspacesDialog() {
   reactExports.useEffect(() => {
     if (!open) setQuery("");
   }, [open]);
-  const sorted = reactExports.useMemo(
-    () => sortRows(
-      ws || [],
-      (w) => sort.pref.key === "name" ? w.name : sort.pref.key === "size" ? w.size_bytes : w.mtime,
-      sort.pref.dir
-    ),
-    [ws, sort.pref]
-  );
-  const shown = reactExports.useMemo(() => {
-    const tokens = searchTokens(query);
-    return sorted.filter((w) => matchesTokens([w.name, w.path, w.kind, w.active_session], tokens));
-  }, [sorted, query]);
-  const byPath = reactExports.useMemo(() => new Map((ws || []).map((w) => [w.path, w])), [ws]);
-  const selectable = reactExports.useMemo(
-    () => sorted.filter((w) => !isProtected(w)).map((w) => w.path),
-    [sorted]
-  );
-  const selectableShown = reactExports.useMemo(
-    () => shown.filter((w) => !isProtected(w)).map((w) => w.path),
-    [shown]
-  );
-  const sel = useRowSelection(selectable, selectableShown);
-  if (!open) return null;
-  const picked = sel.keys.map((p) => byPath.get(p)).filter(Boolean);
-  const delSelected = async () => {
-    if (!picked.length) return;
-    const active = picked.filter((w) => w.active_session);
-    const sized = picked.filter((w) => w.size_bytes != null);
-    const sum = sized.reduce((n, w) => n + (w.size_bytes || 0), 0);
-    const msg = `Permanently delete ${picked.length} workspace${picked.length === 1 ? "" : "s"}` + (sized.length ? ` (${humanSize(sum)}${sized.length < picked.length ? "+" : ""})` : "") + "?\n\n" + previewList(picked.map((w) => w.name)) + "\n" + (active.length ? `
-${active.length} of these ${active.length === 1 ? "is an ACTIVE session" : "are ACTIVE sessions"} (${active.map((w) => w.active_session).join(", ")}) — ${active.length === 1 ? "it" : "they"} will be killed first.
-` : "") + "\nThis cannot be undone.";
-    if (!confirm(msg)) return;
-    setError("");
-    setClearBusy(true);
-    const results = await Promise.all(
-      picked.map(
-        (w) => api("/api/workspaces/delete", { json: { path: w.path } }).then(() => "").catch((e) => e.message)
-      )
-    );
-    setClearBusy(false);
-    const failed = results.filter(Boolean);
-    if (failed.length) setError(`${failed.length} delete(s) failed: ${failed[0]}`);
-    toast(`Deleted ${results.length - failed.length}/${results.length} workspace(s)`);
-    sel.clear();
-    await load2();
-    refreshInstances();
-  };
-  const del = async (w) => {
-    const szNote = w.size_bytes == null ? "" : " (" + humanSize(w.size_bytes) + ")";
-    let msg = `Permanently delete '${w.name}'${szNote}?`;
-    if (w.active_session)
-      msg = `'${w.name}' is the ACTIVE session '${w.active_session}'. Kill it and delete the directory?`;
-    else if (w.kind === "base")
-      msg = "This is the shared base clone — deleting it forces a fresh clone on the next worktree session. Continue?";
-    else if (w.kind === "refresher")
-      msg = "This is the cache refresher workspace — deleting it re-seeds the test cache on the next refresh. Continue?";
-    if (!confirm(msg + "\nThis cannot be undone.")) return;
-    try {
-      await api("/api/workspaces/delete", { json: { path: w.path } });
-    } catch (e) {
-      alert("Delete failed: " + e.message);
-      return;
-    }
-    await load2();
-    refreshInstances();
-  };
-  const clearAll = async () => {
-    if (!confirm(
-      "Delete ALL unprotected, idle workspaces?\n\nKept: protected base clones / cache refreshers, and any workspace with a running session.\n" + // The filter narrows the LIST, not the sweep — a user who filtered to
-      // three rows and then hit this button would otherwise lose everything.
-      (query ? "\nThe filter does not limit this — every unprotected, idle workspace goes.\n" : "") + "\nThis cannot be undone."
-    ))
-      return;
-    setError("");
-    setClearBusy(true);
-    let r;
-    try {
-      r = await api("/api/workspaces/clear", { json: {} });
-    } catch (e) {
-      setError(e.message);
-      setClearBusy(false);
-      return;
-    }
-    setClearBusy(false);
-    const n = (r == null ? void 0 : r.removed_count) || 0;
-    const kept = (r == null ? void 0 : r.kept_active) || [];
-    let msg = n ? `Removed ${n} workspace${n === 1 ? "" : "s"}` : "Nothing to remove";
-    if (kept.length) msg += ` · kept ${kept.length} active session${kept.length === 1 ? "" : "s"}`;
-    toast(msg);
-    await load2();
-    refreshInstances();
-  };
-  return /* @__PURE__ */ jsxRuntimeExports.jsx(
-    "div",
-    {
-      id: "workspaces-dialog",
-      className: "modal",
-      onClick: (e) => {
-        if (e.target === e.currentTarget) closeDialog();
-      },
-      children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "workspaces-panel", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ws-head", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { children: "Workspaces on disk" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("span", { id: "ws-total", className: "muted", children: query && total ? `${shown.length} of ${total}` : total }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            "button",
-            {
-              type: "button",
-              id: "ws-clear",
-              title: "Delete all unprotected, idle workspaces (keeps protected dirs and any running session)",
-              disabled: clearBusy,
-              onClick: clearAll,
-              children: "Clear unprotected"
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "ws-refresh", onClick: load2, children: "Refresh" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "ws-close", onClick: closeDialog, children: "Close" })
-        ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dlg-filter-row", children: [
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            SelectAllCheck,
-            {
-              state: sel.allState,
-              onChange: sel.setAllVisible,
-              label: "Select every deletable workspace shown"
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            DialogFilter,
-            {
-              id: "ws-filter",
-              value: query,
-              onChange: setQuery,
-              placeholder: "Filter by name, path, or session…  ( Ctrl+F )",
-              onEscape: closeDialog
-            }
-          ),
-          /* @__PURE__ */ jsxRuntimeExports.jsx(
-            SortPicker,
-            {
-              id: "ws-sort",
-              options: SORTS$1,
-              pref: sort.pref,
-              onKey: sort.setKey,
-              onFlip: sort.flip
-            }
-          )
-        ] }),
-        !!picked.length && /* @__PURE__ */ jsxRuntimeExports.jsx(
-          BulkRowBar,
-          {
-            count: picked.length,
-            hiddenCount: sel.hiddenCount,
-            noun: "workspace",
-            onClear: sel.clear,
-            children: /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "button",
-              {
-                type: "button",
-                className: "danger",
-                title: "Permanently delete the selected workspaces",
-                disabled: clearBusy,
-                onClick: delSelected,
-                children: "Delete selected"
-              }
-            )
-          }
-        ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "ws-list", children: ws === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "Loading…" }) : !shown.length && !error ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: query && ws.length ? `No workspace matches “${query}”.` : "No workspace directories on disk." }) : shown.map((w) => {
-          const prot = isProtected(w);
-          return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ws-row" + (sel.has(w.path) ? " picked" : ""), children: [
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              RowCheck,
-              {
-                checked: sel.has(w.path),
-                disabled: prot,
-                title: prot ? "Protected — cannot be deleted" : "Select (Shift-click to extend the range)",
-                onToggle: (shift) => sel.toggle(w.path, shift)
-              }
-            ),
-            /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ws-info", children: [
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-name", title: w.path, children: w.name }),
-              /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: w.kind }),
-              w.active_session && /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "ws-badge active", children: [
-                "active: ",
-                w.active_session
-              ] })
-            ] }),
-            /* @__PURE__ */ jsxRuntimeExports.jsx(
-              "span",
-              {
-                className: "ws-when muted",
-                title: w.mtime ? "Modified " + new Date(w.mtime * 1e3).toLocaleString() : "",
-                children: w.mtime ? relTime(w.mtime) : ""
-              }
-            ),
-            /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-size", children: w.size_bytes == null ? "…" : humanSize(w.size_bytes) }),
-            prot ? /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-protected", title: "Protected — needed by the engine", children: "protected" }) : /* @__PURE__ */ jsxRuntimeExports.jsx("button", { className: "ws-del", onClick: () => del(w), children: "Delete" })
-          ] }, w.path);
-        }) }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("p", { id: "ws-error", className: "error", children: error })
-      ] })
-    }
-  );
-}
-function fmtClosedAt(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? "" : d.toLocaleString();
-}
-function closedMs(e) {
-  if (!e.closed_at) return null;
-  const t = new Date(e.closed_at).getTime();
-  return isNaN(t) ? null : t;
-}
-function entryLabel(e, alias = "") {
-  return alias || e.branch || e.title || "(untitled)";
-}
-const SORTS = [
-  {
-    key: "date",
-    label: "Date closed",
-    defaultDir: "desc",
-    asc: "oldest first",
-    desc: "newest first"
-  },
-  { key: "name", label: "Branch / name", defaultDir: "asc", asc: "A → Z", desc: "Z → A" }
-];
-function RecentDialog() {
-  const open = useUi((s) => s.openDialog === "recent");
-  const closeDialog = useUi((s) => s.closeDialog);
-  const aliases = useUi((s) => s.aliases);
-  const [list, setList] = reactExports.useState(null);
-  const [error, setError] = reactExports.useState("");
-  const [query, setQuery] = reactExports.useState("");
-  const sort = useSortPref("mf_sort_recent", SORTS);
-  const load2 = reactExports.useCallback(async () => {
-    try {
-      const data2 = await api("/api/recently-closed");
-      setError("");
-      setList(Array.isArray(data2) ? data2 : []);
-    } catch (e) {
-      setError(e.message);
-    }
-  }, []);
-  reactExports.useEffect(() => {
-    if (open) load2();
-  }, [open, load2]);
-  reactExports.useEffect(() => {
-    if (!open) setQuery("");
-  }, [open]);
-  const all = list || [];
+  const all = (data == null ? void 0 : data.rows) || [];
   const aliasOf = reactExports.useCallback(
     (e) => e.title && aliases[e.title] || "",
     [aliases]
   );
   const sorted = reactExports.useMemo(
-    () => sortRows(
-      all,
-      (e) => sort.pref.key === "name" ? entryLabel(e, aliasOf(e)) : closedMs(e),
-      sort.pref.dir
-    ),
+    () => sortRows(all, (e) => rowSortValue(e, sort.pref.key, aliasOf(e)), sort.pref.dir),
     [all, sort.pref, aliasOf]
   );
-  const data = reactExports.useMemo(() => {
+  const shown = reactExports.useMemo(() => {
     const tokens = searchTokens(query);
-    return sorted.filter(
-      (e) => matchesTokens(
-        [
-          aliasOf(e),
-          e.branch,
-          e.title,
-          e.folder,
-          e.in_place ? "in-place" : "",
-          e.provisioned ? "provisioned" : "",
-          e.exists ? "" : "worktree gone"
-        ],
-        tokens
-      )
-    );
+    return sorted.filter((e) => matchesTokens(rowSearchFields(e, aliasOf(e)), tokens));
   }, [sorted, query, aliasOf]);
   const byId = reactExports.useMemo(() => new Map(all.map((e) => [e.id, e])), [all]);
   const sel = useRowSelection(
     reactExports.useMemo(() => sorted.map((e) => e.id), [sorted]),
-    reactExports.useMemo(() => data.map((e) => e.id), [data])
+    reactExports.useMemo(() => shown.map((e) => e.id), [shown])
+  );
+  const totalBytes = reactExports.useMemo(() => sumBytes(all), [all]);
+  const staleCount = reactExports.useMemo(
+    () => new Set(all.filter((e) => e.stale).map((e) => e.path)).size,
+    [all]
   );
   if (!open) return null;
   const picked = sel.keys.map((id) => byId.get(id)).filter(Boolean);
   const label = (e) => entryLabel(e, aliasOf(e));
-  const runBulk = async (wipe, verb) => {
-    const targets = wipe ? picked.filter((e) => e.exists && !e.in_place) : picked;
+  const hidden = data == null ? void 0 : data.hidden;
+  const hiddenNote = [
+    (hidden == null ? void 0 : hidden.protected) ? `${hidden.protected} protected` + (hidden.protected_bytes ? ` (${humanSize(hidden.protected_bytes)})` : "") : "",
+    (hidden == null ? void 0 : hidden.active) ? `${hidden.active} in use` : ""
+  ].filter(Boolean).join(" + ");
+  const removeOne = (e) => e.source === "closed" ? api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, {
+    json: { wipe: true }
+  }) : api("/api/workspaces/delete", { json: { path: e.path } });
+  const runBulk = async (targets, verb, act) => {
     if (!targets.length) return;
+    setBusy(true);
     const results = await Promise.all(
       targets.map(
-        (e) => api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, { json: { wipe } }).then(() => "").catch((err) => err.message)
+        (e) => act(e).then(() => "").catch((err) => err.message)
       )
     );
+    setBusy(false);
     const failed = results.filter(Boolean);
     if (failed.length) setError(`${failed.length} ${verb} failed: ${failed[0]}`);
-    toast(`${verb} ${results.length - failed.length}/${results.length} session(s)`);
+    toast(`${verb} ${results.length - failed.length}/${results.length} item(s)`);
     sel.clear();
-    load2();
+    await load2(failed.length > 0);
+    refreshInstances();
+    refreshRecentlyClosed();
   };
-  const wipeSelected = async () => {
-    const targets = picked.filter((e) => e.exists && !e.in_place);
+  const deleteSelected = async () => {
+    const targets = picked.filter(deletable);
     const skipped = picked.length - targets.length;
     if (!targets.length) {
       alert(
-        "None of the selected sessions has a worktree to wipe — they are in-place or already gone.\n\nUse Forget to drop them from this list."
+        "None of the selected rows has a directory this app may delete — an in-place session runs in your own repo, and the others are already gone or still in use by a running session.\n\nUse Forget to drop a closed session from this list."
       );
       return;
     }
-    const msg = `Permanently delete ${targets.length} worktree${targets.length === 1 ? "" : "s"}?
-
-` + previewList(targets.map(label)) + "\n" + (skipped ? `
-${skipped} selected row${skipped === 1 ? " is" : "s are"} in-place or already gone and will be left alone.
-` : "") + "\nThis cannot be undone.";
+    const sized = targets.filter((e) => e.size_bytes != null);
+    const sum = sumBytes(sized);
+    const msg = `Permanently delete ${targets.length} director${targets.length === 1 ? "y" : "ies"}` + (sized.length ? ` (${humanSize(sum)}${sized.length < targets.length ? "+" : ""})` : "") + "?\n\n" + previewList(targets.map(label)) + "\n" + (skipped ? `
+${skipped} selected row${skipped === 1 ? " has" : "s have"} no directory this app may delete (an in-place session runs in your own repo, and one may be gone already or still in use by a running session) — ${skipped === 1 ? "it" : "they"} will be left alone.
+` : "") + (targets.every((e) => e.worktree) ? "\nA worktree's branch and commits stay in the repository it came from; anything uncommitted, and anything git ignores, does not.\n" : "\nSome of these are clones, not worktrees — for those, everything goes with the directory, committed or not.\n") + "\nThis cannot be undone.";
     if (!confirm(msg)) return;
-    await runBulk(true, "Wiped");
+    await runBulk(targets, "Deleted", removeOne);
   };
   const forgetSelected = async () => {
-    const msg = `Forget ${picked.length} closed session${picked.length === 1 ? "" : "s"}?
+    const targets = picked.filter((e) => e.source === "closed");
+    if (!targets.length) {
+      alert(
+        "None of the selected rows is a closed session — there is nothing to forget.\n\nUse Delete to remove a leftover directory from disk."
+      );
+      return;
+    }
+    const msg = `Forget ${targets.length} closed session${targets.length === 1 ? "" : "s"}?
 
-` + previewList(picked.map(label)) + "\n\nWorktrees stay on disk; the rows leave this list, so Reopen is no longer offered.";
+` + previewList(targets.map(label)) + "\n\nThe directories stay on disk (they come back as on-disk rows); the sessions leave this list, so Reopen is no longer offered.";
     if (!confirm(msg)) return;
-    await runBulk(false, "Forgot");
+    await runBulk(
+      targets,
+      "Forgot",
+      (e) => api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, {
+        json: { wipe: false }
+      })
+    );
+  };
+  const pruneUnused = async () => {
+    var _a3, _b2, _c2;
+    setError("");
+    setBusy(true);
+    let pre;
+    try {
+      pre = await api("/api/workspaces/prune-worktrees", {
+        json: { dry_run: true }
+      });
+    } catch (err) {
+      setBusy(false);
+      setError(err.message);
+      return;
+    }
+    setBusy(false);
+    if (!((_a3 = pre.candidates) == null ? void 0 : _a3.length)) {
+      alert(nothingMessage(pre));
+      return;
+    }
+    if (!confirm(pruneMessage(pre))) return;
+    let includeDirty = false;
+    if (pre.dirty_count) {
+      includeDirty = confirm(dirtyMessage(pre));
+      if (!includeDirty && pre.dirty_count === pre.candidates.length) return;
+    }
+    setBusy(true);
+    let done;
+    try {
+      done = await api("/api/workspaces/prune-worktrees", {
+        json: { dry_run: false, include_dirty: includeDirty }
+      });
+    } catch (err) {
+      setBusy(false);
+      setError(err.message);
+      return;
+    }
+    setBusy(false);
+    toast(prunedMessage(done));
+    if ((_b2 = done.failed) == null ? void 0 : _b2.length) setError(`Could not remove: ${done.failed.join(", ")}`);
+    await load2(!!((_c2 = done.failed) == null ? void 0 : _c2.length));
+    refreshInstances();
+    refreshRecentlyClosed();
   };
   return /* @__PURE__ */ jsxRuntimeExports.jsx(
     "div",
@@ -42657,12 +42806,37 @@ ${skipped} selected row${skipped === 1 ? " is" : "s are"} in-place or already go
       children: /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { id: "recent-panel", children: [
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "ws-head", children: [
           /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { children: "Recently closed" }),
-          /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { id: "recent-total", className: "muted", children: [
-            query ? `${data.length} of ${all.length}` : data.length,
-            " session",
-            (query ? all.length : data.length) === 1 ? "" : "s"
-          ] }),
-          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "recent-refresh", onClick: load2, children: "Refresh" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "span",
+            {
+              id: "recent-total",
+              className: "muted",
+              title: ((_a2 = hidden == null ? void 0 : hidden.protected_names) == null ? void 0 : _a2.length) ? "Not listed (protected, the engine needs them): " + hidden.protected_names.join(", ") : "",
+              children: [
+                query ? `${shown.length} of ${all.length}` : all.length,
+                " item",
+                (query ? all.length : shown.length) === 1 ? "" : "s",
+                totalBytes ? ` · ${humanSize(totalBytes)}` : "",
+                hiddenNote ? ` · ${hiddenNote} hidden` : ""
+              ]
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsxs(
+            "button",
+            {
+              type: "button",
+              id: "recent-prune",
+              "data-caps": "git",
+              title: `Delete every worktree no session is using and nothing has touched in ${Math.round((data == null ? void 0 : data.stale_days) ?? 7)} days. Repositories and clones are never touched.`,
+              disabled: busy,
+              onClick: pruneUnused,
+              children: [
+                "Remove unused worktrees",
+                staleCount ? ` (${staleCount})` : ""
+              ]
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "recent-refresh", onClick: () => load2(), children: "Refresh" }),
           /* @__PURE__ */ jsxRuntimeExports.jsx("button", { type: "button", id: "recent-close", onClick: closeDialog, children: "Close" })
         ] }),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "dlg-filter-row", children: [
@@ -42671,7 +42845,7 @@ ${skipped} selected row${skipped === 1 ? " is" : "s are"} in-place or already go
             {
               state: sel.allState,
               onChange: sel.setAllVisible,
-              label: "Select every session shown"
+              label: "Select every row shown"
             }
           ),
           /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -42700,14 +42874,15 @@ ${skipped} selected row${skipped === 1 ? " is" : "s are"} in-place or already go
           {
             count: picked.length,
             hiddenCount: sel.hiddenCount,
-            noun: "session",
+            noun: "row",
             onClear: sel.clear,
             children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(
                 "button",
                 {
                   type: "button",
-                  title: "Drop the selected rows from this list (worktrees stay on disk)",
+                  title: "Drop the selected closed sessions from this list (directories stay on disk)",
+                  disabled: busy,
                   onClick: forgetSelected,
                   children: "Forget selected"
                 }
@@ -42717,17 +42892,19 @@ ${skipped} selected row${skipped === 1 ? " is" : "s are"} in-place or already go
                 {
                   type: "button",
                   className: "danger",
-                  title: "Permanently delete the selected sessions' worktrees",
-                  onClick: wipeSelected,
-                  children: "Wipe worktrees"
+                  title: "Permanently delete the selected directories",
+                  disabled: busy,
+                  onClick: deleteSelected,
+                  children: "Delete from disk"
                 }
               )
             ]
           }
         ),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "recent-list", children: list === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "Loading…" }) : !data.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: query && all.length ? `No closed session matches “${query}”.` : "No recently closed sessions." }) : data.map((e) => {
+        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { id: "recent-list", children: data === null ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: "Loading…" }) : !shown.length ? /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "muted", children: query && all.length ? `Nothing matches “${query}”.` : "No closed sessions, and nothing left on disk." }) : shown.map((e) => {
           const gone = !e.exists;
           const a = aliasOf(e);
+          const days = e.stale ? staleDays(e) : null;
           return /* @__PURE__ */ jsxRuntimeExports.jsxs(
             "div",
             {
@@ -42750,7 +42927,7 @@ ${skipped} selected row${skipped === 1 ? " is" : "s are"} in-place or already go
                         a ? "Saved name: " + a : "",
                         e.branch ? "Branch: " + e.branch : "",
                         e.title ? "Session: " + e.title : "",
-                        e.folder || ""
+                        e.path || ""
                       ].filter(Boolean).join("\n"),
                       children: label(e)
                     }
@@ -42758,18 +42935,44 @@ ${skipped} selected row${skipped === 1 ? " is" : "s are"} in-place or already go
                   /* @__PURE__ */ jsxRuntimeExports.jsxs("span", { className: "recent-sub", children: [
                     a && e.branch && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-slug muted", children: e.branch }),
                     e.title && (a || e.branch) && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-slug muted", children: e.title }),
+                    dirNote(e, a) && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-slug muted", children: dirNote(e, a) }),
+                    e.kind && e.kind !== "in-place" && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: e.kind }),
                     e.in_place && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "in-place" }),
                     e.provisioned && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge kind", children: "provisioned" }),
                     gone && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "ws-badge gone", children: "worktree gone" }),
-                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-when muted", children: fmtClosedAt(e.closed_at) })
+                    e.active_session && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                      "span",
+                      {
+                        className: "ws-badge active",
+                        title: "A running session is still working in this directory",
+                        children: [
+                          "in use: ",
+                          e.active_session
+                        ]
+                      }
+                    ),
+                    e.stale && /* @__PURE__ */ jsxRuntimeExports.jsxs(
+                      "span",
+                      {
+                        className: "ws-badge stale",
+                        title: "No session is using this and nothing has touched it for over a week — Remove unused worktrees would take it",
+                        children: [
+                          "unused ",
+                          days,
+                          "d"
+                        ]
+                      }
+                    ),
+                    /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-when muted", title: whenTitle(e), children: whenText(e) }),
+                    e.size_bytes != null && /* @__PURE__ */ jsxRuntimeExports.jsx("span", { className: "recent-size muted", children: humanSize(e.size_bytes) })
                   ] })
                 ] }),
                 /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "recent-actions", children: [
-                  /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  e.source === "closed" && /* @__PURE__ */ jsxRuntimeExports.jsx(
                     "button",
                     {
                       className: "recent-reopen",
-                      disabled: gone,
+                      disabled: gone || busy,
                       onClick: async () => {
                         try {
                           const inst = await api(
@@ -42787,43 +42990,48 @@ ${skipped} selected row${skipped === 1 ? " is" : "s are"} in-place or already go
                       children: "Reopen"
                     }
                   ),
-                  !e.in_place && !gone && /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  deletable(e) && /* @__PURE__ */ jsxRuntimeExports.jsx(
                     "button",
                     {
                       className: "recent-wipe danger",
+                      disabled: busy,
+                      title: e.worktree ? "Permanently delete this worktree directory (its branch and commits stay in the repository it came from)" : "Permanently delete this directory",
                       onClick: async () => {
                         if (!confirm(
-                          `Permanently delete the worktree for '${label(e)}'?
-This cannot be undone.`
+                          `Permanently delete '${label(e)}'` + (e.size_bytes != null ? ` (${humanSize(e.size_bytes)})` : "") + "?\nThis cannot be undone."
                         ))
                           return;
                         try {
-                          await api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, {
-                            json: { wipe: true }
-                          });
+                          await removeOne(e);
                         } catch (err) {
-                          alert("Wipe failed: " + err.message);
+                          alert("Delete failed: " + err.message);
                           return;
                         }
                         load2();
+                        refreshInstances();
+                        refreshRecentlyClosed();
                       },
-                      children: "Wipe worktree"
+                      children: "Delete"
                     }
                   ),
-                  /* @__PURE__ */ jsxRuntimeExports.jsx(
+                  e.source === "closed" && /* @__PURE__ */ jsxRuntimeExports.jsx(
                     "button",
                     {
                       className: "recent-forget",
+                      disabled: busy,
+                      title: "Drop this closed session from the list (its directory stays on disk)",
                       onClick: async () => {
                         try {
-                          await api(`/api/recently-closed/${encodeURIComponent(e.id)}/forget`, {
-                            json: { wipe: false }
-                          });
+                          await api(
+                            `/api/recently-closed/${encodeURIComponent(e.id)}/forget`,
+                            { json: { wipe: false } }
+                          );
                         } catch (err) {
                           alert("Forget failed: " + err.message);
                           return;
                         }
                         load2();
+                        refreshRecentlyClosed();
                       },
                       children: "Forget"
                     }
@@ -42911,7 +43119,7 @@ function PromptsDialog() {
     setText("");
     toast(`Added prompt “${n}”`);
   };
-  const section = (label, items, deletable, kind) => items.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+  const section = (label, items, deletable2, kind) => items.length ? /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "prompts-group-label", children: label }),
     items.map((p) => {
       const key = kind + ":" + p.name;
@@ -42946,7 +43154,7 @@ function PromptsDialog() {
             children: "⋮"
           }
         ),
-        deletable && /* @__PURE__ */ jsxRuntimeExports.jsx(
+        deletable2 && /* @__PURE__ */ jsxRuntimeExports.jsx(
           "button",
           {
             type: "button",
@@ -44328,7 +44536,7 @@ function App() {
       followAutopilot(inst);
     }
   }, [instances2]);
-  const [openSpecial, setOpenSpecial] = reactExports.useState(/* @__PURE__ */ new Set());
+  const specialOpen = useUi((s) => s.specialOpen);
   const verifyPanes = useUi((s) => s.verifyPanes);
   const extPanes = useUi((s) => s.extPanes);
   const extQuery = useExtensions();
@@ -44343,49 +44551,37 @@ function App() {
       if (!live.has(session)) useUi.getState().closeVerifyPane(session);
     }
   }, [instances2, verifyPanes]);
-  const toggleSpecial = reactExports.useCallback((kind) => {
-    setOpenSpecial((prev) => {
-      const next = new Set(prev);
-      if (next.has(kind)) next.delete(kind);
-      else next.add(kind);
-      return next;
-    });
-  }, []);
+  const toggleSpecial = reactExports.useCallback(
+    (kind) => useUi.getState().toggleSpecial(kind),
+    []
+  );
   const specialPanes = reactExports.useMemo(() => {
     const meta = {
       logs: { title: "MindFlock logs" },
       syslogs: { title: "System logs" },
       chat: { title: "Assistant" }
     };
-    const fixed = [...openSpecial].map((kind) => ({
+    const fixed = specialOpen.map((kind) => ({
       key: kind,
       kind,
-      title: meta[kind].title,
-      onClose: () => toggleSpecial(kind)
+      title: meta[kind].title
     }));
     const runs = verifyPanes.map((session) => ({
       key: "verify:" + session,
       kind: "verify",
       title: session,
-      session,
-      onClose: () => useUi.getState().closeVerifyPane(session)
+      session
     }));
     const ext = extPanes.map((p) => ({
       key: "ext:" + p.key,
       kind: "ext",
       title: p.title,
-      extKey: p.key,
-      onClose: () => closeExtPaneByKey(p.key)
+      extKey: p.key
     }));
     return fixed.concat(runs, ext);
-  }, [openSpecial, toggleSpecial, verifyPanes, extPanes]);
+  }, [specialOpen, verifyPanes, extPanes]);
   const host2 = reactExports.useMemo(() => {
-    const stableTitles = () => {
-      const order = useUi.getState().order;
-      const list = instances$1().map((i) => i.title).filter((t) => !isVerifySession(t));
-      const known2 = order.filter((t) => list.includes(t));
-      return [...known2, ...list.filter((t) => !known2.includes(t))];
-    };
+    const stableKeys = () => useUi.getState().railOrder;
     const toggleDialog = (name) => {
       const s = useUi.getState();
       if (s.openDialog === name) s.closeDialog();
@@ -44398,14 +44594,15 @@ function App() {
         var _a3;
         return (_a3 = document.getElementById("session-filter")) == null ? void 0 : _a3.focus();
       },
-      cycleSession: (dir) => {
-        const titles = stableTitles();
-        if (!titles.length) return;
-        const cur = useUi.getState().focused;
-        const i = cur ? titles.indexOf(cur) : -1;
-        selectSession(titles[(i + dir + titles.length) % titles.length]);
+      cycleWindow: (dir) => {
+        const keys = stableKeys();
+        if (!keys.length) return;
+        const s = useUi.getState();
+        const cur = keys.includes(s.mru[0]) ? s.mru[0] : s.focused;
+        const i = cur ? keys.indexOf(cur) : -1;
+        selectRailKey(keys[(i + dir + keys.length) % keys.length]);
       },
-      sessionAt: (index) => stableTitles()[index] ?? null,
+      rowAt: (index) => stableKeys()[index] ?? null,
       openDoctor: () => useUi.getState().openDialogFor("settings", "doctor")
     };
   }, []);
@@ -44431,7 +44628,6 @@ function App() {
     /* @__PURE__ */ jsxRuntimeExports.jsx(MakePrDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(RenameDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(DeviceDialog, {}),
-    /* @__PURE__ */ jsxRuntimeExports.jsx(WorkspacesDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(RecentDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(PromptsDialog, {}),
     /* @__PURE__ */ jsxRuntimeExports.jsx(SetupDialog, {}),

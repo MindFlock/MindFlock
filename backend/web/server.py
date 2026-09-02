@@ -217,14 +217,21 @@ from backend.web.core.repo_picker import (
     suggest_repos,
 )
 from backend.web.core.workspaces import (
+    STALE_WORKTREE_DAYS,
     _base_clone_references,
     _classify_workspace,
     _dir_size_bytes,
     _find_worktrees,
+    _prune_empty_worktree_dirs,
     _remove_worktree_path,
     _strictly_under,
     _workspace_roots,
+    _worktree_gitdir,
     _worktree_in_use_by_other,
+    _worktree_repo_path,
+    prune_stale_worktrees,
+    recent_rows,
+    scan_workspaces,
 )
 from backend.web.core.budget import (
     _BUDGET_FIRED,
@@ -2573,15 +2580,21 @@ def _autopilot_written_message(title: str, wt: str, rec: dict) -> str:
     and the caller falls back to the placeholder.
     """
     inst = ENGINE.instances.get(title)
+    # The intake item this run came from ("sc-1421-fix-login"), plus its NAME when
+    # the run is an intake one — a ticket / PR / issue title is what the work was
+    # asked to be, which is real context. The ⏩ button's own placeholder ("Work on
+    # ft-session") is not, so rec["message"] is only borrowed for intake sources.
+    hint = str(rec.get("item") or "")
+    if rec.get("source") in ("tix", "pr", "iss"):
+        named = str(rec.get("message") or "").strip()
+        if named and named != hint:
+            hint = ("%s — %s" % (hint, named)) if hint else named
     return (
         _commit_message.suggest_or_none(
             wt,
             program=str(getattr(inst, "Program", "") or ""),
             timeout=_commit_message.TIMEOUT_AUTOPILOT,
-            # The intake item this run came from ("sc-1421-fix-login") is real
-            # context; the placeholder subject built from it is not, so the hint is
-            # the item and never rec["message"].
-            hint=str(rec.get("item") or ""),
+            hint=hint,
             branch=_current_branch(wt) or "",
             fallback_program=ENGINE.default_program(),
         )
@@ -2598,10 +2611,11 @@ def _autopilot_commit(title, wt, rec, detail, fields) -> bool:
                 msg = fh.read().strip()
         except OSError:
             msg = ""
-    # A message the ARM ROUTE invented ("Work on ft-session") is worth replacing
-    # now that the diff exists and is final — that placeholder describes the
-    # session, not the change. A message a human typed or an intake item named is
-    # not touched, and neither is the on-disk one a blocked commit left behind.
+    # A placeholder — the arm route's "Work on ft-session", or the ticket / PR /
+    # issue name an intake run carries — is worth replacing now that the diff
+    # exists and is final: both describe the session or the request, not the
+    # change that was actually made. A message a HUMAN typed is not touched, and
+    # neither is the on-disk one a blocked commit left behind.
     #
     # On success the result is written back to the record so a pre-commit retry
     # commits the same sentence instead of paying for a second turn. A failure
@@ -5436,6 +5450,13 @@ def _arm_intake_autopilot(
             source=source,
             item=item,
             message=message,
+            # The intake message is the ITEM'S name ("Fix login redirect loop"),
+            # which is the work as REQUESTED, not the change as MADE — and it is
+            # identical for every commit a multi-commit run makes. So it is a
+            # placeholder like the ⏩ button's: good enough to commit under if
+            # nothing better arrives, and replaced at commit time by a message
+            # written from the final diff (the ✨ button's generator).
+            message_auto=bool(message),
             retryable=_precommit_retry_hooks(),
             boot=_SERVER_BOOT_ID,
         )
@@ -7041,6 +7062,13 @@ _PR_STICKY_S = 600.0
 _MERGE_STATE_CACHE: Dict[str, tuple] = {}  # branch -> (expires_epoch, state_or_None)
 _MERGE_STATE_TTL = 20.0
 
+#: Review verdict per branch — "approved" / "changes_requested" / "". Cached far
+#: longer than the merge state because nothing acts on it: it exists to be told
+#: to a human once, and one GitHub call per open PR every two minutes is a
+#: budget a flock of sessions can afford.
+_REVIEW_CACHE: Dict[str, tuple] = {}  # branch -> (expires_epoch, verdict)
+_REVIEW_TTL = 120.0
+
 
 def _pr_merge_state(wt: str, branch: str, force: bool = False):
     """Whether ``branch``'s PR can be merged and what is blocking it, memoized.
@@ -7058,6 +7086,37 @@ def _pr_merge_state(wt: str, branch: str, force: bool = False):
     state = _github_pr.pr_merge_state_sync(wt, branch)
     _MERGE_STATE_CACHE[branch] = (now + _MERGE_STATE_TTL, state)
     return state
+
+
+def _pr_number(info) -> Optional[int]:
+    """A PR's number from whichever rung answered: the REST lookup carries it
+    outright, the ``gh`` one only in the URL's ``/pull/<n>`` tail."""
+    if not isinstance(info, dict):
+        return None
+    raw = info.get("number")
+    if isinstance(raw, int) and raw > 0:
+        return raw
+    match = re.search(r"/pull/(\d+)", str(info.get("url") or ""))
+    return int(match.group(1)) if match else None
+
+
+def _pr_review_state(wt: str, branch: str, info, force: bool = False) -> str:
+    """Where ``branch``'s open PR stands with its reviewers, memoized.
+
+    ``""`` means "nobody has decided, or we could not ask" — never "not
+    approved". The caller announces an approval to a human, so an empty answer
+    has to stay indistinguishable from silence.
+    """
+    number = _pr_number(info)
+    if not branch or not number:
+        return ""
+    now = time.time()
+    cached = _REVIEW_CACHE.get(branch)
+    if not force and cached and cached[0] > now:
+        return cached[1]
+    verdict = _github_pr.pr_review_state_sync(wt, number)
+    _REVIEW_CACHE[branch] = (now + _REVIEW_TTL, verdict)
+    return verdict
 
 
 def _pr_info(wt: str, branch: str, force: bool = False):
@@ -7625,11 +7684,30 @@ async def forget_recently_closed(entry_id: str, payload: dict = None) -> JSONRes
         return JSONResponse({"error": "entry not found"}, status_code=404)
     if wipe and not entry.get("in_place"):
         folder = entry.get("folder") or ""
+        # A closed session can SHARE its worktree with one that is still running
+        # (a copy and its origin keep the same directory — see
+        # _worktree_in_use_by_other). Deleting it here would pull the rug out
+        # from under the live session, which is not what "wipe the thing I
+        # closed" can possibly mean.
+        if folder and _worktree_in_use_by_other(folder, ""):
+            return JSONResponse(
+                {
+                    "error": "a running session is still working in %s — close it "
+                    "first" % folder
+                },
+                status_code=409,
+            )
         repo_path = ((entry.get("data") or {}).get("worktree") or {}).get(
             "repo_path", ""
         )
         await asyncio.to_thread(_remove_worktree_path, folder, repo_path)
-    _save_recently_closed([e for e in items if e.get("id") != entry_id])
+    # Re-read: `items` was loaded before the delete above, and a page deleting
+    # several rows at once fires these concurrently — writing the stale snapshot
+    # back would resurrect the sibling entries whose directories just went, each
+    # then offering a Reopen that can only 410.
+    _save_recently_closed(
+        [e for e in _load_recently_closed() if e.get("id") != entry_id]
+    )
     return JSONResponse({"ok": True})
 
 
@@ -7694,7 +7772,18 @@ def _commit_shell_command(skip: str = "") -> str:
         # re-commit that is still running must never be read as the old
         # failure (nonzero status + dirty tree -> a false "interrupt" chip
         # while the hooks are live). The real result is written at the end.
-        'rm -f {status}; touch "$L"; git add -A; n=0; rc=1; '
+        'rm -f {status}; touch "$L"; '
+        # Everything below runs in a SUBSHELL whose INT/TERM/HUP trap drops the
+        # lock. Ctrl+C on a running hook kills `git` and makes the interactive
+        # shell abandon the rest of a `;` list, so the chain's own `rm -f "$L"`
+        # never fired: the lock lingered and the pill stayed on "pre-commit"
+        # until the stale-lock self-heal noticed (a grace window plus a
+        # persistence debounce — most of a minute of a session looking wedged
+        # right after the user cancelled it on purpose). The trap turns a cancel
+        # back into the "commit" state within a poll. The self-heal stays as the
+        # net for what a trap CANNOT catch (SIGKILL, the pane being killed).
+        "( trap 'rm -f \"$L\"; exit 130' INT HUP TERM; "
+        "git add -A; n=0; rc=1; "
         "while [ $n -lt 5 ]; do "
         # Refresh the lock each round so a multi-round retry (each hook pass
         # can outlast the liveness grace) can't be self-healed mid-flight.
@@ -7713,7 +7802,7 @@ def _commit_shell_command(skip: str = "") -> str:
         # files of one feature under a message describing a database migration.
         # Now a leftover message can only exist while a failure is genuinely
         # pending, which is exactly the case reuse is for.
-        "; [ $rc -eq 0 ] && rm -f {msgf} || true"
+        "; [ $rc -eq 0 ] && rm -f {msgf} || true )"
     ).format(
         msgf=shlex.quote(_COMMIT_MSG_FILE),
         status=_COMMIT_STATUS_FILE,
@@ -8351,22 +8440,25 @@ async def instance_fast_track(
             status_code=400,
         )
     msg = str(body.get("message") or "").strip()
+    # Whether ``msg`` is a placeholder rather than a sentence someone chose, which
+    # is what lets the commit step replace it with a model-written one (see
+    # _autopilot_commit).
+    msg_auto = False
     if not msg:
         # An intake-armed run already carries the ticket / PR / issue NAME as its
         # message. Re-arming with ⏩ used to overwrite that with a generated
         # "Work on <slug>", throwing away the one genuinely descriptive subject
-        # available. Prefer it.
+        # available. Prefer it — and carry its placeholder flag across, or
+        # re-arming would freeze a placeholder into the commit.
         prev = _autopilot.get(title) or {}
         msg = str(prev.get("message") or "").strip()
+        msg_auto = bool(msg) and bool(prev.get("message_auto"))
     if not msg:
         # Only adopt the on-disk message when a FAILED attempt is pending — the
         # same rule GET /commit-message applies. Reusing it unconditionally meant a
         # message left by unrelated work became the subject of whatever was armed
         # next.
         msg = await asyncio.to_thread(_pending_commit_message, wt)
-    # Whether ``msg`` is a placeholder this route invented, which is what lets the
-    # commit step replace it with a model-written one (see _autopilot_commit).
-    msg_auto = False
     if not msg and await asyncio.to_thread(_is_dirty, wt):
         # The ⏩ button presses with no message, and `.mindflock_commit_msg` only
         # exists once something has committed THROUGH MindFlock — so the single most
@@ -10255,73 +10347,12 @@ def _prune_base_clone_worktrees() -> None:
 async def list_workspaces(sizes: int = 0) -> JSONResponse:
     """List every workspace directory on disk under the managed roots.
 
-    ``size_bytes`` is only computed when ``?sizes=1``: a ``du`` over a large
-    workspace stats every file and can take seconds when the page cache is
-    cold, so the UI fetches the instant no-sizes list first and fills sizes
-    in from a second request.
+    The raw disk listing (the merged Recently-closed page uses ``/api/recent``,
+    which filters and annotates it). ``size_bytes`` is only computed when
+    ``?sizes=1``: a ``du`` over a large workspace stats every file and can take
+    seconds when the page cache is cold.
     """
-    active = _active_worktree_titles()
-
-    def _mtime(path: str) -> float | None:
-        """The directory's own mtime, for the UI's "sort by date".
-
-        One stat per entry, unlike the ``du`` behind ``size_bytes`` — cheap
-        enough to always include, so the disk manager can sort by age without a
-        second round trip. It is the top-level dir's timestamp, so it tracks when
-        the workspace was created or had files added/removed at its root, not
-        every edit deep inside it. Newest-first over that is still the answer to
-        "which of these 40 worktrees is stale".
-        """
-        try:
-            return os.stat(path).st_mtime
-        except OSError:
-            return None
-
-    def _entry(path: str, name: str, root: str) -> dict:
-        return {
-            "name": name,
-            "path": path,
-            "root": root,
-            "kind": _classify_workspace(os.path.basename(name) or name, root),
-            "size_bytes": None,
-            "mtime": _mtime(path),
-            "active_session": active.get(os.path.realpath(path)),
-        }
-
-    def _scan() -> list:
-        out = []
-        wt_dir = os.path.realpath(os.path.join(config.GetConfigDir(), "worktrees"))
-        for root in _workspace_roots():
-            if root == wt_dir:
-                # Worktrees are nested under branch-name slashes — list the
-                # actual worktree leaf dirs by their path relative to the root.
-                for p in _find_worktrees(root):
-                    out.append(_entry(p, os.path.relpath(p, root), root))
-            else:
-                # workspace_dir is flat: clones, _base_*, cache refreshers and
-                # pr-* are all direct children.
-                try:
-                    children = sorted(os.scandir(root), key=lambda e: e.name)
-                except OSError:
-                    continue
-                for e in children:
-                    try:
-                        if not e.is_dir():
-                            continue
-                    except OSError:
-                        continue
-                    out.append(_entry(e.path, e.name, root))
-        if sizes and out:
-            # One du per entry; a single big tree dominates, so run them
-            # concurrently instead of back-to-back.
-            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-                for entry, n in zip(
-                    out, pool.map(_dir_size_bytes, [e["path"] for e in out])
-                ):
-                    entry["size_bytes"] = n
-        return out
-
-    entries = await asyncio.to_thread(_scan)
+    entries = await asyncio.to_thread(scan_workspaces, None, bool(sizes))
     return JSONResponse({"workspaces": entries, "roots": _workspace_roots()})
 
 
@@ -10346,6 +10377,24 @@ async def delete_workspace(payload: dict) -> JSONResponse:
     if not is_allowed:
         return JSONResponse(
             {"error": "path is not within a managed workspace root"}, status_code=400
+        )
+    # ...and it has to be a directory this server actually LISTS as a workspace:
+    # a flat child of a provisioning root, or a worktree leaf. _strictly_under
+    # alone accepts any descendant at any depth, so without this a path like
+    # `<workspace_dir>/_base_repo/src` passed every guard below (the base-clone
+    # protection tests only the basename) and deleted a subtree inside a
+    # protected clone. This is the "direct child" rule the docstring above and
+    # docs/web-api.md have always claimed.
+    listed = {
+        os.path.realpath(e["path"])
+        for e in await asyncio.to_thread(scan_workspaces, {}, False)
+    }
+    if real not in listed:
+        return JSONResponse(
+            {
+                "error": "path is not a workspace directory (only a listed workspace or worktree can be deleted)"
+            },
+            status_code=400,
         )
     # Protect shared infrastructure dirs — deleting them is expensive to rebuild.
     base = os.path.basename(real)
@@ -10395,15 +10444,30 @@ async def delete_workspace(payload: dict) -> JSONResponse:
             killed = title
             break
 
+    # Read before the directory goes: a linked worktree's `.git` FILE names the
+    # repo that holds its registration, which is the only way to prune a NESTED
+    # worktree (`worktrees/feature/sc-1/slug`) — the old "is my parent named
+    # worktrees" test is false for every branch name with a slash in it, so those
+    # registrations were never pruned and later made `git worktree add` for the
+    # same branch fail.
+    wt_repo = _worktree_repo_path(_worktree_gitdir(real))
+
     def _remove() -> None:
         shutil.rmtree(real, ignore_errors=True)
         _close_cursor_window(real)
         _remove_trust_entry(real)  # GC ~/.claude.json trust entry (G3)
-        # If we removed a linked worktree, prune the stale registration from the
-        # base repo(s) so `git worktree` stays consistent. Base clones are
-        # per-repo (`_base_<slug>`) — prune every one under every managed
-        # workspace dir (cheap no-op when the worktree wasn't theirs).
-        if os.path.dirname(real).endswith("worktrees"):
+        # Prune the stale registration so `git worktree` stays consistent: from
+        # the repo the worktree itself pointed at when we know it, else the old
+        # sweep over every base clone under every managed workspace dir.
+        if wt_repo and os.path.isdir(wt_repo):
+            _run_capped(
+                ["git", "-C", wt_repo, "worktree", "prune"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=60,
+            )
+            _prune_empty_worktree_dirs()
+        elif os.path.dirname(real).endswith("worktrees"):
             _prune_base_clone_worktrees()
 
     await asyncio.to_thread(_remove)
@@ -10477,6 +10541,76 @@ async def clear_workspaces(payload: Optional[dict] = None) -> JSONResponse:
 
     result = await asyncio.to_thread(_sweep)
     return JSONResponse({"ok": True, "removed_count": len(result["removed"]), **result})
+
+
+@app.get("/api/recent")
+async def recent_list(
+    sizes: int = 0, days: float = STALE_WORKTREE_DAYS
+) -> JSONResponse:
+    """The Recently-closed page: closed sessions AND what is left on disk, in
+    one list.
+
+    One page rather than two, because "can I have this work back" and "can I
+    have this disk back" are the same question asked about the same directory.
+    Rows carry both identities — the closed session's title/branch/closed_at and
+    the directory's kind/size/age — plus ``stale``, which marks the rows the
+    unused-worktree sweep would take. Not shown, but counted in ``hidden``:
+    protected base clones / cache refreshers, and any workspace a LIVE session
+    is using (that one is in the sidebar).
+
+    ``?sizes=1`` adds ``size_bytes`` (a ``du`` per row — seconds on a cold
+    cache), which is why the page loads without it first. ``?days=`` previews a
+    different staleness window than the sweep's default, so the marks and the
+    sweep can be lined up on the same number instead of two.
+    """
+    if days < 0:
+        return JSONResponse({"error": "days must be >= 0"}, status_code=400)
+    data = await asyncio.to_thread(recent_rows, bool(sizes), days)
+    return JSONResponse(data)
+
+
+@app.post("/api/workspaces/prune-worktrees")
+async def prune_worktrees(payload: Optional[dict] = None) -> JSONResponse:
+    """Delete every unused git WORKTREE — and nothing else.
+
+    "Unused" is: nothing has touched it for ``days`` (default 7), no live
+    session is working in it, and no second session shares it. "Worktree" is
+    load-bearing and checked per directory, twice (at scan time and again
+    immediately before the delete): only a directory whose ``.git`` is a gitdir
+    FILE, i.e. one ``git worktree add`` generated under a managed root, is ever
+    a candidate. A repository, a clone, a ``_base_*`` mirror, a ``pr-*`` review
+    clone and any plain folder are all excluded by that test — this route cannot
+    delete a repo, whatever it is pointed at.
+
+    ``{"dry_run": true}`` (the default) resolves the candidate list and returns
+    it with sizes and a ``dirty`` flag per row, without touching anything: the
+    UI shows that list in its confirmation, because the commits in a worktree
+    live in the base repository and survive, while uncommitted changes, a stash
+    or a detached HEAD do not. ``{"dry_run": false}`` performs the removal — of
+    the clean rows only, unless ``{"include_dirty": true}``, which is the second
+    thing the UI asks about — forgets the closed entries whose worktree just went
+    (their Reopen could only 410 from then on), prunes the stale registration
+    from each worktree's own base repo, and collects the empty branch-slug
+    directories the removals leave behind.
+
+    The candidate set is always recomputed HERE — no path a client sends is ever
+    deleted.
+    """
+    payload = payload or {}
+    raw = payload.get("days", STALE_WORKTREE_DAYS)
+    try:
+        days = float(raw)
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "days must be a number"}, status_code=400)
+    if days < 0:
+        return JSONResponse({"error": "days must be >= 0"}, status_code=400)
+    data = await asyncio.to_thread(
+        prune_stale_worktrees,
+        days,
+        bool(payload.get("dry_run", True)),
+        bool(payload.get("include_dirty", False)),
+    )
+    return JSONResponse(data)
 
 
 # --------------------------------------------------------------------------- #

@@ -1,8 +1,8 @@
 /** One session pane (port of app.js makePane, section 14): header with grip /
  * title / diff-stat context line / tabs / next-step / usage chip / state pill
- * / copy-history, the terminal hosts, Diff + Queue tabs, and the budget-lock
- * overlay. Terminals are adopted from lib/terminals' registry so they never
- * remount with the pane. */
+ * / history + copy-all + hide (✕), the terminal hosts, Diff + Queue tabs, and
+ * the budget-lock overlay. Terminals are adopted from lib/terminals' registry
+ * so they never remount with the pane. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Instance } from "../../api/types";
@@ -309,6 +309,20 @@ export function Pane({
             missing workspace
           </span>
           <span className="state">workspace gone</span>
+          <div className="head-tail">
+            <button
+              className="act pane-close"
+              type="button"
+              aria-label="Hide window"
+              title="Hide this window (show it again from its sidebar row)"
+              onClick={(e) => {
+                e.stopPropagation();
+                useUi.getState().setHidden(title, true);
+              }}
+            >
+              ✕
+            </button>
+          </div>
         </div>
         <div className="pane-body">
           <div className="missing-body">
@@ -347,6 +361,20 @@ export function Pane({
           <span className="title">{displayName}</span>
           <span className="branch">{inst.branch ? "(" + displayBranch(inst) + ")" : ""}</span>
           <span className="state">provisioning…</span>
+          <div className="head-tail">
+            <button
+              className="act pane-close"
+              type="button"
+              aria-label="Hide window"
+              title="Hide this window — provisioning keeps going (show it again from its sidebar row)"
+              onClick={(e) => {
+                e.stopPropagation();
+                useUi.getState().setHidden(title, true);
+              }}
+            >
+              ✕
+            </button>
+          </div>
         </div>
         <div className="pane-body">
           <div className="provisioning">
@@ -514,6 +542,9 @@ export function Pane({
         <AccountChip inst={inst} />
         <SessionUsageChip inst={inst} />
         <span className={"state" + (wsState !== "connected" ? " state-bad" : "")}>{wsState}</span>
+        {/* Pinned right even when the header scrolls: history, copy-all, close
+            stay reachable without scrolling to the end of a long header. */}
+        <div className="head-tail">
         <button
           className="act copyhist"
           type="button"
@@ -581,6 +612,19 @@ export function Pane({
             <rect x="8" y="2" width="8" height="4" rx="1" />
           </svg>
         </button>
+        <button
+          className="act pane-close"
+          type="button"
+          aria-label="Hide window"
+          title="Hide this window — the session keeps running (show it again from its sidebar row)"
+          onClick={(e) => {
+            e.stopPropagation();
+            useUi.getState().setHidden(title, true);
+          }}
+        >
+          ✕
+        </button>
+        </div>
       </div>
       <div className="pane-body" ref={bodyRef}>
         <div className={"pane-term agent-term" + (tab !== "agent" ? " hidden" : "")} ref={adopt("agent")}>

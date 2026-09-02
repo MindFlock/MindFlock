@@ -9,10 +9,13 @@ only to prove the extension is registered and its static module is served.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 
 import pytest
 from fastapi import FastAPI
@@ -21,7 +24,13 @@ from fastapi.testclient import TestClient
 from backend.config import settings as S
 from backend.web.addons import AppContext
 from backend.web.addons.base import SECRET_MASK
-from backend.web.addons.dbclient import DbClientAddon, service as svc, store
+from backend.web.addons.dbclient import (
+    DbClientAddon,
+    adapters as adapters_mod,
+    installer as installer_mod,
+    service as svc,
+    store,
+)
 from backend.web.core import events as events_mod
 
 BASE = "/api/dbclient"
@@ -220,17 +229,320 @@ class TestProfiles:
 
 class TestDrivers:
     def test_report_shape(self, client):
-        drivers = {
-            d["engine"]: d for d in client.get(BASE + "/drivers").json()["drivers"]
-        }
+        payload = client.get(BASE + "/drivers").json()
+        drivers = {d["engine"]: d for d in payload["drivers"]}
         assert set(drivers) == {"sqlite", "postgres", "mysql"}
         assert drivers["sqlite"]["available"] is True
+        # sqlite is stdlib: never a candidate for the Install button.
+        assert drivers["sqlite"]["can_install"] is False
+        assert payload["target"] == sys.prefix
         for engine in ("postgres", "mysql"):
             d = drivers[engine]
             assert d["driver"]
             if not d["available"]:
                 assert "uv pip install" in d["install_hint"]
                 assert "mindflock" in d["install_hint"]
+                # Exactly one of the two is offered: a button or an excuse.
+                assert bool(d["can_install"]) != bool(d["install_blocked"])
+
+
+class TestDriverInstall:
+    """POST /drivers/install — the Install button behind the "driver is not
+    installed" note. Every test stubs the subprocess: nothing here may install
+    a package into the developer's environment."""
+
+    @pytest.fixture
+    def fake_pg(self, monkeypatch):
+        """A missing postgres driver that appears once an install "succeeds"."""
+        state = {"installed": False, "calls": []}
+        monkeypatch.setattr(
+            adapters_mod.PostgresAdapter,
+            "available",
+            classmethod(lambda cls: state["installed"]),
+        )
+        monkeypatch.setattr(installer_mod, "_uv_path", lambda: "/fake/bin/uv")
+        return state
+
+    def _stub_run(self, monkeypatch, state, code=0, out="done"):
+        def run(argv):
+            state["calls"].append(list(argv))
+            if code == 0:
+                state["installed"] = True
+            return code, out
+
+        monkeypatch.setattr(installer_mod, "_run", run)
+
+    def test_unknown_engine_is_400(self, client):
+        r = client.post(BASE + "/drivers/install", json={"engine": "oracle"})
+        assert r.status_code == 400
+        assert "oracle" in r.json()["error"]
+
+    def test_sqlite_needs_nothing(self, client):
+        r = client.post(BASE + "/drivers/install", json={"engine": "sqlite"}).json()
+        assert r["ok"] is True and r["already"] is True
+
+    def test_already_installed_runs_no_install(self, client, monkeypatch, fake_pg):
+        fake_pg["installed"] = True
+        self._stub_run(monkeypatch, fake_pg)
+        r = client.post(BASE + "/drivers/install", json={"engine": "postgres"}).json()
+        assert r["ok"] is True and r["already"] is True
+        assert fake_pg["calls"] == []
+
+    def test_uv_install_targets_this_interpreter(self, client, monkeypatch, fake_pg):
+        self._stub_run(monkeypatch, fake_pg)
+        r = client.post(BASE + "/drivers/install", json={"engine": "postgres"}).json()
+        assert r["ok"] is True, r
+        assert r["method"] == "uv pip"
+        assert r["driver"] == "psycopg[binary]"
+        assert r["target"] == sys.prefix
+        # The venv that serves the app, named explicitly — never a bare `uv pip
+        # install` that would land wherever uv felt like.
+        assert fake_pg["calls"] == [
+            [
+                "/fake/bin/uv",
+                "pip",
+                "install",
+                "--python",
+                sys.executable,
+                "psycopg[binary]",
+            ]
+        ]
+
+    def test_failure_reports_the_output_and_the_manual_command(
+        self, client, monkeypatch, fake_pg
+    ):
+        self._stub_run(monkeypatch, fake_pg, code=1, out="no matching distribution")
+        r = client.post(BASE + "/drivers/install", json={"engine": "postgres"}).json()
+        assert r["ok"] is False
+        assert "no matching distribution" in r["output"]
+        assert "uv pip install" in r["install_hint"]
+
+    def test_every_attempt_is_reported_when_all_of_them_fail(
+        self, client, monkeypatch, fake_pg
+    ):
+        """uv first, then pip: the report must carry both outputs, since the
+        first failure is usually the one that explains the second."""
+        monkeypatch.setattr(installer_mod, "_has_pip", lambda: True)
+
+        def run(argv):
+            fake_pg["calls"].append(list(argv))
+            return 1, "uv exploded" if "uv" in argv[0] else "pip exploded"
+
+        monkeypatch.setattr(installer_mod, "_run", run)
+        r = client.post(BASE + "/drivers/install", json={"engine": "postgres"}).json()
+        assert r["ok"] is False
+        assert "uv exploded" in r["output"] and "pip exploded" in r["output"]
+        assert len(fake_pg["calls"]) == 2
+
+    def test_pip_fallback_when_uv_is_absent(self, client, monkeypatch, fake_pg):
+        monkeypatch.setattr(installer_mod, "_uv_path", lambda: None)
+        monkeypatch.setattr(installer_mod, "_has_pip", lambda: True)
+        self._stub_run(monkeypatch, fake_pg)
+        r = client.post(BASE + "/drivers/install", json={"engine": "postgres"}).json()
+        assert r["ok"] is True and r["method"] == "pip"
+        assert fake_pg["calls"] == [
+            [sys.executable, "-m", "pip", "install", "psycopg[binary]"]
+        ]
+
+    def test_a_venv_without_pip_gets_ensurepip_first(
+        self, client, monkeypatch, fake_pg
+    ):
+        monkeypatch.setattr(installer_mod, "_uv_path", lambda: None)
+        monkeypatch.setattr(installer_mod, "_has_pip", lambda: False)
+        monkeypatch.setattr(installer_mod, "_has_ensurepip", lambda: True)
+        self._stub_run(monkeypatch, fake_pg)
+        r = client.post(BASE + "/drivers/install", json={"engine": "postgres"}).json()
+        assert r["ok"] is True and r["method"] == "ensurepip + pip"
+        assert [c[1:3] for c in fake_pg["calls"]] == [
+            ["-m", "ensurepip"],
+            ["-m", "pip"],
+        ]
+
+    def test_system_python_is_refused_not_broken(self, client, monkeypatch, fake_pg):
+        """PEP 668 outside a venv: no subprocess at all, and the report says why
+        the UI must keep showing the command instead of a button."""
+        monkeypatch.setattr(installer_mod, "_in_venv", lambda: False)
+        monkeypatch.setattr(installer_mod, "_externally_managed", lambda: True)
+        self._stub_run(monkeypatch, fake_pg)
+        r = client.post(BASE + "/drivers/install", json={"engine": "postgres"}).json()
+        assert r["ok"] is False
+        assert "system-managed Python" in r["error"]
+        assert r["install_hint"]
+        assert fake_pg["calls"] == []
+        row = {d["engine"]: d for d in client.get(BASE + "/drivers").json()["drivers"]}[
+            "postgres"
+        ]
+        assert row["can_install"] is False
+        assert "system-managed Python" in row["install_blocked"]
+
+    def test_a_second_install_does_not_race_the_first(
+        self, client, monkeypatch, fake_pg
+    ):
+        self._stub_run(monkeypatch, fake_pg)
+        assert installer_mod._LOCK.acquire(blocking=False)
+        try:
+            r = client.post(
+                BASE + "/drivers/install", json={"engine": "postgres"}
+            ).json()
+        finally:
+            installer_mod._LOCK.release()
+        assert r["ok"] is False and r["busy"] is True
+        assert fake_pg["calls"] == []
+
+    def test_env_does_not_carry_another_venv(self, monkeypatch):
+        monkeypatch.setenv("VIRTUAL_ENV", "/somewhere/else")
+        monkeypatch.setenv("PYTHONPATH", "/dev/tree")
+        env = installer_mod._child_env()
+        assert "VIRTUAL_ENV" not in env and "PYTHONPATH" not in env
+        assert env["UV_PYTHON_DOWNLOADS"] == "never"
+
+    def test_a_body_that_names_no_engine_is_refused(self, client, monkeypatch, fake_pg):
+        """The one field this endpoint reads is the one field a caller controls,
+        so every degenerate spelling of "nothing" has to land on the same 400 —
+        never a traceback, and never an install."""
+        self._stub_run(monkeypatch, fake_pg)
+        for body in ({}, {"engine": ""}, {"engine": None}, {"other": "postgres"}):
+            r = client.post(BASE + "/drivers/install", json=body)
+            assert r.status_code == 400, body
+            assert r.json()["error"]
+        # A body that is not an object at all is rejected by the schema itself.
+        assert (
+            client.post(BASE + "/drivers/install", json=["postgres"]).status_code == 422
+        )
+        assert fake_pg["calls"] == []
+
+    def test_the_package_spec_can_never_come_from_the_request(
+        self, client, monkeypatch, fake_pg
+    ):
+        """The whole security model in one test: the body names an ENGINE, and
+        the package is looked up from that engine's adapter. So anything that
+        looks like a package spec — extra requirements, an index URL, a path — is
+        simply an engine nobody has, and no subprocess is spawned for it."""
+        self._stub_run(monkeypatch, fake_pg)
+        for engine in (
+            "postgres; evil-pkg",
+            "postgres --index-url http://attacker.invalid/simple",
+            "psycopg[binary]",
+            "../../../etc/passwd",
+        ):
+            r = client.post(BASE + "/drivers/install", json={"engine": engine})
+            assert r.status_code == 400, engine
+        assert fake_pg["calls"] == []
+
+    def test_a_pep_668_interpreter_offers_no_button_for_any_driver(
+        self, client, monkeypatch
+    ):
+        """One refusal, reported in every place the UI reads: the top-level
+        capability AND each row, because the driver cache the UI keeps is a plain
+        list of rows with no envelope around it."""
+        monkeypatch.setattr(installer_mod, "_in_venv", lambda: False)
+        monkeypatch.setattr(installer_mod, "_externally_managed", lambda: True)
+        payload = client.get(BASE + "/drivers").json()
+        assert payload["installer"] == ""
+        assert "system-managed Python" in payload["install_blocked"]
+        assert payload["target"] == sys.prefix
+        assert all(d["can_install"] is False for d in payload["drivers"])
+        assert set(payload) == {"drivers", "installer", "install_blocked", "target"}
+
+    def test_a_timed_out_installer_fails_and_leaves_the_lock_free(
+        self, client, monkeypatch, fake_pg
+    ):
+        """A stalled index must not hold the request forever — and, more
+        importantly, must not leave the button saying "busy" for the rest of the
+        server's life. The timeout is a reported failure like any other."""
+        monkeypatch.setattr(installer_mod, "_has_pip", lambda: False)
+        monkeypatch.setattr(installer_mod, "_has_ensurepip", lambda: False)
+
+        def _timeout(*a, **kw):
+            raise subprocess.TimeoutExpired(
+                cmd="uv", timeout=installer_mod.INSTALL_TIMEOUT_S
+            )
+
+        monkeypatch.setattr(installer_mod.subprocess, "run", _timeout)
+        r = client.post(BASE + "/drivers/install", json={"engine": "postgres"}).json()
+        assert r["ok"] is False
+        assert "timed out after %ds" % installer_mod.INSTALL_TIMEOUT_S in r["output"]
+        assert r["install_hint"]
+        # The next click gets a real attempt, not "another install is running".
+        assert installer_mod._LOCK.acquire(blocking=False)
+        installer_mod._LOCK.release()
+
+    def test_a_huge_installer_log_is_trimmed_to_its_tail(
+        self, client, monkeypatch, fake_pg
+    ):
+        """A source build can print megabytes. The tail is the part that explains
+        the failure, so that is what survives into the JSON response."""
+        monkeypatch.setattr(installer_mod, "_has_pip", lambda: False)
+        monkeypatch.setattr(installer_mod, "_has_ensurepip", lambda: False)
+        noise = "x" * (installer_mod.OUTPUT_TAIL_CHARS * 3) + "THE ACTUAL ERROR"
+        self._stub_run(monkeypatch, fake_pg, code=1, out=noise)
+        r = client.post(BASE + "/drivers/install", json={"engine": "postgres"}).json()
+        assert r["ok"] is False
+        assert len(r["output"]) == installer_mod.OUTPUT_TAIL_CHARS + 1
+        assert r["output"].startswith("\u2026")
+        assert r["output"].endswith("THE ACTUAL ERROR")
+
+    def test_an_exit_zero_that_leaves_it_unimportable_is_not_a_success(
+        self, client, monkeypatch, fake_pg
+    ):
+        """The install lands in a LIVE process, so "pip said ok" is not the claim
+        the UI makes — "you can query postgres now" is. The finders' caches are
+        dropped and the adapter is re-asked, and if it still says no, so does the
+        report."""
+        invalidated: list = []
+        monkeypatch.setattr(
+            installer_mod.importlib, "invalidate_caches", lambda: invalidated.append(1)
+        )
+        # Exits 0 but never flips availability (a wheel for another interpreter,
+        # a --target install, a resolver that satisfied the spec from elsewhere).
+        monkeypatch.setattr(
+            installer_mod,
+            "_run",
+            lambda argv: (
+                fake_pg["calls"].append(list(argv)),
+                (0, "Successfully installed"),
+            )[1],
+        )
+        r = client.post(BASE + "/drivers/install", json={"engine": "postgres"}).json()
+        assert r["ok"] is False
+        assert "still not importable" in r["error"]
+        assert r["install_hint"]
+        assert invalidated == [1]
+
+    def test_neither_driver_route_runs_on_the_event_loop(self, client, monkeypatch):
+        """An install is minutes of subprocess and a ``du``-grade catalog read;
+        both routes hand the work to a thread, or one click freezes every other
+        session's polling for the duration."""
+        loops: list = []
+
+        def _note(*a, **kw):
+            try:
+                asyncio.get_running_loop()
+                loops.append(True)
+            except RuntimeError:
+                loops.append(False)
+            return {
+                "ok": True,
+                "already": True,
+                "engine": "sqlite",
+                "driver": "",
+                "target": sys.prefix,
+            }
+
+        def _report():
+            _note()
+            return {
+                "drivers": [],
+                "installer": "",
+                "install_blocked": "",
+                "target": sys.prefix,
+            }
+
+        monkeypatch.setattr(installer_mod, "install_driver", _note)
+        monkeypatch.setattr(installer_mod, "drivers_payload", _report)
+        client.post(BASE + "/drivers/install", json={"engine": "sqlite"})
+        client.get(BASE + "/drivers")
+        assert loops == [False, False]
 
 
 # --------------------------------------------------------------------------- #
@@ -264,6 +576,40 @@ class TestIntrospection:
         assert by_name["v_people"]["kind"] == "view"
         assert by_name["people"]["kind"] == "table"
         assert by_name["people"]["approx_rows"] is None  # never a COUNT(*) scan
+
+    def test_tree_items_normalizes_names_and_dicts(self):
+        # Adapters may return bare names or {name, size_bytes} dicts (the
+        # postgres/mysql size statistics); the wire shape is always a dict.
+        from backend.web.addons.dbclient.service import tree_items
+
+        assert tree_items(["a", "b"]) == [{"name": "a"}, {"name": "b"}]
+        assert tree_items([{"name": "public", "size_bytes": 123}]) == [
+            {"name": "public", "size_bytes": 123}
+        ]
+        assert tree_items([{"name": "empty", "size_bytes": None}]) == [
+            {"name": "empty", "size_bytes": None}
+        ]
+        assert tree_items([{"size_bytes": 1}]) == [{"size_bytes": 1, "name": ""}]
+        # A present-but-falsy name is a NAME, not a missing one: the sqlite
+        # unnamed-schema case must not be rewritten, and an unknown key an
+        # adapter adds rides through untouched.
+        assert tree_items([{"name": "", "size_bytes": 0, "note": "x"}]) == [
+            {"name": "", "size_bytes": 0, "note": "x"}
+        ]
+        # A bare name is stringified, so the wire shape never carries a number.
+        assert tree_items([7]) == [{"name": "7"}]
+        assert tree_items([]) == []
+
+    def test_tree_reports_no_size_for_an_engine_that_has_no_statistics(
+        self, client, conn_id
+    ):
+        """The contract widened for postgres/mysql; sqlite has no cheap size
+        statistics, so it keeps the legacy shape — the same ``level`` value it
+        always had, and no ``size_bytes`` invented for it."""
+        body = client.get(_url(conn_id, "/tree")).json()
+        assert body["level"] == "tables"
+        assert all(i.get("size_bytes") is None for i in body["items"])
+        assert all(isinstance(i["name"], str) for i in body["items"])
 
     def test_tree_on_a_broken_connection_is_502(self, client, db_path):
         client.post(
@@ -848,10 +1194,13 @@ class TestServerIntegration:
         spec = ext["extension"]
         assert spec["module"] == "/extensions/dbclient/index.js"
         assert spec["bar_label"] == "Database" and spec["stylesheet"] is True
-        assert [b["command"] for b in spec["buttons"]] == [
-            "dbclient.explorer",
-            "dbclient.sql",
-        ]
+        assert [b["command"] for b in spec["buttons"]] == ["dbclient.explorer"]
+        # The SQL button left the bar (SQL rides the palette and the explorer
+        # now), but the COMMAND behind it is what both of those invoke — dropping
+        # it with the button would orphan the whole surface silently.
+        commands = {c["id"] for c in spec["commands"]}
+        assert "dbclient.sql" in commands
+        assert {"dbclient.explorer", "dbclient.new-query"} <= commands
         assert {s["id"]: s["kind"] for s in spec["surfaces"]} == {
             "main": "dialog",
             "query": "pane",
@@ -872,3 +1221,143 @@ class TestServerIntegration:
         server_client.post("/api/settings", json={"extensions": {"disabled": []}})
         addons = {a["id"]: a for a in server_client.get("/api/addons").json()["addons"]}
         assert addons["dbclient"]["enabled"] is True
+
+
+# --------------------------------------------------------------------------- #
+# Size statistics on the tree's upper levels (postgres / mysql)
+# --------------------------------------------------------------------------- #
+class _FakeCursor:
+    def __init__(self, conn) -> None:
+        self._conn = conn
+        self._rows: list = []
+
+    def execute(self, sql, *args) -> None:
+        self._conn.sql.append(sql)
+        self._rows = self._conn.answer(sql)
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+class _FakeConn:
+    """A DB-API shape thin enough to drive the catalog queries directly: the
+    adapters' size statistics are pure SQL + shaping, and a real server is not
+    installable in CI."""
+
+    def __init__(self, answer) -> None:
+        self.sql: list = []
+        self.rollbacks = 0
+        self._answer = answer
+
+    def cursor(self):
+        return _FakeCursor(self)
+
+    def answer(self, sql):
+        return self._answer(sql)
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+class TestSizeStatistics:
+    """The tree's databases/schemas grew a ``size_bytes`` badge. Sizes are
+    DECORATION: an engine that will not answer must still list every name."""
+
+    def test_postgres_databases_carry_their_size(self):
+        def answer(sql):
+            if "pg_database_size" in sql:
+                return [("app", 4096), ("locked_out", None)]
+            return []
+
+        conn = _FakeConn(answer)
+        rows = adapters_mod.PostgresAdapter().list_databases(conn)
+        assert rows == [
+            {"name": "app", "size_bytes": 4096},
+            # has_database_privilege said no: a name with no size, not a
+            # missing database.
+            {"name": "locked_out", "size_bytes": None},
+        ]
+
+    def test_postgres_schemas_carry_their_size(self):
+        def answer(sql):
+            if "pg_total_relation_size" in sql:
+                return [("public", 8192), ("empty", None)]
+            return []
+
+        rows = adapters_mod.PostgresAdapter().list_schemas(_FakeConn(answer))
+        assert rows == [
+            {"name": "public", "size_bytes": 8192},
+            {"name": "empty", "size_bytes": None},
+        ]
+
+    def test_the_size_query_is_bounded_and_the_bound_is_always_lifted(self):
+        """``pg_database_size`` stats every file of every database and runs on the
+        POOLED connection under its lock, so a hang there wedges the whole tree.
+        The cap is applied to the statement itself — and released in a ``finally``,
+        or the next query on this connection inherits it."""
+        ms = int(adapters_mod.SIZE_STATS_TIMEOUT_S * 1000)
+
+        def answer(sql):
+            if "pg_database_size" in sql:
+                raise RuntimeError("canceling statement due to statement timeout")
+            return [("app",)]
+
+        conn = _FakeConn(answer)
+        rows = adapters_mod.PostgresAdapter().list_databases(conn)
+        assert conn.sql[0] == "SET statement_timeout = %d" % ms
+        assert "pg_database_size" in conn.sql[1]
+        assert "RESET statement_timeout" in conn.sql
+        # ...and the timeout is not merely wrapped in a try: the names survive it.
+        assert rows == ["app"]
+        assert conn.rollbacks == 1
+
+    def test_postgres_falls_back_to_bare_names_and_lists_them_all(self):
+        """A role without CONNECT on some database, or a catalog too big to size
+        inside the cap: the tree must still show every database."""
+
+        def answer(sql):
+            if "pg_database_size" in sql or "pg_total_relation_size" in sql:
+                raise RuntimeError("permission denied")
+            return [("app",), ("other",)]
+
+        pg = adapters_mod.PostgresAdapter()
+        assert pg.list_databases(_FakeConn(answer)) == ["app", "other"]
+        assert pg.list_schemas(_FakeConn(answer)) == ["app", "other"]
+
+    def test_mysql_sums_information_schema_lengths(self):
+        def answer(sql):
+            if sql == "SHOW DATABASES":
+                return [("app",), ("sys",)]
+            if "information_schema.tables" in sql:
+                return [("app", 1024)]  # sys reports nothing
+            return []
+
+        rows = adapters_mod.MysqlAdapter().list_databases(_FakeConn(answer))
+        assert rows == [
+            {"name": "app", "size_bytes": 1024},
+            {"name": "sys", "size_bytes": None},
+        ]
+
+    def test_mysql_degrades_to_plain_names_when_information_schema_refuses(self):
+        def answer(sql):
+            if sql == "SHOW DATABASES":
+                return [("app",), ("sys",)]
+            if "information_schema.tables" in sql:
+                raise RuntimeError("SELECT command denied")
+            return []
+
+        assert adapters_mod.MysqlAdapter().list_databases(_FakeConn(answer)) == [
+            "app",
+            "sys",
+        ]
+
+    def test_sqlite_keeps_the_legacy_bare_name_shape(self):
+        """The widening is backward compatible by construction: an adapter with
+        no statistics keeps returning names, and ``tree_items`` lifts them."""
+        assert adapters_mod.SqliteAdapter().list_databases(None) == ["main"]
+        assert svc.tree_items(adapters_mod.SqliteAdapter().list_databases(None)) == [
+            {"name": "main"}
+        ]

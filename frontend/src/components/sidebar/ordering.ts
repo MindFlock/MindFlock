@@ -5,6 +5,30 @@ import type { Instance } from "../../api/types";
 import { relTime } from "../../lib/format";
 import { effectiveActivity } from "../../lib/stage";
 
+/** Arrange `keys` by the saved drag order: known keys in saved order first,
+ * then keys the order has never seen, in the order given. The one ordering
+ * rule for the whole rail — sessions and windows share it, because a window's
+ * order key (its NUL-prefixed sentinel) lives in the same namespace as a session
+ * title, exactly as it already does in the MRU and the grid rows. */
+export function orderedKeys(keys: string[], order: string[]): string[] {
+  const present = new Set(keys);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const k of order) {
+    if (present.has(k) && !seen.has(k)) {
+      out.push(k);
+      seen.add(k);
+    }
+  }
+  for (const k of keys) {
+    if (!seen.has(k)) {
+      out.push(k);
+      seen.add(k);
+    }
+  }
+  return out;
+}
+
 /** Stable user order first (drag order), then unlisted instances in server
  * order. Returns the reconciled order for persistence alongside the rows.
  * A transient empty list must not rewrite the saved order. */
@@ -14,21 +38,59 @@ export function orderedInstances(
 ): { rows: Instance[]; nextOrder: string[] } {
   if (!instances.length) return { rows: [], nextOrder: order };
   const byTitle = new Map(instances.map((i) => [i.title, i]));
-  const rows: Instance[] = [];
-  for (const t of order) {
-    const inst = byTitle.get(t);
-    if (inst) {
-      rows.push(inst);
-      byTitle.delete(t);
-    }
-  }
-  for (const i of instances) {
-    if (byTitle.has(i.title)) {
-      rows.push(i);
-      byTitle.delete(i.title);
-    }
-  }
+  const rows = orderedKeys([...byTitle.keys()], order).map((t) => byTitle.get(t)!);
   return { rows, nextOrder: rows.map((i) => i.title) };
+}
+
+/** The saved order after dragging one rail row (a session or a window)
+ * above/below another.
+ *
+ * A MERGE of the saved order with the live rail, never a replacement: the
+ * saved order is sparse and can hold slots for rows that aren't in this
+ * snapshot — a sleeping remote device's sessions, a closed assistant window —
+ * and materializing only what's on screen would silently erase them (the same
+ * `nextOrder` trap placeAfter in sessionActions documents). Live keys the
+ * order has never seen are appended in rail order, so the splice lands exactly
+ * where the drop cue showed.
+ *
+ * `stale` prunes order keys that should NOT keep a slot once the merge has
+ * them in hand: verify/ext window sentinels whose window is closed. Those
+ * panes don't survive a reload anyway, so a remembered position is a slow
+ * leak, not a feature — unlike the three fixed windows (assistant, logs),
+ * whose sentinels are constants and whose position SHOULD survive a
+ * close/reopen. Session titles always keep their slots. */
+export function movedRailOrder(opts: {
+  saved: string[];
+  live: string[];
+  drag: string;
+  target: string;
+  before: boolean;
+  stale?: (key: string) => boolean;
+}): string[] {
+  const { saved, live, drag, target, before, stale } = opts;
+  if (!drag || drag === target) return saved;
+  const seen = new Set(saved);
+  const order = saved
+    .concat(live.filter((k) => !seen.has(k)))
+    .filter((k) => k !== drag && !(stale && stale(k)));
+  let to = order.indexOf(target);
+  if (to < 0) to = order.length;
+  else if (!before) to += 1;
+  order.splice(to, 0, drag);
+  // A never-dragged window still sitting at the rail's tail must NOT be baked
+  // into the saved order by someone ELSE's drag: persisted, its sentinel
+  // would file every later-created session below it (new keys append after
+  // everything saved). A trailing sentinel the saved order has never seen
+  // re-appears in the same place dynamically, so drop it — unless it IS the
+  // dragged key, which is the user placing it there on purpose. A sentinel
+  // that ended up ABOVE anything is load-bearing for that row and stays.
+  const savedSet = new Set(saved);
+  while (order.length) {
+    const last = order[order.length - 1];
+    if (last !== drag && last.startsWith("\u0000") && !savedSet.has(last)) order.pop();
+    else break;
+  }
+  return order;
 }
 
 /** Slot `title` directly beneath `after` in a materialized order.

@@ -325,6 +325,30 @@
   border-color: var(--accent);
 }
 
+/* --- Non-session windows (WindowList.tsx) -------------------------------- */
+/* They sit IN the session list, under no heading of their own: the rail is the
+   list of windows, and the assistant or a database table is one. The rows are
+   first-class — grip, Alt+N number, drag cues, all inherited from .inst — and
+   the icon takes the lane a session's status dot takes, so the titles line up;
+   the shared .inst.active says which windows currently hold a grid slot. */
+.inst.window-row .win-icon {
+  flex: none;
+  width: 13px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.inst.window-row .title {
+  font-weight: 500;
+}
+
+.inst.window-row .stagechip.win-kind {
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.05em;
+}
+
 #sidebar-footer {
   padding: 10px 16px;
   font-size: 11px;
@@ -373,19 +397,5 @@
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
-}
-
-#workspaces-btn {
-  cursor: pointer;
-  font-size: 11px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-}
-
-#workspaces-btn:hover {
-  border-color: var(--accent);
 }
 

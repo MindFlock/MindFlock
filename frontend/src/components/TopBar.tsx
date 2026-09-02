@@ -9,7 +9,7 @@
  * has nothing else, since our own – □ ✕ aren't drawn there. Same elements, same
  * behaviour, mirrored placement. */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useUi } from "../state/store";
 import { useTestPlans } from "../state/queries";
 import { dueCount } from "./dialogs/verify";
@@ -35,9 +35,7 @@ let engineVersion = "";
 export function TopBar() {
   const ui = useUi();
   const [light, setLight] = useState(() => document.documentElement.classList.contains("light"));
-  const [recentOpen, setRecentOpen] = useState(false);
   const [version, setVersion] = useState(engineVersion);
-  const dropRef = useRef<HTMLDivElement | null>(null);
   // How much verification is waiting on you, without opening the dialog. Same
   // query and same helper the dialog itself uses, so the badge and the list can
   // never disagree — the discipline the Intake tab counts follow. The top bar is
@@ -85,21 +83,6 @@ export function TopBar() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!recentOpen) return;
-    const close = (e: MouseEvent) => {
-      if (!dropRef.current?.contains(e.target as Node)) setRecentOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setRecentOpen(false);
-    };
-    document.addEventListener("click", close);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("click", close);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [recentOpen]);
 
   const toggleTheme = () => {
     const next = !light;
@@ -222,47 +205,18 @@ export function TopBar() {
                 out. */}
             {due > 0 && <span className="tb-count">{due}</span>}
           </button>
-          <div className={"tb-drop" + (recentOpen ? " open" : "")} id="recent-menu" ref={dropRef}>
-            <button
-              type="button"
-              className="tb-item tb-drop-btn"
-              id="recent-menu-btn"
-              aria-haspopup="true"
-              aria-expanded={recentOpen}
-              title="Reopen a recent session or manage workspaces on disk"
-              onClick={(e) => {
-                e.stopPropagation();
-                setRecentOpen((v) => !v);
-              }}
-            >
-              Recent
-            </button>
-            <div className="tb-drop-panel" role="menu">
-              <button
-                type="button"
-                id="recent-btn"
-                role="menuitem"
-                onClick={() => {
-                  setRecentOpen(false);
-                  ui.openDialogFor("recent");
-                }}
-              >
-                Recently closed…
-              </button>
-              <button
-                type="button"
-                id="workspaces-btn"
-                role="menuitem"
-                data-caps="git"
-                onClick={() => {
-                  setRecentOpen(false);
-                  ui.openDialogFor("workspaces");
-                }}
-              >
-                Workspaces on disk…
-              </button>
-            </div>
-          </div>
+          {/* One page, so one button: the disk manager used to be the other
+              half of a dropdown here, and it is now the same list seen from the
+              other end (see RecentDialog). */}
+          <button
+            id="recent-btn"
+            className="tb-item"
+            type="button"
+            title="Recently closed — reopen closed work, or clear out what it left on disk"
+            onClick={() => ui.openDialogFor("recent")}
+          >
+            Recent
+          </button>
           <button
             id="prompts-btn"
             className="tb-item"

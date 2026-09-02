@@ -309,6 +309,15 @@ export function refreshInstances() {
   return queryClient.invalidateQueries({ queryKey: ["instances"] });
 }
 
+/** After anything that changes the recently-closed store: a reopen, a forget, a
+ * delete, or the unused-worktree sweep (which forgets the entries whose
+ * directory it removed). The Verify dialog caches this list to offer closed
+ * sessions as checklist targets, so without the invalidate it keeps offering
+ * work whose worktree and store entry are both gone. */
+export function refreshRecentlyClosed() {
+  return queryClient.invalidateQueries({ queryKey: ["recently-closed"] });
+}
+
 /** Settings → Site traffic (dev shell only): stars/forks, per-release
  * download counts, and click totals for the /go/ tracked links. The backend
  * addon already caches this for 5 minutes against GitHub's rate limit, so

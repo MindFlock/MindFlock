@@ -73,20 +73,32 @@ export function windowName(title: string): string {
  *
  * The rail's numbers are how people locate a window ("[3] finished" → glance
  * at row 3), so a notification carrying one must show THE number the rail
- * shows right now. That number is client state — the drag order plus the live
- * filter — so it is derived here, at render time, exactly the way the rail
- * derives its rows: verify sessions excluded, the saved order applied, the
- * filter applied. One deliberate divergence: on a tailnet with device groups
- * the rail numbers grouped rows in section order and skips collapsed groups;
- * this resolver lists local rows first and cannot see collapse state, so a
- * remote session's number can drift from its row there. Local sessions — the
- * ones this machine's events are about — always match.
+ * shows right now. The rail publishes its rendered row order (railOrder in
+ * the store: sessions AND window rows, drag order, device grouping, collapse
+ * and filter applied), so the number is read from that — never re-derived,
+ * which is how this resolver used to drift (it knew nothing of window rows
+ * or collapsed device groups). Until the sidebar's first render publishes it,
+ * fall back to the old approximation: verify sessions excluded, saved order,
+ * filter, local rows first.
  */
 export function slotNumber(title: string): string {
   const raw = String(title || "");
   if (!raw) return "";
   try {
     const ui = useUi.getState();
+    const rail = ui.railOrder;
+    if (rail.length) {
+      let idx = rail.indexOf(raw);
+      if (idx < 0) {
+        // Events name a session by display_title as often as by title; the
+        // rail is keyed by raw title, so resolve through the snapshot.
+        const inst = (snapshot() as Instance[]).find(
+          (i) => i && (i as { display_title?: string }).display_title === raw
+        );
+        if (inst) idx = rail.indexOf(inst.title);
+      }
+      return idx >= 0 && idx < 9 ? String(idx + 1) : "";
+    }
     const listed = (snapshot() as Instance[]).filter(
       (i) => i && !isVerifySession(String(i.title || ""))
     );

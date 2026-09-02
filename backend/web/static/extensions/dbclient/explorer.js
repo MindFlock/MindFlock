@@ -1,9 +1,13 @@
 /** The Explorer dialog (surface "main") and the dbclient data layer.
  *
- * Left: connection tree — connections → [databases → [schemas →]] tables and
- * views, one lazy level per /tree call. Right: a context panel that follows
- * the selection (connection list + New connection, the connection form,
- * a table's column summary with View Data / New Query / DDL).
+ * Left: connection tree — connections → [databases → [schemas →]] then
+ * "Tables (n)" / "Views (n)" groups whose tables unfold into their columns,
+ * one lazy /tree call per scope level and one /table call per unfolded
+ * table. Databases and schemas carry a size badge where the engine has cheap
+ * statistics. Right: a context panel that follows the selection (connection
+ * list + New connection, the connection form, and for a table the UNIFIED
+ * table view embedded in place — SQL bar + grid + STRUCTURE/DDL — with an
+ * "Open as window" action for the same view as a grid window).
  *
  * Dialog bodies are transient (the host disposes them on close), so the state
  * worth keeping — which nodes are expanded, every fetched level, the current
@@ -25,8 +29,10 @@ import {
   makeNotice,
   errMsg,
   fmtNum,
+  fmtBytes,
   copyText,
   qualifiedName,
+  tableLabel,
 } from "./ui.js";
 
 export const BASE = "/api/dbclient";
@@ -105,6 +111,22 @@ export function cachedDrivers() {
   return driversCache || [];
 }
 
+/** Ask the server to install an engine's driver into its own environment.
+ * Resolves to the server's report ({ok, error, output, install_hint, …}) —
+ * a failed install is a report, not a throw, so the caller can show what the
+ * installer said. The driver cache is refreshed either way: a partial success
+ * (installed but not importable) must not leave a stale "available" behind. */
+export async function installDriver(api, engine) {
+  let res;
+  try {
+    res = await api.request(BASE + "/drivers/install", { json: { engine } });
+  } finally {
+    driversCache = null;
+  }
+  await listDrivers(api, true).catch(() => {});
+  return res && typeof res === "object" ? res : { ok: false, error: "unexpected reply" };
+}
+
 export function levelKey(database, schema) {
   return (database || "") + "\u0001" + (schema || "");
 }
@@ -144,17 +166,35 @@ export function dropTreeLevels(connId, scope = {}) {
     t.levels.clear();
     return;
   }
-  const prefix = scope.schema ? levelKey(scope.database, scope.schema) : (scope.database || "") + "\u0001";
+  if (scope.schema) {
+    // A schema level has no descendant levels, and a bare-name prefix test
+    // would also take out "auth_archive" when refreshing "auth".
+    t.levels.delete(levelKey(scope.database, scope.schema));
+    return;
+  }
+  const prefix = (scope.database || "") + "\u0001";
   for (const key of [...t.levels.keys()]) {
     if (key === prefix || key.startsWith(prefix)) t.levels.delete(key);
   }
 }
 
+/** Forget cached table_info under `scope` — a refresh must reach the column
+ * leaves too, or the tree repaints stale columns from this cache. Every
+ * prefix ends on a separator, so name-prefix siblings never match. */
+export function dropTableInfo(connId, scope = {}) {
+  const prefix = scope.schema
+    ? [connId, scope.database || "", scope.schema, ""].join("\u0001")
+    : scope.database
+      ? [connId, scope.database, ""].join("\u0001")
+      : connId + "\u0001";
+  for (const key of [...tableInfoCache.keys()]) {
+    if (key.startsWith(prefix)) tableInfoCache.delete(key);
+  }
+}
+
 export function dropTreeCache(connId) {
   treeCache.delete(connId);
-  for (const key of [...tableInfoCache.keys()]) {
-    if (key.startsWith(connId + "\u0001")) tableInfoCache.delete(key);
-  }
+  dropTableInfo(connId);
 }
 
 export function itemName(item) {
@@ -334,9 +374,14 @@ export function createScopePicker(api, opts = {}) {
 // Explorer dialog
 // ---------------------------------------------------------------------------
 
-/** Sticky across dialog opens: what is selected, the filter text, and whether
- * the DDL block of the table detail is unfolded. */
-const explorerState = { selected: null, filter: "", ddlOpen: false };
+/** Sticky across dialog opens: what is selected and the filter text. */
+const explorerState = { selected: null, filter: "" };
+
+/** Group nodes ("Tables (n)" / "Views (n)") are expanded by DEFAULT — the
+ * grouping is orientation, not another click on the way to the data — so what
+ * sticks is the exception: the groups someone folded away. Keyed by node key,
+ * module-level like the tree cache. */
+const collapsedGroups = new Set();
 
 /** {isNew, draft, error, ok} while the connection form is showing. Reset on
  * every open so Escape means "forget it". */
@@ -369,12 +414,32 @@ function connSummary(c) {
 export function renderExplorer(shared, host) {
   const api = shared.api;
   let disposed = false;
-  const pending = new Set(); // connId|levelKey currently loading
-  const errors = new Map(); // connId|levelKey → message
+  const pending = new Set(); // connId|levelKey (or tbl|nodeKey) currently loading
+  const errors = new Map(); // connId|levelKey (or tbl|nodeKey) → message
   const nodesByKey = new Map();
+  /** The table view embedded in the detail panel ({dispose}), if one is up.
+   * Every repaint of the panel replaces its DOM, so the instance must be
+   * disposed alongside or its grid keeps listeners on detached nodes. */
+  let embedded = null;
+  /** True while renderTree is on the stack: its loop kicks ensureLevel /
+   * ensureTableInfo for expanded-but-unfetched nodes, and those helpers
+   * repaint immediately when called from a click — but a nested repaint from
+   * inside the loop would append a second full copy of the tree. Declared
+   * with the rest of the state, ABOVE the first renderTree() call (the
+   * startForm/root TDZ lesson). */
+  let treePainting = false;
+
+  function disposeEmbed() {
+    if (!embedded) return;
+    try {
+      embedded.dispose();
+    } catch (e) {
+      /* a broken embed must not take the panel down */
+    }
+    embedded = null;
+  }
 
   form = null;
-  if (host.ref === "new") startForm(null);
 
   // --- left: tree ---------------------------------------------------------
   const filterInput = el("input", {
@@ -409,14 +474,23 @@ export function renderExplorer(shared, host) {
   const root = el("div", { class: "dbc-explorer" }, side, main);
   host.el.appendChild(root);
 
+  // ref "new" jumps straight to the connection form. AFTER root exists:
+  // startForm repaints via root.isConnected, and calling it any earlier hits
+  // the const's temporal dead zone (the broken-Add-connection bug).
+  if (host.ref === "new") startForm(null);
+
   renderTree();
   renderMain();
-  // Paint from cache first (above), then refresh the connection list.
+  // Paint from cache first (above), then refresh the connection list. The
+  // main panel repaints only when the list actually changed: an unconditional
+  // renderMain here disposed and rebuilt the embedded table view (fetches,
+  // scroll, pending edits) on every dialog open.
+  const beforeRefresh = JSON.stringify(cachedConnections());
   listConnections(api, true)
     .then(() => {
       if (disposed) return;
       renderTree();
-      renderMain();
+      if (JSON.stringify(cachedConnections()) !== beforeRefresh) renderMain();
     })
     .catch((err) => {
       if (!disposed) showTreeError(errMsg(err));
@@ -455,58 +529,138 @@ export function renderExplorer(shared, host) {
     if (!explorerState.filter && !t.expanded.has(node.key)) return;
     const lvl = t.levels.get(node.lkey);
     if (!lvl) return;
-    for (const item of lvl.items) {
-      const name = itemName(item);
-      if (!name) continue;
-      let n;
-      if (lvl.level === "databases") {
-        n = {
-          kind: "database",
-          connId: node.connId,
-          engine: node.engine,
-          database: name,
-          name,
-          depth: node.depth + 1,
-          key: nodeKey(node.connId, name),
-          lkey: levelKey(name),
-          expandable: true,
-          parent: node,
-        };
-      } else if (lvl.level === "schemas") {
-        n = {
-          kind: "schema",
-          connId: node.connId,
-          engine: node.engine,
-          database: node.database,
-          schema: name,
-          name,
-          depth: node.depth + 1,
-          key: nodeKey(node.connId, node.database, name),
-          lkey: levelKey(node.database, name),
-          expandable: true,
-          parent: node,
-        };
-      } else {
-        const kind = item && item.kind ? String(item.kind) : "table";
-        n = {
-          kind: kind === "view" ? "view" : "table",
-          tableKind: kind,
-          approxRows: item && typeof item.approx_rows === "number" ? item.approx_rows : null,
-          connId: node.connId,
-          engine: node.engine,
-          database: node.database,
-          schema: node.schema,
-          table: name,
-          name,
-          depth: node.depth + 1,
-          key: nodeKey(node.connId, node.database, node.schema, name),
-          expandable: false,
-          parent: node,
-        };
+    if (lvl.level === "databases" || lvl.level === "schemas") {
+      for (const item of lvl.items) {
+        const name = itemName(item);
+        if (!name) continue;
+        const sizeBytes = item && typeof item.size_bytes === "number" ? item.size_bytes : null;
+        const n =
+          lvl.level === "databases"
+            ? {
+                kind: "database",
+                connId: node.connId,
+                engine: node.engine,
+                database: name,
+                name,
+                sizeBytes,
+                depth: node.depth + 1,
+                key: nodeKey(node.connId, name),
+                lkey: levelKey(name),
+                expandable: true,
+                parent: node,
+              }
+            : {
+                kind: "schema",
+                connId: node.connId,
+                engine: node.engine,
+                database: node.database,
+                schema: name,
+                name,
+                sizeBytes,
+                depth: node.depth + 1,
+                key: nodeKey(node.connId, node.database, name),
+                lkey: levelKey(node.database, name),
+                expandable: true,
+                parent: node,
+              };
+        out.push(n);
+        walk(n, out, t);
       }
-      out.push(n);
-      if (n.expandable) walk(n, out, t);
+      return;
     }
+    // The tables level renders grouped, the way an IDE's tree does: a
+    // "Tables (n)" group and — only when the schema has any — a "Views (n)"
+    // group, each holding its members as children.
+    const tables = [];
+    const views = [];
+    for (const item of lvl.items) {
+      if (!itemName(item)) continue;
+      const kind = item && item.kind ? String(item.kind) : "table";
+      (kind === "table" ? tables : views).push(item);
+    }
+    pushGroup(node, out, t, "tables", "Tables", tables);
+    if (views.length) pushGroup(node, out, t, "views", "Views", views);
+  }
+
+  function pushGroup(parent, out, t, groupId, label, items) {
+    const g = {
+      kind: "group",
+      groupId,
+      connId: parent.connId,
+      engine: parent.engine,
+      database: parent.database,
+      schema: parent.schema,
+      name: label,
+      count: items.length,
+      depth: parent.depth + 1,
+      key: parent.key + "\u0002" + groupId,
+      expandable: true,
+      parent,
+    };
+    out.push(g);
+    // While filtering, collapsed state is ignored — the keep-set prunes below.
+    if (!explorerState.filter && collapsedGroups.has(g.key)) return;
+    for (const item of items) {
+      const n = tableNode(item, g);
+      out.push(n);
+      pushColumns(n, out, t);
+    }
+  }
+
+  function tableNode(item, group) {
+    const name = itemName(item);
+    const kind = item && item.kind ? String(item.kind) : "table";
+    return {
+      kind: kind === "view" ? "view" : "table",
+      tableKind: kind,
+      approxRows: item && typeof item.approx_rows === "number" ? item.approx_rows : null,
+      connId: group.connId,
+      engine: group.engine,
+      database: group.database,
+      schema: group.schema,
+      table: name,
+      name,
+      depth: group.depth + 1,
+      // The 4-part key tables have always had, so the selection and the
+      // expanded set survive the grouping.
+      key: nodeKey(group.connId, group.database, group.schema, name),
+      expandable: true,
+      parent: group,
+    };
+  }
+
+  /** An expanded table's columns as leaf nodes (name · type, key icon on the
+   * primary key), from the same table_info cache the detail panel fills. */
+  function pushColumns(tn, out, t) {
+    if (!t.expanded.has(tn.key)) return;
+    const info = tableInfoCache.get(tableCacheKey(tn));
+    if (!info) return; // renderTree shows the loading/error row instead
+    for (const c of info.columns) {
+      out.push({
+        kind: "column",
+        name: String(c.name),
+        colType: c.type || "",
+        pk: !!c.pk,
+        connId: tn.connId,
+        engine: tn.engine,
+        database: tn.database,
+        schema: tn.schema,
+        table: tn.table,
+        depth: tn.depth + 1,
+        key: tn.key + "\u0002col\u0002" + c.name,
+        expandable: false,
+        parent: tn,
+      });
+    }
+  }
+
+  function tableCacheKey(n) {
+    return [n.connId, n.database || "", n.schema || "", n.table].join("\u0001");
+  }
+
+  function isExpanded(n) {
+    if (n.kind === "group") return !collapsedGroups.has(n.key);
+    return treeFor(n.connId).expanded.has(n.key);
   }
 
   function pendKey(n) {
@@ -514,7 +668,16 @@ export function renderExplorer(shared, host) {
   }
 
   function renderTree() {
-    if (disposed) return;
+    if (disposed || treePainting) return;
+    treePainting = true;
+    try {
+      renderTreeNow();
+    } finally {
+      treePainting = false;
+    }
+  }
+
+  function renderTreeNow() {
     tree.replaceChildren();
     nodesByKey.clear();
     const conns = cachedConnections();
@@ -533,31 +696,57 @@ export function renderExplorer(shared, host) {
     for (const n of nodes) nodesByKey.set(n.key, n);
     const filter = explorerState.filter;
     if (filter) {
+      // Match real objects only — never the "Tables"/"Views" group labels or
+      // column names, which would light up half the tree for any short filter.
+      const MATCHABLE = new Set(["table", "view", "database", "schema"]);
       const keep = new Set();
       for (const n of nodes) {
-        if (n.kind !== "conn" && n.name.toLowerCase().includes(filter)) {
+        if (MATCHABLE.has(n.kind) && n.name.toLowerCase().includes(filter)) {
           for (let p = n; p; p = p.parent) keep.add(p.key);
         }
       }
-      nodes = nodes.filter((n) => keep.has(n.key) || n.kind === "conn");
+      nodes = nodes.filter(
+        (n) =>
+          keep.has(n.key) ||
+          n.kind === "conn" ||
+          // A kept, expanded table keeps its column children.
+          (n.kind === "column" && n.parent && keep.has(n.parent.key))
+      );
     }
     const frag = document.createDocumentFragment();
     for (const n of nodes) {
       frag.appendChild(renderNode(n));
-      if (n.expandable && treeFor(n.connId).expanded.has(n.key)) {
-        const pk = pendKey(n);
+      if (!n.expandable || !isExpanded(n)) continue;
+      if (n.kind === "table" || n.kind === "view") {
+        const pk = tablePendKey(n);
         if (pending.has(pk)) {
           frag.appendChild(statusRow(n, "Loading…"));
         } else if (errors.has(pk)) {
-          frag.appendChild(statusRow(n, errors.get(pk), true, () => ensureLevel(n, true)));
-        } else if (!treeFor(n.connId).levels.has(n.lkey)) {
+          frag.appendChild(statusRow(n, errors.get(pk), true, () => ensureTableInfo(n, true)));
+        } else if (!tableInfoCache.has(tableCacheKey(n))) {
           // Expanded but nothing fetched yet (reopen after a cache drop) —
-          // kick the load; the pending guard above stops a second one.
-          ensureLevel(n);
+          // kick the load; the pending guard stops a second one.
+          ensureTableInfo(n);
           frag.appendChild(statusRow(n, "Loading…"));
-        } else if (!treeFor(n.connId).levels.get(n.lkey).items.length && !filter) {
-          frag.appendChild(statusRow(n, "empty"));
         }
+        continue;
+      }
+      if (n.kind === "group") {
+        if (!n.count && !filter) frag.appendChild(statusRow(n, "empty"));
+        continue;
+      }
+      const pk = pendKey(n);
+      if (pending.has(pk)) {
+        frag.appendChild(statusRow(n, "Loading…"));
+      } else if (errors.has(pk)) {
+        frag.appendChild(statusRow(n, errors.get(pk), true, () => ensureLevel(n, true)));
+      } else if (!treeFor(n.connId).levels.has(n.lkey)) {
+        // Expanded but nothing fetched yet (reopen after a cache drop) —
+        // kick the load; the pending guard above stops a second one.
+        ensureLevel(n);
+        frag.appendChild(statusRow(n, "Loading…"));
+      } else if (!treeFor(n.connId).levels.get(n.lkey).items.length && !filter) {
+        frag.appendChild(statusRow(n, "empty"));
       }
     }
     tree.appendChild(frag);
@@ -578,6 +767,8 @@ export function renderExplorer(shared, host) {
     if (n.kind === "database") return "database";
     if (n.kind === "schema") return "schema";
     if (n.kind === "view") return "view";
+    if (n.kind === "group") return n.groupId === "views" ? "view" : "table";
+    if (n.kind === "column") return n.pk ? "key" : "columns";
     return "table";
   }
 
@@ -587,18 +778,27 @@ export function renderExplorer(shared, host) {
   }
 
   function renderNode(n) {
-    const t = treeFor(n.connId);
-    const expanded = t.expanded.has(n.key);
+    // While filtering, every fetched child renders regardless of collapsed
+    // state — the chevron says so, or it would claim "collapsed" over a row
+    // visibly showing its children.
+    const expanded = isExpanded(n) || (!!explorerState.filter && n.expandable);
+    const selectable = n.kind !== "group";
     const row = el("div", {
-      class: "dbc-node kind-" + n.kind + (isSelected(n) ? " selected" : ""),
+      class:
+        "dbc-node kind-" + n.kind + (n.kind === "column" && n.pk ? " pk" : "") + (selectable && isSelected(n) ? " selected" : ""),
       role: "treeitem",
       "aria-expanded": n.expandable ? String(expanded) : undefined,
-      "aria-selected": String(isSelected(n)),
+      "aria-selected": selectable ? String(isSelected(n)) : undefined,
       style: { "--depth": n.depth },
       dataset: { key: n.key },
       onClick: () => {
+        // Groups toggle; a column stands for its table; a scope node both
+        // selects and unfolds; a table only selects (its chevron unfolds the
+        // columns — a click should not fire a fetch you didn't ask for).
+        if (n.kind === "group") return toggle(n);
+        if (n.kind === "column") return select(n.parent);
         select(n);
-        if (n.expandable && !expanded) expand(n);
+        if ((n.kind === "conn" || n.kind === "database" || n.kind === "schema") && !expanded) expand(n);
       },
     });
     if (n.expandable) {
@@ -622,16 +822,47 @@ export function renderExplorer(shared, host) {
       row.appendChild(el("span", { class: "dbc-chevron-spacer" }));
     }
     row.appendChild(svgIcon(iconFor(n), "dbc-node-icon"));
-    row.appendChild(el("span", { class: "dbc-node-name", text: n.name, title: n.name }));
+    row.appendChild(
+      el("span", {
+        class: "dbc-node-name",
+        text: n.name,
+        title: n.kind === "column" ? n.name + (n.colType ? " · " + n.colType : "") + (n.pk ? " · primary key" : "") : n.name,
+      })
+    );
     if (n.kind === "conn") {
       row.appendChild(el("span", { class: "dbc-node-badge", text: engineLabel(n.engine) }));
       if (n.conn.read_only) row.appendChild(svgIcon("lock", "dbc-node-lock"));
+    } else if (n.kind === "group") {
+      row.appendChild(el("span", { class: "dbc-node-badge count", text: fmtNum(n.count) }));
     } else if (n.kind === "view") {
       row.appendChild(el("span", { class: "dbc-node-badge", text: "view" }));
     } else if (n.kind === "table" && n.approxRows !== null) {
       row.appendChild(el("span", { class: "dbc-node-badge rows", text: "~" + fmtNum(n.approxRows), title: "approximate row count" }));
+    } else if (n.kind === "column" && n.colType) {
+      row.appendChild(el("span", { class: "dbc-node-badge coltype mono", text: n.colType }));
     }
-    if (n.expandable) {
+    if ((n.kind === "database" || n.kind === "schema") && n.sizeBytes != null) {
+      row.appendChild(
+        el("span", { class: "dbc-node-badge size", text: fmtBytes(n.sizeBytes), title: "approximate size on disk" })
+      );
+    }
+    if (n.kind === "conn" || n.kind === "database" || n.kind === "schema") {
+      row.appendChild(
+        el(
+          "button",
+          {
+            type: "button",
+            class: "dbc-node-act",
+            title: "New query here",
+            "aria-label": "New query on " + n.name,
+            onClick: (e) => {
+              e.stopPropagation();
+              shared.openQuery({ connId: n.connId, database: n.database, schema: n.schema });
+            },
+          },
+          svgIcon("code")
+        )
+      );
       row.appendChild(
         el(
           "button",
@@ -677,12 +908,48 @@ export function renderExplorer(shared, host) {
       });
   }
 
+  function tablePendKey(n) {
+    return "tbl|" + n.key;
+  }
+
+  /** Load an expanded table's table_info for its column children (the same
+   * cache renderTableDetail reads, so neither fetches twice). */
+  function ensureTableInfo(n, force) {
+    const pk = tablePendKey(n);
+    if (pending.has(pk)) return;
+    if (!force && tableInfoCache.has(tableCacheKey(n))) {
+      renderTree();
+      return;
+    }
+    pending.add(pk);
+    errors.delete(pk);
+    renderTree();
+    fetchTable(api, n.connId, { database: n.database, schema: n.schema, table: n.table }, force)
+      .catch((err) => {
+        errors.set(pk, errMsg(err));
+      })
+      .finally(() => {
+        pending.delete(pk);
+        if (!disposed) renderTree();
+      });
+  }
+
   function expand(n) {
+    if (n.kind === "group") {
+      collapsedGroups.delete(n.key);
+      return renderTree();
+    }
     treeFor(n.connId).expanded.add(n.key);
-    ensureLevel(n);
+    if (n.kind === "table" || n.kind === "view") ensureTableInfo(n);
+    else ensureLevel(n);
   }
 
   function toggle(n) {
+    if (n.kind === "group") {
+      if (collapsedGroups.has(n.key)) collapsedGroups.delete(n.key);
+      else collapsedGroups.add(n.key);
+      return renderTree();
+    }
     const t = treeFor(n.connId);
     if (t.expanded.has(n.key)) {
       t.expanded.delete(n.key);
@@ -692,13 +959,19 @@ export function renderExplorer(shared, host) {
 
   function refreshNode(n) {
     dropTreeLevels(n.connId, scopeOf(n));
+    // The column leaves under this scope come from tableInfoCache — a refresh
+    // that left it warm would repaint stale columns under fresh tables.
+    dropTableInfo(n.connId, scopeOf(n));
     treeFor(n.connId).expanded.add(n.key);
     ensureLevel(n, true);
   }
 
   function refreshAll() {
     invalidateConnections();
-    for (const [, t] of treeCache) t.levels.clear();
+    for (const [id, t] of treeCache) {
+      t.levels.clear();
+      dropTableInfo(id);
+    }
     errors.clear();
     listConnections(api, true)
       .then(() => {
@@ -709,7 +982,22 @@ export function renderExplorer(shared, host) {
       .catch((err) => !disposed && showTreeError(errMsg(err)));
   }
 
+  /** Repainting the panel disposes the embedded table view, edits and all —
+   * so leaving a dirty embed needs a yes first. window.confirm (not the async
+   * confirm bar): the callers are synchronous click handlers and the row they
+   * clicked must not change selection when the answer is no. */
+  function confirmDiscardEmbed() {
+    const dirty = embedded && embedded.dirtyCount ? embedded.dirtyCount() : 0;
+    if (!dirty) return true;
+    const name = (explorerState.selected && explorerState.selected.name) || "this table";
+    return window.confirm(
+      "Discard " + dirty + " unsaved change" + (dirty === 1 ? "" : "s") + " in " + name + "?"
+    );
+  }
+
   function select(n) {
+    if (explorerState.selected && explorerState.selected.key === n.key && !form) return;
+    if (!confirmDiscardEmbed()) return;
     explorerState.selected = {
       key: n.key,
       kind: n.kind,
@@ -727,6 +1015,7 @@ export function renderExplorer(shared, host) {
   }
 
   function selectConn(conn) {
+    if (!confirmDiscardEmbed()) return;
     explorerState.selected = { key: nodeKey(conn.id), kind: "conn", connId: conn.id, engine: conn.engine, name: conn.name || conn.id };
     form = null;
     renderTree();
@@ -737,6 +1026,8 @@ export function renderExplorer(shared, host) {
 
   function renderMain() {
     if (disposed) return;
+    disposeEmbed();
+    panel.classList.remove("has-embed");
     panel.replaceChildren();
     if (form) return renderForm();
     const s = explorerState.selected;
@@ -836,18 +1127,14 @@ export function renderExplorer(shared, host) {
     panel.appendChild(el("p", { class: "dbc-hint", text: label + " on " + (conn.name || conn.id) + ". Expand it in the tree to see its tables." }));
   }
 
+  /** A selected table IS the unified table view, embedded where the column
+   * summary used to be: the SQL bar + grid (with STRUCTURE and DDL one tab
+   * over), exactly what "Open as window" opens as a grid window. The embed
+   * host shim is chrome-less — no pane title to set, and "close" means
+   * selecting something else, which renderMain's disposeEmbed handles. */
   function renderTableDetail(conn, s) {
-    const scope = { database: s.database, schema: s.schema, table: s.table };
-    const qualified = (s.schema ? s.schema + "." : "") + s.table;
+    const qualified = tableLabel(s.schema, s.table, conn.engine);
     const ctx = { connId: conn.id, database: s.database, schema: s.schema, table: s.table, kind: s.tableKind };
-    const ddlBtn = button("DDL", {
-      icon: "code",
-      class: explorerState.ddlOpen ? "active" : "",
-      onClick: () => {
-        explorerState.ddlOpen = !explorerState.ddlOpen;
-        renderMain();
-      },
-    });
     panel.appendChild(
       panelHead(
         qualified,
@@ -855,7 +1142,12 @@ export function renderExplorer(shared, host) {
         el(
           "span",
           { class: "dbc-actions" },
-          button("View data", { kind: "primary", icon: "table", onClick: () => shared.openTable(ctx) }),
+          button("Open as window", {
+            kind: "primary",
+            icon: "open",
+            title: "Open this table as a grid window, beside your sessions",
+            onClick: () => shared.openTable(ctx),
+          }),
           button("New query", {
             icon: "code",
             onClick: () =>
@@ -865,97 +1157,20 @@ export function renderExplorer(shared, host) {
                 schema: s.schema,
                 sql: "SELECT * FROM " + qualifiedName(conn.engine, s.schema, s.table) + " LIMIT 100",
               }),
-          }),
-          ddlBtn,
-          button("Refresh", { kind: "icon", icon: "refresh", title: "Reload table info", onClick: () => loadDetail(true) })
+          })
         )
       )
     );
-    const badges = el("div", { class: "dbc-badges" }, el("span", { class: "dbc-badge kind", text: s.tableKind || s.kind }));
-    panel.appendChild(badges);
-    const body = el("div", { class: "dbc-detail-body" }, el("p", { class: "dbc-hint", text: "Loading…" }));
+    const body = el("div", { class: "dbc-embed" });
     panel.appendChild(body);
-
-    const loadDetail = (force) => {
-      fetchTable(api, conn.id, scope, force)
-        .then((info) => {
-          if (disposed || !isSelected({ key: s.key })) return;
-          body.replaceChildren();
-          const pk = pkColumns(info);
-          if (!pk.length && info.kind === "table") {
-            badges.appendChild(el("span", { class: "dbc-badge ro", text: "no primary key — data is read only" }));
-          }
-          if (info.kind && info.kind !== "table") {
-            badges.appendChild(el("span", { class: "dbc-badge ro", text: info.kind + " — data is read only" }));
-          }
-          body.appendChild(columnsTable(info.columns));
-          body.appendChild(
-            el("p", { class: "dbc-hint", text: fmtNum(info.columns.length) + " columns · " + fmtNum(info.indexes.length) + " indexes" })
-          );
-          if (explorerState.ddlOpen) {
-            body.appendChild(
-              el(
-                "div",
-                { class: "dbc-ddl" },
-                el(
-                  "div",
-                  { class: "dbc-ddl-head" },
-                  el("span", { text: "DDL" }),
-                  el("span", { class: "dbc-spacer" }),
-                  button("Copy", { icon: "copy", onClick: () => copyText(info.ddl || "") })
-                ),
-                el("pre", { class: "dbc-code", text: info.ddl || "(no DDL available)" })
-              )
-            );
-          }
-        })
-        .catch((err) => {
-          if (disposed) return;
-          body.replaceChildren(el("div", { class: "dbc-notice error", text: "Could not load table info: " + errMsg(err) }));
-        });
-    };
-    loadDetail(false);
-  }
-
-  function columnsTable(columns) {
-    const tbl = el(
-      "table",
-      { class: "dbc-cols-table" },
-      el(
-        "thead",
-        null,
-        el(
-          "tr",
-          null,
-          el("th", { text: "" }),
-          el("th", { text: "Column" }),
-          el("th", { text: "Type" }),
-          el("th", { text: "Nullable" }),
-          el("th", { text: "Default" })
-        )
-      )
-    );
-    const tb = el("tbody");
-    for (const c of columns) {
-      tb.appendChild(
-        el(
-          "tr",
-          null,
-          el("td", { class: "dbc-pk-cell" }, c.pk ? svgIcon("key", "dbc-pk-icon") : null),
-          el("td", { class: "mono", text: c.name }),
-          el("td", { class: "mono muted", text: c.type || "" }),
-          el("td", { class: "muted", text: c.nullable === false ? "NOT NULL" : "NULL" }),
-          el("td", { class: "mono muted", text: c.default == null ? "" : String(c.default) })
-        )
-      );
-    }
-    tbl.appendChild(tb);
-    return el("div", { class: "dbc-cols-wrap" }, tbl);
+    panel.classList.add("has-embed");
+    embedded = shared.embedTable(body, ctx);
   }
 
   // --- connection form ------------------------------------------------------
 
   function startForm(existing) {
+    if (!confirmDiscardEmbed()) return;
     if (existing) {
       form = {
         isNew: false,
@@ -973,6 +1188,7 @@ export function renderExplorer(shared, host) {
         },
         error: "",
         ok: "",
+        install: null,
       };
     } else {
       form = {
@@ -980,6 +1196,7 @@ export function renderExplorer(shared, host) {
         draft: { id: "", name: "", engine: "sqlite", host: "", port: "", user: "", password: "", database: "", file: "", read_only: false },
         error: "",
         ok: "",
+        install: null,
       };
     }
     if (root.isConnected) renderMain();
@@ -989,6 +1206,94 @@ export function renderExplorer(shared, host) {
     const id = "dbc-f-" + label.toLowerCase().replace(/[^a-z0-9]+/g, "-") + "-" + Math.random().toString(36).slice(2, 6);
     input.id = id;
     return el("label", { class: "dbc-field", for: id }, el("span", { class: "dbc-field-label", text: label }), input);
+  }
+
+  /** The "driver missing" note above the form's fields. When the server can
+   * install the driver into its own environment (can_install) the note leads
+   * with a button; the paste-into-a-shell command stays as the fallback, and
+   * is the ONLY thing shown when the server refuses (a system-managed Python,
+   * or no uv/pip) — a button that cannot work would be worse than a command. */
+  function driverNote(drv) {
+    const st = installState();
+    const body = el("div", { class: "dbc-driver-body" });
+    body.appendChild(
+      el("div", {
+        text: st.running
+          ? "Installing " + (drv.driver || "the driver") + " into the server's environment…"
+          : "The " +
+            engineLabel(drv.engine) +
+            " driver" +
+            (drv.driver ? " (" + drv.driver + ")" : "") +
+            " is not installed in the server's environment.",
+      })
+    );
+    if (drv.can_install) {
+      body.appendChild(
+        el(
+          "div",
+          { class: "dbc-driver-actions" },
+          button(st.running ? "Installing…" : "Install driver", {
+            kind: "primary",
+            icon: "download",
+            disabled: !!st.running,
+            title: "Install " + (drv.driver || "the driver") + " into the environment that runs MindFlock",
+            onClick: () => runInstall(drv),
+          }),
+          st.running ? null : el("span", { class: "dbc-hint inline", text: "— no shell needed" })
+        )
+      );
+    } else if (drv.install_blocked) {
+      body.appendChild(el("div", { class: "dbc-hint", text: "Cannot install from here: " + drv.install_blocked + "." }));
+    }
+    if (st.error) body.appendChild(el("div", { class: "dbc-driver-error", text: st.error }));
+    if (st.output) body.appendChild(el("pre", { class: "dbc-driver-out", text: st.output }));
+    if (drv.install_hint && !st.running) {
+      body.appendChild(
+        el(
+          "div",
+          { class: "dbc-driver-hint" },
+          el("code", { class: "mono", text: drv.install_hint }),
+          button("Copy", { kind: "icon", icon: "copy", title: "Copy install command", onClick: () => copyText(drv.install_hint) })
+        )
+      );
+    }
+    return el("div", { class: "dbc-driver-note" }, svgIcon("alert"), body);
+  }
+
+  function installState() {
+    if (!form.install) form.install = { running: false, error: "", output: "" };
+    return form.install;
+  }
+
+  /** Run the install, then repaint: on success the refreshed driver cache makes
+   * the note disappear by itself; on failure the installer's own output is what
+   * the note shows, because "pip said no" is the only useful next step. */
+  async function runInstall(drv) {
+    if (!form) return;
+    const st = installState();
+    if (st.running) return;
+    st.running = true;
+    st.error = st.output = "";
+    form.error = form.ok = "";
+    renderMain();
+    let res;
+    try {
+      res = await installDriver(api, drv.engine);
+    } catch (err) {
+      res = { ok: false, error: errMsg(err) };
+    }
+    if (disposed || !form) return;
+    // Re-read: the form object may have been replaced while we were awaiting.
+    const now = installState();
+    now.running = false;
+    if (res.ok) {
+      api.ui.toast((res.driver || "Driver") + (res.already ? " already installed" : " installed"));
+      form.ok = "Driver installed — Test now checks the connection for real.";
+    } else {
+      now.error = res.error || "the install failed";
+      now.output = res.output || "";
+    }
+    renderMain();
   }
 
   function renderForm() {
@@ -1028,28 +1333,7 @@ export function renderExplorer(shared, host) {
     panel.appendChild(strip);
 
     const drv = cachedDrivers().find((x) => x.engine === d.engine);
-    if (drv && drv.available === false) {
-      panel.appendChild(
-        el(
-          "div",
-          { class: "dbc-driver-note" },
-          svgIcon("alert"),
-          el(
-            "div",
-            null,
-            el("div", { text: "The " + engineLabel(d.engine) + " driver" + (drv.driver ? " (" + drv.driver + ")" : "") + " is not installed in the server's environment." }),
-            drv.install_hint
-              ? el(
-                  "div",
-                  { class: "dbc-driver-hint" },
-                  el("code", { class: "mono", text: drv.install_hint }),
-                  button("Copy", { kind: "icon", icon: "copy", title: "Copy install command", onClick: () => copyText(drv.install_hint) })
-                )
-              : null
-          )
-        )
-      );
-    }
+    if (drv && drv.available === false) panel.appendChild(driverNote(drv));
 
     const fields = el("div", { class: "dbc-fields" });
     fields.appendChild(field("Name", bind("name", { placeholder: "My database", autofocus: true })));
@@ -1242,6 +1526,7 @@ export function renderExplorer(shared, host) {
   return {
     dispose() {
       disposed = true;
+      disposeEmbed();
       dismissConfirm(confirmSlot);
       root.remove();
     },

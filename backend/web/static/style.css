@@ -680,6 +680,29 @@ body {
   width: 100%;
   height: 100%;
 }
+
+/* An inline spinner for a button that is mid-request ("Writing…"). The pane
+   overlays' .spinner is a 28px block for an empty pane; this one is sized in
+   `em` so it rides the button's own text, and borrows `currentColor` so it
+   tints with whatever button it sits in. Shares the .spinner keyframes.
+   `prefers-reduced-motion` gets a static ring rather than nothing: the ring is
+   the "still working" cue, the rotation only makes it lively. */
+.btn-spin {
+  display: inline-block;
+  vertical-align: -0.12em;
+  width: 0.9em;
+  height: 0.9em;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-top-color: currentColor;
+  animation: cs-spin 0.7s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-spin {
+    animation: none;
+  }
+}
 }
 @layer components{
 /* Defensively neutralize the LEGACY Electron title-strip injection. Older app
@@ -810,8 +833,8 @@ body #mf-winctl {
 
 /* The menu carries seven items now (New, Intake, Verify, Recent, Prompts,
    Command, Settings), so the type and the spacing are deliberately tighter than
-   the rest of the app — here, on #topbar button, on .tb-item / .tb-drop-btn and
-   on #new-btn, which must all move together or the row goes ragged.
+   the rest of the app — here, on #topbar button, on .tb-item and on #new-btn,
+   which must all move together or the row goes ragged.
    The bar must stay ONE line at the narrowest window anyone actually uses: it is
    fixed and full-width, so an item that wraps does not push anything down, it
    disappears under the edge of the window. 11px is the floor — these are the
@@ -829,8 +852,7 @@ body #mf-winctl {
 }
 
 /* Everything clickable opts out of the drag region. */
-#topbar button,
-#topbar .tb-drop {
+#topbar button {
   -webkit-app-region: no-drag;
 }
 
@@ -844,8 +866,7 @@ body #mf-winctl {
 }
 
 /* Icon/label buttons in the top bar. */
-#topbar .tb-item,
-#topbar .tb-drop-btn {
+#topbar .tb-item {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -861,8 +882,7 @@ body #mf-winctl {
   cursor: pointer;
 }
 
-#topbar .tb-item:hover,
-#topbar .tb-drop-btn:hover {
+#topbar .tb-item:hover {
   background: var(--panel-2);
   border-color: var(--border);
 }
@@ -978,47 +998,6 @@ body #mf-winctl {
 
 #topbar #notif-btn {
   position: relative;
-}
-
-/* Top-bar dropdown (combined Recent / Disk menu). */
-#topbar .tb-drop {
-  position: relative;
-}
-
-#topbar .tb-drop-panel {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  z-index: 3200;
-  display: none;
-  flex-direction: column;
-  min-width: 190px;
-  padding: 4px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-}
-
-#topbar .tb-drop.open .tb-drop-panel {
-  display: flex;
-}
-
-#topbar .tb-drop-panel button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: 7px 10px;
-  background: transparent;
-  color: var(--text);
-  border: 0;
-  border-radius: 6px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-#topbar .tb-drop-panel button:hover {
-  background: var(--panel-2);
 }
 } /* 020 */ @layer components{
 /* Sidebar */
@@ -3370,6 +3349,30 @@ p.set-hint {
   border-color: var(--accent);
 }
 
+/* --- Non-session windows (WindowList.tsx) -------------------------------- */
+/* They sit IN the session list, under no heading of their own: the rail is the
+   list of windows, and the assistant or a database table is one. The rows are
+   first-class — grip, Alt+N number, drag cues, all inherited from .inst — and
+   the icon takes the lane a session's status dot takes, so the titles line up;
+   the shared .inst.active says which windows currently hold a grid slot. */
+.inst.window-row .win-icon {
+  flex: none;
+  width: 13px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.inst.window-row .title {
+  font-weight: 500;
+}
+
+.inst.window-row .stagechip.win-kind {
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.05em;
+}
+
 #sidebar-footer {
   padding: 10px 16px;
   font-size: 11px;
@@ -3418,20 +3421,6 @@ p.set-hint {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
-}
-
-#workspaces-btn {
-  cursor: pointer;
-  font-size: 11px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-}
-
-#workspaces-btn:hover {
-  border-color: var(--accent);
 }
 } /* 080 */ @layer components{
 /* Overall cost/token summary, pinned just below the sidebar header. */
@@ -4990,16 +4979,27 @@ p.set-hint {
 
 .pane-head {
   flex-wrap: nowrap;
-  /* Backstop only. With the title able to shrink to 2.5rem and the container
-     queries below shedding the optional bits, this should never engage — but a
-     header that spills past the pane's rounded corner looks broken, so clip. */
-  overflow: hidden;
+  /* Scroll, never clip: in a narrow pane every header control stays reachable
+     by scrolling sideways (shift+wheel / trackpad swipe) instead of being cut
+     off past the edge. The scrollbar itself is hidden so the header keeps its
+     one-line height — content cut mid-glyph at the edge is the affordance —
+     and .head-tail stays pinned to the right so the window controls (history,
+     copy-all, ✕) never leave view. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
 
-/* Normal right padding. (The old 54px gutter reserved room for the floating
-   #mic-btn, which is now hidden — reclaim the space so headers fit more.) */
+.pane-head::-webkit-scrollbar {
+  display: none;
+}
+
+/* The right gutter lives on .head-tail (every head renders one), not here:
+   the head scrolls horizontally and the tail is sticky, so padding on the
+   container would be a 12px strip past the tail where scrolled content peeks
+   out from under it. */
 .pane-head {
-  padding-right: 12px;
+  padding-right: 0;
 }
 
 /* The title is the ONE thing in this header that yields.
@@ -5090,47 +5090,19 @@ p.set-hint {
   display: none;
 }
 
-/* Progressive disclosure as a pane narrows (multiple windows): drop the least
-   useful bits first so nothing gets clipped. Priority kept longest: title,
-   view tabs, and the status chip. Order of removal:
-     560px — diff-stats line + the per-window token/cost counter
-     420px — next-step (Commit/Push/…) button — kept longest so the primary
-             action stays reachable when several windows are tiled tight
-     360px — tighten the tabs so all four still fit */
+/* The header scrolls sideways now, so NOTHING is display:none'd away as a
+   pane narrows — everything stays clickable, just possibly a scroll away.
+   (The old progressive-disclosure rules hid the token chip and the live-step
+   text at 560/360px, which made them unreachable in tiled layouts.) Narrow
+   panes only tighten spacing: */
 .pane {
   container-type: inline-size;
 }
 
 @container (max-width: 560px) {
-  .pane-head .tok {
-    display: none;
-  }
-
-  .pane-head .actions .stepnow-target {
-    display: none;
-  }
-
   .pane-head .actions .stepnow-text {
     max-width: 12ch;
   }
-}
-
-/* Tightest layout: the dot alone still says "running / blocked", and the tooltip
-   still carries the detail. Deliberately NOT hidden with .nextstep at 420px —
-   once the action button is gone this is the only signal left. */
-@container (max-width: 360px) {
-  .pane-head .actions .stepnow-text {
-    display: none;
-  }
-}
-
-/* Between the fixed breakpoints a header can still overflow (long titles,
-   wide next-step labels) and the chip would render half a word ("Claud").
-   makePane's fitTok() marks it .tok-clip whenever the header content is wider
-   than the pane; visibility (not display) keeps its width in the layout so
-   the overflow measurement doesn't oscillate. */
-.pane-head .tok.tok-clip {
-  visibility: hidden;
 }
 
 @container (max-width: 360px) {
@@ -5607,6 +5579,48 @@ p.set-hint {
 .pane-head .act:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* The right-edge control cluster (history, copy-all, ✕). Sticky against the
+   header's own horizontal scroll so these stay visible while the rest of the
+   header slides beneath; the opaque background is what masks that content.
+   margin-left:auto pins it right in heads with no .tok (special panes); when
+   a chip already carries the auto margin the sibling rule zeroes this one so
+   the free space isn't split between two auto margins (see the .tok note). */
+.pane-head .head-tail {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  margin-left: auto;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 6px;
+  /* The head's right gutter — carried here (see the padding-right: 0 note on
+     .pane-head) so the opaque tail runs flush to the pane edge. */
+  padding-right: 12px;
+  background: var(--panel-2);
+}
+
+.pane-head .tok ~ .head-tail {
+  margin-left: 0;
+}
+
+/* The window ✕: hide (sessions) / close (special windows). Same glyph and
+   hover treatment as the sidebar rows' .kill so it reads as the same verb. */
+.pane-head .act.pane-close {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 7px;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.pane-head .act.pane-close:hover {
+  color: var(--red);
+  border-color: var(--red);
+  background: rgba(222, 97, 62, 0.12);
 }
 
 /* Icon-only copy-history button: center the SVG, muted like the other glyphs. */
@@ -7055,6 +7069,11 @@ p.set-hint {
    should still land on Commit. Sized to the label row it sits on. */
 #commit-form #commit-write {
   flex: none;
+  /* inline-flex + gap so the "Writing…" spinner sits on the text's line without
+     the button jumping height mid-generation. */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
@@ -7294,22 +7313,8 @@ p.set-hint {
   cursor: default;
 }
 
-/* Workspaces / disk manager */
-#workspaces-panel {
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 18px;
-  /* Was 580px; the rows now carry a checkbox and a modified-date column, and
-     the header a filter and a sort picker. */
-  width: 760px;
-  max-width: 92vw;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
+/* Dialog header row — shared by every list dialog (Recently closed,
+   Intake, Verify, Prompts, Settings…). */
 .ws-head {
   display: flex;
   align-items: center;
@@ -7319,13 +7324,6 @@ p.set-hint {
 .ws-head h2 {
   margin: 0;
   font-size: 16px;
-}
-
-.ws-head #ws-total {
-  flex: 1;
-  font-size: 12px;
-  /* "37 dirs · 243.80 GB" was breaking between the number and its unit. */
-  white-space: nowrap;
 }
 
 .ws-head button {
@@ -7403,14 +7401,6 @@ p.set-hint {
   border-color: var(--accent);
 }
 
-.ws-when {
-  font-size: 11px;
-  flex: none;
-  min-width: 58px;
-  text-align: right;
-  white-space: nowrap;
-}
-
 .row-check {
   flex: none;
   width: 14px;
@@ -7440,7 +7430,6 @@ p.set-hint {
 
 /* A picked row has to be obvious from across the list: the checkbox alone is
    14px of signal for an action that can delete a dozen worktrees. */
-.ws-row.picked,
 .recent-row.picked {
   border-color: var(--accent);
   background: rgba(var(--accent-rgb), 0.1);
@@ -7478,39 +7467,6 @@ p.set-hint {
   border-color: var(--accent);
 }
 
-#ws-list {
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 60px;
-}
-
-.ws-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-}
-
-.ws-info {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.ws-name {
-  font-size: 13px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .ws-badge {
   font-size: 10px;
   padding: 1px 7px;
@@ -7525,55 +7481,9 @@ p.set-hint {
   color: #c4b3ff;
 }
 
-.ws-size {
-  font-size: 12px;
-  color: var(--muted);
-  flex: none;
-  min-width: 64px;
-  text-align: right;
-}
-
-.ws-del {
-  border-radius: 6px;
-  padding: 5px 12px;
-  font-size: 12px;
-  cursor: pointer;
-  flex: none;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--red);
-}
-
-.ws-del:hover {
-  border-color: var(--red);
-  background: rgba(222, 97, 62, 0.12);
-}
-
-.ws-protected {
-  font-size: 11px;
-  color: var(--muted);
-  flex: none;
-  padding: 5px 8px;
-}
-
 .ws-badge.gone {
   background: rgba(222, 97, 62, 0.18);
   color: #f0a08a;
-}
-
-/* Recent… footer button */
-#recent-btn {
-  cursor: pointer;
-  font-size: 11px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-}
-
-#recent-btn:hover {
-  border-color: var(--accent);
 }
 
 /* Cursor auto-adopt on/off switch (sidebar footer) */
@@ -7624,7 +7534,7 @@ p.set-hint {
   background: #fff;
 }
 
-/* Recently-closed panel (reuses .ws-head from the disk manager) */
+/* Recently-closed panel — closed sessions AND what is left on disk. */
 #recent-panel {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -7701,9 +7611,17 @@ p.set-hint {
   font-family: ui-monospace, Menlo, Consolas, monospace;
 }
 
-.recent-when {
+.recent-when,
+.recent-size {
   font-size: 11px;
   flex: none;
+}
+
+/* The rows "Remove unused worktrees" would take. Muted amber, not the red of
+   .ws-badge.gone: this is a row you can still reopen, not one already lost. */
+.ws-badge.stale {
+  background: rgba(214, 158, 46, 0.18);
+  color: #e6c15e;
 }
 
 .recent-actions {
@@ -12106,7 +12024,6 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
    app-wide palette through the unshadowed --app-* copies. A declaration on the
    element itself always beats the region's inherited one, so this needs no
    specificity or layer juggling. */
-#topbar .tb-drop-panel,
 .notif-pop,
 #foot-customize-menu {
   --panel: var(--app-panel);

@@ -3,7 +3,7 @@
  * The lists here are the ones that grow without bound — every open PR on every
  * watched repo, every issue, every assigned ticket in every workflow state —
  * and until now the only way to a particular row was scrolling past the rest.
- * Recently closed and Workspaces on disk already solved that with a Ctrl+F
+ * Recently closed already solved that with a Ctrl+F
  * filter, and Verify's checklist list now shares it; these are the same
  * mechanism (``matchesTokens``: every whitespace-separated token has to appear
  * somewhere in the row) applied to the four Intake panels.

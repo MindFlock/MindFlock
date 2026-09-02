@@ -10,7 +10,8 @@ running any extension code — and in the REST shapes under ``/api/dbclient``
 that the JS calls.
 
 Layout: ``store.py`` keeps the profiles (own 0600 file, never settings.json),
-``adapters.py`` speaks each engine's dialect, ``service.py`` is the single
+``adapters.py`` speaks each engine's dialect, ``installer.py`` puts a missing
+driver into the serving venv on request, ``service.py`` is the single
 execution chokepoint (pool + locks, statement guards, value codec, identifier
 validation). This module only assembles the router: every handler is
 ``async def`` and pushes adapter work through ``asyncio.to_thread`` (the
@@ -39,8 +40,8 @@ from ..base import (
     ExtensionSpec,
     ExtensionSurface,
 )
-from . import store
-from .adapters import DriverMissing, driver_report
+from . import installer, store
+from .adapters import DriverMissing
 from .service import DbClientService, RequestError, content_disposition, error_text
 
 
@@ -71,11 +72,6 @@ class DbClientAddon(Addon):
                     command="dbclient.explorer",
                     label="Explorer",
                     title="Browse connections, tables and data",
-                ),
-                ExtensionButton(
-                    command="dbclient.sql",
-                    label="SQL",
-                    title="Open the SQL query pad",
                 ),
             ],
             commands=[
@@ -175,7 +171,19 @@ class DbClientAddon(Addon):
 
         @router.get("/drivers")
         async def get_drivers() -> JSONResponse:
-            return JSONResponse({"drivers": await asyncio.to_thread(driver_report)})
+            return JSONResponse(await asyncio.to_thread(installer.drivers_payload))
+
+        @router.post("/drivers/install")
+        async def install_driver(body: dict) -> JSONResponse:
+            """Put an engine's driver into the server's own environment. The
+            body names an engine, never a package: see installer.py for why
+            that distinction is the whole security model here."""
+            engine = str((body or {}).get("engine") or "")
+            try:
+                report = await asyncio.to_thread(installer.install_driver, engine)
+            except ValueError as err:
+                return _error(400, str(err))
+            return JSONResponse(report)
 
         # --- profiles ----------------------------------------------------- #
         @router.get("/connections")

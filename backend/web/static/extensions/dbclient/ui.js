@@ -20,7 +20,15 @@ export function el(tag, attrs, ...children) {
       if (key === "class" || key === "className") node.className = val;
       else if (key === "text") node.textContent = val;
       else if (key === "dataset") Object.assign(node.dataset, val);
-      else if (key === "style" && typeof val === "object") Object.assign(node.style, val);
+      else if (key === "style" && typeof val === "object") {
+        for (const [prop, v] of Object.entries(val)) {
+          // Custom properties have no named setter on CSSStyleDeclaration —
+          // Object.assign would create an inert expando and the var() falls
+          // back silently (the flat-tree bug). setProperty is the only door.
+          if (prop.startsWith("--")) node.style.setProperty(prop, String(v));
+          else node.style[prop] = v;
+        }
+      }
       else if (key === "for") node.htmlFor = val;
       else if (/^on[A-Z]/.test(key)) node.addEventListener(key.slice(2).toLowerCase(), val);
       else if (key.startsWith("aria-") || key.startsWith("data-")) node.setAttribute(key, val);
@@ -300,19 +308,13 @@ export function fmtBytes(n) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "?";
   if (n < 1024) return n + " B";
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
-  return (n / (1024 * 1024)).toFixed(1) + " MB";
+  if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB";
+  if (n < 1024 * 1024 * 1024 * 1024) return (n / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+  return (n / (1024 * 1024 * 1024 * 1024)).toFixed(1) + " TB";
 }
 
-/** Identifier quoting per engine — for the SQL the explorer pre-fills into a
- * new query pane. The server validates and quotes everything it executes on
- * its own; this only has to produce text a human would have typed. */
-export function quoteIdent(engine, name) {
-  const s = String(name);
-  if (engine === "mysql") return "`" + s.replace(/`/g, "``") + "`";
-  return '"' + s.replace(/"/g, '""') + '"';
-}
-
-export function qualifiedName(engine, schema, table) {
-  const t = quoteIdent(engine, table);
-  return schema ? quoteIdent(engine, schema) + "." + t : t;
-}
+/** Identifier text — quoting, schema qualification, and the label form — lives
+ * in sql.js (it is part of the SQL these produce, and that module is the one
+ * the unit tests load bare). Re-exported here so the UI layer keeps importing
+ * its helpers from one place. */
+export { quoteIdent, qualifiedName, tableLabel, isDefaultSchema } from "./sql.js";

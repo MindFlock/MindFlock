@@ -20,6 +20,15 @@
   line-height: 1.4;
 }
 
+/* The JS toggles visibility with el.hidden throughout, but any author display
+ * rule (.dbc-badge's inline-flex, .dbc-grid-empty's flex) beats the UA's
+ * [hidden]{display:none} — which is how a hidden "No rows" note floated over
+ * a full grid and an empty read-only badge showed as a bare lock chip. One
+ * scoped guard restores the attribute's meaning for the whole extension. */
+.mfx-dbclient [hidden] {
+  display: none !important;
+}
+
 .mfx-dbclient .mono {
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
 }
@@ -179,13 +188,6 @@
 
 .mfx-dbclient .dbc-badge.kind {
   text-transform: uppercase;
-}
-
-.mfx-dbclient .dbc-badges {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  padding: 0 12px 8px;
 }
 
 .mfx-dbclient .dbc-notice {
@@ -373,6 +375,7 @@
   pointer-events: none;
 }
 
+
 .mfx-dbclient .dbc-table {
   border-collapse: separate;
   border-spacing: 0;
@@ -404,11 +407,104 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* Export: one control, two formats. The pair never splits across lines — as
+   two full buttons they were the first thing a narrow toolbar broke apart, and
+   a stray "JSON" on its own line reads as an unrelated action. */
+.mfx-dbclient .dbc-export {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  padding: 0 6px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--muted);
+  background: var(--panel-2);
+}
+
+.mfx-dbclient .dbc-export .dbc-btn.dbc-export-fmt {
+  border: 0;
+  background: none;
+  padding: 4px 6px;
+}
+
+.mfx-dbclient .dbc-export .dbc-btn.dbc-export-fmt:hover {
+  color: var(--accent);
+}
+
+/* A hairline between the two formats, so they read as a choice. */
+.mfx-dbclient .dbc-export .dbc-btn.dbc-export-fmt + .dbc-btn.dbc-export-fmt {
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+}
+
+/* --- resizable columns ---------------------------------------------------- */
+/* Only once a column has been resized: until then the grid sizes itself to its
+   content, and fixed layout would hand every column an equal share instead. */
+.mfx-dbclient .dbc-table.cols-fixed {
+  table-layout: fixed;
+}
+
+/* In fixed layout the column widths ARE the widths — the 360px cap that keeps
+   an auto-laid-out grid readable would silently overrule a wider drag. */
+.mfx-dbclient .dbc-table.cols-fixed th,
+.mfx-dbclient .dbc-table.cols-fixed td {
+  max-width: none;
+}
+
+/* The slack-taker. Only exists once columns are pinned: until then the auto
+   layout's own stretching is the look this grid has always had. */
+.mfx-dbclient .dbc-table:not(.cols-fixed) .dbc-filler {
+  display: none;
+}
+
+.mfx-dbclient .dbc-table .dbc-filler {
+  border-right: 0;
+  padding: 0;
+}
+
+/* The grab strip on a header's right edge. Wider than it looks (7px) because a
+   1px target is a game, not a control. */
+.mfx-dbclient .dbc-th .dbc-col-resize {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 7px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+.mfx-dbclient .dbc-th .dbc-col-resize:hover::after,
+.mfx-dbclient .dbc-grid.resizing .dbc-th .dbc-col-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 2px;
+  height: 100%;
+  background: var(--accent);
+}
+
+/* Keep the resize cursor while the pointer is dragging outside the header. */
+.mfx-dbclient .dbc-grid.resizing,
+.mfx-dbclient .dbc-grid.resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
 .mfx-dbclient .dbc-table thead .dbc-filter-row th {
   top: 27px;
   padding: 2px 4px;
   font-weight: 400;
   background: var(--panel);
+}
+
+/* The grip inside it is absolutely positioned; a sticky th is already a
+   containing block, but the relative keeps that true if the sticky ever goes. */
+.mfx-dbclient .dbc-th {
+  position: relative;
 }
 
 .mfx-dbclient .dbc-th.sortable {
@@ -980,13 +1076,6 @@
   padding: 12px;
 }
 
-.mfx-dbclient .dbc-detail-body {
-  padding: 0 12px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
 /* connection cards (the .prov-conn vocabulary, scoped) */
 .mfx-dbclient .dbc-card-list {
   display: flex;
@@ -1143,6 +1232,37 @@
   margin-top: 2px;
 }
 
+.mfx-dbclient .dbc-driver-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.mfx-dbclient .dbc-driver-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.mfx-dbclient .dbc-driver-error {
+  margin-top: 6px;
+  color: var(--red);
+}
+
+.mfx-dbclient .dbc-driver-out {
+  margin: 6px 0 0;
+  max-height: 140px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .mfx-dbclient .dbc-driver-hint {
   display: flex;
   align-items: center;
@@ -1199,16 +1319,89 @@
   width: 1%;
 }
 
-.mfx-dbclient .dbc-ddl {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.mfx-dbclient .dbc-ddl-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* --- tree groups, columns and size badges -------------------------------- */
+.mfx-dbclient .dbc-node.kind-group .dbc-node-name {
   color: var(--muted);
   font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+
+.mfx-dbclient .dbc-node-badge.count,
+.mfx-dbclient .dbc-node-badge.size,
+.mfx-dbclient .dbc-node-badge.coltype {
+  border-color: transparent;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.mfx-dbclient .dbc-node-badge.size {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.mfx-dbclient .dbc-node.kind-column {
+  min-height: 21px;
+  font-size: 11.5px;
+}
+
+.mfx-dbclient .dbc-node.kind-column .dbc-node-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.mfx-dbclient .dbc-node.kind-column.pk .dbc-node-icon {
+  color: var(--gold);
+}
+
+.mfx-dbclient .dbc-node-badge.coltype {
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- unified table view: the SQL bar ------------------------------------- */
+.mfx-dbclient .dbc-sqlbar-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex: none;
+}
+
+/* Overrides the query pad's .dbc-sql block metrics: this is a bar, not an
+ * editor pane — one line tall, growing with its content (autosized in JS). */
+.mfx-dbclient .dbc-sqlbar {
+  flex: 1;
+  min-width: 0;
+  min-height: 26px;
+  height: 26px;
+  max-height: 132px;
+  resize: none;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.mfx-dbclient .dbc-sqlbar.edited {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.06);
+}
+
+.mfx-dbclient .custom-sql .dbc-sqlbar:not(.edited) {
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--border));
+}
+
+/* --- the table view embedded in the explorer's detail panel --------------- */
+.mfx-dbclient .dbc-panel.has-embed {
+  overflow: hidden;
+}
+
+.mfx-dbclient .dbc-embed {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }

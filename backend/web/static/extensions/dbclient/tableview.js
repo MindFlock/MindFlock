@@ -1,12 +1,23 @@
-/** The table pane (surface "table", multi-instance): DATA | STRUCTURE | DDL.
+/** The table view (surface "table", multi-instance; also embedded in the
+ * explorer's table detail): DATA | STRUCTURE | DDL, unified with the query.
  *
- * DATA is the editable page grid: header-click sort, a per-column filter row,
- * checkbox selection, double-click editing with Set-NULL, Insert / Delete
- * selected / Save, CSV/JSON export through a plain anchor GET, and a footer
- * with prev/next + "rows X–Y" (" of ~N" only when the server had a cheap
- * estimate). Views and tables without a primary key render read-only with a
- * badge saying why — the backend refuses to write them anyway (no
- * where-all-columns fallback in v1), so the UI says so up front.
+ * DATA leads with the SQL bar: the SELECT behind the page, regenerated
+ * (buildTableSql) every time a sort click, filter, page turn or page-size
+ * change reshapes it — the buttons alter the query and the query is SHOWN.
+ * The text is editable: Ctrl+Enter (or Run) with the generated text merely
+ * reloads the page; with edited text it runs as a custom query through
+ * POST /query, whose result set renders read-only in the same grid until the
+ * Table button (or any sort/filter/page action) returns to the managed page.
+ * The managed page itself still loads through /table-data with structured,
+ * bound parameters — the SQL bar mirrors it, it is never the loader.
+ *
+ * Below the bar, the editable page grid: header-click sort, a per-column
+ * filter row, checkbox selection, double-click editing with Set-NULL,
+ * Insert / Delete selected / Save, CSV/JSON export through a plain anchor
+ * GET, and a footer with prev/next + "rows X–Y" (" of ~N" only when the
+ * server had a cheap estimate). Views and tables without a primary key render
+ * read-only with a badge saying why — the backend refuses to write them
+ * anyway (no where-all-columns fallback in v1), so the UI says so up front.
  *
  * Save is a two-step conversation with POST /rows: preview:true returns the
  * generated SQL, which is shown in a confirm bar; confirming resends with
@@ -18,6 +29,7 @@
 
 import { el, button, option, svgIcon, confirmBar, dismissConfirm, makeNotice, showOverlay, debounce, errMsg, fmtNum, fmtBytes, copyText } from "./ui.js";
 import { createGrid, RENDER_CAP } from "./grid.js";
+import { buildTableSql, classifyStatement, tableLabel } from "./sql.js";
 import { connUrl, connectionById, fetchTable, pkColumns, createScopePicker } from "./explorer.js";
 
 /** The page index the server calls the first page. ONE place to flip if the
@@ -57,6 +69,9 @@ export function renderTableView(shared, host) {
     total: null,
     rowsOnPage: 0,
     busy: false,
+    /** {sql} while an edited query's result set is on the grid instead of the
+     * managed page — cleared by loadData (every managed action). */
+    custom: null,
   };
 
   const root = el("div", { class: "dbc-pane dbc-tableview" });
@@ -121,14 +136,29 @@ export function renderTableView(shared, host) {
   let refreshBtn = null;
   let exportCsv = null;
   let exportJson = null;
+  let sqlInput = null;
+  let runBtn = null;
+  let tableBtn = null;
+  /** The last buildTableSql output — the yardstick for "has the user edited". */
+  let lastGenerated = "";
+  /** Monotonic request token: only the newest load/run may render, so a slow
+   * page response can never repaint over a newer one (or a custom result). */
+  let loadGen = 0;
   const onFilter = debounce((filters) => {
-    st.filters = filters;
-    st.page = FIRST_PAGE;
-    loadData();
+    // Through guardDirty like every managed action — typing a filter must
+    // not silently reload over unsaved edits.
+    guardDirty(() => {
+      st.filters = filters;
+      st.page = FIRST_PAGE;
+      loadData();
+    });
   }, 350);
 
   function build() {
-    const ident = (st.schema ? st.schema + "." : "") + st.table;
+    // st.conn is still null on the first build (the connection loads after),
+    // and the engine-less label — every engine's default schema hidden — is the
+    // right answer for a title either way.
+    const ident = tableLabel(st.schema, st.table, st.conn && st.conn.engine);
     host.setTitle(ident);
     roBadge = el("span", { class: "dbc-badge ro", hidden: true }, svgIcon("lock"), el("span"));
 
@@ -175,13 +205,27 @@ export function renderTableView(shared, host) {
     sizeSel = el("select", { class: "dbc-select", title: "Rows per page" });
     for (const n of PAGE_SIZES) sizeSel.appendChild(option(String(n), String(n) + " / page", n === st.pageSize));
     sizeSel.addEventListener("change", () =>
-      guardDirty(() => {
-        st.pageSize = Number(sizeSel.value) || PAGE_SIZES[0];
-        st.page = FIRST_PAGE;
-        loadData();
-      })
+      guardDirty(
+        () => {
+          st.pageSize = Number(sizeSel.value) || PAGE_SIZES[0];
+          st.page = FIRST_PAGE;
+          loadData();
+        },
+        // Declined: the select must snap back to the size still in force.
+        () => {
+          sizeSel.value = String(st.pageSize);
+        }
+      )
     );
-    refreshBtn = button("Refresh", { kind: "icon", icon: "refresh", title: "Reload this page", onClick: () => guardDirty(loadData) });
+    refreshBtn = button("Refresh", {
+      kind: "icon",
+      icon: "refresh",
+      title: "Reload this page (re-runs a custom SELECT as is)",
+      // Only a custom statement that RETURNED ROWS is re-run verbatim; a
+      // custom write must never be silently executed again — refreshing
+      // after one means "show me the table now".
+      onClick: () => guardDirty(() => (st.custom && st.custom.isQuery ? runCustom(st.custom.sql) : loadData())),
+    });
     filterBtn = button("Filter", {
       icon: "filter",
       title: "Show or hide the per-column filter row",
@@ -212,14 +256,50 @@ export function renderTableView(shared, host) {
       deleteBtn,
       saveBtn,
       el("span", { class: "dbc-spacer" }),
-      exportCsv,
-      exportJson
+      // ONE control with two formats: as two separate buttons they were the
+      // first things the toolbar broke onto a second line, which read as two
+      // unrelated actions stacked up.
+      el("span", { class: "dbc-export" }, svgIcon("download"), exportCsv, exportJson)
     );
     prevBtn = button("Previous page", { kind: "icon", icon: "arrow-left", title: "Previous page", disabled: true, onClick: () => page(-1) });
     nextBtn = button("Next page", { kind: "icon", icon: "arrow-right", title: "Next page", disabled: true, onClick: () => page(1) });
     footerText = el("span", { class: "dbc-footer-text muted", text: "Loading…" });
     const footer = el("div", { class: "dbc-footer" }, prevBtn, footerText, nextBtn);
-    dataBody = el("div", { class: "dbc-tab-body data" }, toolbar, notice.el, confirmSlot, grid.el, footer);
+
+    // The SQL bar: the query behind the page, visibly rewritten by every sort/
+    // filter/page action; editable, Ctrl+Enter to run (see the module header).
+    sqlInput = el("textarea", {
+      class: "dbc-sql dbc-sqlbar mono",
+      spellcheck: false,
+      rows: 1,
+      "aria-label": "The SQL behind this page — edit and press Ctrl+Enter to run a custom query",
+      onInput: () => {
+        autosizeSql();
+        markSqlState();
+      },
+      onKeyDown: (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+          e.preventDefault();
+          runSql();
+        }
+      },
+    });
+    runBtn = button("Run", {
+      kind: "icon",
+      icon: "play",
+      title: "Run the SQL above (Ctrl+Enter) — an edited query runs as a custom, read-only result",
+      onClick: runSql,
+    });
+    tableBtn = button("Table", {
+      kind: "icon",
+      icon: "table",
+      title: "Back to the managed table page (regenerates the query)",
+      onClick: resetToManaged,
+    });
+    tableBtn.hidden = true;
+    const sqlRow = el("div", { class: "dbc-sqlbar-row" }, sqlInput, tableBtn, runBtn);
+
+    dataBody = el("div", { class: "dbc-tab-body data" }, sqlRow, toolbar, notice.el, confirmSlot, grid.el, footer);
 
     // STRUCTURE / DDL
     structBody = el("div", { class: "dbc-tab-body structure", hidden: true });
@@ -243,18 +323,16 @@ export function renderTableView(shared, host) {
     qs.set("format", format);
     // A real anchor: the browser streams the GET to disk with the session
     // cookie attached — no blob buffering for a possibly large table.
-    const a = el(
+    return el(
       "a",
       {
-        class: "dbc-btn",
+        class: "dbc-btn dbc-export-fmt",
         href: connUrl(st.connId, "/export?" + qs.toString()),
         download: st.table + "." + format,
         title: "Download the whole table as " + format.toUpperCase(),
       },
-      svgIcon("download"),
       el("span", { text: format.toUpperCase() })
     );
-    return a;
   }
 
   // --- data -----------------------------------------------------------------
@@ -292,16 +370,22 @@ export function renderTableView(shared, host) {
   }
 
   function applyReadOnly() {
-    const ro = !!st.readOnlyWhy;
+    const why = st.readOnlyWhy || (st.custom ? "custom query — results are read only" : "");
+    const ro = !!why;
     roBadge.hidden = !ro;
-    roBadge.lastChild.textContent = st.readOnlyWhy;
-    roBadge.title = ro ? "Editing is disabled: " + st.readOnlyWhy : "";
+    roBadge.lastChild.textContent = why;
+    roBadge.title = ro ? "Editing is disabled: " + why : "";
     insertBtn.disabled = ro;
     deleteBtn.disabled = ro;
     saveBtn.hidden = ro;
     insertBtn.hidden = ro;
     deleteBtn.hidden = ro;
+    // A custom result set's columns are not the table's — the per-column
+    // filter row (and its collected filters) only make sense on the page.
+    filterBtn.disabled = !!st.custom;
+    if (grid) grid.setEditable(!ro);
     root.classList.toggle("read-only", ro);
+    root.classList.toggle("custom-sql", !!st.custom);
   }
 
   function syncButtons() {
@@ -316,14 +400,25 @@ export function renderTableView(shared, host) {
     st.busy = on;
     root.classList.toggle("busy", on);
     refreshBtn.disabled = on;
-    prevBtn.disabled = on || st.page <= FIRST_PAGE;
-    nextBtn.disabled = on || !st.hasMore;
+    if (runBtn) runBtn.disabled = on;
+    if (tableBtn) tableBtn.disabled = on;
+    // Pages belong to the managed query; a custom result set has no pages.
+    prevBtn.disabled = on || !!st.custom || st.page <= FIRST_PAGE;
+    nextBtn.disabled = on || !!st.custom || !st.hasMore;
     syncButtons();
   }
 
   async function loadData() {
     if (disposed || !grid) return;
     dismissConfirm(confirmSlot);
+    // Every managed action lands here, so this is where a custom result set
+    // hands the grid back to the page — and where the SQL bar is regenerated
+    // to show exactly the query the buttons just built.
+    const wasCustom = !!st.custom;
+    st.custom = null;
+    applyReadOnly();
+    syncSql();
+    const my = ++loadGen;
     setBusy(true);
     footerText.textContent = "Loading…";
     const body = {
@@ -339,16 +434,18 @@ export function renderTableView(shared, host) {
     try {
       res = await api.request(connUrl(st.connId, "/table-data"), { json: body });
     } catch (err) {
-      if (disposed) return;
+      if (disposed || my !== loadGen) return;
       notice.set(errMsg(err), "error");
       footerText.textContent = "Load failed.";
+      loadFailedAfterCustom(wasCustom);
       setBusy(false);
       return;
     }
-    if (disposed) return;
+    if (disposed || my !== loadGen) return;
     if (!res || typeof res !== "object" || res.ok === false) {
       notice.set((res && res.error) || "Load failed.", "error");
       footerText.textContent = "Load failed.";
+      loadFailedAfterCustom(wasCustom);
       setBusy(false);
       return;
     }
@@ -369,12 +466,26 @@ export function renderTableView(shared, host) {
     const from = (st.page - FIRST_PAGE) * st.pageSize + 1;
     grid.setData({ columns, rows, pk: st.pk, startIndex: from });
     grid.setSort(st.sort);
+    // A custom run hides the filter row (its columns are not the table's);
+    // coming back with live filters must show them again or the page would
+    // be silently filtered with the Filter button unlit.
+    if (st.filters.length && !grid.filtersVisible()) {
+      grid.showFilters(true);
+      filterBtn.classList.add("active");
+    }
     grid.setFilters(st.filters);
     const to = from + rows.length - 1;
     footerText.textContent =
       (rows.length ? "rows " + fmtNum(from) + "–" + fmtNum(to) : st.page > FIRST_PAGE ? "no more rows" : "no rows") +
       (st.total !== null ? " of ~" + fmtNum(st.total) : "");
     setBusy(false);
+  }
+
+  /** A managed load that failed right after leaving custom mode must not
+   * leave the custom rows sitting in a grid whose editing UI is re-armed —
+   * clear them; the footer already says the load failed. */
+  function loadFailedAfterCustom(wasCustom) {
+    if (wasCustom) grid.setData({ columns: st.info.columns, rows: [], pk: st.pk, startIndex: 1 });
   }
 
   function page(delta) {
@@ -386,8 +497,11 @@ export function renderTableView(shared, host) {
     });
   }
 
-  /** none → asc → desc → none, single column. */
+  /** none → asc → desc → none, single column. A sort click always returns to
+   * the managed page (loadData clears custom), so on a custom result set it
+   * only applies when the clicked column is a real table column. */
   function cycleSort(column) {
+    if (st.custom && !(st.info.columns || []).some((c) => c.name === column)) return;
     guardDirty(() => {
       if (!st.sort || st.sort.column !== column) st.sort = { column, dir: "asc" };
       else if (st.sort.dir === "asc") st.sort = { column, dir: "desc" };
@@ -397,8 +511,139 @@ export function renderTableView(shared, host) {
     });
   }
 
-  /** Run `fn` now, or after the user agrees to drop pending edits. */
-  async function guardDirty(fn) {
+  // --- the SQL bar ----------------------------------------------------------
+  function generatedSql() {
+    const columnTypes = {};
+    for (const c of (st.info && st.info.columns) || []) columnTypes[c.name] = c.type || "";
+    return buildTableSql({
+      engine: st.conn ? st.conn.engine : "",
+      schema: st.schema,
+      table: st.table,
+      filters: st.filters,
+      sort: st.sort,
+      limit: st.pageSize,
+      offset: (st.page - FIRST_PAGE) * st.pageSize,
+      columnTypes,
+    });
+  }
+
+  /** Regenerate the visible SQL from the structured state (managed mode). */
+  function syncSql() {
+    if (!sqlInput) return;
+    lastGenerated = generatedSql();
+    sqlInput.value = lastGenerated;
+    autosizeSql();
+    markSqlState();
+  }
+
+  function autosizeSql() {
+    sqlInput.style.height = "auto";
+    sqlInput.style.height = Math.min(sqlInput.scrollHeight, 132) + "px";
+  }
+
+  /** Edited text gets the tint + the way back; pristine text stays chrome. */
+  function markSqlState() {
+    const edited = sqlInput.value.trim() !== lastGenerated.trim();
+    sqlInput.classList.toggle("edited", edited);
+    tableBtn.hidden = !edited && !st.custom;
+  }
+
+  function runSql() {
+    if (!grid || st.busy) return;
+    const text = sqlInput.value.trim();
+    if (!text) return;
+    // Unedited text: Run is just Refresh. Edited text: a custom query.
+    if (text === lastGenerated.trim() && !st.custom) return guardDirty(loadData);
+    guardDirty(() => runCustom(text));
+  }
+
+  /** Run edited SQL through POST /query; the result set replaces the page
+   * (read-only) until any managed action calls loadData. The server owns the
+   * guards — single statement, needs_confirm for a no-WHERE write. */
+  async function runCustom(sql, confirm) {
+    dismissConfirm(confirmSlot);
+    const my = ++loadGen;
+    setBusy(true);
+    footerText.textContent = "Running…";
+    const body = { sql };
+    if (st.database) body.database = st.database;
+    if (st.schema) body.schema = st.schema;
+    if (confirm) body.confirm = true;
+    let res;
+    try {
+      res = await api.request(connUrl(st.connId, "/query"), { json: body });
+    } catch (err) {
+      if (disposed || my !== loadGen) return;
+      notice.set(errMsg(err), "error");
+      footerText.textContent = "Query failed.";
+      setBusy(false);
+      return;
+    }
+    if (disposed || my !== loadGen) return;
+    if (res && res.needs_confirm) {
+      setBusy(false);
+      const cls = classifyStatement(sql, {
+        dialect: st.conn && st.conn.engine === "mysql" ? "mysql" : "standard",
+      });
+      const yes = await confirmBar(confirmSlot, {
+        danger: true,
+        title:
+          (cls.verb || "This statement") +
+          (cls.hasWhere ? " needs confirmation" : " has no WHERE clause — it will affect every row"),
+        pre: sql,
+        confirmLabel: "Run anyway",
+      });
+      if (disposed) return;
+      if (!yes) {
+        footerText.textContent = "Cancelled.";
+        return;
+      }
+      return runCustom(sql, true);
+    }
+    if (!res || typeof res !== "object" || res.ok === false) {
+      notice.set((res && res.error) || "The statement failed.", "error");
+      footerText.textContent = "Query failed.";
+      setBusy(false);
+      return;
+    }
+    notice.clear();
+    const cols = Array.isArray(res.columns) ? res.columns : [];
+    st.custom = { sql, isQuery: cols.length > 0 };
+    // The filter row's columns belong to the table, not this result set.
+    if (grid.filtersVisible()) {
+      grid.showFilters(false);
+      filterBtn.classList.remove("active");
+    }
+    applyReadOnly();
+    const rows = Array.isArray(res.rows) ? res.rows : [];
+    grid.setData({ columns: cols, rows, pk: [], startIndex: 1 });
+    grid.setSort(null);
+    const ms = typeof res.elapsed_ms === "number" ? fmtNum(Math.round(res.elapsed_ms)) + " ms" : "";
+    if (cols.length) {
+      const n = typeof res.row_count === "number" ? res.row_count : rows.length;
+      footerText.textContent =
+        fmtNum(n) +
+        (n === 1 ? " row" : " rows") +
+        (ms ? " · " + ms : "") +
+        (res.truncated ? " · truncated at " + fmtNum(n) : "") +
+        " · custom query";
+    } else {
+      const affected = typeof res.affected === "number" ? res.affected : null;
+      footerText.textContent =
+        (affected === null ? "OK" : "affected " + fmtNum(affected)) + (ms ? " · " + ms : "") + " · custom query";
+    }
+    markSqlState();
+    setBusy(false);
+  }
+
+  function resetToManaged() {
+    if (st.busy) return;
+    guardDirty(loadData);
+  }
+
+  /** Run `fn` now, or after the user agrees to drop pending edits;
+   * `onDecline` runs when they refuse (to undo optimistic control state). */
+  async function guardDirty(fn, onDecline) {
     if (!grid || grid.dirtyCount() === 0) return fn();
     const n = grid.dirtyCount();
     const yes = await confirmBar(confirmSlot, {
@@ -406,7 +651,11 @@ export function renderTableView(shared, host) {
       title: "Discard " + n + " unsaved change" + (n === 1 ? "" : "s") + "?",
       confirmLabel: "Discard",
     });
-    if (disposed || !yes) return;
+    if (disposed) return;
+    if (!yes) {
+      if (onDecline) onDecline();
+      return;
+    }
     grid.clearChanges();
     fn();
   }
@@ -414,6 +663,8 @@ export function renderTableView(shared, host) {
   // --- save -----------------------------------------------------------------
   async function save() {
     if (!grid || st.busy || st.readOnlyWhy) return;
+    // Commit the open cell editor FIRST or its typed text misses the batch.
+    grid.closeEditor(true);
     const c = grid.changes();
     const operations = [
       ...c.inserts.map((x) => ({ action: "insert", values: x.values })),
@@ -421,7 +672,6 @@ export function renderTableView(shared, host) {
       ...c.deletes.map((x) => ({ action: "delete", where_pk: x.where })),
     ];
     if (!operations.length) return;
-    grid.closeEditor(true);
     notice.clear();
     const base = { database: st.database || null, schema: st.schema || null, table: st.table, operations };
     setBusy(true);
@@ -577,6 +827,10 @@ export function renderTableView(shared, host) {
   }
 
   return {
+    /** Unsaved grid edits, for the embed host's discard confirm. */
+    dirtyCount() {
+      return grid ? grid.dirtyCount() : 0;
+    },
     dispose() {
       disposed = true;
       onFilter.cancel();
