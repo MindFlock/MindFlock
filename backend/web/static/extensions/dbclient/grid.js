@@ -107,6 +107,11 @@ export function createGrid(opts = {}) {
   let startIndex = 1;
   let editor = null; // {td, row, colIdx, input, done}
   let selectAllBox = null;
+  /** The row a plain checkbox tick last landed on — the anchor a shift+click
+   * extends FROM. Held as the row object, not an index, so an insert, a sort
+   * or a page turn can only make it stale (indexOf -> -1, treated as a plain
+   * tick), never make it point at the wrong row. */
+  let anchorRow = null;
   /** Column name -> px, set by dragging a header edge. Keyed by NAME, not
    * index, so a width survives a reload, a sort, a page change and a re-render
    * — and a result set with different columns simply has none, and lays itself
@@ -420,6 +425,29 @@ export function createGrid(opts = {}) {
           emitChange();
         },
       });
+      // Shift+click extends from the last plainly-ticked row to this one, the
+      // gesture every list with checkboxes has — ticking twenty rows for a
+      // delete should not be twenty clicks. The range takes the state the
+      // clicked box just took, so shift+click UNticks a run just as readily.
+      // On `click`, not `change`: only the mouse event carries shiftKey, and it
+      // runs with `checked` already flipped and before the change handler that
+      // records it. The anchor SURVIVES the extend (shift+click again to
+      // re-extend from the same start), and a shift+click with no anchor is an
+      // ordinary tick.
+      box.addEventListener("click", (ev) => {
+        const idx = rows.indexOf(r);
+        const anchor = anchorRow ? rows.indexOf(anchorRow) : -1;
+        if (!ev.shiftKey || anchor < 0 || idx < 0) {
+          anchorRow = r;
+          return;
+        }
+        const lo = Math.min(anchor, idx);
+        const hi = Math.max(anchor, idx);
+        for (let i = lo; i <= hi; i++) setSelected(rows[i], box.checked);
+        // Shift+click inside a table drags a text selection along with it.
+        const sel = window.getSelection();
+        if (sel) sel.removeAllRanges();
+      });
       r.box = box;
       tr.appendChild(el("td", { class: "dbc-sel" }, box));
     }
@@ -619,6 +647,7 @@ export function createGrid(opts = {}) {
 
   function setData(data) {
     closeEditor(false);
+    anchorRow = null; // new rows, no shift+click anchor to extend from
     // The rebuild below replaces the filter row; if the user is mid-typing in
     // one of its inputs (the debounced reload path), losing focus after every
     // keystroke-pause makes filters untypeable — put the caret back.

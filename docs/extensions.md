@@ -892,9 +892,11 @@ whose Back button runs the explorer command.
   through `/query` whose result set renders read-only in the same grid (a
   badge says so) until the Table button — or any sort/filter/page action —
   returns to the managed page. Below the bar, the editable page grid —
-  header-click sort, a per-column filter row, checkbox selection,
-  double-click editing with a Set-NULL control, Insert / Delete selected /
-  Save, CSV/JSON export through a plain anchor GET, and a footer with
+  header-click sort, a per-column filter row, checkbox selection
+  (**shift-click a checkbox** to extend from the last one you ticked — the run
+  takes the state the clicked box just took, so it unticks a range as readily
+  as it ticks one), double-click editing with a Set-NULL control, Insert /
+  Delete selected / Save, CSV/JSON export through a plain anchor GET, and a footer with
   prev/next and "rows X–Y" (" of ~N" only when the server had an estimate).
   Save is a two-step conversation with `/rows`: `preview: true` returns the
   generated SQL, shown in a confirm bar; the confirmation resends for real.

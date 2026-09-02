@@ -188,6 +188,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The ✨ **Write it** buttons (Commit, and the verify-plan writer) show a
   spinner while a message is being written. "Writing…" alone read as a dead
   button on a cold CLI start.
+- **Shift-click extends the selection in the database client's grid.** Tick one
+  row's checkbox, shift-click another, and everything between takes the state
+  the clicked box just took — so it unticks a run as readily as it ticks one.
+  Deleting twenty rows was twenty clicks. The anchor is the last row you ticked
+  plainly, and it survives the extend; a new page of rows clears it.
 
 ## [0.2.1] - 2026-08-28
 
