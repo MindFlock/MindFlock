@@ -7,6 +7,7 @@ import re
 from starlette.testclient import TestClient
 
 from backend.web import server
+from tests._bundle import in_bundle, squash
 
 client = TestClient(server.app)
 
@@ -32,16 +33,16 @@ def test_switch_flips_only_on_the_switch_not_the_whole_row():
     assert "set-switch-row" in js
     # The switch keeps its click target: every .ca-switch renders as a <label>…
     assert re.search(
-        r'jsxs?\("label",\s*\{\s*className:\s*"ca-switch"', js
+        r'jsxs?\)?\("label",\s*\{\s*className:\s*"ca-switch"', js
     ), "the .ca-switch is no longer a <label> — the slider won't toggle on click"
     # …and none renders as a bare span/div (which wouldn't toggle at all).
     assert not re.search(
-        r'jsxs?\("(?:span|div)",\s*\{\s*className:\s*"ca-switch"', js
+        r'jsxs?\)?\("(?:span|div)",\s*\{\s*className:\s*"ca-switch"', js
     ), "a .ca-switch is a span/div — the slider won't toggle on click"
     # No switch row is a <label> any more: a row-wide label flips the toggle
     # from anywhere on the row, which is exactly the behaviour being removed.
     assert not re.search(
-        r'jsxs?\("label",\s*\{[^}]*set-switch-row', js
+        r'jsxs?\)?\("label",\s*\{[^}]*set-switch-row', js
     ), "a set-switch-row is a <label> — clicking the row text flips the toggle"
 
 
@@ -124,7 +125,12 @@ def test_ctrl_r_reloads_page():
     terminal's reverse-i-search)."""
     js = client.get("/app.js").text
     assert "location.reload()" in js
-    assert "reverse-i-search" in js  # the handler's rationale comment
+    # Anchored on the binding, not on the source comment that explains it:
+    # comments are stripped from the shipped bundle. `when` carries the whole
+    # rule — with a terminal focused the key falls through to the shell as
+    # reverse-i-search instead of reloading.
+    assert in_bundle('key: "r", mod: true, id: "reload"', js)
+    assert in_bundle("when: () => !terminalFocused(), run: () => location.reload()", js)
 
 
 def test_terminal_passes_zoom_keys_to_native_zoom():
@@ -299,7 +305,7 @@ def test_app_js_provider_login_ui_removed():
 
 def _screen_keys(js: str) -> list[str]:
     """Ordered list of settings-screen keys from the SCREENS array."""
-    block = js.split("const SCREENS = [", 1)[1].split("];", 1)[0]
+    block = squash(js).split("SCREENS = [", 1)[1].split("];", 1)[0]
     return re.findall(r'key: "([^"]+)", label:', block)
 
 
@@ -307,8 +313,8 @@ def test_settings_screen_labels_renamed():
     """The coding + providers screens are relabelled to 'Agent CLI' / 'Agent
     providers' (keys unchanged so deep-links still resolve)."""
     js = client.get("/app.js").text
-    assert '{ key: "coding", label: "Agent CLI"' in js
-    assert '{ key: "providers", label: "Agent providers"' in js
+    assert in_bundle('{ key: "coding", label: "Agent CLI"', js)
+    assert in_bundle('{ key: "providers", label: "Agent providers"', js)
     # The old labels are gone.
     assert 'label: "Coding CLI"' not in js
     assert 'label: "Providers"' not in js
@@ -468,7 +474,9 @@ def test_settings_panel_repolls_only_while_the_server_reports_stale():
     js = client.get("/app.js").text
     assert "PANEL_STALE_RETRY_MS = 2e3" in js
     assert "PANEL_STALE_RETRY_MS : false" in js  # not stale → no interval
-    assert ".stale) ? PANEL_STALE_RETRY_MS" in js  # driven by the payload flag
+    # Driven by the payload flag. The parenthesis around the optional chain is
+    # the bundler's taste, not ours — Rollup emitted it, Rolldown does not.
+    assert re.search(r"\.stale\)? \? PANEL_STALE_RETRY_MS", squash(js))
     # The client's freshness window matches the server's TTL: inside it, a
     # mount is answered from the query cache instead of making a round trip to
     # be told the same thing.
@@ -476,7 +484,8 @@ def test_settings_panel_repolls_only_while_the_server_reports_stale():
     assert server._FANOUT_TTL == 20.0, "keep PANEL_STALE_MS in step with the TTL"
     # Panels must outlive the default 5min gcTime, or "cached across opens"
     # quietly becomes a cold load again after a short break.
-    assert "PANEL_GC_MS = 60 * 6e4" in js
+    # 60 * 6e4, folded to its product by Oxc — an hour either way.
+    assert re.search(r"PANEL_GC_MS = (?:36e5|60 \* 6e4)\b", js)
     assert 2.0 < server._FANOUT_TTL
 
 
@@ -492,16 +501,22 @@ def test_opening_work_warms_all_three_panels():
     #
     # The chrome around the rows — settings, source cards, agent names — is
     # topped up on the same open, so no tab lands on a "Loading…" either.
-    pair = "prefetchIntakePanels();\n    prefetchIntakeMeta();"
-    assert pair in js
-    dialog = js.split(pair, 1)[1][:80]
+    pair = "prefetchIntakePanels(); prefetchIntakeMeta();"
+    assert pair in squash(js)
+    dialog = squash(js).split(pair, 1)[1][:80]
     assert "[open]" in dialog  # the effect keys on `open` alone
     prefetch = js.split("function prefetchIntakePanels()", 1)[1][:400]
     assert "Object.keys(PANELS)" in prefetch  # every panel, no hand-kept list
     assert "staleTime: PANEL_STALE_MS" in prefetch  # a no-op while still fresh
     # `void`: an unconfigured integration 502s here, and a warm-up must not
     # surface as an unhandled rejection.
-    assert "void queryClient.prefetchQuery(" in prefetch
+    # `void` is a no-op in statement position and Oxc erases it; what it
+    # signalled — the prefetch is fire-and-forget, never awaited or returned —
+    # is still what the bundle does.
+    assert re.search(
+        r"\bObject\.keys\(PANELS\)\) (?:void )?queryClient\.prefetchQuery\(",
+        squash(prefetch),
+    )
 
 
 def test_ticket_source_errors_outrank_the_refresh_note():

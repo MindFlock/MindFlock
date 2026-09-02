@@ -434,11 +434,7 @@ export function attachDragHistoryGesture(
 function makeTerm(
   title: string,
   wsPath: string,
-  interactive: boolean,
-  // When set, the websocket connects to this absolute path instead of the
-  // per-instance "/api/instances/{title}{wsPath}" template — used by
-  // standalone terminals (provider login) that aren't tied to a session.
-  absolutePath?: string
+  interactive: boolean
 ): TermHandle {
   const container = document.createElement("div");
   container.className = "term-container";
@@ -566,8 +562,7 @@ function makeTerm(
     },
     connect() {
       const proto = location.protocol === "https:" ? "wss" : "ws";
-      const path =
-        absolutePath ?? "/api/instances/" + encodeURIComponent(title) + wsPath;
+      const path = "/api/instances/" + encodeURIComponent(title) + wsPath;
       const sock = new WebSocket(proto + "://" + location.host + path);
       sock.binaryType = "arraybuffer";
       ws = sock;

@@ -19,7 +19,19 @@ export default defineConfig({
     sourcemap: "hidden",
     cssCodeSplit: false,
     rollupOptions: {
+      // Rolldown inlines cross-module consts by default, which erases the named
+      // constant a reader (and the backend's bundle assertions) look for:
+      // `EMERGE_MS` stops existing and only a bare `2e4` remains. Same reason
+      // minification is off above — this bundle is meant to stay readable.
+      optimization: { inlineConst: false },
       output: {
+        // Vite 8 bundles with Rolldown, which preserves JSDoc blocks that
+        // Rollup+esbuild used to drop. Our source comments are long and frank;
+        // shipping them verbatim would both bloat the bundle and publish notes
+        // meant for us. Legal comments stay (dependency licences must survive)
+        // and so do annotations (@__PURE__, @vite-ignore); only JSDoc goes.
+        // Plain // and /* */ comments are stripped by Rolldown either way.
+        comments: { legal: true, annotation: true, jsdoc: false },
         entryFileNames: "app.js",
         chunkFileNames: "js/chunks/[name].js",
         assetFileNames: (info) =>

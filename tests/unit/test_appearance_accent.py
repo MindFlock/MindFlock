@@ -205,10 +205,15 @@ def _button_glyph_markup(js, marker, span):
 
     A glyph used in more than one place gets hoisted into its own component, so
     the <svg> stops being inline next to the button — resolve that one hop
-    before checking what paints it."""
+    before checking what paints it.
+
+    The call form is bundler-dependent and must not be: Rollup emitted
+    `jsxRuntimeExports.jsx(Foo, ...)`, Rolldown emits `(0, ns.jsx)(Foo, ...)`.
+    The optional `)` matches both, so a toolchain bump cannot silently turn this
+    check into a no-op."""
     win = js.split(marker, 1)[1][:span]
     parts = [win]
-    for name in sorted(set(re.findall(r"jsx\((\w+Glyph)\b", win))):
+    for name in sorted(set(re.findall(r"jsx\)?\((\w+Glyph)\b", win))):
         decl = "function %s(" % name
         assert decl in js, "%s renders <%s/> but it is not in the bundle" % (
             marker,
