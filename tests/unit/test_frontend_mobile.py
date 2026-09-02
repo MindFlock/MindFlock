@@ -20,6 +20,7 @@ import re
 from fastapi.testclient import TestClient
 
 from backend.web import server
+from tests._bundle import in_bundle
 
 client = TestClient(server.app)
 
@@ -32,7 +33,7 @@ def test_app_js_touch_scroll_wiring():
     for ev in ('"touchstart"', '"touchmove"', '"touchend"'):
         assert ev in js, ev
     # touchmove must be non-passive to be able to preventDefault page panning.
-    assert "{ capture: true, passive: false }" in js
+    assert in_bundle("{ capture: true, passive: false }", js)
     # The browser's own gesture handling is disabled on PTY terminals so the
     # drag reaches our handler instead of panning/zooming the page.
     #
@@ -118,9 +119,15 @@ def test_mobile_css_keys_is_bottommost_bar():
 def test_touch_scroll_speed_multiplier():
     # 1:1 finger-to-line felt "far too slow" (user report) — both heads emit
     # 3 ticks per cell dragged, with the per-event cap raised to match.
-    for path in ("/app.js", "/mobile.js"):
-        js = client.get(path).text
-        assert "TOUCH_SCROLL_MULT = 3" in js, path
+    # mobile.js is hand-written and ships as-is, so the name survives there; in
+    # app.js the bundler folds the multiplier into the arithmetic, so the 3 is
+    # asserted where it actually lands — ticks per cell dragged.
+    mobile = client.get("/mobile.js").text
+    assert "TOUCH_SCROLL_MULT = 3" in mobile
+    assert in_bundle("Math.abs(dy) * TOUCH_SCROLL_MULT / cellH", mobile)
+    app = client.get("/app.js").text
+    assert in_bundle("Math.abs(dy) * 3 / cellHeight()", app)
+    for js, path in ((app, "/app.js"), (mobile, "/mobile.js")):
         assert "Math.min(24, lines)" in js, path
 
 
