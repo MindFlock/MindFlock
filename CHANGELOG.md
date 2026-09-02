@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-02
+
 ### Added
 
 - **Window rows are first-class sidebar rows.** The Assistant chat, the log
@@ -193,6 +195,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the clicked box just took — so it unticks a run as readily as it ticks one.
   Deleting twenty rows was twenty clicks. The anchor is the last row you ticked
   plainly, and it survives the extend; a new page of rows clears it.
+- **The web UI is built with Vite 8** (Rolldown + Oxc, replacing Rollup +
+  esbuild), which also unblocks `@vitejs/plugin-react` 6 — the plugin major
+  that 0.1.x had to pin away from because it requires vite 8. The shipped
+  bundle is smaller for it: 2.00 MB to 1.77 MB, 458 kB to 371 kB gzipped,
+  most of it source comments that the old toolchain dropped and the new one
+  preserved until told not to. Nothing in the UI changes.
 
 ## [0.2.1] - 2026-08-28
 
@@ -1908,7 +1916,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.3.0
 [0.2.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.2.1
 [0.2.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.2.0
 [0.1.17]: https://github.com/MindFlock/MindFlock/releases/tag/v0.1.17
