@@ -33,6 +33,7 @@ from backend.ticket_ingestion.config import (
     _parse_github,
 )
 from backend.web import server
+from tests._bundle import in_bundle
 
 client = TestClient(server.app)
 
@@ -1007,7 +1008,7 @@ class TestIntakeDialogShell:
         assert '.ik-groups [aria-expanded="true"] .tk-caret' in css
         assert "rotate(90deg)" in css
         js = client.get("/app.js").text
-        assert 'className: "tk-caret", children: "▸"' in js
+        assert in_bundle('className: "tk-caret", children: "▸"', js)
         # Keyboard users get the same target.
         assert ".ik-groups .tk-bucket-toggle:focus-visible" in css
 

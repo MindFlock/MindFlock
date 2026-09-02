@@ -297,6 +297,9 @@
   opacity: 0.4;
   cursor: default;
 }
+
+@layer tokens, base, components, theme;
+
 /* Global stylesheet manifest — the only file that knows the whole picture.
  *
  * Two things live here and nowhere else:
@@ -312,7 +315,7 @@
  *
  * Adding a component? Drop `Foo.css` next to `Foo.tsx` and add one line to the
  * components block. Rules that must override everything go in theme-light.css. */
-@layer tokens, base, components, theme;
+
 @layer base{
 
 /**
@@ -534,6 +537,7 @@
     position: relative;
 }
 }
+
 @layer tokens{
 /* Design tokens — the whole palette in one place.
  *
@@ -640,6 +644,7 @@
   --term-fg: #1b2030;
 }
 }
+
 @layer base{
 /* Reset + page skeleton. The app's outermost layout lives here and nowhere
    else; components lay out their own insides. */
@@ -704,6 +709,7 @@ body {
   }
 }
 }
+
 @layer components{
 /* Defensively neutralize the LEGACY Electron title-strip injection. Older app
    builds inject `#grid { margin-top:32px !important; height:calc(100vh-32px) }`
@@ -999,7 +1005,11 @@ body #mf-winctl {
 #topbar #notif-btn {
   position: relative;
 }
-} /* 020 */ @layer components{
+}
+
+/* 020 */
+
+@layer components{
 /* Sidebar */
 #sidebar {
   /* --panel / --border / --text are REBOUND for this whole region in
@@ -1198,7 +1208,11 @@ body:has(.modal:not(.hidden)) .sidebar-resizer {
   margin: 0;
   accent-color: var(--accent);
 }
-} /* 030 */ @layer components{
+}
+
+/* 030 */
+
+@layer components{
 /* Settings dialog (a modal like #recent-panel). The panel is a FIXED size —
    width and height don't change with the selected screen; each screen's content
    scrolls inside #settings-screens instead of resizing the dialog. (Capped to
@@ -1405,7 +1419,11 @@ p.set-hint {
 .notif-rule .ca-switch {
   flex: none;
 }
-} /* 040 */ @layer components{
+}
+
+/* 040 */
+
+@layer components{
 /* Productization settings sections + provider manager. The panel's own box —
    including its fixed size — lives in SettingsDialog.css. */
 #settings-body {
@@ -2166,7 +2184,11 @@ p.set-hint {
   color: var(--text);
   background: var(--panel-2);
 }
-} /* 050 */ @layer components{
+}
+
+/* 050 */
+
+@layer components{
 /* Voice-input button — pinned top-right, styled to match the pane-header
    buttons so it reads as header chrome (flat, no shadow) rather than a floating
    bubble. #grid panes reserve right-padding so it sits beside the state text. */
@@ -2644,7 +2666,11 @@ p.set-hint {
   opacity: 0.5;
   cursor: default;
 }
-} /* 060 */ @layer components{
+}
+
+/* 060 */
+
+@layer components{
 /* Todo dialog (a modal like #recent-panel). */
 #todo-panel {
   background: var(--panel);
@@ -3021,7 +3047,11 @@ p.set-hint {
   border-radius: 8px;
   position: relative;
 }
-} /* 070 */ @layer components{
+}
+
+/* 070 */
+
+@layer components{
 /* Sidebar drop cue: accent insertion line showing where the dragged row will
    land (same purple as the grid's .grid-drop-preview). Sits in the 4px gap
    between rows. */
@@ -3422,7 +3452,11 @@ p.set-hint {
   border-color: var(--accent);
   color: #fff;
 }
-} /* 080 */ @layer components{
+}
+
+/* 080 */
+
+@layer components{
 /* Overall cost/token summary, pinned just below the sidebar header. */
 .overall-usage {
   display: flex;
@@ -3657,7 +3691,11 @@ p.set-hint {
   outline: none;
   border-color: var(--accent);
 }
-} /* 090 */ @layer components{
+}
+
+/* 090 */
+
+@layer components{
 /* --- Send / prompt-queue: the Queue tab (badge + inline console) --- */
 /* The tab label matches the other tabs in every state — no accent/gold tint;
    status is conveyed by the neutral badge (count, or ⏳ when usage-limited). */
@@ -4098,7 +4136,11 @@ p.set-hint {
   color: var(--red);
   border-color: var(--red);
 }
-} /* 100 */ @layer components{
+}
+
+/* 100 */
+
+@layer components{
 /* --- Notification center: bell + badge + panel --- */
 #notif-btn {
   position: relative;
@@ -4404,7 +4446,11 @@ p.set-hint {
   font-size: 11px;
   margin: 2px 0 0 6px;
 }
-} /* 110 + 270 */ @layer components{
+}
+
+/* 110 + 270 */
+
+@layer components{
 /* --- Bulk session actions: batch bar --- */
 #bulk-bar {
   display: flex;
@@ -4453,7 +4499,11 @@ p.set-hint {
   border-color: var(--red);
   color: var(--red);
 }
-} /* 110 */ @layer components{
+}
+
+/* 110 */
+
+@layer components{
 /* --- Sidebar session filter --- */
 #sidebar-search {
   display: flex;
@@ -4508,7 +4558,11 @@ p.set-hint {
 .inst .title.aliased {
   font-style: italic;
 }
-} /* 110 */ @layer components{
+}
+
+/* 110 */
+
+@layer components{
 /* --- Keyboard shortcut cheat-sheet ('?') --- */
 .shortcuts-overlay {
   position: fixed;
@@ -4720,7 +4774,11 @@ p.set-hint {
   font-size: 11px;
   color: var(--muted);
 }
-} /* 120 */ @layer components{
+}
+
+/* 120 */
+
+@layer components{
 /* --- Budget lock overlay (typing paused until the budget is raised) ---
    Positioned against .pane-body, which Pane.css already makes relative. */
 .budget-lock {
@@ -4892,7 +4950,11 @@ p.set-hint {
   border-color: var(--accent);
   color: var(--accent);
 }
-} /* 130 */ @layer components{
+}
+
+/* 130 */
+
+@layer components{
 /* Terminal grid */
 /* A vertical stack of rows; each row is a horizontal strip of windows. Drag a
    window onto any side of another to rearrange (see placeInGrid). */
@@ -5667,7 +5729,11 @@ p.set-hint {
 .pane.verify-pane .pane-term {
   cursor: default;
 }
-} /* 140 */ @layer components{
+}
+
+/* 140 */
+
+@layer components{
 /* Workflow stage chips (sidebar + pane header) */
 .stagechip {
   font-size: 10px;
@@ -6075,7 +6141,11 @@ p.set-hint {
   border-color: var(--accent);
   color: var(--text);
 }
-} /* 150 */ @layer components{
+}
+
+/* 150 */
+
+@layer components{
 /* Boot loader: fills the grid from page open until the first /api/instances
    snapshot arrives, so restored sessions don't flash an empty environment. */
 #boot-loading {
@@ -6250,7 +6320,11 @@ p.set-hint {
     transform: rotate(360deg);
   }
 }
-} /* 160 */ @layer components{
+}
+
+/* 160 */
+
+@layer components{
 /* Full-history overlay (HistoryOverlay.tsx) — anchored to .pane-body, which
    Pane.css already makes relative. z-index 4: above the reduce-motion cover
    (2) and the boot loader (3), below the file-drop cue (5/6) and the budget
@@ -6324,7 +6398,11 @@ p.set-hint {
 .hist-msg.error {
   color: var(--red);
 }
-} /* 160 */ @layer components{
+}
+
+/* 160 */
+
+@layer components{
 /* Modal */
 .modal {
   position: fixed;
@@ -7015,7 +7093,11 @@ p.set-hint {
   min-height: 16px;
   margin: 0;
 }
-} /* 170 */ @layer components{
+}
+
+/* 170 */
+
+@layer components{
 /* Commit dialog (multiline message) */
 #commit-form {
   background: var(--panel);
@@ -7668,7 +7750,11 @@ p.set-hint {
 .recent-actions button:hover {
   border-color: var(--accent);
 }
-} /* 180 */ @layer components{
+}
+
+/* 180 */
+
+@layer components{
 /* --------------------------------------------------------------------------- *
  * E1 — connection-lost card + stale grid overlay. A compact bottom-right card
  * (never a full-width strip: that covered the top bar and its controls) that
@@ -7834,7 +7920,11 @@ body.conn-lost #cs-errors {
 #cs-toast.clickable:hover {
   background: var(--panel);
 }
-} /* 200 */ @layer components{
+}
+
+/* 200 */
+
+@layer components{
 /* --------------------------------------------------------------------------- *
  * Downgrade notice. Top-centre rather than the bottom-right corner ConnBanner
  * uses: this explains why the grid the user is staring at is empty, so it has
@@ -7901,7 +7991,11 @@ body.conn-lost #cs-errors {
 #state-notice .sn-btn:hover {
   border-color: var(--accent);
 }
-} /* 200 */ @layer components{
+}
+
+/* 200 */
+
+@layer components{
 /* --------------------------------------------------------------------------- *
  * C2 — first-run setup checklist (empty-state card + footer Setup dialog) and
  * the shared doctor-check list (also rendered in Settings → Doctor).
@@ -8126,7 +8220,11 @@ button.linklike {
 .test-result.bad {
   color: var(--red);
 }
-} /* 210 */ @layer components{
+}
+
+/* 210 */
+
+@layer components{
 /* F8 — dismissible doctor warning chip (failures while sessions exist). */
 #doctor-warn {
   display: flex;
@@ -8290,7 +8388,11 @@ button.linklike {
   border-color: var(--accent);
   color: var(--text);
 }
-} /* 220 */ @layer components{
+}
+
+/* 220 */
+
+@layer components{
 /* --------------------------------------------------------------------------- *
  * J3 — session context line: a subtle one-line diff stat ("+120 −8 · 6 files")
  * under each sidebar row title and in the pane header. Hidden when the backend
@@ -8392,7 +8494,11 @@ button.linklike {
   flex: 1;
   min-width: 0;
 }
-} /* 230 */ @layer components{
+}
+
+/* 230 */
+
+@layer components{
 /* --------------------------------------------------------------------------- *
  * L7 — missing-workspace treatment: the session's directory vanished. The row
  * renders muted/hollow with a "missing workspace" chip (not a fake stage) and
@@ -8508,7 +8614,11 @@ button.linklike {
   border-color: var(--accent);
   color: var(--text);
 }
-} /* 240 */ @layer components{
+}
+
+/* 240 */
+
+@layer components{
 /* Source cards: one per watched thing (a ticketing source, a repo) on any Work
    tab. The `tk-` prefix is historical — Ticketing had them first. */
 .tk-source {
@@ -8700,7 +8810,11 @@ button.linklike {
 #assistant-agent-dialog #assistant-agent-status {
   margin-right: auto;
 }
-} /* 250 */ @layer components{
+}
+
+/* 250 */
+
+@layer components{
 /* The Intake dialog: tab strip over one scrolling panel.
  *
  * Deliberately NOT the settings shell. Settings is a long left nav of things
@@ -9301,8 +9415,12 @@ button.linklike {
   padding: 2px 0 2px 8px;
   margin-bottom: 2px;
 }
-} /* 255 — after
-   ticketingConnections.css, whose .tk-* card rules the Intake cards build on */ @layer components{
+}
+
+/* 255 — after
+   ticketingConnections.css, whose .tk-* card rules the Intake cards build on */
+
+@layer components{
 
 /* The Verify dialog: the same shell as Intake, with two rows of its own.
  *
@@ -10786,9 +10904,13 @@ button.linklike {
 .vf-runwatch-state[data-state="error"] {
   color: var(--red);
 }
-} /* 256 — after
+}
+
+/* 256 — after
    IntakeDialog.css, whose .ik-tab / .ik-groups / .pr-open-chip rules the Verify
-   panel reuses wholesale and, in a few places, extends */ @layer components{
+   panel reuses wholesale and, in a few places, extends */
+
+@layer components{
 /* Settings → Mobile: white QR card + URL rows.
    .qr-card is shared with Settings → Notifications (the ntfy subscribe QR) —
    a QR must stay dark-on-white to scan, whatever the app theme is doing. */
@@ -10923,7 +11045,11 @@ button.linklike {
   color: var(--text);
   font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-} /* 260 */ @layer components{
+}
+
+/* 260 */
+
+@layer components{
 
 /* Settings → Notifications: the ntfy (phone push) section.
    The QR card itself is the shared .qr-card from mobileLogs.css. */
@@ -10981,7 +11107,11 @@ button.linklike {
 .ntfy-verdict-bad {
   color: var(--red);
 }
-} /* 260 */ @layer components{
+}
+
+/* 260 */
+
+@layer components{
 /* --- Capability gating (git / tailscale / ticketing) ------------------------
    applyCaps() stamps body.no-git / .no-tailscale / .no-ticketing from
    /api/config `caps`. Static HTML tagged data-caps="X" simply disappears when
@@ -11058,7 +11188,11 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   font-size: 9px;
   max-width: 76px;
 }
-} /* 270 */ @layer components{
+}
+
+/* 270 */
+
+@layer components{
 /* --- Device tab groups (tailnet multi-device control) ---------------------
  * Headers only render when other MindFlock devices are discovered on the
  * tailnet; a single-device network keeps the flat, header-less list. */
@@ -11162,7 +11296,11 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   margin-right: auto;
   align-self: center;
 }
-} /* 270 */ @layer components{
+}
+
+/* 270 */
+
+@layer components{
 /* ---------------------------------------------------------------------------
  * Appearance picker (Settings → Appearance). The theme palettes themselves
  * live in theme.css (shared with the mobile page); these are just the picker
@@ -11211,7 +11349,11 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
 .surface-swatch .sw-dot {
   border-radius: 5px;
 }
-} /* 280 */ @layer components{
+}
+
+/* 280 */
+
+@layer components{
 
 /* Settings → Site traffic (dev shell only). Stat tiles, single-hue charts, a
    first-time-visitor funnel, and data tables — no chart library, consistent
@@ -11630,7 +11772,11 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-} /* 290 */ @layer components{
+}
+
+/* 290 */
+
+@layer components{
 
 /* Take-a-break screen + the idle flock overlay (Settings → General). */
 
@@ -11812,8 +11958,12 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   outline: none;
   border-color: var(--accent);
 }
-} /* 300 — after
-   NewSessionDialog.css, whose .modal backdrop the break screen overrides */ @layer components{
+}
+
+/* 300 — after
+   NewSessionDialog.css, whose .modal backdrop the break screen overrides */
+
+@layer components{
 
 /* Extension host chrome (Addon API v3): the sidebar bar, the shared dialog,
    the pane body and the Settings rows. Everything an extension draws lives
@@ -11977,9 +12127,13 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
 .ext-row-error {
   color: var(--red);
 }
-} /* 310 — after
+}
+
+/* 310 — after
    Pane.css (.pane-head .act) and screens.css (.prov-conn), both of which the
-   extension host chrome extends */ @layer theme{
+   extension host chrome extends */
+
+@layer theme{
 /* ---------------------------------------------------------------------------
  * Region hues — the one file that knows how a multi-color theme set reaches
  * the pixels.
@@ -12032,7 +12186,9 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   --text: var(--app-text);
   --muted: var(--app-muted);
 }
-} @layer theme{
+}
+
+@layer theme{
 /* Light-mode patches.
  *
  * The light palette itself is a variable swap in tokens.css; these are the
@@ -12150,4 +12306,7 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   border-color: rgba(154, 107, 0, 0.5);
   background: rgba(154, 107, 0, 0.08);
 }
-} /* 190 */
+}
+
+/* 190 */
+/*$vite$:1*/

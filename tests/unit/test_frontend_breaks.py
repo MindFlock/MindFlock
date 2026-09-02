@@ -21,6 +21,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from backend.web import server
+from tests._bundle import squash
 
 client = TestClient(server.app)
 
@@ -88,6 +89,13 @@ def test_opening_the_app_starts_the_clock_but_a_refresh_does_not():
     assert '"reload"' in block or "'reload'" in block
 
 
+def _activity_at(js: str) -> int:
+    """Index of the ACTIVITY event list, whichever keyword declares it."""
+    m = re.search(r"\b(?:const|var|let) ACTIVITY = \[", js)
+    assert m, "no ACTIVITY list in the bundle"
+    return m.start()
+
+
 def _bundled_const(js: str, name: str) -> float:
     """The numeric value of a top-level ``const`` in the built bundle.
 
@@ -96,8 +104,11 @@ def _bundled_const(js: str, name: str) -> float:
     ``5 * 60_000`` as ``5 * 6e4``. Both are valid Python arithmetic, and the
     expression is checked to be nothing else before it is evaluated.
     """
-    head = "const %s = " % name
-    at = js.index(head) + len(head)
+    # `const` or `var`: Rollup kept the source keyword, Rolldown hoists module
+    # scope to `var`. Which one it is says nothing about the value.
+    head = re.search(r"\b(?:const|var|let) %s = " % re.escape(name), js)
+    assert head, "no top-level %s in the bundle" % name
+    at = head.end()
     expr = js[at : js.index(";", at)]
     assert re.fullmatch(r"[\d.eE+*\s]+", expr), expr
     return float(eval(expr, {"__builtins__": {}}))  # noqa: S307 — see above
@@ -183,8 +194,15 @@ def test_the_emergence_is_a_slow_stream_not_one_long_interpolation():
     each bird's own flight inside it is short, and a bird that lands rejoins the
     live flock while the rest are still queued on the mark."""
     js = _js()
-    assert "EMERGE_MS = 2e4" in js or "EMERGE_MS = 20000" in js
-    assert "HATCH_FLIGHT_MS" in js
+    # Read as the two numbers that survive, not as `EMERGE_MS`: Oxc folds
+    # `EMERGE_MS - HATCH_FLIGHT_MS` to its value and then drops the name, which
+    # by then has no references left. The window is still pinned — it is the
+    # launch window plus the flight that was subtracted out of it.
+    flight = _bundled_const(js, "HATCH_FLIGHT_MS")
+    launch = re.search(r"launchWindow = Math\.max\(0, ([\d.e+]+)\)", squash(js))
+    assert launch, "no launch window in the bundle"
+    assert float(launch.group(1)) + flight == 20_000
+    assert flight <= 5_000, "a bird's own flight must be short inside the window"
     # step() and hatchStep() run in the SAME frame, on different birds.
     assert "if (hatchFrom) hatchStep(now);" in js
     assert "if (b.hatchAt) continue;" in js
@@ -248,7 +266,7 @@ def test_idle_flock_is_dismissed_by_deliberate_input_only():
     meaning anything by it. It must neither hold the flock off nor dismiss it.
     """
     js = _js()
-    at = js.index("const ACTIVITY = [")
+    at = _activity_at(js)
     activity = js[at : js.index("]", at) + 1]
     for evt in ("pointerdown", "keydown", "touchstart", "wheel"):
         assert evt in activity
@@ -296,7 +314,7 @@ def test_work_in_another_window_does_not_stop_mindflock_idling():
     behind you, so a second monitor fills up while you work elsewhere.
     """
     js = _js()
-    at = js.index("const ACTIVITY = [")
+    at = _activity_at(js)
     activity = js[at : js.index("]", at) + 1]
     assert "focus" not in activity, "window focus is not human input into MindFlock"
     # The hook's own effect must not re-arm on a visibility change either.
