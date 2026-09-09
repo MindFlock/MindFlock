@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Install a missing database driver from the tree.** A connection whose
+  driver is not installed shows "Install driver" on the failing node itself,
+  not only inside the connection form — the error the user can actually fix no
+  longer dead-ends in a shell command to paste. The install's progress is keyed
+  by engine rather than by the open form, so it survives the form being
+  replaced (or never having been opened), and a successful install refreshes
+  the driver cache and clears the stale "driver is not installed" rows so the
+  tree retries instead of reporting a problem that is gone.
+
 ## [0.3.0] - 2026-09-02
 
 ### Added
