@@ -1113,11 +1113,11 @@ describe("liveBranchOverridden (is the header's one branch the whole story?)", (
   });
 });
 
-/** A session, cut down to the two fields these rules read. The full `Instance`
- * is two dozen fields of grid/stage state, and spelling them out would bury the
- * branch — the only one that decides anything here. */
-const session = (title: string, branch: string): Instance =>
-  ({ title, branch }) as Instance;
+/** A session, cut down to the three fields these rules read. The full
+ * `Instance` is two dozen fields of grid/stage state, and spelling them out
+ * would bury the branch — the one that decides most of what happens here. */
+const session = (title: string, branch: string, repo = ""): Instance =>
+  ({ title, branch, repo }) as Instance;
 
 describe("planTargets (what the Write-plan bar may offer)", () => {
   it("offers a started session with no plan", () => {
@@ -1144,6 +1144,41 @@ describe("planTargets (what the Write-plan bar may offer)", () => {
     // The fresh install. The bar renders nothing here, which is why the empty
     // state has to ask this same question before telling anyone to press it.
     expect(planTargets([], [])).toEqual([]);
+  });
+
+  it("skips the second window on a branch another window's plan covers", () => {
+    // Two windows on one branch (`bot7` and a duplicate) are ONE thing to
+    // check. The server refuses to write a second checklist for the branch, so
+    // offering the copy would promise something that cannot happen.
+    const targets = planTargets(
+      [
+        session("bot7", "feature/sc-1", "bot7-repo"),
+        session("bot7-copy", "feature/sc-1", "bot7-repo"),
+      ],
+      [plan({ id: "bot7", branch: "feature/sc-1", repo_root: "/src/bot7-repo" })],
+    );
+    expect(targets).toEqual([]);
+  });
+
+  it("still offers the same branch name in a DIFFERENT repo", () => {
+    // Two clones sit on different commits and can push to different remotes:
+    // one branch name, two real diffs.
+    const targets = planTargets(
+      [session("other", "feature/sc-1", "app")],
+      [plan({ id: "bot7", branch: "feature/sc-1", repo_root: "/src/bot7-repo" })],
+    );
+    expect(targets).toEqual(["other"]);
+  });
+
+  it("offers a session whose repo is unknown rather than guessing on the branch", () => {
+    // `Instance.repo` is "" before the worktree resolves. Matching on the
+    // branch alone there would hide the button for whoever happens to share a
+    // branch name with a plan in another repo.
+    const targets = planTargets(
+      [session("starting", "feature/sc-1")],
+      [plan({ id: "bot7", branch: "feature/sc-1", repo_root: "/src/bot7-repo" })],
+    );
+    expect(targets).toEqual(["starting"]);
   });
 });
 

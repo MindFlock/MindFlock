@@ -1100,10 +1100,14 @@ and every "why is nothing showing up?" is a question about which one hasn't:
    `.mindflock.toml`). Membership *is* the opt-in; there is
    no second on/off per repo. Writing a checklist costs a real model call, so
    nothing happens in a repo nobody named.
-2. **Push a session branch in it.** The **first** push of each session branch
-   writes a checklist — from that branch's diff, and from what the session itself
-   was doing. It sits in **Not shipped yet** while the branch is reviewed and
-   merged. A later push always records the newest commit, and — *only while
+2. **Push a session branch in it.** The **first** push of each branch writes a
+   checklist — from that branch's diff, and from what the session itself was
+   doing. One per branch, not per window: two sessions on the same branch of the
+   same repo (a duplicated window, a repo adopted twice) share the checklist
+   written under whichever pushed first, and a push from the other one refreshes
+   *that* plan rather than writing a second. It sits in **Not shipped yet** while
+   the branch is reviewed and merged. A later push always records the newest
+   commit, and — *only while
    nobody has answered anything yet* — rewrites the checklist from the branch's
    whole diff at that commit, at most **three** times and never within five
    minutes of the last one. The moment you answer one step the checklist is yours
@@ -1209,6 +1213,14 @@ answering a step all keep working — exactly as a forced PR review still runs w
 automated review switched off. **Sources** is the repository list; **Write a
 checklist by hand** is the fold under the work list, for asking for exactly one
 checklist by name with nothing configured.
+
+**It offers only what has no checklist yet.** A live session whose repo and
+branch another plan already covers is left off the list, whichever window that
+plan was written under; a closed session carries no repo to match on, so it
+stays offered. Pressing the button for a session that turns out to be covered
+does not error — the toast names the checklist that covers it (*"foo-copy's
+branch already has a checklist — it's under foo"*) when that is a different
+session from the one you pressed.
 
 **It offers sessions you have already CLOSED**, labelled `(closed)`, alongside
 the open ones. A checklist outlives its session everywhere else in this feature —

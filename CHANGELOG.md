@@ -27,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One verification checklist per branch, not per window.** With the same
+  branch open in two windows — a duplicated window, a repo adopted twice — both
+  windows saw the same push and each wrote its own checklist, so one piece of
+  work produced two cards from two model calls whose drafts did not even agree.
+  A checklist describes a branch's diff in a repo, so that is what it is now
+  keyed on: the second window writes nothing, a later push from either window
+  refreshes the one checklist, and the write-a-checklist button reports which
+  window's checklist already covers the branch instead of pointing at a row
+  that does not exist.
+
 - **A verify card no longer stops one rung short of where the work actually
   is.** In a repo that merges pull requests into `staging` and promotes
   `staging` into `main`, the "landed on" line froze at `staging` — the pass

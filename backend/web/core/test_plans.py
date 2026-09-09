@@ -71,7 +71,11 @@ from a push watcher AND from the stage-transition fallback, and a branch gets
 pushed over and over. Five pushes on one branch must produce exactly ONE plan —
 otherwise every amend-and-force-push burns a model call and buries the user in
 duplicate cards. Plans are keyed by session title and a matching ``(id, branch)``
-is a no-op.
+is a no-op. So is a matching ``(repo, branch)`` under a DIFFERENT title: one
+branch can be open in two windows (a duplicated window, a repo adopted twice),
+both windows see the same push, and a checklist describes a branch's diff rather
+than a window — see :func:`_branch_owner`, and :func:`owner_for_branch` for how
+a caller names the plan it was told already exists.
 
 ...AND A LATER PUSH REFRESHES THAT ONE PLAN, NEVER APPENDS TO IT. The paragraph
 above is unchanged: five pushes still make one plan. What a later push may do is
@@ -126,6 +130,7 @@ __all__ = [
     "get",
     "upsert",
     "ensure_plan_for",
+    "owner_for_branch",
     "intent_from_prompt",
     "session_intent",
     "refresh_for_push",
@@ -1073,6 +1078,69 @@ def upsert(plan: dict) -> dict:
         return entry
 
 
+def _branch_owner(plans: dict, repo_root: str, branch: str, skip: str = "") -> str:
+    """The id of the plan that already covers ``(repo, branch)``, or ``""``.
+
+    THE SECOND WINDOW. Plans are keyed by session title, and one branch can be
+    open in more than one window: the same repo adopted twice, a window
+    duplicated (``foo`` and ``foo-copy``), a second session started on a branch
+    somebody was already on. Both windows see the same push, so keying on the
+    title alone made ONE piece of work produce TWO checklists — two model calls,
+    two cards, two different drafts of the same diff — which is the same failure
+    the five-pushes rule exists to prevent, one level up. What a checklist
+    describes is a BRANCH's diff in a REPO; it does not describe a window. So
+    the second window finds the first window's plan here and does nothing.
+
+    Matched on the normalized main repo path plus the branch, and on nothing
+    else: two clones of one project on the same branch are genuinely two things
+    to check (they can sit on different commits and push to different remotes),
+    and a blank repo path matches nothing at all rather than everything — see
+    :func:`norm_repo`, where a blank path deliberately stays blank.
+
+    Order is the store's own, so the winner is the plan that was written FIRST —
+    the one that has been on screen, that a notification may already have named,
+    and that any answer would have been recorded against.
+    """
+    root = norm_repo(repo_root)
+    branch = str(branch or "").strip()
+    if not root or not branch:
+        return ""
+    for pid, raw in plans.items():
+        if pid == skip or not isinstance(raw, dict):
+            continue
+        if str(raw.get("branch") or "").strip() != branch:
+            continue
+        if norm_repo(str(raw.get("repo_root") or "")) != root:
+            continue
+        return pid
+    return ""
+
+
+def owner_for_branch(title: str, repo_root: str, branch: str) -> str:
+    """Which plan id covers this session's branch — its own, or a sibling's.
+
+    The lookup that goes with :func:`ensure_plan_for`'s ``None``: a caller told
+    "there is already a plan for this" needs to be able to NAME it, because the
+    plan may belong to another window on the same branch (see
+    :func:`_branch_owner`) and pointing the user at a plan id that does not
+    exist is worse than saying nothing. ``""`` when nothing covers it, which is
+    also the answer for the other reason ``ensure_plan_for`` declines (no
+    branch at all).
+    """
+    plan_id = str(title or "").strip()
+    want = str(branch or "").strip()
+    with _LOCK:
+        plans = _plans_of(_load())
+        own = plans.get(plan_id) if plan_id else None
+        # The session's own plan wins, but only while it is a plan about THIS
+        # branch: a plan left over from the branch this session used to be on
+        # answers a different question, and ``ensure_plan_for`` replaces it
+        # rather than declining, so the caller is never here for that one.
+        if isinstance(own, dict) and str(own.get("branch") or "").strip() == want:
+            return plan_id
+        return _branch_owner(plans, repo_root, want)
+
+
 def ensure_plan_for(
     title: str,
     branch: str,
@@ -1094,8 +1162,12 @@ def ensure_plan_for(
     Returns ``None`` when there is nothing to do — a plan already exists for
     this ``(id, branch)`` in ANY state, including ``failed`` (a plan that could
     not be generated is regenerated on request, not silently retried on every
-    subsequent push) and including ``done``. Otherwise it stores a fresh plan in
-    state ``generating`` and returns it, which is the caller's signal to run
+    subsequent push) and including ``done``. It also returns ``None`` when
+    another window is already covering this ``(repo, branch)`` under a different
+    title: two windows on one branch are one thing to check, not two, and a
+    caller that needs to name the covering plan asks
+    :func:`owner_for_branch`. Otherwise it stores a fresh plan in state
+    ``generating`` and returns it, which is the caller's signal to run
     :func:`generate` in the background.
 
     A plan whose ``branch`` differs IS replaced: plans are keyed by session
@@ -1114,6 +1186,12 @@ def ensure_plan_for(
         if isinstance(existing, dict):
             if str(existing.get("branch") or "").strip() == branch:
                 return None
+        # ...and the same no-op when ANOTHER window is already covering this
+        # branch in this repo. A checklist describes a branch's diff, not a
+        # window, so the second session on one branch must not buy a second
+        # model call — see :func:`_branch_owner`.
+        if _branch_owner(plans, repo_root, branch, skip=plan_id):
+            return None
         plan = _blank(plan_id)
         plan["repo_root"] = str(repo_root or "")
         plan["branch"] = branch

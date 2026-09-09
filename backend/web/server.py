@@ -840,9 +840,11 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
     # never announces. The stage ladder has neither limit — it is recomputed for
     # every session on every tick — so it catches what the watcher drops.
     # Deliberately redundant, and safe precisely because it is:
-    # ``test_plans.ensure_plan_for`` is idempotent per (session, branch), so the
-    # loser of the race does no work at all. Cheap enough to be unconditional:
-    # this fires on a stage TRANSITION, not on every tick.
+    # ``test_plans.ensure_plan_for`` is idempotent per (session, branch) — and
+    # per (repo, branch) across sessions, so two windows on one branch also
+    # make one plan — so the loser of the race does no work at all. Cheap
+    # enough to be unconditional: this fires on a stage TRANSITION, not on
+    # every tick.
     if prev.get("stage") != stage and stage == "pushed":
         _ensure_test_plan(title)
     # Turn boundaries are decided on every pass, not only on a transition: the
@@ -3111,9 +3113,17 @@ def _ensure_test_plan_blocking(title: str, manual: bool = False) -> None:
             # push MAY do is refresh that one plan, and only while nobody has
             # answered anything on it. Deliberately after the ``_verify_auto_for``
             # gate above, so a repo nobody tracks still gets nothing.
-            if _test_plans.refresh_for_push(title, branch, sha) is not None:
+            #
+            # ``owner`` rather than ``title``, because the plan for this branch
+            # may belong to ANOTHER window on it (a duplicated window, a repo
+            # adopted twice — see ``test_plans._branch_owner``). Refreshing
+            # under this session's title would find nothing and quietly stop
+            # recording the new tip, so the checklist for a branch two windows
+            # share would freeze at whichever push the first window saw.
+            owner = _test_plans.owner_for_branch(title, repo_root, branch)
+            if owner and _test_plans.refresh_for_push(owner, branch, sha) is not None:
                 _generate_test_plan(
-                    title, getattr(inst, "Program", "") or "", wt, refresh=True
+                    owner, getattr(inst, "Program", "") or "", wt, refresh=True
                 )
             return
         _generate_test_plan(title, getattr(inst, "Program", "") or "", wt)
@@ -9545,14 +9555,22 @@ async def instance_write_test_plan(title: str) -> JSONResponse:
             # plan for this branch". Without this the route reports the cheerful
             # one: "already has a checklist — it is in the list below", pointing
             # at a checklist that does not exist and never will.
-            return None, JSONResponse(
-                {"error": "this session isn't on a branch"}, status_code=409
+            return (
+                None,
+                "",
+                JSONResponse(
+                    {"error": "this session isn't on a branch"}, status_code=409
+                ),
             )
         if not sha:
             # An unborn HEAD: nothing has been committed, so there is no change
             # to describe and a plan would be a list of steps about nothing.
-            return None, JSONResponse(
-                {"error": "nothing committed on this branch yet"}, status_code=409
+            return (
+                None,
+                "",
+                JSONResponse(
+                    {"error": "nothing committed on this branch yet"}, status_code=409
+                ),
             )
         # One expression, used twice on purpose: the plan's repo and the repo the
         # live branch is resolved FOR must be the same one, or a repo whose
@@ -9566,17 +9584,27 @@ async def instance_write_test_plan(title: str) -> JSONResponse:
             _test_plans.resolve_live_branch(root),
             intent=_test_plan_intent(title),
         )
-        return plan, None
+        # Which plan the "there is already one" answer is ABOUT. Usually this
+        # session's own, but a branch open in two windows has one checklist
+        # between them and it is keyed by whichever window got there first —
+        # so the id is looked up rather than assumed, or the dialog would point
+        # at a plan that does not exist.
+        owner = (
+            ""
+            if plan is not None
+            else _test_plans.owner_for_branch(title, root, branch)
+        )
+        return plan, owner, None
 
-    plan, resp = await asyncio.to_thread(_prepare)
+    plan, owner, resp = await asyncio.to_thread(_prepare)
     if resp is not None:
         return resp
     if plan is None:
-        existing = _test_plans.get(title) or {}
+        existing = _test_plans.get(owner) or {}
         return JSONResponse(
             {
                 "ok": True,
-                "plan": title,
+                "plan": owner or title,
                 "existing": True,
                 "state": existing.get("state", ""),
             }
@@ -9604,11 +9632,13 @@ async def _write_test_plan_for_closed(title: str) -> JSONResponse:
             return (
                 None,
                 "",
+                "",
                 JSONResponse({"error": "no such session: %s" % title}, status_code=404),
             )
         if not branch:
             return (
                 None,
+                "",
                 "",
                 JSONResponse(
                     {"error": "that session wasn't on a branch"}, status_code=409
@@ -9617,6 +9647,7 @@ async def _write_test_plan_for_closed(title: str) -> JSONResponse:
         if not sha:
             return (
                 None,
+                "",
                 "",
                 JSONResponse(
                     {
@@ -9638,17 +9669,24 @@ async def _write_test_plan_for_closed(title: str) -> JSONResponse:
             # rewrite box.
             intent="",
         )
-        return plan, program, None
+        # Same lookup as the live route: the checklist that already covers this
+        # branch may be keyed by another window that was on it.
+        owner = (
+            ""
+            if plan is not None
+            else _test_plans.owner_for_branch(title, repo_root, branch)
+        )
+        return plan, program, owner, None
 
-    plan, program, resp = await asyncio.to_thread(_prepare)
+    plan, program, owner, resp = await asyncio.to_thread(_prepare)
     if resp is not None:
         return resp
     if plan is None:
-        existing = _test_plans.get(title) or {}
+        existing = _test_plans.get(owner) or {}
         return JSONResponse(
             {
                 "ok": True,
-                "plan": title,
+                "plan": owner or title,
                 "existing": True,
                 "state": existing.get("state", ""),
             }

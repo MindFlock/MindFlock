@@ -503,16 +503,52 @@ export function planTargets(
   closed: ClosedTarget[] = [],
 ): string[] {
   const havePlans = new Set((plans || []).map((plan) => plan.id));
+  // Branches a checklist already covers, keyed by repo + branch. A branch can be
+  // open
+  // in two windows (one duplicated, a repo adopted twice), and the checklist for
+  // it is keyed by whichever window got there first — so the OTHER window is not
+  // a candidate either. Offering it would promise a second checklist the server
+  // rightly refuses to write (`test_plans._branch_owner`), and the honest answer
+  // is the one this list already gives for a session with a plan: nothing to
+  // press, its plan is in the list below.
+  const covered = new Set(
+    (plans || [])
+      .map((plan) => coverageKey(repoName(plan.repo_root), plan.branch))
+      .filter(Boolean),
+  );
   const out: string[] = [];
   const seen = new Set<string>();
-  const take = (title: string, branch: string | undefined) => {
+  const take = (title: string, branch: string | undefined, repo: string) => {
     if (!title || !branch || havePlans.has(title) || seen.has(title)) return;
+    // Only when BOTH sides name a repo. An unknown repo on either side means
+    // branch names alone would decide it, and two unrelated repos sharing a
+    // branch name are two real things to check.
+    const key = coverageKey(repo, branch);
+    if (key && covered.has(key)) return;
     seen.add(title);
     out.push(title);
   };
-  for (const inst of instances || []) take(inst.title, inst.branch);
-  for (const entry of closed || []) take(entry.title, entry.branch);
+  for (const inst of instances || []) take(inst.title, inst.branch, inst.repo);
+  // A closed session carries no repo, so it is matched on nothing and stays
+  // offered — the server still declines to write a second checklist for a
+  // branch it already covers, and says which one covers it.
+  for (const entry of closed || []) take(entry.title, entry.branch, "");
   return out;
+}
+
+/** `repo/branch`, or "" when either half is missing (which matches nothing). */
+function coverageKey(repo: string, branch: string): string {
+  const r = (repo || "").trim();
+  const b = (branch || "").trim();
+  return r && b ? r + "\u0000" + b : "";
+}
+
+/** A plan stores its repo as an absolute path; `Instance.repo` is the display
+ * name, which for every non-provisioned session is that path's basename. This
+ * is the one place the two are compared, so it is the one place that converts. */
+function repoName(repoRoot: string): string {
+  const parts = (repoRoot || "").replace(/[/\\]+$/, "").split(/[/\\]/);
+  return parts[parts.length - 1] || "";
 }
 
 /** Which of those titles is a closed session — the picker labels them, because

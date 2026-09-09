@@ -2556,9 +2556,17 @@ function NewPlanBar({
       // 202 means a model call is now running for up to three minutes. Say so:
       // the plan appears immediately as "writing the plan", and a user who was
       // not told would read that quiet row as the button having failed.
+      //
+      // `r.plan` names the checklist that already exists, which is not always
+      // this session: a branch open in two windows has ONE checklist between
+      // them, filed under whichever window got there first. Saying "<target>
+      // already has a checklist" would send the user looking for a row that is
+      // there under another name.
       toast(
         r.existing
-          ? target + " already has a checklist — it is in the list below"
+          ? (r.plan && r.plan !== target
+              ? target + "'s branch already has a checklist — it's under " + r.plan
+              : target + " already has a checklist") + " — it is in the list below"
           // "up to three minutes", matching the row this press creates and the
           // server's own budget. It used to promise "a minute" 200px above a row
           // saying three, which makes the faster of the two promises a broken one.

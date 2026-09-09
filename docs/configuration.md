@@ -38,9 +38,9 @@ copy_untracked = [".env", ".env.local"]
 check_command = "npm test"
 
 # Verify: opt this repo in to automatic checklists. The first push of each
-# session branch gets a checklist written from its diff, which turns up in
-# Verify (Alt+V) once that commit reaches the repo's live branch. See
-# web-ui.md#verify.
+# branch in this repo gets a checklist written from its diff (one per branch,
+# even when several windows share it), which turns up in Verify (Alt+V) once
+# that commit reaches the repo's live branch. See web-ui.md#verify.
 #
 # This is the team-wide, committed half of the opt-in, and the ONLY one
 # available to a checkout with no GitHub origin — the other half is

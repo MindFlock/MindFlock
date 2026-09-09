@@ -354,6 +354,126 @@ def test_an_existing_plan_in_any_state_is_a_no_op(store, state):
     assert tp.ensure_plan_for("sc-1", "feature/x", "sha", "/repo", "main") is None
 
 
+def test_two_windows_on_one_branch_make_one_plan(store):
+    """THE SECOND WINDOW. One branch, two sessions on it (a duplicated window,
+    a repo adopted twice) — both see the same push, and keying on the title
+    alone bought two model calls and left two cards describing one diff. A
+    checklist is about a branch's diff in a repo, not about a window."""
+    first = tp.ensure_plan_for("bot7", "feature/sc-1", "sha1", "/repo", "main")
+    assert first is not None
+    assert (
+        tp.ensure_plan_for("bot7-copy", "feature/sc-1", "sha1", "/repo", "main") is None
+    )
+    assert [p["id"] for p in tp.list_plans()] == ["bot7"]
+
+
+def test_the_same_branch_in_a_different_repo_is_its_own_plan(store):
+    """Two clones of one project can sit on different commits and push to
+    different remotes, so a shared branch name is two real things to check."""
+    tp.ensure_plan_for("bot7", "feature/sc-1", "sha1", "/repo-a", "main")
+    plan = tp.ensure_plan_for("bot8", "feature/sc-1", "sha2", "/repo-b", "main")
+    assert plan is not None
+    assert len(tp.list_plans()) == 2
+
+
+def test_a_plan_with_no_repo_does_not_cover_every_branch(store):
+    """``norm_repo("")`` stays blank on purpose; a blank must match nothing
+    rather than everything, or one repo-less plan would silence the feature."""
+    tp.upsert(_plan("no-repo", branch="feature/sc-1", repo_root=""))
+    plan = tp.ensure_plan_for("bot7", "feature/sc-1", "sha", "/repo", "main")
+    assert plan is not None and plan["id"] == "bot7"
+    assert tp.owner_for_branch("bot7-copy", "", "feature/sc-1") == ""
+
+
+def test_the_second_window_can_name_the_plan_that_covers_it(store):
+    """What the button reports. ``ensure_plan_for`` declining is only useful if
+    the caller can point at the checklist that already exists — under a title
+    that is not this session's."""
+    tp.ensure_plan_for("bot7", "feature/sc-1", "sha1", "/repo", "main")
+    assert tp.owner_for_branch("bot7-copy", "/repo", "feature/sc-1") == "bot7"
+    # Its own plan wins over a sibling's...
+    tp.ensure_plan_for("bot7-copy", "feature/other", "sha1", "/repo", "main")
+    assert tp.owner_for_branch("bot7-copy", "/repo", "feature/other") == "bot7-copy"
+    # ...but only for the branch that plan is actually about.
+    assert tp.owner_for_branch("bot7-copy", "/repo", "feature/sc-1") == "bot7"
+    assert tp.owner_for_branch("nobody", "/repo", "feature/nothing") == ""
+
+
+def test_moving_onto_a_branch_another_window_covers_keeps_the_old_plan(store):
+    """Pins what happens at the seam between the two rules. The same session
+    moving to a NEW branch replaces its plan (below) — but when that new branch
+    is one a sibling already covers, the (repo, branch) no-op wins and nothing
+    is written, so the plan for the branch it left stays in the store. It is
+    still a real checklist about real work, and deleting it would throw away
+    whatever was answered on it; if that ever changes, this is the test to
+    change on purpose."""
+    tp.ensure_plan_for("bot7", "feature/sc-1", "sha1", "/repo", "main")
+    tp.ensure_plan_for("bot8", "feature/other", "sha2", "/repo", "main")
+    assert tp.ensure_plan_for("bot8", "feature/sc-1", "sha3", "/repo", "main") is None
+    assert tp.get("bot8")["branch"] == "feature/other"
+    assert sorted(p["id"] for p in tp.list_plans()) == ["bot7", "bot8"]
+    # ...and the session is told whose plan covers where it is NOW, not the
+    # stale one under its own title.
+    assert tp.owner_for_branch("bot8", "/repo", "feature/sc-1") == "bot7"
+
+
+def test_a_sessions_plan_for_another_branch_is_not_the_owner_of_this_one(store):
+    """The own-plan short cut must be about THIS branch: a plan left over from
+    the branch the session used to be on answers a different question, and
+    with no sibling covering the new branch the honest answer is nothing."""
+    tp.ensure_plan_for("bot7", "feature/old", "sha1", "/repo", "main")
+    assert tp.owner_for_branch("bot7", "/repo", "feature/new") == ""
+
+
+def test_two_spellings_of_one_repo_are_one_owner(store, tmp_path):
+    """``norm_repo`` decides whether two windows dedupe at all. A trailing
+    slash, a ``./`` segment and a symlink (``/tmp`` -> ``/private/tmp`` on a
+    Mac) are the same checkout, and a mismatch here does not break anything — it
+    quietly degrades to the two-checklists bug this exists to stop."""
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    first = tp.ensure_plan_for("bot7", "feature/x", "sha", str(real) + "/", "main")
+    assert first is not None
+    for spelling in (str(real), str(tmp_path / "." / "real"), str(link)):
+        assert tp.ensure_plan_for("bot8", "feature/x", "sha", spelling, "main") is None
+        assert tp.owner_for_branch("bot8", spelling, "feature/x") == "bot7"
+    assert [p["id"] for p in tp.list_plans()] == ["bot7"]
+
+
+def test_a_legacy_store_with_two_plans_for_one_branch_keeps_both(store):
+    """A file written before the cross-window rule can hold two plans for one
+    (repo, branch). Neither is deleted — an answer may be recorded on either —
+    the FIRST-written one is the owner every time, and a third window on the
+    branch is still a no-op."""
+    _write_store(
+        store,
+        {
+            "first": _plan("first", branch="feature/x", repo_root="/repo"),
+            "second": _plan("second", branch="feature/x", repo_root="/repo"),
+        },
+    )
+    assert sorted(p["id"] for p in tp.list_plans()) == ["first", "second"]
+    assert tp.ensure_plan_for("third", "feature/x", "sha", "/repo", "main") is None
+    assert tp.owner_for_branch("third", "/repo", "feature/x") == "first"
+    # A window that already has its own plan on the branch is told about its
+    # own, whichever was written first.
+    assert tp.owner_for_branch("second", "/repo", "feature/x") == "second"
+    assert sorted(p["id"] for p in tp.list_plans()) == ["first", "second"]
+
+
+def test_the_branch_match_strips_whitespace_but_keeps_case(store):
+    """The branch is compared as git would name it: padding a caller may leave
+    on it is not a different branch, but ``Feature/x`` is a different ref from
+    ``feature/x`` and gets its own checklist."""
+    assert tp.ensure_plan_for("bot7", "feature/x", "sha", "/repo", "main") is not None
+    assert tp.ensure_plan_for("bot8", " feature/x ", "sha", "/repo", "main") is None
+    assert tp.owner_for_branch("bot8", "/repo", " feature/x ") == "bot7"
+    cased = tp.ensure_plan_for("bot9", "Feature/x", "sha", "/repo", "main")
+    assert cased is not None and cased["branch"] == "Feature/x"
+
+
 def test_a_different_branch_replaces_the_plan(store):
     """Plans are keyed by session title and the store has exactly one slot per
     session, so the same session moving on to a different branch is new work."""
@@ -3413,6 +3533,17 @@ def test_the_dialog_ships_the_at_a_glance_tally(client):
     assert ".vf-plan-check" in css and ".vf-plan.picked" in css
 
 
+def test_the_dialog_ships_the_second_window_rule(client):
+    """The Write-plan bar must stop offering a session whose (repo, branch)
+    another window's plan already covers, and the toast for a press that lands
+    on that rule must name the window the checklist is under — a title that is
+    not the one pressed. Both live in the built bundle, so a stale build is the
+    one failure neither side can see."""
+    js = client.get("/app.js").text
+    assert "coverageKey(repoName(" in js
+    assert "'s branch already has a checklist — it's under " in js
+
+
 def test_routes_address_a_plan_whose_id_is_a_whole_branch_path(client):
     """``{plan_id:path}``, not ``{plan_id}``: a plan is keyed by its session
     title and create_instance accepts a title like ``feature/sc-412/badges``.
@@ -3627,6 +3758,161 @@ def test_write_route_points_at_the_existing_plan_rather_than_erroring(
     body = r.json()
     assert body["existing"] is True and body["plan"] == "sc-1"
     assert len(calls) == 1  # no second model call
+
+
+def test_two_windows_on_one_branch_buy_one_model_call(pushed_session, monkeypatch):
+    """The reported bug, at the trigger. The same branch was open in two
+    windows (`sc-1` and a duplicate of it), both saw the push, and the store
+    ended up with two cards describing one diff — written by two separate model
+    calls, so they did not even agree with each other."""
+    from backend.web import server
+
+    repo, calls = pushed_session
+    _register_repo(monkeypatch, "sc-1-copy", repo)
+    server._ensure_test_plan_blocking("sc-1", manual=True)
+    server._ensure_test_plan_blocking("sc-1-copy", manual=True)
+    assert [p["id"] for p in tp.list_plans()] == ["sc-1"]
+    assert len(calls) == 1
+
+
+def test_write_route_names_the_window_that_owns_the_checklist(
+    client, pushed_session, monkeypatch
+):
+    """The button on the second window. "Already written" is the right answer,
+    but the plan it points at belongs to the FIRST window — reporting this
+    session's own title would send the dialog to a row that does not exist."""
+    repo, calls = pushed_session
+    _register_repo(monkeypatch, "sc-1-copy", repo)
+    assert client.post("/api/instances/sc-1/test-plan").status_code == 202
+    r = client.post("/api/instances/sc-1-copy/test-plan")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["existing"] is True and body["plan"] == "sc-1"
+    assert len(calls) == 1  # no second model call
+
+
+def test_a_later_push_from_the_other_window_refreshes_the_one_plan(
+    pushed_session, monkeypatch
+):
+    """The refresh has to follow the plan, not the window. Keyed by this
+    session's title it would find nothing on the second window's push and stop
+    recording the tip, freezing a shared branch's checklist at whichever commit
+    the first window happened to see."""
+    from backend.web import server
+
+    repo, calls = pushed_session
+    _register_repo(monkeypatch, "sc-1-copy", repo)
+    server._ensure_test_plan_blocking("sc-1", manual=True)
+    plan = tp.get("sc-1")
+    plan["state"] = "generated"
+    plan["steps"] = [{"id": "s1", "text": "t", "expect": "e", "actor": "agent"}]
+    plan["generated_at"] = 1.0  # long enough ago to clear REFRESH_MIN_INTERVAL_S
+    tp.upsert(plan)
+    (repo / "f.txt").write_text("more line\n", encoding="utf-8")
+    _git(repo, "commit", "-am", "second commit")
+    server._ensure_test_plan_blocking("sc-1-copy", manual=True)
+    after = tp.get("sc-1")
+    assert after["tip_sha"] == _head(repo)
+    assert after["state"] == "generating" and after["refreshes"] == 1
+    assert len(tp.list_plans()) == 1
+
+
+def test_a_push_from_the_other_window_never_rewrites_an_answered_checklist(
+    pushed_session, monkeypatch
+):
+    """The refresh gate holds across windows too. Once somebody has answered a
+    step on the shared plan, the second window's push records the new tip and
+    does nothing else — no rewrite, no second plan, no model call."""
+    from backend.web import server
+
+    repo, calls = pushed_session
+    _register_repo(monkeypatch, "sc-1-copy", repo)
+    server._ensure_test_plan_blocking("sc-1", manual=True)
+    plan = tp.get("sc-1")
+    plan["state"] = "generated"
+    plan["steps"] = [
+        {"id": "s1", "text": "t", "expect": "e", "actor": "human"},
+        {"id": "s2", "text": "u", "expect": "f", "actor": "human"},
+    ]
+    plan["generated_at"] = 1.0
+    tp.upsert(plan)
+    tp.record_result("sc-1", "s1", "pass")  # half-answered: still `generated`
+    (repo / "f.txt").write_text("more line\n", encoding="utf-8")
+    _git(repo, "commit", "-am", "second commit")
+    server._ensure_test_plan_blocking("sc-1-copy", manual=True)
+    after = tp.get("sc-1")
+    assert after["tip_sha"] == _head(repo)  # recorded anyway — it is free
+    assert after["state"] == "generated" and after["refreshes"] == 0
+    assert [p["id"] for p in tp.list_plans()] == ["sc-1"]
+    assert len(calls) == 1
+
+
+def test_deleting_the_owners_plan_lets_the_other_window_write_its_own(
+    pushed_session, monkeypatch
+):
+    """The winner is whoever wrote first, not a permanent claim: with the first
+    window's plan deleted, nothing covers the branch and the second window's
+    next push writes a plan under its own title."""
+    from backend.web import server
+
+    repo, calls = pushed_session
+    _register_repo(monkeypatch, "sc-1-copy", repo)
+    server._ensure_test_plan_blocking("sc-1", manual=True)
+    assert tp.delete("sc-1") is True
+    server._ensure_test_plan_blocking("sc-1-copy", manual=True)
+    assert [p["id"] for p in tp.list_plans()] == ["sc-1-copy"]
+    assert len(calls) == 2
+    assert tp.owner_for_branch("sc-1", str(repo), "main") == "sc-1-copy"
+
+
+def test_the_second_windows_answer_carries_the_owners_state(
+    client, pushed_session, monkeypatch
+):
+    """The dialog reads ``state`` off the response to say where the checklist
+    has got to. Read from this session's own (missing) plan it would be blank;
+    it has to come from the plan the answer is actually about."""
+    repo, calls = pushed_session
+    _register_repo(monkeypatch, "sc-1-copy", repo)
+    assert client.post("/api/instances/sc-1/test-plan").status_code == 202
+    plan = tp.get("sc-1")
+    plan["state"] = "generated"
+    tp.upsert(plan)
+    body = client.post("/api/instances/sc-1-copy/test-plan").json()
+    assert body == {"ok": True, "plan": "sc-1", "existing": True, "state": "generated"}
+    assert len(calls) == 1  # no second model call
+
+
+def test_the_stage_ladder_writes_one_plan_for_two_windows_on_one_branch(
+    pushed_session, monkeypatch
+):
+    """The OTHER trigger. The route tests above press the button; this is the
+    stage-transition fallback in ``_emit_state_changes``, which fires for every
+    session that climbs to ``pushed`` — so two windows on one branch reach it in
+    the same tick. Run inline rather than on the daemon thread so the store can
+    be read the moment the tick is over."""
+    from backend.web import server
+    from backend.web.core import events as events_mod
+    from backend.web.core.events import EventBus
+
+    repo, calls = pushed_session
+    # The fallback is not a manual request, so the repo has to have opted in.
+    (repo / ".mindflock.toml").write_text(
+        "[workspace]\nverify_on_push = true\n", encoding="utf-8"
+    )
+    _register_repo(monkeypatch, "sc-1-copy", repo)
+    monkeypatch.setattr(events_mod, "BUS", EventBus())
+    monkeypatch.setattr(server, "_EVENT_SNAPSHOT", {})
+    monkeypatch.setattr(
+        server,
+        "_ensure_test_plan",
+        lambda title, manual=False: server._ensure_test_plan_blocking(title, manual),
+    )
+    for title in ("sc-1", "sc-1-copy"):
+        server._emit_state_changes(title, "running", "working", "agent")
+    for title in ("sc-1", "sc-1-copy"):
+        server._emit_state_changes(title, "running", "working", "pushed")
+    assert [p["id"] for p in tp.list_plans()] == ["sc-1"]
+    assert len(calls) == 1
 
 
 def test_write_route_404s_on_an_unknown_session(client):
@@ -7228,6 +7514,40 @@ def test_a_closed_session_that_already_has_a_checklist_points_at_it(
 
     assert r.status_code == 200
     assert r.json()["existing"] is True
+
+
+def test_a_closed_session_whose_branch_another_window_covers_names_that_window(
+    client, closed_session, monkeypatch
+):
+    """The closed-session route shares the second-window rule. A checklist for
+    this branch already exists under another title (a duplicate window that is
+    still open, say), so the answer is that plan — not a second model call, and
+    not a pointer at a plan under this title that was never written."""
+    from backend.web import server
+
+    repo, _ = closed_session
+    monkeypatch.setattr(server.ENGINE, "instances", {})
+    started: list = []
+    monkeypatch.setattr(
+        server, "_start_test_plan_generation", lambda *a, **k: started.append(a)
+    )
+    tp.upsert(
+        _plan(
+            "sc-9-copy", branch="feature/sc-9", repo_root=str(repo), state="generated"
+        )
+    )
+
+    r = client.post("/api/instances/sc-9/test-plan")
+
+    assert r.status_code == 200
+    assert r.json() == {
+        "ok": True,
+        "plan": "sc-9-copy",
+        "existing": True,
+        "state": "generated",
+    }
+    assert started == []
+    assert [p["id"] for p in tp.list_plans()] == ["sc-9-copy"]
 
 
 def test_a_name_that_is_in_neither_store_is_still_a_404(
