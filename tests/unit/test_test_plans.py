@@ -2609,11 +2609,13 @@ def test_ancestry_wins_over_the_PR(store, monkeypatch):
     assert server._test_plan_merged_into(_plan("sc-1"))["branch"] == "main"
 
 
-def test_the_landing_pass_stops_asking_once_the_work_is_where_it_ships(
+def test_the_landing_pass_stops_asking_once_the_landing_has_settled(
     store, repo_settings, monkeypatch
 ):
-    """The end of the road this question tracks. Without it every answered plan
-    in the store would be re-probed forever for an answer that cannot change."""
+    """The end of the road this question tracks. Without a stop, every answered
+    plan in the store would be re-probed forever for an answer that cannot
+    change — and the stop is a CLOCK, so it applies to a plan sitting on
+    `develop` just as much as to one that reached the live branch."""
     from backend.web import server
 
     repo_settings(live_branch="main")
@@ -2627,10 +2629,79 @@ def test_the_landing_pass_stops_asking_once_the_work_is_where_it_ships(
         or {"branch": "main", "at": 1.0, "all": []},
     )
     server._TEST_PLAN_LANDED_CHECKED.clear()
-    tp.upsert(_plan("sc-1", live_branch="main", merged_into="main"))
-    tp.upsert(_plan("sc-2", live_branch="main", merged_into="staging"))
+    old = time.time() - server._TEST_PLAN_LANDED_SETTLE_S - 60.0
+    tp.upsert(_plan("sc-1", live_branch="main", merged_into="main", merged_into_at=old))
+    tp.upsert(
+        _plan("sc-2", live_branch="main", merged_into="develop", merged_into_at=old)
+    )
+    # Landed nowhere yet: the question is still genuinely open.
+    tp.upsert(_plan("sc-3", live_branch="main"))
     server._check_test_plan_landings(tp.list_plans())
-    assert asked == ["sc-2"]
+    assert asked == ["sc-3"]
+
+
+def test_the_landing_pass_keeps_climbing_past_the_live_branch(
+    store, repo_settings, monkeypatch
+):
+    """THE BUG THIS ENDS. A repo that merges PRs into ``staging`` and promotes
+    ``staging`` into ``main`` has its live branch as the FIRST rung, so a stop
+    keyed on "it reached the branch we ship from" froze every card at
+    ``staging`` while the work was already in ``main``."""
+    from backend.web import server
+
+    repo_settings(live_branch="staging")
+    asked = []
+    monkeypatch.setattr(server, "git_available", lambda: True)
+    monkeypatch.setattr(server, "_verify_enabled", lambda: True)
+    monkeypatch.setattr(
+        server,
+        "_test_plan_merged_into",
+        lambda plan: asked.append(plan["id"])
+        or {"branch": "main", "at": 2.0, "all": ["main", "staging"]},
+    )
+    server._TEST_PLAN_LANDED_CHECKED.clear()
+    tp.upsert(
+        _plan(
+            "sc-1",
+            live_branch="staging",
+            merged_into="staging",
+            merged_into_at=time.time() - 3600.0,
+        )
+    )
+    server._check_test_plan_landings(tp.list_plans())
+    assert asked == ["sc-1"]
+    assert tp.get("sc-1")["merged_into"] == "main"
+
+
+def test_the_landing_pass_closes_the_window_on_an_undated_landing(
+    store, repo_settings, monkeypatch
+):
+    """A squash merge is known only by its PR, and a PR does not carry the
+    moment it merged — so ``merged_into_at`` is 0.0 and the window has to fall
+    back to a stamp that exists, or such a plan is asked for ever."""
+    from backend.web import server
+
+    repo_settings(live_branch="main")
+    asked = []
+    monkeypatch.setattr(server, "git_available", lambda: True)
+    monkeypatch.setattr(server, "_verify_enabled", lambda: True)
+    monkeypatch.setattr(
+        server,
+        "_test_plan_merged_into",
+        lambda plan: asked.append(plan["id"]) or {"branch": "", "at": 0.0, "all": []},
+    )
+    server._TEST_PLAN_LANDED_CHECKED.clear()
+    tp.upsert(
+        _plan(
+            "sc-1",
+            live_branch="main",
+            merged_into="develop",
+            merged_into_at=0.0,
+            generated_at=100.0,
+        )
+    )
+    server._check_test_plan_landings(tp.list_plans())
+    assert asked == []
 
 
 def test_the_landing_pass_asks_each_plan_at_most_once_a_window(

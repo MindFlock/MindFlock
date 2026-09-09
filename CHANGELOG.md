@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the driver cache and clears the stale "driver is not installed" rows so the
   tree retries instead of reporting a problem that is gone.
 
+### Fixed
+
+- **A verify card no longer stops one rung short of where the work actually
+  is.** In a repo that merges pull requests into `staging` and promotes
+  `staging` into `main`, the "landed on" line froze at `staging` — the pass
+  that asks where work has got to stopped as soon as the work reached the
+  branch the repo ships from, which in that shape is the FIRST rung. It now
+  keeps asking until a landing has stopped moving (a week without a promotion),
+  which also bounds the question for a plan sitting on `develop` — the old rule
+  re-probed those for ever.
+
 ## [0.3.0] - 2026-09-02
 
 ### Added

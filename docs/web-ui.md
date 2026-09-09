@@ -1165,8 +1165,13 @@ ranked by which one it reached most recently, with branches that arrived in the
 that merge, and listing them all would answer with four names when one thing
 happened). Where a **squash merge** left no ancestry to find, the branch its pull
 request merged into is used instead. It refreshes every few minutes per plan on
-one shared fetch per repository, and stops being asked once the work has reached
-the branch its repo ships from.
+one shared fetch per repository, and stops being asked a week after the work last
+landed anywhere — the branch a change sits on keeps climbing (merged into
+`staging`, promoted into `main` days later) and no branch name marks the top of
+that climb, so the stop is a clock rather than the live branch. In a repo that
+promotes `staging` into `main` the chip therefore moves on from the tinted
+`staging` to a plain `main` once the promotion happens; the tint marks the live
+branch, not the end of the trail.
 
 **A checklist nobody has answered follows its repo's live branch**, so
 re-pointing a repo from `staging` to `main` re-aims every unanswered checklist
