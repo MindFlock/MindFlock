@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-09
+
 ### Added
 
 - **Install a missing database driver from the tree.** A connection whose
@@ -1955,7 +1957,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.3.1
 [0.3.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.3.0
 [0.2.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.2.1
 [0.2.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.2.0
