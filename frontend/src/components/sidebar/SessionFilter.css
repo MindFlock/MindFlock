@@ -48,7 +48,3 @@
   list-style: none;
 }
 
-/* A renamed session shows its custom label in italic (real title in tooltip). */
-.inst .title.aliased {
-  font-style: italic;
-}

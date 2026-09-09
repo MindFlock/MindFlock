@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the driver cache and clears the stale "driver is not installed" rows so the
   tree retries instead of reporting a problem that is gone.
 
+### Changed
+
+- **A renamed session row reads like every other row.** Renaming a tab used to
+  put its label in italics; the real title is already one hover away in the
+  tooltip, and a row that is styled differently for a reason nobody can see
+  just looks like a mistake.
+
 ### Fixed
 
 - **A verify card no longer stops one rung short of where the work actually

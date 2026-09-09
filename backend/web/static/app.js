@@ -25646,7 +25646,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 							}
 						}
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "title" + (alias ? " aliased" : ""),
+						className: "title",
 						title: [
 							alias ? `${alias}  ·  ${label.text}` : label.text,
 							label.kind ? `session: ${displayTitle(inst)}` : "",
