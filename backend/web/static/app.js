@@ -19889,16 +19889,28 @@ function liveBranchOverridden(liveBranch, plans, trackedRepos, blocks) {
 }
 function planTargets(instances, plans, closed = []) {
 	const havePlans = new Set((plans || []).map((plan) => plan.id));
+	const covered = new Set((plans || []).map((plan) => coverageKey(repoName(plan.repo_root), plan.branch)).filter(Boolean));
 	const out = [];
 	const seen = /* @__PURE__ */ new Set();
-	const take = (title, branch) => {
+	const take = (title, branch, repo) => {
 		if (!title || !branch || havePlans.has(title) || seen.has(title)) return;
+		const key = coverageKey(repo, branch);
+		if (key && covered.has(key)) return;
 		seen.add(title);
 		out.push(title);
 	};
-	for (const inst of instances || []) take(inst.title, inst.branch);
-	for (const entry of closed || []) take(entry.title, entry.branch);
+	for (const inst of instances || []) take(inst.title, inst.branch, inst.repo);
+	for (const entry of closed || []) take(entry.title, entry.branch, "");
 	return out;
+}
+function coverageKey(repo, branch) {
+	const r = (repo || "").trim();
+	const b = (branch || "").trim();
+	return r && b ? r + "\0" + b : "";
+}
+function repoName(repoRoot) {
+	const parts = (repoRoot || "").replace(/[/\\]+$/, "").split(/[/\\]/);
+	return parts[parts.length - 1] || "";
 }
 function closedTargets(instances, closed = []) {
 	const live = new Set((instances || []).map((i) => i.title));
@@ -25646,7 +25658,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 							}
 						}
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "title" + (alias ? " aliased" : ""),
+						className: "title",
 						title: [
 							alias ? `${alias}  ·  ${label.text}` : label.text,
 							label.kind ? `session: ${displayTitle(inst)}` : "",
@@ -41623,7 +41635,8 @@ function NewPlanBar({ candidates, closed, reason }) {
 	async function write() {
 		setBusy(target);
 		try {
-			toast((await api("/api/instances/" + encodeURIComponent(target) + "/test-plan", { method: "POST" })).existing ? target + " already has a checklist — it is in the list below" : "Writing a checklist for " + target + " — up to three minutes");
+			const r = await api("/api/instances/" + encodeURIComponent(target) + "/test-plan", { method: "POST" });
+			toast(r.existing ? (r.plan && r.plan !== target ? target + "'s branch already has a checklist — it's under " + r.plan : target + " already has a checklist") + " — it is in the list below" : "Writing a checklist for " + target + " — up to three minutes");
 			refreshTestPlans();
 		} catch (err) {
 			errorPop("Couldn't write a checklist", errMsg(err));

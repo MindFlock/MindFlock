@@ -38,9 +38,9 @@ copy_untracked = [".env", ".env.local"]
 check_command = "npm test"
 
 # Verify: opt this repo in to automatic checklists. The first push of each
-# session branch gets a checklist written from its diff, which turns up in
-# Verify (Alt+V) once that commit reaches the repo's live branch. See
-# web-ui.md#verify.
+# branch in this repo gets a checklist written from its diff (one per branch,
+# even when several windows share it), which turns up in Verify (Alt+V) once
+# that commit reaches the repo's live branch. See web-ui.md#verify.
 #
 # This is the team-wide, committed half of the opt-in, and the ONLY one
 # available to a checkout with no GitHub origin — the other half is
@@ -56,7 +56,7 @@ in `repository.verify_repo_settings["owner/name"]` and edited in Verify →
 
 | Key | What it decides |
 | --- | --- |
-| `live_branch` | Which branch counts as shipped for this repo. A checklist goes due when its commit lands on it. Resolves first-non-empty through this override → `repository.live_branch` → `pr_base_branch` → `base_branch` → `main`. |
+| `live_branch` | Which branch counts as shipped for this repo. A checklist goes due when its commit lands on it. Resolves first-non-empty through this override → `repository.live_branch` → `pr_base_branch` → `base_branch` → `main`. The card's "merged into" chip is independent of this: it keeps following the work for a week after each landing, so it can name a branch beyond the live one (`main` in a repo whose live branch is `staging`). |
 | `deploy_delay_minutes` | How long after merging the change is actually running. A checklist waits this long before it turns up to be checked — merged is not deployed, and checking too early records a failure against code that is fine. `0` when merging *is* shipping. Blank inherits the flock-wide default (5). |
 | `target` | Where this repo's running product is — a URL, plus whatever is needed to reach it. **This is the key that decides what "it works" is checked against.** With it set, both the checklist and the agent that works it are aimed at that deployment. Blank is a real answer, not a missing one: a library or a CLI has no environment to point at, and its checklist is worked against a fresh checkout of the live branch on this machine. |
 | `prompt` | Standing instructions for this repo — where the app runs, what to always check, what to ignore. Folded into **both** the prompt that writes a checklist and the one the agent runs it with. Steers *what* gets tested; it can never change the format either model must answer in. |

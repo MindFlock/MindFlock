@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Install a missing database driver from the tree.** A connection whose
+  driver is not installed shows "Install driver" on the failing node itself,
+  not only inside the connection form — the error the user can actually fix no
+  longer dead-ends in a shell command to paste. The install's progress is keyed
+  by engine rather than by the open form, so it survives the form being
+  replaced (or never having been opened), and a successful install refreshes
+  the driver cache and clears the stale "driver is not installed" rows so the
+  tree retries instead of reporting a problem that is gone.
+
+### Changed
+
+- **A renamed session row reads like every other row.** Renaming a tab used to
+  put its label in italics; the real title is already one hover away in the
+  tooltip, and a row that is styled differently for a reason nobody can see
+  just looks like a mistake.
+
+### Fixed
+
+- **One verification checklist per branch, not per window.** With the same
+  branch open in two windows — a duplicated window, a repo adopted twice — both
+  windows saw the same push and each wrote its own checklist, so one piece of
+  work produced two cards from two model calls whose drafts did not even agree.
+  A checklist describes a branch's diff in a repo, so that is what it is now
+  keyed on: the second window writes nothing, a later push from either window
+  refreshes the one checklist, and the write-a-checklist button reports which
+  window's checklist already covers the branch instead of pointing at a row
+  that does not exist.
+
+- **A verify card no longer stops one rung short of where the work actually
+  is.** In a repo that merges pull requests into `staging` and promotes
+  `staging` into `main`, the "landed on" line froze at `staging` — the pass
+  that asks where work has got to stopped as soon as the work reached the
+  branch the repo ships from, which in that shape is the FIRST rung. It now
+  keeps asking until a landing has stopped moving (a week without a promotion),
+  which also bounds the question for a plan sitting on `develop` — the old rule
+  re-probed those for ever.
+
 ## [0.3.0] - 2026-09-02
 
 ### Added

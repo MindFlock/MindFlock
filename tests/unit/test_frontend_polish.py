@@ -96,7 +96,7 @@ def test_app_js_foreign_chip_removed():
     assert "From another repo: " not in js
     # Truncated titles still reveal the full name on hover (alias-aware: an
     # aliased row shows "alias · real-title", a plain row shows the real title).
-    assert "aliased" in js
+    assert "  \u00b7  " in js
 
 
 # --------------------------------------------------------------------------- #

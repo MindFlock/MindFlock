@@ -225,7 +225,7 @@ export const SidebarRow = memo(function SidebarRow({
             />
           ) : (
             <span
-              className={"title" + (alias ? " aliased" : "")}
+              className="title"
               title={[
                 alias ? `${alias}  ·  ${label.text}` : label.text,
                 // The real title is the identity behind a reformatted label —

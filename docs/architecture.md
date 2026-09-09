@@ -90,7 +90,10 @@ FastAPI app `backend.web.server:app`. Key pieces:
 - **`core/git_ops.py`** — pure git queries (dirty? commits beyond base? upstream?
   origin SHA?) used to compute each session's **workflow stage**:
   `provisioning → agent → pre-commit → committed → pushed → PR open → merged`
-  (+ `pre-commit ✗` on hook failure).
+  (+ `pre-commit ✗` on hook failure). The `pushed` transition is also the
+  fallback trigger for a Verify checklist (`_ensure_test_plan`), idempotent per
+  (session, branch) and per (repo, branch) across sessions — see
+  [web-api.md](web-api.md#verify--checklists-for-what-shipped).
 - **`core/events.py`** — the server-side session event bus: `session.*` events
   broadcast over `WS /api/events`, delivered to in-process addons via
   `AppContext.subscribe`, and to user shell hooks under `~/.mindflock/hooks/`.

@@ -840,9 +840,11 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
     # never announces. The stage ladder has neither limit — it is recomputed for
     # every session on every tick — so it catches what the watcher drops.
     # Deliberately redundant, and safe precisely because it is:
-    # ``test_plans.ensure_plan_for`` is idempotent per (session, branch), so the
-    # loser of the race does no work at all. Cheap enough to be unconditional:
-    # this fires on a stage TRANSITION, not on every tick.
+    # ``test_plans.ensure_plan_for`` is idempotent per (session, branch) — and
+    # per (repo, branch) across sessions, so two windows on one branch also
+    # make one plan — so the loser of the race does no work at all. Cheap
+    # enough to be unconditional: this fires on a stage TRANSITION, not on
+    # every tick.
     if prev.get("stage") != stage and stage == "pushed":
         _ensure_test_plan(title)
     # Turn boundaries are decided on every pass, not only on a transition: the
@@ -2917,6 +2919,17 @@ _TEST_PLAN_LIVE_CHECKED: Dict[str, float] = {}
 _TEST_PLAN_LANDED_TTL_S = 300.0
 _TEST_PLAN_LANDED_BUDGET_S = 15.0
 
+#: How long after its most recent landing a plan is still asked "and now?".
+#: The stop condition for the landing pass, and the reason it is a CLOCK rather
+#: than a branch name is in :func:`_check_test_plan_landings`: the branch a
+#: change sits on climbs (merged into staging on Tuesday, promoted into main on
+#: Wednesday) and no branch name marks the top of that climb, but a promotion
+#: that has not happened within a week is not coming. Generous on purpose — the
+#: cost of a too-long window is one cheap local probe per plan per five minutes,
+#: while a too-short one is a wrong branch name on the card, which is the bug
+#: this window exists to end.
+_TEST_PLAN_LANDED_SETTLE_S = 7 * 86400.0
+
 #: plan id -> epoch when its landing was last asked. Same cursor trick as
 #: :data:`_TEST_PLAN_LIVE_CHECKED`, and in memory for the same reason.
 _TEST_PLAN_LANDED_CHECKED: Dict[str, float] = {}
@@ -3100,9 +3113,17 @@ def _ensure_test_plan_blocking(title: str, manual: bool = False) -> None:
             # push MAY do is refresh that one plan, and only while nobody has
             # answered anything on it. Deliberately after the ``_verify_auto_for``
             # gate above, so a repo nobody tracks still gets nothing.
-            if _test_plans.refresh_for_push(title, branch, sha) is not None:
+            #
+            # ``owner`` rather than ``title``, because the plan for this branch
+            # may belong to ANOTHER window on it (a duplicated window, a repo
+            # adopted twice — see ``test_plans._branch_owner``). Refreshing
+            # under this session's title would find nothing and quietly stop
+            # recording the new tip, so the checklist for a branch two windows
+            # share would freeze at whichever push the first window saw.
+            owner = _test_plans.owner_for_branch(title, repo_root, branch)
+            if owner and _test_plans.refresh_for_push(owner, branch, sha) is not None:
                 _generate_test_plan(
-                    title, getattr(inst, "Program", "") or "", wt, refresh=True
+                    owner, getattr(inst, "Program", "") or "", wt, refresh=True
                 )
             return
         _generate_test_plan(title, getattr(inst, "Program", "") or "", wt)
@@ -4421,9 +4442,12 @@ def _check_test_plan_landings(plans: list) -> None:
 
     What stops it being expensive:
 
-    * **A plan that has reached its own live branch is finished being asked.**
-      That is the end of the road this question is tracking; a later landing on
-      some other branch is not what the card is for.
+    * **A landing that has stopped moving is finished being asked** —
+      :data:`_TEST_PLAN_LANDED_SETTLE_S` after the work last landed somewhere,
+      wherever that was. See the comment on the check itself for why this is a
+      clock and not "it reached the branch this repo ships from", which is what
+      it used to be and which froze the card one rung short in every repo that
+      promotes a live branch onward.
     * **:data:`_TEST_PLAN_LANDED_TTL_S`** — minutes, not every tick. Nothing acts
       on this answer, so nothing is hurt by it being a few minutes old.
     * **The fetch is per repository, not per plan** (``fetch_all_heads``), so a
@@ -4442,8 +4466,33 @@ def _check_test_plan_landings(plans: list) -> None:
     for plan in plans:
         if not (plan.get("repo_root") and plan.get("branch") and plan.get("sha")):
             continue
+        # WHEN THIS QUESTION IS FINISHED — and it is NOT "the work reached the
+        # branch this repo ships from", which is what stood here first and what
+        # froze the card in exactly the repo shape the answer exists for. A repo
+        # that merges PRs into `staging` and promotes `staging` into `main` hours
+        # later has `staging` as BOTH its first rung and its live branch, so
+        # every plan stopped being asked at the first rung and a screenful of
+        # cards went on saying "staging" about work that was already in `main`.
+        # The climb the row renders (local -> staging -> main) does not end at
+        # the live branch; it ends when the work stops moving.
+        #
+        # So the stop is a settle window on the landing itself, which also
+        # bounds the queue for EVERY landed plan instead of only the ones that
+        # happened to end on the live branch — the develop/release repo the old
+        # rule re-probed for ever included.
         landed = str(plan.get("merged_into") or "")
-        if landed and landed == str(plan.get("live_branch") or ""):
+        # `merged_into_at` is 0.0 for a landing only the PR could name (a squash
+        # merge leaves no ancestry, and a PR does not carry the moment it
+        # merged), so fall back through the stamps that do exist rather than
+        # asking such a plan for ever. `generated_at` is the last resort and is
+        # always set, so the window always closes.
+        since = (
+            float(plan.get("merged_into_at") or 0.0)
+            or float(plan.get("merged_at") or 0.0)
+            or float(plan.get("live_at") or 0.0)
+            or float(plan.get("generated_at") or 0.0)
+        )
+        if landed and since and now - since > _TEST_PLAN_LANDED_SETTLE_S:
             continue
         if (
             now - _TEST_PLAN_LANDED_CHECKED.get(plan["id"], 0.0)
@@ -9506,14 +9555,22 @@ async def instance_write_test_plan(title: str) -> JSONResponse:
             # plan for this branch". Without this the route reports the cheerful
             # one: "already has a checklist — it is in the list below", pointing
             # at a checklist that does not exist and never will.
-            return None, JSONResponse(
-                {"error": "this session isn't on a branch"}, status_code=409
+            return (
+                None,
+                "",
+                JSONResponse(
+                    {"error": "this session isn't on a branch"}, status_code=409
+                ),
             )
         if not sha:
             # An unborn HEAD: nothing has been committed, so there is no change
             # to describe and a plan would be a list of steps about nothing.
-            return None, JSONResponse(
-                {"error": "nothing committed on this branch yet"}, status_code=409
+            return (
+                None,
+                "",
+                JSONResponse(
+                    {"error": "nothing committed on this branch yet"}, status_code=409
+                ),
             )
         # One expression, used twice on purpose: the plan's repo and the repo the
         # live branch is resolved FOR must be the same one, or a repo whose
@@ -9527,17 +9584,27 @@ async def instance_write_test_plan(title: str) -> JSONResponse:
             _test_plans.resolve_live_branch(root),
             intent=_test_plan_intent(title),
         )
-        return plan, None
+        # Which plan the "there is already one" answer is ABOUT. Usually this
+        # session's own, but a branch open in two windows has one checklist
+        # between them and it is keyed by whichever window got there first —
+        # so the id is looked up rather than assumed, or the dialog would point
+        # at a plan that does not exist.
+        owner = (
+            ""
+            if plan is not None
+            else _test_plans.owner_for_branch(title, root, branch)
+        )
+        return plan, owner, None
 
-    plan, resp = await asyncio.to_thread(_prepare)
+    plan, owner, resp = await asyncio.to_thread(_prepare)
     if resp is not None:
         return resp
     if plan is None:
-        existing = _test_plans.get(title) or {}
+        existing = _test_plans.get(owner) or {}
         return JSONResponse(
             {
                 "ok": True,
-                "plan": title,
+                "plan": owner or title,
                 "existing": True,
                 "state": existing.get("state", ""),
             }
@@ -9565,11 +9632,13 @@ async def _write_test_plan_for_closed(title: str) -> JSONResponse:
             return (
                 None,
                 "",
+                "",
                 JSONResponse({"error": "no such session: %s" % title}, status_code=404),
             )
         if not branch:
             return (
                 None,
+                "",
                 "",
                 JSONResponse(
                     {"error": "that session wasn't on a branch"}, status_code=409
@@ -9578,6 +9647,7 @@ async def _write_test_plan_for_closed(title: str) -> JSONResponse:
         if not sha:
             return (
                 None,
+                "",
                 "",
                 JSONResponse(
                     {
@@ -9599,17 +9669,24 @@ async def _write_test_plan_for_closed(title: str) -> JSONResponse:
             # rewrite box.
             intent="",
         )
-        return plan, program, None
+        # Same lookup as the live route: the checklist that already covers this
+        # branch may be keyed by another window that was on it.
+        owner = (
+            ""
+            if plan is not None
+            else _test_plans.owner_for_branch(title, repo_root, branch)
+        )
+        return plan, program, owner, None
 
-    plan, program, resp = await asyncio.to_thread(_prepare)
+    plan, program, owner, resp = await asyncio.to_thread(_prepare)
     if resp is not None:
         return resp
     if plan is None:
-        existing = _test_plans.get(title) or {}
+        existing = _test_plans.get(owner) or {}
         return JSONResponse(
             {
                 "ok": True,
-                "plan": title,
+                "plan": owner or title,
                 "existing": True,
                 "state": existing.get("state", ""),
             }

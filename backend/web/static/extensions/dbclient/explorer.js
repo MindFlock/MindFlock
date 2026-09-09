@@ -428,6 +428,17 @@ export function renderExplorer(shared, host) {
    * with the rest of the state, ABOVE the first renderTree() call (the
    * startForm/root TDZ lesson). */
   let treePainting = false;
+  /** The connection-detail panel's notice line. Declared HERE, with the rest
+   * of the state, because renderConnDetail reads it and the first renderMain()
+   * below runs before any later declaration would — the same TDZ that broke
+   * startForm/root and treePainting. Keep every const renderMain can reach
+   * above that call. */
+  const connNotice = makeNotice();
+  /** engine → {running, error, output} for a driver install in flight. Keyed by
+   * ENGINE, not by the form: an install can now be started from the tree's
+   * error row with no form open at all, and the old form.install slot was lost
+   * whenever the form object was replaced mid-await. */
+  const installs = new Map();
 
   function disposeEmbed() {
     if (!embedded) return;
@@ -495,7 +506,17 @@ export function renderExplorer(shared, host) {
     .catch((err) => {
       if (!disposed) showTreeError(errMsg(err));
     });
-  listDrivers(api).then(() => !disposed && form && renderMain()).catch(() => {});
+  // The tree repaints unconditionally: its error rows show an "Install driver"
+  // button only once the driver cache says the engine is missing, and that
+  // cache lands after the first paint. renderMain stays form-gated (it rebuilds
+  // the embedded table view).
+  listDrivers(api)
+    .then(() => {
+      if (disposed) return;
+      renderTree();
+      if (form) renderMain();
+    })
+    .catch(() => {});
 
   function showTreeError(msg) {
     tree.replaceChildren(el("div", { class: "dbc-node-status error", text: "Could not load connections: " + msg }));
@@ -758,6 +779,22 @@ export function renderExplorer(shared, host) {
       { class: "dbc-node-status" + (isError ? " error" : ""), style: { "--depth": parent.depth + 1 } },
       el("span", { text })
     );
+    // A missing driver is the one tree error the user can fix from here, so it
+    // gets the button rather than only the shell command buried in the message.
+    const drv = isError && isDriverMissing(text) ? driverGapFor(parent.connId) : null;
+    if (drv && drv.can_install) {
+      const st = installState(drv.engine);
+      row.appendChild(
+        button(st.running ? "Installing…" : "Install driver", {
+          kind: "primary",
+          icon: "download",
+          disabled: !!st.running,
+          title: "Install " + (drv.driver || "the driver") + " into the environment that runs MindFlock",
+          onClick: () => runInstall(drv),
+        })
+      );
+      if (st.error) row.appendChild(el("span", { class: "dbc-hint inline", text: st.error }));
+    }
     if (retry) row.appendChild(button("Retry", { onClick: retry }));
     return row;
   }
@@ -1109,7 +1146,6 @@ export function renderExplorer(shared, host) {
     panel.appendChild(connCard(conn, true));
     panel.appendChild(el("div", { class: "dbc-notice-slot" }, connNotice.el));
   }
-  const connNotice = makeNotice();
 
   function renderScopeDetail(conn, s) {
     const label = s.kind === "schema" ? "Schema" : "Database";
@@ -1213,8 +1249,25 @@ export function renderExplorer(shared, host) {
    * with a button; the paste-into-a-shell command stays as the fallback, and
    * is the ONLY thing shown when the server refuses (a system-managed Python,
    * or no uv/pip) — a button that cannot work would be worse than a command. */
+  /** Does this tree/panel error text come from DriverMissing? Matched on the
+   * server's own wording (adapters.py DriverMissing) — the tree only ever
+   * holds the flattened message, not the structured report. */
+  function isDriverMissing(msg) {
+    return typeof msg === "string" && msg.includes("is not installed in the server's environment");
+  }
+
+  /** The installable-driver record behind a node's error, or null. The tree row
+   * shows the same "Install driver" button as the connection form, so a missing
+   * driver never dead-ends in a command the user has to paste into a shell. */
+  function driverGapFor(connId) {
+    const conn = cachedConnections().find((c) => c.id === connId);
+    if (!conn) return null;
+    const drv = cachedDrivers().find((x) => x.engine === conn.engine);
+    return drv && drv.available === false ? drv : null;
+  }
+
   function driverNote(drv) {
-    const st = installState();
+    const st = installState(drv.engine);
     const body = el("div", { class: "dbc-driver-body" });
     body.appendChild(
       el("div", {
@@ -1260,40 +1313,49 @@ export function renderExplorer(shared, host) {
     return el("div", { class: "dbc-driver-note" }, svgIcon("alert"), body);
   }
 
-  function installState() {
-    if (!form.install) form.install = { running: false, error: "", output: "" };
-    return form.install;
+  function installState(engine) {
+    let st = installs.get(engine);
+    if (!st) installs.set(engine, (st = { running: false, error: "", output: "" }));
+    return st;
   }
 
   /** Run the install, then repaint: on success the refreshed driver cache makes
    * the note disappear by itself; on failure the installer's own output is what
    * the note shows, because "pip said no" is the only useful next step. */
   async function runInstall(drv) {
-    if (!form) return;
-    const st = installState();
+    const st = installState(drv.engine);
     if (st.running) return;
     st.running = true;
     st.error = st.output = "";
-    form.error = form.ok = "";
+    if (form) form.error = form.ok = "";
     renderMain();
+    renderTree();
     let res;
     try {
       res = await installDriver(api, drv.engine);
     } catch (err) {
       res = { ok: false, error: errMsg(err) };
     }
-    if (disposed || !form) return;
-    // Re-read: the form object may have been replaced while we were awaiting.
-    const now = installState();
+    if (disposed) return;
+    // Keyed by engine, so this survives the form being replaced — or never
+    // having existed, when the install was started from the tree's error row.
+    const now = installState(drv.engine);
     now.running = false;
     if (res.ok) {
       api.ui.toast((res.driver || "Driver") + (res.already ? " already installed" : " installed"));
-      form.ok = "Driver installed — Test now checks the connection for real.";
+      if (form) form.ok = "Driver installed — Test now checks the connection for real.";
+      // The driver cache still says "unavailable"; refresh it, then drop the
+      // stale per-node errors so the tree retries instead of showing the old
+      // "driver is not installed" text under a now-working connection.
+      await listDrivers(api, true).catch(() => {});
+      if (disposed) return;
+      for (const [k, v] of [...errors]) if (isDriverMissing(v)) errors.delete(k);
     } else {
       now.error = res.error || "the install failed";
       now.output = res.output || "";
     }
     renderMain();
+    renderTree();
   }
 
   function renderForm() {

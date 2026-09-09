@@ -59,8 +59,10 @@ def test_app_js_rename_wiring():
     assert '"data-title"' in js
 
 
-def test_style_css_has_alias_rule():
-    assert ".title.aliased" in client.get("/style.css").text
+def test_style_css_does_not_restyle_an_alias():
+    # A renamed row reads exactly like every other row — no italic, no
+    # separate ".aliased" styling (the real title lives in the tooltip).
+    assert "aliased" not in client.get("/style.css").text
 
 
 # --------------------------------------------------------------------------- #
