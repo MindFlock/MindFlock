@@ -20764,6 +20764,50 @@ async function pasteFilesAsPaths(files, term, session) {
 	toast(paths.length === 1 ? "File → " + paths[0] : paths.length + " files → workspace");
 }
 var dtHasFiles = (dt) => !!dt && Array.from(dt.types || []).indexOf("Files") !== -1;
+function attachFileDrop(host, term, session) {
+	const onPaste = (ev) => {
+		const cd = ev.clipboardData;
+		if (!cd) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		const files = Array.from(cd.files || []);
+		const text = cd.getData("text/plain");
+		const onlyImages = files.length > 0 && files.every((f) => (f.type || "").startsWith("image/"));
+		if (files.length && !(text && onlyImages)) pasteFilesAsPaths(files, term, session);
+		else if (text) {
+			term.paste(text);
+			toast("Pasted " + text.length + " chars");
+		} else pasteClipboard(term, session);
+	};
+	const onDragOver = (ev) => {
+		if (!dtHasFiles(ev.dataTransfer)) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		ev.dataTransfer.dropEffect = "copy";
+		host.classList.add("file-drop");
+	};
+	const onDragLeave = (ev) => {
+		if (!host.contains(ev.relatedTarget)) host.classList.remove("file-drop");
+	};
+	const onDrop = (ev) => {
+		if (!dtHasFiles(ev.dataTransfer)) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		host.classList.remove("file-drop");
+		pasteFilesAsPaths(ev.dataTransfer.files, term, session);
+	};
+	host.addEventListener("paste", onPaste, true);
+	host.addEventListener("dragover", onDragOver);
+	host.addEventListener("dragleave", onDragLeave);
+	host.addEventListener("drop", onDrop);
+	return () => {
+		host.removeEventListener("paste", onPaste, true);
+		host.removeEventListener("dragover", onDragOver);
+		host.removeEventListener("dragleave", onDragLeave);
+		host.removeEventListener("drop", onDrop);
+		host.classList.remove("file-drop");
+	};
+}
 function installGlobalDropGuards() {
 	window.addEventListener("dragover", (ev) => {
 		if (dtHasFiles(ev.dataTransfer)) ev.preventDefault();
@@ -21501,37 +21545,7 @@ function attachCopyOnSelect(host, term, opts) {
 	const session = opts.session;
 	if (interactive) {
 		host.title += " · drop / paste files to upload";
-		host.addEventListener("paste", (ev) => {
-			const cd = ev.clipboardData;
-			if (!cd) return;
-			ev.preventDefault();
-			ev.stopPropagation();
-			const files = Array.from(cd.files || []);
-			const text = cd.getData("text/plain");
-			const onlyImages = files.length > 0 && files.every((f) => (f.type || "").startsWith("image/"));
-			if (files.length && !(text && onlyImages)) pasteFilesAsPaths(files, term, session);
-			else if (text) {
-				term.paste(text);
-				toast("Pasted " + text.length + " chars");
-			} else pasteClipboard(term, session);
-		}, true);
-		host.addEventListener("dragover", (ev) => {
-			if (!dtHasFiles(ev.dataTransfer)) return;
-			ev.preventDefault();
-			ev.stopPropagation();
-			ev.dataTransfer.dropEffect = "copy";
-			host.classList.add("file-drop");
-		});
-		host.addEventListener("dragleave", (ev) => {
-			if (!host.contains(ev.relatedTarget)) host.classList.remove("file-drop");
-		});
-		host.addEventListener("drop", (ev) => {
-			if (!dtHasFiles(ev.dataTransfer)) return;
-			ev.preventDefault();
-			ev.stopPropagation();
-			host.classList.remove("file-drop");
-			pasteFilesAsPaths(ev.dataTransfer.files, term, session);
-		});
+		attachFileDrop(host, term, session);
 	}
 	let captured = "";
 	term.onSelectionChange(() => {
@@ -30160,6 +30174,8 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 		const fit = new import_addon_fit.FitAddon();
 		term.loadAddon(fit);
 		term.open(host);
+		const detachFiles = interactive ? attachFileDrop(host, term) : void 0;
+		if (interactive) host.title = "Drop or paste a file to hand over its path";
 		let ws = null;
 		let timer;
 		let dead = false;
@@ -30231,6 +30247,7 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 			clearTimeout(t);
 			if (timer) clearTimeout(timer);
 			obs.disconnect();
+			detachFiles?.();
 			try {
 				ws?.close();
 			} catch {}

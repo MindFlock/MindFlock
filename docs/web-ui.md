@@ -92,6 +92,9 @@ right, next to copy-all (a session pane's hides the window; the session keeps
 running). Closing a verify row closes only the watch window; the run keeps
 going and the Verify dialog reopens it. Verify *sessions* stay off the session
 rail (they are not work); their open windows list here like any other window.
+The Assistant — the one window here that takes input — also accepts a dropped
+file the way a session terminal does; the read-only tails do not — see "Hand a
+file to the agent" below.
 
 A drop **merges into** the saved order rather than replacing it: the browser
 only ever sees the rows it currently has, so replacing would drop everything it
@@ -148,6 +151,32 @@ the API (including the friendly 400 in this case) surface as toasts.
 
 Terminals keep tmux mouse scrolling (speed configurable in settings);
 **Shift+drag** (Alt+drag on macOS) selects text and auto-copies it.
+
+**Hand a file to the agent** — drag a file onto a terminal (or `Ctrl+V` an
+image) and its bytes are uploaded, then the saved **absolute path** is typed
+into the PTY followed by a space. The agent CLI runs on this machine and can
+see neither the browser's clipboard nor the filesystem you dragged from, so
+"look at this screenshot" has to become a path it can open. The pane highlights
+(`.file-drop`) while a file-carrying drag is over it; dropping N files types all
+N paths, space-separated and quoted if a path contains spaces; anything over
+20 MB is refused by the API.
+
+The gesture belongs to windows that **take input**: a session's Agent and
+Terminal panes and the **Assistant** chat. Windows you only watch — MindFlock
+logs, System logs, a verify watch — have no prompt to paste into, so a drag
+passes straight through them (and is caught by the page-level guard that stops
+the browser from navigating away). An addon pane with its own terminal is built
+by `core/ws-xterm.js` rather than by either of the two callers above, so it does
+not have the gesture either.
+
+Where the file lands depends on the window, and only on that: a session
+terminal stores it inside that session's workspace under `.mindflock_pastes/`
+(git-excluded, so the agent needs no out-of-tree read and the file never joins
+a commit), while the Assistant — which has no worktree of its own — stores it
+under `~/.mindflock/pastes`, the same bucket the phone UI uses. Either way the
+agent receives an absolute path, so the experience on the CLI side is
+identical. Both directories are transient: each new upload prunes its own
+directory back to the newest few files.
 
 ## Workflow stages and the guided next step
 
@@ -575,6 +604,7 @@ built-in alias.
 | `Ctrl+K D` | Duplicate session |
 | `Ctrl+K H` | Hide/show window |
 | `Ctrl+W` / `Delete` | End the focused session (`Delete` only when not typing; never fires for a selected non-session window — those close from their ✕) |
+| `Ctrl+V` (in a terminal) | Paste into the PTY: an image or file on the clipboard uploads and pastes its path, plain text pastes with a "Pasted N chars" toast, and an empty clipboard event falls back to reading `navigator.clipboard`. Same in session panes and the Assistant |
 | `Ctrl+Shift+T` | Reopen the last-closed session |
 | `Ctrl+Enter` | Submit the commit dialog |
 
