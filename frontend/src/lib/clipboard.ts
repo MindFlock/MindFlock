@@ -164,6 +164,81 @@ export async function pasteFilesAsPaths(
 export const dtHasFiles = (dt: DataTransfer | null): boolean =>
   !!dt && Array.from(dt.types || []).indexOf("Files") !== -1;
 
+/** Wire a terminal host so a file dropped or pasted onto it is uploaded and its
+ * saved path typed into the PTY. Returns a disposer that removes the listeners.
+ *
+ * THE AGENT CANNOT SEE THE BROWSER. Every CLI behind these terminals runs on
+ * this machine and has no access to the clipboard or the filesystem the browser
+ * is dragging from, so "here, look at this screenshot" has to become a path:
+ * the bytes are uploaded (`/api/paste-image`), and what reaches the PTY is the
+ * absolute path they landed at.
+ *
+ * Lives here rather than in `terminals.ts` because it is made entirely of this
+ * module's own upload plumbing, and because it has TWO callers that share no
+ * other code: the session terminals and `useWsTerm`'s assistant window. The
+ * assistant went without it for a while, which read as the feature being broken
+ * rather than absent — the same gesture on the window next door already worked.
+ *
+ * `session` decides only WHERE the file lands: a session's workspace (so the
+ * agent needs no out-of-tree read) or `~/.mindflock/pastes` for a window that
+ * has no workspace of its own. Both hand back an absolute path.
+ */
+export function attachFileDrop(
+  host: HTMLElement,
+  term: Terminal,
+  session?: string
+): () => void {
+  const onPaste = (ev: ClipboardEvent) => {
+    const cd = ev.clipboardData;
+    if (!cd) return; // let xterm's default run
+    ev.preventDefault();
+    ev.stopPropagation();
+    const files = Array.from(cd.files || []);
+    const text = cd.getData("text/plain");
+    const onlyImages =
+      files.length > 0 && files.every((f) => (f.type || "").startsWith("image/"));
+    if (files.length && !(text && onlyImages)) {
+      pasteFilesAsPaths(files, term, session);
+    } else if (text) {
+      term.paste(text);
+      toast("Pasted " + text.length + " chars");
+    } else {
+      pasteClipboard(term, session);
+    }
+  };
+  const onDragOver = (ev: DragEvent) => {
+    if (!dtHasFiles(ev.dataTransfer)) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.dataTransfer!.dropEffect = "copy";
+    host.classList.add("file-drop");
+  };
+  const onDragLeave = (ev: DragEvent) => {
+    if (!host.contains(ev.relatedTarget as Node)) host.classList.remove("file-drop");
+  };
+  const onDrop = (ev: DragEvent) => {
+    if (!dtHasFiles(ev.dataTransfer)) return;
+    // Stopped as well as prevented: the grid's panes carry their own drop
+    // handler for rearranging windows, and a file dropped on a terminal is not
+    // a pane being moved.
+    ev.preventDefault();
+    ev.stopPropagation();
+    host.classList.remove("file-drop");
+    pasteFilesAsPaths(ev.dataTransfer!.files, term, session);
+  };
+  host.addEventListener("paste", onPaste, true);
+  host.addEventListener("dragover", onDragOver);
+  host.addEventListener("dragleave", onDragLeave);
+  host.addEventListener("drop", onDrop);
+  return () => {
+    host.removeEventListener("paste", onPaste, true);
+    host.removeEventListener("dragover", onDragOver);
+    host.removeEventListener("dragleave", onDragLeave);
+    host.removeEventListener("drop", onDrop);
+    host.classList.remove("file-drop");
+  };
+}
+
 /** A file dropped OUTSIDE a terminal must not navigate the page away. */
 export function installGlobalDropGuards() {
   window.addEventListener("dragover", (ev) => {

@@ -19,6 +19,7 @@ import { useEffect, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { termTheme } from "./terminals";
+import { attachFileDrop } from "./clipboard";
 
 /** Close code `terminal_ws` sends when the engine has no such session YET.
  *
@@ -122,6 +123,19 @@ export function useWsTerm(
     term.loadAddon(fit);
     term.open(host);
 
+    // A file dropped (or an image pasted) on a window that TAKES INPUT becomes
+    // a path the agent can read — the same gesture, and the same helper, as a
+    // session terminal. It was missing here, which is worse than absent: the
+    // assistant is a chat you hand things to, and dropping a screenshot on it
+    // did nothing while dropping one on the pane beside it worked. Interactive
+    // only: the log tails and a verify watch have no PTY to paste a path into.
+    //
+    // No session is passed, so uploads land in `~/.mindflock/pastes` rather
+    // than a workspace — the assistant has no worktree of its own, and the
+    // path handed over is absolute either way.
+    const detachFiles = interactive ? attachFileDrop(host, term) : undefined;
+    if (interactive) host.title = "Drop or paste a file to hand over its path";
+
     // THE TERMINAL OUTLIVES THE SOCKET. Only the WebSocket is rebuilt on a
     // retry; recreating the xterm with it would clear the scrollback every
     // time, which on a reconnecting session means losing the output you were
@@ -210,6 +224,10 @@ export function useWsTerm(
       clearTimeout(t);
       if (timer) clearTimeout(timer);
       obs.disconnect();
+      // Removed by hand: the host div is React's and OUTLIVES this effect, so a
+      // re-run would stack a second set of listeners on it and upload every
+      // dropped file twice.
+      detachFiles?.();
       try {
         ws?.close();
       } catch {

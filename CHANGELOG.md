@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Drop a file on the assistant window.** Dropping an image or a file on the
+  assistant chat did nothing, while the same drop on a session terminal
+  uploaded it and typed back the path the agent can read — so the gesture
+  looked broken rather than missing. The assistant takes it now (and an image
+  pasted with `Ctrl+V` too): the file lands in `~/.mindflock/pastes`, since the
+  assistant has no workspace of its own, and its absolute path goes into the
+  prompt. Windows you only watch — a log tail, a verify run — still let a drag
+  pass through, having no prompt to paste into. The assistant's `Ctrl+V` now
+  goes through the same path as a session terminal's, so pasting text reports
+  "Pasted N chars" where xterm's silent default used to run.
+
 ## [0.3.1] - 2026-09-09
 
 ### Added

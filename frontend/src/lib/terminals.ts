@@ -16,7 +16,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { toast } from "./toast";
-import { copyText, dtHasFiles, pasteClipboard, pasteFilesAsPaths } from "./clipboard";
+import { attachFileDrop, copyText, pasteClipboard } from "./clipboard";
 
 export type TermKind = "agent" | "shell";
 
@@ -151,45 +151,9 @@ function attachCopyOnSelect(
   const session = opts.session;
   if (interactive) {
     host.title += " · drop / paste files to upload";
-    host.addEventListener(
-      "paste",
-      (ev: ClipboardEvent) => {
-        const cd = ev.clipboardData;
-        if (!cd) return; // let xterm's default run
-        ev.preventDefault();
-        ev.stopPropagation();
-        const files = Array.from(cd.files || []);
-        const text = cd.getData("text/plain");
-        const onlyImages =
-          files.length > 0 && files.every((f) => (f.type || "").startsWith("image/"));
-        if (files.length && !(text && onlyImages)) {
-          pasteFilesAsPaths(files, term, session);
-        } else if (text) {
-          term.paste(text);
-          toast("Pasted " + text.length + " chars");
-        } else {
-          pasteClipboard(term, session);
-        }
-      },
-      true
-    );
-    host.addEventListener("dragover", (ev) => {
-      if (!dtHasFiles(ev.dataTransfer)) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      ev.dataTransfer!.dropEffect = "copy";
-      host.classList.add("file-drop");
-    });
-    host.addEventListener("dragleave", (ev) => {
-      if (!host.contains(ev.relatedTarget as Node)) host.classList.remove("file-drop");
-    });
-    host.addEventListener("drop", (ev) => {
-      if (!dtHasFiles(ev.dataTransfer)) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      host.classList.remove("file-drop");
-      pasteFilesAsPaths(ev.dataTransfer!.files, term, session);
-    });
+    // The same wiring the assistant window gets (clipboard.attachFileDrop): one
+    // gesture, one implementation, so the two cannot drift apart again.
+    attachFileDrop(host, term, session);
   }
   // Capture the selection continuously (a TUI repaint can wipe the highlight
   // right after mouse-up) and copy the captured value on release/right-click.

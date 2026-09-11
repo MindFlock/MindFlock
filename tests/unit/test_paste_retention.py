@@ -149,3 +149,88 @@ def test_upload_without_name_maps_type_to_extension(tmp_path, monkeypatch):
         "/api/paste-image", content=PNG, headers={"content-type": "image/png"}
     )
     assert r.json()["path"].endswith(".png")  # image behavior unchanged
+
+
+# --- where an upload lands: workspace vs. the shared global dir --------------
+# The assistant window now drops files too, and it has no worktree of its own,
+# so it is the first regular producer of SESSIONLESS uploads — sharing the
+# global directory, and its retention prune, with the phone UI.
+
+
+def test_sessionless_upload_lands_in_the_global_dir(tmp_path, monkeypatch):
+    """No ``?session=`` (the assistant window) → ``~/.mindflock/pastes``.
+
+    The path handed back has to be ABSOLUTE: it is typed straight into a PTY
+    whose cwd is nobody's in particular.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    r = client.post(
+        "/api/paste-image?name=shot.png",
+        content=PNG,
+        headers={"content-type": "image/png"},
+    )
+    assert r.status_code == 200
+    path = r.json()["path"]
+    assert os.path.isabs(path)
+    assert os.path.dirname(path) == _global_paste_dir(tmp_path)
+    assert os.path.basename(path).endswith("-shot.png")
+
+
+def test_session_upload_still_lands_in_that_session_workspace(tmp_path, monkeypatch):
+    """``?session=<title>`` keeps its workspace destination.
+
+    A session's agent should need no out-of-tree read, so its uploads go to the
+    worktree's git-excluded ``.mindflock_pastes`` — and not into the global dir
+    the assistant shares with the phone.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ws = tmp_path / "ws"
+    ws.mkdir()
+
+    class _Inst:
+        Path = str(ws)
+
+        def Started(self):
+            return True
+
+        def GetWorktreePath(self):
+            return str(ws)
+
+    monkeypatch.setitem(server.ENGINE.instances, "paste-dest-inst", _Inst())
+    r = client.post(
+        "/api/paste-image?session=paste-dest-inst&name=shot.png",
+        content=PNG,
+        headers={"content-type": "image/png"},
+    )
+    assert r.status_code == 200
+    path = r.json()["path"]
+    assert os.path.dirname(path) == str(ws / ".mindflock_pastes")
+    assert _pastes(_global_paste_dir(tmp_path)) == []  # global dir untouched
+
+
+def test_sessionless_uploads_evict_older_global_pastes(tmp_path, monkeypatch):
+    """One shared directory means one shared retention budget.
+
+    A drop on the assistant can now push out the phone screenshot that was
+    there first — that is the cost of the assistant having no workspace, and it
+    should be a deliberate choice rather than a surprise.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    base = _global_paste_dir(tmp_path)
+    os.makedirs(base)
+    old = time.time() - 3600  # an hour back, so the new drop is plainly newest
+    for i in range(10):  # a full house of phone pastes
+        p = os.path.join(base, f"paste-phone-{i:02d}.png")
+        with open(p, "wb") as f:
+            f.write(PNG)
+        os.utime(p, (old + i, old + i))  # i = age rank: higher = newer
+    r = client.post(
+        "/api/paste-image?name=drop.png",
+        content=PNG,
+        headers={"content-type": "image/png"},
+    )
+    assert r.status_code == 200
+    kept = _pastes(base)
+    assert len(kept) == 10  # still capped
+    assert "paste-phone-00.png" not in kept  # the oldest was evicted
+    assert os.path.isfile(r.json()["path"])  # the drop itself survives

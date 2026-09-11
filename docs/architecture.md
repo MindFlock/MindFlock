@@ -168,7 +168,11 @@ FastAPI app `backend.web.server:app`. Key pieces:
   (`recent_rows`, `last_used`), and the unused-worktree sweep
   (`prune_stale_worktrees`) — gated on a `.git` gitdir FILE so it can only ever
   remove a worktree git generated), `recently_closed` (reopen/Ctrl+Z store),
-  `uploads` (paste retention), `system_logs` (log tails), `cursor_windows`,
+  `uploads` (paste retention — pruned **per directory** to the newest
+  `_PASTE_KEEP` files, so a session's `.mindflock_pastes/` and the global
+  `~/.mindflock/pastes` age out independently; the global bucket is fed by the
+  phone UI *and* the Assistant window, whose drops can therefore evict older
+  workspace-less pastes), `system_logs` (log tails), `cursor_windows`,
   `ide_launch`, `ports`, `window_refresh`, `worktree_setup`, `stage_reset` (the
   guided ladder's ↺ display pin — in-memory, pruned against the live titles) and
   `reopen` (does an intake item still have a workspace on this machine). Both
@@ -215,6 +219,16 @@ sessions come from — Settings is set-and-forget, Intake is the surface you vis
 to see what came in and start something by hand. `core/ws-xterm.js` is the
 shared xterm↔WebSocket wiring; `mobile.*` is a single-terminal phone UI at
 `/m`. See [web-ui.md](web-ui.md).
+
+`lib/clipboard.attachFileDrop(host, term, session?)` is the single owner of the
+drop/paste-to-path gesture, with exactly two callers: `lib/terminals`'
+`attachCopyOnSelect` (session panes) and `lib/wsTerm`'s `useWsTerm` (the
+Assistant and other interactive WebSocket windows) — it lived inline in the
+first for a while, which is how the Assistant ended up without it. It returns a
+**disposer** rather than attaching for good, because `useWsTerm`'s host element
+is React's and outlives the effect: the cleanup must remove the listeners or a
+reconnect-triggered re-run stacks a second set and uploads each dropped file
+twice. `session` decides only which directory the upload lands in.
 
 `frontend/src/state/queries.ts` is the shared server-state layer (TanStack
 Query): every hook that reads the HTTP API lives there, including the
