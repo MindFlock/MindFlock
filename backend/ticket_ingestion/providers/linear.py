@@ -120,6 +120,15 @@ _STATES_QUERY = (
 )
 
 
+#: Move one issue into a workflow state — the write half of ``list_states``,
+#: used by the source's optional "move it when a session starts" setting.
+_SET_STATE_MUTATION = """
+mutation($id: String!, $state: String!) {
+  issueUpdate(id: $id, input: { stateId: $state }) { success }
+}
+"""
+
+
 class LinearProvider(TicketProvider):
     name = "linear"
     label = "Linear"
@@ -232,6 +241,24 @@ class LinearProvider(TicketProvider):
             raise ProviderError(f"Linear issue {ticket_id} not found")
         return self._issue_to_ticket(issue)
 
+    async def set_state(self, ticket_id: str, state_id: str) -> None:
+        """Move an issue into workflow state ``state_id`` (``issueUpdate``).
+
+        Like Shortcut and unlike Jira, Linear has no transition graph — a state
+        id from :meth:`list_states` is a legal destination — so this is one
+        mutation. A state belonging to another team is the one rejection worth
+        expecting, and Linear reports it as a GraphQL error, which ``_gql``
+        already turns into a :class:`ProviderError`.
+        """
+        target = str(state_id).strip()
+        if not target:
+            return
+        data = await self._gql(_SET_STATE_MUTATION, {"id": ticket_id, "state": target})
+        if not ((data.get("issueUpdate") or {}).get("success")):
+            raise ProviderError(
+                f"Linear refused to move issue {ticket_id} to state {target}"
+            )
+
     async def test_connection(self) -> tuple[dict | None, str]:
         try:
             data = await self._gql(_VIEWER_QUERY, {})
@@ -268,3 +295,110 @@ class LinearProvider(TicketProvider):
                 }
             )
         return out
+
+    # ----------------------------------------------------------------- #
+    # Writes (Intake → Tickets → Merge into…). See TicketProvider for the
+    # contract and for why the order in ticket_merge.py is the order it is.
+    # ----------------------------------------------------------------- #
+    can_merge = True
+
+    async def _resolve(self, ticket_id: str) -> dict:
+        """``{id, description}`` for an issue named by identifier OR by UUID.
+
+        Every mutation below takes the UUID, while everything the UI hands
+        around is the human identifier (``ENG-5``) — :meth:`_issue_to_ticket`
+        keeps the identifier as :attr:`Ticket.id` because that is what a person
+        reads on a branch name. Linear's ``issue(id:)`` accepts either spelling,
+        so one query bridges the two rather than the merge path having to know
+        which it was given.
+        """
+        data = await self._gql(
+            "query($id: String!) { issue(id: $id) { id description } }",
+            {"id": ticket_id},
+        )
+        issue = data.get("issue")
+        if not issue or not issue.get("id"):
+            raise ProviderError(f"Linear issue {ticket_id} not found")
+        return issue
+
+    async def append_description(self, ticket_id: str, addition: str) -> None:
+        issue = await self._resolve(ticket_id)
+        data = await self._gql(
+            "mutation($id: String!, $description: String!) {"
+            " issueUpdate(id: $id, input: { description: $description })"
+            " { success } }",
+            {
+                "id": issue["id"],
+                "description": (issue.get("description") or "") + addition,
+            },
+        )
+        if not ((data.get("issueUpdate") or {}).get("success")):
+            raise ProviderError(f"Linear would not update issue {ticket_id}")
+
+    async def add_comment(self, ticket_id: str, body: str) -> None:
+        issue = await self._resolve(ticket_id)
+        data = await self._gql(
+            "mutation($issueId: String!, $body: String!) {"
+            " commentCreate(input: { issueId: $issueId, body: $body })"
+            " { success } }",
+            {"issueId": issue["id"], "body": body},
+        )
+        if not ((data.get("commentCreate") or {}).get("success")):
+            raise ProviderError(f"Linear would not comment on issue {ticket_id}")
+
+    async def carry_attachments(
+        self, from_id: str, to_id: str
+    ) -> tuple[list[str], list[str]]:
+        """Recreate the source issue's attachment LINKS on the target.
+
+        Two different things are called an attachment in Linear and only one of
+        them is here. Files a person drags onto an issue are uploaded to
+        Linear's asset CDN and referenced from the description markdown — those
+        travel in the copied text and keep resolving after the source issue is
+        deleted, so there is nothing to move. The ``attachments`` connection is
+        the other one: links an integration hung off the issue (a Sentry event,
+        a Front conversation, a PR), and those DO die with it, so they are
+        recreated on the survivor.
+        """
+        ticket = await self.fetch(from_id)
+        if not ticket.attachments:
+            return [], []
+        target = await self._resolve(to_id)
+        moved: list[str] = []
+        failed: list[str] = []
+        for att in ticket.attachments:
+            try:
+                data = await self._gql(
+                    "mutation($issueId: String!, $url: String!, $title: String!) {"
+                    " attachmentCreate("
+                    "   input: { issueId: $issueId, url: $url, title: $title }"
+                    " ) { success } }",
+                    {"issueId": target["id"], "url": att.url, "title": att.name},
+                )
+                if (data.get("attachmentCreate") or {}).get("success"):
+                    moved.append(att.name)
+                else:
+                    failed.append(att.name)
+            except (ProviderError, aiohttp.ClientError) as err:  # noqa: PERF203
+                _logger.warning(
+                    "Could not carry Linear attachment %s from %s to %s: %s",
+                    att.name,
+                    from_id,
+                    to_id,
+                    err,
+                )
+                failed.append(att.name)
+        return moved, failed
+
+    async def delete_ticket(self, ticket_id: str) -> None:
+        """``issueDelete`` — Linear's own delete, which moves the issue to the
+        workspace trash. That IS deletion here: it leaves every board, search
+        and cycle, and Linear reaps the trash on its own schedule. There is no
+        harder delete in the API to reach for."""
+        issue = await self._resolve(ticket_id)
+        data = await self._gql(
+            "mutation($id: String!) { issueDelete(id: $id) { success } }",
+            {"id": issue["id"]},
+        )
+        if not ((data.get("issueDelete") or {}).get("success")):
+            raise ProviderError(f"Linear refused to delete issue {ticket_id}")

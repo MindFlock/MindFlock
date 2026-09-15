@@ -14,6 +14,14 @@ Two responsibilities per adapter:
 * :meth:`TicketProvider.fetch` — full detail for one ticket by native id (used
   by the webhook path and to hydrate slim search results).
 
+…and one OPTIONAL fifth, off to the side: the four write methods at the bottom
+of :class:`TicketProvider` (``append_description`` / ``add_comment`` /
+``carry_attachments`` / ``delete_ticket``), gated on ``can_merge``. Everything
+else in this package reads; those four exist so Intake can fold one duplicate
+ticket into another and delete the loser, which has to happen in the tracker
+both filers will go back to. An adapter that doesn't implement them says so
+with ``can_merge = False`` and the UI never offers the control.
+
 The markdown-shaped helpers here (acceptance-criteria mining, link/attachment
 extraction) are shared: every provider that hands us markdown/plain-text
 descriptions reuses the exact same rules the Shortcut pipeline always used.
@@ -215,12 +223,34 @@ def workflow_state_list(cfg: TicketProviderConfig) -> list[str]:
 #: workspace) or a project scope, so "anyone" has nothing to stand on there.
 ANY_ASSIGNEE_PROVIDERS = frozenset({"shortcut", "jira", "linear", "github_issues"})
 
+#: Providers with a workflow-state model the pipeline can WRITE to — the ones
+#: that can be asked to move a ticket when its session starts (``start_state``).
+#: Same three that offer :meth:`TicketProvider.list_states`; GitHub Issues and
+#: Asana have nothing to move a ticket to.
+STATE_SETTING_PROVIDERS = frozenset({"shortcut", "jira", "linear"})
+
 #: Of those, the ones whose search is bounded by ``workflow_state``. Dropping the
 #: assignee here without an ingest state selected would ask the tracker for every
 #: ticket in the organization, so the scope quietly stays "mine" until one is
 #: picked. GitHub Issues is not listed — it has no workflow states, and the
 #: ``owner/repo`` it is pinned to is the bound.
 STATE_BOUNDED_PROVIDERS = frozenset({"shortcut", "jira", "linear"})
+
+
+def start_state_id(cfg) -> str:
+    """The state this source moves a ticket INTO when its session starts.
+
+    ``""`` = leave the ticket where it is, which is what every source did before
+    the setting existed. Fails narrow the same way :func:`ingests_any_assignee`
+    does: a provider with no writable workflow state (GitHub Issues, Asana) can
+    only answer ``""``, so a stale value left in a hand-edited config after a
+    provider switch moves nothing rather than erroring on every launch.
+    """
+    target = (getattr(cfg, "start_state", "") or "").strip()
+    if not target:
+        return ""
+    provider = (getattr(cfg, "provider", "") or "").strip().lower()
+    return target if provider in STATE_SETTING_PROVIDERS else ""
 
 
 def ingests_any_assignee(cfg) -> bool:
@@ -340,3 +370,95 @@ class TicketProvider(abc.ABC):
         Asana) don't offer the picker. Shortcut/Jira/Linear override.
         """
         return []
+
+    async def set_state(self, ticket_id: str, state_id: str) -> None:
+        """Move one ticket into the workflow state ``state_id``.
+
+        The write twin of :meth:`list_states`, and it takes an id from exactly
+        that list. Backs the source's optional "move it when a session starts"
+        setting (``start_state``), so a ticket picked up by the pipeline stops
+        looking untouched on the board the moment work begins on it.
+
+        Raises :class:`ProviderError` when the move cannot be made — an unknown
+        state, a transition the tracker refuses, an API failure. Callers treat a
+        failed move as a warning, never as a failed launch: the session is the
+        work, and the board is bookkeeping about it.
+
+        Default: unsupported. Providers without a writable workflow state
+        (GitHub Issues, Asana) never reach here — ``start_state_id`` answers
+        ``""`` for them — so this is the hand-edited-config backstop.
+        """
+        raise ProviderError(
+            f"{self.label or self.name} cannot move a ticket's workflow state"
+        )
+
+    # ----------------------------------------------------------------- #
+    # Writes: merging one ticket into another
+    #
+    # Everything above this line reads. These four write, and they exist for
+    # exactly one caller — :mod:`backend.web.core.ticket_merge`, behind Intake →
+    # Tickets → **Merge into…** — because duplicate tickets are a tracker
+    # problem, not a MindFlock one: two people file the same task, and the fix
+    # has to happen where both of them will look for it.
+    #
+    # They are OPTIONAL. ``can_merge`` is the gate the UI and the merge endpoint
+    # both read, and an adapter that leaves it ``False`` keeps the four
+    # defaults below, which refuse with a sentence naming the provider rather
+    # than half-performing a merge. That is the difference between "Asana
+    # sources don't offer Merge" and "Asana sources offer a button that deletes
+    # a task and loses its files".
+    # ----------------------------------------------------------------- #
+
+    #: Whether this adapter implements the four write methods below. The
+    #: assigned-tickets payload carries it per row (``merge_ready``) so the UI
+    #: can hide a control it would only be able to apologize for.
+    can_merge: bool = False
+
+    def _no_merge(self) -> ProviderError:
+        return ProviderError(
+            f"{self.label or self.name} tickets cannot be merged from MindFlock — "
+            "this provider's adapter is read-only. Merge them in "
+            f"{self.label or self.name} itself."
+        )
+
+    async def append_description(self, ticket_id: str, addition: str) -> None:
+        """Append ``addition`` to the ticket's description, keeping what is
+        already there.
+
+        FIRST and load-bearing in a merge: nothing else runs until this has
+        succeeded, because it is the step that makes the surviving ticket carry
+        the deleted one's content. An adapter must read the current description
+        and write back ``current + addition`` — never replace.
+        """
+        raise self._no_merge()
+
+    async def add_comment(self, ticket_id: str, body: str) -> None:
+        """Post ``body`` as a comment on the ticket."""
+        raise self._no_merge()
+
+    async def carry_attachments(
+        self, from_id: str, to_id: str
+    ) -> tuple[list[str], list[str]]:
+        """Make ``from_id``'s attached files reachable from ``to_id``.
+
+        Returns ``(moved, failed)`` — the names that now hang off the target,
+        and the ones that could not be carried at all.
+
+        The default is ``([], [])``, which is the *right* answer for a provider
+        whose uploads live at workspace scope and outlive the ticket they were
+        posted on (GitHub's user-attachments hosts, Linear's upload CDN): the
+        markdown links copied into the description keep resolving after the
+        source ticket is gone, so there is nothing to move. Override only where
+        a file is genuinely owned by one ticket and dies with it (Jira), or
+        where the provider can re-point it for free (Shortcut's file ids).
+        """
+        return [], []
+
+    async def delete_ticket(self, ticket_id: str) -> None:
+        """Delete the ticket, for good.
+
+        LAST in a merge, and deliberately so: every copy step runs first, so a
+        failure here leaves a ticket that has been duplicated into another one
+        rather than a ticket that has been erased into nothing.
+        """
+        raise self._no_merge()

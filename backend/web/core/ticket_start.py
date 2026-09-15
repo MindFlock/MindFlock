@@ -326,6 +326,12 @@ async def list_assigned_tickets() -> dict:
         # "not assigned to you" is not a reason to skip one there.
         any_assignee = ingests_any_assignee(src)
         member_ids = [src.member_id] if src.member_id and not any_assignee else []
+        # Whether this source's adapter can fold one of its tickets into another
+        # and delete the loser. Stamped per row rather than looked up in the UI
+        # because the answer is the adapter's (``TicketProvider.can_merge``),
+        # and a client-side list of "providers that support merging" is a second
+        # copy of that fact waiting to disagree with the first.
+        merge_ready = bool(getattr(provider, "can_merge", False))
         for story in stories:
             story.repo_url = src.repo_url
             story.agent = getattr(src, "agent", "")
@@ -360,6 +366,7 @@ async def list_assigned_tickets() -> dict:
                     "repo_url": repo,
                     "strategy": strategy,
                     "bucket": bucket,
+                    "merge_ready": merge_ready,
                     "eligible": not reasons,
                     "reasons": reasons,
                     # Whose ticket this is. A source scoped to "anyone" lists
@@ -401,6 +408,10 @@ async def find_ticket(source: str, ticket_id: str):
             story = await provider.fetch(str(ticket_id))
             story.repo_url = src.repo_url
             story.agent = getattr(src, "agent", "")
+            # The source this ticket launches under, so the post-launch move
+            # (start_state) resolves the same card the row was started from —
+            # two sources of the same provider share `provider` and nothing else.
+            story.source_key = source
             return story
     raise LookupError(
         f"No ticketing source {source!r} is configured — " "check Intake → Tickets"
@@ -447,6 +458,20 @@ async def download_attachments(inst, story) -> None:
             story.slug,
             err,
         )
+
+
+async def move_to_start_state(story) -> str:
+    """Move a force-started ticket into its source's configured start state.
+
+    The web twin of what ``SessionRunner`` does after a pipeline launch, and
+    literally the same code: a ticket started by hand from the panel has to land
+    on the board exactly where one the pipeline picked up does, or the column
+    stops meaning "being worked on". Best-effort — see
+    :mod:`backend.ticket_ingestion.start_state`.
+    """
+    from backend.ticket_ingestion.start_state import move_started
+
+    return await move_started(story, _load_config())
 
 
 def record_started(story) -> None:

@@ -232,9 +232,9 @@ these fields and a "Test connection" button that auto-fills `member_id`.
 | Provider | Required keys | Notes |
 |---|---|---|
 | `github_issues` | **none** | The zero-config on-ramp, and the catalog's first entry. `api_token` falls back to the GitHub connection (`[github].token` / `$GH_TOKEN` / `gh auth token`); `project` falls back to the source's `repo_url`, then `[repository].url`, then this checkout's `origin`. No workflow states. |
-| `shortcut` | `api_token`, `member_id` | `workflow_state` optional (workflow-state id; integer `workflow_state_id` also works). Archived stories, and stories under an archived epic, are always excluded — see below. |
-| `jira` | `base_url`, `email`, `api_token` | Jira Cloud, `assignee = currentUser()`. `member_id` (accountId) optional. `workflow_state` optional (status id → `status = <id>`). |
-| `linear` | `api_token` | GraphQL `viewer.assignedIssues`. `workflow_state` optional (state id). |
+| `shortcut` | `api_token`, `member_id` | `workflow_state` optional (workflow-state id; integer `workflow_state_id` also works), `start_state` optional. Archived stories, and stories under an archived epic, are always excluded — see below. |
+| `jira` | `base_url`, `email`, `api_token` | Jira Cloud, `assignee = currentUser()`. `member_id` (accountId) optional. `workflow_state` optional (status id → `status = <id>`), `start_state` optional. |
+| `linear` | `api_token` | GraphQL `viewer.assignedIssues`. `workflow_state` optional (state id), `start_state` optional. |
 | `asana` | `api_token`, `project` (workspace gid) | Tasks with `assignee = me`. No workflow states. |
 
 Every source also takes an OPTIONAL-in-TOML-but-required-in-the-UI `repo_url`
@@ -242,6 +242,12 @@ Every source also takes an OPTIONAL-in-TOML-but-required-in-the-UI `repo_url`
 global default repo. `workflow_state` gates ingestion so a ticket only gets a
 session once it reaches the chosen state (blank = any state). The Intake →
 **Tickets** tab loads the live state list per source (Shortcut/Jira/Linear).
+The same list feeds the optional **`start_state`** ("Move to state on start"),
+which is the other direction: where a ticket goes once a session starts for it.
+In the provider catalog (`GET /api/settings/providers/ticketing`) it is a field
+of type **`state_one`** — a single destination, as against the multi-select
+filter `workflow_state` renders as — and it is only offered by the providers
+that can write a state back.
 
 **Shortcut also filters archived work, implicitly.** Alongside `workflow_state`
 and `assignee_scope`, a Shortcut source silently narrows to what Shortcut's own
@@ -324,6 +330,21 @@ byte-identical to before the feature existed.
 
 Notes on individual keys:
 
+- `start_state` (per source, optional) — the state a ticket is **moved into**
+  when a session starts for it, so a board stops showing work as untouched the
+  moment an agent picks it up. One provider-native state id, from the same list
+  `workflow_state` picks from; blank (the default) leaves the ticket where it
+  is. Applies to both launch paths — the pipeline's own ingestion and a
+  force-start from Intake → Tickets. Only `shortcut`, `jira` and `linear` can
+  move a ticket, and the two halves of that answer differently on purpose:
+  **config validation reports** `start_state` on `github_issues`/`asana` as a
+  problem (silently ignoring it is how "my tickets stopped moving" becomes
+  invisible), while at **runtime** `start_state_id()` fails narrow and answers
+  `""` — so a key left behind by a provider switch moves nothing rather than
+  erroring on every launch. Jira moves along the transitions its workflow offers
+  from the issue's current status, so a status that is real but unreachable is
+  reported as a warning and the session still starts — the move never fails a
+  launch.
 - `workflow_state` (per source) — the state a ticket must be in to be ingested.
   In the web UI this is a live dropdown (Intake → Tickets) populated from the
   provider, so you rarely need the raw id. For Shortcut you can also list ids with

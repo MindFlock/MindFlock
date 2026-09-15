@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -113,6 +114,74 @@ def flatten_adf(node: Any) -> str:
     if ntype == "codeBlock":
         return inner + "\n"
     return inner
+
+
+_ADF_HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
+_ADF_BULLET = re.compile(r"^\s*[-*]\s+(.*\S)\s*$")
+
+
+def text_to_adf(text: str) -> list[dict]:
+    """The inverse of :func:`flatten_adf`, to the depth the merge path needs.
+
+    Jira is the one supported tracker whose description is not markdown, so the
+    merged-in section — which is assembled once, in markdown, for every provider
+    — has to be translated before it can be written back. This understands
+    exactly the four shapes :func:`backend.web.core.ticket_merge.merged_section`
+    emits (``---`` rules, ``#`` headings, ``-`` bullets, plain paragraphs) and
+    degrades anything else to a paragraph, which is lossless for text even when
+    it loses formatting.
+
+    Deliberately NOT a general markdown-to-ADF converter: this is only ever fed
+    text this repo wrote, and a half-right converter guessing at tables and
+    inline marks would fail on somebody's ticket rather than on a fixture.
+    """
+    nodes: list[dict] = []
+    bullets: list[dict] = []
+
+    def flush_bullets() -> None:
+        if bullets:
+            nodes.append({"type": "bulletList", "content": list(bullets)})
+            bullets.clear()
+
+    def paragraph(body: str) -> dict:
+        # An empty paragraph has no `content` key at all — ADF rejects an empty
+        # content array, which is what a naive [] would produce for a blank line.
+        return (
+            {"type": "paragraph", "content": [{"type": "text", "text": body}]}
+            if body
+            else {"type": "paragraph"}
+        )
+
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("---") and set(stripped) == {"-"}:
+            flush_bullets()
+            nodes.append({"type": "rule"})
+            continue
+        m = _ADF_HEADING.match(stripped)
+        if m:
+            flush_bullets()
+            level = min(len(m.group(1)), _MAX_HEADING_LEVEL)
+            body = m.group(2).strip()
+            nodes.append(
+                {
+                    "type": "heading",
+                    "attrs": {"level": level},
+                    "content": [{"type": "text", "text": body}] if body else [],
+                }
+            )
+            continue
+        m = _ADF_BULLET.match(line)
+        if m:
+            bullets.append(
+                {"type": "listItem", "content": [paragraph(m.group(1).strip())]}
+            )
+            continue
+        flush_bullets()
+        if stripped:
+            nodes.append(paragraph(stripped))
+    flush_bullets()
+    return nodes
 
 
 class JiraProvider(TicketProvider):
@@ -272,6 +341,65 @@ class JiraProvider(TicketProvider):
                 data = await resp.json()
         return self._issue_to_ticket(data)
 
+    async def set_state(self, ticket_id: str, state_id: str) -> None:
+        """Move an issue to status ``state_id`` by executing its transition.
+
+        Jira statuses are not writable directly: an issue moves along the
+        transitions its workflow offers from where it currently sits. So this
+        asks the issue which transitions it has (``GET …/transitions``), picks
+        the one whose destination is the configured status — by id, and by name
+        as the fallback, since :meth:`list_states` stores ids but a hand-edited
+        config may hold a name — and executes it.
+
+        A status that is real but not reachable from the issue's current one is
+        the common failure, and it is a configuration answer rather than a bug,
+        so the error names the transitions that WERE on offer.
+        """
+        target = str(state_id).strip()
+        if not target:
+            return
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.get(
+                self._api(f"/rest/api/3/issue/{ticket_id}/transitions"),
+                headers=self._headers(),
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Jira could not list transitions for {ticket_id} "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+                data = await resp.json()
+            transitions = data.get("transitions") or []
+            match = None
+            offered: list[str] = []
+            for t in transitions:
+                to = t.get("to") or {}
+                name = str(to.get("name") or "")
+                offered.append(name or str(t.get("name") or ""))
+                if str(to.get("id") or "") == target or name == target:
+                    match = t
+                    break
+            if match is None:
+                # Already there is not a failure: an issue sitting in the target
+                # status simply has no transition INTO it.
+                raise ProviderError(
+                    f"Jira has no transition from issue {ticket_id}'s current "
+                    f"status to {target!r}"
+                    + (f" (offered: {', '.join(offered)})" if offered else "")
+                )
+            async with session.post(
+                self._api(f"/rest/api/3/issue/{ticket_id}/transitions"),
+                json={"transition": {"id": str(match.get("id"))}},
+                headers=self._headers(),
+            ) as resp:
+                if resp.status not in (200, 201, 204):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Jira refused to move issue {ticket_id} to {target!r} "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+
     async def test_connection(self) -> tuple[dict | None, str]:
         if not self.cfg.base_url:
             return None, "no Jira site URL configured (e.g. https://you.atlassian.net)"
@@ -333,3 +461,147 @@ class JiraProvider(TicketProvider):
                 }
             )
         return out
+
+    # ----------------------------------------------------------------- #
+    # Writes (Intake → Tickets → Merge into…). See TicketProvider for the
+    # contract and for why the order in ticket_merge.py is the order it is.
+    # ----------------------------------------------------------------- #
+    can_merge = True
+
+    async def append_description(self, ticket_id: str, addition: str) -> None:
+        """Append to the issue description, translating markdown to ADF.
+
+        Read-modify-write on the raw ADF rather than on the flattened text
+        :meth:`fetch` returns: writing back a flattened description would strip
+        every table, panel, code block and inline mark the issue already had —
+        a merge is not a licence to reformat somebody else's ticket.
+        """
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.get(
+                self._api(f"/rest/api/3/issue/{ticket_id}"),
+                params={"fields": "description"},
+                headers=self._headers(),
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Jira API returned {resp.status} for issue "
+                        f"{ticket_id}: {text[:200]}"
+                    )
+                data = await resp.json()
+        current = (data.get("fields") or {}).get("description")
+        content = list((current or {}).get("content") or [])
+        doc = {
+            "type": "doc",
+            "version": int((current or {}).get("version") or 1),
+            "content": content + text_to_adf(addition),
+        }
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.put(
+                self._api(f"/rest/api/3/issue/{ticket_id}"),
+                json={"fields": {"description": doc}},
+                headers=self._headers(),
+            ) as resp:
+                if resp.status not in (200, 201, 204):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Jira could not update issue {ticket_id} "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+
+    async def add_comment(self, ticket_id: str, body: str) -> None:
+        doc = {"type": "doc", "version": 1, "content": text_to_adf(body)}
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.post(
+                self._api(f"/rest/api/3/issue/{ticket_id}/comment"),
+                json={"body": doc},
+                headers=self._headers(),
+            ) as resp:
+                if resp.status not in (200, 201):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Jira could not comment on issue {ticket_id} "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+
+    async def carry_attachments(
+        self, from_id: str, to_id: str
+    ) -> tuple[list[str], list[str]]:
+        """Download each of the source issue's attachments and re-upload them
+        onto the target.
+
+        The one provider here where the bytes genuinely have to move: a Jira
+        attachment belongs to its issue and is destroyed with it, so a link
+        copied into the description would 404 the moment the source is deleted.
+
+        Per-file best effort. One oversized or expired attachment comes back in
+        ``failed`` and the rest still land — losing four files because the fifth
+        was unreadable would be a worse answer than losing the fifth.
+        """
+        issue = await self.fetch(from_id)
+        moved: list[str] = []
+        failed: list[str] = []
+        upload_headers = {
+            "Authorization": self._headers()["Authorization"],
+            # Jira's XSRF check rejects a multipart POST without it.
+            "X-Atlassian-Token": "no-check",
+            "Accept": "application/json",
+        }
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            for att in issue.attachments:
+                try:
+                    async with session.get(
+                        att.url, headers=att.auth_headers or {}
+                    ) as resp:
+                        if resp.status != 200:
+                            failed.append(att.name)
+                            continue
+                        blob = await resp.read()
+                    form = aiohttp.FormData()
+                    form.add_field(
+                        "file",
+                        blob,
+                        filename=att.name,
+                        content_type=att.content_type or "application/octet-stream",
+                    )
+                    async with session.post(
+                        self._api(f"/rest/api/3/issue/{to_id}/attachments"),
+                        data=form,
+                        headers=upload_headers,
+                    ) as resp:
+                        if resp.status not in (200, 201):
+                            failed.append(att.name)
+                            continue
+                    moved.append(att.name)
+                except (aiohttp.ClientError, OSError) as err:  # noqa: PERF203
+                    _logger.warning(
+                        "Could not carry Jira attachment %s from %s to %s: %s",
+                        att.name,
+                        from_id,
+                        to_id,
+                        err,
+                    )
+                    failed.append(att.name)
+        return moved, failed
+
+    async def delete_ticket(self, ticket_id: str) -> None:
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.delete(
+                self._api(f"/rest/api/3/issue/{ticket_id}"),
+                # Subtasks cannot outlive their parent — Jira refuses the delete
+                # outright (400) unless this says what to do with them.
+                params={"deleteSubtasks": "true"},
+                headers=self._headers(),
+            ) as resp:
+                if resp.status not in (200, 204):
+                    text = await resp.text()
+                    hint = (
+                        " — your Jira account needs the project's Delete Issues "
+                        "permission"
+                        if resp.status == 403
+                        else ""
+                    )
+                    raise ProviderError(
+                        f"Jira refused to delete issue {ticket_id} "
+                        f"(HTTP {resp.status}){hint}: {text[:200]}"
+                    )

@@ -239,6 +239,30 @@ def test_pick_argv_raises_when_nothing_can_answer():
     assert "headless" in str(err.value)
 
 
+def test_pick_argv_names_what_it_was_asked_for():
+    """The refusal sentence is shared with callers that are not asking for a
+    commit message at all — the New Session dialog's Describe box asks this same
+    function for a session plan — and a refusal naming the wrong feature sends
+    people looking two screens away from the thing they are staring at.
+
+    The default is byte-identical to the original wording, so every caller that
+    does not care reads exactly as it always did.
+    """
+    with pytest.raises(cm.CommitMessageError) as err:
+        cm.pick_argv("P", "aider", "aider", purpose="a session plan")
+    assert str(err.value) == (
+        "no installed CLI (aider) has a headless mode MindFlock can ask for "
+        "a session plan"
+    )
+
+    with pytest.raises(cm.CommitMessageError) as err:
+        cm.pick_argv("P", "aider", "aider")
+    assert str(err.value) == (
+        "no installed CLI (aider) has a headless mode MindFlock can ask for "
+        "a commit message"
+    )
+
+
 # --- the orchestrator -------------------------------------------------------- #
 
 

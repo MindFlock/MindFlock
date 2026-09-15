@@ -961,3 +961,120 @@ class TestEngineRunnerSelection:
         """The real probe must succeed where the engine is installed — otherwise
         every install would silently ship the terminal-tab path."""
         assert engine_bridge_error() is None
+
+
+# --------------------------------------------------------------------------- #
+# The source-key stamp on the orchestrator's own two producers — the webhook
+# fetch and the crash-recovery re-enqueue. The scanner stamps its own (see
+# tests/unit/test_backfill.py); these are the two paths that bypass it, and an
+# unstamped ticket is one whose post-launch board move resolves the wrong
+# source or none at all.
+# --------------------------------------------------------------------------- #
+class TestSourceKeyStamp:
+    async def test_webhook_fetch_stamps_the_primary_source(self, config):
+        """The webhook path runs on the PRIMARY source, so that is the source
+        whose settings the ticket launches under."""
+        config.ticketing.id = "sc-main"
+        orch = PipelineOrchestrator(config)
+        orch._provider = MagicMock()
+        orch._provider.fetch = AsyncMock(return_value=make_ticket(id=1))
+
+        story = await orch._fetch_story(1)
+        assert story.source_key == "sc-main"
+
+    async def test_webhook_fetch_falls_back_to_the_provider_name(self, config):
+        # An unkeyed lone source is matched on `provider` by `source_for`, so
+        # that is exactly the right thing to stamp for it.
+        config.ticketing.id = ""
+        orch = PipelineOrchestrator(config)
+        orch._provider = MagicMock()
+        orch._provider.fetch = AsyncMock(return_value=make_ticket(id=1))
+
+        assert (await orch._fetch_story(1)).source_key == "shortcut"
+
+    async def test_webhook_fetch_without_a_primary_source_is_not_an_error(self, config):
+        """A config with no ``[ticketing]`` block still has to return the
+        ticket: the stamp is bookkeeping, and a missing one costs a board move,
+        not the webhook."""
+        orch = PipelineOrchestrator(config)
+        orch.config.ticketing = None
+        orch._provider = MagicMock()
+        orch._provider.fetch = AsyncMock(return_value=make_ticket(id=1))
+
+        story = await orch._fetch_story(1)
+        assert story.id == 1 and story.source_key == ""
+
+    async def test_a_re_enqueued_pending_ticket_keeps_its_source(
+        self, config, _isolated_state_dir
+    ):
+        """A ticket that round-trips through the pending store and back into the
+        queue is re-fetched from scratch, so the stamp has to be re-applied —
+        alongside the agent/effort refresh that is re-read for the same reason.
+        Without it, the one ticket a crash already delayed is also the one that
+        never moves on the board."""
+        from backend.ticket_ingestion.state import record_pending_story
+
+        config.ticketing_sources = [
+            TicketProviderConfig(
+                provider="shortcut", id="sc-main", api_token="t", member_id="m"
+            )
+        ]
+        orch = PipelineOrchestrator(config)
+        scanner = orch._scanners[0]
+        assert scanner._source_key == "sc-main"
+        # The re-fetched ticket comes back from the provider unstamped, exactly
+        # as a fresh API read would.
+        scanner._provider = MagicMock()
+        scanner._provider.fetch = AsyncMock(return_value=make_ticket(id=7))
+        record_pending_story(_isolated_state_dir, "sc-7", 7, "sc-main")
+
+        await orch._requeue_pending_stories()
+
+        story = orch._queue.get_nowait()
+        assert story.id == 7
+        assert story.source_key == "sc-main"
+
+    async def test_a_re_enqueued_ticket_moves_on_the_right_board(
+        self, config, _isolated_state_dir
+    ):
+        """End to end over the round trip: pending store -> re-enqueue -> the
+        shared mover. Two Shortcut sources with different start states, and the
+        one the ticket was stamped with is the one that gets written to."""
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        from backend.ticket_ingestion import start_state
+        from backend.ticket_ingestion.state import record_pending_story
+
+        other = TicketProviderConfig(
+            provider="shortcut", id="sc-other", api_token="t2", start_state="111"
+        )
+        mine = TicketProviderConfig(
+            provider="shortcut", id="sc-mine", api_token="t1", start_state="222"
+        )
+        config.ticketing_sources = [other, mine]
+        orch = PipelineOrchestrator(config)
+        scanner = {s._source_key: s for s in orch._scanners}["sc-mine"]
+        scanner._provider = MagicMock()
+        scanner._provider.fetch = _AsyncMock(return_value=make_ticket(id=7))
+        record_pending_story(_isolated_state_dir, "sc-7", 7, "sc-mine")
+
+        await orch._requeue_pending_stories()
+        story = orch._queue.get_nowait()
+
+        moved_with = {}
+        provider = _AsyncMock()
+
+        def _get_provider(src):
+            moved_with["source"] = src
+            return provider
+
+        with patch(
+            "backend.ticket_ingestion.config.config_for_launch", return_value=config
+        ):
+            with patch(
+                "backend.ticket_ingestion.providers.get_provider", _get_provider
+            ):
+                assert await start_state.move_started(story) == "222"
+
+        assert moved_with["source"] is mine
+        provider.set_state.assert_awaited_once_with("7", "222")

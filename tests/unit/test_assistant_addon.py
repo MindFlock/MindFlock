@@ -4,7 +4,11 @@ Covers the file-backed surface that has no other coverage: the CLAUDE.md
 seed/marker composition, the atomic writer, the defensive dir seeding, the
 user-instructions read/write, the tolerant todos parser, and the todos +
 instructions REST endpoints (id de-duplication, normalization, validation and
-the error paths). The tmux/PTY surface (``_ensure_assistant_session``, the
+the error paths); the window's state pill (the ``/state`` route and the
+session-shaped stand-in it probes through); and the one part of
+``_ensure_assistant_session`` that can be checked without tmux — that the launch
+carries the assistant's directory, which is where the CLI's activity hooks get
+installed. The rest of the tmux/PTY surface (actually starting a session, the
 ``/terminal`` websocket) is intentionally left uncovered — it needs a live tmux
 server and a real PTY, neither available on CI.
 """
@@ -256,3 +260,197 @@ class TestRestartEndpoint:
         monkeypatch.setattr(A.subprocess, "run", fake_run)
         # Best-effort: a wedged tmux must not fail the request.
         assert client.post("/api/assistant/restart").json() == {"ok": True}
+
+
+class TestStateEndpoint:
+    """The window's pill: the Assistant read through the SAME activity ladder
+    every session row is painted from."""
+
+    def test_title_and_tmux_name_agree(self, A):
+        from backend.session import tmux
+
+        # The ladder derives the tmux name from the title itself, so a title
+        # that doesn't round-trip to ASSIST_TMUX would silently probe a session
+        # that doesn't exist (and report a permanent "offline").
+        assert tmux.to_mindflock_tmux_name(A.ASSIST_TITLE) == A.ASSIST_TMUX
+
+    def test_stand_in_answers_what_the_ladder_asks_of_a_session(self, A):
+        from backend import session
+
+        inst = A._ASSIST_INST
+        assert inst.Title == A.ASSIST_TITLE
+        assert inst.Started() is True
+        assert inst.Status != session.Paused  # never reported offline for this
+        assert inst.GetWorktreePath() == str(A.ASSIST_DIR)
+        assert inst.Program  # whatever CLI the Assistant is configured to run
+
+    def test_stand_in_is_one_object(self, A):
+        # server._probe_cached only serves its memo to the object it memoized
+        # against; a fresh stand-in per request would poll tmux every time.
+        assert A._ASSIST_INST is A._ASSIST_INST
+
+    def test_state_reports_the_activity_probe(self, client, A, monkeypatch):
+        seen = {}
+
+        def fake_probe(inst, title):
+            seen["inst"], seen["title"] = inst, title
+            return "clarify"
+
+        from backend.web import server
+
+        monkeypatch.setattr(server, "_agent_activity_cached", fake_probe)
+        r = client.get("/api/assistant/state")
+        assert r.status_code == 200 and r.json() == {"activity": "clarify"}
+        assert seen["inst"] is A._ASSIST_INST and seen["title"] == A.ASSIST_TITLE
+
+    def test_state_reports_offline_when_the_probe_blows_up(self, client, monkeypatch):
+        from backend.web import server
+
+        def _boom(*a, **k):
+            raise RuntimeError("no tmux")
+
+        monkeypatch.setattr(server, "_agent_activity_cached", _boom)
+        # A state read is decoration; it must never 500 the window.
+        assert client.get("/api/assistant/state").json() == {"activity": "offline"}
+
+
+class TestLaunchContext:
+    """The Assistant's launch carries its own directory — the thing that makes
+    the state pill possible at all (it is where the provider installs its
+    activity-reporting hooks, and a hook is the only signal that can say "the
+    agent asked you something")."""
+
+    def test_launch_passes_the_assistant_dir_as_the_workdir(self, A, monkeypatch):
+        seen = {}
+
+        class _Provider:
+            def is_natural_exit(self, _marker):
+                return True
+
+            def build_launch_command(self, ctx):
+                seen["ctx"] = ctx
+                return "claude"
+
+        def fake_run(argv, **kw):
+            # has-session: not running -> the launch path; everything else OK.
+            rc = 1 if "has-session" in argv else 0
+            return subprocess.CompletedProcess(argv, rc, stderr=b"")
+
+        monkeypatch.setattr(A.subprocess, "run", fake_run)
+        monkeypatch.setattr(A.providers, "resolve", lambda _p: _Provider())
+        monkeypatch.setattr(A, "_read_exit_marker", lambda _n: None)
+        monkeypatch.setattr(A, "_clear_exit_marker", lambda _n: None)
+        monkeypatch.setattr(A, "_wrap_launch_cmd", lambda cmd, _n: cmd)
+        monkeypatch.setattr(A, "apply_scroll_speed", lambda: None)
+
+        name, err = A._ensure_assistant_session()
+        assert (name, err) == (A.ASSIST_TMUX, None)
+        assert seen["ctx"].workdir == str(A.ASSIST_DIR)
+        assert seen["ctx"].session_name == A.ASSIST_TMUX
+
+
+class TestStateMemo:
+    """The reason the stand-in is a module-level singleton at all.
+
+    ``server._probe_cached`` keys its ~2.5s memo on (probe, title) and only
+    serves the entry back to the SAME object it memoized against. A fresh
+    stand-in per request would key identically and miss every time, so the
+    window's poll would shell out to tmux on every tick — which is the cost the
+    memo exists to avoid for real sessions.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clean_memo(self):
+        from backend.web import server
+
+        server._PROBE_CACHE.clear()
+        yield
+        server._PROBE_CACHE.clear()
+
+    def test_two_reads_inside_the_window_probe_once(self, A, monkeypatch):
+        from backend.web import server
+
+        calls = []
+
+        def counting(inst, title):
+            calls.append(title)
+            return "working"
+
+        monkeypatch.setattr(server, "_agent_activity", counting)
+        assert A._assistant_activity() == "working"
+        assert A._assistant_activity() == "working"
+        assert calls == [A.ASSIST_TITLE]
+
+    def test_the_singleton_is_what_makes_the_memo_hit(self, A, monkeypatch):
+        """Same probe, same title, a different object: the memo correctly
+        refuses to serve it. This is the miss the singleton avoids."""
+        from backend.web import server
+
+        calls = []
+        monkeypatch.setattr(
+            server, "_agent_activity", lambda inst, title: calls.append(title) or "idle"
+        )
+        assert A._assistant_activity() == "idle"
+        # A second, equal-but-not-identical stand-in.
+        fresh = A._AssistantInstance()
+        assert server._agent_activity_cached(fresh, A.ASSIST_TITLE) == "idle"
+        assert len(calls) == 2
+
+    def test_the_route_reads_through_the_same_memo(self, client, A, monkeypatch):
+        from backend.web import server
+
+        calls = []
+        monkeypatch.setattr(
+            server,
+            "_agent_activity",
+            lambda inst, title: calls.append(title) or "clarify",
+        )
+        first = client.get("/api/assistant/state").json()
+        second = client.get("/api/assistant/state").json()
+        assert first == second == {"activity": "clarify"}
+        assert len(calls) == 1
+
+
+class TestStateVocabulary:
+    """``offline`` is a real answer, not an error code.
+
+    The window says "offline" before its first chat (there is no tmux session
+    yet) and "idle" once one exists and its agent is between turns. Collapsing
+    the two would make a never-used Assistant look like one that is standing by.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clean_memo(self):
+        from backend.web import server
+
+        server._PROBE_CACHE.clear()
+        yield
+        server._PROBE_CACHE.clear()
+
+    def test_a_session_that_was_never_started_reads_offline(self, A, monkeypatch):
+        from backend.web import server
+
+        # No tmux session by this name: `has-session` answers non-zero, which is
+        # the layer that returns "offline" before any pane is inspected.
+        probed = []
+
+        def no_session(argv, **kw):
+            probed.append(list(argv))
+            return subprocess.CompletedProcess(argv, 1, b"", b"")
+
+        monkeypatch.setattr(server, "_run_capped", no_session)
+        assert A._assistant_activity() == "offline"
+        # Asserted, because `_assistant_activity` also answers "offline" when
+        # the read BLOWS UP — and a test that couldn't tell the two apart would
+        # keep passing after the ladder stopped being consulted at all.
+        assert probed == [["tmux", "has-session", "-t=" + A.ASSIST_TMUX]]
+
+    def test_the_stand_in_never_reports_itself_paused(self, A):
+        """The two ``offline`` returns above the tmux probe are "not started"
+        and "paused" — neither of which the Assistant can be. Its window is
+        offline only when its tmux session is genuinely gone, which is the one
+        thing the person looking at it can act on."""
+        from backend import session
+
+        inst = A._ASSIST_INST
+        assert inst.Started() is True and inst.Status == session.Running

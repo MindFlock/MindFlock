@@ -258,6 +258,17 @@ class TicketingSource:
     # "anyone" (every ticket in the configured workflow states, whoever owns it —
     # the QA queue). "anyone" is only honoured alongside an ingest-state filter.
     assignee_scope: str = ""
+    # Optional: the workflow state a ticket from this source is MOVED INTO when
+    # a session starts for it — a provider-native state id, picked from the same
+    # list as the ingest filter above. Blank = leave the ticket where it is,
+    # which is what every source did before this field existed.
+    #
+    # Per SOURCE and opt-in because "starting work" only means something on a
+    # board that has a column for it: a QA queue wants its tickets moved out of
+    # "Ready for dev" the moment a session takes one, while a personal backlog
+    # has nowhere to move them to. Only Shortcut / Jira / Linear can move a
+    # ticket at all; the other providers never offer the field.
+    start_state: str = ""
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -276,6 +287,7 @@ class TicketingSource:
             "effort",
             "depth",
             "assignee_scope",
+            "start_state",
         ):
             v = getattr(self, k)
             if v:
@@ -308,6 +320,7 @@ class TicketingSource:
             effort=_effort_level(d.get("effort")),
             depth=str(d.get("depth", "") or ""),
             assignee_scope=str(d.get("assignee_scope", "") or ""),
+            start_state=str(d.get("start_state", "") or ""),
         )
 
 

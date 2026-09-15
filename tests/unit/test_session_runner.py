@@ -20,7 +20,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -540,3 +540,137 @@ def test_a_failed_arm_is_logged_at_warning_and_does_not_stop_the_run(
     assert ap.get("sc-44") is None
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert warnings and "sc-44" in warnings[-1].getMessage()
+
+
+# --------------------------------------------------------------------------- #
+# start_state: the ticket moves on its board once the session is live          #
+# --------------------------------------------------------------------------- #
+def test_run_moves_the_ticket_into_its_sources_start_state(config):
+    runner = SessionRunner(config)
+    story = _make_story()
+    fake_inst = MagicMock()
+    fake_inst.GetWorktreePath.return_value = None
+
+    with patch.object(runner, "_create_instance", return_value=fake_inst):
+        with patch(
+            "backend.ticket_ingestion.session_runner.move_started",
+            new=AsyncMock(return_value="42"),
+        ) as move:
+            _run(runner.run(story))
+
+    # After the launch, not before: the state claims a session is working on it.
+    move.assert_awaited_once()
+    assert move.await_args.args[0] is story
+
+
+def test_a_failed_move_does_not_fail_the_launch(config):
+    # move_started swallows its own failures; this pins that run() does not add
+    # a path around it (e.g. awaiting it before the instance exists).
+    runner = SessionRunner(config)
+    story = _make_story()
+    fake_inst = MagicMock()
+    fake_inst.GetWorktreePath.return_value = None
+
+    with patch.object(runner, "_create_instance", return_value=fake_inst):
+        with patch(
+            "backend.ticket_ingestion.session_runner.move_started",
+            new=AsyncMock(return_value=""),
+        ):
+            assert _run(runner.run(story)) == _branch_name_for(story)
+
+
+def test_the_board_move_happens_after_the_post_launch_work(config):
+    """Ordering. ``start_state`` means "a session is working on this", so it may
+    only be written once the session exists — and it is written last, after the
+    attachments are on their way into the workspace."""
+    runner = SessionRunner(config)
+    story = _make_story()
+    order: list[str] = []
+
+    fake_inst = MagicMock()
+    fake_inst.GetWorktreePath.return_value = None
+
+    def _create(*a, **kw):
+        order.append("create")
+        return fake_inst
+
+    async def _post_start(inst, s):
+        order.append("post_start")
+
+    async def _move(s, cfg):
+        order.append("move")
+        return "42"
+
+    with patch.object(runner, "_create_instance", _create):
+        with patch.object(runner, "_post_start", _post_start):
+            with patch("backend.ticket_ingestion.session_runner.move_started", _move):
+                _run(runner.run(story))
+
+    assert order == ["create", "post_start", "move"]
+
+
+def test_a_failed_attachment_download_does_not_skip_the_board_move(config):
+    """The two post-launch chores are independent bookkeeping about a session
+    that is already live, so neither may take the other down with it. Driven
+    through the REAL ``_post_start`` — the swallow that makes this true lives
+    inside it, and stubbing it out would prove nothing.
+    """
+    runner = SessionRunner(config)
+    story = _make_story()
+    story.attachments = [Attachment(name="spec.pdf", url="https://x/spec.pdf")]
+    fake_inst = MagicMock()
+    fake_inst.GetWorktreePath.return_value = "/tmp/does-not-matter"
+
+    async def _boom(path, s):
+        raise RuntimeError("the attachment host is down")
+
+    with patch.object(runner, "_create_instance", return_value=fake_inst):
+        with patch.object(runner._prompt_helper, "_download_attachments", _boom):
+            with patch(
+                "backend.ticket_ingestion.session_runner.move_started",
+                new=AsyncMock(return_value="42"),
+            ) as move:
+                assert _run(runner.run(story)) == _branch_name_for(story)
+
+    move.assert_awaited_once()
+
+
+def test_a_launch_that_never_produced_a_session_moves_nothing(config):
+    """The ticket stays where it is when there is no session to justify moving
+    it. A board that says "in progress" for work that failed to start is worse
+    than one that says nothing — nobody goes looking for the session that isn't
+    there."""
+    runner = SessionRunner(config)
+    story = _make_story()
+
+    with patch.object(
+        runner, "_create_instance", side_effect=RuntimeError("tmux is wedged")
+    ):
+        with patch(
+            "backend.ticket_ingestion.session_runner.move_started",
+            new=AsyncMock(return_value="42"),
+        ) as move:
+            with pytest.raises(RuntimeError, match="tmux is wedged"):
+                _run(runner.run(story))
+
+    move.assert_not_awaited()
+
+
+def test_the_move_is_handed_the_runners_own_config_as_the_fallback(config):
+    """The mover prefers the config on DISK and falls back to the snapshot it
+    was passed. Passing the runner's own config is what makes that fallback
+    mean anything in the pipeline process, which loaded its config at boot and
+    may be the only thing still holding a readable copy."""
+    runner = SessionRunner(config)
+    story = _make_story()
+    fake_inst = MagicMock()
+    fake_inst.GetWorktreePath.return_value = None
+
+    with patch.object(runner, "_create_instance", return_value=fake_inst):
+        with patch(
+            "backend.ticket_ingestion.session_runner.move_started",
+            new=AsyncMock(return_value=""),
+        ) as move:
+            _run(runner.run(story))
+
+    assert move.await_args.args == (story, config)

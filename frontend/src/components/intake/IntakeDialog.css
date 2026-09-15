@@ -598,3 +598,152 @@
   padding: 2px 0 2px 8px;
   margin-bottom: 2px;
 }
+
+/* Merge into… (Intake → Tickets) --------------------------------------------
+   A rare, irreversible action on a common row, and the layout says both.
+
+   The TRIGGER is a chip in the meta line, sharing the row the skip-reason chips
+   already wrap across, because a control of its own would have cost every
+   ticket in the list a line of height for something most of them will never do.
+   The CONFIRMATION is a drawer under the row rather than a dialog: these rows
+   are inside an `aria-modal` already, and the second window a `confirm()` or a
+   nested overlay opens is painted by the wrong layer and steals focus from a
+   dialog that still thinks it owns it (VerifyDialog.tsx documents the same
+   lesson at length). */
+/* The TRIGGER lives in the action column, at the quiet weight `.ik-start-again`
+   already established for a row's secondary action — same size, same radius,
+   same right-alignment, so a row with two actions reads as one stack rather
+   than as two unrelated controls.
+
+   It was a chip in the meta line first. That is worth leaving a note about,
+   because it looked fine in a screenshot and failed completely in use: the meta
+   line is where a row states facts about itself, a control among those facts
+   inherits their grey passive reading, and the thing was reported missing by
+   someone whose eyes were on it. Height on a rare row is cheaper than an action
+   nobody can find. */
+.ik-item-start .ik-merge-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  align-self: flex-end;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.ik-item-start .ik-merge-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Open: reads as attached to the drawer below it rather than as one more thing
+   the row is offering. */
+.ik-item-start .ik-merge-btn.on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--panel-2, var(--panel));
+}
+
+/* Spans the whole row card, under both columns — the picker and its warning are
+   about the row, not about the button column they were opened from. */
+.ik-item-drawer {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  min-width: 0;
+}
+
+.ik-merge {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.ik-merge-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.ik-merge-label {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Two classes deep, like every other control in a work row: a work list lives
+   inside a `.set-row`, and `.set-row input` / `.set-row select`
+   (SettingsDialog.css) are (0,1,1) — a lone `.ik-merge-target` at (0,1,0) would
+   lose every declaration here and render at full settings-field size. */
+.ik-merge .ik-merge-filter,
+.ik-merge .ik-merge-target {
+  font-size: 11px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  min-width: 0;
+}
+
+.ik-merge .ik-merge-filter {
+  flex: 0 1 180px;
+}
+
+/* The target picker takes the rest of the line and is allowed to shrink: its
+   options are "<slug> — <title> · <state>", which are long, and a select sized
+   to its longest option would set a floor on the whole dialog's width. */
+.ik-merge .ik-merge-target {
+  flex: 1 1 220px;
+}
+
+.ik-merge-note {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+/* The open-session warning. Left-marked in amber rather than boxed in red: it
+   is not a refusal and nothing here is about to touch that session — it is the
+   one consequence of the merge that happens outside the tracker, and the reader
+   has to notice it without reading it as the destructive part. */
+.ik-merge-warn {
+  margin: 0;
+  color: var(--text);
+  border-left: 2px solid var(--gold);
+  padding: 2px 0 2px 8px;
+  line-height: 1.45;
+}
+
+.ik-merge-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.ik-merge .ik-merge-go {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+/* ARMED: the second press is the one that deletes, so the button changes colour
+   as well as words. Red only here — an unarmed "Merge and delete sc-1" sitting
+   red under every open drawer would train the eye to ignore it by the time it
+   means something. */
+.ik-merge .ik-merge-go.armed {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+
+.ik-merge .ik-merge-go:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

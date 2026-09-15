@@ -4,6 +4,7 @@ import { queryClient } from "../state/queries";
 import {
   stageMeta,
   chipState,
+  activityChip,
   checkChip,
   nextStep,
   effectiveActivity,
@@ -204,6 +205,28 @@ describe("back-to-idle pin", () => {
     expect(at({ title: "r11", stage: "pr", workspace_missing: true })).toBeNull();
     setCaps({ git: false });
     expect(at({ title: "r12", stage: "pr" })).toBeNull();
+  });
+});
+
+describe("activityChip (the Assistant window's pill)", () => {
+  it("speaks the same five words a session's pill does", () => {
+    // The Assistant has an agent but no session, so it is painted from the
+    // activity alone. If these two ever disagree, one window says "running" in
+    // a colour that means something else — the exact drift the split avoids.
+    for (const act of ["working", "clarify", "limit"]) {
+      const own = activityChip(act);
+      const viaSession = chipState(inst({ title: "ac-" + act, activity: act }));
+      expect(own).toEqual(viaSession);
+    }
+  });
+
+  it("distinguishes a parked agent from one that isn't running", () => {
+    expect(activityChip("idle").label).toBe("idle");
+    expect(activityChip("offline").label).toBe("offline");
+    // Anything the server hasn't taught it is parked, never "running": a chip
+    // that invents work is worse than one that under-reports it.
+    expect(activityChip("").label).toBe("idle");
+    expect(activityChip("something-new").label).toBe("idle");
   });
 });
 

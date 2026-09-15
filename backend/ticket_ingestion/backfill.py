@@ -168,6 +168,10 @@ class BackfillScanner:
             # ignored until the pipeline was restarted.
             story.repo_url = self._source.repo_url
             story.agent = source_agent_now(self._source_key, self._source.agent)
+            # Which source this came from, so a launch several hops later can go
+            # back to its settings (start_state) without re-deriving the key from
+            # the provider name — which two sources of the same provider share.
+            story.source_key = self._source_key
             # Crash safety: persist a pending marker BEFORE the checkpoint
             # advances, so a ticket that dies in the in-memory queue is
             # re-enqueued on the next startup instead of lost forever.

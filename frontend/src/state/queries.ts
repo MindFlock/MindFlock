@@ -202,6 +202,24 @@ export function refreshExtensions() {
   return queryClient.invalidateQueries({ queryKey: ["addons"] });
 }
 
+/** The Assistant's live agent state — the pill on its window.
+ *
+ * A plain poll, on the SPA's own visible/hidden cadence, and no `enabled`
+ * flag: the only callers are the Assistant window's chip, so the query has
+ * observers exactly while that window is open and stops the moment it closes.
+ * The state is not on the session event bus — the bus speaks for sessions the
+ * engine owns, and the Assistant is a window, not one of them.
+ */
+export function useAssistantActivity() {
+  return useQuery({
+    queryKey: ["assistant-state"],
+    queryFn: () => api<{ activity: string }>("/api/assistant/state"),
+    refetchInterval: pollInterval,
+    placeholderData: (prev) => prev,
+    retry: false,
+  });
+}
+
 export function useDevices() {
   return useQuery({
     queryKey: ["devices"],

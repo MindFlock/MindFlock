@@ -407,3 +407,156 @@ def test_the_settings_source_round_trips_its_effort():
     assert TicketingSource.from_dict({"effort": "turbo"}).effort == ""
     # Blank never appears in the stored document — an unset field means inherit.
     assert "effort" not in TicketingSource.from_dict({"provider": "jira"}).to_dict()
+
+
+# --------------------------------------------------------------------------- #
+# start_state: the optional "move the ticket when its session starts" setting.
+# --------------------------------------------------------------------------- #
+def test_start_state_parses_and_round_trips(tmp_path):
+    cfg = load_config(
+        _write(
+            tmp_path,
+            """
+[ticketing]
+provider = "shortcut"
+api_token = "tok"
+member_id = "m"
+start_state = "500000012"
+""" + COMMON,
+        )
+    )
+    assert cfg.ticketing.start_state == "500000012"
+
+
+def test_start_state_is_blank_by_default(tmp_path):
+    cfg = load_config(
+        _write(
+            tmp_path,
+            """
+[ticketing]
+provider = "shortcut"
+api_token = "tok"
+member_id = "m"
+""" + COMMON,
+        )
+    )
+    assert cfg.ticketing.start_state == ""
+
+
+def test_start_state_on_a_provider_that_cannot_move_a_ticket_is_a_problem(tmp_path):
+    # A source switched from Jira to Asana keeps the old key; say so rather than
+    # silently ignoring it, which reads as "my tickets stopped moving".
+    with pytest.raises(ConfigError, match="start_state"):
+        load_config(
+            _write(
+                tmp_path,
+                """
+[ticketing]
+provider = "asana"
+api_token = "tok"
+project = "ws"
+start_state = "Doing"
+""" + COMMON,
+            )
+        )
+
+
+def test_settings_roundtrip_start_state():
+    s = Settings.from_dict(
+        {
+            "ticketing": {
+                "sources": [
+                    {
+                        "provider": "linear",
+                        "api_token": "t",
+                        "start_state": "state-uuid",
+                    }
+                ]
+            }
+        }
+    )
+    assert s.ticketing.sources[0].start_state == "state-uuid"
+    assert s.to_dict()["ticketing"]["sources"][0]["start_state"] == "state-uuid"
+    # Blank is the default and blank fields are dropped, so a source that never
+    # sets it round-trips byte-identical.
+    plain = Settings.from_dict(
+        {"ticketing": {"sources": [{"provider": "asana", "api_token": "t"}]}}
+    )
+    assert "start_state" not in plain.to_dict()["ticketing"]["sources"][0]
+
+
+def test_source_for_matches_on_id_then_provider():
+    cfg = PipelineConfig(
+        repo_url="git@github.com:o/r.git",
+        workspace_dir=Path("/tmp/ws"),
+        log_file=Path("/tmp/l.log"),
+        log_level="INFO",
+        poll_interval_seconds=20,
+        ticketing_sources=[
+            TicketProviderConfig(provider="jira", id="jira-eu", start_state="3"),
+            TicketProviderConfig(provider="linear", id="lin", start_state="s"),
+        ],
+    )
+    assert cfg.source_for("jira-eu").start_state == "3"
+    assert cfg.source_for("lin").provider == "linear"
+    assert cfg.source_for("nope") is None
+    assert cfg.source_for("") is None
+
+
+def test_the_settings_source_coerces_a_non_string_start_state():
+    """A hand-edited (or older) settings.json must not be able to raise here.
+
+    ``start_state`` is a string field like every other one on the card, and
+    ``from_dict`` is the store's only entry point — a ``TypeError`` out of it
+    doesn't cost one source, it costs the whole settings read.
+    """
+    from backend.config.settings import TicketingSource
+
+    assert TicketingSource.from_dict({"start_state": None}).start_state == ""
+    assert TicketingSource.from_dict({"start_state": 0}).start_state == ""
+    assert TicketingSource.from_dict({}).start_state == ""
+    # A number that a JSON editor left unquoted still names the state it named.
+    assert (
+        TicketingSource.from_dict({"start_state": 500000012}).start_state == "500000012"
+    )
+
+
+def test_source_for_hands_back_the_whole_source_not_just_its_state():
+    """Two sources of the SAME provider, different sites, different tokens.
+
+    The mover asks for a source by key and then builds a provider from what it
+    gets back. If that were only the state id — or the primary source's config
+    with someone else's state id pasted on — the move would land on the wrong
+    board, authenticated as the wrong account. Returning the whole source is
+    what makes those two facts impossible to separate.
+    """
+    eu = TicketProviderConfig(
+        provider="jira",
+        id="jira-eu",
+        base_url="https://eu.atlassian.net",
+        api_token="tok-eu",
+        start_state="3",
+    )
+    us = TicketProviderConfig(
+        provider="jira",
+        id="jira-us",
+        base_url="https://us.atlassian.net",
+        api_token="tok-us",
+        start_state="10",
+    )
+    cfg = PipelineConfig(
+        repo_url="git@github.com:org/repo.git",
+        workspace_dir=Path("/tmp/ws"),
+        log_file=Path("/tmp/l.log"),
+        log_level="INFO",
+        poll_interval_seconds=20,
+        ticketing_sources=[eu, us],
+    )
+    # `provider` is the same string on both; only the id tells them apart.
+    assert cfg.source_for("jira-us") is us
+    assert cfg.source_for("jira-us").base_url == "https://us.atlassian.net"
+    assert cfg.source_for("jira-us").api_token == "tok-us"
+    # And the first configured source is NOT the fallback for an unknown key:
+    # moving a ticket on a board nobody named is worse than moving nothing.
+    assert cfg.source_for("jira") is None
+    assert cfg.source_for("") is None

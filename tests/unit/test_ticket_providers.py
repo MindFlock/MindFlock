@@ -396,11 +396,13 @@ class _FakeSession:
     """Stand-in for aiohttp.ClientSession. Responses are consumed in order;
     calls are recorded (url, kwargs) for assertions."""
 
-    def __init__(self, get_responses=None, post_responses=None):
+    def __init__(self, get_responses=None, post_responses=None, put_responses=None):
         self._get = list(get_responses or [])
         self._post = list(post_responses or [])
+        self._put = list(put_responses or [])
         self.get_calls = []
         self.post_calls = []
+        self.put_calls = []
 
     async def __aenter__(self):
         return self
@@ -415,6 +417,10 @@ class _FakeSession:
     def post(self, url, **kwargs):
         self.post_calls.append((url, kwargs))
         return self._post.pop(0)
+
+    def put(self, url, **kwargs):
+        self.put_calls.append((url, kwargs))
+        return self._put.pop(0)
 
 
 class _ExplodingSession(_FakeSession):
@@ -2314,3 +2320,349 @@ class TestLinearFetchTestStates:
         t = prov._issue_to_ticket(issue)
         assert t.comments == ["[2025-01-01 by unknown] real"]
         assert [a.url for a in t.attachments] == ["http://a"]
+
+
+# --------------------------------------------------------------------------- #
+# set_state — the write half of list_states, behind the per-source `start_state`
+# ("move the ticket when a session starts for it").
+# --------------------------------------------------------------------------- #
+def test_start_state_id_only_for_providers_that_can_move_a_ticket():
+    from backend.ticket_ingestion.providers.base import start_state_id
+
+    movable = TicketProviderConfig(provider="shortcut", start_state="42")
+    assert start_state_id(movable) == "42"
+    # A value left behind by a provider switch moves nothing rather than
+    # erroring on every launch.
+    stale = TicketProviderConfig(provider="github_issues", start_state="42")
+    assert start_state_id(stale) == ""
+    assert start_state_id(TicketProviderConfig(provider="jira")) == ""
+
+
+def test_catalog_offers_start_state_exactly_where_it_works():
+    offering = {
+        p["id"]
+        for p in PROVIDER_META
+        if any(f["key"] == "start_state" for f in p["fields"])
+    }
+    assert offering == {"shortcut", "jira", "linear"}
+    for p in PROVIDER_META:
+        for f in p["fields"]:
+            if f["key"] == "start_state":
+                # One destination, not a filter — its own widget type.
+                assert f["type"] == "state_one"
+                assert not f.get("required")
+
+
+@pytest.mark.asyncio
+async def test_set_state_unsupported_provider_raises():
+    prov = GithubIssuesProvider(TicketProviderConfig(provider="github_issues"))
+    with pytest.raises(ProviderError, match="cannot move"):
+        await prov.set_state("7", "Doing")
+
+
+@pytest.mark.asyncio
+class TestShortcutSetState:
+    def _prov(self):
+        return ShortcutProvider(
+            TicketProviderConfig(provider="shortcut", api_token="t", member_id="m")
+        )
+
+    async def test_puts_the_workflow_state_id(self):
+        session = _FakeSession(put_responses=[_FakeResp(200, json_data={})])
+        with _patch_session(session):
+            await self._prov().set_state("123", "500000012")
+        url, kwargs = session.put_calls[0]
+        assert url == f"{_SHORTCUT_API_BASE}/stories/123"
+        assert kwargs["json"] == {"workflow_state_id": 500000012}
+
+    async def test_non_numeric_state_raises_before_any_call(self):
+        session = _FakeSession()
+        with _patch_session(session):
+            with pytest.raises(ProviderError, match="not a state id"):
+                await self._prov().set_state("123", "Doing")
+        assert session.put_calls == []
+
+    async def test_error_status_raises(self):
+        session = _FakeSession(put_responses=[_FakeResp(422, text_data="nope")])
+        with _patch_session(session):
+            with pytest.raises(ProviderError, match="422"):
+                await self._prov().set_state("123", "7")
+
+
+@pytest.mark.asyncio
+class TestJiraSetState:
+    def _prov(self):
+        return JiraProvider(
+            TicketProviderConfig(
+                provider="jira",
+                base_url="https://acme.atlassian.net",
+                email="e@x.com",
+                api_token="t",
+            )
+        )
+
+    async def test_executes_the_transition_whose_destination_matches(self):
+        transitions = {
+            "transitions": [
+                {"id": "11", "name": "Backlog", "to": {"id": "1", "name": "To Do"}},
+                {"id": "21", "name": "Start", "to": {"id": "3", "name": "In Progress"}},
+            ]
+        }
+        session = _FakeSession(
+            get_responses=[_FakeResp(200, json_data=transitions)],
+            post_responses=[_FakeResp(204)],
+        )
+        with _patch_session(session):
+            await self._prov().set_state("PROJ-1", "3")
+        url, kwargs = session.post_calls[0]
+        assert url.endswith("/rest/api/3/issue/PROJ-1/transitions")
+        assert kwargs["json"] == {"transition": {"id": "21"}}
+
+    async def test_matches_a_status_name_too(self):
+        # list_states stores ids, but a hand-edited config may hold a name.
+        transitions = {
+            "transitions": [
+                {"id": "21", "to": {"id": "3", "name": "In Progress"}},
+            ]
+        }
+        session = _FakeSession(
+            get_responses=[_FakeResp(200, json_data=transitions)],
+            post_responses=[_FakeResp(200, json_data={})],
+        )
+        with _patch_session(session):
+            await self._prov().set_state("PROJ-1", "In Progress")
+        assert session.post_calls[0][1]["json"] == {"transition": {"id": "21"}}
+
+    async def test_unreachable_status_names_what_was_offered(self):
+        transitions = {
+            "transitions": [{"id": "11", "to": {"id": "1", "name": "To Do"}}]
+        }
+        session = _FakeSession(get_responses=[_FakeResp(200, json_data=transitions)])
+        with _patch_session(session):
+            with pytest.raises(ProviderError, match="To Do"):
+                await self._prov().set_state("PROJ-1", "3")
+
+    async def test_transition_list_failure_raises(self):
+        session = _FakeSession(get_responses=[_FakeResp(403, text_data="denied")])
+        with _patch_session(session):
+            with pytest.raises(ProviderError, match="403"):
+                await self._prov().set_state("PROJ-1", "3")
+
+
+@pytest.mark.asyncio
+class TestLinearSetState:
+    def _prov(self):
+        return LinearProvider(
+            TicketProviderConfig(provider="linear", api_token="lin_api_x")
+        )
+
+    async def test_mutates_the_issue_state(self):
+        prov = self._prov()
+        calls = []
+
+        async def fake_gql(query, variables):
+            calls.append((query, variables))
+            return {"issueUpdate": {"success": True}}
+
+        prov._gql = fake_gql
+        await prov.set_state("iss-1", "state-uuid")
+        query, variables = calls[0]
+        assert "issueUpdate" in query
+        assert variables == {"id": "iss-1", "state": "state-uuid"}
+
+    async def test_unsuccessful_mutation_raises(self):
+        prov = self._prov()
+
+        async def fake_gql(query, variables):
+            return {"issueUpdate": {"success": False}}
+
+        prov._gql = fake_gql
+        with pytest.raises(ProviderError, match="refused"):
+            await prov.set_state("iss-1", "state-uuid")
+
+
+@pytest.mark.asyncio
+class TestSetStateShortCircuits:
+    """Nothing configured, nothing sent.
+
+    ``start_state_id`` already answers "" for an unset source, so a blank id
+    reaching an adapter means something upstream changed — and the adapters
+    still have to be safe on their own, because a stray call here is a WRITE to
+    a live tracker. Each of the three refuses to make one.
+    """
+
+    async def test_jira_blank_never_opens_a_session(self):
+        prov = JiraProvider(
+            TicketProviderConfig(
+                provider="jira",
+                base_url="https://acme.atlassian.net",
+                email="e@x.com",
+                api_token="t",
+            )
+        )
+        session = _FakeSession()
+        with _patch_session(session) as ctor:
+            for blank in ("", "   ", "\n"):
+                assert await prov.set_state("PROJ-1", blank) is None
+        # Not merely "no request" — no ClientSession is constructed at all.
+        assert ctor.call_count == 0
+
+    async def test_linear_blank_never_sends_the_mutation(self):
+        prov = LinearProvider(TicketProviderConfig(provider="linear", api_token="k"))
+        calls = []
+
+        async def fake_gql(query, variables):
+            calls.append(variables)
+            return {"issueUpdate": {"success": True}}
+
+        prov._gql = fake_gql
+        for blank in ("", "   ", "\n"):
+            assert await prov.set_state("iss-1", blank) is None
+        assert calls == []
+
+    async def test_shortcut_blank_is_refused_before_any_call(self):
+        prov = ShortcutProvider(
+            TicketProviderConfig(provider="shortcut", api_token="t", member_id="m")
+        )
+        session = _FakeSession()
+        with _patch_session(session) as ctor:
+            # Shortcut states are integers, so a blank is simply not a state id
+            # — it is refused the same way "Doing" is, and the mover turns that
+            # into a log line rather than a failed launch.
+            with pytest.raises(ProviderError, match="not a state id"):
+                await prov.set_state("123", "   ")
+        assert ctor.call_count == 0 and session.put_calls == []
+
+
+@pytest.mark.asyncio
+class TestSetStateDetails:
+    """The wire details each adapter's success path is pinned to."""
+
+    async def test_shortcut_accepts_a_201(self):
+        # The code allows 200 and 201; a green write that reports 201 must not
+        # surface as a failed move (which would read as "the board is broken").
+        prov = ShortcutProvider(
+            TicketProviderConfig(provider="shortcut", api_token="t", member_id="m")
+        )
+        session = _FakeSession(put_responses=[_FakeResp(201, json_data={})])
+        with _patch_session(session):
+            assert await prov.set_state("123", "500000012") is None
+        assert session.put_calls[0][1]["json"] == {"workflow_state_id": 500000012}
+
+    async def test_shortcut_strips_a_padded_state_id(self):
+        prov = ShortcutProvider(
+            TicketProviderConfig(provider="shortcut", api_token="t", member_id="m")
+        )
+        session = _FakeSession(put_responses=[_FakeResp(200, json_data={})])
+        with _patch_session(session):
+            await prov.set_state("123", "  7 \n")
+        assert session.put_calls[0][1]["json"] == {"workflow_state_id": 7}
+
+    async def test_linear_strips_a_padded_state_id(self):
+        # A state id pasted out of Linear's UI arrives with whitespace around
+        # it more often than not; the mutation must carry the id, not the paste.
+        prov = LinearProvider(TicketProviderConfig(provider="linear", api_token="k"))
+        seen = {}
+
+        async def fake_gql(query, variables):
+            seen.update(variables)
+            return {"issueUpdate": {"success": True}}
+
+        prov._gql = fake_gql
+        await prov.set_state("iss-1", "  state-uuid \n")
+        assert seen == {"id": "iss-1", "state": "state-uuid"}
+
+    async def test_linear_surfaces_a_graphql_error_as_a_provider_error(self):
+        """Distinct from ``success: false``: a state belonging to another team
+        comes back as a GraphQL ``errors`` array, and ``_gql`` — not
+        ``set_state`` — is what has to turn that into a ProviderError. The mover
+        only swallows exceptions; a raw dict here would sail past it."""
+        prov = LinearProvider(TicketProviderConfig(provider="linear", api_token="k"))
+        session = _FakeSession(
+            post_responses=[
+                _FakeResp(
+                    200,
+                    json_data={"errors": [{"message": "Entity not found: state"}]},
+                )
+            ]
+        )
+        with _patch_session(session):
+            with pytest.raises(ProviderError, match="Entity not found"):
+                await prov.set_state("iss-1", "state-from-another-team")
+
+    async def test_jira_accepts_both_204_and_200(self):
+        transitions = {
+            "transitions": [{"id": "21", "to": {"id": "3", "name": "In Progress"}}]
+        }
+        prov = JiraProvider(
+            TicketProviderConfig(
+                provider="jira",
+                base_url="https://acme.atlassian.net",
+                email="e@x.com",
+                api_token="t",
+            )
+        )
+        for status in (200, 204):
+            session = _FakeSession(
+                get_responses=[_FakeResp(200, json_data=transitions)],
+                post_responses=[_FakeResp(status, json_data={})],
+            )
+            with _patch_session(session):
+                assert await prov.set_state("PROJ-1", "3") is None
+            assert session.post_calls[0][1]["json"] == {"transition": {"id": "21"}}
+
+    async def test_jira_matches_on_the_destination_not_the_transition(self):
+        """The transition's OWN id and name are not what is being matched.
+
+        A workflow where transition 3 ("In Progress") leads to status 9 and
+        transition 21 leads to status 3 is entirely ordinary, and matching the
+        transition instead of its destination would move the issue somewhere
+        nobody picked.
+        """
+        transitions = {
+            "transitions": [
+                {"id": "3", "name": "In Progress", "to": {"id": "9", "name": "Done"}},
+                {"id": "21", "name": "Begin", "to": {"id": "3", "name": "Doing"}},
+            ]
+        }
+        prov = JiraProvider(
+            TicketProviderConfig(
+                provider="jira",
+                base_url="https://acme.atlassian.net",
+                email="e@x.com",
+                api_token="t",
+            )
+        )
+        session = _FakeSession(
+            get_responses=[_FakeResp(200, json_data=transitions)],
+            post_responses=[_FakeResp(204)],
+        )
+        with _patch_session(session):
+            await prov.set_state("PROJ-1", "3")
+        assert session.post_calls[0][1]["json"] == {"transition": {"id": "21"}}
+
+    async def test_jira_reports_an_unreachable_status_rather_than_moving_anywhere(
+        self,
+    ):
+        """The common configuration failure, and the one the docstring calls
+        out: the status is real but the issue's current one has no transition
+        into it (very often because the issue is ALREADY there). It is reported,
+        and — the part that matters — no transition is executed, so the issue
+        does not end up in some other status instead.
+        """
+        transitions = {
+            "transitions": [{"id": "11", "to": {"id": "1", "name": "To Do"}}]
+        }
+        prov = JiraProvider(
+            TicketProviderConfig(
+                provider="jira",
+                base_url="https://acme.atlassian.net",
+                email="e@x.com",
+                api_token="t",
+            )
+        )
+        session = _FakeSession(get_responses=[_FakeResp(200, json_data=transitions)])
+        with _patch_session(session):
+            with pytest.raises(ProviderError, match="no transition"):
+                await prov.set_state("PROJ-1", "In Progress")
+        assert session.post_calls == []

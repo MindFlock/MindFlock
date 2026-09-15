@@ -302,3 +302,111 @@ class GithubIssuesProvider(TicketProvider):
             "name": me.get("name"),
             "project": f"{owner}/{repo}",
         }, ""
+
+    # ----------------------------------------------------------------- #
+    # Writes (Intake → Tickets → Merge into…). See TicketProvider for the
+    # contract and for why the order in ticket_merge.py is the order it is.
+    #
+    # ``carry_attachments`` is deliberately NOT overridden. GitHub has no
+    # attachment API at all: an image or file dropped into an issue is uploaded
+    # to githubusercontent / user-attachments and referenced from the body as a
+    # markdown link, owned by the uploader rather than by the issue. Those links
+    # keep resolving after the issue is deleted, so copying the body IS carrying
+    # the files, and the base class's "nothing to move" default is the truth.
+    # ----------------------------------------------------------------- #
+    can_merge = True
+
+    async def _issue_json(self, ticket_id: str) -> dict[str, Any]:
+        owner, repo = self._repo()
+        headers = await self._headers()
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.get(
+                f"{_API}/repos/{owner}/{repo}/issues/{ticket_id}", headers=headers
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"GitHub API returned {resp.status} for issue "
+                        f"{ticket_id}: {text[:200]}"
+                    )
+                return await resp.json()
+
+    async def append_description(self, ticket_id: str, addition: str) -> None:
+        owner, repo = self._repo()
+        headers = await self._headers()
+        current = (await self._issue_json(ticket_id)).get("body") or ""
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.patch(
+                f"{_API}/repos/{owner}/{repo}/issues/{ticket_id}",
+                json={"body": current + addition},
+                headers=headers,
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"GitHub could not update issue {ticket_id} "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+
+    async def add_comment(self, ticket_id: str, body: str) -> None:
+        owner, repo = self._repo()
+        headers = await self._headers()
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.post(
+                f"{_API}/repos/{owner}/{repo}/issues/{ticket_id}/comments",
+                json={"body": body},
+                headers=headers,
+            ) as resp:
+                if resp.status not in (200, 201):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"GitHub could not comment on issue {ticket_id} "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+
+    async def delete_ticket(self, ticket_id: str) -> None:
+        """Delete the issue through the GraphQL ``deleteIssue`` mutation.
+
+        The REST API cannot do this — there is no ``DELETE /issues/{n}``, which
+        is why this is the one adapter here that reaches for GraphQL — and the
+        mutation is gated on admin rights over the repository. That is a real
+        constraint on a real feature, so the failure says which permission is
+        missing instead of returning a bare 403: everything the merge copied is
+        already on the surviving issue by the time this runs, and the caller
+        reports "merged, but not deleted" rather than pretending otherwise.
+        """
+        node_id = (await self._issue_json(ticket_id)).get("node_id")
+        if not node_id:
+            raise ProviderError(
+                f"GitHub did not report a node id for issue {ticket_id}"
+            )
+        headers = await self._headers()
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.post(
+                f"{_API}/graphql",
+                json={
+                    "query": (
+                        "mutation($id: ID!) {"
+                        " deleteIssue(input: { issueId: $id })"
+                        " { clientMutationId } }"
+                    ),
+                    "variables": {"id": node_id},
+                },
+                headers=headers,
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"GitHub refused to delete issue {ticket_id} "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+                payload = await resp.json()
+        errors = payload.get("errors") or []
+        if errors:
+            message = "; ".join(str(e.get("message") or e) for e in errors)
+            raise ProviderError(
+                f"GitHub refused to delete issue {ticket_id}: {message} — "
+                "deleting an issue needs admin permission on the repository, "
+                "and a fine-grained token needs its Issues scope set to "
+                "read and write."
+            )

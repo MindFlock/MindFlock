@@ -114,11 +114,13 @@ from backend.web.core import pr_review as _pr_review
 from backend.web.core import reopen as _reopen
 from backend.web.core import worktree_reclaim as _worktree_reclaim
 from backend.web.core import ticket_start as _ticket_start
+from backend.web.core import ticket_merge as _ticket_merge
 from backend.web.core import remote as _remote
 from backend.web.core import stage_reset as _stage_reset
 from backend.web.core import pending as _pending
 from backend.web.core import prompt_queue as _prompt_queue
 from backend.web.core import ntfy as _ntfy
+from backend.web.core import session_plan as _session_plan
 from backend.web.core import test_plans as _test_plans
 from backend.web.core import window_refresh as _window_refresh
 from backend.web.core import worktree_setup as _wt_setup
@@ -272,6 +274,7 @@ from backend.web.core.engine import (
 )
 from backend.web.core import mobile_announce
 from backend.web.core import restart as _restart
+from backend.web.core import self_update as _self_update
 from backend.web.core.mobile_access import (
     _local_only_mode,
     _mobile_banner,
@@ -5164,6 +5167,95 @@ def post_server_restart() -> JSONResponse:
 
 
 # --------------------------------------------------------------------------- #
+# Engine updates (Settings → Advanced)
+# --------------------------------------------------------------------------- #
+# The desktop shell has its own updater (electron/main.js `engine:install`), and
+# keeps it: it can install while nothing of its own is being replaced. These
+# routes are for every OTHER client — a browser on the tailnet, /m, a second
+# machine — which until now could be told it was behind and do nothing about it.
+# See core.self_update for why the install is detached and its progress is a
+# file rather than a variable in this process.
+
+
+@app.get("/api/update/check")
+async def get_update_check(refresh: int = 0) -> JSONResponse:
+    """What is installed, what is released, and whether this install can update.
+
+    Never 500s and never turns "couldn't reach GitHub" into "up to date": a
+    failed lookup answers ``latest: null``, which the screen renders as exactly
+    that. ``refresh=1`` bypasses the 15-minute cache behind the Check button.
+    """
+    current = _self_update.installed_version()
+    try:
+        release = await _self_update.latest_release(force=bool(refresh))
+    except Exception:  # noqa: BLE001 — a version line never fails a screen
+        release = None
+    latest = (release or {}).get("version", "")
+    blocked = _self_update.blocked_reason()
+    return JSONResponse(
+        {
+            "current": current,
+            "latest": latest,
+            "tag": (release or {}).get("tag", ""),
+            "release_url": (release or {}).get("url", ""),
+            "notes": (release or {}).get("notes", ""),
+            "checked": release is not None,
+            "available": _self_update.is_newer(latest, current),
+            "kind": _self_update.install_kind(),
+            "blocked": blocked,
+            "repo": _self_update.UPDATE_REPO,
+            "state": _self_update.read_state().get("state", "idle"),
+        }
+    )
+
+
+@app.post("/api/update/start")
+async def post_update_start(payload: Optional[dict] = None) -> JSONResponse:
+    """Install the newest release (or an explicit ``ref``) and report back.
+
+    The ref is resolved server-side by default rather than taken from the
+    client: the button says "update to the newest version", and the newest
+    version is not something a stale settings screen should get to decide.
+    """
+    ref = str((payload or {}).get("ref", "") or "").strip()
+    if not ref:
+        try:
+            release = await _self_update.latest_release()
+        except Exception:  # noqa: BLE001
+            release = None
+        if not release:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "could not reach GitHub to find the newest release",
+                },
+                status_code=502,
+            )
+        ref = release["tag"]
+    result = await asyncio.to_thread(_self_update.start_update, ref)
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=400)
+    return JSONResponse(result)
+
+
+@app.get("/api/update/state")
+def get_update_state() -> JSONResponse:
+    """Progress of the running (or last) update, plus the restart it earns.
+
+    The restart is triggered from HERE, on the first poll that sees a finished
+    install, rather than by the installer itself — see core.self_update for why
+    that is the cheaper half of the deal. ``restarting`` tells the UI to start
+    waiting for the server to come back, which is the same wait the Restart
+    button already does.
+    """
+    state, restart_now = _self_update.finish_state()
+    if restart_now:
+        _restart.reset_tailscale_attempts()
+        _restart.reexec_soon()
+    return JSONResponse({**state, "restarting": restart_now})
+
+
+# --------------------------------------------------------------------------- #
 # System logs (Settings → System logs)
 # --------------------------------------------------------------------------- #
 # _LOG_TAIL_MAX / _log_sources / _read_log_tail moved to core.system_logs
@@ -5730,6 +5822,61 @@ def browse(path: str = "") -> JSONResponse:
     )
 
 
+def _recent_repo_paths() -> list:
+    """Folders recent work happened in, newest first.
+
+    Most-recent first: the folder the last session (or wizard run) used
+    (``settings.general.last_repo_path``), then live sessions newest-touched
+    first, then the closed-session undo store — which is already newest-first.
+    Every tier is best-effort, so a broken one costs its own suggestions and not
+    the whole list.
+
+    Module-level rather than the closure it used to be inside
+    :func:`repo_suggestions`, because ``POST /api/session-plan`` has to offer a
+    model the *same* folders the dialog's own suggestion chips show. A second
+    copy of this ladder is a second ladder that drifts, and it would drift
+    silently: the plan route's note tells the user the folder was picked from a
+    list, and only this function decides what is on it.
+
+    Blocking (a settings read plus a state-store read), so call it off the loop.
+    """
+
+    def _touched_at(inst) -> float:
+        """Sort key for live sessions: last-touched epoch, 0 when unknown."""
+        try:
+            return inst.UpdatedAt.timestamp()
+        except Exception:  # noqa: BLE001 — an unset/odd timestamp just sorts last
+            return 0.0
+
+    recent: list = []
+    try:
+        from backend.config import settings as _settings
+
+        recent.append(_settings.load_settings().general.last_repo_path)
+    except Exception:  # noqa: BLE001 — no settings store yet is not an error
+        pass
+    try:
+        for inst in sorted(
+            list(ENGINE.instances.values()), key=_touched_at, reverse=True
+        ):
+            recent.append(getattr(inst, "Path", "") or "")
+    except Exception:  # noqa: BLE001 — a registry mutating mid-read just skips it
+        pass
+    try:
+        for closed in _load_recently_closed():
+            if not isinstance(closed, dict):
+                continue
+            # The session's repo lives in the serialized instance data; the
+            # top-level "folder" is its worktree, which is only the same
+            # directory for an in-place session — hence the fallback order.
+            data = closed.get("data")
+            path = (data or {}).get("path") if isinstance(data, dict) else ""
+            recent.append(str(path or closed.get("folder") or ""))
+    except Exception:  # noqa: BLE001 — an unreadable history simply adds nothing
+        pass
+    return recent
+
+
 @app.get("/api/repos/suggest")
 async def repo_suggestions() -> JSONResponse:
     """Folders the New Session dialog can offer instead of a bare folder tree.
@@ -5742,48 +5889,12 @@ async def repo_suggestions() -> JSONResponse:
     renders paths relative to it and falls back to it when nothing is suggested.
     """
 
-    def _touched_at(inst) -> float:
-        """Sort key for live sessions: last-touched epoch, 0 when unknown."""
-        try:
-            return inst.UpdatedAt.timestamp()
-        except Exception:  # noqa: BLE001 — an unset/odd timestamp just sorts last
-            return 0.0
-
     def _gather() -> list:
-        # Most-recent first: the folder the last session (or wizard run) used,
-        # then live sessions newest-touched first, then the closed-session undo
-        # store — which is already newest-first. Every tier is best-effort, so a
-        # broken one costs its own suggestions and not the whole list.
-        recent: list = []
-        try:
-            from backend.config import settings as _settings
-
-            recent.append(_settings.load_settings().general.last_repo_path)
-        except Exception:  # noqa: BLE001 — no settings store yet is not an error
-            pass
-        try:
-            for inst in sorted(
-                list(ENGINE.instances.values()), key=_touched_at, reverse=True
-            ):
-                recent.append(getattr(inst, "Path", "") or "")
-        except Exception:  # noqa: BLE001 — a registry mutating mid-read just skips it
-            pass
-        try:
-            for closed in _load_recently_closed():
-                if not isinstance(closed, dict):
-                    continue
-                # The session's repo lives in the serialized instance data; the
-                # top-level "folder" is its worktree, which is only the same
-                # directory for an in-place session — hence the fallback order.
-                data = closed.get("data")
-                path = (data or {}).get("path") if isinstance(data, dict) else ""
-                recent.append(str(path or closed.get("folder") or ""))
-        except Exception:  # noqa: BLE001 — an unreadable history simply adds nothing
-            pass
         # Blocking work (a readdir per scan root plus a git probe per surviving
-        # candidate) — threaded like paste_image's _store so a cold disk or a
-        # stalled network mount can't hold up every other request.
-        return suggest_repos(recent_paths=recent, cwd=os.getcwd())
+        # candidate, on top of the recency read) — threaded like paste_image's
+        # _store so a cold disk or a stalled network mount can't hold up every
+        # other request.
+        return suggest_repos(recent_paths=_recent_repo_paths(), cwd=os.getcwd())
 
     return JSONResponse(
         {
@@ -5837,6 +5948,79 @@ async def repo_check(path: str = "") -> JSONResponse:
     if not (path or "").strip():
         return JSONResponse({"error": "a path is required"}, status_code=400)
     return JSONResponse(await asyncio.to_thread(check_repo, path))
+
+
+@app.post("/api/session-plan")
+async def session_plan(payload: dict) -> JSONResponse:
+    """Fill in the New Session form from one sentence. Creates nothing.
+
+    The model's whole job is to fill the form the user is already looking at: it
+    picks a folder BY NUMBER from a menu this route built by walking the
+    filesystem, writes a name and a first prompt, and says worktree or not. It
+    never writes a path, and this route would not accept one if it did — a bare
+    name reaching ``POST /api/instances`` is realpath'd against the SERVER's cwd
+    and then ``makedirs``'d (``plain_repo.py:41,70``), and the only guard against
+    that lives in TypeScript (``isNameQuery``, which exists because typing ``api``
+    once created a ``MindFlock/api`` directory). Answering with a path we chose
+    from a list we built ourselves means that guard can never even fire.
+
+    502 with a sentence when there is no model to ask, or when the answer can't
+    be read: the form is still there, still empty, still usable, and the person
+    has lost one keystroke. That is the no-model fallback this whole layer
+    contracts for — here it is literally the surface the box sits on.
+
+    The folder menu comes from :func:`_recent_repo_paths` so the model chooses
+    from the same rows the dialog's own suggestion chips show; the note the
+    answer carries is composed in :mod:`backend.web.core.session_plan` from
+    resolved facts, never by the model, because a model-written note is a
+    sentence that can disagree with the form printed under it.
+    """
+    raw = str((payload or {}).get("text") or "")
+    # Contract tokens go BY LINE, not by substring: substring-stripping silently
+    # corrupts ordinary prose ("the code that handles <commit> hooks"), and a
+    # sentence that is nothing but a format instruction has to be refused out
+    # loud rather than sent on as an empty request.
+    text = _session_plan.strip_contract_lines(raw).strip()[: _session_plan.MAX_SENTENCE]
+    if not raw.strip():
+        return JSONResponse({"error": "say what you want to work on"}, status_code=400)
+    if not text:
+        return JSONResponse(
+            {
+                "error": "that reads like an answer format rather than a request — "
+                "say what you want to work on"
+            },
+            status_code=400,
+        )
+    home = os.path.expanduser("~")
+
+    def _work() -> dict:
+        return _session_plan.plan(
+            text,
+            # The flock's own default CLI, read fresh per request rather than
+            # captured once: this is the only program the plan has to go on (no
+            # session exists yet to inherit one from), and it goes into
+            # pick_argv's FIRST slot. Passing "" there would be a silent no-op —
+            # providers.resolve("") always answers claude — which is how a
+            # codex-only machine would get "claude is not installed" forever,
+            # naming a CLI its owner never chose.
+            program=ENGINE.default_program(),
+            recent_paths=_recent_repo_paths(),
+            cwd=os.getcwd(),
+            home=home,
+            git_ok=git_available(),
+        )
+
+    try:
+        # Threaded for both halves: the candidate menu walks the filesystem (up
+        # to three search_repos calls, each capped at 1.5s) and the one-shot
+        # blocks for the whole model turn — the same posture the ✨ commit-message
+        # route uses. A client that aborts just stops waiting; the subprocess
+        # stays bounded by session_plan.TIMEOUT_PLAN either way.
+        return JSONResponse(await asyncio.to_thread(_work))
+    except _session_plan.SessionPlanError as err:
+        return JSONResponse({"error": str(err)}, status_code=502)
+    except Exception as err:  # noqa: BLE001 — never a 500 for a convenience
+        return JSONResponse({"error": str(err)}, status_code=502)
 
 
 # There is deliberately no endpoint for the frontend to set general.onboarded.
@@ -9058,6 +9242,14 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
             # Terminal ledger entry so auto ingestion doesn't run it again.
             _ticket_start.record_result(story, branch=branch)
             await _ticket_start.download_attachments(inst, story)
+            # …and move the ticket on its board, if its source asked for that.
+            # After the launch, like the attachments above: the state means "a
+            # session is working on this", which only became true just now.
+            moved = await _ticket_start.move_to_start_state(story)
+            if moved and log.InfoLog is not None:
+                log.InfoLog.Printf(
+                    "ticket %s moved to its source's start state (%s)", title, moved
+                )
             if log.InfoLog is not None:
                 log.InfoLog.Printf("forced ticket session %s live", title)
         except Exception as err:  # noqa: BLE001
@@ -9073,6 +9265,100 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
 
     _register_task(_bg_start())
     return JSONResponse({"started": True, "title": title}, status_code=202)
+
+
+# --- Ticket merge (Intake → Tickets) --------------------------------------
+# Duplicate tickets are a tracker problem, so the fix writes to the tracker:
+# everything on ticket A is appended to ticket B and A is deleted. The step
+# order, and why a failed delete comes back in the payload instead of as a 500,
+# are in backend.web.core.ticket_merge — read that before changing this.
+
+
+def _notify_ticket_merged(result: dict) -> None:
+    """Push "A is gone, its content is on B" to the user's phone, when ntfy is on.
+
+    Deleting a ticket is the least reversible thing this app does to a system
+    it does not own, and the person who pressed the button is frequently not the
+    only person who cared about that ticket — so the confirmation is worth
+    carrying past the tab that started it. Best effort and fully wrapped: a
+    notification must never be able to fail a merge that has already happened.
+    """
+    try:
+        cfg = _ntfy.load()
+        if not cfg.active:
+            return
+        gone = result.get("from") or {}
+        kept = result.get("into") or {}
+        _ntfy.publish_soon(
+            cfg,
+            title="%s merged into %s" % (gone.get("slug", "?"), kept.get("slug", "?")),
+            message=(
+                "%s — %s\n%s"
+                % (
+                    gone.get("slug", "?"),
+                    gone.get("name") or "untitled",
+                    (
+                        "Deleted; its description, comments and files are on %s."
+                        % (kept.get("slug", "?"))
+                        if result.get("deleted")
+                        # The half-done case says so rather than claiming the tidy
+                        # one: the content moved, the original is still sitting
+                        # there, and somebody has to go and delete it by hand.
+                        else "Copied onto %s, but it could NOT be deleted: %s"
+                        % (
+                            kept.get("slug", "?"),
+                            result.get("delete_error") or "no reason given",
+                        )
+                    ),
+                )
+            ),
+            # 3 = normal when it worked (news, nothing is waiting on anyone),
+            # 4 = high when the original survived, because that one IS a job.
+            priority=3 if result.get("deleted") else 4,
+            tags=(
+                ["twisted_rightwards_arrows"] if result.get("deleted") else ["warning"]
+            ),
+            click=kept.get("url") or None,
+        )
+    except Exception as err:  # noqa: BLE001
+        _ntfy.log_error("ticket merge push failed: %s", err)
+
+
+@app.post("/api/tickets/merge")
+async def ticket_merge(payload: dict) -> JSONResponse:
+    """Merge one ticket into another on the same source and delete the first."""
+    payload = payload or {}
+    source = str(payload.get("source", "") or "").strip()
+    from_id = str(payload.get("from", "") or "").strip()
+    into_id = str(payload.get("into", "") or "").strip()
+    if not source or not from_id or not into_id:
+        return JSONResponse(
+            {"error": "source, from and into are required"}, status_code=400
+        )
+    try:
+        result = await _ticket_merge.merge_tickets(source, from_id, into_id)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    except LookupError as err:
+        return JSONResponse({"error": str(err)}, status_code=404)
+    except Exception as err:  # noqa: BLE001 — token / network / provider refusal
+        # Nothing was written: merge_tickets only lets the FIRST write raise, and
+        # by then both tickets are still exactly as they were.
+        return JSONResponse({"error": str(err)}, status_code=502)
+
+    # The panel's cached fan-out still lists the ticket that no longer exists.
+    # Dropped rather than refreshed: a re-sweep here would put a provider search
+    # per source on this request, and the client refetches immediately anyway.
+    _ASSIGNED_TICKETS_CACHE.pop("v", None)
+    _notify_ticket_merged(result)
+    if log.InfoLog is not None:
+        log.InfoLog.Printf(
+            "merged ticket %s into %s (deleted: %v)",
+            (result.get("from") or {}).get("slug", "?"),
+            (result.get("into") or {}).get("slug", "?"),
+            result.get("deleted"),
+        )
+    return JSONResponse(result)
 
 
 # --- Issue force-start (Intake → Issues) ---------------------------------

@@ -11,7 +11,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { Config, Instance } from "../../api/types";
+import type { Config, Instance, PlanAnswer } from "../../api/types";
 import { api } from "../../api/client";
 import {
   refreshInstances,
@@ -21,6 +21,7 @@ import {
 } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
+import { errMsg } from "../../lib/format";
 import {
   addPendingSession,
   clearStaleAlias,
@@ -92,6 +93,27 @@ const SEARCH_DEBOUNCE_MS = 200;
  * and answers an empty list rather than an error, so this copy only saves the
  * round trip. */
 const SEARCH_MIN_CHARS = 2;
+
+/** Below this the Describe box is not worth a model turn. The floor is about
+ * ambiguity, not length: one word names no project and no task, and the answer
+ * to "scan" is a folder the model guessed and the user has to undo. Twenty-five
+ * seconds to be told nothing useful is the worst trade this feature can make. */
+const DESCRIBE_MIN_CHARS = 8;
+
+/** What the box will send, matching the server's own MAX_SENTENCE. A pasted
+ * paragraph is truncated rather than refused — a brief is still a request. */
+const DESCRIBE_MAX_CHARS = 2000;
+
+/** How long the ring runs before the label admits it. The generator's budget is
+ * 75s and a cold CLI start plus a real turn is ~10s, so a spinner that never
+ * changes reads as a hang long before the timeout does. */
+const DESCRIBE_SLOW_MS = 8000;
+
+/** How long Create is held after a fill lands. Focus moves when the answer
+ * arrives, ~10-25s after the user pressed Enter — long enough that their hand
+ * may be back on Enter for a reason that has nothing to do with this form.
+ * Long enough to catch that, far short of the time it takes to read a note. */
+const SUBMIT_ARM_MS = 500;
 
 /** Whether what is in the Folder field is a PATH rather than a name to look up.
  *
@@ -324,6 +346,343 @@ export function mayTakeOpeningFocus(where: {
   return where.activeIsTarget || !where.activeInsideDialog;
 }
 
+/** Why a provisioned create cannot even be attempted, or "" when it can.
+ *
+ * Provisioning builds a SEPARATE worktree or clone, so a folder with no repo in
+ * it has nothing to fork: the server answers 400 and the create never happens.
+ * Answering it here rather than letting the round trip do it makes the refusal
+ * instant and — more to the point — names the folder, because the git aside
+ * that would otherwise explain it sits at the top of a card the user is two
+ * screens below by the time they tick Provision. `initRepo` clears it: that box
+ * git-inits the folder first, which is exactly the thing missing. */
+export function provisionBlockReason(where: {
+  provision: boolean;
+  plainFolder: boolean;
+  initRepo: boolean;
+  folderPath: string;
+}): string {
+  if (!where.provision || !where.plainFolder || where.initRepo) return "";
+  return (
+    "Provisioning needs a git repo, and there is none in " +
+    where.folderPath +
+    " — pick a folder marked \u{1F4E6} above, or tick \u201CCreate a git repo in this " +
+    "folder\u201D."
+  );
+}
+
+/** Why an immediate "Start session now" must stop and ask, or "" when it can go.
+ *
+ * Page 1's whole point is skipping the form, so this is the ONE thing it does
+ * not skip: a folder that is not there yet gets made by the create, and nothing
+ * else in this flow produces something that outlives the session — close a
+ * session and its worktree goes, but nobody ever comes back for the directory.
+ * "Without validating on page 2" is about not re-reading a form; it was never
+ * about creating a directory nobody was shown.
+ *
+ * Kept pure and separate from the handler so the one rule that makes the fast
+ * path safe can be tested without a browser, and so it cannot drift from the
+ * confirm row that renders the same fact. */
+export function immediateStartBlockReason(where: {
+  folderExists: boolean;
+  folderLabel: string;
+  confirmed: boolean;
+}): string {
+  if (where.folderExists || where.confirmed) return "";
+  return (
+    "One thing first: " +
+    where.folderLabel +
+    " does not exist yet. Tick the box, then press Start session again."
+  );
+}
+
+/** Why the chosen "new worktree" will not actually happen, or "" when it will.
+ *
+ * A worktree is forked from a commit, so a folder with no repo in it has nothing
+ * to fork: `create_instance` forces `in_place` for exactly this case and the 202
+ * quietly hands back a session running in the folder. That override predates
+ * this line and was always silent — tolerable while the mode was the ABSENCE
+ * of a tick, and not tolerable now that it is a radio the user (or a plan) has
+ * positively selected. A control reading "New worktree" over a folder that
+ * cannot have one is the form promising something the server will not do.
+ *
+ * `initRepo` clears it for the same reason it clears provisionBlockReason: that
+ * box git-inits the folder first, which is precisely the missing thing. */
+export function worktreeClampReason(where: {
+  inPlace: boolean;
+  provisionOn: boolean;
+  plainFolder: boolean;
+  initRepo: boolean;
+}): string {
+  if (where.inPlace || where.provisionOn) return "";
+  if (!where.plainFolder || where.initRepo) return "";
+  return (
+    "There is no git repo in that folder, so this will run in the folder itself " +
+    "\u2014 tick \u201CCreate a git repo in this folder\u201D below to get a real worktree."
+  );
+}
+
+/** Why the Describe box can't be sent yet, or "" when it can.
+ *
+ * Same pattern as provisionBlockReason above: pure, returns the sentence a
+ * person reads or nothing at all, and is the ONE place the refusal lives so the
+ * button and the Enter key can never disagree about it. The floor is about
+ * ambiguity, not length — `search_repos("scan")` resolves to exactly one folder
+ * on this machine and it is the wrong one, and there is no repair for a sentence
+ * that never said which project. A busy box says nothing, because the button is
+ * already saying "Reading\u2026" and a second line under it would be the dialog
+ * talking over itself. */
+export function describeBlockReason(where: { text: string; busy: boolean }): string {
+  if (where.busy) return "";
+  const t = where.text.trim();
+  if (!t) return "Type what you want to work on first.";
+  if (t.length < DESCRIBE_MIN_CHARS) {
+    return `Say a bit more \u2014 \u201C${t}\u201D doesn't say which project or what to do.`;
+  }
+  return "";
+}
+
+/** Why Create is refusing right now, or "" when it isn't.
+ *
+ * A fill lands seconds after the keystroke that asked for it and moves the caret
+ * while it does. Without this hold, an Enter aimed at nothing in particular
+ * creates a session in a folder a model picked and nobody read — and submit()
+ * closes the dialog optimistically before the POST, so there is nothing left on
+ * screen to cancel. It says so rather than swallowing the key: a control that
+ * ignores you is worse than one that explains itself. */
+export function submitHoldReason(armAt: number, now: number): string {
+  if (!armAt || now >= armAt) return "";
+  return "Just filled the form in \u2014 check the folder, then press Create.";
+}
+
+/** The plan's in-place flag, defaulting TRUE when the key is missing.
+ *
+ * `!!a.in_place` reads an absent key as false, and false here means "cut a
+ * branch and a worktree in somebody's repo". Of the two ways to be wrong about a
+ * key that isn't there, only one of them writes to a git repo. */
+export function planInPlace(a: Partial<PlanAnswer>): boolean {
+  return a.in_place !== false;
+}
+
+/** The folder a landed plan is about — kept WHOLE, existing or not.
+ *
+ * The state this replaces held a path only while the folder still needed
+ * making, which quietly made it two different facts wearing one name: the gate
+ * asks "does the form still hold a folder that has to be MADE?", while the note
+ * asks the wider "does the form still hold the folder I am a sentence about?".
+ * Folding both into one field left the second question nothing to compare
+ * against, and the note went on describing a folder the form no longer showed.
+ * So the path is always the plan's repo_path, and `exists` is kept beside it. */
+export interface PlanFolder {
+  /** The plan's repo_path, ALWAYS — an existing folder as much as a new one. */
+  path: string;
+  /** The ~-relative spelling from the same answer. Cosmetic: only ever shown,
+   * never compared — a display string could not match a field holding an
+   * absolute path anyway. */
+  display: string;
+  /** Whether that folder was already on disk when the plan was made. */
+  exists: boolean;
+}
+
+/** No plan has landed this opening. `exists: true` is the quiet half: an empty
+ * path arms nothing either way, and true is the value that asks no question. */
+export const PLAN_FOLDER_NONE: PlanFolder = { path: "", display: "", exists: true };
+
+export type PlanFolderAction =
+  /** A plan came back and was written into the form. */
+  | { t: "answer"; plan: Partial<PlanAnswer> }
+  /** The dialog was closed and opened again. */
+  | { t: "reopen" }
+  /** POST /api/instances came back 200: the folder is on disk now. */
+  | { t: "created" };
+
+/** The plan's folder across the dialog's own lifecycle.
+ *
+ * A reducer rather than three setState calls, for the same reason folderReducer
+ * is one: every bug here has been a question of WHEN, and a transition that
+ * cannot be replayed in a test is a transition nobody checked. The reopen case
+ * below is exactly such a bug, and it shipped. */
+export function planFolderReducer(s: PlanFolder, a: PlanFolderAction): PlanFolder {
+  switch (a.t) {
+    case "answer":
+      // `!== true` rather than `!a.folder_exists`, for the reason planInPlace
+      // gives about its own absent key: a server too old to send this (or a 200
+      // that somehow lost it) then asks a question it did not need to, which
+      // costs one tick — while reading a missing key as "it's already there"
+      // makes a directory nobody was ever shown. Only one of those is
+      // recoverable.
+      return {
+        path: a.plan.repo_path || "",
+        display: a.plan.folder_display || "",
+        exists: a.plan.folder_exists === true,
+      };
+    case "reopen":
+      // THE ASYMMETRY, and the bug this case exists to state. The TICK dies on
+      // a reopen — a "yes, make it" is consent to one sentence's folder and
+      // must never carry over — but the QUESTION does not, because the field
+      // the question is about survives: folderReducer's own "reopen"
+      // deliberately KEEPS folder.path. Clearing the plan alongside the tick
+      // disarmed the gate while the Folder field still read
+      // /home/me/code/invoice-parser, and Create then made a directory nobody
+      // confirmed. Nothing re-armed it either: the {t:"suggested"} dispatch
+      // that would have overwritten the field is a no-op when
+      // /api/repos/suggest answers an empty list — which is precisely the
+      // machine whose menu was empty and whose model was therefore forced to
+      // answer `new:<name>`.
+      //
+      // Keeping it is safe because the gate is DERIVED from the live field (see
+      // newFolderGate): a retained plan self-clears the instant the field moves
+      // off it, which is the whole point of the derivation.
+      return s;
+    case "created":
+      // The create came back 200, so that directory is there now — and if it
+      // did not come back, the plan's folder is not what the next opening is
+      // about either. Left behind, it would have a later reopen ask to create a
+      // folder that already exists.
+      return PLAN_FOLDER_NONE;
+  }
+}
+
+/** What the plan contributes to the confirm gate: the folder it wants MADE, or
+ * "" when that folder was already there. The gate compares paths and nothing
+ * else, so the "does it exist" half is answered here — in one place, so the
+ * confirm row and submit()'s refusal can never disagree about it. */
+export function planGatePath(p: PlanFolder): string {
+  return p.exists ? "" : p.path;
+}
+
+/** The plan's note, but only while the form still shows the folder it is about.
+ *
+ * Derived from the field exactly as newFolderGate is, and for the same reason.
+ * The note was cleared only by the next run and by a reopen, so clicking a
+ * suggestion chip after a `new:` plan left "Using ~/code/invoice-parser — a new
+ * folder" sitting above a Folder field, a git nudge and a Create that all said
+ * something else. A sentence that disagrees with the form it explains is worse
+ * than no sentence: it is the one thing on the strip a reader takes on trust,
+ * and telling them a folder is about to be made when it is not is the failure
+ * the server's own note_for exists to prevent. */
+export function planNoteFor(where: {
+  /** The server's sentence about what it chose and why. */
+  note: string;
+  /** The plan's repo_path — its folder, existing or not. */
+  planPath: string;
+  /** What the Folder field holds RIGHT NOW. */
+  folderPath: string;
+}): string {
+  const path = where.planPath.trim();
+  if (!path || where.folderPath.trim() !== path) return "";
+  return where.note;
+}
+
+/** The one in-flight plan request, as a value instead of two loose refs.
+ *
+ * `seq` is the staleness stamp every landing checks; `abort` is the socket.
+ * They live in one object because both bugs here were one of them moving
+ * without the other — a seq bumped with the controller left orphaned, and a
+ * close that moved neither. */
+export interface PlanRun {
+  seq: number;
+  abort: AbortController | null;
+}
+
+/** Claim the slot for a new run, or refuse because one is already running.
+ *
+ * The refusal cannot live in describeBlockReason: that one answers "" while a
+ * turn is in flight ON PURPOSE, because the button is already saying "Reading…"
+ * and a second line under it would be the dialog talking over itself. So Enter
+ * — which goes on firing, the box being readOnly rather than disabled, so it
+ * keeps focus — fell straight through it, and every press bought another POST
+ * /api/session-plan: three more 1.5s filesystem walks and another headless CLI
+ * turn, bounded only by the server's 75s budget and by nothing at all on the
+ * concurrency side. Five impatient Enters were five concurrent CLI turns. The
+ * mobile sheet has had this guard since it shipped (`if (planBusy) return`).
+ *
+ * Aborts whatever it is replacing BEFORE taking the slot, so no path can orphan
+ * a request: the old code overwrote the controller without aborting it, and an
+ * orphaned controller is a socket nobody can ever cancel. */
+export function startPlanRun(
+  run: PlanRun,
+  busy: boolean
+): { seq: number; ctl: AbortController } | null {
+  if (busy) return null;
+  run.abort?.abort();
+  const ctl = new AbortController();
+  run.seq += 1;
+  run.abort = ctl;
+  return { seq: run.seq, ctl };
+}
+
+/** Stop waiting: the Cancel button, a reopen, and — the case that was missing —
+ * the dialog simply being CLOSED.
+ *
+ * The seq bump is what actually cancels, by making the answer a no-op wherever
+ * it lands; the abort only saves the socket. This component never unmounts (it
+ * returns null when shut), so a close registered no cleanup whatsoever: ~15s
+ * later the answer arrived with its staleness check intact and applyPlan wrote
+ * the model's path into the folder reducer behind a dialog nobody was looking
+ * at. */
+export function cancelPlanRun(run: PlanRun): void {
+  run.seq += 1;
+  run.abort?.abort();
+  run.abort = null;
+}
+
+/** The folder a plan wants MADE and the user has not agreed to yet, spelled for
+ * a person — or "" when there is nothing to agree to.
+ *
+ * Creating a directory is the one thing a plan proposes that outlives the
+ * session and that closing it never takes back: a worktree goes when the session
+ * does, and nobody ever comes back for the folder. So a folder a MODEL invented
+ * has to be confirmed in as many words before Create will run. A folder the USER
+ * typed is not gated and must not be — this dialog has always made one on Create,
+ * and that is their own act.
+ *
+ * DERIVED FROM THE FIELD, never a flag that gets cleared, and that is the whole
+ * design. The Folder field is written from six places (typing, the browse tree's
+ * select / commit / cancel, a suggestion chip, a search match, a template) and a
+ * boolean cleared at five of them is a gate that silently survives onto a folder
+ * the plan never proposed — which is precisely the create nobody confirmed. Here
+ * the question exists exactly while the field still holds the plan's own path, so
+ * editing the field to anything else ends it, and typing that path back starts it
+ * again: the field holds the model's folder, so the model's folder is what Create
+ * would make.
+ *
+ * Falls back to the absolute path when the server sent no display spelling. A
+ * missing cosmetic field must never be able to switch the gate off — of the two
+ * ways to be wrong here, only one of them makes a directory nobody read about. */
+export function newFolderGate(where: {
+  /** The absolute repo_path the plan proposed, "" when its folder already
+   * exists (or when no plan has landed this opening). */
+  planPath: string;
+  /** The ~-relative spelling to show, from the same answer. */
+  planDisplay: string;
+  /** What the Folder field holds RIGHT NOW. */
+  folderPath: string;
+}): string {
+  const path = where.planPath.trim();
+  if (!path || where.folderPath.trim() !== path) return "";
+  return where.planDisplay.trim() || path;
+}
+
+/** Why Create is refusing an unconfirmed new folder, or "" when it isn't.
+ *
+ * Same shape as provisionBlockReason above, and one place for the same reason:
+ * the button, Ctrl/Cmd+Enter and Enter in any field all reach submit() and must
+ * never disagree about this. It NAMES the folder and quotes the tick verbatim,
+ * because this card scrolls — by the time someone presses Create the confirm row
+ * can be several screens up, and "confirm the folder first" would be an
+ * instruction about a control they cannot see. */
+export function newFolderBlockReason(where: { gate: string; confirmed: boolean }): string {
+  if (!where.gate || where.confirmed) return "";
+  return (
+    "There is no folder at " +
+    where.gate +
+    " yet — tick “Yes, create " +
+    where.gate +
+    "” under “Describe it” to have Create make it, or put a folder that " +
+    "already exists in Folder."
+  );
+}
+
 export function NewSessionDialog() {
   const open = useUi((s) => s.openDialog === "new-session");
   const closeDialog = useUi((s) => s.closeDialog);
@@ -354,6 +713,58 @@ export function NewSessionDialog() {
   const [promptOpen, setPromptOpen] = useState(false);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [activeTemplate, setActiveTemplate] = useState("");
+  // The one-sentence door at the top of the body: what the user typed, whether
+  // a model turn is in flight, and whether that turn has gone on long enough
+  // that the ring alone stops reading as progress. Deliberately NOT wired to
+  // anything the form submits — the sentence's only output is the fields
+  // applyPlan writes, and it is kept only so the box still shows it afterwards.
+  /** Which of the two pages is on screen: 1 the sentence, 2 the form.
+   *
+   * An opening lands on 1. That is a deliberate reversal of "Ctrl+N, type a
+   * name, Enter" — the sentence is now the front door and the form is behind
+   * it — so page 1 carries an explicit way through to the form that costs one
+   * click and no model turn, and a failed create reopens on page 2, where the
+   * fields to fix it are. */
+  const [page, setPage] = useState(1);
+  const [describe, setDescribe] = useState("");
+  const [describing, setDescribing] = useState(false);
+  const [describeSlow, setDescribeSlow] = useState(false);
+  // The server-composed sentence about what it chose and why, and the inline
+  // failure. Two states rather than one because they are different registers
+  // in the same place: the note is muted, the error is red, and a run that
+  // fails must not leave the previous run's note underneath claiming a folder.
+  const [planNote, setPlanNote] = useState("");
+  const [planError, setPlanError] = useState("");
+  // The folder the last plan was about — always its repo_path, existing or not
+  // — and whether the user has said yes to making it. Both the gate and the
+  // note are derived by comparing that path against the Folder field (see
+  // newFolderGate / planNoteFor), which is why the plan is kept whole and why
+  // its transitions live in a reducer that can be replayed in a test.
+  const [planFolder, planFolderDo] = useReducer(planFolderReducer, PLAN_FOLDER_NONE);
+  const [newFolderOk, setNewFolderOk] = useState(false);
+  /** The last plan and the sentence it answered, so page 1's "Start session"
+   * can be pressed twice without paying for a second model turn.
+   *
+   * It needs two presses whenever the plan lands on a folder that does not
+   * exist: the first shows the question, the second acts on the answer. Without
+   * this the second press would re-run the CLI and could come back with a
+   * different folder than the one the user just agreed to — a confirmation for
+   * one directory spent on another. */
+  const lastAnswer = useRef<{ sentence: string; answer: PlanAnswer } | null>(null);
+  /** Set when a fill has just moved to page 2 and the Folder field, which only
+   * exists on that page, still has to take the caret. */
+  const focusFolderNext = useRef(false);
+  /** Set when applyPlan is about to open the Prompt fold, so that fold's
+   * onToggle can tell a programmatic open from a click.
+   *
+   * A <details> fires `toggle` whichever way it was opened — React setting the
+   * `open` attribute counts — and that handler scrolls the fold to the bottom
+   * of the scroll region. So a plan that filled in a prompt scrolled page 2
+   * down the moment it arrived, undoing the "land at the top of the form" the
+   * focus effect had just done and cutting Name and Folder off above the view.
+   * (The launch fold's own comment claims an open-by-default fires no toggle;
+   * that is true of the initial render and not of this.) */
+  const foldOpenedByPlan = useRef(false);
   const [provisioningAvailable, setProvisioningAvailable] = useState(false);
   const [homePath, setHomePath] = useState("");
   const [suggestions, setSuggestions] = useState<RepoSuggestion[]>([]);
@@ -394,6 +805,21 @@ export function NewSessionDialog() {
   const selectedProfile = (authProfiles?.profiles || []).find((p) => p.id === profileId);
   const launchDefaults = useRef<Record<string, string>>({});
   const titleRef = useRef<HTMLInputElement | null>(null);
+  const describeRef = useRef<HTMLInputElement | null>(null);
+  // #new-repo-path, so a landed plan can put the caret on the one field most
+  // likely to be wrong — and, because focusing scrolls, actually on screen.
+  const repoRef = useRef<HTMLInputElement | null>(null);
+  /** The in-flight plan request: a seq bumped by every run, every open and
+   * every CLOSE, so an answer that belonged to a sentence the user has moved on
+   * from can never land on the form, plus the controller that drops its socket.
+   * Same job as the `live` flags in the check and search effects below, and
+   * needed for the same reason: this component never unmounts (it returns null
+   * when shut), so a promise started before a close is still running after the
+   * reopen. One object rather than two refs because every bug here has been one
+   * of the two moving without the other — see startPlanRun / cancelPlanRun. */
+  const planRun = useRef<PlanRun>({ seq: 0, abort: null });
+  /** Epoch after which Create is armed again. See submitHoldReason. */
+  const submitArmAt = useRef(0);
   const launchRef = useRef<HTMLDetailsElement | null>(null);
   // The match list's scroll box, so the keyboard highlight can be scrolled into
   // it — see the effect below for why nothing else will do that.
@@ -402,6 +828,9 @@ export function NewSessionDialog() {
   // The modal's own element, so the opening focus can tell "nothing in here has
   // the caret yet" from "the user is already typing in one of these fields".
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // Armed by a failed create, for the reopen it is about to trigger. See the
+  // reset effect, which is the thing that has to know.
+  const failedReopen = useRef(false);
   // The Folder field and the browser's visibility travel together: see
   // folderReducer for the two orderings that forced them into one value. These
   // aliases keep the form's many readers reading a plain value, while every
@@ -410,13 +839,71 @@ export function NewSessionDialog() {
   const repoPath = folder.path;
   const browserOpen = folder.browsing;
 
-  // Reset + load fresh data on every open (matches openDialog()).
+  // Reset + load fresh data on every open (matches openDialog()) — except the
+  // one open that is a failed create's own reopen.
+  //
+  // That path arrives here a tick after `submit` set the error, so this reset
+  // used to wipe the only report of the failure the user ever gets, along with
+  // the name, the prompt and the Provision tick they would have had to retype.
+  // A refused create was therefore indistinguishable from the New Session menu
+  // reopening itself for no reason. Nothing below needs redoing on that path
+  // either: the component never unmounts, so every list this effect loads is
+  // still in state from the open the user actually made.
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      // A CLOSE cancels the plan too, and nothing used to do it. The reset
+      // below was the only thing that bumped the seq, and it runs on OPEN — so
+      // closing the dialog registered no cleanup at all, and since this
+      // component never unmounts the answer landed ~15s later with its
+      // staleness check still passing, writing the model's folder into a form
+      // that was not on screen. Cancel first, return second.
+      cancelPlanRun(planRun.current);
+      return;
+    }
+    if (failedReopen.current) {
+      failedReopen.current = false;
+      return;
+    }
     setTitle("");
     setError("");
     setPrompt("");
     setLaunchArgs("");
+    // The Describe box and everything it leaves behind. Each of these is here
+    // because a useState without a reset line leaks from one opening to the
+    // next — `strategy` is the standing counter-example — and a leaked note is
+    // worse than a leaked field: it is a sentence about a folder the form is no
+    // longer showing.
+    setDescribe("");
+    setDescribing(false);
+    setDescribeSlow(false);
+    setPlanNote("");
+    setPlanError("");
+    // The tick, and ONLY the tick. Last opening's "yes, make that folder" is
+    // consent to one sentence's folder and must never carry over, so it dies
+    // here — but the question it answered does not, because the field the
+    // question is about survives: the folder reducer's "reopen" deliberately
+    // KEEPS folder.path. Clearing the plan alongside the tick is what disarmed
+    // the gate over a Folder field still holding the model's not-yet-existing
+    // folder, and Create then made a directory nobody confirmed. See
+    // planFolderReducer's "reopen" for the asymmetry and why keeping it is
+    // safe: the gate is derived from the live field, so a retained plan
+    // self-clears the moment that field moves off it.
+    // Every opening starts at the sentence. The form is one click away and
+    // keeps whatever the last opening left in it only as far as the resets
+    // below allow — page is not one of the things worth remembering, because a
+    // dialog that reopens halfway through a flow nobody is in the middle of
+    // reads as a bug.
+    setPage(1);
+    setNewFolderOk(false);
+    planFolderDo({ t: "reopen" });
+    // An answer for last opening's sentence has nothing to say about this one,
+    // and a model turn is slow enough to still be running when the dialog is
+    // closed and reopened. Bumping the seq is what makes the late one a no-op;
+    // the abort is the courtesy of not waiting for it.
+    cancelPlanRun(planRun.current);
+    // Nothing has been filled in yet, so nothing is holding Create — a hold
+    // carried over from last opening would refuse the first Enter of this one.
+    submitArmAt.current = 0;
     setProvision(false);
     setInPlace(true);
     setInitRepo(false);
@@ -530,7 +1017,11 @@ export function NewSessionDialog() {
   // beats this effect's commit — and whatever did keeps the caret.
   useEffect(() => {
     if (!open) return;
-    const el = titleRef.current;
+    // The sentence box on page 1, the Name field on page 2 — whichever of the
+    // two the opening is actually showing. titleRef is null on page 1 now (that
+    // field is not rendered), and an opening that focused nothing would leave
+    // the caret wherever the app last had it, outside the modal.
+    const el = page === 1 ? describeRef.current : titleRef.current;
     const active = document.activeElement;
     if (
       el &&
@@ -540,6 +1031,11 @@ export function NewSessionDialog() {
       })
     )
       el.focus();
+    // `page` is deliberately NOT a dependency: this is the OPENING's focus, and
+    // re-running it on every page change would fight the two focus moves that
+    // belong to the flow itself — the Folder field after a fill, and whatever
+    // the user had clicked before pressing Back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   // Whether the folder is a git repo is only knowable server-side, and the
@@ -742,6 +1238,246 @@ export function NewSessionDialog() {
     titleRef.current?.focus();
   };
 
+  /** Write a plan from the Describe box into the form the user is looking at.
+   *
+   * Deliberately NOT fillFromTemplate, whose last third is wrong for this caller
+   * three ways. Its `setAdvancedOpen(!!(t.provisioned || t.init_repo ||
+   * !t.in_place))` evaluates to FALSE for the commonest plan there is — an
+   * existing repo, in place, no init — so reusing it would CLOSE "Git &
+   * workspace" and hide the two checkboxes the model had just decided, which is
+   * the exact opposite of what this box is for. Its `setProvision(!!...)` would
+   * silently untick a Provision box the user armed by hand. And its
+   * `setActiveTemplate(t.name)` would write a session title into the state that
+   * highlights a template chip, lighting up whichever template happens to share
+   * the name.
+   *
+   * Every field is written unconditionally (except the title — see below),
+   * because the button says it replaces the form, and a half-replaced form is
+   * one whose leftover values are indistinguishable from the new ones. */
+  const applyPlan = (a: PlanAnswer) => {
+    setError("");
+    // Through the reducer like every other way of naming a folder, so the rest
+    // follows by itself: the debounced /api/repos/check probe fires on the new
+    // path (it is absolute, so looksLikePath waves it through), the git nudge
+    // appears under a plain folder, the matching suggestion chip lights up, and
+    // the name-search effect clears its matches rather than leaving a stale list
+    // hanging under a path.
+    folderDo({ t: "user-set", path: a.repo_path });
+    // A blank title is the server declining to name the session, not an
+    // instruction to erase the name the user typed before reaching for the box.
+    if (a.title) setTitle(a.title);
+    setPrompt(a.prompt || "");
+    setInPlace(planInPlace(a));
+    setInitRepo(!!a.init_repo);
+    // The whole folder, existing or not: the gate reads the "does it need
+    // making" half of it and the note reads the path. Keeping a path only for a
+    // NEW folder is what left the note with nothing to compare itself against.
+    // Reading a MISSING folder_exists as "not there" lives in the reducer,
+    // beside the comment about why.
+    planFolderDo({ t: "answer", plan: a });
+    // ALWAYS false, including over a plan that proposes the same folder as the
+    // last one: a tick left over from the previous sentence is consent to that
+    // sentence's folder, not to this one's. Every fill asks again.
+    setNewFolderOk(false);
+    // The plan never provisions — `provisioned` is not in the wire contract and
+    // the server never emits it — so this is a clear, not a copy.
+    setProvision(false);
+    // Never CLOSE a fold the plan has just written into. Unconditional on
+    // purpose; see the fillFromTemplate comparison above.
+    setAdvancedOpen(true);
+    if (a.prompt) {
+      foldOpenedByPlan.current = true;
+      setPromptOpen(true);
+    }
+  };
+
+  /** Stop waiting. The seq bump is what actually cancels — it makes the answer
+   * a no-op whenever it lands — and the abort only saves the socket. The
+   * subprocess on the far side is not killed by this and runs to its own
+   * timeout; it is a read-only one-shot with stdin closed, so that is bounded
+   * and harmless rather than something worth building a kill channel for. */
+  /** Page 1's "Start session": plan if we need to, otherwise act on the plan
+   * we already have.
+   *
+   * The second press of this button — the one after ticking a new folder's
+   * confirm — must NOT buy another model turn. Beyond the waste, a fresh turn
+   * could answer with a different folder than the one the user just said yes
+   * to, which would spend a confirmation on a directory nobody was shown. The
+   * cached answer is keyed on the sentence, so editing the box does correctly
+   * force a new plan. */
+  const startNow = () => {
+    const cached = lastAnswer.current;
+    if (cached && cached.sentence === describe.trim()) {
+      void startFromPlan(cached.answer);
+      return;
+    }
+    void runDescribe("start");
+  };
+
+  /** Move the caret to the Folder field once page 2 is actually on screen.
+   *
+   * runDescribe cannot do this itself: it sets the page and the field it wants
+   * is rendered by that same update, so repoRef.current is still null on the
+   * line after. Focusing also SCROLLS the field into view, which is half the
+   * point — a filled-in form is taller than the sentence that asked for it. */
+  useEffect(() => {
+    if (page !== 2 || !focusFolderNext.current) return;
+    focusFolderNext.current = false;
+    const el = repoRef.current;
+    if (!el) return;
+    // Top of the form FIRST, then the caret without moving it again.
+    // focus() scrolls its target into view all by itself, which landed page 2
+    // already scrolled — Folder pinned to the top edge and Name cut off above
+    // it, so the page you had just been sent to appeared to start in the
+    // middle. preventScroll keeps the caret where the value most likely to be
+    // wrong is, while the page still reads from its own beginning.
+    const body = el.closest(".nf-body");
+    if (body) body.scrollTop = 0;
+    el.focus({ preventScroll: true });
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [page]);
+
+  const cancelDescribe = () => {
+    cancelPlanRun(planRun.current);
+    setDescribing(false);
+    setDescribeSlow(false);
+  };
+
+  /** Ask the server to read the sentence and fill the form in. */
+  /** Start an immediate create from a plan, or refuse and say why.
+   *
+   * Page 1's "Start session" is the "don't make me read the form" path, and it
+   * skips page 2 entirely — but it does NOT skip the one question that is not a
+   * validation: a folder that does not exist yet still has to be agreed to in
+   * as many words, because nothing else in this flow makes something that
+   * outlives the session. So the first press shows the question and stops, and
+   * the second press — with the tick on, and reusing the answer rather than
+   * paying for a second model turn — creates.
+   *
+   * The body comes from the ANSWER, not from the fields applyPlan has just
+   * written: those setStates are queued, so `inPlace` and friends still hold
+   * the previous opening's values at this point. applyPlan still runs, so that
+   * anything which stops the create leaves the user on a form that agrees with
+   * the sentence instead of an empty one. */
+  const startFromPlan = async (a: PlanAnswer) => {
+    // Not an error — the plan is good and the question is the point. The confirm
+    // row is already on screen (it derives from the folder applyPlan just
+    // wrote), so this only has to say which press comes next.
+    const ask = immediateStartBlockReason({
+      // `!== true`, the same direction applyPlan reads it: of the two ways to be
+      // wrong about a missing key, only one of them makes a directory nobody
+      // was shown.
+      folderExists: a.folder_exists === true,
+      folderLabel: a.folder_display || a.repo_path || "that folder",
+      confirmed: newFolderOk,
+    });
+    if (ask) {
+      setPlanError(ask);
+      return;
+    }
+    await postCreate(
+      buildBody({
+        title: a.title || "",
+        repoPath: a.repo_path || "",
+        prompt: a.prompt || "",
+        inPlace: planInPlace(a),
+        initRepo: !!a.init_repo,
+        // A plan never provisions — `provisioned` is not in the wire contract
+        // and the server never emits it — so an immediate start never does
+        // either, whatever the form happened to be holding.
+        provisioned: false,
+      })
+    );
+  };
+
+  const runDescribe = async (mode: "fill" | "start" = "fill") => {
+    // The in-flight guard comes FIRST, before describeBlockReason is consulted,
+    // because that one cannot carry it: it answers "" while a turn is in flight
+    // on purpose (the button is already saying "Reading…"). The button is
+    // disabled, but the box is readOnly rather than disabled — it keeps focus,
+    // so Enter goes on firing, and each press used to buy another
+    // POST /api/session-plan and another headless CLI turn. Claiming the slot
+    // for a sentence the check below then refuses costs nothing: nothing is in
+    // flight to invalidate, and the controller it makes never gets a request.
+    const started = startPlanRun(planRun.current, describing);
+    if (!started) return;
+    const { seq, ctl } = started;
+    const blocked = describeBlockReason({ text: describe, busy: describing });
+    if (blocked) {
+      // Said out loud rather than silently ignored: both the button and Enter
+      // come through here, and neither is disabled, so a refusal that showed
+      // nothing would read as a dead control.
+      setPlanError(blocked);
+      return;
+    }
+    setDescribing(true);
+    setDescribeSlow(false);
+    setPlanError("");
+    // Last run's note described last run's folder. Clearing it up front means
+    // the strip never shows a sentence about a form that is being replaced.
+    setPlanNote("");
+    const slow = window.setTimeout(() => {
+      if (planRun.current.seq === seq) setDescribeSlow(true);
+    }, DESCRIBE_SLOW_MS);
+    try {
+      const a = await api<PlanAnswer>("/api/session-plan", {
+        json: { text: describe.trim().slice(0, DESCRIBE_MAX_CHARS) },
+        signal: ctl.signal,
+      });
+      if (planRun.current.seq !== seq) return;
+      applyPlan(a);
+      setPlanNote(a.note || "");
+      // Kept so "Start session" can be pressed a second time — after ticking a
+      // new folder's confirm — without buying another CLI turn, and without the
+      // risk that the second turn answers with a DIFFERENT folder than the one
+      // just agreed to.
+      lastAnswer.current = { sentence: describe.trim(), answer: a };
+      if (mode === "start") {
+        // Straight to the create. Nothing below applies: there is no form to
+        // hold, no caret to move, and no page 2 to move it on.
+        setDescribing(false);
+        setDescribeSlow(false);
+        void startFromPlan(a);
+        return;
+      }
+      setPage(2);
+      // Create is held for a breath before the caret moves, not after: the
+      // answer arrives ~10-25s after the keystroke that asked for it, by which
+      // time the user's hand may be back on Enter for some other reason.
+      submitArmAt.current = Date.now() + SUBMIT_ARM_MS;
+      // The Folder field, not Create: it holds the value most likely to be
+      // wrong, it is what the note is about, and focusing it scrolls it into
+      // view — .nf-body is the scroll region and a filled-in form is taller than
+      // the empty one that asked for it, so the folder can easily be above the
+      // fold by now. Plain Enter there still submits (that field only swallows
+      // Enter for a NAME, and a plan's path is never one), so the two-Enter path
+      // survives with the caret on the thing you would be confirming.
+      // Deferred to an effect, because the Folder field is on page 2 and page 2
+      // has not rendered yet — repoRef.current is still null on this line.
+      focusFolderNext.current = true;
+    } catch (err) {
+      if (planRun.current.seq !== seq) return;
+      // Our own cancel, not a failure: cancelDescribe has already put the button
+      // back and there is nothing to report.
+      if ((err as Error)?.name === "AbortError") return;
+      // Inline, never a toast: toast is a 1.4s strip at the bottom of the screen
+      // that lands behind this modal, while this is a field-level failure in an
+      // open dialog — which is exactly what #new-error and MakePrDialog's .error
+      // line already are. The remedy never changes and is already on screen, so
+      // the sentence names it.
+      setPlanError(errMsg(err) + " — fill in the form below instead.");
+    } finally {
+      window.clearTimeout(slow);
+      // Guarded like every other landing: a later run owns the button now, and
+      // an overtaken run must not turn its spinner off.
+      if (planRun.current.seq === seq) {
+        setDescribing(false);
+        setDescribeSlow(false);
+        planRun.current.abort = null;
+      }
+    }
+  };
+
   /** The git nudge's action drives the real "Create a git repo in this folder"
    * checkbox instead of a flag of its own — two switches for one behaviour is
    * how a submitted form ends up disagreeing with what the user was shown. The
@@ -790,6 +1526,50 @@ export function NewSessionDialog() {
   // in-place checkbox greyed out by an invisible control is unfixable from the
   // dialog.
   const provisionOn = offerProvision && provision;
+  // Computed once for both readers: the aside inside the Git & workspace fold,
+  // and submit's refusal to post a create the server is certain to refuse.
+  const provisionBlocked = provisionBlockReason({
+    provision: provisionOn,
+    plainFolder,
+    initRepo,
+    folderPath,
+  });
+  // Why the selected "New worktree" will not survive the create, or "" when it
+  // will. Derived beside provisionBlocked because it is the same kind of fact
+  // about the same folder, and because the radio above it is now a positive
+  // claim that has to be honest.
+  const worktreeClamped = worktreeClampReason({
+    inPlace,
+    provisionOn,
+    plainFolder,
+    initRepo,
+  });
+  // Recomputed from the Folder field on every render rather than remembered, so
+  // there is no state to forget to clear: see newFolderGate for the six writers
+  // that would each have had to remember. Both readers come off the one value —
+  // the confirm row in the Describe strip, and submit's refusal.
+  const newFolderAsk = newFolderGate({
+    // planGatePath answers the "is it already there" half, so the gate itself
+    // only ever compares paths — one place for that question, so the confirm
+    // row and submit's refusal cannot come to different conclusions about it.
+    planPath: planGatePath(planFolder),
+    planDisplay: planFolder.display,
+    folderPath,
+  });
+  const newFolderBlocked = newFolderBlockReason({
+    gate: newFolderAsk,
+    confirmed: newFolderOk,
+  });
+  // The note is derived from the same fact as the gate above, and for the same
+  // reason: nothing cleared it when the Folder field moved off the plan's path,
+  // so a suggestion chip clicked after a `new:` plan left a muted line still
+  // saying "Using ~/code/invoice-parser — a new folder" over a form whose
+  // field, git nudge and Create had all moved on to somewhere else.
+  const planNoteShown = planNoteFor({
+    note: planNote,
+    planPath: planFolder.path,
+    folderPath,
+  });
   // Empty groups drop out, so a machine with no recent sessions shows "Nearby"
   // alone instead of two blank label columns.
   const suggestRows = SUGGEST_SOURCES.map((g) => ({
@@ -809,7 +1589,130 @@ export function NewSessionDialog() {
     setSearchOpen(false);
   };
 
+  /** Report a create that never happened. The line beside the Create button is
+   * the primary surface, but this card scrolls and its actions row is off the
+   * bottom of a small window (and a reopened dialog comes back scrolled to the
+   * top), so the same words also go to the toast — fixed to the viewport, and
+   * impossible to be scrolled away from. */
+  const failCreate = (msg: string) => {
+    setError(msg);
+    toast(msg, { duration: 9000 });
+  };
+
+  /** The create body for one session.
+   *
+   * The six fields a plan decides are PARAMETERS; everything else — agent,
+   * launch flags, account, model pin, workspace strategy — is read from the
+   * form, where it is either the user's own pick or the default loaded when the
+   * dialog opened, and where no plan ever writes. That split is what lets an
+   * immediate start build a body from an answer it has just received while the
+   * form still holds the previous opening's values. */
+  const buildBody = (p: {
+    title: string;
+    repoPath: string;
+    prompt: string;
+    inPlace: boolean;
+    initRepo: boolean;
+    provisioned: boolean;
+  }): Record<string, unknown> => {
+    const body: Record<string, unknown> = {
+      title: p.title.trim(),
+      program: program.trim(),
+      repo_path: p.repoPath.trim(),
+    };
+    const promptVal = p.prompt.trim();
+    if (promptVal) body.prompt = promptVal;
+    // Sent EXPLICITLY (even empty) so a toggled-off default is honored.
+    body.launch_args = tokenize(launchArgs);
+    // Absent = inherit the app-wide default account (same tri-state as
+    // launch_args), so only an explicit pick rides along.
+    if (profileId) body.profile_id = profileId;
+    if (profileId && profileModel.trim()) body.profile_model = profileModel.trim();
+    if (p.provisioned) {
+      body.provisioned = true;
+      body.workspace_strategy = strategy;
+      if (body.repo_path) body.init_repo = p.initRepo;
+    } else {
+      body.init_repo = p.initRepo;
+      body.in_place = p.inPlace;
+    }
+    return body;
+  };
+
+  /** POST the create, and own everything that follows it.
+   *
+   * BOTH ways of starting a session end here — the form's Create button on page
+   * 2, and page 1's "Start session", which never touches the form at all — so
+   * the optimistic close, the pending row, the alias fix and the failure reopen
+   * happen once and identically. It takes a finished body rather than reading
+   * state because that is the only way the second caller can work: applyPlan's
+   * setState calls have not been flushed when an immediate start needs the
+   * values, so it passes the answer's own fields and this function cannot tell
+   * the two apart. */
+  const postCreate = async (body: Record<string, unknown>) => {
+    setError("Creating…");
+    // Close NOW with an optimistic "provisioning" row — the POST can take
+    // seconds; on failure the dialog re-opens with fields and error intact.
+    const guess = addPendingSession((body.title as string) || "untitled");
+    closeDialog();
+    try {
+      const inst = await api<Instance>("/api/instances", { json: body });
+      // The create came back 200, so the plan's folder is on disk now — and the
+      // question about making it goes with it. A reopen deliberately KEEPS the
+      // plan (see planFolderReducer), so without this the next opening would
+      // offer to create a folder that is already there.
+      planFolderDo({ t: "created" });
+      // Same reason as the guess in addPendingSession: the server's real title
+      // must not arrive wearing a closed session's rename.
+      clearStaleAlias(inst.title);
+      await refreshInstances();
+      selectSession(inst.title);
+    } catch (err) {
+      failPendingSession(guess);
+      failCreate((err as Error).message);
+      const ui = useUi.getState();
+      // Armed only when there is a reopen to arm it for. Someone who reopened
+      // the dialog by hand while the POST was in flight is already looking at
+      // it, and a flag left set here would go on to suppress the reset of an
+      // open that had nothing to do with this failure.
+      if (ui.openDialog !== "new-session") {
+        failedReopen.current = true;
+        // The FORM, not the sentence — including for a create fired from page
+        // 1, which is the case that needs it most: a refused create is a thing
+        // to fix, every field to fix it with is here, and applyPlan has already
+        // put the plan's values in them. Set before the reopen, because the
+        // reset effect early-returns on failedReopen and will not touch it.
+        setPage(2);
+        ui.openDialogFor("new-session");
+      }
+    }
+  };
+
   const submit = async () => {
+    const held = submitHoldReason(submitArmAt.current, Date.now());
+    if (held) {
+      // First, and — like the guards below — before the optimistic close:
+      // once the dialog has shut there is nothing on screen to correct. setError
+      // rather than failCreate because a half-second hold is not a create
+      // failure and does not deserve a nine-second toast for it.
+      setError(held);
+      return;
+    }
+    if (newFolderBlocked) {
+      // failCreate, not setError, for the reason its two siblings below give:
+      // this card scrolls, its actions row is off the bottom of a small window,
+      // and the refusal has to reach somebody whose confirm row is three screens
+      // up. And before the optimistic close, like every guard here — once the
+      // dialog has shut the directory is made and there is nothing to correct.
+      failCreate(newFolderBlocked);
+      return;
+    }
+    if (provisionBlocked) {
+      // Before the optimistic close below, for the same reason the name guard
+      // is: once the dialog has shut there is nothing on screen to correct.
+      failCreate(provisionBlocked);
+      return;
+    }
     if (isNameQuery(repoPath)) {
       // Every way of reaching Create lands here — the button, Ctrl/Cmd+Enter,
       // and Enter in any other field — so this is the one place that can stop a
@@ -818,49 +1721,21 @@ export function NewSessionDialog() {
       // same breath, so by the time the server has made its stray directory
       // there is nothing left on screen to cancel. See isNameQuery for what the
       // server does with a name.
-      setError(
+      failCreate(
         `“${repoPath.trim()}” is a name to look up, not a folder — pick one of the matches, or type a full path starting with / or ~ (Browse… fills one in).`
       );
       return;
     }
-    setError("Creating…");
-    const body: Record<string, unknown> = {
-      title: title.trim(),
-      program: program.trim(),
-      repo_path: repoPath.trim(),
-    };
-    const promptVal = prompt.trim();
-    if (promptVal) body.prompt = promptVal;
-    // Sent EXPLICITLY (even empty) so a toggled-off default is honored.
-    body.launch_args = tokenize(launchArgs);
-    // Absent = inherit the app-wide default account (same tri-state as
-    // launch_args), so only an explicit pick rides along.
-    if (profileId) body.profile_id = profileId;
-    if (profileId && profileModel.trim()) body.profile_model = profileModel.trim();
-    if (provision) {
-      body.provisioned = true;
-      body.workspace_strategy = strategy;
-      if (body.repo_path) body.init_repo = initRepo;
-    } else {
-      body.init_repo = initRepo;
-      body.in_place = inPlace;
-    }
-    // Close NOW with an optimistic "provisioning" row — the POST can take
-    // seconds; on failure the dialog re-opens with fields intact.
-    const guess = addPendingSession((body.title as string) || "untitled");
-    closeDialog();
-    try {
-      const inst = await api<Instance>("/api/instances", { json: body });
-      // Same reason as the guess in addPendingSession: the server's real title
-      // must not arrive wearing a closed session's rename.
-      clearStaleAlias(inst.title);
-      await refreshInstances();
-      selectSession(inst.title);
-    } catch (err) {
-      failPendingSession(guess);
-      setError((err as Error).message);
-      useUi.getState().openDialogFor("new-session");
-    }
+    await postCreate(
+      buildBody({
+        title,
+        repoPath,
+        prompt,
+        inPlace,
+        initRepo,
+        provisioned: provision,
+      })
+    );
   };
 
   const savePreset = () => {
@@ -903,6 +1778,12 @@ export function NewSessionDialog() {
     >
       <form
         id="new-form"
+        // Page 1 is one question and three buttons. The fixed height below
+        // exists so that opening a fold on page 2 scrolls inside .nf-body
+        // instead of growing the card and re-centering it under the pointer —
+        // there are no folds here, and holding 620px up over a single input
+        // left most of the card empty.
+        className={page === 1 ? "nf-ask" : undefined}
         onSubmit={(e) => {
           e.preventDefault();
           submit();
@@ -916,685 +1797,988 @@ export function NewSessionDialog() {
         </div>
 
         <div className="nf-body">
-          {templates.length > 0 && (
-            <div id="new-templates" className="new-templates">
+          {page === 1 ? (
+            <>
+          {/* The one-sentence door, first in the body and above Templates
+                because it is the widest of the three ways to fill this form in
+                (a sentence, a template chip, or by hand) and reads top-down as
+                the least specific first. It wears .new-templates so it is the
+                same card as the Templates and folder-suggestion strips rather
+                than a second form stacked on the first — nothing here is
+                submitted, and looking like a form would say otherwise. */}
+            <div id="new-describe" className="new-templates nf-describe">
               <div className="nt-head">
-                <span>Templates</span>
-                <button
-                  type="button"
-                  id="new-templates-manage"
-                  className="linklike"
-                  onClick={() => {
-                    const w = window as unknown as {
-                      mindflockAddons?: { templates?: { open?: () => void } };
-                    };
-                    const t = w.mindflockAddons?.templates;
-                    if (t && typeof t.open === "function") {
-                      closeDialog();
-                      t.open();
-                    } else toast("Templates manager isn't loaded");
-                  }}
-                >
-                  Manage…
-                </button>
+                <span>What do you want to work on?</span>
               </div>
-              <div id="new-templates-list" className="nt-list">
-                {templates.map((t) => (
-                  <button
-                    key={t.name}
-                    type="button"
-                    className={"nt-chip" + (activeTemplate === t.name ? " active" : "")}
-                    data-name={t.name}
-                    title={(t.program ? "[" + t.program + "] " : "") + (t.prompt || "launch this recipe")}
-                    onClick={() => fillFromTemplate(t)}
-                  >
-                    {t.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <label>
-            <span>
-              Name <span className="muted">— optional; empty starts an untitled session</span>
-            </span>
-            <input
-              id="new-title"
-              ref={titleRef}
-              autoComplete="off"
-              placeholder="untitled"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-            />
-          </label>
-
-          <div className="nf-quick">
-            <label
-              className="nf-folder"
-              title="Any folder works — git features (diff / commit / PR) turn on automatically when it's a git repo."
-            >
-              Folder
-              <span className="repo-path-row">
+              <div className="nf-describe-row">
                 <input
-                  id="new-repo-path"
+                  id="new-describe-text"
+                  ref={describeRef}
+                  type="text"
+                  value={describe}
+                  maxLength={DESCRIBE_MAX_CHARS}
                   autoComplete="off"
-                  placeholder="/home/me/projects/foo — or a folder name to look up"
-                  value={repoPath}
-                  // Announced as a combobox because it is one now: without these
-                  // a screen reader hears an ordinary text box, the arrow keys
-                  // move a highlight nothing reports, and Enter fills the field
-                  // from a list that was never mentioned.
-                  role="combobox"
-                  aria-expanded={!!searchHits}
-                  aria-controls="new-search-list"
-                  aria-autocomplete="list"
-                  aria-activedescendant={selIndex >= 0 ? "new-search-hit-" + selIndex : undefined}
+                  spellCheck={false}
+                  // readOnly rather than disabled: a disabled input loses focus to
+                  // the body, so the caret would jump out of the box the moment
+                  // Enter was pressed and the sentence would stop being
+                  // selectable while the user waits to see what it produced.
+                  readOnly={describing}
+                  placeholder="e.g. fix the login bug in acme-api"
                   onChange={(e) => {
-                    folderDo({ t: "user-set", path: e.target.value });
-                    // Typing is what brings a dismissed list back: the query has
-                    // changed, so the reason it was dismissed went with it.
-                    setSearchOpen(true);
+                    setDescribe(e.target.value);
+                    // Typing is what clears the refusal: whatever it objected to
+                    // has just changed, and a stale red line under a box the user
+                    // is actively fixing is noise.
+                    setPlanError("");
                   }}
                   onKeyDown={(e) => {
-                    const hits = searchHits?.matches || [];
-                    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-                      if (!searchHits && search && search.asked === folderPath && !browserOpen) {
-                        // Matches exist for exactly this text and were merely
-                        // dismissed: the first arrow brings them back, rather
-                        // than making the user type a character and delete it
-                        // again to see the list they just closed.
-                        e.preventDefault();
-                        setSearchOpen(true);
-                        return;
-                      }
-                      if (!hits.length) return;
-                      // Otherwise the arrows would take the caret to the ends of
-                      // the path instead of moving the highlight.
-                      e.preventDefault();
-                      const step = e.key === "ArrowDown" ? 1 : -1;
-                      const at = Math.min(searchSel, hits.length - 1) + step;
-                      setSearchSel(Math.max(0, Math.min(hits.length - 1, at)));
-                    } else if (
-                      e.key === "Enter" &&
-                      !e.ctrlKey &&
-                      !e.metaKey &&
-                      isNameQuery(folderPath)
-                    ) {
-                      // This input sits inside the form whose submit CREATES the
-                      // session, so a plain Enter must not leak out of a field
-                      // that is holding a NAME — with or without matches under
-                      // it. With a highlight it takes the highlighted folder;
-                      // preventDefault then stops the session being created in a
-                      // folder the user had only just chosen, before they had
-                      // seen the choice land. Without one — the search found
-                      // nothing, or has not answered yet, or the list was
-                      // dismissed with Escape — it does nothing, which is the
-                      // whole point: gating this branch on the matches meant
-                      // Enter on "notathing" submitted the SEARCH TERM as
-                      // repo_path, and the server resolves a bare name against
-                      // its own working directory and creates it. A search that
-                      // came up empty must not be one keystroke from a session in
-                      // a stray folder next to the server.
-                      //
-                      // Ctrl/Cmd+Enter is excluded on purpose: that chord means
-                      // "create now" everywhere else in the dialog, the modal's
-                      // own handler owns it, and submit() refuses a name there.
-                      // A field holding a real path keeps plain Enter as submit,
-                      // exactly as it behaved before this field could search.
-                      e.preventDefault();
-                      if (hits.length) pickMatch(hits[Math.min(searchSel, hits.length - 1)].path);
-                      else if (search && search.asked === folderPath && !browserOpen)
-                        // Matches exist and were merely dismissed: Enter brings
-                        // them back rather than swallowing the keystroke, the
-                        // same courtesy the arrows do above.
-                        setSearchOpen(true);
-                    } else if (e.key === "Escape" && searchHits) {
-                      // Escape dismisses the list and nothing else: not the typed
-                      // text, which is the query and the one thing the user would
-                      // resent retyping, and not the dialog — so it must not
-                      // reach the modal's Escape handler above.
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setSearchOpen(false);
-                    }
+                    if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
+                    // Enter here means "read this", never "create a session". This
+                    // input sits inside <form id="new-form" onSubmit={submit}>, so
+                    // without the preventDefault a sentence nobody has resolved
+                    // yet becomes a create in whatever folder the suggestion
+                    // pre-fill happened to leave behind. stopPropagation keeps the
+                    // modal root's Ctrl+Enter handler out of it.
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void runDescribe("fill");
                   }}
                 />
-                <button
-                  type="button"
-                  id="repo-browse-btn"
-                  title={
-                    browserOpen
-                      ? "Close the browser and keep this folder (Esc puts the old one back)"
-                      : "Browse local folders"
-                  }
-                  onClick={() =>
-                    // Toggling the panel shut keeps whatever the field now holds:
-                    // it is on screen, the user has been looking at it, and only
-                    // Escape claims to undo anything.
-                    folderDo(
-                      browserOpen ? { t: "browse-commit", path: repoPath } : { t: "browse-open" }
-                    )
-                  }
-                >
-                  Browse…
-                </button>
-              </span>
-            </label>
-            <label className="nf-agent">
-              <span className="nf-agent-head">
-                Agent
-                <button
-                  type="button"
-                  id="new-agent-manage"
-                  className="linklike"
-                  title="Manage coding CLIs in Settings"
-                  onClick={() => {
-                    closeDialog();
-                    useUi.getState().openDialogFor("settings", "coding");
-                  }}
-                >
-                  Manage
-                </button>
-              </span>
-              <select
-                id="new-program"
-                title="The coding CLI this session runs"
-                value={program}
-                onChange={(e) => setAgent(e.target.value)}
-              >
-                {!providers.some((p) => p.name === program) && program && (
-                  <option value={program}>{program}</option>
-                )}
-                {providers.map((p) => (
-                  <option key={p.name} value={p.name}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {(authProfiles?.profiles || []).length > 0 && (
-              <label className="nf-agent">
-                <span className="nf-agent-head">
-                  Account
+                {describing && (
                   <button
                     type="button"
-                    id="new-account-manage"
+                    id="new-describe-cancel"
                     className="linklike"
-                    title="Manage accounts in Settings"
+                    onClick={cancelDescribe}
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+              {/* Written for somebody who has never opened this dialog. The
+                  line this replaced — "Enter fills in the form — or start the
+                  session straight away" — named two things a first-time user
+                  has no way to know: WHICH form, and what starting it straight
+                  away skips. This says what the sentence is for, and that
+                  reading it costs nothing, which is the fact that makes the
+                  button row below safe to experiment with. */}
+              <p className="nf-describe-help">
+                Your coding CLI reads this and works out which folder to use, what
+                to call the session, and what to tell the agent first.{" "}
+                <b>Nothing is created until you pick one of the buttons below.</b>
+              </p>
+              {/* Two examples rather than none: the placeholder can only show
+                  one shape and the box accepts three — an existing project, a
+                  brand-new one, and a request for somewhere separate to work. A
+                  user who cannot tell which of those is allowed types the safest
+                  thing they can think of and never finds the other two. */}
+              <p className="nf-describe-eg">
+                Also understood:{" "}
+                <code>start a new project called invoice-parser</code>
+                {" · "}
+                <code>add metrics to billing, in a worktree</code>
+              </p>
+              {planNoteShown && (
+                <p className="nf-describe-note" aria-live="polite">
+                  {planNoteShown}
+                </p>
+              )}
+              {planError && (
+                <p id="new-describe-error" className="error" aria-live="polite">
+                  {planError}
+                </p>
+              )}
+              {newFolderAsk && (
+                /* The one control in this dialog whose "no" is the safe answer, so
+                   it is drawn as a question and not as a fourth checkbox: a folder
+                   is the only thing a plan proposes that survives the session, and
+                   an option row reads as something you may skim past. It sits at
+                   the FOOT of the strip — below the note that explains the folder
+                   and below the error, which is about the sentence rather than
+                   about this — so the eye meets it on its way down to the form it
+                   is holding up.
+  
+                   It is announced as well as the note above it. Two polite regions
+                   firing together is a little chatty; a gate a screen reader never
+                   mentioned, on a form whose Create then refuses, is worse. */
+                <div
+                  className="nf-newfolder"
+                  role="group"
+                  aria-labelledby="new-describe-newfolder-q"
+                >
+                  <p id="new-describe-newfolder-q" className="nf-newfolder-q" aria-live="polite">
+                    There is no folder at <b>{newFolderAsk}</b> yet. Make it?
+                  </p>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      id="new-describe-newfolder"
+                      checked={newFolderOk}
+                      onChange={(e) => setNewFolderOk(e.target.checked)}
+                    />
+                    {/* Word for word what newFolderBlockReason quotes, because the
+                        refusal is read several screens below this row and has to
+                        name a control the user can go and find. */}
+                    Yes, create {newFolderAsk}{" "}
+                    <span className="muted">
+                      — a new directory, made when you press Create. Not the same as “Create a git
+                      repo in this folder” under Git &amp; workspace, which runs git init inside it;
+                      a new project usually wants both.
+                    </span>
+                  </label>
+                </div>
+              )}
+            </div>
+            </>
+          ) : (
+            <>
+          {templates.length > 0 && (
+              <div id="new-templates" className="new-templates">
+                <div className="nt-head">
+                  <span>Templates</span>
+                  <button
+                    type="button"
+                    id="new-templates-manage"
+                    className="linklike"
+                    onClick={() => {
+                      const w = window as unknown as {
+                        mindflockAddons?: { templates?: { open?: () => void } };
+                      };
+                      const t = w.mindflockAddons?.templates;
+                      if (t && typeof t.open === "function") {
+                        closeDialog();
+                        t.open();
+                      } else toast("Templates manager isn't loaded");
+                    }}
+                  >
+                    Manage…
+                  </button>
+                </div>
+                <div id="new-templates-list" className="nt-list">
+                  {templates.map((t) => (
+                    <button
+                      key={t.name}
+                      type="button"
+                      className={"nt-chip" + (activeTemplate === t.name ? " active" : "")}
+                      data-name={t.name}
+                      title={(t.program ? "[" + t.program + "] " : "") + (t.prompt || "launch this recipe")}
+                      onClick={() => fillFromTemplate(t)}
+                    >
+                      {t.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+  
+            <label>
+              <span>
+                Name <span className="muted">— optional; empty starts an untitled session</span>
+              </span>
+              <input
+                id="new-title"
+                ref={titleRef}
+                autoComplete="off"
+                placeholder="untitled"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+            </label>
+  
+            <div className="nf-quick">
+              <label
+                className="nf-folder"
+                title="Any folder works — git features (diff / commit / PR) turn on automatically when it's a git repo."
+              >
+                Folder
+                <span className="repo-path-row">
+                  <input
+                    id="new-repo-path"
+                    ref={repoRef}
+                    autoComplete="off"
+                    placeholder="/home/me/projects/foo — or a folder name to look up"
+                    value={repoPath}
+                    // Announced as a combobox because it is one now: without these
+                    // a screen reader hears an ordinary text box, the arrow keys
+                    // move a highlight nothing reports, and Enter fills the field
+                    // from a list that was never mentioned.
+                    role="combobox"
+                    aria-expanded={!!searchHits}
+                    aria-controls="new-search-list"
+                    aria-autocomplete="list"
+                    aria-activedescendant={selIndex >= 0 ? "new-search-hit-" + selIndex : undefined}
+                    onChange={(e) => {
+                      folderDo({ t: "user-set", path: e.target.value });
+                      // Typing is what brings a dismissed list back: the query has
+                      // changed, so the reason it was dismissed went with it.
+                      setSearchOpen(true);
+                    }}
+                    onKeyDown={(e) => {
+                      const hits = searchHits?.matches || [];
+                      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                        if (!searchHits && search && search.asked === folderPath && !browserOpen) {
+                          // Matches exist for exactly this text and were merely
+                          // dismissed: the first arrow brings them back, rather
+                          // than making the user type a character and delete it
+                          // again to see the list they just closed.
+                          e.preventDefault();
+                          setSearchOpen(true);
+                          return;
+                        }
+                        if (!hits.length) return;
+                        // Otherwise the arrows would take the caret to the ends of
+                        // the path instead of moving the highlight.
+                        e.preventDefault();
+                        const step = e.key === "ArrowDown" ? 1 : -1;
+                        const at = Math.min(searchSel, hits.length - 1) + step;
+                        setSearchSel(Math.max(0, Math.min(hits.length - 1, at)));
+                      } else if (
+                        e.key === "Enter" &&
+                        !e.ctrlKey &&
+                        !e.metaKey &&
+                        isNameQuery(folderPath)
+                      ) {
+                        // This input sits inside the form whose submit CREATES the
+                        // session, so a plain Enter must not leak out of a field
+                        // that is holding a NAME — with or without matches under
+                        // it. With a highlight it takes the highlighted folder;
+                        // preventDefault then stops the session being created in a
+                        // folder the user had only just chosen, before they had
+                        // seen the choice land. Without one — the search found
+                        // nothing, or has not answered yet, or the list was
+                        // dismissed with Escape — it does nothing, which is the
+                        // whole point: gating this branch on the matches meant
+                        // Enter on "notathing" submitted the SEARCH TERM as
+                        // repo_path, and the server resolves a bare name against
+                        // its own working directory and creates it. A search that
+                        // came up empty must not be one keystroke from a session in
+                        // a stray folder next to the server.
+                        //
+                        // Ctrl/Cmd+Enter is excluded on purpose: that chord means
+                        // "create now" everywhere else in the dialog, the modal's
+                        // own handler owns it, and submit() refuses a name there.
+                        // A field holding a real path keeps plain Enter as submit,
+                        // exactly as it behaved before this field could search.
+                        e.preventDefault();
+                        if (hits.length) pickMatch(hits[Math.min(searchSel, hits.length - 1)].path);
+                        else if (search && search.asked === folderPath && !browserOpen)
+                          // Matches exist and were merely dismissed: Enter brings
+                          // them back rather than swallowing the keystroke, the
+                          // same courtesy the arrows do above.
+                          setSearchOpen(true);
+                      } else if (e.key === "Escape" && searchHits) {
+                        // Escape dismisses the list and nothing else: not the typed
+                        // text, which is the query and the one thing the user would
+                        // resent retyping, and not the dialog — so it must not
+                        // reach the modal's Escape handler above.
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setSearchOpen(false);
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    id="repo-browse-btn"
+                    title={
+                      browserOpen
+                        ? "Close the browser and keep this folder (Esc puts the old one back)"
+                        : "Browse local folders"
+                    }
+                    onClick={() =>
+                      // Toggling the panel shut keeps whatever the field now holds:
+                      // it is on screen, the user has been looking at it, and only
+                      // Escape claims to undo anything.
+                      folderDo(
+                        browserOpen ? { t: "browse-commit", path: repoPath } : { t: "browse-open" }
+                      )
+                    }
+                  >
+                    Browse…
+                  </button>
+                </span>
+              </label>
+              <label className="nf-agent">
+                <span className="nf-agent-head">
+                  Agent
+                  <button
+                    type="button"
+                    id="new-agent-manage"
+                    className="linklike"
+                    title="Manage coding CLIs in Settings"
                     onClick={() => {
                       closeDialog();
-                      useUi.getState().openDialogFor("settings", "accounts");
+                      useUi.getState().openDialogFor("settings", "coding");
                     }}
                   >
                     Manage
                   </button>
                 </span>
                 <select
-                  id="new-account"
-                  title="Which identity this session's CLI runs as"
-                  value={profileId}
-                  onChange={(e) => setAccount(e.target.value)}
+                  id="new-program"
+                  title="The coding CLI this session runs"
+                  value={program}
+                  onChange={(e) => setAgent(e.target.value)}
                 >
-                  <option value="">
-                    {authProfiles?.default_profile
-                      ? `App default (${authProfiles.default_profile})`
-                      : "App default (CLI's own login)"}
-                  </option>
-                  <option value="default">CLI's own login</option>
-                  {(authProfiles?.profiles || []).map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.label || p.id}
+                  {!providers.some((p) => p.name === program) && program && (
+                    <option value={program}>{program}</option>
+                  )}
+                  {providers.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name}
                     </option>
                   ))}
                 </select>
               </label>
-            )}
-          </div>
-
-          {selectedProfile && selectedProfile.kind !== "account" && (
-            <div className="nf-quick">
-              <label className="nf-agent" style={{ flex: 1 }}>
-                <span className="nf-agent-head">Model</span>
-                {(profileModels[profileId] || []).length ? (
+              {(authProfiles?.profiles || []).length > 0 && (
+                <label className="nf-agent">
+                  <span className="nf-agent-head">
+                    Account
+                    <button
+                      type="button"
+                      id="new-account-manage"
+                      className="linklike"
+                      title="Manage accounts in Settings"
+                      onClick={() => {
+                        closeDialog();
+                        useUi.getState().openDialogFor("settings", "accounts");
+                      }}
+                    >
+                      Manage
+                    </button>
+                  </span>
                   <select
-                    id="new-account-model"
-                    title="Model this session runs on (through the selected account)"
-                    value={profileModel}
-                    onChange={(e) => setProfileModel(e.target.value)}
+                    id="new-account"
+                    title="Which identity this session's CLI runs as"
+                    value={profileId}
+                    onChange={(e) => setAccount(e.target.value)}
                   >
                     <option value="">
-                      {selectedProfile.model
-                        ? `Account default (${selectedProfile.model})`
-                        : "Account default"}
+                      {authProfiles?.default_profile
+                        ? `App default (${authProfiles.default_profile})`
+                        : "App default (CLI's own login)"}
                     </option>
-                    {/* A value typed before the catalog landed (or absent from
-                        it) stays VISIBLE and selected — coercing the display
-                        to "Account default" while still submitting it would
-                        launch a model the form no longer shows. */}
-                    {profileModel &&
-                      !(profileModels[profileId] || []).includes(profileModel) && (
-                        <option value={profileModel}>{profileModel} (custom)</option>
-                      )}
-                    {(profileModels[profileId] || []).map((m) => (
-                      <option key={m} value={m}>
-                        {m}
+                    <option value="default">CLI's own login</option>
+                    {(authProfiles?.profiles || []).map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label || p.id}
                       </option>
                     ))}
                   </select>
-                ) : (
-                  <input
-                    id="new-account-model"
-                    type="text"
-                    autoComplete="off"
-                    placeholder={
-                      selectedProfile.model
-                        ? `Account default (${selectedProfile.model})`
-                        : "anthropic/claude-sonnet-4.5"
-                    }
-                    value={profileModel}
-                    onChange={(e) => setProfileModel(e.target.value)}
-                  />
-                )}
-              </label>
-            </div>
-          )}
-
-          {routeWarning && <p className="nf-git-nudge">{routeWarning}</p>}
-          {/* The datalist mount slots.js populates from /api/providers. */}
-          <datalist id="provider-list"></datalist>
-
-          {searchHits && (
-            /* The name-search results. Wears .new-templates and .nf-suggest for
-               the same reason the suggestion strip below does — same card, same
-               head, same pills, a different source — and adds only what a search
-               hit needs that a suggestion chip doesn't: its path. Two folders
-               called `api` are told apart by where they live, and telling them
-               apart is the entire point of having searched. */
-            <div id="new-search" className="new-templates nf-suggest nf-search">
-              <div className="nt-head">
-                <span>Matches for “{searchHits.asked}”</span>
-                <span className="nf-suggest-legend">↑↓ choose · Enter fills · Esc closes</span>
-              </div>
-              {searchHits.matches.length > 0 && (
-                <div
-                  id="new-search-list"
-                  className="nf-search-list"
-                  ref={searchListRef}
-                  role="listbox"
-                  aria-label="Folder matches"
-                >
-                  {searchHits.matches.map((m, i) => (
-                    <button
-                      key={m.path}
-                      id={"new-search-hit-" + i}
-                      type="button"
-                      role="option"
-                      aria-selected={i === selIndex}
-                      /* .active is the suggestion strip's "this is the folder
-                         you get" treatment — accent border and tint, light
-                         theme included — and that is precisely what the
-                         highlight means here, so it reuses it rather than
-                         inventing a second way to say the same thing. */
-                      className={
-                        "nt-chip" + (m.is_git ? " is-git" : "") + (i === selIndex ? " active" : "")
-                      }
-                      data-path={m.path}
-                      title={m.path + (m.is_git ? "" : "\nno git repo here yet")}
-                      // Hovering moves the highlight so the mouse and the
-                      // keyboard never disagree about which row Enter takes.
-                      onMouseMove={() => setSearchSel(i)}
-                      onClick={() => pickMatch(m.path)}
-                    >
-                      <span className="nf-search-name">{(m.is_git ? "📦 " : "📁 ") + m.name}</span>
-                      <span className="nf-search-path">
-                        {homeRelative(m.path, searchHits.home || homePath)}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-              {searchHits.matches.length === 0 && (
-                /* An empty result has to name the ways out, because the field
-                   looks identical whether the search found nothing or was never
-                   a search at all. Both sentences are written to claim only what
-                   the walk can actually support. A budget that tripped before
-                   finding anything did not look everywhere, so "not here" would
-                   be a claim it never got far enough to make — and it does not
-                   ask the user to type more of the name, because the walk is
-                   query-independent (the needle only RANKS what was already
-                   reached) and a longer query re-walks the same directories for
-                   the same budget. Nor does the complete-walk sentence say
-                   "nothing under your home directory is called X": the search
-                   stops at three levels, never enters a git repo and skips
-                   hidden and node_modules-shaped folders, so a `widget` inside
-                   the monorepo the user lives in is plainly under home and
-                   plainly not something this walk can see. */
-                <p className="nf-search-empty muted">
-                  {searchHits.truncated ? (
-                    <>
-                      The search stopped at its time and size limit before it found “
-                      {searchHits.asked}” — Browse… walks straight to it, and a path starting with /
-                      or ~ is used exactly as typed.
-                    </>
-                  ) : (
-                    <>
-                      No folder called “{searchHits.asked}” in the first three levels under your
-                      home directory — the search doesn’t look inside git repos or hidden folders.
-                      Browse… reaches those and the rest of the disk, and a path starting with / or
-                      ~ is used exactly as typed.
-                    </>
-                  )}
-                </p>
-              )}
-              {searchHits.matches.length > 0 && searchHits.truncated && (
-                /* Deliberately does NOT say "more folders matched": truncation
-                   is one flag over three causes (the scan cap, the 1.5s deadline
-                   and the row limit), and under either of the first two no extra
-                   match is known to exist — the walk simply stopped. "May not be
-                   everything" is true of all three. */
-                <p className="nf-search-note muted">
-                  The search stopped early, so this list may not be everything — Browse… if the
-                  folder you want isn’t here.
-                </p>
-              )}
-            </div>
-          )}
-
-          {plainFolder && (
-            <p className="nf-git-nudge">
-              {initRepo ? (
-                <>A git repo will be created here — diff, commit and PR will work.</>
-              ) : (
-                <>
-                  No git repo in this folder, so diff, commit and PR stay off.{" "}
-                  <button
-                    type="button"
-                    className="linklike"
-                    title="Ticks “Create a git repo in this folder” under Git & workspace"
-                    onClick={armInitRepo}
-                  >
-                    Create one
-                  </button>
-                </>
-              )}
-            </p>
-          )}
-
-          {suggestRows.length > 0 && (
-            /* Wears .new-templates as well as its own class on purpose: this is
-               the same chip strip as Templates, filled from a different source,
-               and sharing the class is what stops the two from drifting apart. */
-            <div id="new-suggest" className="new-templates nf-suggest">
-              <div className="nt-head">
-                <span>Folders</span>
-                <span className="nf-suggest-legend">📦 git repo · 📁 plain folder</span>
-              </div>
-              {suggestRows.map((g) => (
-                <div key={g.key} className="nf-suggest-row">
-                  <span className="nf-suggest-label" title={g.hint}>
-                    {g.label}
-                  </span>
-                  <FitRow>
-                    {g.items.map((s) => {
-                      const active = folderPath === s.path;
-                      return (
-                        <button
-                          key={s.path}
-                          type="button"
-                          className={
-                            "nt-chip" + (s.is_git ? " is-git" : "") + (active ? " active" : "")
-                          }
-                          data-path={s.path}
-                          aria-pressed={active}
-                          title={s.path + (s.is_git ? "" : "\nno git repo here yet")}
-                          onClick={() => folderDo({ t: "user-set", path: s.path })}
-                        >
-                          {(s.is_git ? "📦 " : "📁 ") + s.name}
-                        </button>
-                      );
-                    })}
-                  </FitRow>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {browserOpen && (
-            <FolderBrowser
-              initialPath={folderPath || homePath || ""}
-              selected={folderPath}
-              onSelect={(p) => folderDo({ t: "browse-select", path: p })}
-              onPick={(p) => folderDo({ t: "browse-commit", path: p })}
-            />
-          )}
-
-          <details
-            id="new-advanced"
-            className="nf-advanced"
-            data-caps="git"
-            open={advancedOpen}
-            onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
-          >
-            <summary>
-              Git &amp; workspace
-            </summary>
-            <div className="nf-advanced-body">
-              <label className="check">
-                <input
-                  type="checkbox"
-                  id="new-in-place"
-                  checked={inPlace}
-                  disabled={provisionOn}
-                  onChange={(e) => {
-                    setInPlace(e.target.checked);
-                    // The other half of the exclusion. Unreachable while the
-                    // provision row is on screen (this box is disabled then),
-                    // but not dead: when offerProvision hides that row, a
-                    // provision flag left over from a template would otherwise
-                    // survive invisibly and be submitted.
-                    if (e.target.checked) setProvision(false);
-                  }}
-                />
-                Work directly in this folder{" "}
-                <span className="muted">
-                  {provisionOn
-                    ? "(off while provisioning: that builds a separate worktree or clone, so there is no “this folder” left to work in)"
-                    : "(no worktree — edits the original; multiple sessions can share it)"}
-                </span>
-              </label>
-              {/* No longer exclusive with "work directly in this folder", and
-                  the pairing was always backwards: git-initialising a folder and
-                  then working in that same folder is the ordinary thing to want
-                  — arguably the most natural mode for a folder you just made,
-                  since a worktree cut from a brand-new repo is the awkward case.
-                  The server does exactly that combination: _prepare_plain_repo
-                  git-inits and makes the first commit, and the session comes up
-                  in place with diff/commit/PR on. */}
-              <label className="check">
-                <input
-                  type="checkbox"
-                  id="new-init-repo"
-                  checked={initRepo}
-                  onChange={(e) => setInitRepo(e.target.checked)}
-                />
-                Create a git repo in this folder{" "}
-                <span className="muted">(git init + initial commit — enables diff/commit/PR)</span>
-              </label>
-
-              {offerProvision && (
-                <label id="new-provision-row" className="check">
-                  <input
-                    type="checkbox"
-                    id="new-provision"
-                    checked={provision}
-                    onChange={(e) => {
-                      setProvision(e.target.checked);
-                      // Turning provisioning on turns working-in-place off,
-                      // rather than being disabled by it: in-place ships ticked,
-                      // so a symmetric disable would leave this box permanently
-                      // greyed out and provisioning undiscoverable — which is
-                      // exactly how the old init-repo pairing went wrong. The
-                      // explicit choice wins over the default one.
-                      if (e.target.checked) setInPlace(false);
-                    }}
-                  />
-                  Provision workspace{" "}
-                  <span className="muted">
-                    — run repo setup &amp; warm test caches, in a separate worktree or clone
-                  </span>
                 </label>
               )}
-              {offerProvision && provision && (
-                <div id="provision-opts">
-                  <label>
-                    Workspace strategy
-                    <select
-                      id="new-workspace-strategy"
-                      value={strategy}
-                      onChange={(e) => setStrategy(e.target.value)}
-                    >
-                      <option value="worktree">shared base clone (worktree) — fast, default</option>
-                      <option value="clone">full clone — standalone</option>
-                    </select>
-                  </label>
-                  <p className="muted provision-hint">
-                    Tip: paste a full branch in <b>Name</b> (e.g.{" "}
-                    <code>feature/sc-17436/grafana-dashboard-…</code>) to use it as the branch
-                    verbatim — the session name becomes its last segment.
-                  </p>
-                </div>
-              )}
             </div>
-          </details>
-
-          <details
-            id="new-prompt-fold"
-            className="nf-advanced"
-            ref={promptRef}
-            open={promptOpen}
-            onToggle={(e) => {
-              const open = (e.target as HTMLDetailsElement).open;
-              setPromptOpen(open);
-              if (open)
-                promptRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-            }}
-          >
-            <summary>
-              Prompt <span className="muted">— sent to the agent at launch</span>
-            </summary>
-            <div className="nf-advanced-body">
-              <label>
-                <span className="preset-row">
-                  <select
-                    id="new-preset"
-                    title="Prompt presets — pick one to fill the prompt below (editable after)"
-                    value={presetValue}
-                    onChange={(e) => {
-                      setPresetValue(e.target.value);
-                      const p = findPreset(e.target.value);
-                      if (p) setPrompt(p.prompt);
-                    }}
+  
+            {selectedProfile && selectedProfile.kind !== "account" && (
+              <div className="nf-quick">
+                <label className="nf-agent" style={{ flex: 1 }}>
+                  <span className="nf-agent-head">Model</span>
+                  {(profileModels[profileId] || []).length ? (
+                    <select
+                      id="new-account-model"
+                      title="Model this session runs on (through the selected account)"
+                      value={profileModel}
+                      onChange={(e) => setProfileModel(e.target.value)}
+                    >
+                      <option value="">
+                        {selectedProfile.model
+                          ? `Account default (${selectedProfile.model})`
+                          : "Account default"}
+                      </option>
+                      {/* A value typed before the catalog landed (or absent from
+                          it) stays VISIBLE and selected — coercing the display
+                          to "Account default" while still submitting it would
+                          launch a model the form no longer shows. */}
+                      {profileModel &&
+                        !(profileModels[profileId] || []).includes(profileModel) && (
+                          <option value={profileModel}>{profileModel} (custom)</option>
+                        )}
+                      {(profileModels[profileId] || []).map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      id="new-account-model"
+                      type="text"
+                      autoComplete="off"
+                      placeholder={
+                        selectedProfile.model
+                          ? `Account default (${selectedProfile.model})`
+                          : "anthropic/claude-sonnet-4.5"
+                      }
+                      value={profileModel}
+                      onChange={(e) => setProfileModel(e.target.value)}
+                    />
+                  )}
+                </label>
+              </div>
+            )}
+  
+            {routeWarning && <p className="nf-git-nudge">{routeWarning}</p>}
+            {/* The datalist mount slots.js populates from /api/providers. */}
+            <datalist id="provider-list"></datalist>
+  
+            {searchHits && (
+              /* The name-search results. Wears .new-templates and .nf-suggest for
+                 the same reason the suggestion strip below does — same card, same
+                 head, same pills, a different source — and adds only what a search
+                 hit needs that a suggestion chip doesn't: its path. Two folders
+                 called `api` are told apart by where they live, and telling them
+                 apart is the entire point of having searched. */
+              <div id="new-search" className="new-templates nf-suggest nf-search">
+                <div className="nt-head">
+                  <span>Matches for “{searchHits.asked}”</span>
+                  <span className="nf-suggest-legend">↑↓ choose · Enter fills · Esc closes</span>
+                </div>
+                {searchHits.matches.length > 0 && (
+                  <div
+                    id="new-search-list"
+                    className="nf-search-list"
+                    ref={searchListRef}
+                    role="listbox"
+                    aria-label="Folder matches"
                   >
-                    <option value="">Preset…</option>
-                    {BUILTIN_PRESETS.length > 0 && (
-                      <optgroup label="Built-in">
-                        {BUILTIN_PRESETS.map((p) => (
-                          <option key={"b:" + p.name} value={"b:" + p.name} title={p.prompt}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </optgroup>
+                    {searchHits.matches.map((m, i) => (
+                      <button
+                        key={m.path}
+                        id={"new-search-hit-" + i}
+                        type="button"
+                        role="option"
+                        aria-selected={i === selIndex}
+                        /* .active is the suggestion strip's "this is the folder
+                           you get" treatment — accent border and tint, light
+                           theme included — and that is precisely what the
+                           highlight means here, so it reuses it rather than
+                           inventing a second way to say the same thing. */
+                        className={
+                          "nt-chip" + (m.is_git ? " is-git" : "") + (i === selIndex ? " active" : "")
+                        }
+                        data-path={m.path}
+                        title={m.path + (m.is_git ? "" : "\nno git repo here yet")}
+                        // Hovering moves the highlight so the mouse and the
+                        // keyboard never disagree about which row Enter takes.
+                        onMouseMove={() => setSearchSel(i)}
+                        onClick={() => pickMatch(m.path)}
+                      >
+                        <span className="nf-search-name">{(m.is_git ? "📦 " : "📁 ") + m.name}</span>
+                        <span className="nf-search-path">
+                          {homeRelative(m.path, searchHits.home || homePath)}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {searchHits.matches.length === 0 && (
+                  /* An empty result has to name the ways out, because the field
+                     looks identical whether the search found nothing or was never
+                     a search at all. Both sentences are written to claim only what
+                     the walk can actually support. A budget that tripped before
+                     finding anything did not look everywhere, so "not here" would
+                     be a claim it never got far enough to make — and it does not
+                     ask the user to type more of the name, because the walk is
+                     query-independent (the needle only RANKS what was already
+                     reached) and a longer query re-walks the same directories for
+                     the same budget. Nor does the complete-walk sentence say
+                     "nothing under your home directory is called X": the search
+                     stops at three levels, never enters a git repo and skips
+                     hidden and node_modules-shaped folders, so a `widget` inside
+                     the monorepo the user lives in is plainly under home and
+                     plainly not something this walk can see. */
+                  <p className="nf-search-empty muted">
+                    {searchHits.truncated ? (
+                      <>
+                        The search stopped at its time and size limit before it found “
+                        {searchHits.asked}” — Browse… walks straight to it, and a path starting with /
+                        or ~ is used exactly as typed.
+                      </>
+                    ) : (
+                      <>
+                        No folder called “{searchHits.asked}” in the first three levels under your
+                        home directory — the search doesn’t look inside git repos or hidden folders.
+                        Browse… reaches those and the rest of the disk, and a path starting with / or
+                        ~ is used exactly as typed.
+                      </>
                     )}
-                    {savedPresets.length > 0 && (
-                      <optgroup label="Saved">
-                        {savedPresets.map((p) => (
-                          <option key={"u:" + p.name} value={"u:" + p.name} title={p.prompt}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </select>
-                  <button type="button" id="preset-save" title="Save current prompt as preset…" onClick={savePreset}>
-                    Save…
-                  </button>
-                  {presetValue.startsWith("u:") && (
+                  </p>
+                )}
+                {searchHits.matches.length > 0 && searchHits.truncated && (
+                  /* Deliberately does NOT say "more folders matched": truncation
+                     is one flag over three causes (the scan cap, the 1.5s deadline
+                     and the row limit), and under either of the first two no extra
+                     match is known to exist — the walk simply stopped. "May not be
+                     everything" is true of all three. */
+                  <p className="nf-search-note muted">
+                    The search stopped early, so this list may not be everything — Browse… if the
+                    folder you want isn’t here.
+                  </p>
+                )}
+              </div>
+            )}
+  
+            {plainFolder && (
+              <p className="nf-git-nudge">
+                {initRepo ? (
+                  <>A git repo will be created here — diff, commit and PR will work.</>
+                ) : (
+                  <>
+                    No git repo in this folder, so diff, commit and PR stay off.{" "}
                     <button
                       type="button"
-                      id="preset-del"
-                      title="Delete the selected saved preset"
-                      onClick={() => {
-                        const p = findPreset(presetValue);
-                        if (!p) return;
-                        const list = loadUserPresets().filter((q) => q.name !== p.name);
-                        saveUserPresets(list);
-                        setSavedPresets(list);
-                        setPresetValue("");
+                      className="linklike"
+                      title="Ticks “Create a git repo in this folder” under Git & workspace"
+                      onClick={armInitRepo}
+                    >
+                      Create one
+                    </button>
+                  </>
+                )}
+              </p>
+            )}
+  
+            {suggestRows.length > 0 && (
+              /* Wears .new-templates as well as its own class on purpose: this is
+                 the same chip strip as Templates, filled from a different source,
+                 and sharing the class is what stops the two from drifting apart. */
+              <div id="new-suggest" className="new-templates nf-suggest">
+                <div className="nt-head">
+                  <span>Folders</span>
+                  <span className="nf-suggest-legend">📦 git repo · 📁 plain folder</span>
+                </div>
+                {suggestRows.map((g) => (
+                  <div key={g.key} className="nf-suggest-row">
+                    <span className="nf-suggest-label" title={g.hint}>
+                      {g.label}
+                    </span>
+                    <FitRow>
+                      {g.items.map((s) => {
+                        const active = folderPath === s.path;
+                        return (
+                          <button
+                            key={s.path}
+                            type="button"
+                            className={
+                              "nt-chip" + (s.is_git ? " is-git" : "") + (active ? " active" : "")
+                            }
+                            data-path={s.path}
+                            aria-pressed={active}
+                            title={s.path + (s.is_git ? "" : "\nno git repo here yet")}
+                            onClick={() => folderDo({ t: "user-set", path: s.path })}
+                          >
+                            {(s.is_git ? "📦 " : "📁 ") + s.name}
+                          </button>
+                        );
+                      })}
+                    </FitRow>
+                  </div>
+                ))}
+              </div>
+            )}
+  
+            {browserOpen && (
+              <FolderBrowser
+                initialPath={folderPath || homePath || ""}
+                selected={folderPath}
+                onSelect={(p) => folderDo({ t: "browse-select", path: p })}
+                onPick={(p) => folderDo({ t: "browse-commit", path: p })}
+              />
+            )}
+  
+            <details
+              id="new-advanced"
+              className="nf-advanced"
+              data-caps="git"
+              open={advancedOpen}
+              onToggle={(e) => setAdvancedOpen((e.target as HTMLDetailsElement).open)}
+            >
+              <summary>
+                Git &amp; workspace
+              </summary>
+              <div className="nf-advanced-body">
+                {/* ONE question with three answers, not a radio pair plus a
+                    stray checkbox.
+  
+                    "Isn't Provision workspace the same exact thing as New
+                    worktree?" — asked about the previous shape, and a fair
+                    reading of it: both do produce a separate checkout, they sat
+                    in the same fold, and nothing said how they were related. They
+                    are not the same (provisioning ALSO runs the repo's setup
+                    commands and seeds the warm caches, and can make a full clone
+                    instead of a worktree), but "worktree" being a radio while
+                    "provision" was a checkbox implied they answered DIFFERENT
+                    questions, when they answer the same one: where does this
+                    session's work happen.
+  
+                    Three radios say the relationship out loud — provisioning is
+                    the worktree option plus setup — and cost nothing in
+                    behaviour: the three states were already mutually exclusive,
+                    each old setter clearing the other by hand. This is that
+                    exclusion written down instead of maintained. */}
+                <div
+                  className="nf-mode"
+                  role="radiogroup"
+                  aria-labelledby="new-mode-label"
+                >
+                  <div id="new-mode-label" className="nf-mode-label">
+                    Where the work happens
+                  </div>
+                  <label className="check">
+                    <input
+                      type="radio"
+                      name="new-workspace-mode"
+                      id="new-worktree"
+                      checked={!inPlace && !provisionOn}
+                      onChange={() => {
+                        setInPlace(false);
+                        setProvision(false);
+                      }}
+                    />
+                    New worktree{" "}
+                    <span className="muted">
+                      (a separate checkout on its own branch — nothing is installed
+                      into it)
+                    </span>
+                  </label>
+                  <label className="check">
+                    <input
+                      type="radio"
+                      name="new-workspace-mode"
+                      id="new-in-place"
+                      checked={inPlace}
+                      onChange={() => {
+                        setInPlace(true);
+                        setProvision(false);
+                      }}
+                    />
+                    Work directly in this folder{" "}
+                    <span className="muted">
+                      (no worktree — edits the original; multiple sessions can share
+                      it)
+                    </span>
+                  </label>
+                  {offerProvision && (
+                    <label id="new-provision-row" className="check">
+                      <input
+                        type="radio"
+                        name="new-workspace-mode"
+                        id="new-provision"
+                        checked={provisionOn}
+                        onChange={() => {
+                          setProvision(true);
+                          setInPlace(false);
+                        }}
+                      />
+                      Provision workspace{" "}
+                      <span className="muted">
+                        — the same separate checkout, plus run repo setup &amp; warm
+                        test caches (or a full clone instead of a worktree)
+                      </span>
+                    </label>
+                  )}
+                  {worktreeClamped && (
+                    /* The server would silently do this anyway; saying so is the
+                       difference between a form that reports the session you are
+                       about to get and one that reports the session you asked
+                       for. Same register and same remedy as the git nudge under
+                       the Folder field. */
+                    <p className="nf-git-nudge">{worktreeClamped}</p>
+                  )}
+                  {provisionBlocked && (
+                    /* The git aside under the Folder field says the same thing in
+                       the register of a plain session, where a repo-less folder is
+                       merely a folder without diff/commit/PR. Here it is a hard
+                       stop, it is three screens further down, and the fix is the
+                       checkbox directly below — so it earns its own line. */
+                    <p className="nf-git-nudge nf-provision-warn">
+                      {provisionBlocked}{" "}
+                      <button
+                        type="button"
+                        className="linklike"
+                        title="Ticks “Create a git repo in this folder” below"
+                        onClick={armInitRepo}
+                      >
+                        Create one here
+                      </button>
+                    </p>
+                  )}
+                  {offerProvision && provision && (
+                    <div id="provision-opts">
+                      <label>
+                        Workspace strategy
+                        <select
+                          id="new-workspace-strategy"
+                          value={strategy}
+                          onChange={(e) => setStrategy(e.target.value)}
+                        >
+                          <option value="worktree">shared base clone (worktree) — fast, default</option>
+                          <option value="clone">full clone — standalone</option>
+                        </select>
+                      </label>
+                      <p className="muted provision-hint">
+                        Tip: paste a full branch in <b>Name</b> (e.g.{" "}
+                        <code>feature/sc-17436/grafana-dashboard-…</code>) to use it as the branch
+                        verbatim — the session name becomes its last segment.
+                      </p>
+                    </div>
+                  )}
+                </div>
+  
+                {/* OUTSIDE the mode group, because it is not a fourth answer to
+                    "where does the work happen" — it is a thing done to the folder
+                    before any of the three run, and it combines with all of them.
+                    No longer exclusive with "work directly in this folder", and
+                    the pairing was always backwards: git-initialising a folder and
+                    then working in that same folder is the ordinary thing to want
+                    — arguably the most natural mode for a folder you just made,
+                    since a worktree cut from a brand-new repo is the awkward case.
+                    The server does exactly that combination: _prepare_plain_repo
+                    git-inits and makes the first commit, and the session comes up
+                    in place with diff/commit/PR on. */}
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    id="new-init-repo"
+                    checked={initRepo}
+                    onChange={(e) => setInitRepo(e.target.checked)}
+                  />
+                  Create a git repo in this folder{" "}
+                  <span className="muted">(git init + initial commit — enables diff/commit/PR)</span>
+                </label>
+              </div>
+            </details>
+  
+            <details
+              id="new-prompt-fold"
+              className="nf-advanced"
+              ref={promptRef}
+              open={promptOpen}
+              onToggle={(e) => {
+                const open = (e.target as HTMLDetailsElement).open;
+                setPromptOpen(open);
+                // Scroll to it only when a PERSON opened it. A plan opens this
+                // fold to show the prompt it wrote, and scrolling to the bottom
+                // of the form on arrival buries the two fields most likely to
+                // be wrong — see foldOpenedByPlan.
+                if (foldOpenedByPlan.current) {
+                  foldOpenedByPlan.current = false;
+                  return;
+                }
+                if (open)
+                  promptRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+              }}
+            >
+              <summary>
+                Prompt <span className="muted">— sent to the agent at launch</span>
+              </summary>
+              <div className="nf-advanced-body">
+                <label>
+                  <span className="preset-row">
+                    <select
+                      id="new-preset"
+                      title="Prompt presets — pick one to fill the prompt below (editable after)"
+                      value={presetValue}
+                      onChange={(e) => {
+                        setPresetValue(e.target.value);
+                        const p = findPreset(e.target.value);
+                        if (p) setPrompt(p.prompt);
                       }}
                     >
-                      ✕
+                      <option value="">Preset…</option>
+                      {BUILTIN_PRESETS.length > 0 && (
+                        <optgroup label="Built-in">
+                          {BUILTIN_PRESETS.map((p) => (
+                            <option key={"b:" + p.name} value={"b:" + p.name} title={p.prompt}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {savedPresets.length > 0 && (
+                        <optgroup label="Saved">
+                          {savedPresets.map((p) => (
+                            <option key={"u:" + p.name} value={"u:" + p.name} title={p.prompt}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                    </select>
+                    <button type="button" id="preset-save" title="Save current prompt as preset…" onClick={savePreset}>
+                      Save…
                     </button>
-                  )}
-                </span>
-                <textarea
-                  id="new-prompt"
-                  rows={2}
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="What should the agent do first? Leave blank if you don’t want to kick anything off just yet."
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                />
-              </label>
-            </div>
-          </details>
-
-          <details
-            id="new-launch-advanced"
-            className="nf-advanced"
-            ref={launchRef}
-            open={launchOpen}
-            onToggle={(e) => {
-              const open = (e.target as HTMLDetailsElement).open;
-              setLaunchOpen(open);
-              // The fold is the last thing in the scroll region, so its revealed
-              // fields open below the fold line — scroll them into view so it's
-              // obvious the click did something and where to look. Only on a
-              // real click: open-by-default fires no toggle, and scrolling the
-              // body on arrival would bury the Name field.
-              if (open)
-                launchRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-            }}
-          >
-            <summary>
-              Launch flags <span className="muted">— extra CLI flags for this session</span>
-            </summary>
-            <div className="nf-advanced-body">
-              <label>
-                <span>
-                  Flags{" "}
-                  <span className="muted">
-                    — e.g. --dangerously-skip-permissions; appended after the agent's saved defaults
+                    {presetValue.startsWith("u:") && (
+                      <button
+                        type="button"
+                        id="preset-del"
+                        title="Delete the selected saved preset"
+                        onClick={() => {
+                          const p = findPreset(presetValue);
+                          if (!p) return;
+                          const list = loadUserPresets().filter((q) => q.name !== p.name);
+                          saveUserPresets(list);
+                          setSavedPresets(list);
+                          setPresetValue("");
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
                   </span>
-                </span>
-                <input
-                  type="text"
-                  id="new-launch-args"
-                  autoComplete="off"
-                  placeholder="--dangerously-skip-permissions"
-                  value={launchArgs}
-                  onChange={(e) => setLaunchArgs(e.target.value)}
-                />
-              </label>
-              <FlagChips provider={program} value={launchArgs} onChange={setLaunchArgs} />
-            </div>
-          </details>
+                  <textarea
+                    id="new-prompt"
+                    rows={2}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="What should the agent do first? Leave blank if you don’t want to kick anything off just yet."
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                  />
+                </label>
+              </div>
+            </details>
+  
+            <details
+              id="new-launch-advanced"
+              className="nf-advanced"
+              ref={launchRef}
+              open={launchOpen}
+              onToggle={(e) => {
+                const open = (e.target as HTMLDetailsElement).open;
+                setLaunchOpen(open);
+                // The fold is the last thing in the scroll region, so its revealed
+                // fields open below the fold line — scroll them into view so it's
+                // obvious the click did something and where to look. Only on a
+                // real click: open-by-default fires no toggle, and scrolling the
+                // body on arrival would bury the Name field.
+                if (open)
+                  launchRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+              }}
+            >
+              <summary>
+                Launch flags <span className="muted">— extra CLI flags for this session</span>
+              </summary>
+              <div className="nf-advanced-body">
+                <label>
+                  <span>
+                    Flags{" "}
+                    <span className="muted">
+                      — e.g. --dangerously-skip-permissions; appended after the agent's saved defaults
+                    </span>
+                  </span>
+                  <input
+                    type="text"
+                    id="new-launch-args"
+                    autoComplete="off"
+                    placeholder="--dangerously-skip-permissions"
+                    value={launchArgs}
+                    onChange={(e) => setLaunchArgs(e.target.value)}
+                  />
+                </label>
+                <FlagChips provider={program} value={launchArgs} onChange={setLaunchArgs} />
+              </div>
+            </details>
+            </>
+          )}
         </div>
-
         <div className="modal-actions nf-actions">
           <p id="new-error" className="error">{error}</p>
-          <button type="submit">Create</button>
+          {page === 1 ? (
+            <>
+              {/* THREE actions, in increasing order of commitment, left to
+                  right — and the row has to say which is which on its own,
+                  because the previous labels ("Skip — fill it in myself",
+                  "✨ Fill in the form", "Start session now") were all written
+                  from inside the app's own vocabulary. "The form" is page 2,
+                  which nobody has seen yet; "skip" does not say what is being
+                  skipped or what you get instead. These name the OUTCOME.
+
+                  The escape is first, quiet, and pushed to the far left by its
+                  own margin so it reads as "not one of these two". It cannot be
+                  dropped: page 1 is where every opening lands, so this is the
+                  only route to the form for someone who does not want to
+                  describe anything — or who has no coding CLI installed to
+                  describe it to. */}
+              <button
+                type="button"
+                id="new-describe-skip"
+                className="nf-quiet"
+                title="Go straight to the full form and choose the folder and options yourself. Nothing is read, and no model runs."
+                onClick={() => setPage(2)}
+              >
+                Set it up myself instead
+              </button>
+              <button
+                // type="button" is load-bearing, not tidiness: the default is
+                // "submit", so without it this button creates a session out of
+                // whatever the form happens to be holding.
+                type="button"
+                id="new-describe-go"
+                // Disabled only while a turn is in flight — NEVER for a sentence
+                // that is too short. A greyed-out control that will not say why
+                // is furniture explaining itself; both this and Enter go through
+                // describeBlockReason instead and get the sentence.
+                disabled={describing}
+                aria-busy={describing || undefined}
+                title="Work out the folder, name and first instruction, then show them to you so you can change anything before the session is created."
+                onClick={() => void runDescribe("fill")}
+              >
+                {describing ? (
+                  <>
+                    {/* The ring AND a changed label: a cold CLI start plus a
+                        real turn runs to ~25s, and a button that only spins
+                        reads as a hang long before the server's own timeout
+                        would say anything. */}
+                    <span className="btn-spin" aria-hidden="true" />{" "}
+                    {describeSlow ? "Still reading…" : "Reading…"}
+                  </>
+                ) : (
+                  <>
+                    Review details first{" "}
+                    {/* What Enter does, shown rather than described. The
+                        sentence that used to say it in words sat in the header
+                        and explained the wrong page. */}
+                    <span className="nf-key" aria-hidden="true">
+                      ↵
+                    </span>
+                  </>
+                )}
+              </button>
+              {/* The "don't make me read anything" path. Accent, because it is
+                  the one this page exists for, and a BUTTON rather than the
+                  Enter key on purpose: Enter in the box means "read this", it
+                  has meant that since the box existed, and a key that creates a
+                  session in a folder nobody has looked at is the one gesture
+                  this whole feature has been careful not to build. The single
+                  exception it does not skip is a folder that does not exist —
+                  see immediateStartBlockReason. */}
+              <button
+                type="button"
+                id="new-describe-start"
+                disabled={describing}
+                title="Create the session right now from what you typed, without showing you the details first."
+                onClick={startNow}
+              >
+                Create session
+              </button>
+            </>
+          ) : (
+            <>
+              {/* Back, not Cancel: page 1 still holds the sentence, and a
+                  create that has not happened yet is not something to undo. */}
+              <button
+                type="button"
+                id="new-back"
+                className="linklike"
+                onClick={() => setPage(1)}
+              >
+                ← Back
+              </button>
+              <button type="submit">Create</button>
+            </>
+          )}
         </div>
       </form>
     </div>

@@ -552,3 +552,102 @@ class TestBackfillScanner:
 
         assert result == 1
         assert mock_fetch.call_count == 3
+
+
+# --------------------------------------------------------------------------- #
+# The source-key stamp. This is the load-bearing half of `start_state`: the
+# launch happens several hops (and, after a crash, a whole process) later, and
+# the key is the only thing that still says WHICH configured source — which
+# board, which credentials — the ticket came from. `provider` is not that key:
+# two Jira sites are both "jira".
+# --------------------------------------------------------------------------- #
+class TestSourceKeyStamp:
+    """Tests for the ``story.source_key`` stamp at its primary producer."""
+
+    def _scan_patches(self, scanner, stories):
+        """The three seams every scan test here stubs, as one context manager."""
+        from contextlib import ExitStack
+
+        stack = ExitStack()
+        stack.enter_context(
+            patch(
+                "backend.ticket_ingestion.backfill.load_last_run_timestamp",
+                return_value=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            )
+        )
+        fetch = stack.enter_context(
+            patch.object(scanner, "_fetch_stories", new_callable=AsyncMock)
+        )
+        fetch.return_value = stories
+        branches = stack.enter_context(
+            patch(
+                "backend.ticket_ingestion.backfill._get_existing_branches",
+                new_callable=AsyncMock,
+            )
+        )
+        branches.return_value = set()
+        return stack
+
+    async def test_every_enqueued_ticket_carries_its_source_key(self, config, queue):
+        source = TicketProviderConfig(
+            provider="shortcut", id="sc-main", member_id="member-123"
+        )
+        scanner = BackfillScanner(config, queue, source)
+        with self._scan_patches(scanner, [_make_story(1), _make_story(2)]):
+            assert await scanner.scan() == 2
+
+        stamped = [(await queue.get()).source_key for _ in range(2)]
+        assert stamped == ["sc-main", "sc-main"]
+
+    async def test_two_sources_of_one_provider_stamp_different_keys(
+        self, config, queue
+    ):
+        """The case `provider` alone cannot express, and the reason the stamp
+        exists: two Shortcut workspaces, two tokens, two start states. A ticket
+        that carried only "shortcut" would resolve whichever source happened to
+        be first — the wrong board, under the wrong credentials."""
+        a = TicketProviderConfig(
+            provider="shortcut", id="sc-a", api_token="tok-a", start_state="1"
+        )
+        b = TicketProviderConfig(
+            provider="shortcut", id="sc-b", api_token="tok-b", start_state="2"
+        )
+        for source, story_id in ((a, 11), (b, 22)):
+            scanner = BackfillScanner(config, queue, source)
+            with self._scan_patches(scanner, [_make_story(story_id)]):
+                await scanner.scan()
+
+        first, second = await queue.get(), await queue.get()
+        assert (first.id, first.source_key) == (11, "sc-a")
+        assert (second.id, second.source_key) == (22, "sc-b")
+
+    async def test_the_stamp_is_written_before_the_pending_marker(
+        self, config, queue, _isolated_state_dir
+    ):
+        """Crash ordering, and it is the ordering that matters.
+
+        The pending marker is the promise that this ticket gets re-enqueued
+        after a crash. If the stamp landed *after* it, a crash in the window
+        between the two would leave the marker describing a ticket with no
+        source — and the re-enqueue would have nothing to resolve a board or a
+        set of credentials from.
+        """
+        from backend.ticket_ingestion import backfill as backfill_mod
+
+        source = TicketProviderConfig(provider="shortcut", id="sc-main")
+        scanner = BackfillScanner(config, queue, source)
+        story = _make_story(7)
+        real = backfill_mod.record_pending_story
+        seen: dict = {}
+
+        def spy(state_dir, slug, ticket_id, source_key):
+            # Read the story as it stands AT the moment the marker is written.
+            seen["stamp"] = story.source_key
+            return real(state_dir, slug, ticket_id, source_key)
+
+        with self._scan_patches(scanner, [story]):
+            with patch.object(backfill_mod, "record_pending_story", spy):
+                assert await scanner.scan() == 1
+
+        assert seen["stamp"] == "sc-main"
+        assert (await queue.get()).source_key == "sc-main"

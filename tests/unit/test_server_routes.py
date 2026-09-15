@@ -2321,3 +2321,166 @@ def test_github_open_prs_stale_hit_annotates_without_touching_the_cache(
         "prs": [{"number": 3, "session": "owner/repo#3"}]
     }
     assert "stale" not in server._OPEN_PRS_CACHE["v"][1]
+
+
+# --------------------------------------------------------------------------- #
+# engine updates (Settings → Advanced)                                         #
+# --------------------------------------------------------------------------- #
+def test_update_check_reports_a_newer_release(monkeypatch):
+    async def _latest(force=False):
+        return {"tag": "v9.9.9", "version": "9.9.9", "url": "https://x/y", "notes": ""}
+
+    monkeypatch.setattr(server._self_update, "latest_release", _latest)
+    monkeypatch.setattr(server._self_update, "installed_version", lambda: "0.3.2")
+    monkeypatch.setattr(server._self_update, "install_kind", lambda: "uv-tool")
+    monkeypatch.setattr(server._self_update, "blocked_reason", lambda: "")
+    body = client.get("/api/update/check").json()
+    assert body["available"] is True
+    assert body["latest"] == "9.9.9" and body["current"] == "0.3.2"
+    assert body["checked"] is True and body["blocked"] == ""
+
+
+def test_update_check_never_calls_an_unreachable_github_up_to_date(monkeypatch):
+    # The failure mode that matters: "couldn't ask" must not render as "you're
+    # on the newest version", which is a claim nobody made.
+    async def _latest(force=False):
+        return None
+
+    monkeypatch.setattr(server._self_update, "latest_release", _latest)
+    monkeypatch.setattr(server._self_update, "installed_version", lambda: "0.3.2")
+    body = client.get("/api/update/check").json()
+    assert body["checked"] is False
+    assert body["available"] is False and body["latest"] == ""
+
+
+def test_update_check_passes_the_block_through(monkeypatch):
+    async def _latest(force=False):
+        return {"tag": "v9.9.9", "version": "9.9.9", "url": "", "notes": ""}
+
+    monkeypatch.setattr(server._self_update, "latest_release", _latest)
+    monkeypatch.setattr(server._self_update, "installed_version", lambda: "0.3.2")
+    monkeypatch.setattr(server._self_update, "install_kind", lambda: "editable")
+    body = client.get("/api/update/check").json()
+    assert body["kind"] == "editable"
+    assert "development checkout" in body["blocked"]
+
+
+def test_update_start_resolves_the_newest_ref_itself(monkeypatch):
+    # The client asks for "the newest version", not for a specific tag: a stale
+    # settings screen must not get to choose which release is installed.
+    async def _latest(force=False):
+        return {"tag": "v9.9.9", "version": "9.9.9", "url": "", "notes": ""}
+
+    seen = {}
+
+    def _start(ref):
+        seen["ref"] = ref
+        return {"ok": True, "ref": ref}
+
+    monkeypatch.setattr(server._self_update, "latest_release", _latest)
+    monkeypatch.setattr(server._self_update, "start_update", _start)
+    r = client.post("/api/update/start", json={})
+    assert r.status_code == 200
+    assert seen["ref"] == "v9.9.9"
+
+
+def test_update_start_reports_a_refusal_as_400(monkeypatch):
+    async def _latest(force=False):
+        return {"tag": "v9.9.9", "version": "9.9.9", "url": "", "notes": ""}
+
+    monkeypatch.setattr(server._self_update, "latest_release", _latest)
+    monkeypatch.setattr(
+        server._self_update, "start_update", lambda ref: {"ok": False, "error": "nope"}
+    )
+    r = client.post("/api/update/start", json={})
+    assert r.status_code == 400 and r.json()["error"] == "nope"
+
+
+def test_update_state_restarts_the_server_once_the_install_is_done(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        server._self_update,
+        "finish_state",
+        lambda: ({"state": "done", "log": []}, True),
+    )
+    monkeypatch.setattr(
+        server._restart, "reset_tailscale_attempts", lambda: calls.append("reset")
+    )
+    monkeypatch.setattr(server._restart, "reexec_soon", lambda: calls.append("reexec"))
+    body = client.get("/api/update/state").json()
+    assert body["restarting"] is True
+    assert calls == ["reset", "reexec"]
+
+
+def test_update_state_does_not_restart_while_the_install_is_running(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        server._self_update,
+        "finish_state",
+        lambda: ({"state": "started", "log": []}, False),
+    )
+    monkeypatch.setattr(server._restart, "reexec_soon", lambda: calls.append("reexec"))
+    body = client.get("/api/update/state").json()
+    assert body["restarting"] is False and calls == []
+
+
+def test_update_state_re_execs_exactly_once_across_repeated_polls(
+    monkeypatch, tmp_path
+):
+    """The route-level half of the once-only restart.
+
+    Every open settings screen polls this, and a restart here is a re-exec of
+    the process answering — so the second poll must not re-exec the process the
+    first one just brought up. Driven through the REAL state file rather than a
+    stubbed ``finish_state``: the "did I already restart for this?" flag lives
+    IN that file (it has to survive the restart), and a stub would prove only
+    that the route forwards a boolean.
+    """
+    monkeypatch.setattr(server._self_update, "_state_dir", lambda: tmp_path)
+    server._self_update.write_state(state="done", ref="v9.9.9", code=0)
+    calls = []
+    monkeypatch.setattr(server._restart, "reset_tailscale_attempts", lambda: None)
+    monkeypatch.setattr(server._restart, "reexec_soon", lambda: calls.append("reexec"))
+
+    first = client.get("/api/update/state").json()
+    second = client.get("/api/update/state").json()
+    third = client.get("/api/update/state").json()
+
+    assert first["restarting"] is True
+    assert second["restarting"] is False and third["restarting"] is False
+    assert calls == ["reexec"]
+    # The state itself still reads `done` for every one of them — the screen
+    # says "updated to 9.9.9" across the restart, it just stops re-triggering.
+    assert [b["state"] for b in (first, second, third)] == ["done", "done", "done"]
+
+
+def test_update_state_carries_the_installer_log_tail(monkeypatch, tmp_path):
+    """The detail fold's contents come from the log file, not from memory — the
+    installer is a detached process this one does not own."""
+    monkeypatch.setattr(server._self_update, "_state_dir", lambda: tmp_path)
+    server._self_update.write_state(state="failed", ref="v9.9.9", code=7)
+    server._self_update.log_path().write_text("line one\nline two\n", encoding="utf-8")
+    monkeypatch.setattr(server._restart, "reexec_soon", lambda: None)
+
+    body = client.get("/api/update/state").json()
+    assert body["state"] == "failed" and body["restarting"] is False
+    assert body["log"] == ["line one", "line two"]
+
+
+def test_update_start_reports_an_unreachable_github_as_502(monkeypatch):
+    """Not a 400 (the client did nothing wrong) and not a silent no-op: the
+    button asked for "the newest release" and there is no newest release to be
+    had right now."""
+
+    async def _latest(force=False):
+        return None
+
+    monkeypatch.setattr(server._self_update, "latest_release", _latest)
+    monkeypatch.setattr(
+        server._self_update,
+        "start_update",
+        lambda ref: pytest.fail("started an update with no release to install"),
+    )
+    r = client.post("/api/update/start", json={})
+    assert r.status_code == 502
+    assert "could not reach GitHub" in r.json()["error"]

@@ -119,6 +119,25 @@ html, body {
 }
 .tab.active { background: var(--accent); color: #fff; }
 
+/* The one control on this bar that isn't about the selected session: it has to
+   be usable when there is no session at all. Painted like #picker and .tab
+   (sunk into the strip with --bg) rather than as an accent button — an accent +
+   beside an accent-highlighted tab reads as two things competing to be the
+   thing you press. */
+#new-btn {
+  flex: 0 0 auto;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 5px 11px;
+  font-size: 20px;
+  line-height: 1.2;
+  font-family: inherit;
+  user-select: none;
+}
+#new-btn:active { background: var(--border); }
+
 /* --- git workflow bar (Commit / Push / PR / Merge) --- */
 #actions {
   flex: 0 0 auto;
@@ -201,6 +220,128 @@ html, body {
 }
 #commit-ok { background: var(--accent); color: #fff; border-color: var(--accent); }
 #commit-ok:active { background: rgba(var(--accent-rgb), 0.75); }
+
+/* --- new-session sheet (three screens in one .sheet-box) --- */
+/* Only THIS box scrolls. The commit sheet is a single field that must keep
+   growing with its message, while step 2 here is a name, a folder, three lines
+   of explanation, a confirm gate and a prompt — taller than the visual viewport
+   leaves once the soft keyboard is up. #app is already sized to that viewport
+   (applyViewport), so max-height:100% is the keyboard-aware height and the box
+   scrolls inside it instead of running off the bottom. */
+#new-sheet .sheet-box {
+  max-height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.new-label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 12px 0 4px;
+}
+#new-text, #new-title, #new-prompt {
+  width: 100%;
+  resize: none;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px 10px;
+  /* 16px minimum: below that iOS Safari zooms the page on focus. */
+  font-size: 16px;
+  font-family: inherit;
+  line-height: 1.35;
+}
+#new-text:focus, #new-title:focus, #new-prompt:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+/* A row that is a button: the folder line in step 2, and every row of the
+   folder list. Left-aligned because what matters is the start of the name, not
+   its middle. */
+.new-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 10px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.new-row:active { background: var(--border); }
+#new-folder-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.new-row-hint { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
+/* Folder-list rows stack name over path: a phone has no room for both on one
+   line, and truncating the path is exactly the information the row is for. */
+.new-folder-row { flex-direction: column; align-items: stretch; gap: 3px; }
+.new-folder-row .new-row-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+#new-folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  /* Its own scroller rather than growing the sheet past the screen — the
+     suggestion list is a dozen rows on a machine with a dozen repos. */
+  max-height: 45vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.new-muted {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 8px;
+}
+/* The confirm gate. Boxed off from the muted lines above it because it is the
+   one control here that must not be mistaken for prose — it is a question, and
+   the session does not start until it is answered. */
+.new-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+/* 20px, not the ~13px a phone renders by default: the gate must be impossible
+   to miss and possible to hit with a thumb. */
+.new-confirm input {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0 0;
+  accent-color: var(--accent);
+}
+.new-confirm .new-muted { display: block; margin-top: 5px; }
+/* Refusals and server errors. Red rather than the muted grey of the notes: this
+   is the line that says why nothing happened when something was pressed. */
+.new-error {
+  margin-top: 12px;
+  color: #f87171;
+  font-size: 13px;
+  line-height: 1.4;
+}
+#new-go, #new-start {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+#new-go:active, #new-start:active { background: rgba(var(--accent-rgb), 0.75); }
+#new-go[disabled], #new-start[disabled] { opacity: 0.6; }
 
 /* --- terminal fills all remaining space --- */
 #term-wrap {
@@ -305,7 +446,20 @@ html, body {
   font-size: 14px;
   padding: 0 24px;
 }
-#empty { top: 50%; transform: translateY(-50%); }
+/* #empty is a <button> now (it starts a session), so it has to be un-styled
+   back into the sentence it looks like — and then underlined, because a
+   sentence nobody can tell is tappable is the old "go and use the desktop"
+   message with extra steps. */
+#empty {
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: 0;
+  font-family: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+#empty:active { color: var(--text); }
 #status { bottom: 8px; font-size: 12px; color: #c08b00; }
 .hidden { display: none !important; }
 

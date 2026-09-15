@@ -403,6 +403,30 @@ class ShortcutProvider(TicketProvider):
                 data = await resp.json()
         return self._finalize(story_from_api_response(data, self.cfg.api_token))
 
+    async def set_state(self, ticket_id: str, state_id: str) -> None:
+        """Move a story to workflow state ``state_id`` (``PUT /stories/{id}``).
+
+        Shortcut has no transition graph — any state in any workflow the story's
+        team can reach is a legal target — so this is a single field write.
+        """
+        try:
+            sid = int(str(state_id).strip())
+        except ValueError:
+            raise ProviderError(
+                f"Shortcut workflow state {state_id!r} is not a state id"
+            ) from None
+        url = f"{_SHORTCUT_API_BASE}/stories/{ticket_id}"
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.put(
+                url, json={"workflow_state_id": sid}, headers=self._headers()
+            ) as resp:
+                if resp.status not in (200, 201):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Shortcut refused to move story {ticket_id} to state "
+                        f"{sid} (HTTP {resp.status}): {text[:200]}"
+                    )
+
     async def test_connection(self) -> tuple[dict | None, str]:
         url = f"{_SHORTCUT_API_BASE}/member"
         try:
@@ -462,3 +486,116 @@ class ShortcutProvider(TicketProvider):
                     }
                 )
         return out
+
+    # ----------------------------------------------------------------- #
+    # Writes (Intake → Tickets → Merge into…). See TicketProvider for the
+    # contract and for why the order in ticket_merge.py is the order it is.
+    # ----------------------------------------------------------------- #
+    can_merge = True
+
+    async def _story_json(
+        self, session: aiohttp.ClientSession, story_id: str
+    ) -> dict[str, Any]:
+        """One story's RAW API object.
+
+        The merge path needs fields :func:`story_from_api_response` deliberately
+        drops — ``file_ids`` and ``linked_file_ids`` above all, which are what
+        makes Shortcut's attachment carry-over free — so it reads the JSON
+        rather than the normalized :class:`Ticket`.
+        """
+        url = f"{_SHORTCUT_API_BASE}/stories/{story_id}"
+        async with session.get(url, headers=self._headers()) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise ProviderError(
+                    f"Shortcut API returned {resp.status} for story "
+                    f"{story_id}: {text[:200]}"
+                )
+            return await resp.json()
+
+    async def _update_story(
+        self, session: aiohttp.ClientSession, story_id: str, body: dict
+    ) -> None:
+        url = f"{_SHORTCUT_API_BASE}/stories/{story_id}"
+        async with session.put(url, json=body, headers=self._headers()) as resp:
+            if resp.status not in (200, 201, 204):
+                text = await resp.text()
+                raise ProviderError(
+                    f"Shortcut could not update story {story_id} "
+                    f"(HTTP {resp.status}): {text[:200]}"
+                )
+
+    async def append_description(self, ticket_id: str, addition: str) -> None:
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            data = await self._story_json(session, ticket_id)
+            current = data.get("description") or ""
+            await self._update_story(
+                session, ticket_id, {"description": current + addition}
+            )
+
+    async def add_comment(self, ticket_id: str, body: str) -> None:
+        url = f"{_SHORTCUT_API_BASE}/stories/{ticket_id}/comments"
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.post(
+                url, json={"text": body}, headers=self._headers()
+            ) as resp:
+                if resp.status not in (200, 201):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Shortcut could not comment on story {ticket_id} "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+
+    async def carry_attachments(
+        self, from_id: str, to_id: str
+    ) -> tuple[list[str], list[str]]:
+        """Re-point the source story's files at the target — no download, no
+        re-upload.
+
+        A Shortcut file is a workspace-level entity with an id; a story merely
+        *references* it through ``file_ids`` (uploads) and ``linked_file_ids``
+        (Google Drive/Dropbox/URL links). So carrying attachments is one PUT
+        adding the source's ids to the target's, and the bytes never move. That
+        also means deleting the source story afterwards does not delete the
+        files — they are already owned by the workspace and now referenced by
+        the survivor.
+
+        Union, not replace: a target that already shares a file with the source
+        must not end up listing it twice, and its own files must survive.
+        """
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            src = await self._story_json(session, from_id)
+            dst = await self._story_json(session, to_id)
+            body: dict = {}
+            names: list[str] = []
+            for key, listing in (
+                ("file_ids", "files"),
+                ("linked_file_ids", "linked_files"),
+            ):
+                src_ids = [f.get("id") for f in (src.get(listing) or []) if f.get("id")]
+                if not src_ids:
+                    continue
+                dst_ids = [f.get("id") for f in (dst.get(listing) or []) if f.get("id")]
+                merged = list(dst_ids)
+                for fid in src_ids:
+                    if fid not in merged:
+                        merged.append(fid)
+                body[key] = merged
+                for f in src.get(listing) or []:
+                    if f.get("id"):
+                        names.append(f.get("name") or f"file-{f['id']}")
+            if not body:
+                return [], []
+            await self._update_story(session, to_id, body)
+        return names, []
+
+    async def delete_ticket(self, ticket_id: str) -> None:
+        url = f"{_SHORTCUT_API_BASE}/stories/{ticket_id}"
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.delete(url, headers=self._headers()) as resp:
+                if resp.status not in (200, 204):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Shortcut refused to delete story {ticket_id} "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
