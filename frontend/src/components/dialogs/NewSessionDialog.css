@@ -12,13 +12,104 @@
   display: none;
 }
 
-/* New-session header: title left, Close button pinned top-right. */
-#new-form .ws-head h2 {
-  flex: 1;
+/* The New dialog's card has ONE fixed top edge and grows downward from it.
+
+   Every other modal is centred, and centring is what made this one move: a
+   centred card shifts its top by half of any height change, so clicking a tab
+   slid the whole dialog under the pointer. The two ways out are equal heights
+   or a fixed top, and equal heights loses — it holds a tall card open over a
+   short pane and leaves a dead band above the buttons. A fixed top gives the
+   same stillness and lets every pane be exactly as tall as it needs to be.
+
+   WHERE the top sits is the part that has to be judged rather than derived.
+   Anchoring it where the FULL FORM would have been centred parks the short
+   panes high on the screen with a lake of space under them. So it is anchored
+   where a LANDING pane is centred instead (--nf-anchor-h, the rough height of
+   Session page 1 and the Ticket tab): those two read as centred, and the full
+   form simply sags past the middle — which is what a form that big should do.
+
+   Four values, each literal written once:
+
+   --nf-card-h   the full form's height (Session page 2).
+   --nf-anchor-h the landing height the top edge is centred on. Not a cap, not
+                 a height any card is given — it only positions the top.
+   --nf-top      that top edge, floored so a short window keeps a margin.
+   --nf-max-h    how far a card may sag: to the bottom of the window, less the
+                 same margin. The full form hits this before 620px on a short
+                 screen and scrolls inside .nf-body, which is what it already
+                 does for its own folds. */
+#new-dialog {
+  --nf-card-h: min(86vh, 620px);
+  --nf-anchor-h: min(86vh, 400px);
+  /* vh, not %: percentage padding resolves against the containing block's
+     WIDTH even on a full-viewport fixed element. */
+  --nf-top: max(16px, calc((100vh - var(--nf-anchor-h)) / 2));
+  --nf-max-h: calc(100vh - var(--nf-top) - 16px);
+  align-items: flex-start;
+  padding-top: var(--nf-top);
 }
 
-#new-form .ws-head #new-close {
+/* Both cards sag to the bottom of the window at most, never past it. */
+#new-form,
+#new-ticket-form {
+  max-height: var(--nf-max-h);
+}
+
+/* New header: title, then the tab strip, then Close pinned top-right.
+
+   The h2 no longer takes the leftover width — the tabs do — so the strip
+   sits next to the title rather than floating in the middle of the row. */
+.nf-head h2 {
+  flex: none;
+}
+
+.nf-head #new-close {
   margin-left: auto;
+}
+
+.nf-tabs {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  margin-left: 10px;
+  align-self: stretch;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border);
+}
+
+/* Underline tabs, the same ones Intake uses (.ik-tab) — this is the app's one
+   tab idiom and the New dialog should not invent a second.
+
+   Specificity is load-bearing, not habit: `.ws-head button` in smallDialogs.css
+   paints EVERY button in a dialog header as a bordered pill, and it outranks a
+   bare `.nf-tab`. So the tabs shipped looking like two more buttons in a row of
+   buttons, next to Close, with nothing saying which one you were on. Three
+   classes beat it; anything less loses to the header rule again. */
+.nf-head .nf-tabs .nf-tab {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 6px 11px;
+  margin-bottom: -1px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.nf-head .nf-tabs .nf-tab:hover {
+  color: var(--text);
+  border-color: transparent;
+  border-bottom-color: var(--border);
+}
+
+.nf-head .nf-tabs .nf-tab.active {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
 }
 
 #new-form {
@@ -39,11 +130,149 @@
      growing and re-centering the dialog under the pointer; both axes clamp to
      the viewport on small windows. */
   width: min(660px, 94vw);
-  height: min(86vh, 620px);
+  height: var(--nf-card-h);
   overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 13px;
+}
+
+/* The Ticket pane's card. Same chrome as #new-form, and its own natural height
+   rather than the full form's — holding 620px up over one text box is what
+   .nf-ask was written to avoid, and the fixed top edge above means a shorter
+   card costs no movement. */
+#new-ticket-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 22px;
+  width: min(660px, 94vw);
+  height: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.nt-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.nt-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.nt-brief {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 88px;
+  resize: vertical;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 9px 11px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.nt-brief:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.nt-help,
+.nt-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.nt-source-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nt-source {
+  flex: 1;
+  min-width: 0;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 6px 9px;
+  font-size: 13px;
+}
+
+/* --- the filed ticket: the link is the deliverable, so it leads --------- */
+.nt-filed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nt-filed-chip {
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.nt-filed-link {
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.nt-filed-name {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.nt-criteria {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.nt-draft {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.nt-draft-head {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.nt-draft-body {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
 }
 
 /* Pinned header + Create actions don't scroll; only .nf-body does. */
@@ -743,6 +972,57 @@
   border-color: var(--accent);
 }
 
+/* The inline new-folder row, between the path and the list.
+
+   It replaced a window.prompt() that had never worked in the desktop app —
+   Electron does not implement prompt() — and the placement is the point: the
+   folder being created in is the path line directly above, so the parent is
+   never a thing the user has to infer. #repo-browser's max-height is fixed, so
+   the row costs the list two rows while it is open and gives them straight
+   back when it closes. */
+.rb-new {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.rb-new .rb-new-name {
+  flex: 1;
+  min-width: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.rb-new .rb-new-name:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.rb-new .rb-new-go {
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  flex: none;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.rb-new .rb-new-go:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.rb-new .rb-new-go:not(:disabled):hover {
+  border-color: var(--accent);
+}
+
 .rb-cwd {
   font-size: 11px;
   color: var(--muted);
@@ -906,9 +1186,11 @@
 /* Page 1 sizes to its content; page 2 keeps the fixed height that stops a fold
    from re-centering the card. max-height, not height, so a long note plus the
    confirm question still scrolls instead of running off the viewport. */
+/* Page 1 is one question and three buttons: its own height and no more. It can
+   do that now only because the top edge is fixed — while the card was centred,
+   an honest height here meant the dialog jumped every time you switched to it. */
 #new-form.nf-ask {
   height: auto;
-  max-height: min(86vh, 620px);
 }
 
 /* Page 1's plain-language explanation, under the box and above everything the

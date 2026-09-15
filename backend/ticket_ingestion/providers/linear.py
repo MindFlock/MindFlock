@@ -402,3 +402,91 @@ class LinearProvider(TicketProvider):
         )
         if not ((data.get("issueDelete") or {}).get("success")):
             raise ProviderError(f"Linear refused to delete issue {ticket_id}")
+
+    # --- filing a new ticket (New → Ticket) -------------------------- #
+
+    can_create = True
+
+    async def _create_team_id(self) -> str:
+        """The team id ``issueCreate`` must be given, or a readable refusal.
+
+        Linear has no workspace-level issue: every issue belongs to a team, and
+        the id is not something a person has ever seen — they know the KEY
+        (``ENG``), which is what this source's ``project`` field holds and what
+        :meth:`_assigned` already filters by. So the key is translated here.
+
+        A source that names no team is not an error when there is only one team
+        to mean: a single-team workspace is the common small setup, and refusing
+        it would be refusing the only correct answer. Two or more and the
+        refusal names the field to fill in, because at that point MindFlock
+        choosing would be filing work on a team nobody picked.
+        """
+        key = (self.cfg.project or "").strip()
+        if key:
+            data = await self._gql(
+                "query($key: String!) { teams(filter: { key: { eq: $key } }, "
+                "first: 1) { nodes { id key } } }",
+                {"key": key},
+            )
+            nodes = ((data.get("teams") or {}).get("nodes")) or []
+            if not nodes:
+                raise ProviderError(
+                    f"Linear has no team with the key {key!r} — this source's "
+                    "Project field is the team key a new issue is filed under."
+                )
+            return str(nodes[0].get("id") or "")
+        data = await self._gql("query { teams(first: 2) { nodes { id key } } }", {})
+        nodes = ((data.get("teams") or {}).get("nodes")) or []
+        if len(nodes) == 1:
+            return str(nodes[0].get("id") or "")
+        if not nodes:
+            raise ProviderError("This Linear account can see no teams to file into.")
+        raise ProviderError(
+            "This Linear workspace has more than one team, so MindFlock cannot "
+            "guess which one to file into — set this source's Project field to "
+            "the team key (e.g. ENG)."
+        )
+
+    async def create_ticket(self, name: str, description: str) -> Ticket:
+        """File a new issue (``issueCreate``) and return it, hydrated.
+
+        Two round trips after the team lookup, and the second one is not
+        optional: ``issueCreate`` answers with a thin issue, and the returned
+        Ticket has to carry the same fields every other Linear read carries —
+        the identifier the slug is built from and the URL the user is handed
+        above all. Re-fetching through :meth:`fetch` is what keeps a created
+        ticket and a polled one the same object.
+        """
+        team_id = await self._create_team_id()
+        variables: dict[str, Any] = {
+            "team": team_id,
+            "title": name,
+            "description": description,
+        }
+        assignee = (self.cfg.member_id or "").strip()
+        input_fields = "teamId: $team, title: $title, description: $description"
+        params = "$team: String!, $title: String!, $description: String!"
+        if assignee:
+            params += ", $assignee: String!"
+            input_fields += ", assigneeId: $assignee"
+            variables["assignee"] = assignee
+        state_ids = workflow_state_list(self.cfg)
+        if state_ids:
+            # Same placement rule as every adapter here: file into the state
+            # this source already ingests from, so the issue lands where the
+            # board (and the poller) is looking rather than in Linear's default
+            # backlog. Only the first — a source may watch several states, and
+            # an issue can only be in one.
+            params += ", $state: String!"
+            input_fields += ", stateId: $state"
+            variables["state"] = state_ids[0]
+        data = await self._gql(
+            f"mutation({params}) {{ issueCreate(input: {{ {input_fields} }}) "
+            "{ success issue { identifier } } }",
+            variables,
+        )
+        result = data.get("issueCreate") or {}
+        identifier = ((result.get("issue") or {}).get("identifier")) or ""
+        if not result.get("success") or not identifier:
+            raise ProviderError("Linear refused to create the issue")
+        return await self.fetch(identifier)

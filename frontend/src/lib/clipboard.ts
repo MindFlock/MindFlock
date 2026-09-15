@@ -138,13 +138,22 @@ export async function uploadFileToWorkspace(
 
 /** Upload a FileList and paste the saved paths, space separated (quoted when
  * a path contains spaces) so the agent can read them. */
-export async function pasteFilesAsPaths(
+/** Upload every file and return the saved paths as ONE string — space
+ * separated, and quoted where a path contains spaces so it survives a shell.
+ * Empty string when there was nothing to upload or every upload failed.
+ *
+ * Split out of `pasteFilesAsPaths` when the same gesture had to work on a
+ * plain <textarea> (the new-session prompt and the new-ticket brief) as well as
+ * a PTY. The two destinations share everything EXCEPT the last step — one
+ * pastes into xterm, the other splices at a caret — so the upload loop, the
+ * toasts and the quoting live here and cannot drift between them.
+ */
+export async function uploadFilesAsPathText(
   files: FileList | File[] | null,
-  term: Terminal,
   session?: string
-) {
+): Promise<string> {
   const list = Array.from(files || []);
-  if (!list.length) return;
+  if (!list.length) return "";
   toast(
     "Uploading " + (list.length === 1 ? list[0].name || "file" : list.length + " files") + "…"
   );
@@ -156,9 +165,18 @@ export async function pasteFilesAsPaths(
       toast("Upload failed: " + (f.name || "file") + " — " + ((err as Error)?.message || "error"));
     }
   }
-  if (!paths.length) return;
-  term.paste(paths.map((p) => (/\s/.test(p) ? '"' + p + '"' : p)).join(" ") + " ");
+  if (!paths.length) return "";
   toast(paths.length === 1 ? "File → " + paths[0] : paths.length + " files → workspace");
+  return paths.map((p) => (/\s/.test(p) ? '"' + p + '"' : p)).join(" ");
+}
+
+export async function pasteFilesAsPaths(
+  files: FileList | File[] | null,
+  term: Terminal,
+  session?: string
+) {
+  const text = await uploadFilesAsPathText(files, session);
+  if (text) term.paste(text + " ");
 }
 
 export const dtHasFiles = (dt: DataTransfer | null): boolean =>

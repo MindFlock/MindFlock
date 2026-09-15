@@ -599,3 +599,50 @@ class ShortcutProvider(TicketProvider):
                         f"Shortcut refused to delete story {ticket_id} "
                         f"(HTTP {resp.status}): {text[:200]}"
                     )
+
+    # --- filing a new ticket (New → Ticket) -------------------------- #
+
+    can_create = True
+
+    async def create_ticket(self, name: str, description: str) -> Ticket:
+        """File a new story (``POST /stories``) and return it, hydrated.
+
+        Two of the four fields sent are the source's own configuration rather
+        than anything the caller chose:
+
+        * ``workflow_state_id`` — the FIRST state this source ingests from,
+          when it has one. Filing into the state the board already watches is
+          the only placement that cannot be wrong: any other choice puts the
+          story somewhere the team's own process does not look, and Shortcut's
+          own default (the workflow's first state) is a guess about a board
+          MindFlock has never seen. Omitted when the source ingests from
+          everywhere, which is Shortcut's default-state behaviour and correct.
+        * ``owner_ids`` — the configured member, when set. A story that lands on
+          nobody is one ``search_assigned`` will never return, so an unassigned
+          create would file a ticket into a queue that cannot see it.
+
+        The response is a full story object, so the returned Ticket is built by
+        the same parser every other Shortcut read goes through — no second,
+        thinner idea of what a story is.
+        """
+        body: dict[str, Any] = {
+            "name": name,
+            "description": description,
+        }
+        state_ids = self._ingest_state_ids()
+        if state_ids:
+            body["workflow_state_id"] = state_ids[0]
+        member = (self.cfg.member_id or "").strip()
+        if member:
+            body["owner_ids"] = [member]
+        url = f"{_SHORTCUT_API_BASE}/stories"
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.post(url, json=body, headers=self._headers()) as resp:
+                if resp.status not in (200, 201):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Shortcut could not create the story "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+                data = await resp.json()
+        return self._finalize(story_from_api_response(data, self.cfg.api_token))

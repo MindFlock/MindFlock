@@ -629,19 +629,96 @@ staging is deliberately unbound — palette/menu only, behind a confirm.
 
 ## New-session dialog
 
-The dialog is two pages: a one-sentence **Describe** page it opens on (below),
-and the form itself. On the form, newcomers see just **Name**, **Prompt**, and
+The dialog has two tabs — **Session** and **Ticket**. Session is the landing
+tab on every open (including after a refused create), because it is the hot
+path: name → Enter. Ticket is described further down.
+
+The card has one fixed top edge and grows downward from it, rather than being
+centred like every other modal — a centred card shifts its top by half of any
+height change, so switching tabs slid the whole dialog under the pointer. The
+top is anchored where a *landing* pane sits centred (Session page 1, the Ticket
+tab), so those read as centred and the full form simply sags past the middle;
+each pane keeps its own natural height, and a card stops growing at the bottom
+of the window and scrolls inside instead.
+
+The Session tab is two pages: a one-sentence **Describe** page it opens on
+(below), and the form itself. On the form, newcomers see just **Name**, **Prompt**, and
 **Create** — the defaults do the right thing (blank repo → the configured
 `[repository].url` is provisioned; program prefilled). Program, repo folder, the *create new repo* / *work in place* checkboxes, the folder
 browser, and a **Launch flags** field live under a collapsed **Advanced options**
 fold (its open/closed state is remembered). **Ctrl/Cmd+Enter** submits the dialog
 from anywhere in it (the handler is dialog-level, not tied to the prompt field).
 
+**Browse… → + Folder** creates a folder on disk, inside whatever directory the
+browser is currently showing — the path line directly above the name box — and
+picks it. The parent is never in question, which matters: MindFlock has always
+created folders as a side effect of **Create** (a Folder path that does not exist
+yet is `mkdir`'d, and *create new repo* `git init`s it), and a bare name typed
+into that field once produced a directory beside the server's own checkout.
+
 **Launch flags** are extra CLI flags appended to the agent on every start/resume
 of the session. The field is pre-filled from the global per-provider default
 (`coding_cli.default_launch_args`, Settings → Agent CLI) and its value is
 *always sent* with the create request — so clearing it for one session creates
 that session with no flags rather than re-inheriting the default.
+
+## New → Ticket: file a ticket by describing it
+
+The second tab files a work item on one of your configured ticketing sources
+and hands you the link to it. One box, one picker, one button.
+
+**There is no ticket form, and there will not be one.** You cannot hand-write a
+title and a description here — the tracker already has a form for that, it is
+one click away, and a worse copy of it living inside a session dialog would earn
+nothing. What MindFlock can do that the tracker cannot is turn *“the login page
+hangs for SSO users on slow connections”* into a ticket somebody else on the team
+could pick up. So the input is a brief, and the output is a filed ticket.
+
+What happens when you press **Create ticket**:
+
+1. A model turn writes a title, a description and acceptance criteria. This is
+   the slow part (~10–25 s) and the button says so once it runs long.
+2. The description is normalized to paragraphs, one `## Acceptance Criteria`
+   heading and `-` bullets — nothing else. That narrow grammar is load-bearing
+   in two places that are not defensive about it: the pipeline's
+   acceptance-criteria miner reads the criteria back out of that exact heading
+   on ingestion, and Jira's ADF translator understands those four shapes alone.
+3. The ticket is filed on the chosen source, **in the workflow state that source
+   already ingests from** and assigned to its configured member — so it lands
+   where the board is looking rather than in a default backlog, and where the
+   poller can still find it.
+4. You get the link.
+
+Filing does **not** start a session. The ticket shows up in Intake → Tickets
+like any other, and **Begin work** is where you start one. If ticket ingestion
+is on for the flock, the pane says so before you press the button: a ticket that
+quietly turns into a running agent is a surprise worth one sentence.
+
+**Ctrl/Cmd+Enter** files from inside the Ticket tab — distinct from the
+dialog-level shortcut that submits the Session form, so the same keys do the
+right thing on either tab. The brief box takes focus when you switch to the tab,
+so switching and typing works without a click. When exactly **one** configured
+source can accept a ticket it is preselected; with two it is not, because which
+board work lands on is a decision and a silent default is how it lands on the
+wrong one. Once the filing runs past **~8 s** the button
+changes from *Filing…* to *Still writing…* rather than sitting unchanged, which
+reads as a hang long before it is one.
+
+Sources that cannot accept a ticket stay in the picker, disabled, with the
+reason — usually one field short (a Jira source needs its **Project** set to a
+project key; a Linear source in a multi-team workspace needs its **Project** set
+to a team key). All five providers can file: GitHub Issues, Shortcut, Jira,
+Linear and Asana.
+
+If the drafting succeeds and the *filing* fails — an expired token, an archived
+project — the drafted ticket is shown rather than thrown away. It is the
+expensive half and, at that moment, the only copy of that text anywhere.
+
+One failure sentence is worth reading before you retry: *“the ticket was filed
+on X but the tracker did not return a link to it — check the board before filing
+it again.”* That one means the ticket **exists** and only its link is missing, so
+pressing the button again files a second copy. It is reported as a failure
+anyway, because a ticket you cannot open is one you cannot act on.
 
 ## New-session dialog: describe it in a sentence
 
@@ -1100,9 +1177,15 @@ everything the duplicate has — description, acceptance criteria, comments and
 attached files — is appended to the survivor's description, a comment on the
 survivor records where it came from, and the duplicate is **deleted from the
 tracker**. In Shortcut, Jira, Linear and GitHub, not just here; Asana's adapter
-is read-only, so its rows never show it (the server stamps `merge_ready`
-per row from the adapter's own `can_merge`, rather than the UI keeping a second
-list of which providers can write).
+implements no merge writes, so its rows never show it (the server stamps
+`merge_ready` per row from the adapter's own `can_merge`, rather than the UI
+keeping a second list of which providers can write). *Merging* is the capability
+Asana lacks — it can still **file** a new ticket, which every provider can; see
+[New → Ticket](#new--ticket-file-a-ticket-by-describing-it) for the other
+direction, filling this panel rather than tidying it. A ticket filed there shows
+up in this list because filing drops the panel's cached fan-out, not because the
+panel went back to the tracker — so it arrives on the next poll rather than
+instantly.
 
 The four steps run in an order chosen so that every partial failure is a
 *recoverable* one, and the surface is built to report which one happened rather

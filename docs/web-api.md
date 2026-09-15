@@ -226,7 +226,11 @@ Errors carry one human sentence and leave the form untouched:
   `{"error": "that reads like an answer format rather than a request — say what
   you want to work on"}` when the sentence is nothing but output-contract markup
   (those lines are dropped whole, never substring-stripped, so ordinary prose
-  mentioning `<commit>` survives).
+  mentioning `<commit>` survives). The stripper is shared with
+  `POST /api/tickets/compose` and knows **four** contract names, not three:
+  `newsession`, `commit`, `testplan` and — since New → Ticket — `newticket`, all
+  derived from one list (`session_plan._CONTRACT_NAMES`), so a forged
+  `<newticket>` block is dropped from both boxes by the same code.
 - **502** `{"error": "…"}` — no model to ask or an unreadable answer, e.g.
   `claude is not installed`, `codex did not answer within 75s`, `no installed CLI
   (aider) has a headless mode MindFlock can ask for a session plan`, `the CLI
@@ -282,7 +286,9 @@ no response whose only content is "gh is not installed".
 |---|---|---|
 | GET | `/api/tickets` | Assigned tickets on the configured ticketing sources, each annotated with auto-ingest eligibility → `{tickets, sources, source_labels, buckets, done_buckets, ingest_states, errors[], stale}` (per ticket: `source`, `source_label`, `bucket`, `eligible`, `reasons`, `has_session`). The list is grouped by **source** and then by workflow-state bucket, so `source_labels` maps the key of EVERY configured source → its display label — including sources that returned nothing and ones that landed in `errors[]`, which deriving labels from the ticket rows alone would make vanish (`sources` is the subset that answered). The slowest of the three panel fan-outs (~3 s: one provider search per source + a `git ls-remote` per repo); per-source failures come back in `errors[]` rather than failing the call. Powers Intake → **Tickets** → **Assigned tickets** |
 | POST | `/api/tickets/start` | Body `{source, id, agent?}` — force-start a coding session for one ticket, bypassing the auto-ingest filters. `agent` is the coding CLI for **this one launch** (the picker beside **Begin work**) and outranks the source's own; omit it — or send `""` — to use the configured chain (the source's Agent CLI, then `[mindflock].agent`, then the app default). 400 missing `source`/`id` or an `agent` no provider answers to, 404 ticket gone, 409 a session for it already exists |
-| POST | `/api/tickets/merge` | Body `{source, from, into}` — fold the duplicate ticket `from` into `into` on the same source and **delete `from` in the tracker** (Intake → Tickets → **Merge into…**). Everything `from` has — description, acceptance criteria, comments and attached files — is appended to `into`'s description, an audit comment on `into` records where it came from, and only then is `from` deleted. The order is the contract, not an implementation detail: a failure at the append leaves BOTH tickets untouched, and a failure at the delete leaves a duplicated ticket rather than an erased one — so `deleted` and `delete_error` come back in a **200** body instead of as a 5xx, because by then almost everything did happen and a 5xx would say nothing had. → `{from, into, comments_copied, attachments_moved[], attachments_failed[], attachments_linked[], comment_error, deleted, delete_error}`; `attachments_linked` is the honest answer for a provider whose uploads outlive the ticket (GitHub, Linear) — nothing moved because nothing had to. Same source only: files cannot follow a ticket into another tracker and the survivor keeps its own queue's repo and agent. Needs an adapter that implements the provider writes (`TicketProvider.can_merge` — Shortcut, Jira, Linear, GitHub Issues; Asana is read-only and its rows never offer the control, which `GET /api/tickets` reports per row as `merge_ready`). Deleting a GitHub issue is the one that can refuse on permissions: it needs the GraphQL `deleteIssue` mutation and repo admin rights. 400 missing ids, the same ticket twice, or a read-only provider; 404 no such source; 502 the tracker refused the FIRST write, with nothing changed |
+| POST | `/api/tickets/merge` | Body `{source, from, into}` — fold the duplicate ticket `from` into `into` on the same source and **delete `from` in the tracker** (Intake → Tickets → **Merge into…**). Everything `from` has — description, acceptance criteria, comments and attached files — is appended to `into`'s description, an audit comment on `into` records where it came from, and only then is `from` deleted. The order is the contract, not an implementation detail: a failure at the append leaves BOTH tickets untouched, and a failure at the delete leaves a duplicated ticket rather than an erased one — so `deleted` and `delete_error` come back in a **200** body instead of as a 5xx, because by then almost everything did happen and a 5xx would say nothing had. → `{from, into, comments_copied, attachments_moved[], attachments_failed[], attachments_linked[], comment_error, deleted, delete_error}`; `attachments_linked` is the honest answer for a provider whose uploads outlive the ticket (GitHub, Linear) — nothing moved because nothing had to. Same source only: files cannot follow a ticket into another tracker and the survivor keeps its own queue's repo and agent. Needs an adapter that implements the provider writes (`TicketProvider.can_merge` — Shortcut, Jira, Linear, GitHub Issues; Asana implements no *merge* writes, so its rows never offer the control — it can still file a new ticket via `/api/tickets/compose` — which `GET /api/tickets` reports per row as `merge_ready`). Deleting a GitHub issue is the one that can refuse on permissions: it needs the GraphQL `deleteIssue` mutation and repo admin rights. 400 missing ids, the same ticket twice, or a provider that cannot merge; 404 no such source; 502 the tracker refused the FIRST write, with nothing changed |
+| GET | `/api/tickets/sources` | `{sources[], ingest_on}` — every configured ticketing source with whether a ticket can be **filed into** it (`{key, label, provider, can_create, blocker}`). Powers the source picker in **New → Ticket**. Sources that cannot accept one are listed too, with `blocker` naming the field to set (a Jira source with no project key, a Linear source that names no team in a multi-team workspace), because "Jira isn't in the list" and "this Jira source needs a project" are different problems and only one is the user's to fix. Contacts no provider — `TicketProvider.create_blocker` is contracted offline — so opening the dialog costs no API calls. `ingest_on` is whether ticket ingestion is running at all, i.e. whether filing will also eventually start a session |
+| POST | `/api/tickets/compose` | Body `{source, text}` — draft a ticket from one sentence and **file it on the tracker**, returning the link (**New → Ticket**). → `{source, source_label, provider, id, slug, name, url, description, criteria[]}`. The model writes a title, a description and acceptance criteria; the description is normalized to paragraphs + one `## Acceptance Criteria` heading + `-` bullets, which is the grammar `parse_acceptance_criteria` mines back out on ingestion and the only grammar Jira's ADF translator understands. The ticket is filed into the state the source already ingests from and assigned to its configured member, so it lands where the board (and the poller) is looking. **There is deliberately no route that takes ticket fields**: the tracker already has a form, and describing the work is the only thing MindFlock can do here that it cannot. Needs an adapter with `TicketProvider.can_create` (all five: GitHub Issues, Shortcut, Jira, Linear, Asana). 400 no source, an empty sentence, or one that is only an answer-format instruction; 404 no such source; 502 the source is blocked, the CLI could not draft, or the tracker refused — a 502 raised **after** the model turn carries `draft` (`{name, description, criteria}`) so a retry costs a button press rather than another ~25 s |
 | GET | `/api/github/prs` | Open PRs on the watched repos, each annotated with why auto-review did / didn't pick it up. **Every** open non-draft PR is listed, whatever it targets: a PR into a branch its repo isn't watching comes back with the skip reason `targets X, not the watched base (Y)` instead of being filtered out server-side, so the row is visible and still force-reviewable (the auto monitor, which asks GitHub only for the watched base, would never see it). The watched base is per repo — `github.repo_settings[repo].base_branch`, else the tab-wide `github.base_branch` |
 | POST | `/api/github/prs/review` | Body `{repo, number, agent?}` — force-start a review session for one open PR (**Begin review** in Intake → Pull requests), bypassing the auto filters, a non-matching base included. `agent` is this launch's coding CLI and outranks the repo card's; blank falls through to the same chain the monitor uses (`github.repo_settings[repo].agent` → `github.agent` → `[mindflock].agent` → the app default). 400 bad `owner/name`/number or an unknown `agent`, 404 no such open PR, 409 a session for it already exists |
 | GET | `/api/github/issues` | Open issues on the issue-handling repos (`github.issue_repos`), each annotated with auto-handling eligibility (`eligible`, `reasons`, `has_session`). PRs filtered out. Powers Intake → **Issues** |
@@ -344,6 +350,90 @@ nothing — and is per *pass*, not per row: the recently-closed store is read
 once, each candidate directory is stat'd once, and each repo answers one
 `git worktree list`, all indexed for the whole response. Rows that already have
 a live session are skipped.
+
+Two **POST** routes drop the assigned-tickets cache rather than refreshing it:
+`/api/tickets/merge` and `/api/tickets/compose`. Both change what the Tickets
+panel should show — one ticket gone, one ticket new — and re-sweeping inline
+would put a provider search per source on a request that has already done its
+work. Dropping the entry means the panel's next poll pays for one real sweep. So
+a just-filed ticket appears in Intake because the cache was invalidated, not
+because the panel went back to the tracker on its own.
+
+### `POST /api/tickets/compose`
+
+The ticket twin of `POST /api/session-plan`, and the opposite in one important
+respect: this one **creates something**, on a server MindFlock does not own.
+One sentence in, a filed ticket and a link out.
+
+```jsonc
+{ "source": "shortcut", "text": "the login page hangs for SSO users on slow connections" }
+```
+
+```jsonc
+{
+  "source": "shortcut",            // the pair every other ticket route is keyed on…
+  "id": "4821",                    // …so the row can go straight to /api/tickets/start
+  "source_label": "Shortcut",
+  "provider": "shortcut",
+  "slug": "sc-4821",
+  "name": "SSO login hangs on slow connections",
+  "url": "https://app.shortcut.com/acme/story/4821",   // the deliverable
+  "description": "…\n\n## Acceptance Criteria\n- …",   // what was filed
+  "criteria": ["…"]
+}
+```
+
+**There is deliberately no route that takes ticket FIELDS.** The tracker already
+has a form for filing a ticket by hand; a worse copy of it inside a session
+dialog would earn nothing, and describing the work is the only thing MindFlock
+can do here that the tracker cannot.
+
+The shape of the call:
+
+- **The draft is one headless model turn**, budgeted at **75 s**
+  (`ticket_draft.TIMEOUT_DRAFT`) — the same budget the Describe box uses, for
+  the same reason. It runs on `asyncio.to_thread`, off the loop serving the
+  grid's websockets, and typically takes ~10–25 s.
+- **`program` is not a parameter.** The server reads the flock's own default CLI
+  (`ENGINE.default_program()`) per request and passes it in `pick_argv`'s FIRST
+  slot — passing `""` there resolves to `claude` unconditionally, which is how a
+  codex-only machine ends up being told a CLI it never chose is not installed.
+  Same reasoning as `/api/session-plan`.
+- **`text` is stripped of output-contract lines** before it is sent, by the same
+  stripper `/api/session-plan` uses.
+- **The blocker is checked before the model runs**, so a source that was never
+  going to accept a ticket costs a round trip rather than a draft.
+- It **invalidates the assigned-tickets cache**, so Intake → Tickets shows the
+  new row on its next poll (see the caching contract above).
+
+Errors carry one human sentence:
+
+- **400** `{"error": "pick a source to file the ticket on"}` — no `source`;
+  `{"error": "say what the ticket is for"}` — blank `text`; and `{"error": "that
+  reads like an answer format rather than a request — say what the ticket is
+  for"}` when the sentence is nothing but output-contract markup.
+- **404** `{"error": "No ticketing source 'x' is configured — check Intake →
+  Tickets"}`.
+- **502** `{"error": "…"}` — the source is blocked (`create_blocker`), no CLI
+  could be asked, the draft was unreadable, or the tracker refused. **A 502
+  raised after the model turn carries the draft**, which is the one shape in
+  this file that is not a bare `{error}`:
+
+  ```jsonc
+  { "error": "Jira could not create an issue in ENG (HTTP 401): …",
+    "draft": { "name": "…", "description": "…", "criteria": ["…"] } }
+  ```
+
+  It is returned so a retry costs a button press rather than another ~25 s, and
+  because at that moment the drafted text is the only copy of itself anywhere.
+
+  One 502 is worth reading closely: *"The ticket was filed on X but the tracker
+  did not return a link to it — check the board before filing it again."* That
+  one means the create **succeeded** and only the link is missing, so **a retry
+  will file a second ticket.** It is reported as a failure anyway, because a
+  ticket the user cannot open is one they cannot act on — but the sentence says
+  what happened rather than dressing it up.
+
 
 ### Verify — checklists for what shipped
 

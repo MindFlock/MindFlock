@@ -85,7 +85,9 @@ api_token = "…"                 # secret — the provider's token/API key/PAT
 base_url = "https://you.atlassian.net"   # Jira only — your site URL
 email = "you@company.com"       # Jira only — account email (basic auth with api_token)
 member_id = "…"                 # "assigned to me" identity; auto-filled by Test in the UI
-project = "owner/repo"          # scope: GitHub owner/repo, Asana workspace gid, ...
+                                # also the assignee of a ticket filed from New -> Ticket
+project = "owner/repo"          # scope AND filing target: GitHub owner/repo, Asana
+                                # workspace gid, Jira project key, Linear team key
 poll_interval_seconds = 20      # optional, default 20 — poll cadence
 workflow_state_id = 500000007   # Shortcut only — restrict the story search to one state
 
@@ -248,6 +250,25 @@ In the provider catalog (`GET /api/settings/providers/ticketing`) it is a field
 of type **`state_one`** — a single destination, as against the multi-select
 filter `workflow_state` renders as — and it is only offered by the providers
 that can write a state back.
+
+**`project` has a second job: it is the FILING target.** Reading tickets works
+without it on three of the five providers; filing one (New → **Ticket**, which
+every provider supports) does not, because a tracker has no workspace-level
+ticket to create:
+
+| Provider | What `project` must hold before a ticket can be filed |
+|---|---|
+| `jira` | The **project key** (`ENG`). Required — a Jira site has dozens of projects owned by teams who would not thank you for a stray ticket, so there is nothing to guess. Without it the source is shown disabled in the picker, with that sentence. |
+| `linear` | The **team key** (`ENG`), which MindFlock translates to the team id `issueCreate` wants. Optional only in a **single-team** workspace, where there is exactly one right answer; with two or more teams it is required. |
+| `asana` | The **workspace gid**, which this provider already required for reading. |
+| `github_issues` | Nothing new — it resolves through the existing repo ladder (`project` → `repo_url` → `[repository].url` → this checkout's `origin`). |
+| `shortcut` | Nothing — a new story lands in the **first state this source ingests from** (`workflow_state`), or Shortcut's own default when the source ingests from everywhere. |
+
+**`member_id` becomes the assignee of a filed ticket** on every provider that
+supports it. That is not a nicety: `search_assigned` looks tickets up *by*
+assignee, so a ticket filed onto nobody is one the source can never list again —
+and never auto-ingest. (GitHub's assignment is best effort: a token without push
+rights makes GitHub drop the field silently, and the issue is still filed.)
 
 **Shortcut also filters archived work, implicitly.** Alongside `workflow_state`
 and `assignee_scope`, a Shortcut source silently narrows to what Shortcut's own

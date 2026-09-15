@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **New → Ticket: describe work, get a filed ticket back.** The New dialog now
+  has two tabs. The second one takes a sentence or two about what needs doing,
+  writes a ticket from it — title, description, acceptance criteria — files it
+  on one of your configured ticketing sources, and hands you the link. All five
+  providers can file: GitHub Issues, Shortcut, Jira, Linear and Asana.
+
+  There is deliberately **no ticket form**, and no route anywhere that accepts
+  ticket fields. Every tracker already has a create form and it is one click
+  away; the only thing MindFlock can do here that the tracker cannot is turn a
+  half-formed sentence into something a teammate could pick up. The drafted
+  description is normalized to paragraphs, one `## Acceptance Criteria` heading
+  and `-` bullets — that narrow grammar is what the ingestion pipeline mines
+  the criteria back out of, and the only grammar Jira's ADF translator
+  understands. The ticket is filed into the state the source already ingests
+  from and assigned to its configured member, so it lands where the board is
+  looking instead of in a default backlog.
+
+  Filing does not start a session — the ticket appears in Intake → Tickets like
+  any other — but if ingestion is on, the pane says so before you press the
+  button, because a ticket that quietly becomes a running agent is a surprise
+  worth one sentence. A source that cannot accept a ticket stays in the picker
+  with the reason (a Jira source needs its Project set to a project key; a
+  Linear source in a multi-team workspace needs a team), and that refusal comes
+  *before* the model runs rather than 25 seconds into it. If the drafting
+  succeeds and the filing then fails, the draft comes back with the error: it
+  is the expensive half, and at that moment the only copy of that text.
+
 - **Merge a duplicate ticket into another one, and delete it.** Two people file
   the same task constantly, and the queue's only answers were to start two
   sessions on it or to remember forever that one is "really" the other —
@@ -31,6 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   button arms before it fires — this is the one thing in Intake that destroys
   something other people can see. A push goes out over ntfy too, since deleting
   a ticket is worth carrying past the tab that did it.
+
+### Fixed
+
+- **“+ Folder” in the folder browser now works in the desktop app.** It never
+  had: it asked for the name with `window.prompt`, which Electron does not
+  implement at all — it returns null and logs a refusal — so the button did
+  nothing, silently, for everyone outside a browser tab. The name is now typed
+  into a row inside the browser itself, directly under the path it will be
+  created in.
 
 ## [0.3.2] - 2026-09-11
 

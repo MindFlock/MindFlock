@@ -605,3 +605,106 @@ class JiraProvider(TicketProvider):
                         f"Jira refused to delete issue {ticket_id} "
                         f"(HTTP {resp.status}){hint}: {text[:200]}"
                     )
+
+    # --- filing a new ticket (New → Ticket) -------------------------- #
+
+    can_create = True
+
+    def create_blocker(self) -> str:
+        """Jira cannot file an issue into a site — only into a project.
+
+        There is no guessable default: a Jira site routinely has dozens of
+        projects owned by teams that would not thank you for a stray ticket, so
+        unlike Linear's single-team case there is no "only one it could be" to
+        fall back on. The refusal names the field, and the compose route shows
+        it against the source before anything is drafted.
+        """
+        if not (self.cfg.project or "").strip():
+            return (
+                "This Jira source has no project to file into — set its Project "
+                "field to the project key (e.g. ENG) first."
+            )
+        return ""
+
+    async def _create_issue_type(self, session: aiohttp.ClientSession) -> str:
+        """The issue type a new ticket is filed as: ``Task`` where the project
+        has one, else the project's first non-subtask type.
+
+        Asked rather than assumed because "Task" is a default, not a guarantee:
+        a project configured for a software team may offer only Story/Bug/Epic,
+        and a hardcoded type would fail every create on it. Sub-task types are
+        excluded because they cannot exist without a parent, and this route has
+        none to give.
+
+        Any failure answers ``Task`` — the create below reports the real error
+        far better than a metadata probe can, and a probe that fails must not be
+        the reason nothing gets filed.
+        """
+        key = (self.cfg.project or "").strip()
+        try:
+            async with session.get(
+                self._api("/rest/api/3/issue/createmeta/%s/issuetypes" % key),
+                headers=self._headers(),
+            ) as resp:
+                if resp.status != 200:
+                    return "Task"
+                data = await resp.json()
+        except (aiohttp.ClientError, ValueError):
+            return "Task"
+        usable = [
+            t
+            for t in (data.get("issueTypes") or data.get("values") or [])
+            if isinstance(t, dict) and not t.get("subtask")
+        ]
+        for t in usable:
+            if str(t.get("name") or "").lower() == "task":
+                return str(t["name"])
+        return str(usable[0].get("name")) if usable else "Task"
+
+    async def create_ticket(self, name: str, description: str) -> Ticket:
+        """File a new issue (``POST /rest/api/3/issue``) and return it, hydrated.
+
+        The description is translated by :func:`text_to_adf`, which is safe here
+        for the reason its own docstring gives: it is only ever fed text this
+        repo wrote, and the drafted description is normalized to exactly the
+        shapes it understands (paragraphs, one ``##`` heading, ``-`` bullets)
+        before it arrives.
+
+        Jira's create response carries only ``id``/``key``/``self``, so the
+        ticket is re-fetched — the returned object has to be the same shape a
+        polled one is, and ``key`` alone is not it.
+        """
+        blocker = self.create_blocker()
+        if blocker:
+            raise ProviderError(blocker)
+        project = (self.cfg.project or "").strip()
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            fields: dict[str, Any] = {
+                "project": {"key": project},
+                "summary": name,
+                "issuetype": {"name": await self._create_issue_type(session)},
+                "description": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": text_to_adf(description),
+                },
+            }
+            account = (self.cfg.member_id or "").strip()
+            if account:
+                fields["assignee"] = {"accountId": account}
+            async with session.post(
+                self._api("/rest/api/3/issue"),
+                json={"fields": fields},
+                headers=self._headers(),
+            ) as resp:
+                if resp.status not in (200, 201):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Jira could not create an issue in {project} "
+                        f"(HTTP {resp.status}): {text[:300]}"
+                    )
+                created = await resp.json()
+        key = str(created.get("key") or "")
+        if not key:
+            raise ProviderError("Jira created an issue but did not return its key")
+        return await self.fetch(key)

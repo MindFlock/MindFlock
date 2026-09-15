@@ -22072,9 +22072,9 @@ async function uploadFileToWorkspace(blob, session, name) {
 		body: blob
 	})).path;
 }
-async function pasteFilesAsPaths(files, term, session) {
+async function uploadFilesAsPathText(files, session) {
 	const list = Array.from(files || []);
-	if (!list.length) return;
+	if (!list.length) return "";
 	toast("Uploading " + (list.length === 1 ? list[0].name || "file" : list.length + " files") + "…");
 	const paths = [];
 	for (const f of list) try {
@@ -22082,9 +22082,13 @@ async function pasteFilesAsPaths(files, term, session) {
 	} catch (err) {
 		toast("Upload failed: " + (f.name || "file") + " — " + (err?.message || "error"));
 	}
-	if (!paths.length) return;
-	term.paste(paths.map((p) => /\s/.test(p) ? "\"" + p + "\"" : p).join(" ") + " ");
+	if (!paths.length) return "";
 	toast(paths.length === 1 ? "File → " + paths[0] : paths.length + " files → workspace");
+	return paths.map((p) => /\s/.test(p) ? "\"" + p + "\"" : p).join(" ");
+}
+async function pasteFilesAsPaths(files, term, session) {
+	const text = await uploadFilesAsPathText(files, session);
+	if (text) term.paste(text + " ");
 }
 var dtHasFiles = (dt) => !!dt && Array.from(dt.types || []).indexOf("Files") !== -1;
 function attachFileDrop(host, term, session) {
@@ -32683,6 +32687,101 @@ function findPreset(value) {
 	return (m[1] === "b" ? BUILTIN_PRESETS : loadUserPresets()).find((p) => p.name === m[2]) || null;
 }
 //#endregion
+//#region src/lib/fileDropTextarea.ts
+var TEXTAREA_DROP_CLASS = "ta-file-drop";
+function setControlledValue(ta, next) {
+	const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(ta), "value");
+	if (desc?.set) desc.set.call(ta, next);
+	else ta.value = next;
+	ta.dispatchEvent(new Event("input", { bubbles: true }));
+}
+function revealTextarea(ta) {
+	for (let el = ta.parentElement; el; el = el.parentElement) if (el.tagName === "DETAILS" && !el.open) el.open = true;
+}
+function spliceAtCaret(value, start, end, insert) {
+	const s = Math.max(0, Math.min(start, value.length));
+	const e = Math.max(s, Math.min(end, value.length));
+	const before = value.slice(0, s);
+	const after = value.slice(e);
+	const lead = before && !/\s$/.test(before) ? " " : "";
+	const tail = after && /^\s/.test(after) ? "" : " ";
+	const body = lead + insert + tail;
+	return {
+		value: before + body + after,
+		caret: before.length + body.length
+	};
+}
+function attachFileDropZone(zone, opts) {
+	const box = () => zone.querySelector("textarea");
+	const shut = () => {
+		const ta = box();
+		if (!ta) return !opts().onInsert;
+		return ta.readOnly || ta.disabled;
+	};
+	const onDragOver = (ev) => {
+		if (shut() || !dtHasFiles(ev.dataTransfer)) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		ev.dataTransfer.dropEffect = "copy";
+		zone.classList.add(TEXTAREA_DROP_CLASS);
+	};
+	const onDragLeave = (ev) => {
+		if (!zone.contains(ev.relatedTarget)) zone.classList.remove(TEXTAREA_DROP_CLASS);
+	};
+	const onDrop = (ev) => {
+		if (shut() || !dtHasFiles(ev.dataTransfer)) return;
+		ev.preventDefault();
+		ev.stopPropagation();
+		zone.classList.remove(TEXTAREA_DROP_CLASS);
+		const host = box();
+		if (!host) {
+			const { session: sess, onInsert } = opts();
+			uploadFilesAsPathText(ev.dataTransfer.files, sess).then((text) => {
+				if (text) onInsert?.(text);
+			});
+			return;
+		}
+		const focused = typeof document !== "undefined" && document.activeElement === host;
+		const start = focused ? host.selectionStart ?? host.value.length : host.value.length;
+		const end = focused ? host.selectionEnd ?? start : host.value.length;
+		const files = ev.dataTransfer.files;
+		const { session } = opts();
+		uploadFilesAsPathText(files, session).then((text) => {
+			if (!text) return;
+			const next = spliceAtCaret(host.value, start, end, text);
+			setControlledValue(host, next.value);
+			revealTextarea(host);
+			const restore = () => {
+				try {
+					host.focus();
+					host.setSelectionRange(next.caret, next.caret);
+				} catch {}
+			};
+			if (typeof requestAnimationFrame === "function") requestAnimationFrame(restore);
+			else restore();
+		});
+	};
+	zone.addEventListener("dragover", onDragOver);
+	zone.addEventListener("dragleave", onDragLeave);
+	zone.addEventListener("drop", onDrop);
+	return () => {
+		zone.removeEventListener("dragover", onDragOver);
+		zone.removeEventListener("dragleave", onDragLeave);
+		zone.removeEventListener("drop", onDrop);
+		zone.classList.remove(TEXTAREA_DROP_CLASS);
+	};
+}
+function useFileDropTextarea(opts) {
+	const latest = (0, import_react.useRef)(opts);
+	latest.current = opts;
+	const detach = (0, import_react.useRef)(null);
+	return (0, import_react.useCallback)((el) => {
+		detach.current?.();
+		detach.current = null;
+		if (el) detach.current = attachFileDropZone(el, () => latest.current);
+	}, []);
+}
+//#endregion
 //#region src/components/dialogs/FlagChips.tsx
 var LAUNCH_FLAG_PRESETS = {
 	claude: [
@@ -32788,7 +32887,266 @@ function FlagChips({ provider, value, onChange }) {
 	});
 }
 //#endregion
+//#region src/components/dialogs/NewTicketPane.tsx
+var MIN_BRIEF = 6;
+var MAX_BRIEF = 2e3;
+var SLOW_MS = 8e3;
+function NewTicketPane() {
+	const closeDialog = useUi((s) => s.closeDialog);
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const [sources, setSources] = (0, import_react.useState)(null);
+	const [ingestOn, setIngestOn] = (0, import_react.useState)(false);
+	const [sourcesError, setSourcesError] = (0, import_react.useState)("");
+	const [source, setSource] = (0, import_react.useState)("");
+	const [brief, setBrief] = (0, import_react.useState)("");
+	const [filing, setFiling] = (0, import_react.useState)(false);
+	const [slow, setSlow] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	const [draft, setDraft] = (0, import_react.useState)(null);
+	const [filed, setFiled] = (0, import_react.useState)(null);
+	const briefRef = (0, import_react.useRef)(null);
+	const slowTimer = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api("/api/tickets/sources").then((p) => {
+			if (!live) return;
+			const rows = p.sources || [];
+			setSources(rows);
+			setIngestOn(!!p.ingest_on);
+			const usable = rows.filter((r) => r.can_create);
+			if (usable.length === 1) setSource(usable[0].key);
+		}).catch((err) => live && setSourcesError(errMsg(err)));
+		return () => {
+			live = false;
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		briefRef.current?.focus();
+	}, []);
+	(0, import_react.useEffect)(() => () => {
+		if (slowTimer.current) window.clearTimeout(slowTimer.current);
+	}, []);
+	const chosen = (sources || []).find((s) => s.key === source) || null;
+	const ready = brief.trim().length >= MIN_BRIEF && !!chosen?.can_create && !filing;
+	const file = (0, import_react.useCallback)(async () => {
+		if (!ready) return;
+		setError("");
+		setDraft(null);
+		setFiling(true);
+		setSlow(false);
+		slowTimer.current = window.setTimeout(() => setSlow(true), SLOW_MS);
+		try {
+			const row = await api("/api/tickets/compose", { json: {
+				source,
+				text: brief.trim()
+			} });
+			setFiled(row);
+		} catch (err) {
+			setError(errMsg(err));
+			const body = err?.body;
+			if (body && body.draft) setDraft(body.draft);
+		} finally {
+			if (slowTimer.current) window.clearTimeout(slowTimer.current);
+			slowTimer.current = null;
+			setSlow(false);
+			setFiling(false);
+		}
+	}, [
+		brief,
+		ready,
+		source
+	]);
+	if (filed) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "nt-pane nt-done",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "nt-filed",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "nt-filed-chip",
+					children: "Filed"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("a", {
+					className: "nt-filed-link",
+					href: filed.url,
+					target: "_blank",
+					rel: "noopener noreferrer",
+					children: [
+						filed.slug || filed.id,
+						" — open in ",
+						filed.source_label
+					]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "nt-filed-name",
+				children: filed.name
+			}),
+			!!(filed.criteria || []).length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "nt-criteria",
+				children: (filed.criteria || []).map((c, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: c }, i))
+			}),
+			ingestOn && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "nt-note",
+				children: "Ticket ingestion is on for this flock, so a session may start for this ticket on the next poll. You can also start one now from Intake."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "modal-actions",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => {
+							setFiled(null);
+							setBrief("");
+							window.setTimeout(() => briefRef.current?.focus(), 0);
+						},
+						children: "File another"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: () => openDialogFor("intake", "tickets"),
+						children: "Open Intake"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: closeDialog,
+						children: "Done"
+					})
+				]
+			})
+		]
+	});
+	if (sources && !sources.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "nt-pane nt-empty",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "nt-note",
+			children: "No ticketing source is connected, so there is nowhere to file a ticket. Connect one under Intake → Tickets and this tab will use it."
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "modal-actions",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				onClick: () => openDialogFor("intake", "tickets"),
+				children: "Open Intake"
+			})
+		})]
+	});
+	const usable = (sources || []).filter((s) => s.can_create);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "nt-pane",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+				className: "nt-label",
+				htmlFor: "nt-brief",
+				children: "What needs doing?"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				id: "nt-brief",
+				ref: briefRef,
+				className: "nt-brief",
+				value: brief,
+				maxLength: MAX_BRIEF,
+				spellCheck: false,
+				readOnly: filing,
+				placeholder: "e.g. the login page hangs for SSO users on slow connections — it should time out and show a retry instead",
+				onChange: (e) => {
+					setBrief(e.target.value);
+					if (error) setError("");
+				},
+				onKeyDown: (e) => {
+					if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+						e.preventDefault();
+						e.stopPropagation();
+						file();
+					}
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "nt-help",
+				children: "MindFlock writes the ticket — a title, a description and acceptance criteria — and files it. There is no form: the tracker already has one, and it is one click away for anything this cannot say."
+			}),
+			sourcesError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: sourcesError
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "nt-source-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+					className: "nt-label",
+					htmlFor: "nt-source",
+					children: "File on"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+					id: "nt-source",
+					className: "nt-source",
+					value: source,
+					disabled: filing || !sources,
+					onChange: (e) => setSource(e.target.value),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: "",
+						children: sources ? usable.length ? "Choose a source…" : "No source can accept a ticket" : "Loading…"
+					}), (sources || []).map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+						value: s.key,
+						disabled: !s.can_create,
+						children: [s.label, s.can_create ? "" : " — unavailable"]
+					}, s.key))]
+				})]
+			}),
+			chosen && !chosen.can_create && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "nt-note",
+				children: chosen.blocker
+			}),
+			!chosen && !!usable.length && !sourcesError && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "nt-note",
+				children: "Pick where the ticket should be filed."
+			}),
+			ingestOn && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "nt-note",
+				children: "Ticket ingestion is on, so a session may start for this ticket automatically once it is filed."
+			}),
+			!!error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				children: error
+			}),
+			draft && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "nt-draft",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "nt-draft-head",
+						children: "Drafted, but not filed:"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "nt-filed-name",
+						children: draft.name
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+						className: "nt-draft-body",
+						children: draft.description
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "modal-actions",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: closeDialog,
+					children: "Cancel"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					disabled: !ready,
+					onClick: file,
+					children: filing ? slow ? "Still writing…" : "Filing…" : "Create ticket"
+				})]
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/dialogs/NewSessionDialog.tsx
+var NEW_TABS = [{
+	key: "session",
+	label: "Session"
+}, {
+	key: "ticket",
+	label: "Ticket"
+}];
 var SUGGEST_SOURCES = [
 	{
 		key: "recent",
@@ -33010,10 +33368,15 @@ function newFolderBlockReason(where) {
 function NewSessionDialog() {
 	const open = useUi((s) => s.openDialog === "new-session");
 	const closeDialog = useUi((s) => s.closeDialog);
+	const [tab, setTab] = (0, import_react.useState)("session");
 	const [title, setTitle] = (0, import_react.useState)("");
 	const [program, setProgram] = (0, import_react.useState)("");
 	const [providers, setProviders] = (0, import_react.useState)([]);
 	const [prompt, setPrompt] = (0, import_react.useState)("");
+	const dropZoneRef = useFileDropTextarea({ onInsert: (text) => setDescribe((prev) => {
+		const next = (prev && !/\s$/.test(prev) ? prev + " " : prev) + text + " ";
+		return next.length > DESCRIBE_MAX_CHARS ? next.slice(0, DESCRIBE_MAX_CHARS) : next;
+	}) });
 	const [launchArgs, setLaunchArgs] = (0, import_react.useState)("");
 	const [provision, setProvision] = (0, import_react.useState)(false);
 	const [strategy, setStrategy] = (0, import_react.useState)("worktree");
@@ -33076,6 +33439,7 @@ function NewSessionDialog() {
 			failedReopen.current = false;
 			return;
 		}
+		setTab("session");
 		setTitle("");
 		setError("");
 		setPrompt("");
@@ -33548,27 +33912,33 @@ function NewSessionDialog() {
 				if (browserOpen) folderDo({ t: "browse-cancel" });
 				else closeDialog();
 			} else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+				if (tab !== "session") return;
 				e.preventDefault();
 				submit();
 			}
 		},
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		children: tab === "ticket" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "new-ticket-form",
+			className: "ta-drop",
+			ref: dropZoneRef,
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewHead, {
+				tab,
+				onTab: setTab,
+				onClose: closeDialog
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewTicketPane, {})]
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			id: "new-form",
-			className: page === 1 ? "nf-ask" : void 0,
+			ref: dropZoneRef,
+			className: "ta-drop" + (page === 1 ? " nf-ask" : ""),
 			onSubmit: (e) => {
 				e.preventDefault();
 				submit();
 			},
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "ws-head",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "New session" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "new-close",
-						title: "Close (Esc)",
-						onClick: closeDialog,
-						children: "Close"
-					})]
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewHead, {
+					tab,
+					onTab: setTab,
+					onClose: closeDialog
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "nf-body",
@@ -34339,6 +34709,33 @@ function NewSessionDialog() {
 		})
 	});
 }
+function NewHead({ tab, onTab, onClose }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ws-head nf-head",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "New" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
+				className: "nf-tabs",
+				"aria-label": "New",
+				children: NEW_TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "nf-tab" + (tab === t.key ? " active" : ""),
+					"data-new-tab": t.key,
+					"aria-current": tab === t.key ? "page" : void 0,
+					onClick: () => onTab(t.key),
+					children: t.label
+				}, t.key))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				id: "new-close",
+				title: "Close (Esc)",
+				onClick: onClose,
+				children: "Close"
+			})
+		]
+	});
+}
 function focusRowIndex(paths, leaving) {
 	if (!paths.length) return -1;
 	const i = paths.indexOf(leaving);
@@ -34347,7 +34744,10 @@ function focusRowIndex(paths, leaving) {
 function FolderBrowser({ initialPath, selected, onSelect, onPick }) {
 	const [data, setData] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)("");
+	const [newFolder, setNewFolder] = (0, import_react.useState)(null);
+	const [making, setMaking] = (0, import_react.useState)(false);
 	const listRef = (0, import_react.useRef)(null);
+	const newFolderRef = (0, import_react.useRef)(null);
 	const leaving = (0, import_react.useRef)(null);
 	const load = (0, import_react.useCallback)(async (path) => {
 		setError("");
@@ -34375,17 +34775,21 @@ function FolderBrowser({ initialPath, selected, onSelect, onPick }) {
 		load(to);
 	};
 	const mkdir = async () => {
-		if (!data?.path) return;
-		const name = window.prompt("New folder name (created in " + data.path + "):", "");
-		if (!name || !name.trim()) return;
+		const name = (newFolder || "").trim();
+		if (!data?.path || !name || making) return;
 		setError("");
+		setMaking(true);
 		try {
-			onPick((await api("/api/mkdir", { json: {
+			const r = await api("/api/mkdir", { json: {
 				path: data.path,
-				name: name.trim()
-			} })).path);
+				name
+			} });
+			setNewFolder(null);
+			onPick(r.path);
 		} catch (err) {
 			setError(err.message);
+		} finally {
+			setMaking(false);
 		}
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -34413,10 +34817,46 @@ function FolderBrowser({ initialPath, selected, onSelect, onPick }) {
 						type: "button",
 						id: "rb-mkdir",
 						title: "Create a new folder here",
-						onClick: mkdir,
+						"aria-expanded": newFolder !== null,
+						onClick: () => {
+							setNewFolder(newFolder === null ? "" : null);
+							setError("");
+						},
 						children: "+ Folder"
 					})
 				]
+			}),
+			newFolder !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rb-new",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					ref: newFolderRef,
+					type: "text",
+					className: "rb-new-name",
+					value: newFolder,
+					autoFocus: true,
+					autoComplete: "off",
+					spellCheck: false,
+					placeholder: "New folder name",
+					"aria-label": "New folder in " + (data?.path || ""),
+					readOnly: making,
+					onChange: (e) => setNewFolder(e.target.value),
+					onKeyDown: (e) => {
+						e.stopPropagation();
+						if (e.key === "Enter") {
+							e.preventDefault();
+							mkdir();
+						} else if (e.key === "Escape") {
+							e.preventDefault();
+							setNewFolder(null);
+						}
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "rb-new-go",
+					disabled: !newFolder.trim() || making,
+					onClick: mkdir,
+					children: making ? "Creating…" : "Create"
+				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				id: "rb-list",
