@@ -391,6 +391,8 @@ export function WorkItemRow({
   configuredEffort,
   workspace,
   onReopen,
+  actionExtra,
+  drawer,
 }: {
   reference: string;
   url?: string;
@@ -429,6 +431,25 @@ export function WorkItemRow({
   workspace?: ItemWorkspace;
   /** Reopens `workspace`; resolve with the session title for the toast. */
   onReopen?(): Promise<string>;
+  /** An extra action for the row, rendered in the ACTION COLUMN under the
+   * primary button.
+   *
+   * It lived in the meta line for one release and that was a mistake worth
+   * recording: the meta line is where a row states FACTS about itself — its
+   * age, why auto ingestion skipped it — and a control dropped among them
+   * inherits their styling and reads as one more label. Tickets' **Merge
+   * into…** was invisible there, to the point of being reported missing by
+   * someone looking straight at it. Every action a row has belongs in the one
+   * column that holds actions, whatever it costs in height. */
+  actionExtra?: React.ReactNode;
+  /** A full-width block under the row, for whatever `metaExtra` opened.
+   *
+   * Inline, NOT a modal. These rows already live inside an `aria-modal`
+   * dialog, and a second window opened from inside one is the mistake Verify
+   * documented at length (VerifyDialog.tsx) — an OS-painted `confirm()` or a
+   * nested overlay that traps focus in the wrong layer. What needs confirming
+   * gets confirmed here, in the app's own paint, next to the row it is about. */
+  drawer?: React.ReactNode;
 }) {
   const [state, setState] = useState<"idle" | "starting" | "started">("idle");
   // Independent of `state`: reopening and starting are different actions on the
@@ -503,9 +524,16 @@ export function WorkItemRow({
         )}
       </div>
       {hasSession ? (
-        <button type="button" className="btn-primary pr-review-btn" disabled>
-          Session open
-        </button>
+        // Wrapped in the same action column the other branch uses, rather than
+        // sitting bare in the grid cell: a row whose session is open still has
+        // actions (a ticket can be merged away while its session keeps running),
+        // and they have to stack under the button the same way they do below.
+        <div className="ik-item-start">
+          <button type="button" className="btn-primary pr-review-btn" disabled>
+            Session open
+          </button>
+          {actionExtra}
+        </div>
       ) : (
         <div className="ik-item-start">
           {/* The work is already here: reopening it is the action, and starting
@@ -672,8 +700,10 @@ export function WorkItemRow({
           >
             {state === "starting" ? "Starting…" : state === "started" ? "Started" : actionLabel}
           </button>
+          {actionExtra}
         </div>
       )}
+      {drawer ? <div className="ik-item-drawer">{drawer}</div> : null}
     </div>
   );
 }

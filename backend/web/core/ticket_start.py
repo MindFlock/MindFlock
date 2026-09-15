@@ -326,6 +326,12 @@ async def list_assigned_tickets() -> dict:
         # "not assigned to you" is not a reason to skip one there.
         any_assignee = ingests_any_assignee(src)
         member_ids = [src.member_id] if src.member_id and not any_assignee else []
+        # Whether this source's adapter can fold one of its tickets into another
+        # and delete the loser. Stamped per row rather than looked up in the UI
+        # because the answer is the adapter's (``TicketProvider.can_merge``),
+        # and a client-side list of "providers that support merging" is a second
+        # copy of that fact waiting to disagree with the first.
+        merge_ready = bool(getattr(provider, "can_merge", False))
         for story in stories:
             story.repo_url = src.repo_url
             story.agent = getattr(src, "agent", "")
@@ -360,6 +366,7 @@ async def list_assigned_tickets() -> dict:
                     "repo_url": repo,
                     "strategy": strategy,
                     "bucket": bucket,
+                    "merge_ready": merge_ready,
                     "eligible": not reasons,
                     "reasons": reasons,
                     # Whose ticket this is. A source scoped to "anyone" lists

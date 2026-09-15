@@ -61,6 +61,7 @@ import {
 import { useProviderEfforts } from "../../state/queries";
 import type { TabProps } from "./IntakeDialog";
 import { ticketMatches } from "./search";
+import { MergeButton, MergeDrawer } from "./MergeTicket";
 import type {
   TicketingCatalogEntry,
   TicketingCatalogField,
@@ -502,6 +503,11 @@ interface AssignedTicket {
   assignee?: string;
   /** Present when a previous run of this ticket still has its workspace here. */
   workspace?: ItemWorkspace;
+  /** Whether this ticket's SOURCE can merge one of its tickets into another and
+   * delete the loser — i.e. whether its adapter implements the provider writes.
+   * Stamped by the server (`TicketProvider.can_merge`) rather than decided from
+   * the provider name here, so there is one answer rather than two. */
+  merge_ready?: boolean;
 }
 
 /** "A", "A and B", "A, B and C", then "A, B and 4 more" — provider state names
@@ -829,6 +835,12 @@ function AssignedTickets({
                       <AssignedTicketRow
                         key={t.source + ":" + t.id}
                         t={t}
+                        // The MERGE picker offers tickets from this source, and
+                        // they are not all in this bucket — the duplicate is
+                        // usually sitting in a different state from the ticket
+                        // it duplicates, which is half of why nobody spotted it.
+                        // So the row gets the unfiltered list, not `rows`.
+                        all={tickets || []}
                         agents={agents}
                         // Falls back to the app default so the picker never
                         // offers a bare "Configured" with nothing named — which
@@ -902,6 +914,7 @@ function AssignedTickets({
 
 function AssignedTicketRow({
   t,
+  all,
   agents,
   configuredAgent,
   configuredDepth,
@@ -909,6 +922,8 @@ function AssignedTicketRow({
   onStarted,
 }: {
   t: AssignedTicket;
+  /** Every ticket the panel holds, for the Merge picker's candidate list. */
+  all: AssignedTicket[];
   agents: string[];
   /** What this ticket's source is configured to run, for the picker's label. */
   configuredAgent: string;
@@ -918,6 +933,13 @@ function AssignedTicketRow({
   configuredEffort: string;
   onStarted(): void;
 }) {
+  const [merging, setMerging] = useState(false);
+  // No Merge control on a source whose adapter cannot write (Asana today), and
+  // none on a ticket with nothing to merge into: a chip that opens a drawer
+  // saying "there is nothing here" is worse than no chip.
+  const canMerge =
+    t.merge_ready !== false &&
+    all.some((o) => o.source === t.source && String(o.id) !== String(t.id));
   return (
     <WorkItemRow
       agents={agents}
@@ -940,6 +962,31 @@ function AssignedTicketRow({
       eligible={t.eligible}
       eligibleLabel="queued for auto ingestion"
       reasons={t.reasons}
+      actionExtra={
+        canMerge ? (
+          <MergeButton
+            reference={t.slug}
+            open={merging}
+            onToggle={() => setMerging((v) => !v)}
+          />
+        ) : null
+      }
+      drawer={
+        merging ? (
+          <MergeDrawer
+            row={t}
+            all={all}
+            hasSession={t.has_session}
+            onClose={() => setMerging(false)}
+            // The merged-away ticket is still in the panel's cached listing and
+            // the survivor's content just changed. Immediate, not the 5s delay
+            // the start paths use: nothing is provisioning here, the tracker has
+            // already answered, and the row that must disappear is the one the
+            // user is looking at.
+            onDone={onStarted}
+          />
+        ) : null
+      }
       actionLabel="Begin work"
       failPrefix="Begin work failed"
       workspace={t.workspace}
