@@ -62,6 +62,52 @@ shows (and stores), so "zero config" never means "an empty field you have to
 trust". When nothing names a repo the error says what to fill in rather than
 failing mid-poll.
 
+### The one thing adapters WRITE: merging duplicates
+
+Everything above reads. Adapters also carry four **optional** write methods —
+`append_description`, `add_comment`, `carry_attachments`, `delete_ticket` — used
+by exactly one caller, `backend.web.core.ticket_merge`, behind Intake → Tickets
+→ **Merge into…**. Duplicate tickets are a tracker problem, so the fix has to
+land in the tracker both filers will go back to; hiding a duplicate in MindFlock
+would leave it in Shortcut, still assigned, still getting ingested.
+
+`can_merge` is the gate. An adapter that leaves it `False` keeps the base
+class's four refusals, which name the provider rather than half-performing a
+merge, and `GET /api/tickets` stamps the answer on every row (`merge_ready`) so
+the UI never offers a control it would only be able to apologize for.
+
+| Provider | Appending | Attachments | Deleting |
+|---|---|---|---|
+| `shortcut` | `PUT /stories/{id}`, read-modify-write on `description` | Free: a file is a workspace entity a story merely *references*, so the carry is one PUT unioning `file_ids` / `linked_file_ids` — the bytes never move, and deleting the source story does not delete them | `DELETE /stories/{id}` |
+| `jira` | `PUT /rest/api/3/issue/{key}`, appending ADF nodes to the raw tree — never the flattened text, which would strip every table, panel and code block the issue already had | The bytes really move: a Jira attachment dies with its issue, so each is downloaded and re-uploaded to `/attachments` (`X-Atlassian-Token: no-check`). Per-file best effort | `DELETE /rest/api/3/issue/{key}?deleteSubtasks=true` — needs the project's **Delete Issues** permission |
+| `linear` | `issueUpdate`, after resolving the human identifier (`ENG-5`) to the UUID every mutation takes | Uploaded files live on Linear's asset CDN and travel in the copied markdown; the `attachments` connection is integration *links*, which are recreated with `attachmentCreate` | `issueDelete` — Linear's own delete, which is the workspace trash |
+| `github_issues` | `PATCH /repos/{o}/{r}/issues/{n}` | Nothing to move: an image dropped into an issue is a markdown link to user-content that outlives the issue, so copying the body *is* carrying the file | GraphQL `deleteIssue` — there is no REST delete, and the mutation needs **admin** rights on the repository |
+| `asana` | — | — | — (read-only; rows never offer the control) |
+
+The merged-in block is assembled **once, in markdown**, for all four, using only
+four shapes — a `---` rule, `####` headings, `- ` bullets and plain paragraphs —
+because Jira's description is not markdown and `providers.jira.text_to_adf`
+translates exactly those. Anything richer would render on three providers and
+come out as literal asterisks on the fourth.
+
+One detail there is load-bearing rather than cosmetic: the criteria heading says
+**"Acceptance criteria from `<slug>`"**, not "Acceptance criteria".
+`parse_acceptance_criteria` enters its criteria section on a line matching
+`^#+ acceptance criteria$` *exactly*, and once it finds one it stops falling
+back to mining the description's other bullets — so an unqualified heading in
+the merged block would quietly change how the **surviving** ticket's own
+criteria are read the next time it is ingested. The merge must not rewrite the
+meaning of text it did not touch.
+
+The order of the four writes is a contract, documented in
+`backend/web/core/ticket_merge.py` and pinned by `tests/unit/test_ticket_merge.py`:
+append first, delete **last**, so that a failure at the start leaves both
+tickets untouched and a failure at the end leaves a duplicated ticket rather
+than an erased one. `merge_tickets` therefore *returns* `deleted` /
+`delete_error` instead of raising — "merged, but I could not delete it" is a
+true sentence the UI can act on, where a 5xx would tell the user nothing
+happened when in fact almost everything did.
+
 ## Which agent CLI a ticket runs
 
 Ingestion is **multi-CLI**: sessions are not tied to Claude Code. The chain,

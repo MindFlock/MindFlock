@@ -1007,6 +1007,54 @@ MindFlock's to delete: ending that session must leave the work exactly where it
 was. Every part of the probe is read-only and best-effort, and any failure answers
 "nothing found", which is precisely how the panels behaved before.
 
+**Duplicate tickets are merged away, in the tracker.** Two people file the same
+task constantly, and until this existed the queue's only answers were to start
+two sessions on it or to remember forever that sc-41 is "really" sc-38 — neither
+of which is visible to the person who filed the second one. So a ticket row
+carries a **Merge into…** button, under **Begin work** in the row's action
+column: pick another ticket from the *same* source, and
+everything the duplicate has — description, acceptance criteria, comments and
+attached files — is appended to the survivor's description, a comment on the
+survivor records where it came from, and the duplicate is **deleted from the
+tracker**. In Shortcut, Jira, Linear and GitHub, not just here; Asana's adapter
+is read-only, so its rows never show it (the server stamps `merge_ready`
+per row from the adapter's own `can_merge`, rather than the UI keeping a second
+list of which providers can write).
+
+The four steps run in an order chosen so that every partial failure is a
+*recoverable* one, and the surface is built to report which one happened rather
+than to claim success: the append runs first (a failure there leaves both
+tickets exactly as they were), and the delete runs **last** (a failure there
+leaves a duplicated ticket rather than an erased one). So the result is not a
+tick — it is a sentence, and only "the content is on the survivor AND the
+original is gone" is green. *"…was copied into sc-38, but it could NOT be
+deleted — your Jira account needs the project's Delete Issues permission"* goes
+to the bottom-right card instead of a 1.4 s toast, because it is an instruction
+and somebody still has to act on it.
+
+The trigger sits in the **action column**, at the quiet weight the demoted
+**Begin work** already uses. It shipped for one afternoon as a chip in the meta
+line instead — on the theory that a rare action should not cost a common row any
+height — and that was wrong twice: the meta line wraps, so on any row with a real
+skip reason it took a line anyway, and a control sitting among `6d old` and `not
+in an ingest state` inherits their grey passive reading and stops looking
+pressable. It was reported missing by someone looking straight at it. The meta
+line is where a row states facts about itself; actions belong in the column that
+holds actions.
+
+The confirmation is a **drawer under the row**, not a dialog and not a native
+`confirm()`. These rows already live inside an `aria-modal` dialog, and a second
+window opened from inside one is painted by the wrong layer and steals focus
+from a dialog that still thinks it owns it — the lesson Verify wrote down at
+length. The primary button **arms** rather than firing: the first press turns
+*Merge and delete sc-41* into a red *Confirm — delete sc-41*. Everything else on
+this panel is reversible, and this one reaches into a system MindFlock does not
+own and destroys something other people can see; two presses is the cheapest
+honest guard, and it costs nothing because nobody merges tickets in a hurry.
+A session open on the merged-away ticket is named in the drawer and deliberately
+left running — the work in it is real and possibly uncommitted, and closing it
+is not this button's decision.
+
 **Every row can be started on a different coding CLI, for that one launch** — a
 small picker beside **Begin work** / **Begin review** / **Start work**, whose
 empty choice names what the row's source or repo card would use ("Configured

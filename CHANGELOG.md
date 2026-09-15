@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Merge a duplicate ticket into another one, and delete it.** Two people file
+  the same task constantly, and the queue's only answers were to start two
+  sessions on it or to remember forever that one is "really" the other —
+  neither of which the second filer can see. A ticket row in Intake → Tickets
+  now carries **Merge into…**: pick another ticket from the same source, and
+  everything the duplicate has — description, acceptance criteria, comments and
+  attached files — is appended to the survivor's description, a comment on the
+  survivor records where it came from, and the duplicate is **deleted in the
+  tracker**, not just hidden here. Shortcut, Jira, Linear and GitHub Issues;
+  Asana's adapter is read-only and its rows never offer the control.
+
+  The four writes run in the order that makes every partial failure survivable
+  — the append first, so a refusal there leaves both tickets untouched, and the
+  delete last, so a refusal there leaves a duplicated ticket rather than an
+  erased one. The result is reported as a sentence rather than a tick, and only
+  "the content is on the survivor and the original is gone" is green: a tracker
+  that refused the delete (deleting a GitHub issue needs repo admin) says so,
+  names the reason, and tells you the duplicate is still there. The
+  confirmation is an inline drawer under the row rather than a dialog, and its
+  button arms before it fires — this is the one thing in Intake that destroys
+  something other people can see. A push goes out over ntfy too, since deleting
+  a ticket is worth carrying past the tab that did it.
+
 ## [0.3.2] - 2026-09-11
 
 ### Added

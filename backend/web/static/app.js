@@ -33064,7 +33064,7 @@ function WorkListPanel({ label, onRefresh, note, hint, children, rowId, refreshI
 		]
 	});
 }
-function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligible, eligibleLabel, reasons, actionLabel, onStart, failPrefix, linkTitle, agents, configuredAgent, configuredDepth, configuredEffort, workspace, onReopen }) {
+function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligible, eligibleLabel, reasons, actionLabel, onStart, failPrefix, linkTitle, agents, configuredAgent, configuredDepth, configuredEffort, workspace, onReopen, actionExtra, drawer }) {
 	const [state, setState] = (0, import_react.useState)("idle");
 	const [reopening, setReopening] = (0, import_react.useState)("idle");
 	const canReopen = !!workspace && !!onReopen && !hasSession;
@@ -33117,11 +33117,14 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligibl
 					}, reason);
 				})]
 			}),
-			hasSession ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "btn-primary pr-review-btn",
-				disabled: true,
-				children: "Session open"
+			hasSession ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-item-start",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "btn-primary pr-review-btn",
+					disabled: true,
+					children: "Session open"
+				}), actionExtra]
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ik-item-start",
 				children: [
@@ -33216,9 +33219,14 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligibl
 							}
 						},
 						children: state === "starting" ? "Starting…" : state === "started" ? "Started" : actionLabel
-					})
+					}),
+					actionExtra
 				]
-			})
+			}),
+			drawer ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-drawer",
+				children: drawer
+			}) : null
 		]
 	});
 }
@@ -33315,6 +33323,170 @@ function queuedMatches(item, tokens) {
 		item.kind,
 		item.kind === "prs" ? "pull request" : ""
 	], tokens);
+}
+//#endregion
+//#region src/components/intake/merge.ts
+function mergeTargets(all, row, query) {
+	const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+	return all.filter((t) => {
+		if (t.source !== row.source) return false;
+		if (String(t.id) === String(row.id)) return false;
+		if (!tokens.length) return true;
+		const hay = [
+			t.slug,
+			t.name,
+			t.bucket
+		].join(" ").toLowerCase();
+		return tokens.every((tok) => hay.includes(tok));
+	});
+}
+function mergeOutcome(r) {
+	const moved = r.attachments_moved || [];
+	const failedFiles = r.attachments_failed || [];
+	const linked = r.attachments_linked || [];
+	const carried = [];
+	if (r.comments_copied) carried.push(r.comments_copied + " comment" + (r.comments_copied === 1 ? "" : "s"));
+	if (moved.length) carried.push(moved.length + " file" + (moved.length === 1 ? "" : "s"));
+	else if (linked.length) carried.push(linked.length + " file link" + (linked.length === 1 ? "" : "s"));
+	const what = carried.length ? " with its " + carried.join(" and ") : "";
+	if (!r.deleted) return {
+		tone: "warn",
+		text: r.from.slug + " was copied into " + r.into.slug + what + ", but it could NOT be deleted — " + (r.delete_error || "the tracker gave no reason") + ". Delete it by hand, or the duplicate stays in the queue."
+	};
+	if (failedFiles.length) return {
+		tone: "warn",
+		text: r.from.slug + " was merged into " + r.into.slug + " and deleted, but " + failedFiles.length + " file" + (failedFiles.length === 1 ? "" : "s") + " could not be carried over (" + failedFiles.join(", ") + ") — they are gone with it."
+	};
+	return {
+		tone: "ok",
+		text: r.from.slug + " merged into " + r.into.slug + what + ", and deleted."
+	};
+}
+//#endregion
+//#region src/components/intake/MergeTicket.tsx
+function MergeButton({ reference, open, onToggle }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn ik-merge-btn" + (open ? " on" : ""),
+		"aria-expanded": open,
+		title: "Fold " + reference + " into another ticket from this source — its description, comments and files move across and " + reference + " is then deleted from the tracker.",
+		onClick: onToggle,
+		children: "Merge into…"
+	});
+}
+function MergeDrawer({ row, all, hasSession, onDone, onClose }) {
+	const [query, setQuery] = (0, import_react.useState)("");
+	const [target, setTarget] = (0, import_react.useState)("");
+	const [armed, setArmed] = (0, import_react.useState)(false);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const candidates = mergeTargets(all, row, query);
+	const picked = candidates.find((c) => String(c.id) === target);
+	const effective = picked ? target : "";
+	const submit = async () => {
+		if (!effective || busy) return;
+		setBusy(true);
+		try {
+			const { tone, text } = mergeOutcome(await api("/api/tickets/merge", { json: {
+				source: row.source,
+				from: row.id,
+				into: effective
+			} }));
+			if (tone === "ok") toast(text);
+			else errorPop("Merged, with something left to do", text);
+			onClose();
+			onDone();
+		} catch (err) {
+			errorPop("Merge failed — " + row.slug + " is untouched", err.message || "the server gave no reason");
+			setBusy(false);
+			setArmed(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ik-merge",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ik-merge-pick",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "ik-merge-label",
+						children: [
+							"Merge ",
+							row.slug,
+							" into"
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "text",
+						className: "ik-merge-filter",
+						placeholder: "Filter…",
+						value: query,
+						autoComplete: "off",
+						onChange: (e) => {
+							setQuery(e.target.value);
+							setArmed(false);
+						}
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+						className: "ik-merge-target",
+						value: effective,
+						disabled: busy,
+						"aria-label": "Ticket to merge " + row.slug + " into",
+						onChange: (e) => {
+							setTarget(e.target.value);
+							setArmed(false);
+						},
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "",
+							children: candidates.length ? "Pick the ticket that survives…" : query ? "No other ticket here matches that" : "No other ticket on this source"
+						}), candidates.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: String(c.id),
+							children: c.slug + " — " + (c.name || "untitled") + (c.bucket ? "  ·  " + c.bucket : "")
+						}, c.id))]
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ik-merge-note",
+				children: picked ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					"Everything on ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: row.slug }),
+					" — its description, acceptance criteria, comments and attached files — is appended to",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: picked.slug }),
+					", a comment on ",
+					picked.slug,
+					" records where it came from, and then ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [row.slug, " is deleted from the tracker"] }),
+					". That last part cannot be undone from here or, on most trackers, at all."
+				] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "Only tickets from this same source can receive it: the files cannot follow a ticket into another tracker, and the surviving ticket keeps its own queue's repo and agent." })
+			}),
+			hasSession && picked ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "ik-merge-warn",
+				children: [
+					"A session is open on ",
+					row.slug,
+					". It keeps running on its own workspace and branch — merging the ticket away does not close it, and nothing here touches the work in it. Close it yourself if it is the duplicate you are dropping."
+				]
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-merge-actions",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy,
+					onClick: onClose,
+					children: "Cancel"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "btn-primary ik-merge-go" + (armed ? " armed" : ""),
+					disabled: !effective || busy,
+					title: effective ? "Deletes " + row.slug + " once its content is on " + (picked?.slug || "") : "Pick the ticket that survives first",
+					onClick: () => armed ? submit() : setArmed(true),
+					children: busy ? "Merging…" : armed ? "Confirm — delete " + row.slug : "Merge and delete " + row.slug
+				})]
+			})
+		]
+	});
 }
 //#endregion
 //#region src/components/intake/TicketsTab.tsx
@@ -33781,6 +33953,7 @@ function AssignedTickets({ agents, sourceAgents, defaultAgent, sourceDepths, sou
 					hideTitle: "Hide the " + b + " bucket everywhere (re-add it from the dropdown)",
 					children: rows.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssignedTicketRow, {
 						t,
+						all: tickets || [],
 						agents,
 						configuredAgent: sourceAgents[t.source] || defaultAgent,
 						configuredDepth: sourceDepths[t.source] || "",
@@ -33823,7 +33996,9 @@ function AssignedTickets({ agents, sourceAgents, defaultAgent, sourceDepths, sou
 		})
 	});
 }
-function AssignedTicketRow({ t, agents, configuredAgent, configuredDepth, configuredEffort, onStarted }) {
+function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, configuredEffort, onStarted }) {
+	const [merging, setMerging] = (0, import_react.useState)(false);
+	const canMerge = t.merge_ready !== false && all.some((o) => o.source === t.source && String(o.id) !== String(t.id));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkItemRow, {
 		agents,
 		configuredAgent,
@@ -33839,6 +34014,18 @@ function AssignedTicketRow({ t, agents, configuredAgent, configuredDepth, config
 		eligible: t.eligible,
 		eligibleLabel: "queued for auto ingestion",
 		reasons: t.reasons,
+		actionExtra: canMerge ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MergeButton, {
+			reference: t.slug,
+			open: merging,
+			onToggle: () => setMerging((v) => !v)
+		}) : null,
+		drawer: merging ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MergeDrawer, {
+			row: t,
+			all,
+			hasSession: t.has_session,
+			onClose: () => setMerging(false),
+			onDone: onStarted
+		}) : null,
 		actionLabel: "Begin work",
 		failPrefix: "Begin work failed",
 		workspace: t.workspace,

@@ -114,6 +114,7 @@ from backend.web.core import pr_review as _pr_review
 from backend.web.core import reopen as _reopen
 from backend.web.core import worktree_reclaim as _worktree_reclaim
 from backend.web.core import ticket_start as _ticket_start
+from backend.web.core import ticket_merge as _ticket_merge
 from backend.web.core import remote as _remote
 from backend.web.core import stage_reset as _stage_reset
 from backend.web.core import pending as _pending
@@ -9073,6 +9074,100 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
 
     _register_task(_bg_start())
     return JSONResponse({"started": True, "title": title}, status_code=202)
+
+
+# --- Ticket merge (Intake → Tickets) --------------------------------------
+# Duplicate tickets are a tracker problem, so the fix writes to the tracker:
+# everything on ticket A is appended to ticket B and A is deleted. The step
+# order, and why a failed delete comes back in the payload instead of as a 500,
+# are in backend.web.core.ticket_merge — read that before changing this.
+
+
+def _notify_ticket_merged(result: dict) -> None:
+    """Push "A is gone, its content is on B" to the user's phone, when ntfy is on.
+
+    Deleting a ticket is the least reversible thing this app does to a system
+    it does not own, and the person who pressed the button is frequently not the
+    only person who cared about that ticket — so the confirmation is worth
+    carrying past the tab that started it. Best effort and fully wrapped: a
+    notification must never be able to fail a merge that has already happened.
+    """
+    try:
+        cfg = _ntfy.load()
+        if not cfg.active:
+            return
+        gone = result.get("from") or {}
+        kept = result.get("into") or {}
+        _ntfy.publish_soon(
+            cfg,
+            title="%s merged into %s" % (gone.get("slug", "?"), kept.get("slug", "?")),
+            message=(
+                "%s — %s\n%s"
+                % (
+                    gone.get("slug", "?"),
+                    gone.get("name") or "untitled",
+                    (
+                        "Deleted; its description, comments and files are on %s."
+                        % (kept.get("slug", "?"))
+                        if result.get("deleted")
+                        # The half-done case says so rather than claiming the tidy
+                        # one: the content moved, the original is still sitting
+                        # there, and somebody has to go and delete it by hand.
+                        else "Copied onto %s, but it could NOT be deleted: %s"
+                        % (
+                            kept.get("slug", "?"),
+                            result.get("delete_error") or "no reason given",
+                        )
+                    ),
+                )
+            ),
+            # 3 = normal when it worked (news, nothing is waiting on anyone),
+            # 4 = high when the original survived, because that one IS a job.
+            priority=3 if result.get("deleted") else 4,
+            tags=(
+                ["twisted_rightwards_arrows"] if result.get("deleted") else ["warning"]
+            ),
+            click=kept.get("url") or None,
+        )
+    except Exception as err:  # noqa: BLE001
+        _ntfy.log_error("ticket merge push failed: %s", err)
+
+
+@app.post("/api/tickets/merge")
+async def ticket_merge(payload: dict) -> JSONResponse:
+    """Merge one ticket into another on the same source and delete the first."""
+    payload = payload or {}
+    source = str(payload.get("source", "") or "").strip()
+    from_id = str(payload.get("from", "") or "").strip()
+    into_id = str(payload.get("into", "") or "").strip()
+    if not source or not from_id or not into_id:
+        return JSONResponse(
+            {"error": "source, from and into are required"}, status_code=400
+        )
+    try:
+        result = await _ticket_merge.merge_tickets(source, from_id, into_id)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    except LookupError as err:
+        return JSONResponse({"error": str(err)}, status_code=404)
+    except Exception as err:  # noqa: BLE001 — token / network / provider refusal
+        # Nothing was written: merge_tickets only lets the FIRST write raise, and
+        # by then both tickets are still exactly as they were.
+        return JSONResponse({"error": str(err)}, status_code=502)
+
+    # The panel's cached fan-out still lists the ticket that no longer exists.
+    # Dropped rather than refreshed: a re-sweep here would put a provider search
+    # per source on this request, and the client refetches immediately anyway.
+    _ASSIGNED_TICKETS_CACHE.pop("v", None)
+    _notify_ticket_merged(result)
+    if log.InfoLog is not None:
+        log.InfoLog.Printf(
+            "merged ticket %s into %s (deleted: %v)",
+            (result.get("from") or {}).get("slug", "?"),
+            (result.get("into") or {}).get("slug", "?"),
+            result.get("deleted"),
+        )
+    return JSONResponse(result)
 
 
 # --- Issue force-start (Intake → Issues) ---------------------------------

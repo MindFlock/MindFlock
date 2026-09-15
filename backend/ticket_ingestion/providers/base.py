@@ -14,6 +14,14 @@ Two responsibilities per adapter:
 * :meth:`TicketProvider.fetch` — full detail for one ticket by native id (used
   by the webhook path and to hydrate slim search results).
 
+…and one OPTIONAL fifth, off to the side: the four write methods at the bottom
+of :class:`TicketProvider` (``append_description`` / ``add_comment`` /
+``carry_attachments`` / ``delete_ticket``), gated on ``can_merge``. Everything
+else in this package reads; those four exist so Intake can fold one duplicate
+ticket into another and delete the loser, which has to happen in the tracker
+both filers will go back to. An adapter that doesn't implement them says so
+with ``can_merge = False`` and the UI never offers the control.
+
 The markdown-shaped helpers here (acceptance-criteria mining, link/attachment
 extraction) are shared: every provider that hands us markdown/plain-text
 descriptions reuses the exact same rules the Shortcut pipeline always used.
@@ -340,3 +348,74 @@ class TicketProvider(abc.ABC):
         Asana) don't offer the picker. Shortcut/Jira/Linear override.
         """
         return []
+
+    # ----------------------------------------------------------------- #
+    # Writes: merging one ticket into another
+    #
+    # Everything above this line reads. These four write, and they exist for
+    # exactly one caller — :mod:`backend.web.core.ticket_merge`, behind Intake →
+    # Tickets → **Merge into…** — because duplicate tickets are a tracker
+    # problem, not a MindFlock one: two people file the same task, and the fix
+    # has to happen where both of them will look for it.
+    #
+    # They are OPTIONAL. ``can_merge`` is the gate the UI and the merge endpoint
+    # both read, and an adapter that leaves it ``False`` keeps the four
+    # defaults below, which refuse with a sentence naming the provider rather
+    # than half-performing a merge. That is the difference between "Asana
+    # sources don't offer Merge" and "Asana sources offer a button that deletes
+    # a task and loses its files".
+    # ----------------------------------------------------------------- #
+
+    #: Whether this adapter implements the four write methods below. The
+    #: assigned-tickets payload carries it per row (``merge_ready``) so the UI
+    #: can hide a control it would only be able to apologize for.
+    can_merge: bool = False
+
+    def _no_merge(self) -> ProviderError:
+        return ProviderError(
+            f"{self.label or self.name} tickets cannot be merged from MindFlock — "
+            "this provider's adapter is read-only. Merge them in "
+            f"{self.label or self.name} itself."
+        )
+
+    async def append_description(self, ticket_id: str, addition: str) -> None:
+        """Append ``addition`` to the ticket's description, keeping what is
+        already there.
+
+        FIRST and load-bearing in a merge: nothing else runs until this has
+        succeeded, because it is the step that makes the surviving ticket carry
+        the deleted one's content. An adapter must read the current description
+        and write back ``current + addition`` — never replace.
+        """
+        raise self._no_merge()
+
+    async def add_comment(self, ticket_id: str, body: str) -> None:
+        """Post ``body`` as a comment on the ticket."""
+        raise self._no_merge()
+
+    async def carry_attachments(
+        self, from_id: str, to_id: str
+    ) -> tuple[list[str], list[str]]:
+        """Make ``from_id``'s attached files reachable from ``to_id``.
+
+        Returns ``(moved, failed)`` — the names that now hang off the target,
+        and the ones that could not be carried at all.
+
+        The default is ``([], [])``, which is the *right* answer for a provider
+        whose uploads live at workspace scope and outlive the ticket they were
+        posted on (GitHub's user-attachments hosts, Linear's upload CDN): the
+        markdown links copied into the description keep resolving after the
+        source ticket is gone, so there is nothing to move. Override only where
+        a file is genuinely owned by one ticket and dies with it (Jira), or
+        where the provider can re-point it for free (Shortcut's file ids).
+        """
+        return [], []
+
+    async def delete_ticket(self, ticket_id: str) -> None:
+        """Delete the ticket, for good.
+
+        LAST in a merge, and deliberately so: every copy step runs first, so a
+        failure here leaves a ticket that has been duplicated into another one
+        rather than a ticket that has been erased into nothing.
+        """
+        raise self._no_merge()
