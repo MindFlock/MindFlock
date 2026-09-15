@@ -11,8 +11,7 @@
     "noFallthroughCasesInSwitch": true,
     "skipLibCheck": true,
     "isolatedModules": true,
-    "noEmit": true,
-    "baseUrl": "src"
+    "noEmit": true
   },
   "include": ["src"]
 }
