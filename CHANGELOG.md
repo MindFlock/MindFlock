@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-15
+
 ### Added
 
 - **New → Ticket: describe work, get a filed ticket back.** The New dialog now
@@ -59,7 +61,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   something other people can see. A push goes out over ntfy too, since deleting
   a ticket is worth carrying past the tab that did it.
 
+- **Drag a file onto the New Session dialog and get its path.** Anywhere on the
+  card — the whole dialog lights up, not just the box — and the file is
+  uploaded and its path dropped into whichever field is in front of you: the
+  one-sentence describe box on the first screen, the launch prompt on the full
+  form, or the ticket brief on the Ticket tab. The agent runs on this machine
+  and cannot see your browser, so "look at this screenshot" has to become a
+  path it can open; the terminals have answered this gesture for a while and
+  now the dialog does too. Dropping onto the full form also opens the Prompt
+  fold, so you can see where the path landed rather than trusting that it did.
+
+### Changed
+
+- **A new project no longer lands in a folder you have never heard of.** The
+  dialog used to offer the first of `code`, `projects`, `src`, `dev`, `work`,
+  `Development` that happened to exist under `$HOME`. One shallow clone dropped
+  into `~/src` by some unrelated tool is enough to make that folder exist, and
+  from then on every new project was proposed into it — past a `$HOME` holding
+  a dozen real projects. It now picks whichever of those directories, `$HOME`
+  included, actually holds the most repos; the list only breaks ties, and a
+  directory you made and named still beats an empty `$HOME`.
+
+- **A new project whose name is already a folder opens that folder.** Asking
+  for `trawl` when `~/trawl` is right there gave you a second `trawl` somewhere
+  else; the folder is the one thing a plan leaves behind that closing the
+  session never cleans up. The name is matched ignoring case and punctuation,
+  so `date-bot` finds `DateBot`, and the form says it is *adopting* an existing
+  folder rather than creating one.
+
 ### Fixed
+
+- **Frontend dependency updates can be merged again.** The committed bundle in
+  `backend/web/static/` is what actually ships, and CI rebuilds it and demands
+  an identical tree — which Dependabot can never satisfy, because it does not
+  run Vite and React is bundled. Every frontend bump therefore arrived red and,
+  since they all rewrite the same lockfile, merging any one conflicted the
+  rest. Those updates are grouped into a single PR now, and both facts are
+  written down where the next person will hit them. React 19.3, Vite 8.3,
+  TypeScript 7 and xterm 6 came in this way.
+
+- **A failing frontend build no longer reports itself as a blank error.**
+  `check-bundle-fresh.sh` sent the build to `/dev/null`, and `tsc` writes its
+  diagnostics to stdout — so a type error surfaced in CI as a bare
+  `exit code 1` after a third of a second, indistinguishable from a stale
+  bundle. It now replays the build log when the build fails.
+
+- **CI no longer runs twice on every pull request.** An unfiltered `push:`
+  trigger sat beside `pull_request:`, so each PR ran the whole matrix against
+  byte-identical trees — two Linux suites, two macOS suites, two cold installs.
+  The GitHub Actions in use also moved off the deprecated Node 20 runtime.
 
 - **“+ Folder” in the folder browser now works in the desktop app.** It never
   had: it asked for the name with `window.prompt`, which Electron does not
@@ -2033,7 +2083,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.4.0
 [0.3.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.3.2
 [0.3.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.3.1
 [0.3.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.3.0
