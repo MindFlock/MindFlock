@@ -31,7 +31,7 @@ jobs:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The tag is the release's name, and three manifests carry the version
       # (pyproject.toml, electron/ and frontend/package.json). Refuse to ship a
@@ -103,9 +103,9 @@ jobs:
       run:
         working-directory: electron
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -202,7 +202,7 @@ jobs:
       # actually opened, instead of only proving the build didn't error.
       - name: Attach desktop artifacts to the run (dry run)
         if: github.ref_type != 'tag'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: MindFlock-${{ matrix.os }}
           path: |

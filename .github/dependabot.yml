@@ -12,6 +12,15 @@ updates:
       - "dependencies"
 
   # Frontend (React/Vite)
+  #
+  # Grouped into ONE PR, because ungrouped these fight each other twice over.
+  # Every one of them rewrites frontend/package-lock.json, so merging the first
+  # conflicts all the rest; and `frontend bundle is current` (ci.yml) rebuilds
+  # backend/web/static/ and demands an identical tree, which dependabot cannot
+  # satisfy — it never runs vite, and react is bundled, so a react bump leaves
+  # app.js stale by construction. That made three PRs (#103/#105/#106) that
+  # were each individually unmergeable. One grouped PR means one rebase and one
+  # `npm run build` commit to make the set green.
   - package-ecosystem: "npm"
     directory: "/frontend"
     schedule:
@@ -19,8 +28,13 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
+    groups:
+      frontend:
+        patterns: ["*"]
 
-  # Electron desktop shell
+  # Electron desktop shell — grouped for the same lockfile reason as /frontend
+  # (no bundle to rebuild here, but electron/package-lock.json still conflicts
+  # every bump against every other).
   - package-ecosystem: "npm"
     directory: "/electron"
     schedule:
@@ -28,6 +42,9 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
+    groups:
+      electron:
+        patterns: ["*"]
 
   # GitHub Actions workflows
   - package-ecosystem: "github-actions"

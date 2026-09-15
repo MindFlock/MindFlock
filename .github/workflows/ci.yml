@@ -9,8 +9,17 @@
 # and run in this same matrix.
 name: CI
 
+# An unfiltered `push:` alongside `pull_request:` ran this whole matrix TWICE
+# for every PR — two ubuntu suites, two macOS suites (~3 min each), two cold
+# installs — on byte-identical trees, and `gh pr checks` showed every job
+# doubled. Scope the push trigger to the branches nothing opens a PR for:
+# main (so a direct push is still checked, which is why `format` covers the
+# whole tree) and tags (the `versions` job asserts the tag matches the
+# manifests, and that only has a tag to read on a tag push).
 on:
   push:
+    branches: [main]
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -24,7 +33,7 @@ jobs:
     name: format (black)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -41,7 +50,7 @@ jobs:
     name: version consistency
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Manifests agree (and match tag on tagged builds)
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
@@ -57,11 +66,19 @@ jobs:
     # without `npm run build` releases a UI that silently lags its own source,
     # and nothing else in this pipeline would notice. Rebuild and demand the
     # tree come back identical.
+    #
+    # Corollary, so the next person does not go hunting: this job is RED on
+    # every dependabot frontend PR, and that is not a bug in the bump. React is
+    # bundled into app.js and dependabot never runs vite, so its commit is a
+    # lockfile without the build that belongs to it. Such a PR goes green only
+    # once someone checks the branch out, runs `npm run build` and commits
+    # backend/web/static/ — see the `groups:` note in .github/dependabot.yml,
+    # which at least makes that one rebuild per week rather than one per bump.
     name: frontend bundle is current
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -88,7 +105,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -132,7 +149,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             curl ca-certificates git tmux procps python3
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Run the installer from the checkout under test
         run: MINDFLOCK_INSTALL_LOCAL="$PWD" sh install.sh
