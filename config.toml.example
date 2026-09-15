@@ -39,6 +39,10 @@ member_id = ""
 poll_interval_seconds = 20
 # Optional: only ingest stories in this workflow state.
 # workflow_state_id = 500000007
+# Optional: move a story into this workflow state when a session starts for it
+# (auto-ingested or started by hand). Unset = leave it where it is. Shortcut /
+# Jira / Linear only. UI field: Intake → Tickets → Move to state on start.
+# start_state = "500000008"
 # Optional: clone URL this source's tickets provision into (defaults to
 # [repository].url).
 # repo_url = ""

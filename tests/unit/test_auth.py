@@ -295,3 +295,48 @@ def test_rotate_endpoint_409_when_env_pinned(monkeypatch):
         headers={"Authorization": "Bearer " + TOKEN},
     )
     assert r.status_code == 409
+
+
+# --------------------------------------------------------------------------- #
+# the update routes
+# --------------------------------------------------------------------------- #
+# These are the highest-privilege routes on the surface: `POST /api/update/start`
+# replaces the tool venv the server is executing out of, and `GET
+# /api/update/state` re-execs the process. They are ordinary `@app` routes, so
+# the middleware covers them the same way it covers everything else — which is
+# exactly the claim worth pinning, because "it's just another route" is also how
+# a route ends up on an allow-list by accident.
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("get", "/api/update/check"),
+        ("post", "/api/update/start"),
+        ("get", "/api/update/state"),
+    ],
+)
+def test_update_routes_are_behind_the_gate(authed, monkeypatch, method, path):
+    def _never(*a, **kw):
+        raise AssertionError("the route body ran for an unauthenticated caller")
+
+    monkeypatch.setattr(server._self_update, "installed_version", _never)
+    monkeypatch.setattr(server._self_update, "start_update", _never)
+    monkeypatch.setattr(server._self_update, "finish_state", _never)
+
+    r = getattr(authed, method)(path, headers={"accept": "application/json"})
+    assert r.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [("get", "/api/update/check"), ("get", "/api/update/state")],
+)
+def test_update_routes_pass_with_a_bearer_token(authed, monkeypatch, method, path):
+    async def _latest(force=False):
+        return None
+
+    monkeypatch.setattr(server._self_update, "latest_release", _latest)
+    monkeypatch.setattr(
+        server._self_update, "finish_state", lambda: ({"state": "idle"}, False)
+    )
+    r = getattr(authed, method)(path, headers={"Authorization": "Bearer " + TOKEN})
+    assert r.status_code == 200

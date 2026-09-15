@@ -184,6 +184,13 @@ function LogsBody({ headDrag }: { headDrag: HeadDrag }) {
   );
 }
 
+/** The Assistant's chat window.
+ *
+ * No state chip in the head, deliberately: the pane header carries no status
+ * label for ANY window (`.pane-head .stagechip` is display:none — a session's
+ * chip is written there and never rendered), because the rail row is where
+ * status lives. The Assistant's row carries its agent's state like every
+ * session's does — see AssistantChip. */
 function ChatBody({ headDrag }: { headDrag: HeadDrag }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const state = useWsTerm(hostRef, "/api/assistant/terminal", true);

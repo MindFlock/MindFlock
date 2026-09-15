@@ -838,3 +838,54 @@ def test_no_effort_leaves_the_launch_flags_exactly_as_they_were(monkeypatch):
 
     assert "launch_args" not in seen
     assert seen["prompt"] == "do the thing"
+
+
+# --------------------------------------------------------------------------- #
+# start_state: a hand-started ticket lands on the board where an auto-ingested
+# one does (Intake → Tickets → the source's "Move to state on start").
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_find_ticket_stamps_the_source_key(monkeypatch):
+    """`provider` is not the source key — two Jira sites share it. Without the
+    stamp the post-launch move resolves the wrong card, or none."""
+    src = SimpleNamespace(
+        id="jira-eu", provider="jira", repo_url="git@github.com:o/r.git", agent=""
+    )
+    monkeypatch.setattr(
+        ticket_start,
+        "_load_config",
+        lambda: SimpleNamespace(ticketing_sources=[src]),
+    )
+    story = _story(provider="jira")
+    monkeypatch.setattr(
+        "backend.ticket_ingestion.providers.get_provider",
+        lambda cfg: SimpleNamespace(fetch=AsyncMock(return_value=story)),
+    )
+    out = await ticket_start.find_ticket("jira-eu", "PROJ-1")
+    assert out.source_key == "jira-eu"
+    assert out.repo_url == "git@github.com:o/r.git"
+
+
+@pytest.mark.asyncio
+async def test_move_to_start_state_delegates_to_the_shared_mover(monkeypatch):
+    """Same code as the pipeline's post-launch move, so the two paths cannot
+    disagree about where a started ticket belongs."""
+    cfg = SimpleNamespace(ticketing_sources=[])
+    monkeypatch.setattr(ticket_start, "_load_config", lambda: cfg)
+    mover = AsyncMock(return_value="42")
+    monkeypatch.setattr("backend.ticket_ingestion.start_state.move_started", mover)
+    story = _story()
+    assert await ticket_start.move_to_start_state(story) == "42"
+    mover.assert_awaited_once_with(story, cfg)
+
+
+def test_the_force_start_route_moves_the_ticket_after_the_launch():
+    """The state claims a session is working on the ticket, so it is only true
+    once the instance is up — after `record_result`, next to the attachments."""
+    import inspect
+
+    from backend.web import server
+
+    src = inspect.getsource(server.ticket_force_start)
+    assert "move_to_start_state" in src
+    assert src.index("inst.Start") < src.index("move_to_start_state")

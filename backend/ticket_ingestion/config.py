@@ -140,6 +140,12 @@ class TicketProviderConfig:
       Asana) ignore it.
     * ``workflow_state_id`` — Shortcut's integer status filter; honoured when
       ``workflow_state`` is empty.
+    * ``start_state`` — optional: the state a ticket is MOVED INTO when a
+      session starts for it (a provider-native state id, from the same list
+      ``workflow_state`` picks from). Empty = leave it where it is, which is
+      what every source did before this setting existed. Only Shortcut / Jira /
+      Linear can move a ticket; see
+      :func:`~backend.ticket_ingestion.providers.base.start_state_id`.
     * ``assignee_scope`` — whose tickets to ingest: ``""``/``"mine"`` (assigned to
       ``member_id``, the historic behavior) or ``"anyone"`` (every ticket sitting
       in ``workflow_state``, whoever owns it — a QA queue picks work up by state,
@@ -158,6 +164,9 @@ class TicketProviderConfig:
     workflow_state: str = ""
     workflow_state_id: int | None = None
     assignee_scope: str = ""
+    #: Provider-native state id a ticket is moved into when its session starts,
+    #: or ``""`` to leave it alone. See the class docstring.
+    start_state: str = ""
     poll_interval_seconds: int = 20
     # Per-source discriminator so you can connect several sources — including
     # multiple of the SAME provider (e.g. two Jira sites) — without their
@@ -366,6 +375,23 @@ class PipelineConfig:
             if source_id and (src.id or src.provider) == source_id and src.effort:
                 return src.effort
         return ""
+
+    def source_for(self, source_id: str = ""):
+        """The configured source ``source_id`` names, or ``None``.
+
+        Matched the way every other per-source lookup here matches — on
+        ``id or provider``, so both a keyed source and a lone unkeyed one
+        resolve. Returns the whole :class:`TicketProviderConfig` rather than one
+        field because the callers that need a source by key (moving a ticket
+        into its start state) need its credentials too, and re-deriving those
+        from a second lookup is how the two drift apart.
+        """
+        if not source_id:
+            return None
+        for src in self.ticketing_sources or ():
+            if (src.id or src.provider) == source_id:
+                return src
+        return None
 
     def _pipeline_agent(self) -> str:
         """The ingestion-wide agent (``[mindflock].agent``), or ``""``."""
@@ -870,6 +896,7 @@ def _parse_source(
     from backend.ticket_ingestion.providers.base import (
         ANY_ASSIGNEE_PROVIDERS,
         STATE_BOUNDED_PROVIDERS,
+        STATE_SETTING_PROVIDERS,
     )
 
     label = f"ticketing.source[{idx}]" if idx is not None else "ticketing"
@@ -913,6 +940,16 @@ def _parse_source(
                 f"workflow_state — without one it would pull every ticket in "
                 f"the tracker, so it stays assigned-to-me"
             )
+    start_state = str(src.get("start_state", "") or "").strip()
+    if start_state and provider not in STATE_SETTING_PROVIDERS:
+        # Say it rather than silently ignoring it: a source switched from Jira
+        # to GitHub Issues keeps the old key in config.toml, and "my tickets
+        # stopped moving" is otherwise invisible.
+        problems.append(
+            f"{label}.start_state is not supported for {provider} — it has no "
+            f"workflow states to move a ticket into"
+        )
+        start_state = ""
     cfg = TicketProviderConfig(
         provider=provider,
         api_token=str(src.get("api_token", "") or ""),
@@ -923,6 +960,7 @@ def _parse_source(
         workflow_state=str(src.get("workflow_state", "") or ""),
         workflow_state_id=int(wsid) if wsid is not None else None,
         assignee_scope=scope,
+        start_state=start_state,
         poll_interval_seconds=int(poll),
         id=str(src.get("id", "") or ""),
         label=str(src.get("label", "") or ""),

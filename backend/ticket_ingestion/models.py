@@ -65,6 +65,12 @@ class Ticket:
     # whatever the CLI does on its own. A neutral rung — see
     # backend/providers/effort.py — translated and clamped at launch.
     effort: str = ""
+    # Which configured SOURCE produced this ticket (its `id or provider` key),
+    # stamped by whoever fetched it. `provider` alone is not that key: two Jira
+    # sites are both "jira" and only their source ids tell them apart. Read when
+    # a launch has to go back to the source's own settings — moving the ticket
+    # into that source's start state. Empty = fall back to `provider`.
+    source_key: str = ""
     # Human name of the ticket's workflow state / bucket ("In Progress",
     # "Ready for Dev", …) when the provider knows it, spelled exactly the way
     # that provider's ``list_states()`` spells it — the assigned-tickets panel

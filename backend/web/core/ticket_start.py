@@ -401,6 +401,10 @@ async def find_ticket(source: str, ticket_id: str):
             story = await provider.fetch(str(ticket_id))
             story.repo_url = src.repo_url
             story.agent = getattr(src, "agent", "")
+            # The source this ticket launches under, so the post-launch move
+            # (start_state) resolves the same card the row was started from —
+            # two sources of the same provider share `provider` and nothing else.
+            story.source_key = source
             return story
     raise LookupError(
         f"No ticketing source {source!r} is configured — " "check Intake → Tickets"
@@ -447,6 +451,20 @@ async def download_attachments(inst, story) -> None:
             story.slug,
             err,
         )
+
+
+async def move_to_start_state(story) -> str:
+    """Move a force-started ticket into its source's configured start state.
+
+    The web twin of what ``SessionRunner`` does after a pipeline launch, and
+    literally the same code: a ticket started by hand from the panel has to land
+    on the board exactly where one the pipeline picked up does, or the column
+    stops meaning "being worked on". Best-effort — see
+    :mod:`backend.ticket_ingestion.start_state`.
+    """
+    from backend.ticket_ingestion.start_state import move_started
+
+    return await move_started(story, _load_config())
 
 
 def record_started(story) -> None:

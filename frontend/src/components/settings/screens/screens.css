@@ -758,3 +758,39 @@
   color: var(--text);
   background: var(--panel-2);
 }
+
+/* Settings → Advanced, Version & updates. The update button and "Check again"
+   sit on one row so the pair reads as one control; the installer output is a
+   fold because it is the thing you want only when the update went wrong. */
+.upd-btn-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0 0;
+}
+
+.upd-fold {
+  margin-top: 8px;
+}
+
+.upd-fold > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.upd-log {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 10px;
+  margin: 6px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

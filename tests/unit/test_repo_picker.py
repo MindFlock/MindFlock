@@ -892,3 +892,169 @@ class TestRepoPickerApi:
     def test_check_rejects_only_a_blank_path(self, client):
         assert client.get("/api/repos/check", params={"path": "  "}).status_code == 400
         assert client.get("/api/repos/check").status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# The recency ladder itself                                                    #
+# --------------------------------------------------------------------------- #
+class TestRecentRepoPaths:
+    """``server._recent_repo_paths`` — one ladder, two consumers.
+
+    It was extracted out of ``repo_suggestions``' closure so that
+    ``POST /api/session-plan`` can offer a model the SAME folders the dialog's
+    suggestion chips show. That matters more than it looks: the plan route tells
+    the user their folder was picked from a list, and this is the only function
+    that decides what is on it. A second copy would drift, and it would drift
+    silently.
+    """
+
+    @pytest.fixture()
+    def ladder(self, tmp_path, home, monkeypatch):
+        """Each tier populated with one distinguishable path."""
+        monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+        S.invalidate()
+        S.update_settings(general={"last_repo_path": str(home / "from-settings")})
+        inst = type(
+            "_Inst", (), {"Path": str(home / "from-session"), "UpdatedAt": None}
+        )()
+        # setattr, not setitem: the registry is a process singleton that may
+        # already hold this developer's own sessions.
+        monkeypatch.setattr(server.ENGINE, "instances", {"live": inst})
+        monkeypatch.setattr(
+            server,
+            "_load_recently_closed",
+            lambda: [{"title": "x", "data": {"path": str(home / "from-closed")}}],
+        )
+        yield home
+        S.invalidate()
+
+    def test_all_three_tiers_in_recency_order(self, ladder):
+        assert server._recent_repo_paths()[:3] == [
+            str(ladder / "from-settings"),
+            str(ladder / "from-session"),
+            str(ladder / "from-closed"),
+        ]
+
+    def test_live_sessions_come_newest_touched_first(self, tmp_path, home, monkeypatch):
+        import datetime as _dt
+
+        def _inst(name, when):
+            return type(
+                "_Inst",
+                (),
+                {"Path": str(home / name), "UpdatedAt": _dt.datetime(2026, 1, when)},
+            )()
+
+        monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+        S.invalidate()
+        monkeypatch.setattr(server, "_load_recently_closed", lambda: [])
+        monkeypatch.setattr(
+            server.ENGINE,
+            "instances",
+            {"a": _inst("older", 1), "b": _inst("newest", 9), "c": _inst("middle", 5)},
+        )
+        paths = [p for p in server._recent_repo_paths() if p]
+        assert paths == [
+            str(home / "newest"),
+            str(home / "middle"),
+            str(home / "older"),
+        ]
+        S.invalidate()
+
+    @pytest.mark.parametrize(
+        "broken,survivors",
+        [
+            ("settings", ["from-session", "from-closed"]),
+            ("sessions", ["from-settings", "from-closed"]),
+            ("closed", ["from-settings", "from-session"]),
+        ],
+    )
+    def test_a_broken_tier_costs_only_its_own_suggestions(
+        self, ladder, monkeypatch, broken, survivors
+    ):
+        """Every tier is best-effort on its own. An unreadable settings store or
+        a corrupt undo file must not empty the folder list — which, for the plan
+        route, is the difference between a narrower menu and no legal answer at
+        all."""
+
+        def boom(*a, **kw):
+            raise RuntimeError("tier is broken")
+
+        if broken == "settings":
+            monkeypatch.setattr(S, "load_settings", boom)
+        elif broken == "sessions":
+            # A registry that raises on enumeration (mutating mid-read).
+            class _Exploding(dict):
+                def values(self):
+                    raise RuntimeError("mutated mid-read")
+
+            monkeypatch.setattr(server.ENGINE, "instances", _Exploding())
+        else:
+            monkeypatch.setattr(server, "_load_recently_closed", boom)
+
+        paths = [p for p in server._recent_repo_paths() if p]
+        assert paths == [str(ladder / s) for s in survivors]
+
+    def test_a_closed_session_prefers_its_repo_over_its_worktree(
+        self, tmp_path, home, monkeypatch
+    ):
+        """``folder`` is the worktree, which is only the same directory for an
+        in-place session — offering it would suggest a directory that is about
+        to be pruned."""
+        monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+        S.invalidate()
+        monkeypatch.setattr(server.ENGINE, "instances", {})
+        monkeypatch.setattr(
+            server,
+            "_load_recently_closed",
+            lambda: [
+                {"folder": "/gone/wt", "data": {"path": str(home / "the-repo")}},
+                # No instance data: the worktree spelling is all there is.
+                {"folder": str(home / "in-place")},
+                "not a dict at all",
+            ],
+        )
+        paths = [p for p in server._recent_repo_paths() if p]
+        assert paths == [str(home / "the-repo"), str(home / "in-place")]
+        S.invalidate()
+
+
+class TestOneLadderTwoConsumers:
+    """Both surfaces derive from the same call, so they cannot drift apart."""
+
+    @pytest.fixture()
+    def counted(self, tmp_path, home, monkeypatch):
+        monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+        S.invalidate()
+        calls: list = []
+        repo = _marker_repo(home / "code", "shared")
+        monkeypatch.setattr(
+            server, "_recent_repo_paths", lambda: calls.append(1) or [repo]
+        )
+        yield calls, repo
+        S.invalidate()
+
+    def test_suggest_derives_its_recency_from_the_shared_ladder(
+        self, counted, marker_git
+    ):
+        calls, repo = counted
+        body = TestClient(server.app).get("/api/repos/suggest").json()
+        assert calls == [1]
+        assert repo in _paths(body["suggestions"])
+
+    def test_the_plan_routes_folder_menu_derives_from_the_same_ladder(
+        self, counted, monkeypatch
+    ):
+        calls, repo = counted
+        seen: dict = {}
+
+        def fake_plan(text, **kw):
+            seen.update(kw)
+            raise server._session_plan.SessionPlanError("stop here")
+
+        monkeypatch.setattr(server._session_plan, "plan", fake_plan)
+        r = TestClient(server.app).post("/api/session-plan", json={"text": "work"})
+
+        assert r.status_code == 502
+        assert calls == [1]
+        assert seen["recent_paths"] == [repo]

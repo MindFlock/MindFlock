@@ -404,6 +404,55 @@ function StatePicker({
   );
 }
 
+/** Single-state picker: where a ticket is MOVED when a session starts for it.
+ *
+ * Its own component rather than a mode of `StatePicker` because it is the other
+ * kind of thing: that one is a filter over several states, this one is one
+ * destination, and empty means "leave it alone" rather than "any". It reads the
+ * same live state list, so it is populated by the same Test connection. */
+function StartStatePicker({
+  field,
+  source,
+  states,
+  loadStates,
+  onChange,
+}: {
+  field: CatalogField;
+  source: Source;
+  states: Array<{ id: string | number; name?: string }>;
+  loadStates(): void;
+  onChange(patch: Record<string, string>): void;
+}) {
+  const current = (source[field.key] || "").trim();
+  // A saved id whose state list hasn't loaded yet would otherwise fall off the
+  // <select> and read as "Leave it where it is" — i.e. the setting silently
+  // unset itself. Keep it as its own option until the real list arrives.
+  const known = states.some((st) => String(st.id) === current);
+  return (
+    <label className="set-row">
+      <span className="set-label">{field.label}</span>
+      <select
+        className="tk-state-one"
+        data-tk-field={field.key}
+        value={current}
+        onFocus={() => {
+          if (!states.length) loadStates();
+        }}
+        onChange={(e) => onChange({ [field.key]: e.target.value })}
+      >
+        <option value="">Leave it where it is</option>
+        {current && !known ? <option value={current}>{current} (saved)</option> : null}
+        {states.map((st) => (
+          <option key={String(st.id)} value={String(st.id)}>
+            {st.name || String(st.id)}
+          </option>
+        ))}
+      </select>
+      {field.hint ? <span className="set-hint">{field.hint}</span> : null}
+    </label>
+  );
+}
+
 /** A catalog field with a fixed set of values, rendered as a select. */
 function ChoicePicker({
   field,
@@ -1154,6 +1203,15 @@ function TicketSourceCard({
         {(meta?.fields || []).map((f) =>
           f.type === "state" ? (
             <StatePicker
+              key={f.key}
+              field={f}
+              source={source}
+              states={states}
+              loadStates={loadStates}
+              onChange={onChange}
+            />
+          ) : f.type === "state_one" ? (
+            <StartStatePicker
               key={f.key}
               field={f}
               source={source}

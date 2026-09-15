@@ -61,6 +61,10 @@
   var tab = "agent";            // "agent" | "shell"
   var ctrlActive = false;       // sticky Ctrl modifier
   var instances = [];
+  // Title whose terminal we are deliberately NOT attaching to yet because the
+  // server is still provisioning it (status "loading"). See select() and
+  // attachWhenReady().
+  var awaitingReady = "";
 
   // --- terminal bootstrap --------------------------------------------------
   function buildTerm() {
@@ -155,6 +159,7 @@
     if (title === current && term) return;
     disconnect();
     current = title;
+    awaitingReady = "";          // a new selection supersedes a provisioning wait
     setCtrl(false);
     if (term) { try { term.dispose(); } catch (e) {} term = null; }
     termHost.innerHTML = "";
@@ -163,7 +168,20 @@
     try { localStorage.setItem("cs_mobile_last", title); } catch (e) {}
     buildTerm();
     fitSoon();
-    connect();
+    // THE LOADING GUARD. Attaching to an instance whose workspace is still
+    // being made gets the socket closed with 4409, which onclose treats as
+    // terminal ("workspace gone", no reconnect) — and nothing ever retried it:
+    // select() early-returns on the same title, re-picking the current option
+    // fires no `change` event, and renderPicker only re-selects when poll's
+    // signature moves (attnRank does not move when a status leaves "loading").
+    // The phone was left on a permanently blank terminal for the session it had
+    // just created. So wait, visibly, and let a poll tick attach.
+    if (isLoading(title)) {
+      awaitingReady = title;
+      setStatus("starting " + title + " — setting up the workspace…");
+    } else {
+      connect();
+    }
     updateActions();
     if (view === "diff") loadDiff();
   }
@@ -192,6 +210,11 @@
   }
 
   function setStatus(msg) {
+    // An explicit status supersedes a pending flashStatus clear. Without this,
+    // the "starting X…" flash fired at create time wiped (at +2500ms) the
+    // provisioning line select() puts up a second later for that same session,
+    // and the phone was left on a blank black terminal with no message at all.
+    if (statusFlashTimer) { clearTimeout(statusFlashTimer); statusFlashTimer = null; }
     if (!msg) { statusEl.classList.add("hidden"); statusEl.textContent = ""; return; }
     // The toast lives inside whichever panel is on screen — parked in the
     // terminal wrap it would be display:none along with it under the Diff tab,
@@ -214,6 +237,19 @@
     return "offline";
   }
 
+  // POST /api/instances registers the instance as Loading and answers 202
+  // BEFORE the worktree exists; GET /api/instances lists it on the very next
+  // poll. So "is there a row" is not "is there a PTY" — this is how select()
+  // tells the two apart.
+  function statusOf(title) {
+    for (var i = 0; i < instances.length; i++)
+      if (instances[i].title === title) return instances[i].status || "";
+    return "";
+  }
+  function isLoading(title) {
+    return statusOf(title) === "loading";
+  }
+
   function renderPicker() {
     var prev = current;
     pickerEl.innerHTML = "";
@@ -222,7 +258,17 @@
       o.textContent = "no sessions";
       pickerEl.appendChild(o);
       pickerEl.disabled = true;
-      if (prev) select(null);
+      // UNCONDITIONALLY, not `if (prev)`. The placeholder starts hidden in the
+      // markup and select(null) is the only thing that reveals it, so guarding
+      // this on a previous selection meant a phone that opened /m with no
+      // sessions at all — the first-run case — showed a blank black rectangle
+      // and never the "No sessions yet" line. It only ever appeared after the
+      // LAST session was closed while you were looking at it. Harmless to
+      // repeat: with no websocket and no terminal, select(null) is three
+      // no-ops and a classList change. Now that the placeholder is the button
+      // that starts a session, this is the difference between a usable
+      // first-run phone and a dead end.
+      select(null);
       return;
     }
     pickerEl.disabled = false;
@@ -545,6 +591,13 @@
         // markers move without a session being added/removed.
         var sig = instances.map(function (i) { return attnRank(i) + i.title; }).join("|");
         if (sig !== poll._sig) { poll._sig = sig; renderPicker(); }
+        // After renderPicker, before the dot: a session created from the "+"
+        // sheet is selected the tick it shows up, and both of those read the
+        // selection.
+        claimPending();
+        // ...and after claimPending, because the session it just selected is
+        // exactly the one that is still provisioning.
+        attachWhenReady();
         updateDot();
         updateActions();
       })
@@ -724,6 +777,540 @@
     for (var i = 0; i < files.length; i++) uploadPastedFile(files[i], true);
   });
 
+  // --- new session ("+") -----------------------------------------------------
+  // Starting work from the phone. Until this, /m said "No sessions yet. Create
+  // one from the desktop view." — the mobile head could drive every session on
+  // the flock and start none of them.
+  //
+  // Two questions, one input each. Step 1 is a sentence; POST /api/session-plan
+  // reads it and answers with the same form fields the desktop New Session
+  // dialog owns. Step 2 is the review, where the only editable things are the
+  // name and the first prompt. That is the whole feature, and the omissions are
+  // the design: templates, the folder combobox, Browse, provisioning, workspace
+  // strategy, launch flags, the account picker and the model pin all stay on the
+  // desktop, because every one of them has a working default and the way to
+  // inherit a default is to send no key at all.
+  //
+  // NO FOLDER NAME EVER REACHES POST /api/instances. Every folder on this page
+  // is either a plan's `repo_path` (which the server resolved itself — the model
+  // answers with the NUMBER of a row in a menu the server built by walking the
+  // filesystem, never a path) or a row of GET /api/repos/suggest. There is
+  // deliberately no free-text folder field: `_prepare_plain_repo` realpaths
+  // whatever it is handed against the SERVER's cwd and then makedirs it, which
+  // is how typing "api" into the desktop dialog once created a MindFlock/api
+  // directory, and the only guard against that lives in the desktop's
+  // TypeScript (isNameQuery). A page with no text field cannot reach it at all.
+  var PLAN_MAX_CHARS = 2000;   // session_plan.MAX_SENTENCE; the box caps it too
+  // 8s, the same moment the desktop's Describe button relabels itself. The plan
+  // is a real model turn (~10-25s), which is long enough that a button which
+  // never changes reads as a page that has hung.
+  var NEW_SLOW_MS = 8000;
+  // How long a 202 has to turn into a row in the session list before we stop
+  // claiming it is starting. A create answers 202 immediately and does the
+  // worktree/provisioning/tmux work in a background task, so the row is usually
+  // one 4s poll away — but a create that fails after its 202 emits
+  // session.create_failed and NEVER joins the list, and nothing on this page
+  // listens for that event. Bounded, so a failure ends in a sentence rather
+  // than in a "starting…" that was never true.
+  var PENDING_NEW_MS = 120000;
+
+  var newSheet = document.getElementById("new-sheet");
+  var newStep1 = document.getElementById("new-step1");
+  var newStep2 = document.getElementById("new-step2");
+  var newFolders = document.getElementById("new-folders");
+  var newTextEl = document.getElementById("new-text");
+  var newGoBtn = document.getElementById("new-go");
+  var newTitleEl = document.getElementById("new-title");
+  var newPromptEl = document.getElementById("new-prompt");
+  var newFolderBtn = document.getElementById("new-folder");
+  var newFolderNameEl = document.getElementById("new-folder-name");
+  var newModeEl = document.getElementById("new-mode");
+  var newNoteEl = document.getElementById("new-note");
+  var newConfirmRow = document.getElementById("new-confirm-row");
+  var newConfirmEl = document.getElementById("new-confirm");
+  var newConfirmLabel = document.getElementById("new-confirm-label");
+  var newStartBtn = document.getElementById("new-start");
+  var newListEl = document.getElementById("new-folder-list");
+  var newFoldersMsg = document.getElementById("new-folders-msg");
+  var newErrEl = document.getElementById("new-error");
+
+  var newPlan = null;          // the answer being reviewed (model's or hand-picked)
+  var planSeq = 0;             // cancels an in-flight plan; see closeNewSheet
+  var planBusy = false;
+  var planSlowTimer = null;
+  var startBusy = false;
+  // Cancels an in-flight CREATE the way planSeq cancels an in-flight plan. The
+  // create POST is unsettled for as long as the network makes it (a phone that
+  // lost signal can leave a fetch pending for a minute), and its answer must not
+  // reach a sheet the user has since dismissed and reopened. See startSession.
+  var startSeq = 0;
+  var foldersBack = 1;         // screen the folder list was entered FROM
+  var suggestHome = "";        // $HOME as /api/repos/suggest reported it
+  var pendingNew = "";         // title we are waiting to see in the session list
+  var pendingNewUntil = 0;
+
+  function newError(msg) {
+    newErrEl.textContent = msg || "";
+    newErrEl.classList.toggle("hidden", !msg);
+  }
+
+  function newStep(which) {
+    newError("");
+    newStep1.classList.toggle("hidden", which !== 1);
+    newStep2.classList.toggle("hidden", which !== 2);
+    newFolders.classList.toggle("hidden", which !== 3);
+  }
+
+  function openNewSheet() {
+    // A fresh sheet every time. A half-reviewed plan left over from the last
+    // opening is indistinguishable from this one's, and the folder it names is
+    // almost certainly not the folder this sentence is about.
+    newPlan = null;
+    newTextEl.value = "";
+    setPlanBusy(false, "Continue");
+    // The Start button too. Nothing the create's answer does resets it when
+    // that answer is stale, so a sheet dismissed mid-create used to reopen with
+    // "Starting…" disabled forever (startSession returns at
+    // `if (startBusy) return;`) and no way out but reloading the page.
+    resetStartBtn();
+    newSheet.classList.remove("hidden");
+    newStep(1);
+    newTextEl.focus();
+  }
+
+  function closeNewSheet() {
+    // The seq bump is what actually cancels an in-flight plan: it makes the
+    // answer a no-op whenever it lands. The subprocess on the far side is not
+    // killed by this and runs to its own timeout — it is a read-only one-shot
+    // with stdin closed, so that is bounded and harmless rather than something
+    // worth building a kill channel for.
+    planSeq += 1;
+    // Same for the create: bumping this is what makes a 202 (or a failure) that
+    // lands after the dismissal a no-op instead of closing — or writing the
+    // previous session's error into — a sheet the user has reopened and is
+    // typing in. The session itself is still created; only the sheet is off
+    // limits.
+    startSeq += 1;
+    if (planSlowTimer) { clearTimeout(planSlowTimer); planSlowTimer = null; }
+    setPlanBusy(false, "Continue");
+    resetStartBtn();
+    newSheet.classList.add("hidden");
+    newPlan = null;
+    newError("");
+  }
+
+  function setPlanBusy(on, label) {
+    planBusy = on;
+    newGoBtn.disabled = on;
+    newGoBtn.textContent = label;
+  }
+
+  function resetStartBtn() {
+    startBusy = false;
+    newStartBtn.disabled = false;
+    newStartBtn.textContent = "Start session";
+  }
+
+  // The ~-relative spelling, for DISPLAY only — mirrors session_plan._tilde and
+  // the frontend's homeRelative, boundary-safe so /home/ann-old is never
+  // shortened against /home/ann. Unlike the server's version this falls back to
+  // the path as-is for a folder outside home: that rule exists because the
+  // server's spelling goes into a model's prompt, and nothing here does.
+  function homeRel(path) {
+    var p = String(path || "");
+    var h = String(suggestHome || "");
+    if (!h) return p;
+    if (p === h) return "~";
+    if (p.indexOf(h + "/") === 0) return "~/" + p.slice(h.length + 1);
+    return p;
+  }
+
+  // ONE muted line, composed here from the resolved fields rather than lifted
+  // out of the server's note. The note is a paragraph about the whole plan; this
+  // is the single fact both screens are really asking about — where the work
+  // lands — and it has to be readable without reading the paragraph.
+  function modeLine(p) {
+    if (!p.folder_exists) {
+      return "A new folder" +
+        (p.init_repo ? ", with a git repo created inside it" : "") + " — " +
+        (p.in_place ? "work happens in the folder directly."
+                    : "work happens in a new worktree.");
+    }
+    return p.in_place
+      ? "Work happens in the folder directly."
+      : "Work happens in a new worktree, not in the folder itself.";
+  }
+
+  // The note's first sentence is the desktop dialog's preamble, and it names a
+  // button that does not exist on this page ("press Create" — here it says
+  // Start session, under a heading that already asks the question). Everything
+  // AFTER it is the resolved facts — which folder, which mode, the "I wasn't
+  // certain" clause, the cut-short search — which is the whole reason to show
+  // the note. Dropped by EXACT prefix, so the day note_for's wording changes
+  // the sentence simply reappears instead of this quietly eating a different
+  // one. The server owns that sentence and is right to: the note is composed
+  // from resolved facts precisely so no client can rewrite it.
+  var NOTE_PREAMBLE = "Filled in from what you typed — check it and press Create. ";
+  function planNote(note) {
+    var t = String(note || "");
+    return t.indexOf(NOTE_PREAMBLE) === 0 ? t.slice(NOTE_PREAMBLE.length) : t;
+  }
+
+  // Whatever is in the two editable boxes is what the plan IS from here on.
+  // Called before every screen change out of step 2, so correcting the folder
+  // (or going Back and re-describing) never quietly reverts a name the user
+  // had already fixed.
+  function harvestPlan() {
+    if (!newPlan) return;
+    newPlan.title = newTitleEl.value.trim();
+    newPlan.prompt = newPromptEl.value;
+  }
+
+  function showPlan(p) {
+    newPlan = p;
+    newTitleEl.value = p.title || "";
+    newPromptEl.value = p.prompt || "";
+    newFolderNameEl.textContent = p.folder_display || p.repo_path || "";
+    newModeEl.textContent = modeLine(p);
+    newNoteEl.textContent = planNote(p.note);
+    newNoteEl.classList.toggle("hidden", !newNoteEl.textContent);
+    // THE CONFIRM GATE, re-armed. Unticked for every plan that lands, including
+    // a second plan naming the same folder: the tick has to mean "I read THIS
+    // folder name and said yes", and a tick that survives a re-describe is the
+    // previous sentence's yes standing in for this one's.
+    newConfirmEl.checked = false;
+    newConfirmLabel.textContent =
+      "Create the folder " + (p.folder_display || p.repo_path || "");
+    newConfirmRow.classList.toggle("hidden", !!p.folder_exists);
+    newStep(2);
+  }
+
+  // Ask the server to read the sentence. Failure is not an error state here —
+  // /api/session-plan answers 502 with one human sentence when there is no CLI
+  // to ask, when it times out, or when the answer can't be read, and on a phone
+  // that cannot be a dead end, so the failure IS the folder list.
+  function describeIt() {
+    var text = newTextEl.value.trim();
+    if (!text) { newTextEl.focus(); return; }
+    if (planBusy) return;
+    // The previous plan goes NOW, not when the new one lands. Keeping it meant a
+    // plan that FAILED (502 → the folder list) left the previous one reviewable
+    // behind a single Back tap: step 2 showing the first sentence's name, folder
+    // and prompt — showPlan never ran on that path — and Start creating THAT
+    // session while the sentence just typed was silently discarded. The tick
+    // goes with it: a confirm box still ticked over a plan the user did not
+    // review is a confirm-gate failure, not merely a navigation one.
+    newPlan = null;
+    newConfirmEl.checked = false;
+    var seq = ++planSeq;
+    newError("");
+    setPlanBusy(true, "Reading…");
+    planSlowTimer = setTimeout(function () {
+      if (seq === planSeq) newGoBtn.textContent = "Still reading…";
+    }, NEW_SLOW_MS);
+    fetch("/api/session-plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text.slice(0, PLAN_MAX_CHARS) }),
+    })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok) throw new Error((j && j.error) || "couldn't read that (" + r.status + ")");
+          return j;
+        });
+      })
+      .then(function (j) {
+        if (seq !== planSeq) return;
+        planDone(seq);
+        showPlan({
+          title: j.title || "",
+          repo_path: j.repo_path || "",
+          // The sentence is the session's first prompt when the model didn't
+          // write one — it is already an instruction, and silently starting an
+          // agent with nothing to do is worse than starting it with the words
+          // that asked for it.
+          prompt: j.prompt || text,
+          // An absent key means in-place, at both ends: of the two ways to be
+          // wrong about a missing value, only `false` opens a worktree and
+          // writes a branch into somebody's repo.
+          in_place: j.in_place !== false,
+          init_repo: !!j.init_repo,
+          // And an absent key here means the folder is NOT there — the fail-safe
+          // direction, because the cost of being wrong is one extra tick on a
+          // folder that already exists, while the other way round is a directory
+          // created on the user's disk without anyone confirming it. The wire
+          // contract always sends this key; this only fires against a server
+          // older than the gate.
+          folder_exists: j.folder_exists === true,
+          folder_display: j.folder_display || j.repo_path || "",
+          note: j.note || "",
+        });
+      })
+      .catch(function (err) {
+        if (seq !== planSeq) return;
+        planDone(seq);
+        loadFolders(((err && err.message) || "couldn't read that") +
+                    " — pick the folder yourself.", 1);
+      });
+  }
+
+  function planDone(seq) {
+    if (seq !== planSeq) return;
+    if (planSlowTimer) { clearTimeout(planSlowTimer); planSlowTimer = null; }
+    setPlanBusy(false, "Continue");
+  }
+
+  function folderNote(msg) {
+    var d = document.createElement("div");
+    d.className = "new-muted";
+    d.textContent = msg;
+    return d;
+  }
+
+  function folderRow(row) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "new-row new-folder-row";
+    var name = document.createElement("span");
+    // textContent, never innerHTML — these are directory names off the user's
+    // own disk, the same rule the diff panel holds for repo content.
+    name.textContent = row.name || row.path || "";
+    var hint = document.createElement("span");
+    hint.className = "new-row-hint";
+    hint.textContent = homeRel(row.path) + (row.is_git ? "  ·  git" : "");
+    b.appendChild(name);
+    b.appendChild(hint);
+    b.addEventListener("click", function () { pickFolder(row); });
+    return b;
+  }
+
+  // The folder list: the no-model fallback AND the correction path. Every row
+  // came out of a walk of the filesystem the SERVER did (the same suggestions
+  // the desktop dialog's chips show), which is exactly what makes tapping one
+  // safe to hand straight to create as a path.
+  function loadFolders(msg, from) {
+    // Where Back goes, TRACKED rather than inferred. It used to be
+    // `newStep(newPlan ? 2 : 1)` — "is there a plan" standing in for "which
+    // screen did I come from" — which is how the fallback list (entered from
+    // step 1, after a failed plan) sent the user "back" to a review screen for a
+    // plan they had already replaced.
+    foldersBack = from === 2 ? 2 : 1;
+    newStep(3);
+    newFoldersMsg.textContent = msg || "";
+    newListEl.innerHTML = "";
+    newListEl.appendChild(folderNote("loading…"));
+    fetch("/api/repos/suggest")
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        suggestHome = (j && j.home) || "";
+        var rows = (j && j.suggestions) || [];
+        newListEl.innerHTML = "";
+        if (!rows.length) {
+          newListEl.appendChild(folderNote(
+            "No folders found on this machine — make one on the desktop first."));
+          return;
+        }
+        for (var i = 0; i < rows.length; i++)
+          newListEl.appendChild(folderRow(rows[i]));
+      })
+      .catch(function () {
+        newListEl.innerHTML = "";
+        newListEl.appendChild(folderNote("couldn't read the folder list"));
+      });
+  }
+
+  // A hand-picked folder becomes the same shape a plan has, so step 2 and Start
+  // have exactly one kind of thing to read.
+  function pickFolder(row) {
+    var git = !!row.is_git;
+    showPlan({
+      title: (newPlan && newPlan.title) || row.name || "",
+      repo_path: row.path || "",
+      prompt: (newPlan && newPlan.prompt) || newTextEl.value.trim(),
+      // Mirrors the create route's own clamp instead of hoping: a non-git folder
+      // has no HEAD to fork a worktree from, so the server forces in-place, and
+      // a review screen that said "worktree" over it would be promising
+      // something the 202 quietly does not do. A plan's worktree choice survives
+      // a folder correction; a bare pick defaults in-place for the same reason
+      // the absent key does.
+      in_place: newPlan ? (!!newPlan.in_place || !git) : true,
+      // Never ticked for a folder the user chose off a list of folders that
+      // already exist: git init here is a decision nobody made.
+      init_repo: false,
+      // Every row of this list is a directory the server found by walking the
+      // disk, so there is nothing here to confirm the creation of.
+      folder_exists: true,
+      folder_display: homeRel(row.path),
+      note: "",
+    });
+  }
+
+  // Why Start can't run yet, or "" when it can. A sentence rather than a
+  // disabled button: a greyed-out control with no explanation is the version of
+  // a safety gate that people learn to ignore, and the gate's whole job is to be
+  // read.
+  function startBlockReason(p) {
+    if (!p) return "say what you want to work on first";
+    // A folder NAME must never reach POST /api/instances (see this section's
+    // header). Unreachable by construction — a plan's repo_path is absolute by
+    // contract and every list row came from the server's own walk — and checked
+    // anyway, because the failure it guards is a directory created in whatever
+    // the server's cwd happens to be.
+    if (!p.repo_path || p.repo_path.charAt(0) !== "/")
+      return "that folder didn't come back as a real path — pick one from the list";
+    // THE CONFIRM GATE. Creating a directory is the one thing a plan proposes
+    // that outlives the session and that no later undo reaches: closing a
+    // session removes its worktree, but nobody ever comes back for the folder.
+    // So a folder that is not there yet has to be agreed to in as many words,
+    // and the refusal names the folder the same way the tick does.
+    if (!p.folder_exists && !newConfirmEl.checked)
+      return "This would create " + (p.folder_display || p.repo_path) +
+        ", which isn't there yet — tick the box to confirm that folder first.";
+    return "";
+  }
+
+  function startSession() {
+    if (startBusy) return;
+    harvestPlan();
+    var blocked = startBlockReason(newPlan);
+    if (blocked) { newError(blocked); return; }
+    var p = newPlan;
+    var seq = ++startSeq;
+    startBusy = true;
+    newStartBtn.disabled = true;
+    newStartBtn.textContent = "Starting…";
+    newError("");
+    fetch("/api/instances", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // FIVE KEYS, and no more. `program`, `launch_args`, `profile_id`,
+      // `profile_model`, `provisioned` and `workspace_strategy` are absent on
+      // purpose: an absent key inherits whatever the user configured on the
+      // desktop, which is the entire reason the phone never has to ask about
+      // any of them.
+      body: JSON.stringify({
+        title: p.title,
+        repo_path: p.repo_path,
+        prompt: p.prompt,
+        in_place: !!p.in_place,
+        init_repo: !!p.init_repo,
+      }),
+    })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok) throw new Error((j && j.error) || "create failed (" + r.status + ")");
+          return j;
+        });
+      })
+      .then(function (j) {
+        // 202: the instance registers as Loading and its real start (worktree,
+        // provisioning, tmux) runs in a background task, so the row arrives in
+        // the list a poll later. The TITLE comes back from the server because an
+        // auto-named session can be re-numbered under the engine lock, and
+        // waiting for a name we invented would be waiting for a row that never
+        // appears.
+        var title = (j && j.title) || p.title;
+        // The session exists whatever the sheet is doing now, so it is still
+        // tracked and selected when it lands.
+        pendingNew = title;
+        pendingNewUntil = Date.now() + PENDING_NEW_MS;
+        flashStatus("starting " + title + "…");
+        setTimeout(poll, 800);
+        // But the SHEET belongs to whoever is using it. Tap Start, dismiss the
+        // sheet while the POST is in flight, tap "+" and start typing: without
+        // this guard the 202 closed the sheet under the user and threw away the
+        // sentence they were writing. closeNewSheet already reset the button.
+        if (seq !== startSeq) return;
+        resetStartBtn();
+        closeNewSheet();
+      })
+      .catch(function (err) {
+        // The sheet STAYS OPEN. A 409 on a name that already exists is fixed by
+        // editing the name that is on screen, and #status lives behind this
+        // sheet where nobody could read it anyway. Unless it is not this
+        // create's sheet any more — the mirror image of the .then guard above,
+        // and without it the PREVIOUS session's create failure is written into
+        // the freshly reopened sheet.
+        if (seq !== startSeq) return;
+        resetStartBtn();
+        newError((err && err.message) || "could not start the session");
+      });
+  }
+
+  // Select the session we just created, once it exists. Done from the poll tick
+  // rather than from the create's own .then because the 202 is an acceptance,
+  // not an arrival — selecting a title that isn't in the picker yet would
+  // connect a websocket to a session tmux hasn't been told about.
+  function claimPending() {
+    if (!pendingNew) return;
+    for (var i = 0; i < instances.length; i++) {
+      if (instances[i].title === pendingNew) {
+        var title = pendingNew;
+        pendingNew = "";
+        // renderPicker has already run for this tick (a new title always moves
+        // the signature), so the option exists to be selected.
+        pickerEl.value = title;
+        select(title);
+        return;
+      }
+    }
+    if (Date.now() > pendingNewUntil) {
+      var gone = pendingNew;
+      pendingNew = "";
+      flashStatus(gone + " didn't start — open it on the desktop to see why");
+    }
+  }
+
+  // The other half of the loading guard. A poll tick is the only thing on this
+  // page that re-fires by itself, so it is what notices provisioning finished
+  // and attaches the terminal — the picker cannot, for all the reasons select()
+  // lists. Bounded by nothing on purpose: the row leaves "loading" either way
+  // (it starts, it fails and disappears, and claimPending's own deadline covers
+  // the create that never joins the list at all).
+  function attachWhenReady() {
+    if (!awaitingReady) return;
+    // Selection moved on; that select() already decided whether to connect.
+    if (awaitingReady !== current) { awaitingReady = ""; return; }
+    if (isLoading(current)) return;
+    awaitingReady = "";
+    connect();                 // onopen clears the provisioning line
+  }
+
+  document.getElementById("new-btn").addEventListener("click", openNewSheet);
+  emptyEl.addEventListener("click", openNewSheet);
+  newGoBtn.addEventListener("click", describeIt);
+  document.getElementById("new-cancel").addEventListener("click", closeNewSheet);
+  newStartBtn.addEventListener("click", startSession);
+  document.getElementById("new-back").addEventListener("click", function () {
+    harvestPlan();
+    newStep(1);
+  });
+  newFolderBtn.addEventListener("click", function () {
+    harvestPlan();
+    loadFolders("Pick the folder this session should work in.", 2);
+  });
+  document.getElementById("new-folders-back").addEventListener("click", function () {
+    newStep(foldersBack);
+  });
+  // Ticking the gate clears the refusal it caused — leaving "tick the box
+  // first" on screen under a ticked box is the sheet arguing with itself.
+  newConfirmEl.addEventListener("change", function () {
+    if (newConfirmEl.checked) newError("");
+  });
+  // Enter continues, Shift+Enter keeps editing — the same bargain the compose
+  // box strikes, because this is the same kind of box on the same keyboard.
+  newTextEl.addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); describeIt(); }
+  });
+  // Tap the dimmed backdrop to dismiss, like the commit sheet.
+  newSheet.addEventListener("click", function (ev) {
+    if (ev.target === newSheet) closeNewSheet();
+  });
+  // Every field in here is one the soft keyboard can bury; focusin/focusout
+  // bubble, so one pair of listeners covers all of them.
+  newSheet.addEventListener("focusin", nudgeViewport);
+  newSheet.addEventListener("focusout", nudgeViewport);
+
   // --- wiring --------------------------------------------------------------
   pickerEl.addEventListener("change", function () { select(pickerEl.value); });
 
@@ -867,17 +1454,17 @@
     if (Math.abs(visibleHeight() - appliedH) > 1 ||
         Math.abs(viewportTop() - appliedTop) > 1) applyViewport();
   }, 250);
-  // The pan happens on focus/blur of the compose box; the viewport events for
-  // it can arrive before the keyboard finishes animating, so nudge a couple of
-  // re-applies behind the settle loop's back.
-  composeEl.addEventListener("focus", function () {
+  // The pan happens on focus/blur of a text field; the viewport events for it
+  // can arrive before the keyboard finishes animating, so nudge a couple of
+  // re-applies behind the settle loop's back. One definition, shared by the
+  // compose box and the new-session sheet's fields — two copies of this is how
+  // one of them keeps its 400ms and the other quietly loses it.
+  function nudgeViewport() {
     setTimeout(applyViewport, 100);
     setTimeout(applyViewport, 400);
-  });
-  composeEl.addEventListener("blur", function () {
-    setTimeout(applyViewport, 100);
-    setTimeout(applyViewport, 400);
-  });
+  }
+  composeEl.addEventListener("focus", nudgeViewport);
+  composeEl.addEventListener("blur", nudgeViewport);
   window.addEventListener("orientationchange", function () { setTimeout(applyViewport, 200); });
 
   // --- viewport debug overlay (?debug=1) -------------------------------------

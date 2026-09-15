@@ -215,12 +215,34 @@ def workflow_state_list(cfg: TicketProviderConfig) -> list[str]:
 #: workspace) or a project scope, so "anyone" has nothing to stand on there.
 ANY_ASSIGNEE_PROVIDERS = frozenset({"shortcut", "jira", "linear", "github_issues"})
 
+#: Providers with a workflow-state model the pipeline can WRITE to — the ones
+#: that can be asked to move a ticket when its session starts (``start_state``).
+#: Same three that offer :meth:`TicketProvider.list_states`; GitHub Issues and
+#: Asana have nothing to move a ticket to.
+STATE_SETTING_PROVIDERS = frozenset({"shortcut", "jira", "linear"})
+
 #: Of those, the ones whose search is bounded by ``workflow_state``. Dropping the
 #: assignee here without an ingest state selected would ask the tracker for every
 #: ticket in the organization, so the scope quietly stays "mine" until one is
 #: picked. GitHub Issues is not listed — it has no workflow states, and the
 #: ``owner/repo`` it is pinned to is the bound.
 STATE_BOUNDED_PROVIDERS = frozenset({"shortcut", "jira", "linear"})
+
+
+def start_state_id(cfg) -> str:
+    """The state this source moves a ticket INTO when its session starts.
+
+    ``""`` = leave the ticket where it is, which is what every source did before
+    the setting existed. Fails narrow the same way :func:`ingests_any_assignee`
+    does: a provider with no writable workflow state (GitHub Issues, Asana) can
+    only answer ``""``, so a stale value left in a hand-edited config after a
+    provider switch moves nothing rather than erroring on every launch.
+    """
+    target = (getattr(cfg, "start_state", "") or "").strip()
+    if not target:
+        return ""
+    provider = (getattr(cfg, "provider", "") or "").strip().lower()
+    return target if provider in STATE_SETTING_PROVIDERS else ""
 
 
 def ingests_any_assignee(cfg) -> bool:
@@ -340,3 +362,24 @@ class TicketProvider(abc.ABC):
         Asana) don't offer the picker. Shortcut/Jira/Linear override.
         """
         return []
+
+    async def set_state(self, ticket_id: str, state_id: str) -> None:
+        """Move one ticket into the workflow state ``state_id``.
+
+        The write twin of :meth:`list_states`, and it takes an id from exactly
+        that list. Backs the source's optional "move it when a session starts"
+        setting (``start_state``), so a ticket picked up by the pipeline stops
+        looking untouched on the board the moment work begins on it.
+
+        Raises :class:`ProviderError` when the move cannot be made — an unknown
+        state, a transition the tracker refuses, an API failure. Callers treat a
+        failed move as a warning, never as a failed launch: the session is the
+        work, and the board is bookkeeping about it.
+
+        Default: unsupported. Providers without a writable workflow state
+        (GitHub Issues, Asana) never reach here — ``start_state_id`` answers
+        ``""`` for them — so this is the hand-edited-config backstop.
+        """
+        raise ProviderError(
+            f"{self.label or self.name} cannot move a ticket's workflow state"
+        )

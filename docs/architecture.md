@@ -118,6 +118,20 @@ FastAPI app `backend.web.server:app`. Key pieces:
 - **`core/prompt_queue.py`** — per-session FIFO of prompts drained into idle
   agents by a background loop (self-driving runs; state in
   `~/.mindflock/prompt_queues.json`).
+- **`core/session_plan.py`** — one headless model turn behind
+  `POST /api/session-plan`, turning a sentence into the New Session form's own
+  fields. **Creates nothing.** The folder menu is walked *server-side* (the
+  shared `server._recent_repo_paths` ladder plus a few name lookups) and
+  rendered home-relative, and the model answers with the **number** of a row —
+  so no model text ever becomes a filesystem path, and an out-of-range number is
+  an error rather than a clamp. See
+  [web-api.md](web-api.md#post-apisession-plan--200).
+- **`core/self_update.py`** — the server replacing itself: `uv tool install
+  --force` over the tool venv this process is running out of, spawned
+  **detached** so it outlives the restart, with progress in a **file**
+  (`<config dir>/update.json`) rather than this process's memory so a client
+  polling across the restart still learns the outcome. A dev/editable checkout
+  is **refused**, not attempted. Behind `/api/update/*` and Settings → Advanced.
 - **`core/pr_review.py`** — the forced-PR-review path behind Intake → Pull
   requests: lists open PRs into **every** base branch (with why auto-review
   did/didn't take them — a base the repo's card doesn't watch is one of those
@@ -255,6 +269,12 @@ GitHub Issues, or Asana** (`ticket_ingestion/providers/`). Two loops:
 - **PRs** — poll GitHub for your open PRs with unresolved review comments and
   launch one consolidated session per PR that addresses all comments (changes left
   unstaged for human review).
+
+`ticket_ingestion/start_state.py` is the single place a ticket is moved into its
+source's `start_state` once its session is live — shared by both launch paths
+(the pipeline process and the in-server force-start), reading config from disk at
+launch time, and never raising: the session is the work, the board is bookkeeping
+about it.
 
 Plus a **testmon refresher** that keeps a warm `.testmondata` seed so provisioned
 workspaces only run diff-impacted tests, and a startup **workspace cleanup** that

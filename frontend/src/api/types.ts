@@ -278,6 +278,46 @@ export interface DoctorCheck {
 
 export type Json = Record<string, unknown>;
 
+/** What POST /api/session-plan answers with: the New Session form's own fields,
+ * resolved server-side from one sentence. Nothing is created by the call — this
+ * is a form to read and correct, not a session.
+ *
+ * Every key is always sent, so nothing here is optional and nothing has to be
+ * defaulted at the call site. `repo_path` is always a non-empty ABSOLUTE path,
+ * because the server only ever hands back a path it built itself out of a
+ * folder menu it walked: the model answers with an index into that menu, never
+ * with text. That is what keeps a model answer from ever reaching the Folder
+ * field as a bare name — see isNameQuery in NewSessionDialog for what the
+ * server does with one of those. */
+export interface PlanAnswer {
+  title: string;
+  repo_path: string;
+  prompt: string;
+  in_place: boolean;
+  init_repo: boolean;
+  /** Whether `repo_path` is ALREADY THERE — and the one key the dialog must
+   * refuse to create a session over until the user has said yes.
+   *
+   * Creating a directory is the only thing a plan proposes that outlives the
+   * session and that closing it never takes back: a worktree goes when the
+   * session does, but nobody comes back for the folder. So false here arms the
+   * confirm row in the Describe strip (see newFolderGate in NewSessionDialog),
+   * and Create refuses until that row is ticked.
+   *
+   * False is exactly the `new:<name>` case: every numbered candidate the model
+   * could pick came out of a walk of the real filesystem, so it is always true.
+   * NOT the same question as `init_repo`, which is `git init` — a folder can
+   * need making without needing a repo, and both can be true at once. */
+  folder_exists: boolean;
+  /** The ~-relative spelling of `repo_path`, for putting in that question. It is
+   * the same string the `note` uses, so the question and the sentence above it
+   * can never name the folder differently, and no client has to re-derive $HOME
+   * to ask. It is never what a session is created with — `repo_path` is — so no
+   * shortening here can change which directory gets opened. */
+  folder_display: string;
+  note: string;
+}
+
 /* --- Ticketing sources (GET /api/settings/providers/ticketing, GET/PUT
  * /api/settings/ticketing/sources) ---------------------------------------
  *
@@ -291,7 +331,8 @@ export interface TicketingCatalogField {
   label: string;
   secret?: boolean;
   placeholder?: string;
-  /** "state" = workflow-state picker, "choice" = <select>. */
+  /** "state" = multi workflow-state filter, "state_one" = a single
+   * workflow-state destination, "choice" = <select> over `options`. */
   type?: string;
   /** "choice" only. */
   options?: { value: string; label: string }[];

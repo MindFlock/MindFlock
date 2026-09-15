@@ -32,6 +32,12 @@
              pane's Diff tab shows, unified and colorized for a narrow screen. -->
         <button type="button" class="tab" data-tab="diff">Diff</button>
       </div>
+      <!-- Start work from the phone. Everything else on this bar is about the
+           session you are looking at; this is the one control that has to exist
+           when there is nothing to look at, which is why it lives up here and
+           not in the git action bar (that row acts on the selected session and
+           disables itself when there isn't one). -->
+      <button type="button" id="new-btn" aria-label="New session">+</button>
     </header>
 
     <!-- Git workflow bar: the same guided flow the desktop pane header offers
@@ -47,7 +53,11 @@
 
     <div id="term-wrap">
       <div id="term"></div>
-      <div id="empty" class="hidden">No sessions yet. Create one from the desktop view.</div>
+      <!-- The placeholder IS the button. This line used to send the reader off
+           to the desktop view to create a session, which is the one instruction
+           a first-run user holding a phone cannot follow — there is no desktop
+           in front of them. -->
+      <button type="button" id="empty" class="hidden">No sessions yet — tap to start one</button>
       <div id="status" class="hidden"></div>
     </div>
 
@@ -101,6 +111,102 @@
           <button type="button" id="commit-cancel">Cancel</button>
           <button type="button" id="commit-ok">Commit</button>
         </div>
+      </div>
+    </div>
+
+    <!-- New-session sheet: three screens in one box, one input each.
+         Step 1 is a single sentence, which POST /api/session-plan turns into
+         the very fields the desktop New Session dialog owns; step 2 is the
+         review; the folder list is both the no-model fallback and the way to
+         correct a plan that picked the wrong repo.
+
+         Everything the desktop dialog also offers — templates, the folder
+         combobox with its three discovery mechanisms, Browse, provisioning,
+         workspace strategy, launch flags, the account picker, the model pin —
+         is deliberately not here. Each of those has a working default, and the
+         way to inherit a default is to send no key at all, so leaving them out
+         is not a reduced feature: it is the same session the desktop would
+         create with nobody touching Advanced. -->
+    <div id="new-sheet" class="sheet hidden">
+      <div class="sheet-box">
+        <!-- Step 1 — the whole screen is one box. -->
+        <div id="new-step1">
+          <div class="sheet-title">What do you want to work on?</div>
+          <textarea id="new-text" rows="3" maxlength="2000"
+                    autocomplete="off" autocapitalize="sentences" spellcheck="true"
+                    placeholder="e.g. fix the token refresh bug in acme-api, in a worktree"
+                    aria-label="What do you want to work on"></textarea>
+          <div class="sheet-actions">
+            <button type="button" id="new-cancel">Cancel</button>
+            <button type="button" id="new-go">Continue</button>
+          </div>
+        </div>
+
+        <!-- Step 2 — the review. Two editable fields and three facts; the
+             sentence you typed becomes the session's first prompt, so it is
+             shown rather than swallowed. -->
+        <div id="new-step2" class="hidden">
+          <div class="sheet-title">Start this session?</div>
+          <label class="new-label" for="new-title">Name</label>
+          <input id="new-title" type="text" maxlength="60"
+                 autocomplete="off" autocapitalize="none" spellcheck="false"
+                 aria-label="Session name" />
+          <div class="new-label">Folder</div>
+          <!-- A BUTTON, not a field. There is no free-text folder input on this
+               page on purpose: _prepare_plain_repo realpaths whatever it is
+               handed against the SERVER's cwd and then makedirs it, which is how
+               typing "api" once created a MindFlock/api directory. Every folder
+               here came out of a walk of the filesystem the server did itself. -->
+          <button type="button" id="new-folder" class="new-row">
+            <span id="new-folder-name"></span>
+            <span class="new-row-hint">Change</span>
+          </button>
+          <div id="new-mode" class="new-muted"></div>
+          <div id="new-note" class="new-muted hidden"></div>
+          <!-- The confirm gate. Shown only when the plan's folder does not exist
+               yet, unticked every time, and Start refuses while it is unticked.
+               Creating a directory is the one thing a plan proposes that
+               outlives the session: closing a session takes its worktree with
+               it, but nobody ever comes back for the folder. -->
+          <label id="new-confirm-row" class="new-confirm hidden">
+            <input type="checkbox" id="new-confirm" />
+            <span>
+              <span id="new-confirm-label"></span>
+              <span class="new-muted">Nothing is there yet. Ticking this makes
+                the directory itself — which is not the same thing as creating a
+                git repo in it — and the folder stays on this machine after the
+                session is closed.</span>
+            </span>
+          </label>
+          <label class="new-label" for="new-prompt">First prompt</label>
+          <textarea id="new-prompt" rows="3"
+                    autocomplete="off" autocapitalize="sentences" spellcheck="true"
+                    aria-label="First prompt"></textarea>
+          <div class="sheet-actions">
+            <button type="button" id="new-back">Back</button>
+            <button type="button" id="new-start">Start session</button>
+          </div>
+        </div>
+
+        <!-- The folder list: GET /api/repos/suggest, the same rows the desktop
+             dialog's suggestion chips show. Reached when the plan route answers
+             502 (no CLI installed, a timeout, an unreadable answer) — on a phone
+             that must not be a dead end — and reached deliberately from step 2,
+             because a plan that picked the wrong repo has to be correctable
+             without walking to a desktop. -->
+        <div id="new-folders" class="hidden">
+          <div class="sheet-title">Which folder?</div>
+          <div id="new-folders-msg" class="new-muted"></div>
+          <div id="new-folder-list"></div>
+          <div class="sheet-actions">
+            <button type="button" id="new-folders-back">Back</button>
+          </div>
+        </div>
+
+        <!-- Outside the three screens, so a refusal (the confirm gate, a 409 on
+             a name that already exists) is readable whichever one is up — and
+             it sits directly under the actions row your thumb just left. -->
+        <div id="new-error" class="new-error hidden" aria-live="polite"></div>
       </div>
     </div>
   </div>

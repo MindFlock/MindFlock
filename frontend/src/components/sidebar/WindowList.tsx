@@ -19,6 +19,7 @@ import { useUi, windowKey, type SpecialKind } from "../../state/store";
 import { closeExtPaneByKey } from "../../extensions/host";
 import { selectWindow } from "../../lib/sessionActions";
 import { rowDndProps, type RowDndCallbacks } from "./rowDnd";
+import { AssistantChip } from "../AssistantChip";
 
 const FIXED_TITLES: Record<SpecialKind, string> = {
   logs: "MindFlock logs",
@@ -102,6 +103,12 @@ export function WindowRowItem({ row, idx, onScreen, dropCue, ...dnd }: ItemProps
             {row.title}
           </span>
         </span>
+        {/* The Assistant is the one window with an AGENT behind it, so it is
+            the one window with something to say about itself: running / asked
+            you a question / done. Same chip a session row wears, in the same
+            slot — the row is in the same list, and "running" has to mean the
+            same thing whichever row you read it on. */}
+        {row.key === windowKey("chat") && <AssistantChip />}
         {row.kind && <span className="stagechip win-kind">{row.kind}</span>}
         <button
           className="kill"

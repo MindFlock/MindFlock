@@ -502,6 +502,9 @@ def _source_cfg_from_body(body: dict):
         member_id=pick("member_id", sp("member_id")),
         project=pick("project", sp("project")),
         workflow_state=pick("workflow_state", sp("workflow_state")),
+        # Round-tripped so the states endpoint answers for the source as the
+        # card currently has it — the start-state picker reads the same list.
+        start_state=pick("start_state", sp("start_state")),
         # Carried so Test exercises the query the pipeline will actually run:
         # an any-assignee source searches by state, not by member id.
         assignee_scope=pick("assignee_scope", sp("assignee_scope")),

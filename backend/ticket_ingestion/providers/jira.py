@@ -272,6 +272,65 @@ class JiraProvider(TicketProvider):
                 data = await resp.json()
         return self._issue_to_ticket(data)
 
+    async def set_state(self, ticket_id: str, state_id: str) -> None:
+        """Move an issue to status ``state_id`` by executing its transition.
+
+        Jira statuses are not writable directly: an issue moves along the
+        transitions its workflow offers from where it currently sits. So this
+        asks the issue which transitions it has (``GET …/transitions``), picks
+        the one whose destination is the configured status — by id, and by name
+        as the fallback, since :meth:`list_states` stores ids but a hand-edited
+        config may hold a name — and executes it.
+
+        A status that is real but not reachable from the issue's current one is
+        the common failure, and it is a configuration answer rather than a bug,
+        so the error names the transitions that WERE on offer.
+        """
+        target = str(state_id).strip()
+        if not target:
+            return
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.get(
+                self._api(f"/rest/api/3/issue/{ticket_id}/transitions"),
+                headers=self._headers(),
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Jira could not list transitions for {ticket_id} "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+                data = await resp.json()
+            transitions = data.get("transitions") or []
+            match = None
+            offered: list[str] = []
+            for t in transitions:
+                to = t.get("to") or {}
+                name = str(to.get("name") or "")
+                offered.append(name or str(t.get("name") or ""))
+                if str(to.get("id") or "") == target or name == target:
+                    match = t
+                    break
+            if match is None:
+                # Already there is not a failure: an issue sitting in the target
+                # status simply has no transition INTO it.
+                raise ProviderError(
+                    f"Jira has no transition from issue {ticket_id}'s current "
+                    f"status to {target!r}"
+                    + (f" (offered: {', '.join(offered)})" if offered else "")
+                )
+            async with session.post(
+                self._api(f"/rest/api/3/issue/{ticket_id}/transitions"),
+                json={"transition": {"id": str(match.get("id"))}},
+                headers=self._headers(),
+            ) as resp:
+                if resp.status not in (200, 201, 204):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Jira refused to move issue {ticket_id} to {target!r} "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+
     async def test_connection(self) -> tuple[dict | None, str]:
         if not self.cfg.base_url:
             return None, "no Jira site URL configured (e.g. https://you.atlassian.net)"

@@ -403,6 +403,30 @@ class ShortcutProvider(TicketProvider):
                 data = await resp.json()
         return self._finalize(story_from_api_response(data, self.cfg.api_token))
 
+    async def set_state(self, ticket_id: str, state_id: str) -> None:
+        """Move a story to workflow state ``state_id`` (``PUT /stories/{id}``).
+
+        Shortcut has no transition graph — any state in any workflow the story's
+        team can reach is a legal target — so this is a single field write.
+        """
+        try:
+            sid = int(str(state_id).strip())
+        except ValueError:
+            raise ProviderError(
+                f"Shortcut workflow state {state_id!r} is not a state id"
+            ) from None
+        url = f"{_SHORTCUT_API_BASE}/stories/{ticket_id}"
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.put(
+                url, json={"workflow_state_id": sid}, headers=self._headers()
+            ) as resp:
+                if resp.status not in (200, 201):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Shortcut refused to move story {ticket_id} to state "
+                        f"{sid} (HTTP {resp.status}): {text[:200]}"
+                    )
+
     async def test_connection(self) -> tuple[dict | None, str]:
         url = f"{_SHORTCUT_API_BASE}/member"
         try:

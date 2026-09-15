@@ -96,6 +96,16 @@ The Assistant — the one window here that takes input — also accepts a droppe
 file the way a session terminal does; the read-only tails do not — see "Hand a
 file to the agent" below.
 
+The **Assistant row wears the same activity chip a session row does** —
+`running` / `clarify` / `limit` / `idle` / `offline`, painted from the same five
+words by the same helper (`lib/stage.ts` `activityChip`, split out of
+`chipState` so a window that has an agent but is not a session shares the
+vocabulary rather than growing a second copy of it). It is fed by
+`GET /api/assistant/state`, polled because the session event bus only speaks for
+sessions the engine owns. The pane **head** deliberately carries none:
+`.pane-head .stagechip` is `display:none` for every window, so status belongs on
+the rail row and a chip added to a header would render invisibly.
+
 A drop **merges into** the saved order rather than replacing it: the browser
 only ever sees the rows it currently has, so replacing would drop everything it
 cannot see — the sessions of a sleeping remote device, a filtered-out row —
@@ -619,9 +629,10 @@ staging is deliberately unbound — palette/menu only, behind a confirm.
 
 ## New-session dialog
 
-Newcomers see just **Name**, **Prompt**, and **Create** — the defaults do the
-right thing (blank repo → the configured `[repository].url` is provisioned; program prefilled). Program,
-repo folder, the *create new repo* / *work in place* checkboxes, the folder
+The dialog is two pages: a one-sentence **Describe** page it opens on (below),
+and the form itself. On the form, newcomers see just **Name**, **Prompt**, and
+**Create** — the defaults do the right thing (blank repo → the configured
+`[repository].url` is provisioned; program prefilled). Program, repo folder, the *create new repo* / *work in place* checkboxes, the folder
 browser, and a **Launch flags** field live under a collapsed **Advanced options**
 fold (its open/closed state is remembered). **Ctrl/Cmd+Enter** submits the dialog
 from anywhere in it (the handler is dialog-level, not tied to the prompt field).
@@ -631,6 +642,67 @@ of the session. The field is pre-filled from the global per-provider default
 (`coding_cli.default_launch_args`, Settings → Agent CLI) and its value is
 *always sent* with the create request — so clearing it for one session creates
 that session with no flags rather than re-inheriting the default.
+
+## New-session dialog: describe it in a sentence
+
+The dialog opens on a **Describe** page — *What do you want to work on?*, one
+text box — and the full form is page 2. The box is the widest of the three ways
+to fill the form in (a sentence, a template chip, or by hand), and **nothing in
+it is submitted**: it wears the same card as the Templates and folder-suggestion
+strips rather than looking like a second form stacked on the first.
+
+Three actions sit under it, in increasing order of commitment, each named for
+its outcome rather than for the app's own vocabulary:
+
+- **Set it up myself instead** — straight to page 2. Nothing is read and no model
+  runs. It cannot be dropped: every opening lands here, so it is the only route
+  to the form for someone with no coding CLI installed.
+- **Review details first ↵** — what Enter in the box does. Sends the sentence to
+  [`POST /api/session-plan`](web-api.md#post-apisession-plan--200), which walks
+  the filesystem, asks one headless model turn, and fills in page 2 for you to
+  change before anything is created. Enter here has always meant "read this",
+  and `preventDefault` keeps it that way — the box lives inside the form, so
+  without it a sentence nobody has resolved yet would become a create in whatever
+  folder the suggestion pre-fill left behind. The button is **`type="button"`**
+  for the same reason.
+- **Create session** — start now from what you typed, without reading the
+  details. The one thing it does *not* skip is a folder that does not exist.
+
+While a turn is in flight the button shows a ring and reads **Reading…**, then
+**Still reading…** after 8 s: a cold CLI start plus a real turn runs to ~25 s and
+a spinner that never changes reads as a hang long before the route's own timeout
+would say anything. A **Cancel** link appears beside the box, which goes
+read-only rather than disabled so the caret and the selection survive the wait.
+
+**Refusals say why instead of greying out.** The button is disabled only while a
+turn is in flight — never for a sentence that is too short. An empty box answers
+*"Type what you want to work on first."*; a one-word sentence answers *"Say a bit
+more — “scan” doesn't say which project or what to do."* The floor is about
+ambiguity, not length: a bare name resolves to exactly one folder on the machine
+and it is the wrong one, and there is no repair for a sentence that never said
+which project.
+
+When a plan lands, the strip shows the **server-written note** (which folder,
+which mode, why it was clamped) — the model never writes it, because a
+model-written note is a sentence that can disagree with the form under it — and
+**Create is held for ~0.5 s**, saying *"Just filled the form in — check the
+folder, then press Create."* The answer arrives 10-25 s after the keystroke that
+asked for it and moves the caret on its way in; without the hold, an Enter aimed
+at something else creates a session in a folder a model picked and nobody read,
+and the create closes the dialog before the POST, so there is nothing left on
+screen to cancel.
+
+**The new-folder gate.** When the plan answers `folder_exists: false`, the foot
+of the strip asks *There is no folder at `~/code/invoice-parser` yet. Make it?*
+with an unticked **Yes, create …** box, and **Create refuses until it is
+ticked** — with a sentence naming the folder and quoting the tick word for word,
+because by then the row can be several screens up. The gate is derived from the
+Folder field, so editing that field away from the proposed path clears it and
+typing the path back re-arms it. This is **not** the *Create a git repo in this
+folder* checkbox (`init_repo`, a `git init`) under Git & workspace — a new
+project usually wants both, and the tick's own copy says so. A folder is the one
+thing a plan proposes that outlives the session: a worktree goes when the session
+does, but nobody comes back for the directory.
 
 ## New-session dialog: prompt presets
 
@@ -846,8 +918,8 @@ credential.
   `/api/mindflock/status` + `start`/`stop` contract, query key and 4 s interval as
   the sidebar's Ticket Ingestion bar, so the two never disagree), one card per
   connected source (provider, optional label, Repo URL, its own **Agent CLI**,
-  its **Thinking effort**, ingest-state picker, credentials, **Test connection**,
-  **Remove**), then
+  its **Thinking effort**, ingest-state picker, **Move to state on start**,
+  credentials, **Test connection**, **Remove**), then
   **Assigned tickets** — the slowest of the three fan-outs (~3 s: a provider
   search per source plus a `git ls-remote` per repo). A **Shortcut** source
   lists what Shortcut's own boards show: archived stories, and stories under an
@@ -872,6 +944,17 @@ credential.
   installation. Unset **Agent CLI** falls back to `[mindflock].agent`, then the app
   default (see
   [ingestion-pipeline.md](ingestion-pipeline.md#which-agent-cli-a-ticket-runs)).
+  **Move to state on start** (Shortcut/Jira/Linear only, opt-in per source) is
+  the ingest-state picker's mirror image: that one filters on where a ticket
+  *is*, this one names where it *goes* once a session starts for it — so a board
+  stops showing work an agent is already doing as untouched. It reads the same
+  live state list (populated by **Test connection**), takes one state, and its
+  empty choice — **Leave it where it is** — is the default and the pre-existing
+  behavior. It applies to both ways a session starts: the pipeline picking the
+  ticket up and **Run ticket** on a row. The move happens after the session is
+  live and never fails a launch — a tracker that refuses it (most often a Jira
+  status with no transition into it from where the issue sits) logs a warning
+  and the session keeps running.
 - **Pull requests** — **Automated review** (absent = on once repos exist), the
   repository cards, then **Open pull requests** with **Begin review**. This tab
   also owns the shared GitHub token, under **Advanced options**.
@@ -1547,6 +1630,24 @@ is running it**.
   names which installed CLIs can be pointed at it. It also states plainly that
   Claude Code has no local route, because a session silently using its hosted API
   is the one outcome the privacy claim cannot afford to be quiet about.
+- **Advanced → Version & updates** — one section with two transports, picked by
+  which one can actually do the work. Inside the Electron shell `window.mfengine`
+  owns it (`engine:update-info` / `engine:install`): the shell can install while
+  nothing of *its* own is being replaced. In any other browser — one on the
+  tailnet, a second machine — the shell object is absent and the **server
+  updates itself** over `/api/update/*` (see
+  [web-api.md](web-api.md#engine-updates)). The version line reads *This engine
+  is **vX** · newest release **vY** (release notes)*, or *· couldn't reach
+  GitHub to check for a newer one* when the lookup failed — never "you're on the
+  newest release", which is a different claim. A **dev/editable checkout** shows
+  a sentence instead of a button (`git pull` in the checkout, then restart):
+  that is a **refusal, not a failure** — reinstalling over an editable install
+  would swap a contributor's working tree for a release build. Otherwise
+  **Update to vY** starts the install, **Installer output** folds open a live log
+  tail, and the screen polls `/api/update/state` until it reports the restart,
+  then waits out the re-exec and reloads onto the new bundle. Your sessions are
+  tmux sessions, so nothing running is lost; if the server doesn't answer within
+  30 s the screen says so and points at System logs rather than spinning.
 - **Advanced → Engine → Ticket sessions in MindFlock** (`engine.enabled`,
   **default on**) — where ingested tickets land. On: each one becomes a MindFlock
   session with its own worktree, branch, seeded agent, stage badge and guided git
@@ -1726,8 +1827,9 @@ focused terminal or text box, with a live caption bar.
 ## Mobile UI (`/m`)
 
 A single full-screen terminal for phones: session picker, activity dot,
-Agent/Shell tabs, and a soft-key bar (esc, sticky ctrl, tab, arrows, enter — the
-sticky ctrl folds the next key into a control code). It uses the same WebSockets
+Agent/Shell tabs, a `+` that starts a session, and a soft-key bar (esc, sticky
+ctrl, tab, arrows, enter — the sticky ctrl folds the next key into a control
+code). It uses the same WebSockets
 and instance list as the desktop UI, remembers your last session, and accepts
 `?s=<title>` to deep-link one. The server prints the `/m` URL (and a QR code in
 tailscale mode) shortly after startup — the banner probe (like the other
@@ -1775,8 +1877,7 @@ to push.
 
 **Git workflow action bar** — a **Commit / Push / PR / Merge** button row that
 brings the desktop pane header's guided flow to a phone, so the whole git
-loop is now drivable from mobile (previously sessions could only be created
-and driven from the desktop view). The buttons hit the same
+loop is drivable from mobile. The buttons hit the same
 `/api/instances/<title>/{commit,push-branch,make-pr,merge-pr}` endpoints the
 desktop uses, and `nextAct()` mirrors the desktop's stage logic to **highlight
 the one recommended next step** for the session's current stage (agent →
@@ -1785,6 +1886,59 @@ bottom-sheet commit-message dialog; **Merge** confirms first. **Push** honors
 the O3 soft gate exactly like the desktop `pushSession` flow: if checks
 haven't passed for the commit the push comes back `409`, and a `confirm()`
 offers to re-push with `{force: true}`.
+
+**New session (`+`)** — the `+` in the top bar (and the "No sessions yet" line,
+which is itself the button) opens a bottom sheet that starts a session from the
+phone. Two screens, one input each:
+
+1. **What do you want to work on?** — one sentence. It goes to
+   `POST /api/session-plan`, which reads the filesystem, asks the flock's own
+   coding CLI one headless question and answers with the New Session form's own
+   fields. The button reads *Reading…*, then *Still reading…* after 8s (the same
+   relabel the desktop's Describe box does), because that is a real model turn
+   and takes ~10-25s.
+2. **Review** — an editable **Name**, the **Folder**, one line saying the mode
+   ("work happens in the folder directly" / "in a new worktree" / "a new
+   folder"), the server's own note, and the typed sentence as the session's
+   editable **first prompt**. **Start session** posts it to the unchanged
+   `POST /api/instances`.
+
+Almost none of the desktop dialog comes to the phone — no templates, no folder
+combobox, no Browse tree, no provisioning, no workspace strategy, no launch
+flags, no account picker, no model pin. Every one of those has a working
+default, and the way to inherit a default is to *send no key at all*, so the
+create posts exactly five keys (`title`, `repo_path`, `prompt`, `in_place`,
+`init_repo`) and the session that comes up is the one the desktop would have
+made with nobody touching Advanced.
+
+**Confirming a new folder.** When the plan proposes a folder that does not exist
+yet (`folder_exists: false`, which happens only for the plan route's
+`new:<name>` answer), the review screen shows a checkbox naming that folder,
+defaulted **off**, and **Start session refuses while it is unticked** — with a
+sentence saying which folder it would create, not a greyed-out button. Creating
+a directory is the one thing a plan proposes that outlives the session and that
+closing it never takes back: a worktree goes when the session does, but nobody
+comes back for the folder. This is *not* the same question as the desktop's
+"Create a git repo in this folder" (`init_repo`, a `git init`) — both can be
+true at once, and the tick's own copy says so.
+
+**No model? Not a dead end.** `POST /api/session-plan` answers **502** with one
+human sentence when the CLI is missing, times out, or answers unreadably. The
+sheet shows that sentence and falls back, in place, to a tap-list of folders from
+`GET /api/repos/suggest` — the same rows the desktop dialog's suggestion chips
+show. The typed sentence still becomes the prompt. That list is also reachable
+deliberately from the review screen (tap the folder row), so a plan that picked
+the wrong repo is correctable without walking to a desktop.
+
+**No folder name ever reaches `POST /api/instances`.** There is no free-text
+folder field on this page, on purpose: `_prepare_plain_repo` realpaths whatever
+it is handed against the *server's* cwd and then `makedirs` it, which is how
+typing `api` once created a `MindFlock/api` directory. Every folder here is
+either a plan's `repo_path` (the model answers with the **number** of a row in a
+menu the server built by walking the filesystem — it never writes a path) or a
+row of `/api/repos/suggest`, and Start refuses anything that isn't absolute
+anyway. The create answers **202**, so the new session is selected from the next
+poll tick, when its row actually appears in the list.
 
 ## Addons in the frontend
 

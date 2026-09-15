@@ -65,6 +65,24 @@ bridge has to be optional on both sides:
   is in the shell today; the fix, if it becomes a real complaint, is a defensive
   `insertCSS` of `#topbar { padding-left: 78px }` on darwin.
 
+### The in-app updater and your editable install
+
+Settings → Advanced can make the **server update itself** (`/api/update/*`,
+`backend/web/core/self_update.py`). It **refuses to run against a dev checkout**:
+`install_kind()` calls an install `editable` when the `backend` package that is
+currently imported lives *outside* site-packages, and the update answers with a
+sentence ("`git pull` in the checkout, then restart") instead of a button. So an
+`uv tool install --force --editable` install is never clobbered by that screen —
+but do not defeat the check, because `uv tool install --force` would replace your
+working tree with a release build.
+
+The update path runs the **same step `install.sh` runs** — resolve the release
+tag to a full commit (peeled tags first: an annotated tag's own ref points at the
+tag object, not the commit), then `uv tool install --force --python 3.12
+"mindflock[web] @ git+<repo>@<commit>"`. The two have to stay in step, the
+`INSTALL_PYTHON` pin included; changing one without the other means the
+installer and the updater produce different installs.
+
 ### Rebuild the bundle in the same commit
 
 `backend/web/static/app.js` and `style.css` are **committed build output**. Any

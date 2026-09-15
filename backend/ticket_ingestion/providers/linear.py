@@ -120,6 +120,15 @@ _STATES_QUERY = (
 )
 
 
+#: Move one issue into a workflow state — the write half of ``list_states``,
+#: used by the source's optional "move it when a session starts" setting.
+_SET_STATE_MUTATION = """
+mutation($id: String!, $state: String!) {
+  issueUpdate(id: $id, input: { stateId: $state }) { success }
+}
+"""
+
+
 class LinearProvider(TicketProvider):
     name = "linear"
     label = "Linear"
@@ -231,6 +240,24 @@ class LinearProvider(TicketProvider):
         if not issue:
             raise ProviderError(f"Linear issue {ticket_id} not found")
         return self._issue_to_ticket(issue)
+
+    async def set_state(self, ticket_id: str, state_id: str) -> None:
+        """Move an issue into workflow state ``state_id`` (``issueUpdate``).
+
+        Like Shortcut and unlike Jira, Linear has no transition graph — a state
+        id from :meth:`list_states` is a legal destination — so this is one
+        mutation. A state belonging to another team is the one rejection worth
+        expecting, and Linear reports it as a GraphQL error, which ``_gql``
+        already turns into a :class:`ProviderError`.
+        """
+        target = str(state_id).strip()
+        if not target:
+            return
+        data = await self._gql(_SET_STATE_MUTATION, {"id": ticket_id, "state": target})
+        if not ((data.get("issueUpdate") or {}).get("success")):
+            raise ProviderError(
+                f"Linear refused to move issue {ticket_id} to state {target}"
+            )
 
     async def test_connection(self) -> tuple[dict | None, str]:
         try:

@@ -358,6 +358,7 @@ class PipelineOrchestrator:
             story.effort = source_effort_now(
                 scanner._source_key, scanner._source.effort
             )
+            story.source_key = scanner._source_key
             await self._queue.put(story)
             _logger.info("Re-enqueued pending ticket %s from a prior run.", slug)
 
@@ -707,4 +708,10 @@ class PipelineOrchestrator:
 
     async def _fetch_story(self, story_id: int | str) -> Ticket:
         """Full ticket detail for a webhook event, via the active provider."""
-        return await self._provider.fetch(str(story_id))
+        story = await self._provider.fetch(str(story_id))
+        # The webhook path runs on the PRIMARY source, so that is the source
+        # whose settings this ticket launches under (start_state).
+        primary = self.config.ticketing
+        if primary is not None:
+            story.source_key = primary.id or primary.provider
+        return story

@@ -1,9 +1,10 @@
 /** Settings → Advanced (partial 115): engine + platform fields, and the
  * on-demand server restart. */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { SettingField, useSettings } from "../useSettings";
 import { useServerRestart } from "../useServerRestart";
+import { api } from "../../../api/client";
 import type { ScreenProps } from "../SettingsDialog";
 
 export function Advanced(_: ScreenProps) {
@@ -92,13 +93,181 @@ export function Advanced(_: ScreenProps) {
   );
 }
 
-/** Engine update, desktop-shell only. Polls the shell (electron/main.js
- * `engine:update-info`) for whether the installed engine is behind the latest
- * released one; if so, offers a one-click update that pulls just the small
- * engine package (not the app) and self-restarts the server. In a plain
- * browser `window.mfengine` is absent → renders nothing. */
-type EngineInfo = { available?: boolean; current?: string; latest?: string };
+/** Version & updates. Two transports, one section.
+ *
+ * Inside the desktop shell the shell owns it (electron/main.js
+ * `engine:update-info` / `engine:install`): it can install while nothing of its
+ * own is being replaced, and it already knows which engine ref this app is
+ * pinned to. Everywhere else — a browser on the tailnet, /m, a second machine
+ * pointed at this server — `window.mfengine` is absent, and until now that
+ * meant no way to update at all short of finding the terminal that owns the
+ * install. There the server updates itself (`/api/update/*`).
+ *
+ * The split is by capability rather than by preference: whichever one is
+ * present is the one that can actually do the work. */
 function EngineUpdate() {
+  const mfengine = (window as unknown as { mfengine?: unknown }).mfengine;
+  return mfengine ? <ShellEngineUpdate /> : <ServerEngineUpdate />;
+}
+
+/** The server updating ITSELF: `uv tool install --force` over the tool venv it
+ * is running out of, then a restart. See backend/web/core/self_update.py for
+ * why that is safe, and why a dev checkout is refused rather than clobbered. */
+type UpdateCheck = {
+  current?: string;
+  latest?: string;
+  tag?: string;
+  release_url?: string;
+  checked?: boolean;
+  available?: boolean;
+  kind?: string;
+  blocked?: string;
+  repo?: string;
+};
+type UpdateState = { state?: string; code?: number; log?: string[]; restarting?: boolean };
+
+function ServerEngineUpdate() {
+  const [info, setInfo] = useState<UpdateCheck | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [lines, setLines] = useState<string[]>([]);
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { restarting, timedOut, restart } = useServerRestart();
+
+  const check = useCallback(async (refresh: boolean) => {
+    try {
+      setInfo(await api<UpdateCheck>("/api/update/check" + (refresh ? "?refresh=1" : "")));
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }, []);
+
+  useEffect(() => {
+    check(false);
+    return () => {
+      if (timer.current) clearInterval(timer.current);
+    };
+  }, [check]);
+
+  const update = async () => {
+    setBusy(true);
+    setError("");
+    setLines([]);
+    try {
+      await api("/api/update/start", { method: "POST", json: {} });
+    } catch (err) {
+      setBusy(false);
+      setError((err as Error).message);
+      return;
+    }
+    if (timer.current) clearInterval(timer.current);
+    timer.current = setInterval(async () => {
+      let st: UpdateState;
+      try {
+        st = await api<UpdateState>("/api/update/state");
+      } catch {
+        // The install replaces the venv this server runs out of, so a gap here
+        // is expected rather than a failure. Keep polling; the restart below is
+        // what ends this loop.
+        return;
+      }
+      setLines(st.log || []);
+      if (st.restarting) {
+        if (timer.current) clearInterval(timer.current);
+        timer.current = null;
+        // The route already re-execed the server, so don't ask for a second
+        // restart — just wait for it to answer again and reload onto the new
+        // bundle.
+        restart({ alreadyRequested: true, reload: true });
+      } else if (st.state === "failed") {
+        if (timer.current) clearInterval(timer.current);
+        timer.current = null;
+        setBusy(false);
+        setError("The update didn’t finish (exit " + (st.code ?? "?") + ").");
+      }
+    }, 2000);
+  };
+
+  const blocked = info?.blocked || "";
+  const version = info?.current ? "v" + info.current : "unknown";
+  return (
+    <>
+      <h3 className="set-section-title">Version &amp; updates</h3>
+      <p className="set-hint">
+        This engine is <strong>{version}</strong>
+        {info?.checked && info?.latest ? (
+          <>
+            {" "}
+            · newest release <strong>v{info.latest}</strong>
+            {info.release_url ? (
+              <>
+                {" "}
+                (
+                <a href={info.release_url} target="_blank" rel="noreferrer">
+                  release notes
+                </a>
+                )
+              </>
+            ) : null}
+          </>
+        ) : info && !info.checked ? (
+          <> · couldn’t reach GitHub to check for a newer one</>
+        ) : null}
+        .
+      </p>
+      {blocked ? (
+        <p className="set-hint">{blocked}</p>
+      ) : info?.available ? (
+        <p className="set-hint">
+          Updating downloads the new engine, replaces this install, and restarts the server —
+          your sessions are tmux sessions, so nothing running is lost. This window reloads on
+          its own once the server answers again.
+        </p>
+      ) : info?.checked ? (
+        <p className="set-hint">You’re on the newest release.</p>
+      ) : null}
+      <div className="upd-btn-row">
+        {!blocked && info?.available && (
+          <button type="button" className="test-btn" disabled={busy || restarting} onClick={update}>
+            {restarting
+              ? "Restarting…"
+              : busy
+                ? "Updating…"
+                : "Update to v" + info.latest}
+          </button>
+        )}
+        <button
+          type="button"
+          className="test-btn"
+          disabled={busy || restarting}
+          onClick={() => check(true)}
+        >
+          Check again
+        </button>
+      </div>
+      {error && <p className="error">{error}</p>}
+      {timedOut && (
+        <p className="error">
+          The update finished, but the server didn’t come back within 30s. Check Settings →
+          System logs, or restart it from the terminal.
+        </p>
+      )}
+      {lines.length > 0 && (
+        <details className="upd-fold">
+          <summary>Installer output</summary>
+          <pre className="upd-log">{lines.join("\n")}</pre>
+        </details>
+      )}
+    </>
+  );
+}
+
+/** The desktop shell's own updater, unchanged: polls electron/main.js for
+ * whether the installed engine is behind the latest released one and, if so,
+ * offers a one-click update that pulls just the small engine package (not the
+ * app) and self-restarts the server. */
+type EngineInfo = { available?: boolean; current?: string; latest?: string };
+function ShellEngineUpdate() {
   const mfengine = (
     window as unknown as {
       mfengine?: {

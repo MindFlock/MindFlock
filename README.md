@@ -91,13 +91,13 @@ Everything MindFlock itself talks to over the network, in full:
 
 | It calls | When | What it sends |
 |---|---|---|
-| Your tracker's API (GitHub Issues · Jira · Linear · Shortcut · Asana) | every ~20 s while ingestion is on | nothing — **read-only**. It never comments and never moves a status |
+| Your tracker's API (GitHub Issues · Jira · Linear · Shortcut · Asana) | every ~20 s while ingestion is on | nothing — **read-only by default**. It never comments; the only write is the optional per-source *Move to state on start*, off unless you pick a state |
 | your local model server, if you configure one | every turn of a session on a local model | your prompt and code — to `127.0.0.1` (or whatever host you pointed it at). Never leaves your machine unless you aim it off-box |
 | `api.github.com` | polling *your own* PRs for review comments; the **Make PR** / **Merge** buttons | what `gh` would send if you ran it by hand |
 | `aipricing.guru` | at most once a day, for the model price table behind the cost display | nothing. Falls back to a built-in table offline |
 | your git remote | only when *you* click push | your commits, over the remote your repo already has |
 | `ntfy.sh`, or your own instance | only if you switch phone push on | the notification text |
-| GitHub Releases | the desktop app's update check | nothing |
+| GitHub Releases | the update check — the desktop app's, and Settings → Advanced in any other browser | nothing |
 
 No analytics, no telemetry, no crash reporting, no license check, no phone-home
 of any kind — the tree is public, so grep it. Tracker tokens live in
@@ -310,8 +310,11 @@ a feature race; those two change what your day looks like:
   provider) for work assigned to you, and GitHub for your PRs that came back
   with review comments. Each one gets a worktree, an installed environment and
   an agent seeded with the ticket — title, description, mined acceptance
-  criteria, comments. Read-only against your tracker: it never comments or
-  moves a ticket's status. **GitHub Issues needs no configuration at all** — the
+  criteria, comments. Read-only against your tracker unless you ask otherwise:
+  it never comments, and the single write is opt-in per source — **Move to state
+  on start**, which moves a ticket into a state you pick once its session is
+  live, so a board stops showing work an agent is already doing as untouched.
+  **GitHub Issues needs no configuration at all** — the
   token comes from your existing `gh auth login` and the repo from this
   checkout's `origin`.
 - 🔒 **No cloud in the middle** — there is no MindFlock service, no account and
@@ -538,6 +541,11 @@ and finishes with `mindflock doctor` so anything still missing (git, tmux,
 > branch/tag is resolved to a full commit SHA that is printed and pinned for
 > the install, an audit trail for what actually ran. Threat model and
 > disclosure contact: [SECURITY.md](SECURITY.md).
+
+**Updating** is the same command again — `install.sh` upgrades in place — or the
+**Update** button in Settings → Advanced, which has the server reinstall itself
+and restart. Your sessions are tmux sessions, so nothing running is lost. A
+contributor's editable install is refused there rather than replaced.
 
 <details>
 <summary>Prefer your own tooling? (uv / pipx / from source)</summary>

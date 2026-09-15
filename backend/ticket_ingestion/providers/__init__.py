@@ -69,6 +69,28 @@ def _scope_field(anyone_label: str, hint: str) -> dict:
     }
 
 
+def _start_state_field(noun: str, hint: str) -> dict:
+    """The optional "move it when a session starts" picker.
+
+    One state, not several: this is a destination, where ``workflow_state`` is a
+    filter. Empty = leave the ticket where it is, which is what every source did
+    before the setting existed — the whole feature is opt-in per source, because
+    a board only has a column to move work into if someone drew one.
+
+    Only offered by the providers that can actually write a state back
+    (``STATE_SETTING_PROVIDERS``); GitHub Issues and Asana have nowhere to move
+    a ticket to.
+    """
+    return {
+        "key": "start_state",
+        "label": f"Move to {noun} on start",
+        "type": "state_one",
+        "secret": False,
+        "required": False,
+        "hint": hint,
+    }
+
+
 PROVIDER_META: list[dict] = [
     {
         "id": "github_issues",
@@ -135,6 +157,12 @@ PROVIDER_META: list[dict] = [
                 "required": False,
                 "placeholder": "any state (add one or more)",
             },
+            _start_state_field(
+                "state",
+                "Optional: when a session starts for one of these stories — "
+                "whether the pipeline picked it up or you ran it by hand — move "
+                "the story here. Leave it unset and the story stays where it is.",
+            ),
         ],
     },
     {
@@ -185,6 +213,15 @@ PROVIDER_META: list[dict] = [
                 "required": False,
                 "placeholder": "any status (add one or more)",
             },
+            _start_state_field(
+                "status",
+                "Optional: when a session starts for one of these issues — "
+                "whether the pipeline picked it up or you ran it by hand — "
+                "transition the issue here. Jira only moves along transitions "
+                "its workflow offers from the issue's current status; when there "
+                "is none, the session still starts and the move is logged as a "
+                "warning.",
+            ),
         ],
     },
     {
@@ -222,6 +259,12 @@ PROVIDER_META: list[dict] = [
                 "required": False,
                 "placeholder": "any state (add one or more)",
             },
+            _start_state_field(
+                "state",
+                "Optional: when a session starts for one of these issues — "
+                "whether the pipeline picked it up or you ran it by hand — move "
+                "the issue here. Leave it unset and the issue stays where it is.",
+            ),
         ],
     },
     {

@@ -155,6 +155,86 @@ has no verified route for the chosen agent — the session will run on the CLI's
 own login, and the web UI warns about that at selection time while API and CLI
 callers would otherwise never hear it.
 
+### `POST /api/session-plan` → **200**
+
+Fill in the New Session form from one sentence. **Creates nothing** — no
+directory, no repo, no branch, no worktree, no session. It reads the filesystem,
+asks one headless model turn, and answers with the fields the dialog already
+owns; everything is still made by the user pressing **Create**, through the
+unchanged `POST /api/instances` above.
+
+```jsonc
+{ "text": "work on the auth bug in acme-api, in a worktree" }
+```
+
+```jsonc
+{
+  "title": "auth-bug",                                          // string
+  "repo_path": "/home/me/code/acme-api",       // string, always absolute
+  "prompt": "Look at why token refresh fails after an idle hour and fix it.", // string
+  "in_place": false,                                            // bool
+  "init_repo": false,                                           // bool
+  "folder_exists": true,                                        // bool
+  "folder_display": "~/code/acme-api",         // string, ~-relative under $HOME
+  "note": "Filled in from what you typed — check it and press Create. Using ~/code/acme-api. Work happens in a new worktree, not in the folder itself." // string
+}
+```
+
+All eight keys are **always present**, and `repo_path` is always a non-empty
+absolute path.
+
+`folder_exists` is `false` only for a `new:<name>` answer that landed somewhere
+nothing is yet — every numbered candidate came out of a walk of the real
+filesystem. **A client must not create a session in a folder that does not exist
+until the user has confirmed that folder in as many words.** Creating a directory
+is the one thing a plan proposes that outlives the session and that closing it
+never takes back: a worktree goes when the session does, but nobody comes back
+for the folder. `folder_display` is the spelling to put in that question — `~`-relative under
+`$HOME`, the plain path otherwise — identical to the one the `note` uses, so the
+two never name the folder differently. It is never what a session is created
+with (`repo_path` is), so no shortening here can change which directory is
+opened. It deliberately differs from the spelling the *model* sees: the folder
+menu in the prompt collapses anything outside `$HOME` to `…/<name>` so no
+absolute path is ever in the model's context to copy, but a confirmation that
+named no parent would be a question nobody can answer — and `resolve` reports
+the realpath, so a symlinked `~/code` puts a brand-new project outside `$HOME`
+routinely. **The model never names a folder.** The server walks the
+filesystem first (the same recency ladder `GET /api/repos/suggest` uses, plus up
+to three `GET /api/repos/search`-style name lookups drawn from the sentence),
+renders that menu into the prompt as *home-relative* spellings only, and the
+model answers with the **number** of a row — or the literal `new:<name>`, which
+is sanitized to one path segment under a parent the server picks (first existing
+of `~/code`, `~/projects`, `~/src`, `~/dev`, `~/work`, `~/Development`, else
+`$HOME`). There is no branch of the resolver that turns model text into a
+filesystem location, so the bare-name-becomes-`makedirs` hazard behind
+`in_place` creation cannot be reached from here. An out-of-range number is an
+**error, not a clamp** — clamping would hand back a folder the model never chose
+under a note claiming it did.
+
+`in_place` and `init_repo` mirror `POST /api/instances`' own clamps, so the form
+can never show a mode the 202 would silently change: a non-git folder is always
+`in_place: true`, and `init_repo` is set only for a project the sentence said was
+new. `provisioned` is never emitted and never accepted. `note` is composed
+server-side from resolved facts (which folder, which mode, why it was clamped,
+and an "I wasn't certain" clause when the folder matched by substring rather than
+by name) — the model never writes it, because a model-written note is a sentence
+that can disagree with the form under it.
+
+Errors carry one human sentence and leave the form untouched:
+
+- **400** `{"error": "say what you want to work on"}` — blank body; and
+  `{"error": "that reads like an answer format rather than a request — say what
+  you want to work on"}` when the sentence is nothing but output-contract markup
+  (those lines are dropped whole, never substring-stripped, so ordinary prose
+  mentioning `<commit>` survives).
+- **502** `{"error": "…"}` — no model to ask or an unreadable answer, e.g.
+  `claude is not installed`, `codex did not answer within 75s`, `no installed CLI
+  (aider) has a headless mode MindFlock can ask for a session plan`, `the CLI
+  answered without a <newsession> block — nothing to read`, `the CLI didn't pick
+  one of the folders — name the project you mean`, `the CLI picked folder 7, and
+  there is no such folder in the list`, `the CLI echoed the example instead of
+  reading what you typed`.
+
 ### Lifecycle
 
 | Method | Path | Effect |
@@ -500,6 +580,7 @@ the owning device.
 | GET | `/api/usage` | Rolling day/week/month/year token+cost totals per provider (Claude, Codex, …) |
 | GET/POST | `/api/scroll-speed` | `{speed}` 1–20, applied live to tmux |
 | GET/POST | `/api/window-refresh` | The scheduled coding-CLI keepalive: config + per-provider `last_fired` (Settings → Agent CLI) |
+| GET | `/api/repos/suggest` | `{suggestions, home}` — folders to offer instead of a bare tree: the recency ladder (`general.last_repo_path` → live sessions newest-touched → the closed-session undo store), the folder the server was launched from, then a shallow sweep of the usual code directories. `POST /api/session-plan` builds its numbered folder menu from the **same** `server._recent_repo_paths` ladder (plus up to three name lookups drawn from the sentence), so the dialog's suggestion chips and a plan can never offer different folders |
 | GET | `/api/browse?path=` | Directory listing `{path, parent, is_git, entries}` for the New-session dialog |
 | POST | `/api/mkdir` | Body `{path, name}` (single path segment) → `{path}` |
 | POST | `/api/paste-image?session=&name=` | Save a file pasted or dropped in the browser (raw bytes as the body) → `{path}`, the **absolute** path the UI then types into the PTY. `?session=<title>` stores it in that session's workspace under `.mindflock_pastes/` (git-excluded, so the agent needs no out-of-tree read); **omitting** `session` — the Assistant window, which has no worktree, and the phone UI — stores it under `~/.mindflock/pastes`. `?name=` keeps a sanitized copy of the original filename so the agent sees `report.pdf` rather than a blob; without it the extension comes from the content type (`image/png|jpeg|gif|webp|bmp`, else `.png` for any other `image/*`, else `.bin`). 400 on an empty body, 413 over 20 MB. Transient: each write prunes its own directory to the newest few pastes |
@@ -673,6 +754,7 @@ store:
 | Method | Path | Returns |
 |---|---|---|
 | WS | `/api/assistant/terminal` | Interactive chat PTY |
+| GET | `/api/assistant/state` | `{"activity": "working\|clarify\|limit\|idle\|offline"}` — what the Assistant's agent is doing, for the window's sidebar pill. **Polled, not pushed**: `WS /api/events` speaks for sessions the *engine* owns, and the Assistant is a window, not one of them. `offline` covers both "never started" and "it died", which is what the row should say before its first chat. The read goes through the same `_agent_activity` ladder and the same ~2.5 s probe memo a session row uses (the addon hands it a singleton stand-in shaped like an instance), so the two can never disagree about what "running" means |
 | GET/PUT | `/api/assistant/instructions` | The assistant's standing instructions file |
 | POST | `/api/assistant/restart` | Kill + relaunch the assistant tmux |
 | GET | `/api/assistant/todos` | `{todos: [{id, text, done}]}` |
@@ -946,6 +1028,42 @@ the local + tailnet mobile URLs (the access token + a QR code if `segno` is
 installed) is printed; each addon's `on_startup` runs. Shutdown reverses addon
 hooks and cancels background tasks. tmux sessions are *not* touched — they
 outlive the server.
+
+### Engine updates
+
+Three routes let the **server update itself** — `uv tool install --force` over
+the very tool venv this process is running out of, then the same re-exec
+`POST /api/server/restart` performs. The
+desktop shell keeps its own updater (`electron/main.js`'s `engine:install`);
+these are for every *other* client — a browser on the tailnet, `/m`, a second
+machine — which could otherwise be told it was behind and do nothing about it.
+Implementation and the reasoning live in `web/core/self_update.py`.
+
+| Method | Path | Returns / accepts |
+|---|---|---|
+| GET | `/api/update/check` | `{current, latest, tag, release_url, notes, checked, available, kind, blocked, repo, state}`. `?refresh=1` bypasses the 15-minute `RELEASE_TTL_S` cache (the **Check again** button) — the releases endpoint is polled by every open settings screen and GitHub's unauthenticated limit is 60/hour. An unreachable GitHub answers an empty `latest` with `checked: false`, and is **never** reported as up-to-date: "couldn't tell" and "you're current" are different answers. `kind` is how this engine is installed (`uv-tool` \| `editable` \| `other`) and `blocked` is the human sentence for why it can't update here (empty = it can) |
+| POST | `/api/update/start` | Body `{}` (or `{"ref": "v0.3.2"}`). The newest tag is resolved **server-side** by default — the button says "update to the newest version", and a stale settings screen doesn't get to decide what that is — then resolved to a commit and handed to `uv tool install --force`. → `{ok: true, ref, commit}`. **400** is a refusal with a reason: a dev/editable checkout, an engine not installed by `uv tool`, no `uv` on PATH, an install already running, a ref that resolves to nothing. **502** = GitHub unreachable, so there is no newest release to install |
+| GET | `/api/update/state` | The progress file plus `restarting` (and a `log` tail for the UI's detail fold). **This route is also what re-execs the server** — exactly once, on the first poll that sees a finished install. The installer deliberately doesn't do it itself: calling back into the API would mean teaching a shell script the port and the auth token for a request the UI is already making |
+
+The operational contract behind them:
+
+- The installer runs **detached** (its own session via `setsid` where there is
+  one), so it survives the restart that ends the update rather than being killed
+  halfway through replacing its own venv.
+- Progress lives in a **file**, `<config dir>/update.json`, not this process's
+  memory — so a client polling *across* the restart still learns how the update
+  ended. Full installer output goes to `<config dir>/update.log` (Settings →
+  System logs).
+- `INSTALL_TIMEOUT_S` is **30 minutes**, after which a `started` marker whose
+  process is gone is aged out rather than disabling the button for ever.
+- `MINDFLOCK_UPDATE_REPO` (`owner/repo`, releases) and `MINDFLOCK_INSTALL_REPO`
+  (clone URL, the install source) override where both halves come from, for a
+  fork or a staging repo — the same names `install.sh` and the desktop shell
+  already honor.
+- A **dev checkout is refused outright**, not attempted and failed:
+  `uv tool install --force` would replace a contributor's editable install with
+  a release build, and no button in a settings screen should be able to do that
+  quietly.
 
 ## Launching the server
 

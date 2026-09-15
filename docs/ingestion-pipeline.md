@@ -44,6 +44,24 @@ provider is chosen by `[ticketing].provider` (see
 | `linear` | GraphQL `viewer.assignedIssues(filter: {updatedAt})` |
 | `asana` | `GET /tasks?assignee=me&workspace=<gid>` |
 
+**Writing a state back (`set_state()`)** is the adapter's one optional *write*
+capability, the twin of the read-only `list_states()` the ingest-state picker is
+built from. It takes an id from exactly that list and backs the source's
+`start_state` setting. `STATE_SETTING_PROVIDERS = {shortcut, jira, linear}` —
+the base class raises `ProviderError` for everyone else, so a `start_state` left
+in a hand-edited config after a provider switch hits a backstop rather than a
+crash (`start_state_id()` already answers `""` for those providers). The
+mechanics differ per tracker:
+
+| Provider | How a state is written |
+|---|---|
+| `shortcut` | `PUT /stories/{id}` with `{workflow_state_id: <int>}`. No transition graph — any state the story's team can reach is a legal target — so it is one field write. A non-numeric id is rejected *before* any HTTP call |
+| `linear` | `issueUpdate(id:, input: {stateId:})`. Also no transition graph. A state belonging to **another team** is the rejection worth expecting, and Linear reports it as a GraphQL error, which surfaces as a `ProviderError` |
+| `jira` | Statuses are not writable directly: `GET /rest/api/3/issue/{id}/transitions`, pick the transition whose **destination** matches the configured status — by id, then by name, since `list_states` stores ids but a hand-edited config may hold a name — and execute it. A status that is real but **not reachable** from where the issue currently sits is the common failure, and it is a configuration answer rather than a bug, so the error names the transitions that *were* offered |
+
+Failures here are warnings, never failed launches — see step 8 of the story flow
+below.
+
 **`github_issues` is the zero-config on-ramp** and therefore leads both the
 registry and the UI catalog (the Intake → Tickets tab seeds a newly added source
 with the catalog's first entry). It is the only source that needs **no fields
@@ -262,6 +280,26 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
      the story runner, PR runner, and IDE launch alike) and the session is
      always reachable over tmux even when no GUI tab opens.
 7. **Record** — the story id, branch, and status land in `state.json`.
+8. **Move it on the board** (optional, per source) — when the source sets
+   `start_state`, the ticket is moved into that state right after the session is
+   live, so the board stops showing work an agent is already doing as untouched.
+   Shortcut and Linear write the state directly; Jira executes the transition
+   whose destination is the configured status. This runs on **both** launch
+   paths — the pipeline above and a force-start from Intake → Tickets — through
+   one helper (`ticket_ingestion/start_state.py`), and it is strictly
+   best-effort: a tracker that is down, or a Jira status with no transition into
+   it from where the issue sits, logs a warning and leaves the session running.
+   Blank (the default) moves nothing.
+
+   **Which source a ticket moves under is carried by `Ticket.source_key`** —
+   the `id or provider` key, stamped by whoever produced the ticket (the
+   backfill scanner, the orchestrator's pending re-enqueue, the webhook path's
+   primary source, and the web layer's `find_ticket`) and resolved back to a
+   source by `PipelineConfig.source_for()`. Two sources of the same provider —
+   two Jira sites, say — share `provider`, and only the source id tells them
+   apart, so an unstamped ticket falls back to the provider name and can move a
+   card on the wrong board with the wrong credentials. The stamp is the
+   load-bearing part of this step.
 
 The prompt contains the story name, Shortcut URL, description, acceptance
 criteria, comments, local attachment paths, and an instruction to advance the

@@ -2184,6 +2184,42 @@ p.set-hint {
   color: var(--text);
   background: var(--panel-2);
 }
+
+/* Settings → Advanced, Version & updates. The update button and "Check again"
+   sit on one row so the pair reads as one control; the installer output is a
+   fold because it is the thing you want only when the update went wrong. */
+.upd-btn-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0 0;
+}
+
+.upd-fold {
+  margin-top: 8px;
+}
+
+.upd-fold > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.upd-log {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 10px;
+  margin: 6px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 }
 
 /* 050 */
@@ -6692,6 +6728,77 @@ p.set-hint {
   font-size: 12px;
 }
 
+/* The workspace mode: two radios instead of one checkbox whose OFF state meant
+   "new worktree". Grouped and labelled so the pair reads as one question with
+   an answer, which is the whole point — an empty checkbox could not say whether
+   the other mode had been chosen or nothing had. */
+.nf-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Bracketed under its own label, because the row that follows the group —
+     "Create a git repo in this folder" — is NOT a fourth answer to the
+     question, it is a thing done to the folder that combines with all three.
+     Flat in one column they read as four options under one heading, which is
+     the confusion this group was introduced to remove, one row further down. */
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--border);
+}
+
+.nf-mode-label {
+  font-size: 12px;
+  color: var(--muted);
+  /* Reads as the question the options answer, not as one of them. */
+  letter-spacing: .01em;
+}
+
+/* Radios wear the checkbox's own look, round instead of square, because they
+   sit in the same fold as "Create a git repo in this folder" and two different
+   control vocabularies in one column reads as two unrelated forms. Written as
+   its own block rather than folded into the checkbox selectors: the two differ
+   only in border-radius and the mark, and a shared rule with two exceptions is
+   how the next person ends up restyling both by accident. */
+#new-form label.check input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 0 9px 0 0;
+  vertical-align: -3px;
+  border: 1.5px solid var(--border);
+  border-radius: 50%;
+  background: var(--panel-2, var(--panel));
+  cursor: pointer;
+  position: relative;
+  transition: border-color .12s, background .12s;
+}
+
+#new-form label.check input[type="radio"]:hover {
+  border-color: var(--accent);
+}
+
+/* A filled dot rather than the checkmark: at 16px a tick inside a circle is a
+   smudge, and the dot is what makes "one of these" read at a glance. */
+#new-form label.check input[type="radio"]:checked {
+  border-color: var(--accent);
+  background: var(--accent)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Ccircle cx='6' cy='6' r='2.6' fill='%23fff'/%3E%3C/svg%3E")
+    center / 12px 12px no-repeat;
+}
+
+#new-form label.check input[type="radio"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+#new-form label.check input[type="radio"]:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
 #provision-opts {
   display: flex;
   flex-direction: column;
@@ -6727,6 +6834,131 @@ p.set-hint {
 
 #repo-browse-btn:hover {
   border-color: var(--accent);
+}
+
+/* The one-sentence door at the top of the body. Like .nf-suggest below it, it
+   wears .new-templates (see the JSX) so the card, the head and the type come
+   from the Templates strip in budgetNotifyTemplates.css and stay in step with
+   it. That sharing is the point: this strip must read as a way IN to the form —
+   a row like the templates and folder-suggestion rows — and not as a second
+   form stacked on the first, because nothing in it is submitted.
+
+   .nf-describe itself carries no rules on purpose: it inherits the strip whole
+   and is here as the hook the rows below hang off. Note the strip is NOT a flex
+   column the way .nf-suggest is — the note and error below tuck under the row
+   with a negative margin, and a flex gap would sit under that margin and undo
+   it. */
+.nf-describe-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* min-width:0 or the input refuses to shrink below its own content and pushes
+   the button off the end of a narrow card — the same trick .nf-quick .nf-folder
+   needs, and for the same flexbox reason: the default min-width is `auto`. */
+#new-describe-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Borrowed wholesale from #repo-browse-btn above, because it is the same thing:
+   the button welded to the right-hand end of a text field in this card. Nothing
+   in the app styles a bare <button>, so without this the one control the strip
+   exists to offer renders as raw browser chrome beside a field that doesn't. */
+#new-describe-go {
+  border-radius: 7px;
+  padding: 7px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  flex: none;
+  /* Overrides the row's align-items:center for this one item, so the button
+     matches the input's height exactly the way Browse… matches the Folder
+     field's — a control half the height of the box it belongs to reads as an
+     afterthought. The padding is still the floor that sizes it once the 480px
+     rule stacks the row and there is no taller sibling to match. */
+  align-self: stretch;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#new-describe-go:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+/* Mid-turn the button is disabled but NOT hidden and not silent — it carries the
+   ring and the label. Dimming it says "not now" without taking away the only
+   thing on screen reporting that anything is happening. */
+#new-describe-go:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* The server's note about what it chose, and the inline failure. Both are asides
+   about the row directly above them rather than paragraphs in their own right,
+   which is what the negative top margin buys — the same reason .nf-git-nudge has
+   one. Sized like every other aside in this card. */
+.nf-describe-note {
+  margin: -2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+#new-describe-error {
+  margin: -2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+/* The new-folder question. Deliberately NOT styled like the two checkbox rows
+   in the Git & workspace fold, which it would otherwise be mistaken for: those
+   are options, and skimming past one costs a setting. This one is the gate in
+   front of the only thing this dialog does that outlives the session — a
+   directory on disk that closing the session never removes — so it is boxed,
+   tinted and given its own question line, which is the treatment this card
+   reserves for something that has to be READ.
+
+   Accent rather than red: nothing has gone wrong and nothing is being refused
+   yet. Red is what .nf-provision-warn uses for a create the server will reject,
+   and spending it here would leave that line nothing louder to be. The tint is
+   an rgba() off --accent-rgb so it works in both themes off the one token — the
+   light theme redefines --accent-rgb, and a hard-coded panel colour would go
+   invisible in one of them. */
+.nf-newfolder {
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+/* The question itself, at the card's ordinary label size rather than the 11.5px
+   of the asides above it: this is the sentence the row exists to have read, and
+   an aside-sized one reads as more small print under a note. */
+.nf-newfolder-q {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+}
+
+.nf-newfolder-q b {
+  font-weight: 600;
+  /* The folder is a path, and a path in running text is hard to see the ends of
+     — which matters here, because the ends are where ~/code/foo differs from
+     ~/code/foo-2. */
+  word-break: break-all;
+}
+
+/* Same stack as .nf-quick's: below this width the input and its button cannot
+   share a line without the button losing its label. */
+@media (max-width: 480px) {
+  .nf-describe-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 /* The folder-suggestion strip. It also carries .new-templates (see the JSX), so
@@ -6886,6 +7118,15 @@ p.set-hint {
   font-size: 11.5px;
   line-height: 1.4;
   color: var(--muted);
+}
+
+/* Same aside, in the one place where it is a refusal rather than an FYI: the
+   Git & workspace fold, under the Provision box. Red because this one does stop
+   the create, and with ordinary top margin because it is not tucked under an
+   input the way .nf-git-nudge's negative margin assumes. */
+.nf-provision-warn {
+  margin: 2px 0 0;
+  color: var(--red);
 }
 
 #repo-browser {
@@ -7080,6 +7321,97 @@ p.set-hint {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+}
+
+/* Page 1's headline action wears what Create wears on page 2, because it IS
+   Create — the same POST, reached without the form. It cannot pick the rule
+   above up by itself: it is type="button" on purpose, since a submit here
+   would create a session from whatever the form happened to be holding rather
+   than from the plan. */
+#new-describe-start {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#new-describe-start:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+/* Page 1 sizes to its content; page 2 keeps the fixed height that stops a fold
+   from re-centering the card. max-height, not height, so a long note plus the
+   confirm question still scrolls instead of running off the viewport. */
+#new-form.nf-ask {
+  height: auto;
+  max-height: min(86vh, 620px);
+}
+
+/* Page 1's plain-language explanation, under the box and above everything the
+   answer adds. Full width and normal line length — this is the paragraph that
+   makes the button row legible to a first-time user, so it is the one piece of
+   copy on the page that must not be squeezed into a corner the way its
+   predecessor was (a muted span sharing a flex row with the heading). */
+.nf-describe-help {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* The bold clause inside it — "nothing is created until you pick one of the
+   buttons below" — is the sentence that makes the row safe to experiment with,
+   so it gets the body colour rather than the muted one. */
+.nf-describe-help b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.nf-describe-eg {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+/* Examples wear the shape of the thing you would type, not of code you would
+   run — so: the input's own font, no border, and a tint rather than a box. */
+.nf-describe-eg code {
+  font-family: inherit;
+  font-style: italic;
+  color: var(--text);
+  opacity: .85;
+}
+
+/* The escape hatch. Quiet on purpose and pushed away from the two real actions
+   by its own margin: .modal-actions is justify-content:flex-end, so auto here
+   is what puts the whole gap between "not this" and the two that commit.
+   Deliberately NOT .linklike, which is accent-coloured AND underlined and made
+   the least important control on the page the loudest thing on it. */
+.nf-quiet {
+  margin-right: auto;
+  background: none !important;
+  border-color: transparent !important;
+  color: var(--muted) !important;
+  text-decoration: none;
+}
+
+.nf-quiet:hover {
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+
+/* The ↵ badge on "Review details first": what Enter does, shown instead of
+   spelled out in a sentence that has nowhere good to live. */
+.nf-key {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 15px;
+  opacity: .75;
 }
 
 .error {

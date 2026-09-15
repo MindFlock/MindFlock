@@ -206,6 +206,33 @@ export interface ChipState {
   title: string;
 }
 
+/** The pill for a live agent state, on its own — no session, no stage.
+ *
+ * Split out of `chipState` so a window that has an AGENT but is not a session
+ * (the Assistant) is painted from the same five words with the same class and
+ * the same tooltip. Two copies of this vocabulary would drift, and the drift
+ * would be invisible: both say "running", one of them just says it in the
+ * wrong colour.
+ */
+export function activityChip(act: string): ChipState {
+  if (act === "working") return { label: "running", cls: "s-running", title: "Agent is working" };
+  if (act === "clarify")
+    return {
+      label: "clarify",
+      cls: "s-clarify",
+      title: "Agent paused to ask you a question — needs your answer",
+    };
+  if (act === "limit")
+    return {
+      label: "limit",
+      cls: "s-limit",
+      title:
+        "Usage limit reached — the queue waits out the window and auto-resumes when it resets",
+    };
+  if (act === "offline") return { label: "offline", cls: "s-offline", title: "Agent offline" };
+  return { label: "idle", cls: "s-idle", title: "Agent is idle — waiting for input" };
+}
+
 export function chipState(inst: Partial<Instance>): ChipState {
   if (inst.workspace_missing)
     return {
@@ -232,25 +259,9 @@ export function chipState(inst: Partial<Instance>): ChipState {
         "Worktree setup running (deps / env files) — queued prompts are held until it finishes",
     };
   const act = effectiveActivity(inst);
-  if (act === "working") return { label: "running", cls: "s-running", title: "Agent is working" };
-  if (act === "clarify")
-    return {
-      label: "clarify",
-      cls: "s-clarify",
-      title: "Agent paused to ask you a question — needs your answer",
-    };
-  if (act === "limit")
-    return {
-      label: "limit",
-      cls: "s-limit",
-      title:
-        "Usage limit reached — the queue waits out the window and auto-resumes when it resets",
-    };
+  if (act === "working" || act === "clarify" || act === "limit") return activityChip(act);
   const stage = guidedStage(inst);
-  if (stage === "agent")
-    return act === "offline"
-      ? { label: "offline", cls: "s-offline", title: "Agent offline" }
-      : { label: "idle", cls: "s-idle", title: "Agent is idle — waiting for input" };
+  if (stage === "agent") return activityChip(act === "offline" ? "offline" : "idle");
   if (stage === "interrupt") {
     const step = (inst.failed_step || "").trim();
     // A pre-commit hook NAME is pill-sized ("ruff", "Run Tests (+3)"), and that

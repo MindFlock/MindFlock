@@ -269,13 +269,27 @@ def _run(argv: Sequence[str], cwd: str, timeout: float) -> str:
     return out
 
 
-def pick_argv(prompt: str, program: str, fallback_program: str = "") -> list[str]:
+def pick_argv(
+    prompt: str,
+    program: str,
+    fallback_program: str = "",
+    purpose: str = "a commit message",
+) -> list[str]:
     """The argv to ask ``prompt`` with — the session's CLI, else the default one.
 
     A session need not run a coding agent at all (``bash`` is a legitimate
     program, and a plain session's is whatever the user typed), and such a session
     still deserves a written commit message. So when its own program can't answer,
     the flock's default CLI does. Raises when neither can.
+
+    ``purpose`` only names the thing being asked for, in the sentence a user
+    reads when nothing can answer. It is a parameter rather than a fixed string
+    because this function is now asked for more than commit messages — the
+    Describe box in the New Session dialog asks it for a session plan — and a
+    refusal that names the wrong feature sends people looking in the wrong place,
+    which is the one thing that sentence exists to prevent. The default
+    reproduces the original wording byte for byte, so every caller that does not
+    care reads exactly as it always did.
     """
     from backend import providers
 
@@ -289,8 +303,8 @@ def pick_argv(prompt: str, program: str, fallback_program: str = "") -> list[str
         if label not in tried:
             tried.append(label)
     raise CommitMessageError(
-        "no installed CLI (%s) has a headless mode MindFlock can ask for a commit "
-        "message" % ", ".join(tried)
+        "no installed CLI (%s) has a headless mode MindFlock can ask for %s"
+        % (", ".join(tried), purpose)
     )
 
 

@@ -44,6 +44,7 @@ from backend.ticket_ingestion.models import (
 from backend.ticket_ingestion.pr_provisioner import PRProvisioner
 from backend.ticket_ingestion.pr_runner import build_consolidated_pr_prompt
 from backend.ticket_ingestion.provisioner import _branch_name_for
+from backend.ticket_ingestion.start_state import move_started
 
 logger = logging.getLogger(__name__)
 
@@ -179,8 +180,12 @@ class SessionRunner:
                 "still be running; the story is marked failed)"
             ) from None
 
-        # Best-effort post-launch: drop attachments into the live workspace.
+        # Best-effort post-launch: drop attachments into the live workspace, and
+        # move the ticket into its source's start state so the board stops
+        # showing it as untouched work. Both are bookkeeping about a session that
+        # is already live — neither can fail the launch.
         await self._post_start(inst, story)
+        await move_started(story, self.config)
         logger.info(
             "Ticket %s is live in MindFlock session 'mindflock_%s'. "
             "Attach via the MindFlock UI or: tmux attach -t mindflock_%s",

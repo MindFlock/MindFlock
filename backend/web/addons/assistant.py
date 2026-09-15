@@ -19,7 +19,7 @@ from typing import Optional
 from fastapi import APIRouter, WebSocket
 from fastapi.responses import JSONResponse
 
-from backend import log, providers
+from backend import log, providers, session
 from backend.session import tmux
 
 from backend.web.core.terminal import (
@@ -43,7 +43,15 @@ ASSIST_CLAUDE_MD = ASSIST_DIR / "CLAUDE.md"
 #: the editable surface — it can't be shown in the box or clobbered. CLAUDE.md
 #: (what ``claude`` actually reads) is always regenerated as seed + this text.
 ASSIST_USER_MD = ASSIST_DIR / "user_instructions.md"
-ASSIST_TMUX = tmux.to_mindflock_tmux_name("mindflock_assistant")
+#: The Assistant's session identity. ``ASSIST_TITLE`` is what a real session
+#: calls its ``Title`` — the key every per-session activity record, probe memo
+#: and tmux name is derived from — so the shared activity ladder can read this
+#: window with the same machinery it reads a coding session with (see
+#: :class:`_AssistantInstance`). ``to_mindflock_tmux_name`` is NOT idempotent
+#: (it prepends its prefix unconditionally), so the title must stay the
+#: un-prefixed string or the two would name different tmux sessions.
+ASSIST_TITLE = "mindflock_assistant"
+ASSIST_TMUX = tmux.to_mindflock_tmux_name(ASSIST_TITLE)
 
 _ASSIST_CLAUDE_MD_SEED = """\
 # MindFlock Personal Assistant
@@ -199,6 +207,13 @@ def _ensure_assistant_session():
     cmd = provider.build_launch_command(
         providers.LaunchContext(
             program=program,
+            # The Assistant's own directory, passed for the same reason every
+            # other launch path passes one: it is where the provider installs
+            # its activity-reporting hooks (and pre-trusts the folder). Without
+            # it the CLI never announced what it was doing, so the window had
+            # no state to show — the pill read from the pane alone, which can
+            # see "busy" but never "the agent asked you a question".
+            workdir=str(ASSIST_DIR),
             resume=resume,
             session_name=name,
             launch_args=tuple(prof_args) + tuple(local_args),
@@ -310,6 +325,66 @@ def _restart_assistant_session() -> None:
         pass  # best-effort; nothing to do if tmux is wedged
 
 
+class _AssistantInstance:
+    """The Assistant, shaped like a session so the shared activity ladder can
+    read it.
+
+    :func:`backend.web.core.agent_state._agent_activity` is the one place that
+    knows how to turn a tmux pane + the CLI's own hooks into
+    ``working``/``clarify``/``limit``/``idle``/``offline``. It asks an instance
+    for five things, and the Assistant can answer all five — it is a real agent
+    in a real tmux session, just one the engine doesn't own. Re-deriving the
+    state here instead would mean a second, weaker copy of that ladder (the one
+    that reads a pane and never learns the CLI asked a question), so the window
+    that is hardest to babysit would get the worst signal.
+
+    Deliberately a module-level SINGLETON: ``server._probe_cached`` only serves
+    its ~2.5s memo when the caller hands back the same object it memoized
+    against, so a fresh stand-in per request would poll tmux on every request.
+
+    ``Started``/``Status`` are constants because they are true by construction:
+    the state route only ever runs against a session the terminal websocket has
+    already ensured, and nothing can pause it.
+    """
+
+    #: Shared with every real session's title namespace (see ASSIST_TITLE).
+    Title = ASSIST_TITLE
+    Status = session.Running
+    #: "" = the app-wide default profile, which is what the launch actually
+    #: applies (``profile_overlay`` is called with no per-session override).
+    ProfileId = ""
+
+    @property
+    def Program(self) -> str:
+        return _assistant_program()
+
+    def Started(self) -> bool:
+        return True
+
+    def GetWorktreePath(self) -> str:
+        return str(ASSIST_DIR)
+
+
+_ASSIST_INST = _AssistantInstance()
+
+
+def _assistant_activity() -> str:
+    """What the Assistant's agent is doing right now.
+
+    ``working`` / ``clarify`` / ``limit`` / ``idle`` / ``offline`` — the same
+    five words a session row's pill is painted from, through the same probe and
+    the same memo, so the two can never disagree about what "running" means.
+    ``offline`` covers "the session was never started" and "it died", which is
+    exactly what the window should say before its first chat.
+    """
+    try:
+        from backend.web import server
+
+        return server._agent_activity_cached(_ASSIST_INST, ASSIST_TITLE)
+    except Exception:  # noqa: BLE001 — a state read must never break the UI
+        return "offline"
+
+
 def _read_todos() -> list[dict]:
     """Load todos.json as a list of {id, text, done} dicts, tolerating a missing
     or malformed file (returns [])."""
@@ -365,6 +440,21 @@ class AssistantAddon(Addon):
                 await ws.close(code=4500)
                 return
             await pump_pty(ws, proc, allow_input=True)
+
+        @router.get("/state")
+        async def assistant_state() -> JSONResponse:
+            """What the Assistant's agent is doing — the window's pill.
+
+            The Assistant is a Claude window like any other, and the one thing
+            you want to know about a Claude window you aren't looking at is
+            whether it is still going, finished, or waiting on you. Read
+            on demand (the UI polls only while its window is open) rather than
+            pushed on the session event bus: the bus speaks about sessions the
+            engine owns, and this is not one.
+            """
+            return JSONResponse(
+                {"activity": await asyncio.to_thread(_assistant_activity)}
+            )
 
         @router.get("/instructions")
         async def get_instructions() -> JSONResponse:
