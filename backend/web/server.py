@@ -115,6 +115,8 @@ from backend.web.core import reopen as _reopen
 from backend.web.core import worktree_reclaim as _worktree_reclaim
 from backend.web.core import ticket_start as _ticket_start
 from backend.web.core import ticket_merge as _ticket_merge
+from backend.web.core import ticket_compose as _ticket_compose
+from backend.web.core import ticket_draft as _ticket_draft
 from backend.web.core import remote as _remote
 from backend.web.core import stage_reset as _stage_reset
 from backend.web.core import pending as _pending
@@ -9359,6 +9361,108 @@ async def ticket_merge(payload: dict) -> JSONResponse:
             result.get("deleted"),
         )
     return JSONResponse(result)
+
+
+# --- File a ticket from one sentence (New → Ticket) ----------------------
+# The one write MindFlock makes INTO a tracker that is not bookkeeping about
+# work already happening. Two routes: which sources will accept a ticket, and
+# the compose that drafts one and files it.
+#
+# There is deliberately no route that takes ticket FIELDS. The tracker already
+# has a form for filing a ticket by hand, and a worse copy of it living inside
+# a session dialog would earn nothing; describing the work is the only thing
+# MindFlock can do here that the tracker cannot. See
+# :mod:`backend.web.core.ticket_compose`.
+
+
+@app.get("/api/tickets/sources")
+async def ticket_sources() -> JSONResponse:
+    """Configured ticketing sources, each with whether it can be filed into.
+
+    Answered per source rather than as a filtered list: a source that cannot
+    accept a ticket is usually one field short of being able to (Jira's project
+    key, Linear's team), and dropping it from the picker turns a fixable
+    misconfiguration into an apparently missing feature. The blocker sentence
+    names the field.
+
+    Threaded: resolving the sources reads the layered pipeline config off disk.
+    No provider is contacted — ``create_blocker`` is contracted offline
+    (``providers/base.py``), so opening the dialog costs no API calls at all.
+    """
+    try:
+        return JSONResponse(await asyncio.to_thread(_ticket_compose.creatable_sources))
+    except Exception as err:  # noqa: BLE001 — unconfigured / unreadable config
+        return JSONResponse({"error": str(err)}, status_code=502)
+
+
+@app.post("/api/tickets/compose")
+async def ticket_compose(payload: dict) -> JSONResponse:
+    """Draft a ticket from one sentence, file it on one source, return the link.
+
+    The one route in this file that creates something on a server MindFlock does
+    not own, so the failure reporting is not the usual shape: a 502 here may
+    carry a ``draft`` alongside the error, which is the ticket text the model
+    already wrote. That is the difference between a failed token costing a
+    button press and costing the whole 25-second turn again.
+
+    ``text`` is stripped of contract lines the same way ``/api/session-plan``
+    strips them, and by the same code — ``newticket`` is registered in
+    ``session_plan._CONTRACT_NAMES``, so a sentence carrying a forged
+    ``<newticket>`` block is neutralised by the one stripper both routes share.
+    """
+    payload = payload or {}
+    source = str(payload.get("source", "") or "").strip()
+    raw = str(payload.get("text", "") or "")
+    if not source:
+        return JSONResponse(
+            {"error": "pick a source to file the ticket on"}, status_code=400
+        )
+    text = _session_plan.strip_contract_lines(raw).strip()[: _ticket_draft.MAX_SENTENCE]
+    if not raw.strip():
+        return JSONResponse({"error": "say what the ticket is for"}, status_code=400)
+    if not text:
+        return JSONResponse(
+            {
+                "error": "that reads like an answer format rather than a request — "
+                "say what the ticket is for"
+            },
+            status_code=400,
+        )
+    try:
+        row = await _ticket_compose.compose(
+            source,
+            text,
+            # The flock's own default CLI, read fresh per request and passed in
+            # pick_argv's FIRST slot — passing "" there resolves to claude
+            # unconditionally, which is how a codex-only machine ends up being
+            # told a CLI it never chose is not installed. Same reasoning as
+            # /api/session-plan, which is where this pattern is documented.
+            program=ENGINE.default_program(),
+        )
+    except LookupError as err:
+        return JSONResponse({"error": str(err)}, status_code=404)
+    except _ticket_compose.ComposeError as err:
+        body: dict = {"error": str(err)}
+        if err.draft is not None:
+            body["draft"] = err.draft.as_dict()
+        return JSONResponse(body, status_code=502)
+    except Exception as err:  # noqa: BLE001 — never a 500 for a convenience
+        return JSONResponse({"error": str(err)}, status_code=502)
+
+    # The assigned-tickets panel's cached fan-out predates this ticket by up to
+    # its whole TTL, so Intake would not show the thing the user just filed.
+    # Dropped rather than refreshed, exactly as the merge route does it: a
+    # re-sweep here would put a provider search per source on this request, and
+    # the panel refetches on its own.
+    _ASSIGNED_TICKETS_CACHE.pop("v", None)
+    if log.InfoLog is not None:
+        log.InfoLog.Printf(
+            "filed ticket %s on %s (%s)",
+            row.get("slug") or row.get("id", "?"),
+            row.get("source", "?"),
+            row.get("url", ""),
+        )
+    return JSONResponse(row)
 
 
 # --- Issue force-start (Intake → Issues) ---------------------------------

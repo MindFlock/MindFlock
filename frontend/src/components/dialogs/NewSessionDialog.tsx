@@ -35,7 +35,19 @@ import {
   saveUserPresets,
   type Preset,
 } from "../../lib/presets";
+import { useFileDropTextarea } from "../../lib/fileDropTextarea";
 import { FlagChips, tokenize } from "./FlagChips";
+import { NewTicketPane } from "./NewTicketPane";
+
+/** The two things New makes. Session is the landing tab and stays that way:
+ * it is the hot path (name → Enter), and a tab strip that makes the common
+ * case pay a click of attention has already cost more than it gave. */
+export type NewTab = "session" | "ticket";
+
+const NEW_TABS: Array<{ key: NewTab; label: string }> = [
+  { key: "session", label: "Session" },
+  { key: "ticket", label: "Ticket" },
+];
 
 interface Template {
   name: string;
@@ -687,10 +699,37 @@ export function NewSessionDialog() {
   const open = useUi((s) => s.openDialog === "new-session");
   const closeDialog = useUi((s) => s.closeDialog);
 
+  // Which of the two things this dialog is making. Not persisted across opens:
+  // the session tab is what Alt+N is for, and reopening into whatever was last
+  // looked at is how a keyboard shortcut stops being predictable.
+  const [tab, setTab] = useState<NewTab>("session");
+
   const [title, setTitle] = useState("");
   const [program, setProgram] = useState("");
   const [providers, setProviders] = useState<Provider[]>([]);
   const [prompt, setPrompt] = useState("");
+  // Drop a file on the prompt box and its uploaded path is spliced in at the
+  // caret. No session exists yet on this form, so the bytes land in
+  // ~/.mindflock/pastes and the agent is handed an absolute path.
+  //
+  // The drop zone is the dialog CARD, and the same ref goes on both of them —
+  // they are mutually exclusive, and each contains exactly one textarea for the
+  // helper to find (the prompt here, the brief on the ticket tab). A callback
+  // ref, not a useRef object, because the cards mount and unmount as the tab
+  // changes and an effect bound once would bind to whichever was showing first.
+  const dropZoneRef = useFileDropTextarea({
+    // Only reached when the card holds no textarea — page 1, where the only
+    // field is the one-sentence describe box and the prompt fold does not exist
+    // yet. The path goes into THAT box, because it is the one on screen: an
+    // earlier version appended to the prompt instead, which was correct and
+    // completely invisible — you dropped a file, the cue flashed, and the
+    // sentence field sat there empty as though nothing had happened.
+    onInsert: (text) =>
+      setDescribe((prev) => {
+        const next = (prev && !/\s$/.test(prev) ? prev + " " : prev) + text + " ";
+        return next.length > DESCRIBE_MAX_CHARS ? next.slice(0, DESCRIBE_MAX_CHARS) : next;
+      }),
+  });
   const [launchArgs, setLaunchArgs] = useState("");
   const [provision, setProvision] = useState(false);
   const [strategy, setStrategy] = useState("worktree");
@@ -864,6 +903,13 @@ export function NewSessionDialog() {
       failedReopen.current = false;
       return;
     }
+    // Back to Session on every open, for the reason the tab state's own
+    // comment gives: Alt+N is a shortcut for starting work, and a shortcut
+    // that lands somewhere different depending on what you last looked at is
+    // not one. It also rides in this reset rather than on its own effect so
+    // the failed-reopen guard above covers it too — a refused create must not
+    // throw the user back to a tab they had left.
+    setTab("session");
     setTitle("");
     setError("");
     setPrompt("");
@@ -1771,30 +1817,40 @@ export function NewSessionDialog() {
           if (browserOpen) folderDo({ t: "browse-cancel" });
           else closeDialog();
         } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+          // Only the session tab. The Ticket pane owns its own Ctrl+Enter and
+          // stops it here, and a fallthrough would submit an empty session form
+          // out from under a tab that is not showing one.
+          if (tab !== "session") return;
           e.preventDefault();
           submit();
         }
       }}
     >
+      {tab === "ticket" ? (
+        /* A sibling of the form, not a branch inside it: nesting a second form
+           is invalid HTML, and hanging the ticket pane off #new-form's submit
+           would mean its Enter key and its validation belong to a form whose
+           fields are not on screen. The two panes share only the head. */
+        <div id="new-ticket-form" className="ta-drop" ref={dropZoneRef}>
+          <NewHead tab={tab} onTab={setTab} onClose={closeDialog} />
+          <NewTicketPane />
+        </div>
+      ) : (
       <form
         id="new-form"
+        ref={dropZoneRef}
         // Page 1 is one question and three buttons. The fixed height below
         // exists so that opening a fold on page 2 scrolls inside .nf-body
         // instead of growing the card and re-centering it under the pointer —
         // there are no folds here, and holding 620px up over a single input
         // left most of the card empty.
-        className={page === 1 ? "nf-ask" : undefined}
+        className={"ta-drop" + (page === 1 ? " nf-ask" : "")}
         onSubmit={(e) => {
           e.preventDefault();
           submit();
         }}
       >
-        <div className="ws-head">
-          <h2>New session</h2>
-          <button type="button" id="new-close" title="Close (Esc)" onClick={closeDialog}>
-            Close
-          </button>
-        </div>
+        <NewHead tab={tab} onTab={setTab} onClose={closeDialog} />
 
         <div className="nf-body">
           {page === 1 ? (
@@ -2781,6 +2837,49 @@ export function NewSessionDialog() {
           )}
         </div>
       </form>
+      )}
+    </div>
+  );
+}
+
+/** The New dialog's head: title, the two tabs, and Close.
+
+ * Shared by both panes rather than written twice, because the strip is the one
+ * thing that has to look identical from either side of it — a tab row that
+ * shifts by a pixel when you switch tabs reads as the whole dialog being
+ * replaced, which (structurally) it is.
+ *
+ * "New" rather than "New session": the heading now names the dialog and the
+ * tabs name the thing being made. */
+function NewHead({
+  tab,
+  onTab,
+  onClose,
+}: {
+  tab: NewTab;
+  onTab(t: NewTab): void;
+  onClose(): void;
+}) {
+  return (
+    <div className="ws-head nf-head">
+      <h2>New</h2>
+      <nav className="nf-tabs" aria-label="New">
+        {NEW_TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            className={"nf-tab" + (tab === t.key ? " active" : "")}
+            data-new-tab={t.key}
+            aria-current={tab === t.key ? "page" : undefined}
+            onClick={() => onTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
+      <button type="button" id="new-close" title="Close (Esc)" onClick={onClose}>
+        Close
+      </button>
     </div>
   );
 }
@@ -2831,7 +2930,13 @@ function FolderBrowser({
   }
   const [data, setData] = useState<BrowsePayload | null>(null);
   const [error, setError] = useState("");
+  // The new-folder row: null when it is closed, the typed name when it is open.
+  // A separate piece of state from the name itself so that "" is a legal thing
+  // to have typed (an open row with an empty box) rather than a closed row.
+  const [newFolder, setNewFolder] = useState<string | null>(null);
+  const [making, setMaking] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const newFolderRef = useRef<HTMLInputElement | null>(null);
   // The folder a keyboard navigation is stepping out of, or null when the
   // pointer drove it (or nothing is pending) — read by the effect below.
   const leaving = useRef<string | null>(null);
@@ -2880,21 +2985,41 @@ function FolderBrowser({
     load(to);
   };
 
+  /** Create the folder named in the inline row, in the folder being browsed.
+   *
+   * This used to be a ``window.prompt``, which is why it had never worked in
+   * the desktop app: Electron does not implement prompt() at all — it logs
+   * "prompt() is and will not be supported" and returns null — so the button
+   * was dead for every user who wasn't in a browser tab, silently and with no
+   * error to report. An inline row is the only shape that works in both.
+   *
+   * The name goes to the server exactly as typed, trimmed. It is NOT sanitized
+   * here: ``/api/mkdir`` refuses anything that isn't a single path segment, and
+   * a client-side repair would create a folder under a name the user did not
+   * ask for — which is the whole class of bug the explicit parent exists to
+   * end. */
   const mkdir = async () => {
-    if (!data?.path) return;
-    const name = window.prompt("New folder name (created in " + data.path + "):", "");
-    if (!name || !name.trim()) return;
+    const name = (newFolder || "").trim();
+    if (!data?.path || !name || making) return;
     setError("");
+    setMaking(true);
     try {
       const r = await api<{ path: string }>("/api/mkdir", {
-        json: { path: data.path, name: name.trim() },
+        json: { path: data.path, name },
       });
-      // Naming a brand-new folder in a prompt IS the deliberate choice, so this
-      // stays a pick: field filled, browser closed. (Nothing re-lists afterwards
-      // for that reason — the popover is already gone.)
+      setNewFolder(null);
+      // Naming a brand-new folder IS the deliberate choice, so this stays a
+      // pick: field filled, browser closed. (Nothing re-lists afterwards for
+      // that reason — the popover is already gone.)
       onPick(r.path);
     } catch (err) {
+      // The row stays open with the name still in it: every refusal here
+      // (already exists, permission denied, a slash in the name) is one the
+      // user fixes by editing what they typed, and clearing the box would make
+      // them type it again to find out.
       setError((err as Error).message);
+    } finally {
+      setMaking(false);
     }
   };
 
@@ -2917,10 +3042,65 @@ function FolderBrowser({
         <span id="rb-cwd" className="rb-cwd" title={data?.path || ""}>
           {data?.path || ""}
         </span>
-        <button type="button" id="rb-mkdir" title="Create a new folder here" onClick={mkdir}>
+        <button
+          type="button"
+          id="rb-mkdir"
+          title="Create a new folder here"
+          aria-expanded={newFolder !== null}
+          onClick={() => {
+            // Toggling closed discards the typed name deliberately: the button
+            // is the cancel, and a row that reopened holding a half-typed name
+            // from five folders ago would create it HERE.
+            setNewFolder(newFolder === null ? "" : null);
+            setError("");
+          }}
+        >
           + Folder
         </button>
       </div>
+      {newFolder !== null && (
+        /* The row sits under the path and above the list, where the folder it
+           will be created in is the thing directly above it — the parent is
+           never in question, which is the one property this control has to
+           have. */
+        <div className="rb-new">
+          <input
+            ref={newFolderRef}
+            type="text"
+            className="rb-new-name"
+            value={newFolder}
+            autoFocus
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="New folder name"
+            aria-label={"New folder in " + (data?.path || "")}
+            readOnly={making}
+            onChange={(e) => setNewFolder(e.target.value)}
+            onKeyDown={(e) => {
+              // Both keys stop here. The popover lives inside the new-session
+              // modal, whose own handler reads Escape as "cancel the browse"
+              // and Enter as "submit the form" — either of which would take
+              // the whole dialog somewhere while the user is naming a folder.
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                mkdir();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setNewFolder(null);
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="rb-new-go"
+            disabled={!newFolder.trim() || making}
+            onClick={mkdir}
+          >
+            {making ? "Creating…" : "Create"}
+          </button>
+        </div>
+      )}
       <div id="rb-list" ref={listRef}>
         {data && (
           /* Names the folder it means. Child rows are selectable now, so "use

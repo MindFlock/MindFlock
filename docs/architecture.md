@@ -126,6 +126,21 @@ FastAPI app `backend.web.server:app`. Key pieces:
   so no model text ever becomes a filesystem path, and an out-of-range number is
   an error rather than a clamp. See
   [web-api.md](web-api.md#post-apisession-plan--200).
+- **`core/ticket_draft.py`** — the ticket twin of `session_plan`: one headless
+  model turn behind `POST /api/tickets/compose` that turns a sentence into a
+  title, a description and acceptance criteria (`TIMEOUT_DRAFT` 75 s). **Files
+  nothing, anywhere** — that is `ticket_compose`'s job, and the split is what
+  lets a failed file still hand the drafted text back. Runs with cwd `$HOME`
+  rather than the server's, so no repo's `AGENTS.md` reaches a prompt whose
+  answer is parsed. The description it emits is *rendered*, not forwarded: a
+  deliberately narrow grammar (paragraphs, one `## Acceptance Criteria`
+  heading, `-` bullets) that two non-defensive readers downstream depend on —
+  the pipeline's criteria miner and Jira's ADF translator.
+- **`core/ticket_compose.py`** — the source listing (`GET /api/tickets/sources`)
+  and the feature's single operation: draft → file → return the link. Refuses
+  to report success without an `app_url`, and carries the draft back on
+  failure. See
+  [web-api.md](web-api.md#post-apiticketscompose).
 - **`core/self_update.py`** — the server replacing itself: `uv tool install
   --force` over the tool venv this process is running out of, spawned
   **detached** so it outlives the restart, with progress in a **file**
@@ -269,6 +284,15 @@ GitHub Issues, or Asana** (`ticket_ingestion/providers/`). Two loops:
 - **PRs** — poll GitHub for your open PRs with unresolved review comments and
   launch one consolidated session per PR that addresses all comments (changes left
   unstaged for human review).
+
+Traffic now runs **both ways**: the web server not only reads tickets, it
+**writes** them — New → Ticket drafts a ticket and files it on a configured
+source (`core/ticket_compose.py` → `TicketProvider.create_ticket`). Because a
+filed ticket lands in the state that source already ingests from and is assigned
+to its configured member, the Tickets loop above can pick it up on its next poll
+and start a session for it — so one button in a dialog can, eventually, become a
+running agent. The dialog warns when that is live: `ingest_on` in the sources
+payload is the pipeline's own `tickets_enabled`.
 
 `ticket_ingestion/start_state.py` is the single place a ticket is moved into its
 source's `start_state` once its session is live — shared by both launch paths

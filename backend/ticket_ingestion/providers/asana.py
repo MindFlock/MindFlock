@@ -166,3 +166,62 @@ class AsanaProvider(TicketProvider):
             "member_id": str((me or {}).get("gid", "")),
             "name": (me or {}).get("name"),
         }, ""
+
+    # --- filing a new ticket (New → Ticket) -------------------------- #
+
+    can_create = True
+
+    def create_blocker(self) -> str:
+        """Asana's ``project`` field is the workspace gid, and a task cannot be
+        created outside one. Same question :meth:`search_assigned` already
+        refuses on, asked before the draft rather than after it."""
+        if not (self.cfg.project or "").strip():
+            return (
+                "This Asana source has no workspace to file into — set its "
+                "Project field to the workspace gid first."
+            )
+        return ""
+
+    async def create_ticket(self, name: str, description: str) -> Ticket:
+        """File a new task (``POST /tasks``) and return it, hydrated.
+
+        ``notes`` rather than ``html_notes``: the description is markdown, and
+        Asana's rich-text field would render the ``##`` and ``-`` markers as
+        literal characters inside a paragraph. Plain notes keep the markdown
+        intact, which is what :func:`parse_acceptance_criteria` reads back when
+        the task is later ingested — the round trip matters more here than the
+        rendering does.
+
+        ``assignee`` falls back to the literal ``"me"``, the same token
+        :meth:`search_assigned` uses for its default: the task has to come back
+        from that search, and "me" is how Asana spells the token's owner.
+        """
+        blocker = self.create_blocker()
+        if blocker:
+            raise ProviderError(blocker)
+        body = {
+            "data": {
+                "workspace": (self.cfg.project or "").strip(),
+                "name": name,
+                "notes": description,
+                "assignee": self.cfg.member_id or "me",
+            }
+        }
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.post(
+                f"{_API}/tasks", json=body, headers=self._headers()
+            ) as resp:
+                if resp.status not in (200, 201):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Asana could not create the task "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+                created = (await resp.json()).get("data") or {}
+            gid = str(created.get("gid") or "")
+            if not gid:
+                raise ProviderError("Asana created a task but did not return its gid")
+            # Re-read rather than converting the create response: _task_to_ticket
+            # wants opt_fields this POST did not ask for (permalink_url above
+            # all, which IS the link this whole feature exists to hand back).
+            return await self.fetch(gid)

@@ -1,0 +1,74 @@
+/* Dragging a file over the new-session dialog: the same promise the terminals
+ * make — dashed accent border, a download arrow and a caption — at card scale.
+ *
+ * WHY THE WHOLE CARD. Three reasons, each of which was a bug before it was a
+ * decision. The prompt textarea lives inside a fold that is CLOSED by default,
+ * so a cue attached to the box gave the session tab no droppable area at all —
+ * a closed <details> keeps its children in the DOM but gives them no layout box.
+ * A two-row textarea is a small thing to hit while holding a file. And a
+ * textarea is a replaced element that generates no ::before/::after, so the
+ * caption could not be drawn on one even if the box were the target.
+ *
+ * lib/fileDropTextarea.ts binds the listeners to `.ta-drop` (both cards carry
+ * it, and they are mutually exclusive) and finds the textarea inside.
+ *
+ * No `@layer` block here. styles/index.css imports this with `layer(components)`,
+ * and wrapping the rules again would nest them in `components.components` — a
+ * SUB-layer, which the cascade ranks BELOW rules sitting directly in
+ * `components`, such as the card styling in NewSessionDialog.css. */
+
+.ta-drop {
+  position: relative; /* anchors the two overlays below */
+}
+
+/* The border and the wash, over the whole card. Inset 3px so the dashes read as
+   a ring inside the card's own rounded edge rather than fighting it. */
+.ta-file-drop::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  z-index: 60; /* over the card's own sticky head and its folds */
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  background: rgba(6, 7, 14, 0.62);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  /* pointer-events stay off the overlay so dragover/drop keep firing on the card
+     underneath — without this the cue flickers as the pointer crosses its own
+     overlay and the drop lands nowhere. */
+  pointer-events: none;
+}
+
+/* Arrow above caption, the way the pane cue does it — there is room for it here.
+   Same icon, same wording shape, so the gesture reads as one feature whether the
+   file is going to a terminal or to this form. */
+.ta-file-drop::after {
+  content: "Drop a file to add its path";
+  position: absolute;
+  inset: 3px;
+  z-index: 61;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 56px; /* clears the arrow drawn above the text */
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a78bfa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'/%3E%3Cpolyline points='7 10 12 15 17 10'/%3E%3Cline x1='12' y1='3' x2='12' y2='15'/%3E%3C/svg%3E")
+    center calc(50% - 32px) / 38px 38px no-repeat;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  pointer-events: none;
+}
+
+/* Forced-colours mode drops the wash and the SVG's own stroke colour, so the
+   caption would sit unreadably over the live form. Restore weight from the
+   system palette. */
+@media (forced-colors: active) {
+  .ta-file-drop::before {
+    border: 3px dashed Highlight;
+    background: Canvas;
+  }
+  .ta-file-drop::after {
+    color: CanvasText;
+  }
+}

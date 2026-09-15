@@ -366,11 +366,20 @@ def test_new_session_ctrl_enter_submits_at_dialog_level():
     handler lives on the dialog div's onKeyDown (not the prompt textarea), and
     Escape still closes the folder browser overlay before the dialog."""
     js = client.get("/app.js").text
-    # The submit shortcut is wired into the dialog's keydown handler.
+    # The submit shortcut is wired into the dialog's keydown handler. There is
+    # now more than one Ctrl/Cmd+Enter in this bundle — the New → Ticket pane
+    # has its own, and it files rather than submits — so the dialog-level one
+    # is identified by what only it sits next to (the folder browser's Escape),
+    # not by being the first occurrence.
     marker = 'e.key === "Enter" && (e.ctrlKey || e.metaKey)'
     assert marker in js
-    i = js.index(marker)
-    handler = js[i - 300 : i + 120]
+    windows = [
+        js[m.start() - 400 : m.start() + 200]
+        for m in re.finditer(re.escape(marker), js)
+    ]
+    handlers = [w for w in windows if "browserOpen" in w]
+    assert len(handlers) == 1, "the dialog-level keydown should be unambiguous"
+    handler = handlers[0]
     assert "submit();" in handler  # Ctrl/Cmd+Enter submits
     # ...within the same keydown that closes the browser overlay first, then the
     # dialog — i.e. the dialog-level handler, not the prompt textarea's.

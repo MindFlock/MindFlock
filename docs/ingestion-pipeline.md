@@ -80,9 +80,14 @@ shows (and stores), so "zero config" never means "an empty field you have to
 trust". When nothing names a repo the error says what to fill in rather than
 failing mid-poll.
 
-### The one thing adapters WRITE: merging duplicates
+### What adapters WRITE: merging duplicates
 
-Everything above reads. Adapters also carry four **optional** write methods —
+Everything above reads. Adapters carry two **optional** write surfaces, each gated
+by its own flag: merging duplicates (below) and filing a brand-new ticket (the
+next section). The two are independent — Asana files but does not merge — so
+neither table can be read as the adapters' whole write story.
+
+The merge half is four methods —
 `append_description`, `add_comment`, `carry_attachments`, `delete_ticket` — used
 by exactly one caller, `backend.web.core.ticket_merge`, behind Intake → Tickets
 → **Merge into…**. Duplicate tickets are a tracker problem, so the fix has to
@@ -100,7 +105,7 @@ the UI never offers a control it would only be able to apologize for.
 | `jira` | `PUT /rest/api/3/issue/{key}`, appending ADF nodes to the raw tree — never the flattened text, which would strip every table, panel and code block the issue already had | The bytes really move: a Jira attachment dies with its issue, so each is downloaded and re-uploaded to `/attachments` (`X-Atlassian-Token: no-check`). Per-file best effort | `DELETE /rest/api/3/issue/{key}?deleteSubtasks=true` — needs the project's **Delete Issues** permission |
 | `linear` | `issueUpdate`, after resolving the human identifier (`ENG-5`) to the UUID every mutation takes | Uploaded files live on Linear's asset CDN and travel in the copied markdown; the `attachments` connection is integration *links*, which are recreated with `attachmentCreate` | `issueDelete` — Linear's own delete, which is the workspace trash |
 | `github_issues` | `PATCH /repos/{o}/{r}/issues/{n}` | Nothing to move: an image dropped into an issue is a markdown link to user-content that outlives the issue, so copying the body *is* carrying the file | GraphQL `deleteIssue` — there is no REST delete, and the mutation needs **admin** rights on the repository |
-| `asana` | — | — | — (read-only; rows never offer the control) |
+| `asana` | — | — | — (no merge writes; rows never offer the control — it **can** still file a new ticket, below) |
 
 The merged-in block is assembled **once, in markdown**, for all four, using only
 four shapes — a `---` rule, `####` headings, `- ` bullets and plain paragraphs —
@@ -117,6 +122,15 @@ the merged block would quietly change how the **surviving** ticket's own
 criteria are read the next time it is ingested. The merge must not rewrite the
 meaning of text it did not touch.
 
+`ticket_merge` is not the only writer of that heading: `ticket_draft.render()`
+emits `## Acceptance Criteria` — the *unqualified* spelling, deliberately, so
+the miner finds it — on every ticket filed from **New → Ticket**, and spells it
+once in `ticket_draft.AC_HEADING` so the two can only agree. A drafted
+description is also *normalized* rather than forwarded: emphasis is stripped and
+bullets the model wrote into the body are flattened into paragraphs, precisely
+so the miner's stray-bullet fallback can never fire, and so
+`providers.jira.text_to_adf` keeps only ever being fed text this repo wrote.
+
 The order of the four writes is a contract, documented in
 `backend/web/core/ticket_merge.py` and pinned by `tests/unit/test_ticket_merge.py`:
 append first, delete **last**, so that a failure at the start leaves both
@@ -125,6 +139,51 @@ than an erased one. `merge_tickets` therefore *returns* `deleted` /
 `delete_error` instead of raising — "merged, but I could not delete it" is a
 true sentence the UI can act on, where a 5xx would tell the user nothing
 happened when in fact almost everything did.
+
+### Filing a new ticket (New → Ticket)
+
+The second write surface, and the newer direction of travel: until this existed
+MindFlock only *read* tickets (plus the merge writes above). It can now create
+one on any of the five trackers — see [web-ui](web-ui.md#new--ticket-file-a-ticket-by-describing-it)
+for the dialog and [web-api](web-api.md#post-apiticketscompose) for the route.
+
+Three members, gated exactly like `can_merge`:
+
+- **`can_create`** — whether the adapter implements a create at all. All five
+  set it `True`.
+- **`create_blocker()`** — one sentence saying why *this source* cannot file
+  right now, or `""`. Contracted to be **cheap and offline**: `GET
+  /api/tickets/sources` calls it once per source every time the New dialog
+  opens, so a blocker that did network I/O would put one request per source on a
+  dialog nobody has asked to do anything yet. It exists because the common
+  refusal is not "this provider can't" but "this source has no project set" —
+  a field the user can fill in, and will not go looking for unless told.
+- **`create_ticket(name, description)`** — files it and returns a hydrated
+  `Ticket` carrying a real `app_url`. The link is the deliverable; a create that
+  cannot say where the ticket went is indistinguishable from one that failed.
+
+**The signature is two strings on purpose.** There is no field-by-field create
+anywhere in this codebase: the tracker already has a form for filing a ticket by
+hand and a worse copy of it inside MindFlock would earn nothing. Everything else
+on the created ticket — where it lands, who owns it — comes from the source's
+own configuration, which is where those answers already live. `description` is
+markdown carrying its own `## Acceptance Criteria` section, so the criteria are
+mined back out on ingestion exactly as for a hand-filed ticket; that is why
+there is no separate criteria argument.
+
+| Provider | How a ticket is filed |
+|---|---|
+| `shortcut` | `POST /stories` with `workflow_state_id` = the **first state this source ingests from** (omitted when it ingests from everywhere) and `owner_ids` = `member_id`. The response is a full story object, so the returned ticket goes through the same parser every other Shortcut read does |
+| `github_issues` | `POST /repos/{owner}/{repo}/issues`, repo resolved through the usual `resolve_repo()` ladder. `assignees` is **best effort and separate from the body**: a token without push rights makes GitHub silently drop the field rather than fail, so the issue still gets filed and the response's own `assignees` are what comes back |
+| `jira` | Issue type is *probed*, not assumed — `GET /rest/api/3/issue/createmeta/{key}/issuetypes`, prefer `Task`, else the first non-subtask type, `Task` on any failure (a software project may offer only Story/Bug/Epic, and sub-tasks need a parent this route has none of). Body is ADF via `text_to_adf`; the create response carries only `id`/`key`/`self`, so the issue is **re-fetched** |
+| `linear` | `issueCreate`. Linear has no workspace-level issue, so the source's `project` — a team **KEY** like `ENG`, which is what a person actually knows — is translated to a team id. With no key set, auto-picked only in a **single-team** workspace; two or more teams is a refusal naming the field. Files into the first ingested state where the source has one, and re-fetches |
+| `asana` | `POST /tasks` with `workspace` = the source's `project` gid and `assignee` = `member_id` (else the literal `me`). Plain **`notes`, not `html_notes`** — the rich-text field would render the `##` and `-` markers as literal characters, and the round trip matters more here than the rendering does. Re-fetched, because `permalink_url` is not in the create response |
+
+Filing does not start a session. But because the ticket lands in the state the
+source already ingests from and is assigned to its configured member, a filed
+ticket is **auto-ingestable**: with ticket ingestion on (`tickets_enabled`), the
+poller below can pick it up and eventually start an agent. The dialog says so
+before the button is pressed (`ingest_on` in the sources payload).
 
 ## Which agent CLI a ticket runs
 

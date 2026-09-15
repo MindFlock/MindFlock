@@ -22,6 +22,11 @@ ticket into another and delete the loser, which has to happen in the tracker
 both filers will go back to. An adapter that doesn't implement them says so
 with ``can_merge = False`` and the UI never offers the control.
 
+…and one more, gated the same way: :meth:`TicketProvider.create_ticket`, behind
+``can_create``, which files a ticket a model drafted from one sentence (New →
+Ticket). It takes a name and a markdown description and nothing else — see the
+comment above it for why there is no field-by-field create here.
+
 The markdown-shaped helpers here (acceptance-criteria mining, link/attachment
 extraction) are shared: every provider that hands us markdown/plain-text
 descriptions reuses the exact same rules the Shortcut pipeline always used.
@@ -462,3 +467,73 @@ class TicketProvider(abc.ABC):
         rather than a ticket that has been erased into nothing.
         """
         raise self._no_merge()
+
+    # ----------------------------------------------------------------- #
+    # Writes: filing a new ticket
+    #
+    # The second optional write surface, and the narrower one: New → Ticket
+    # takes a sentence, has a model draft a ticket from it, and files that
+    # draft on one configured source (:mod:`backend.web.core.ticket_compose`).
+    #
+    # There is deliberately no field-by-field create anywhere above this: the
+    # only caller hands over a NAME and a DESCRIPTION that a model just wrote,
+    # because a tracker already has a perfectly good form for filing a ticket
+    # by hand and a worse copy of it inside MindFlock would earn nothing. That
+    # is why the signature is two strings rather than the ten a real issue
+    # form has — everything else on the created ticket comes from the source's
+    # own configuration, which is where those answers already live.
+    #
+    # Gated the same way merging is, and for the same reason: ``can_create``
+    # is what lets the UI leave the control out rather than offer a button it
+    # can only apologize for. ``create_blocker`` goes one further and answers
+    # WHY, because the common refusal here is not "this adapter can't" but
+    # "this source hasn't been told which project to file into" — a thing the
+    # user can fix, and will not go looking for unless told.
+    # ----------------------------------------------------------------- #
+
+    #: Whether this adapter implements :meth:`create_ticket`. Carried per
+    #: source in the compose payload so the UI can hide the option.
+    can_create: bool = False
+
+    def create_blocker(self) -> str:
+        """Why a ticket cannot be filed on this source right now, or ``""``.
+
+        One sentence, shown against a disabled source in the picker. Adapters
+        that need a destination the config does not carry yet (Jira's project
+        key, Linear's team) override to name the missing setting, because
+        "Jira can't create tickets" and "this Jira source has no project set"
+        send the user to entirely different places.
+        """
+        if not self.can_create:
+            return (
+                f"{self.label or self.name} tickets cannot be filed from "
+                f"MindFlock — this provider's adapter is read-only."
+            )
+        return ""
+
+    async def create_ticket(self, name: str, description: str) -> Ticket:
+        """File a new ticket on this source and return it, hydrated.
+
+        The returned :class:`Ticket` must carry the provider-native ``id`` and
+        a real ``app_url``: the whole point of the feature is handing the user
+        a link to the thing that now exists, and a create that cannot say where
+        the ticket went is indistinguishable from one that failed.
+
+        ``description`` is markdown and carries its own ``## Acceptance
+        Criteria`` section, so :func:`parse_acceptance_criteria` mines the
+        criteria back out on ingestion exactly as it does for a hand-filed
+        ticket. Adapters do not get a separate criteria argument for that
+        reason — one description is the single representation, and a tracker
+        that renders markdown shows it the way the filer intended.
+
+        Assignment is the source's ``member_id`` where the provider supports
+        it: a ticket filed from your own machine that lands on nobody is a
+        ticket auto-ingest (which searches by assignee) will never pick up.
+
+        Raises :class:`ProviderError` with a readable sentence on any refusal —
+        nothing has been created when it does.
+        """
+        raise ProviderError(
+            self.create_blocker()
+            or f"{self.label or self.name} cannot file new tickets"
+        )

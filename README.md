@@ -91,7 +91,7 @@ Everything MindFlock itself talks to over the network, in full:
 
 | It calls | When | What it sends |
 |---|---|---|
-| Your tracker's API (GitHub Issues · Jira · Linear · Shortcut · Asana) | every ~20 s while ingestion is on | nothing — **read-only by default**. It never comments; the only write is the optional per-source *Move to state on start*, off unless you pick a state |
+| Your tracker's API (GitHub Issues · Jira · Linear · Shortcut · Asana) | every ~20 s while ingestion is on | nothing on its own — **no automatic writes by default**. It never comments; the only automatic write is the optional per-source *Move to state on start*, off unless you pick a state. Filing a ticket (New → Ticket) and merging duplicates are writes you press a button for |
 | your local model server, if you configure one | every turn of a session on a local model | your prompt and code — to `127.0.0.1` (or whatever host you pointed it at). Never leaves your machine unless you aim it off-box |
 | `api.github.com` | polling *your own* PRs for review comments; the **Make PR** / **Merge** buttons | what `gh` would send if you ran it by hand |
 | `aipricing.guru` | at most once a day, for the model price table behind the cost display | nothing. Falls back to a built-in table offline |
@@ -310,13 +310,18 @@ a feature race; those two change what your day looks like:
   provider) for work assigned to you, and GitHub for your PRs that came back
   with review comments. Each one gets a worktree, an installed environment and
   an agent seeded with the ticket — title, description, mined acceptance
-  criteria, comments. Read-only against your tracker unless you ask otherwise:
-  it never comments, and the single write is opt-in per source — **Move to state
-  on start**, which moves a ticket into a state you pick once its session is
-  live, so a board stops showing work an agent is already doing as untouched.
-  **GitHub Issues needs no configuration at all** — the
-  token comes from your existing `gh auth login` and the repo from this
-  checkout's `origin`.
+  criteria, comments. It never writes to your tracker on its own: the only
+  automatic write is opt-in per source — **Move to state on start**, which moves
+  a ticket into a state you pick once its session is live, so a board stops
+  showing work an agent is already doing as untouched. Everything else it writes
+  is a button you pressed (below). **GitHub Issues needs no configuration at
+  all** — the token comes from your existing `gh auth login` and the repo from
+  this checkout's `origin`.
+- 📝 **File a ticket by describing it** — **New → Ticket** takes a sentence about
+  what needs doing, writes a real ticket from it (title, description, acceptance
+  criteria), files it on one of your configured sources and hands you the link.
+  All five trackers, in the state that source already ingests from. Duplicates
+  can be **merged away in the tracker** from Intake → Tickets, too.
 - 🔒 **No cloud in the middle** — there is no MindFlock service, no account and
   no vendor sandbox holding a copy of your repo. The engine binds `127.0.0.1`
   unless you ask for tailnet mode, ships no analytics or telemetry of any kind,

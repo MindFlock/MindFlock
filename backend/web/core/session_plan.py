@@ -79,7 +79,7 @@ _TITLE_DASH_RE = re.compile(r"-{2,}")
 #: The block names this codebase's one-shots answer in. A person does not type
 #: these into a box that asks what they want to work on; a transcript of one of
 #: our own one-shots is full of them.
-_CONTRACT_NAMES = ("newsession", "commit", "testplan")
+_CONTRACT_NAMES = ("newsession", "commit", "testplan", "newticket")
 
 #: Output-contract tokens — the literal openers that must never reach a prompt
 #: whose answer is parsed. DERIVED from the names rather than typed out a second
@@ -242,21 +242,100 @@ def _tokens(text: str, limit: int = MAX_TOKENS) -> List[str]:
 # --- the menu --------------------------------------------------------------
 
 
+def _repo_count(path: str) -> int:
+    """How many git repos sit DIRECTLY in ``path``. Never raises."""
+    try:
+        with os.scandir(path) as it:
+            return sum(
+                1
+                for e in it
+                if not e.name.startswith(".")
+                and e.is_dir(follow_symlinks=False)
+                and os.path.isdir(os.path.join(e.path, ".git"))
+            )
+    except OSError:
+        return 0
+
+
 def parent_hint(home: str) -> str:
     """Where a brand-new project's folder goes.
 
-    First of the usual code directories that actually exists, else $HOME. NOT
-    the parent of the last repo used: working in ~/MindFlock/app would put every
-    new project in ~/MindFlock/, which is the stray-folder-beside-something-
-    unrelated bug wearing a nicer parent. Nothing is created from this — it is
-    one field of a form the user reads before pressing Create.
+    The directory that already holds the most projects — one of the usual code
+    directory names, or $HOME itself — with the name ladder breaking ties and a
+    named directory winning a tie against $HOME.
+
+    It used to be "first of the ladder that exists", and that is a trap on a
+    real machine: a single shallow clone dropped into ~/src by some other tool
+    makes ~/src exist, which beats a $HOME holding a dozen actual projects, and
+    from then on every new project is proposed into a folder the user has never
+    thought of. Counting asks the question the ladder was only ever guessing at
+    — where does this person keep work? — and a directory that exists by
+    accident answers it with a 1.
+
+    Still NOT the parent of the last repo used: working in ~/MindFlock/app would
+    put every new project in ~/MindFlock/, which is the stray-folder-beside-
+    something-unrelated bug wearing a nicer parent. Nothing is created from this
+    — it is one field of a form the user reads before pressing Create.
     """
     base = os.path.expanduser(home or "~")
-    for name in NEW_PROJECT_PARENTS:
+    best, best_count, best_rank = base, _repo_count(base), len(NEW_PROJECT_PARENTS)
+    for rank, name in enumerate(NEW_PROJECT_PARENTS):
         full = os.path.join(base, name)
-        if os.path.isdir(full):
-            return full
-    return base
+        if not os.path.isdir(full):
+            continue
+        count = _repo_count(full)
+        # `>=` against $HOME's rank is what lets an EMPTY ~/code win over an
+        # empty $HOME — a directory someone made and named is a statement of
+        # intent, and with nothing in either the intent is all there is to go on.
+        if count > best_count or (count == best_count and rank < best_rank):
+            best, best_count, best_rank = full, count, rank
+    return best
+
+
+def existing_project_dir(seg: str, parent: str, home: str) -> str:
+    """A folder that already IS this project, or "" if there is none.
+
+    Asked before a `new:<name>` plan mints ``parent/seg``, because "make me a
+    thing called trawl" when ~/trawl is right there means the one that is right
+    there. Creating a second folder under a different parent is how a project
+    ends up existing twice under two spellings, and the folder is the one
+    artefact a plan leaves behind that closing the session does not clean up.
+
+    Matching ignores case and every separator, so `timbre-metrics` finds
+    ``timbremetrics`` — the slug the model writes and the name on disk disagree
+    about punctuation far more often than they disagree about the word.
+
+    The caller treats a hit as an ADOPTED folder rather than a created one
+    (``wanted_new and probe["exists"]``), so the form still tells the user, in
+    those words, that it is opening something that already exists.
+    """
+    want = re.sub(r"[^a-z0-9]", "", str(seg or "").lower())
+    if not want:
+        return ""
+    base = os.path.expanduser(home or "~")
+    roots, seen = [], set()
+    for root in [parent, base] + [os.path.join(base, n) for n in NEW_PROJECT_PARENTS]:
+        real = os.path.abspath(root or base)
+        if real not in seen and os.path.isdir(real):
+            seen.add(real)
+            roots.append(real)
+    for root in roots:
+        # Exact spelling first, across ALL roots' worth of patience: an exact
+        # ~/trawl should not lose to a fuzzy ~/src/tra-wl found one root earlier.
+        exact = os.path.join(root, seg)
+        if os.path.isdir(exact):
+            return exact
+    for root in roots:
+        try:
+            with os.scandir(root) as it:
+                for e in it:
+                    if e.is_dir(follow_symlinks=False) and (
+                        re.sub(r"[^a-z0-9]", "", e.name.lower()) == want
+                    ):
+                        return e.path
+        except OSError:
+            continue
+    return ""
 
 
 def _why_for(token: str, path: str) -> str:
@@ -748,7 +827,12 @@ def resolve(
             raise SessionPlanError(
                 "the CLI didn't give the new project a usable folder name"
             )
-        abs_path, chosen, wanted_new = os.path.join(parent_hint, seg), None, True
+        # A folder of this name already on disk IS the project being asked for.
+        # `wanted_new` stays True: the caller turns that plus "it exists" into
+        # ADOPTED, which is what the form then says out loud.
+        found = existing_project_dir(seg, parent_hint, home)
+        abs_path = found or os.path.join(parent_hint, seg)
+        chosen, wanted_new = None, True
     else:
         raise SessionPlanError(
             "the CLI didn't pick one of the folders — name the project you mean"

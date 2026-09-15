@@ -410,3 +410,57 @@ class GithubIssuesProvider(TicketProvider):
                 "and a fine-grained token needs its Issues scope set to "
                 "read and write."
             )
+
+    # --- filing a new ticket (New → Ticket) -------------------------- #
+
+    can_create = True
+
+    def create_blocker(self) -> str:
+        """Refuse before the model turn when no repository resolves.
+
+        :meth:`_repo` raises the same thing, but it raises at file time — after
+        a ~20s draft the user has already waited for. This is the same question
+        asked for free, and the compose route asks it first.
+        """
+        try:
+            self._repo()
+        except ProviderError as err:
+            return str(err)
+        return ""
+
+    async def create_ticket(self, name: str, description: str) -> Ticket:
+        """File a new issue (``POST /repos/{owner}/{repo}/issues``).
+
+        Assigned to the configured member (or, failing that, whoever the token
+        belongs to) for the reason every adapter here assigns: ``search_assigned``
+        looks the ticket up BY assignee, so an unassigned issue is one this
+        source can never list again.
+
+        The assignment is best-effort and separated from the body: a token
+        without push rights cannot assign anyone, and GitHub answers that by
+        silently dropping the field rather than failing — so the issue still
+        gets filed, and the ``assignees`` the response carries are what the
+        returned Ticket reports. An issue that exists and is unassigned is a
+        far better outcome than a refusal.
+        """
+        owner, repo = self._repo()
+        headers = await self._headers()
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            body: dict[str, Any] = {"title": name, "body": description}
+            try:
+                login = await self._login(session, headers)
+            except ProviderError:
+                login = ""
+            if login:
+                body["assignees"] = [login]
+            async with session.post(
+                f"{_API}/repos/{owner}/{repo}/issues", json=body, headers=headers
+            ) as resp:
+                if resp.status not in (200, 201):
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"GitHub could not create an issue on {owner}/{repo} "
+                        f"(HTTP {resp.status}): {text[:200]}"
+                    )
+                issue = await resp.json()
+            return await self._issue_to_ticket(session, headers, issue)

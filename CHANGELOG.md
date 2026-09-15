@@ -7,7 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-15
+
 ### Added
+
+- **New → Ticket: describe work, get a filed ticket back.** The New dialog now
+  has two tabs. The second one takes a sentence or two about what needs doing,
+  writes a ticket from it — title, description, acceptance criteria — files it
+  on one of your configured ticketing sources, and hands you the link. All five
+  providers can file: GitHub Issues, Shortcut, Jira, Linear and Asana.
+
+  There is deliberately **no ticket form**, and no route anywhere that accepts
+  ticket fields. Every tracker already has a create form and it is one click
+  away; the only thing MindFlock can do here that the tracker cannot is turn a
+  half-formed sentence into something a teammate could pick up. The drafted
+  description is normalized to paragraphs, one `## Acceptance Criteria` heading
+  and `-` bullets — that narrow grammar is what the ingestion pipeline mines
+  the criteria back out of, and the only grammar Jira's ADF translator
+  understands. The ticket is filed into the state the source already ingests
+  from and assigned to its configured member, so it lands where the board is
+  looking instead of in a default backlog.
+
+  Filing does not start a session — the ticket appears in Intake → Tickets like
+  any other — but if ingestion is on, the pane says so before you press the
+  button, because a ticket that quietly becomes a running agent is a surprise
+  worth one sentence. A source that cannot accept a ticket stays in the picker
+  with the reason (a Jira source needs its Project set to a project key; a
+  Linear source in a multi-team workspace needs a team), and that refusal comes
+  *before* the model runs rather than 25 seconds into it. If the drafting
+  succeeds and the filing then fails, the draft comes back with the error: it
+  is the expensive half, and at that moment the only copy of that text.
 
 - **Merge a duplicate ticket into another one, and delete it.** Two people file
   the same task constantly, and the queue's only answers were to start two
@@ -31,6 +60,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   button arms before it fires — this is the one thing in Intake that destroys
   something other people can see. A push goes out over ntfy too, since deleting
   a ticket is worth carrying past the tab that did it.
+
+- **Drag a file onto the New Session dialog and get its path.** Anywhere on the
+  card — the whole dialog lights up, not just the box — and the file is
+  uploaded and its path dropped into whichever field is in front of you: the
+  one-sentence describe box on the first screen, the launch prompt on the full
+  form, or the ticket brief on the Ticket tab. The agent runs on this machine
+  and cannot see your browser, so "look at this screenshot" has to become a
+  path it can open; the terminals have answered this gesture for a while and
+  now the dialog does too. Dropping onto the full form also opens the Prompt
+  fold, so you can see where the path landed rather than trusting that it did.
+
+### Changed
+
+- **A new project no longer lands in a folder you have never heard of.** The
+  dialog used to offer the first of `code`, `projects`, `src`, `dev`, `work`,
+  `Development` that happened to exist under `$HOME`. One shallow clone dropped
+  into `~/src` by some unrelated tool is enough to make that folder exist, and
+  from then on every new project was proposed into it — past a `$HOME` holding
+  a dozen real projects. It now picks whichever of those directories, `$HOME`
+  included, actually holds the most repos; the list only breaks ties, and a
+  directory you made and named still beats an empty `$HOME`.
+
+- **A new project whose name is already a folder opens that folder.** Asking
+  for `trawl` when `~/trawl` is right there gave you a second `trawl` somewhere
+  else; the folder is the one thing a plan leaves behind that closing the
+  session never cleans up. The name is matched ignoring case and punctuation,
+  so `date-bot` finds `DateBot`, and the form says it is *adopting* an existing
+  folder rather than creating one.
+
+### Fixed
+
+- **Frontend dependency updates can be merged again.** The committed bundle in
+  `backend/web/static/` is what actually ships, and CI rebuilds it and demands
+  an identical tree — which Dependabot can never satisfy, because it does not
+  run Vite and React is bundled. Every frontend bump therefore arrived red and,
+  since they all rewrite the same lockfile, merging any one conflicted the
+  rest. Those updates are grouped into a single PR now, and both facts are
+  written down where the next person will hit them. React 19.3, Vite 8.3,
+  TypeScript 7 and xterm 6 came in this way.
+
+- **A failing frontend build no longer reports itself as a blank error.**
+  `check-bundle-fresh.sh` sent the build to `/dev/null`, and `tsc` writes its
+  diagnostics to stdout — so a type error surfaced in CI as a bare
+  `exit code 1` after a third of a second, indistinguishable from a stale
+  bundle. It now replays the build log when the build fails.
+
+- **CI no longer runs twice on every pull request.** An unfiltered `push:`
+  trigger sat beside `pull_request:`, so each PR ran the whole matrix against
+  byte-identical trees — two Linux suites, two macOS suites, two cold installs.
+  The GitHub Actions in use also moved off the deprecated Node 20 runtime.
+
+- **“+ Folder” in the folder browser now works in the desktop app.** It never
+  had: it asked for the name with `window.prompt`, which Electron does not
+  implement at all — it returns null and logs a refusal — so the button did
+  nothing, silently, for everyone outside a browser tab. The name is now typed
+  into a row inside the browser itself, directly under the path it will be
+  created in.
 
 ## [0.3.2] - 2026-09-11
 
@@ -1997,7 +2083,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.4.0
 [0.3.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.3.2
 [0.3.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.3.1
 [0.3.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.3.0
