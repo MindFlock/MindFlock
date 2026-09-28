@@ -216,6 +216,7 @@ enabled = true                   # default true — route pipeline sessions thro
 mode = "worktree"                # "worktree" (default) or "clone"
 open_cursor = true               # default false — open each provisioned workspace in Cursor
 skip_permissions = true          # default true — launch claude with --dangerously-skip-permissions
+max_sessions = 5                 # default 0 (no limit) — ingested ticket sessions alive at once
 ```
 
 > **WARNING — section must be named `[mindflock]`.** Both the pipeline
@@ -434,6 +435,12 @@ Notes on individual keys:
   isolation; preserved across pause). Anything else is a `ConfigError`.
 - `[mindflock].skip_permissions` — suppresses Claude's per-folder trust prompt
   (each worktree is a new path, which would otherwise prompt every time).
+- `[mindflock].max_sessions` — the most ingested ticket sessions alive at once
+  (Intake → Auto-start → *Max ticket sessions at once*; `settings.json`
+  `engine.max_sessions`, env `MINDFLOCK_INGESTION_MAX_SESSIONS`). Past it the
+  pipeline holds the next ticket until a ticket session's tmux session ends,
+  re-reading the cap every 10 s, so a change applies without a restart.
+  Force-started tickets count toward it but are never held. `0` = no limit.
 
 ## `~/.mindflock/` — engine config and state
 
@@ -498,6 +505,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_GIT_TRANSPORT` | `auto` | Overrides `[repository].git_transport` — `auto` \| `ssh` \| `https`, the URL form used when the pipeline must build a clone URL from an `owner/repo` slug. Never affects pushing, and never rewrites a URL you configured |
 | `MINDFLOCK_BASE_BRANCH` | `main` | Overrides `[github].base_branch` — the fork point for new branches |
 | `MINDFLOCK_GITHUB_REPO` | — | Single-repo override for `[github].repos` (the PR monitor's `owner/name`) |
+| `MINDFLOCK_INGESTION_MAX_SESSIONS` | — | Overrides `[mindflock].max_sessions` — the cap on concurrently alive ingested ticket sessions (`0` = no limit) |
 | `MINDFLOCK_INGESTION_AGENT` | — | Overrides `[mindflock].agent` — the coding CLI ingested sessions run when their source names none. The headless/CI knob for a cron pipeline that must not touch `settings.json` |
 | `MINDFLOCK_TICKET_AGENT` | — | The `agent` of the single ticketing source built from the `MINDFLOCK_TICKET_*` env override |
 | `SHORTCUT_API_TOKEN` | — | Fallback Shortcut API token when the Settings/ticketing store has none — used by the Settings connection test and Shortcut ingestion |

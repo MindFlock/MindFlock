@@ -437,6 +437,13 @@ class TicketIngestionController:
             "tickets_active": bool(act.get("ticket_busy")) or "tix" in local,
             "pr_active": bool(act.get("pr_busy")) or "pr" in local,
             "issues_active": bool(act.get("issue_busy")) or "iss" in local,
+            # {"live": n, "max": m} while the next ticket waits on the
+            # concurrent-session cap (engine.max_sessions), else None.
+            "held_for_slot": (
+                act.get("held_for_slot")
+                if isinstance(act.get("held_for_slot"), dict)
+                else None
+            ),
         }
 
 

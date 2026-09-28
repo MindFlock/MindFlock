@@ -846,6 +846,9 @@ class EngineSettings:
     # Coding-CLI provider name ingested sessions run when their ticketing source
     # names none. Empty = the engine's configured default program.
     agent: str = ""
+    # Most ingested ticket sessions alive at once; the pipeline holds further
+    # tickets in its queue until one ends. None = unset, 0 = no limit.
+    max_sessions: Optional[int] = None
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -859,6 +862,8 @@ class EngineSettings:
             d["skip_permissions"] = self.skip_permissions
         if self.agent:
             d["agent"] = self.agent
+        if self.max_sessions is not None:
+            d["max_sessions"] = self.max_sessions
         return d
 
     @classmethod
@@ -869,6 +874,7 @@ class EngineSettings:
             open_cursor=_opt_bool(d.get("open_cursor")),
             skip_permissions=_opt_bool(d.get("skip_permissions")),
             agent=str(d.get("agent", "") or ""),
+            max_sessions=_opt_nonneg_int(d.get("max_sessions")),
         )
 
 
@@ -1270,6 +1276,12 @@ def _opt_int(v: Any) -> Optional[int]:
         return int(s) if s else None
     except (TypeError, ValueError):
         return None
+
+
+def _opt_nonneg_int(v: Any) -> Optional[int]:
+    """:func:`_opt_int`, with a negative count read as unset."""
+    n = _opt_int(v)
+    return n if n is not None and n >= 0 else None
 
 
 def _opt_float(v: Any) -> Optional[float]:

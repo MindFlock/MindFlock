@@ -16,6 +16,7 @@ from backend.ticket_ingestion.session_runner import SessionRunner, engine_bridge
 from backend.ticket_ingestion.config import (
     PipelineConfig,
     agent_now,
+    max_sessions_now,
     source_agent_now,
     source_effort_now,
 )
@@ -47,6 +48,7 @@ from backend.ticket_ingestion.state import (
     clear_pr_attempts,
     load_pending_stories,
     load_processed_story_ids,
+    load_processed_story_statuses,
     reap_stale_in_flight,
     record_issue_attempt,
     record_pr_attempt,
@@ -73,6 +75,49 @@ _ACTIVITY_FILE = ".mindflock-pipeline-activity.json"
 _PR_MAX_ATTEMPTS = 3
 # Same retry cap for the issue-handling loop.
 _ISSUE_MAX_ATTEMPTS = 3
+# How often a ticket held back by the concurrent-session cap re-checks for a
+# free slot (a session ending is only visible by polling tmux).
+_SLOT_POLL_SECONDS = 10.0
+
+
+def _live_tmux_sessions() -> set[str] | None:
+    """Every tmux session name on the default server, or None when tmux can't
+    be listed (missing / timed out). No server running means no sessions."""
+    try:
+        proc = subprocess.run(
+            ["tmux", "list-sessions", "-F", "#{session_name}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return set()
+    return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+
+
+def live_ticket_sessions(state_dir: Path | str = _STATE_DIR) -> int | None:
+    """How many ingested ticket sessions are alive right now.
+
+    A ticket's session is alive while its tmux session is: ``mindflock_<slug>``
+    in engine mode (dots become ``_``, as tmux does), ``<slug>`` standalone.
+    Only ledger entries a session was launched for count — skipped / failed
+    tickets never got one. Force-started tickets (Intake → Start now) write the
+    same ledger entry, so they count against the cap too. None when tmux can't
+    be probed.
+    """
+    names = _live_tmux_sessions()
+    if names is None:
+        return None
+    count = 0
+    for slug, status in load_processed_story_statuses(state_dir).items():
+        if status not in ("in_flight", "completed"):
+            continue
+        slug = str(slug)
+        if f"mindflock_{slug.replace('.', '_')}" in names or slug in names:
+            count += 1
+    return count
 
 
 def _tmux_session_alive(slug: str) -> bool | None:
@@ -162,6 +207,9 @@ class PipelineOrchestrator:
         self._pr_runner = PRClaudeRunner(agent=config.pr_agent())
         # Counts of in-flight work per kind, mirrored to the activity beacon.
         self._busy: dict[str, int] = {"ticket": 0, "pr": 0, "issue": 0}
+        # Set while a dequeued ticket waits on the concurrent-session cap:
+        # {"live": n, "max": m}. Mirrored to the beacon for the Intake UI.
+        self._held: dict[str, int] | None = None
 
     def _write_activity(self) -> None:
         """Mirror the busy counters to the beacon file (atomic replace so the
@@ -177,6 +225,7 @@ class PipelineOrchestrator:
                         "ticket_busy": self._busy["ticket"],
                         "pr_busy": self._busy["pr"],
                         "issue_busy": self._busy["issue"],
+                        "held_for_slot": self._held,
                         "updated": datetime.now(timezone.utc).isoformat(),
                     }
                 )
@@ -296,6 +345,11 @@ class PipelineOrchestrator:
         try:
             while True:
                 item = await self._queue.get()
+                # Wait AFTER dequeuing: a slot freed while the queue was empty
+                # could be taken by a hand-started session before this ticket
+                # arrives. The item keeps its crash-recovery pending marker
+                # until process_story runs, so a scan can't re-enqueue it.
+                await self._wait_for_slot()
                 self._mark_busy("ticket", +1)
                 try:
                     await self.process_story(item)
@@ -382,6 +436,44 @@ class PipelineOrchestrator:
                     source_name,
                     e,
                 )
+
+    async def _wait_for_slot(self) -> None:
+        """Block until fewer ticket sessions are alive than the configured cap.
+
+        The cap is re-read every check, so raising it (or setting 0 = no limit)
+        in Intake releases the queue without a restart. An unprobeable tmux
+        doesn't hold the queue: the cap is a safety valve, not a gate that may
+        wedge ingestion.
+        """
+        logged = False
+        try:
+            while True:
+                cap = max_sessions_now(
+                    self.config.engine.max_sessions if self.config.engine else 0
+                )
+                if cap <= 0:
+                    return
+                live = await asyncio.to_thread(live_ticket_sessions, _STATE_DIR)
+                if live is None or live < cap:
+                    return
+                held = {"live": live, "max": cap}
+                if held != self._held:
+                    self._held = held
+                    self._write_activity()
+                if not logged:
+                    _logger.info(
+                        "Holding the next ticket: %d of %d ticket sessions are "
+                        "running (Intake → Auto-start → max sessions). It will "
+                        "start when one ends.",
+                        live,
+                        cap,
+                    )
+                    logged = True
+                await asyncio.sleep(_SLOT_POLL_SECONDS)
+        finally:
+            if self._held is not None:
+                self._held = None
+                self._write_activity()
 
     async def _pr_loop(self) -> None:
         assert self._pr_monitor is not None and self.config.github is not None

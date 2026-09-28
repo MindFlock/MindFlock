@@ -25,7 +25,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { refreshInstances, usePanelQuery } from "../../state/queries";
-import { useSettings } from "../settings/useSettings";
+import { SettingField, useSettings } from "../settings/useSettings";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
 import { WorkItemRow, ageText, panelNote, useListFilter } from "./kit";
 import type { RepoOverrides } from "./RepoSources";
@@ -82,6 +82,8 @@ interface IngestionStatus {
   /** github.enabled AND repos configured, folded server-side. */
   pr_enabled?: boolean;
   issues_enabled?: boolean;
+  /** Set while the next ticket waits on engine.max_sessions. */
+  held_for_slot?: { live: number; max: number } | null;
 }
 
 /** One status call answers all three switches plus the engine.
@@ -386,46 +388,68 @@ export function QueueTab({ gotoTab }: TabProps) {
     issuesQ.refresh();
   };
 
+  const held = status?.held_for_slot;
+
   return (
-    <div className="set-row" id="ik-queue-row">
-      <span className="set-label">Starts automatically</span>
-      <div className="pr-open-toolbar">
-        <button type="button" className="test-btn" id="ik-queue-refresh" onClick={refreshAll}>
-          Refresh
-        </button>
-        {total ? filter.control : null}
-        <span className="pr-open-note">
-          {total === 0
-            ? "Nothing waiting to start"
-            : filter.active
-              ? shownTotal + " of " + total + " shown"
-              : total + (total === 1 ? " item will auto-start" : " items will auto-start")}
+    <>
+      <label className="set-row" id="ik-max-sessions-row">
+        <span className="set-label">Max ticket sessions at once</span>
+        <SettingField group="engine" field="max_sessions" type="number" placeholder="no limit" />
+        <span className="set-hint">
+          {held ? (
+            <>
+              <strong>
+                Holding: {held.live} of {held.max} ticket sessions are running.
+              </strong>{" "}
+              The next ticket starts when one of them is closed.{" "}
+            </>
+          ) : null}
+          How many auto-started ticket sessions may be alive at once. Past it, the rest stay
+          queued and start one by one as sessions are closed — so dropping 30 tickets in at
+          once doesn't launch 30 agents. Hand-started tickets count toward it but are never
+          held back. Blank or 0 means no limit; a change applies to the next queued ticket.
+        </span>
+      </label>
+      <div className="set-row" id="ik-queue-row">
+        <span className="set-label">Starts automatically</span>
+        <div className="pr-open-toolbar">
+          <button type="button" className="test-btn" id="ik-queue-refresh" onClick={refreshAll}>
+            Refresh
+          </button>
+          {total ? filter.control : null}
+          <span className="pr-open-note">
+            {total === 0
+              ? "Nothing waiting to start"
+              : filter.active
+                ? shownTotal + " of " + total + " shown"
+                : total + (total === 1 ? " item will auto-start" : " items will auto-start")}
+          </span>
+        </div>
+        <div className="ik-queue" id="ik-queue-list">
+          {filter.active && !shownSections.length ? (
+            <div className="ik-queue-empty">No queued item matches “{filter.query}”.</div>
+          ) : null}
+          {shownSections.map((sec) => (
+            <SectionBlock
+              key={sec.kind}
+              s={sec}
+              gotoTab={gotoTab}
+              agents={agentChoices.names}
+              configuredFor={configuredFor}
+              onStart={startItem}
+            />
+          ))}
+        </div>
+        <span className="set-hint">
+          Everything the automations would start on their next sweep, oldest first — the order
+          they are actually drawn in. An item is here because it passed its own kind's filters
+          (ingest state, min age, author, base branch, and not already in the processed ledger);
+          the other tabs explain, per row, why anything else was skipped. Where a section says
+          auto-start is off, these are exactly the items that would go the moment you switch it
+          on — or you can start any of them here now. Items the pipeline has already taken are no
+          longer waiting: they are sessions, in the sidebar.
         </span>
       </div>
-      <div className="ik-queue" id="ik-queue-list">
-        {filter.active && !shownSections.length ? (
-          <div className="ik-queue-empty">No queued item matches “{filter.query}”.</div>
-        ) : null}
-        {shownSections.map((sec) => (
-          <SectionBlock
-            key={sec.kind}
-            s={sec}
-            gotoTab={gotoTab}
-            agents={agentChoices.names}
-            configuredFor={configuredFor}
-            onStart={startItem}
-          />
-        ))}
-      </div>
-      <span className="set-hint">
-        Everything the automations would start on their next sweep, oldest first — the order
-        they are actually drawn in. An item is here because it passed its own kind's filters
-        (ingest state, min age, author, base branch, and not already in the processed ledger);
-        the other tabs explain, per row, why anything else was skipped. Where a section says
-        auto-start is off, these are exactly the items that would go the moment you switch it
-        on — or you can start any of them here now. Items the pipeline has already taken are no
-        longer waiting: they are sessions, in the sidebar.
-      </span>
-    </div>
+    </>
   );
 }
