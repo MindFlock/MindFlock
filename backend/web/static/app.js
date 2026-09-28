@@ -41304,7 +41304,38 @@ function QueueTab({ gotoTab }) {
 		prsQ.refresh();
 		issuesQ.refresh();
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+	const held = status?.held_for_slot;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		id: "ik-max-sessions-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Max ticket sessions at once"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+				group: "engine",
+				field: "max_sessions",
+				type: "number",
+				placeholder: "no limit"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				children: [held ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [
+						"Holding: ",
+						held.live,
+						" of ",
+						held.max,
+						" ticket sessions are running."
+					] }),
+					" ",
+					"The next ticket starts when one of them is closed.",
+					" "
+				] }) : null, "How many auto-started ticket sessions may be alive at once. Past it, the rest stay queued and start one by one as sessions are closed — so dropping 30 tickets in at once doesn't launch 30 agents. Hand-started tickets count toward it but are never held back. Blank or 0 means no limit; a change applies to the next queued ticket."]
+			})
+		]
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-row",
 		id: "ik-queue-row",
 		children: [
@@ -41352,7 +41383,7 @@ function QueueTab({ gotoTab }) {
 				children: "Everything the automations would start on their next sweep, oldest first — the order they are actually drawn in. An item is here because it passed its own kind's filters (ingest state, min age, author, base branch, and not already in the processed ledger); the other tabs explain, per row, why anything else was skipped. Where a section says auto-start is off, these are exactly the items that would go the moment you switch it on — or you can start any of them here now. Items the pipeline has already taken are no longer waiting: they are sessions, in the sidebar."
 			})
 		]
-	});
+	})] });
 }
 //#endregion
 //#region src/components/intake/IntakeDialog.tsx

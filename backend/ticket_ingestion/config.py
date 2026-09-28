@@ -294,11 +294,16 @@ class EngineConfig:
     configured default program, which is what every existing install resolves to,
     so this only ever *widens* the choice. It applies to the standalone launcher
     too — both ingestion paths run the same CLI.
+
+    ``max_sessions`` caps how many ingested ticket sessions are alive at once
+    (``0`` = no limit). Past it the pipeline leaves tickets queued until a
+    session ends — see :meth:`PipelineOrchestrator._wait_for_slot`.
     """
 
     enabled: bool = True
     mode: str = "worktree"
     agent: str = ""
+    max_sessions: int = 0
 
 
 @dataclass
@@ -533,6 +538,16 @@ def agent_now(pick, fallback: str = "") -> str:
         return pick(fresh) or ""
     except Exception:  # noqa: BLE001 — an unreadable config is not a launch error
         return fallback or ""
+
+
+def max_sessions_now(fallback: int = 0) -> int:
+    """The concurrent ingested-session cap on disk RIGHT NOW (0 = no limit),
+    so changing it in Intake applies to the next queued ticket without a
+    pipeline restart."""
+    fresh = config_for_launch(None)
+    if fresh is None or fresh.engine is None:
+        return max(0, int(fallback or 0))
+    return max(0, int(fresh.engine.max_sessions or 0))
 
 
 def source_agent_now(source_key: str, fallback: str = "") -> str:
@@ -776,6 +791,17 @@ def _merge_layers(raw: dict) -> dict:
             env="MINDFLOCK_INGESTION_AGENT",
             settings_getter=lambda s: s.engine.agent,
             toml_value=engine.get("agent"),
+        ),
+    )
+    # Concurrent ingested-session cap (Intake → Auto-start). 0 is an answer
+    # ("no limit"), so it survives _put and overrides a TOML value.
+    _put(
+        engine,
+        "max_sessions",
+        _s.resolve_int(
+            env="MINDFLOCK_INGESTION_MAX_SESSIONS",
+            settings_getter=lambda s: s.engine.max_sessions,
+            toml_value=engine.get("max_sessions"),
         ),
     )
 
@@ -1130,6 +1156,13 @@ def _parse_engine(raw: dict, config_path: Path) -> EngineConfig:
         )
     problems: list[str] = []
     agent = _validate_agent(engine_section.get("agent"), "[mindflock].agent", problems)
+    max_sessions = engine_section.get("max_sessions", 0)
+    if (
+        isinstance(max_sessions, bool)
+        or not isinstance(max_sessions, int)
+        or max_sessions < 0
+    ):
+        problems.append("[mindflock].max_sessions must be a non-negative integer")
     if problems:
         raise ConfigError(
             f"Invalid configuration in {config_path}: " + "; ".join(problems)
@@ -1138,6 +1171,7 @@ def _parse_engine(raw: dict, config_path: Path) -> EngineConfig:
         enabled=bool(engine_section.get("enabled", True)),
         mode=engine_mode,
         agent=agent,
+        max_sessions=int(max_sessions),
     )
 
 
