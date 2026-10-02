@@ -258,6 +258,11 @@ class TicketingSource:
     # "anyone" (every ticket in the configured workflow states, whoever owns it —
     # the QA queue). "anyone" is only honoured alongside an ingest-state filter.
     assignee_scope: str = ""
+    # Optional: comma-separated label names a ticket must carry (any one) to be
+    # auto-ingested — for boards where every ticket sits in the same state and
+    # the label is the per-ticket opt-in. Applied on top of workflow_state, and
+    # bounds an "anyone" scope on its own. Blank = no label filter. Shortcut only.
+    ingest_labels: str = ""
     # Optional: the workflow state a ticket from this source is MOVED INTO when
     # a session starts for it — a provider-native state id, picked from the same
     # list as the ingest filter above. Blank = leave the ticket where it is,
@@ -287,6 +292,7 @@ class TicketingSource:
             "effort",
             "depth",
             "assignee_scope",
+            "ingest_labels",
             "start_state",
         ):
             v = getattr(self, k)
@@ -320,6 +326,7 @@ class TicketingSource:
             effort=_effort_level(d.get("effort")),
             depth=str(d.get("depth", "") or ""),
             assignee_scope=str(d.get("assignee_scope", "") or ""),
+            ingest_labels=str(d.get("ingest_labels", "") or ""),
             start_state=str(d.get("start_state", "") or ""),
         )
 

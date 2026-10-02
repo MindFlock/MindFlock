@@ -21,6 +21,8 @@ from backend.ticket_ingestion.providers.base import (
     ProviderError,
     TicketProvider,
     extract_link_attachments,
+    has_ingest_label,
+    ingest_label_list,
     ingests_any_assignee,
     parse_acceptance_criteria,
     parse_iso8601,
@@ -110,6 +112,15 @@ def _extract_attachments(data: dict[str, Any], token: str) -> list[Attachment]:
     return attachments
 
 
+def _label_names(data: dict[str, Any]) -> list[str]:
+    """Label names off a story (full or slim — both carry ``labels``)."""
+    return [
+        str(lab.get("name") or "")
+        for lab in data.get("labels") or []
+        if isinstance(lab, dict) and lab.get("name")
+    ]
+
+
 def story_from_api_response(data: dict[str, Any], token: str = "") -> Ticket:
     """Build a :class:`Ticket` from a Shortcut story JSON object."""
     description = data.get("description") or ""
@@ -127,6 +138,7 @@ def story_from_api_response(data: dict[str, Any], token: str = "") -> Ticket:
         provider="shortcut",
         slug=f"sc-{story_id}",
         source_label="Shortcut",
+        labels=_label_names(data),
     )
 
 
@@ -232,29 +244,79 @@ class ShortcutProvider(TicketProvider):
                 _logger.warning("Ignoring non-numeric Shortcut workflow_state %r", s)
         return out
 
-    async def search_assigned(self, since: datetime) -> list[Ticket]:
-        base_body: dict = {"updated_at_start": since.isoformat()}
-        # "anyone" drops the owner filter so the state filter alone decides what
-        # gets picked up — a QA queue's stories are assigned to whoever wrote the
-        # code. `ingests_any_assignee` guarantees a state filter exists here.
-        if not ingests_any_assignee(self.cfg):
-            base_body["owner_id"] = self.cfg.member_id
-        # The search endpoint takes ONE workflow_state_id — several configured
-        # ingest states mean one search per state, concatenated and de-duped.
-        state_ids = self._ingest_state_ids()
+    async def _canonical_labels(self) -> list[str]:
+        """The configured ingest labels, spelled the way the workspace spells
+        them.
+
+        ``label_name`` on ``/stories/search`` matches a label's exact name, and
+        the setting is typed by hand — "Brainflight" against a "brainflight"
+        label would quietly match nothing, forever. One ``/labels`` call
+        resolves each name case-insensitively; best-effort, so a failure (or a
+        label that doesn't exist yet) searches the name as typed.
+        """
+        wanted = ingest_label_list(self.cfg)
+        if not wanted:
+            return []
+        url = f"{_SHORTCUT_API_BASE}/labels?slim=true"
+        try:
+            async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+                async with session.get(url, headers=self._headers()) as resp:
+                    data = await resp.json() if resp.status == 200 else []
+        except Exception as err:  # noqa: BLE001 — network / token
+            _logger.warning("Could not resolve Shortcut labels: %s", err)
+            data = []
+        by_fold = {
+            str(lab["name"]).casefold(): str(lab["name"])
+            for lab in (data if isinstance(data, list) else [])
+            if isinstance(lab, dict) and lab.get("name")
+        }
+        return [by_fold.get(w.casefold(), w) for w in wanted]
+
+    async def _search_filtered(self, base_body: dict) -> list:
+        """``base_body`` searched across the source's ingest filters, raw rows
+        concatenated and de-duped.
+
+        The search endpoint takes ONE ``workflow_state_id`` and ONE
+        ``label_name``, so several configured states and labels mean one search
+        per (state, label) pair. Rows are then re-checked against the label
+        filter client-side — a net under the server-side one, so a search that
+        ever ignored ``label_name`` would fail narrow rather than ingest every
+        story on the board. No filters at all = the single ``base_body``
+        search, byte-identical to the historic request.
+        """
+        state_ids: list = self._ingest_state_ids() or [None]
+        labels = await self._canonical_labels()
         data: list = []
         seen_ids: set = set()
-        for body in (
-            [{**base_body, "workflow_state_id": sid} for sid in state_ids]
-            if state_ids
-            else [base_body]
-        ):
-            for item in await self._search_stories(body):
-                sid = item.get("id") if isinstance(item, dict) else None
-                if sid in seen_ids:
-                    continue
-                seen_ids.add(sid)
-                data.append(item)
+        for sid in state_ids:
+            for name in labels or [None]:
+                body = dict(base_body)
+                if sid is not None:
+                    body["workflow_state_id"] = sid
+                if name is not None:
+                    body["label_name"] = name
+                for item in await self._search_stories(body):
+                    key = item.get("id") if isinstance(item, dict) else None
+                    if key in seen_ids:
+                        continue
+                    seen_ids.add(key)
+                    data.append(item)
+        if labels:
+            data = [
+                r
+                for r in data
+                if isinstance(r, dict) and has_ingest_label(_label_names(r), labels)
+            ]
+        return data
+
+    async def search_assigned(self, since: datetime) -> list[Ticket]:
+        base_body: dict = {"updated_at_start": since.isoformat()}
+        # "anyone" drops the owner filter so the state / label filters alone
+        # decide what gets picked up — a QA queue's stories are assigned to
+        # whoever wrote the code. `ingests_any_assignee` guarantees one exists.
+        if not ingests_any_assignee(self.cfg):
+            base_body["owner_id"] = self.cfg.member_id
+        data = await self._search_filtered(base_body)
         data = await self._drop_archived_epic_stories(data)
         # /stories/search returns StorySlim (no description). Hydrate each by id.
         slim = [story_from_api_response(item, self.cfg.api_token) for item in data]
@@ -284,18 +346,11 @@ class ShortcutProvider(TicketProvider):
         # Single source of the endpoint/accepted-status/error format (the guard
         # is redundant: _search_stories already returns [] for a non-list body).
         if ingests_any_assignee(self.cfg):
-            # Nothing scopes an any-assignee search but the state filter, so the
-            # panel keeps it — dropping it here (as the assigned-to-me listing
-            # does, to show every bucket) would ask for the whole organization.
-            data = []
-            seen: set = set()
-            for sid in self._ingest_state_ids():
-                for item in await self._search_stories({"workflow_state_id": sid}):
-                    key = item.get("id") if isinstance(item, dict) else None
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    data.append(item)
+            # Nothing scopes an any-assignee search but the state / label
+            # filters, so the panel keeps them — dropping them here (as the
+            # assigned-to-me listing does, to show every bucket) would ask for
+            # the whole organization. `ingests_any_assignee` guarantees one.
+            data = await self._search_filtered({})
         else:
             data = await self._search_stories({"owner_id": self.cfg.member_id})
         data = await self._drop_archived_epic_stories(data)
@@ -607,7 +662,7 @@ class ShortcutProvider(TicketProvider):
     async def create_ticket(self, name: str, description: str) -> Ticket:
         """File a new story (``POST /stories``) and return it, hydrated.
 
-        Two of the four fields sent are the source's own configuration rather
+        Most of the fields sent are the source's own configuration rather
         than anything the caller chose:
 
         * ``workflow_state_id`` — the FIRST state this source ingests from,
@@ -620,6 +675,10 @@ class ShortcutProvider(TicketProvider):
         * ``owner_ids`` — the configured member, when set. A story that lands on
           nobody is one ``search_assigned`` will never return, so an unassigned
           create would file a ticket into a queue that cannot see it.
+        * ``labels`` — the FIRST ingest label, when the source gates on labels,
+          for the same reason: an unlabelled story is invisible to a source
+          that only takes labelled ones. Shortcut attaches an existing label by
+          name and creates it when there is none.
 
         The response is a full story object, so the returned Ticket is built by
         the same parser every other Shortcut read goes through — no second,
@@ -635,6 +694,9 @@ class ShortcutProvider(TicketProvider):
         member = (self.cfg.member_id or "").strip()
         if member:
             body["owner_ids"] = [member]
+        labels = await self._canonical_labels()
+        if labels:
+            body["labels"] = [{"name": labels[0]}]
         url = f"{_SHORTCUT_API_BASE}/stories"
         async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
             async with session.post(url, json=body, headers=self._headers()) as resp:

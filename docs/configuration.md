@@ -235,7 +235,7 @@ these fields and a "Test connection" button that auto-fills `member_id`.
 | Provider | Required keys | Notes |
 |---|---|---|
 | `github_issues` | **none** | The zero-config on-ramp, and the catalog's first entry. `api_token` falls back to the GitHub connection (`[github].token` / `$GH_TOKEN` / `gh auth token`); `project` falls back to the source's `repo_url`, then `[repository].url`, then this checkout's `origin`. No workflow states. |
-| `shortcut` | `api_token`, `member_id` | `workflow_state` optional (workflow-state id; integer `workflow_state_id` also works), `start_state` optional. Archived stories, and stories under an archived epic, are always excluded — see below. |
+| `shortcut` | `api_token`, `member_id` | `workflow_state` optional (workflow-state id; integer `workflow_state_id` also works), `ingest_labels` optional (see below), `start_state` optional. Archived stories, and stories under an archived epic, are always excluded — see below. |
 | `jira` | `base_url`, `email`, `api_token` | Jira Cloud, `assignee = currentUser()`. `member_id` (accountId) optional. `workflow_state` optional (status id → `status = <id>`), `start_state` optional. |
 | `linear` | `api_token` | GraphQL `viewer.assignedIssues`. `workflow_state` optional (state id), `start_state` optional. |
 | `asana` | `api_token`, `project` (workspace gid) | Tasks with `assignee = me`. No workflow states. |
@@ -252,6 +252,19 @@ of type **`state_one`** — a single destination, as against the multi-select
 filter `workflow_state` renders as — and it is only offered by the providers
 that can write a state back.
 
+**Shortcut can also gate ingestion on a label.** `ingest_labels` takes one or
+more comma-separated label names (`ingest_labels = "brainflight"`); a story is
+only auto-ingested once it carries at least one of them, matched
+case-insensitively. It stacks with `workflow_state` (in an ingest state AND
+labelled), so it is the opt-in for a board where every story sits in the same
+state for everyone and the label is how you hand one ticket to MindFlock. It
+also bounds `assignee_scope = "anyone"` on its own — "anyone's stories labelled
+`qa`" is as narrow as "anyone's stories in Ready for QA". The Assigned tickets
+panel still lists unlabelled stories, marked *missing an ingest label*, and they
+can still be started by hand. A story filed from MindFlock (New → **Ticket**)
+gets the first label, so the source can see it. Other providers reject the key
+at load time.
+
 **`project` has a second job: it is the FILING target.** Reading tickets works
 without it on three of the five providers; filing one (New → **Ticket**, which
 every provider supports) does not, because a tracker has no workspace-level
@@ -263,7 +276,7 @@ ticket to create:
 | `linear` | The **team key** (`ENG`), which MindFlock translates to the team id `issueCreate` wants. Optional only in a **single-team** workspace, where there is exactly one right answer; with two or more teams it is required. |
 | `asana` | The **workspace gid**, which this provider already required for reading. |
 | `github_issues` | Nothing new — it resolves through the existing repo ladder (`project` → `repo_url` → `[repository].url` → this checkout's `origin`). |
-| `shortcut` | Nothing — a new story lands in the **first state this source ingests from** (`workflow_state`), or Shortcut's own default when the source ingests from everywhere. |
+| `shortcut` | Nothing — a new story lands in the **first state this source ingests from** (`workflow_state`), or Shortcut's own default when the source ingests from everywhere, carrying the first `ingest_labels` label when one is set. |
 
 **`member_id` becomes the assignee of a filed ticket** on every provider that
 supports it. That is not a nicety: `search_assigned` looks tickets up *by*
@@ -271,8 +284,8 @@ assignee, so a ticket filed onto nobody is one the source can never list again �
 and never auto-ingest. (GitHub's assignment is best effort: a token without push
 rights makes GitHub drop the field silently, and the issue is still filed.)
 
-**Shortcut also filters archived work, implicitly.** Alongside `workflow_state`
-and `assignee_scope`, a Shortcut source silently narrows to what Shortcut's own
+**Shortcut also filters archived work, implicitly.** Alongside `workflow_state`,
+`ingest_labels` and `assignee_scope`, a Shortcut source silently narrows to what Shortcut's own
 boards show: archived stories, and stories under an archived epic, are neither
 ingested nor listed, so an otherwise-matching `workflow_state` will ingest less
 than the state's own count suggests. **No setting disables it**, it applies to

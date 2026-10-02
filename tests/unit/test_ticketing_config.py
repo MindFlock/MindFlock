@@ -242,6 +242,58 @@ assignee_scope = "anyone"
         )
 
 
+def test_anyone_with_only_an_ingest_label_parses(tmp_path):
+    cfg = load_config(
+        _write(
+            tmp_path,
+            """
+[ticketing]
+provider = "shortcut"
+api_token = "tok"
+member_id = "m"
+ingest_labels = "brainflight,  qa"
+assignee_scope = "anyone"
+""" + COMMON,
+        )
+    )
+    assert cfg.ticketing.assignee_scope == "anyone"
+    assert cfg.ticketing.ingest_labels == "brainflight, qa"
+
+
+def test_ingest_labels_on_an_unsupported_provider_is_a_problem(tmp_path):
+    with pytest.raises(ConfigError, match="ingest_labels is not supported"):
+        load_config(
+            _write(
+                tmp_path,
+                """
+[ticketing]
+provider = "asana"
+api_token = "pat"
+project = "ws1"
+ingest_labels = "brainflight"
+""" + COMMON,
+            )
+        )
+
+
+def test_settings_roundtrip_ingest_labels():
+    s = Settings.from_dict(
+        {
+            "ticketing": {
+                "sources": [
+                    {"provider": "shortcut", "api_token": "t", "ingest_labels": "qa"}
+                ]
+            }
+        }
+    )
+    assert s.ticketing.sources[0].ingest_labels == "qa"
+    assert s.to_dict()["ticketing"]["sources"][0]["ingest_labels"] == "qa"
+    plain = Settings.from_dict(
+        {"ticketing": {"sources": [{"provider": "shortcut", "api_token": "t"}]}}
+    )
+    assert "ingest_labels" not in plain.to_dict()["ticketing"]["sources"][0]
+
+
 def test_unknown_assignee_scope_is_a_problem(tmp_path):
     with pytest.raises(ConfigError, match="assignee_scope"):
         load_config(

@@ -31,6 +31,20 @@ def _story(**over):
 MEMBER_IDS = ["member-123"]
 
 
+def test_missing_ingest_label_is_a_skip_reason():
+    unlabelled = ticket_start.skip_reasons(
+        _story(), {}, set(), set(), MEMBER_IDS, ingest_labels=["brainflight"]
+    )
+    assert unlabelled == ["missing an ingest label (brainflight) — won't auto-ingest"]
+    labelled = _story(labels=["BrainFlight"])
+    assert (
+        ticket_start.skip_reasons(
+            labelled, {}, set(), set(), MEMBER_IDS, ingest_labels=["brainflight"]
+        )
+        == []
+    )
+
+
 def test_eligible_ticket_has_no_skip_reasons():
     # Nothing in the ledger, not pending, no branch, assigned, no state filter.
     assert ticket_start.skip_reasons(_story(), {}, set(), set(), MEMBER_IDS) == []
