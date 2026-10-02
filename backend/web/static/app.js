@@ -39004,8 +39004,9 @@ function TicketsTab(_) {
 		className: "set-hint",
 		children: "Loading…"
 	});
-	const uniqueId = (base) => {
-		const taken = new Set(sources.map((s) => s.id));
+	const prefixFor = (provider) => catalog.find((p) => p.id === provider)?.slug_prefix || provider;
+	const uniqueId = (base, list = sources, except = "") => {
+		const taken = new Set(list.map((s) => s.id).filter((x) => x !== except));
 		let cand = base, n = 1;
 		while (taken.has(cand)) {
 			n += 1;
@@ -39013,12 +39014,22 @@ function TicketsTab(_) {
 		}
 		return cand;
 	};
+	const isSeededId = (id, provider) => {
+		const base = prefixFor(provider);
+		return id === base || new RegExp(`^${base.replace(/[^\w]/g, "\\$&")}-\\d+$`).test(id);
+	};
 	const update = (id, patch) => {
 		setSources((prev) => {
-			const next = (prev || []).map((s) => s.id === id ? {
-				...s,
-				...patch
-			} : s);
+			const list = prev || [];
+			const next = list.map((s) => {
+				if (s.id !== id) return s;
+				const merged = {
+					...s,
+					...patch
+				};
+				if (patch.provider && patch.provider !== s.provider && isSeededId(s.id, s.provider)) merged.id = uniqueId(prefixFor(patch.provider), list, s.id);
+				return merged;
+			});
 			persist(next);
 			return next;
 		});
@@ -39032,7 +39043,7 @@ function TicketsTab(_) {
 	};
 	const add = () => {
 		const provider = catalog[0]?.id || "shortcut";
-		const id = uniqueId(provider);
+		const id = uniqueId(prefixFor(provider));
 		setSources((prev) => [...prev || [], {
 			id,
 			provider

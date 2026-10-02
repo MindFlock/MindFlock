@@ -733,10 +733,26 @@ class SettingsAddon(Addon):
         @router.get("/settings/providers/ticketing")
         def ticketing_providers() -> JSONResponse:
             """The provider catalog (id/label/blurb + credential fields) the
-            Ticket Ingestion settings screen renders."""
-            from backend.ticket_ingestion.providers import PROVIDER_META
+            Ticket Ingestion settings screen renders.
 
-            return JSONResponse({"providers": PROVIDER_META})
+            Each entry carries the provider's ``slug_prefix`` (``sc`` for
+            Shortcut): the UI seeds a new source's ``id`` from it, and that id
+            IS the branch prefix, so seeding from the provider name branched
+            Shortcut tickets as ``feature/shortcut-<id>/`` instead of
+            ``feature/sc-<id>/``."""
+            from backend.ticket_ingestion.providers import (
+                PROVIDER_META,
+                provider_slug_prefix,
+            )
+
+            return JSONResponse(
+                {
+                    "providers": [
+                        {**m, "slug_prefix": provider_slug_prefix(m["id"])}
+                        for m in PROVIDER_META
+                    ]
+                }
+            )
 
         @router.post("/settings/test/ticketing")
         async def test_ticketing(body: Optional[dict] = None) -> JSONResponse:

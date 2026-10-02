@@ -218,8 +218,14 @@ export function TicketsTab(_: TabProps) {
 
   if (sources === null) return <p className="set-hint">Loading…</p>;
 
-  const uniqueId = (base: string) => {
-    const taken = new Set(sources.map((s) => s.id));
+  // A source's id is its branch prefix (feature/<id>-<ticket>/…), so it is
+  // seeded from the provider's slug prefix — `sc`, not `shortcut` — never the
+  // provider name. The backend falls back the same way for an id-less source.
+  const prefixFor = (provider: string) =>
+    catalog.find((p) => p.id === provider)?.slug_prefix || provider;
+
+  const uniqueId = (base: string, list: Source[] = sources, except = "") => {
+    const taken = new Set(list.map((s) => s.id).filter((x) => x !== except));
     let cand = base,
       n = 1;
     while (taken.has(cand)) {
@@ -229,9 +235,27 @@ export function TicketsTab(_: TabProps) {
     return cand;
   };
 
+  // Whether `id` is still the one `add` seeded for `provider` (`sc`, `sc-2`, …)
+  // rather than something the user or a hand-edited config chose.
+  const isSeededId = (id: string, provider: string) => {
+    const base = prefixFor(provider);
+    return id === base || new RegExp(`^${base.replace(/[^\w]/g, "\\$&")}-\\d+$`).test(id);
+  };
+
   const update = (id: string, patch: Record<string, string>) => {
     setSources((prev) => {
-      const next = (prev || []).map((s) => (s.id === id ? ({ ...s, ...patch } as Source) : s));
+      const list = prev || [];
+      const next = list.map((s) => {
+        if (s.id !== id) return s;
+        const merged = { ...s, ...patch } as Source;
+        // Switching the provider of a card whose id is still the seeded one
+        // re-seeds it, or "Add source → pick Jira" branches Jira tickets under
+        // whatever provider the card happened to open on.
+        if (patch.provider && patch.provider !== s.provider && isSeededId(s.id, s.provider)) {
+          merged.id = uniqueId(prefixFor(patch.provider), list, s.id);
+        }
+        return merged;
+      });
       persist(next);
       return next;
     });
@@ -247,7 +271,7 @@ export function TicketsTab(_: TabProps) {
 
   const add = () => {
     const provider = catalog[0]?.id || "shortcut";
-    const id = uniqueId(provider);
+    const id = uniqueId(prefixFor(provider));
     setSources((prev) => [...(prev || []), { id, provider } as Source]);
     setCollapsed((prev) => {
       const next = new Set(prev);
