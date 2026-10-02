@@ -347,10 +347,11 @@ function StatePicker({
   };
   const remaining = states.filter((s) => !selected.includes(String(s.id)));
   const commit = (list: string[]) => onChange({ [field.key]: list.join(",") });
-  // "Anyone's" is carried entirely by this filter — with nothing selected there
-  // is nothing to scope a whole-tracker search by, so the source stays on
-  // assigned-to-me until a state is picked. Say that where the gap is.
-  const needsState = source.assignee_scope === "anyone" && !selected.length;
+  // "Anyone's" is carried by this filter (or, on Shortcut, an ingest label) —
+  // with neither there is nothing to scope a whole-tracker search by, so the
+  // source stays on assigned-to-me until one is set. Say that where the gap is.
+  const hasLabels = !!(source.ingest_labels || "").trim();
+  const needsState = source.assignee_scope === "anyone" && !selected.length && !hasLabels;
 
   return (
     <div className="set-row">
@@ -360,7 +361,9 @@ function StatePicker({
           <div className="repo-empty">
             {needsState
               ? "Pick at least one state — Anyone's has nothing to go on without it, so this source is still only taking tickets assigned to you."
-              : "Any state — every ticket assigned to you is auto-ingested."}
+              : hasLabels
+                ? "Any state — every ticket carrying an ingest label is auto-ingested."
+                : "Any state — every ticket assigned to you is auto-ingested."}
           </div>
         ) : (
           selected.map((id) => (
@@ -1286,6 +1289,7 @@ function TicketSourceCard({
                     onChange({ [f.key]: e.target.value });
                 }}
               />
+              {f.hint ? <span className="set-hint">{f.hint}</span> : null}
             </label>
           )
         )}

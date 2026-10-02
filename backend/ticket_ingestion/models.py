@@ -83,6 +83,11 @@ class Ticket:
     # "anyone" is full of other people's tickets, which are only legible with a
     # name on them. Empty = the provider didn't say (never an error).
     owner_names: list[str] = field(default_factory=list)
+    # Names of the labels on the ticket, when the provider reports them. Read
+    # by the assigned-tickets panel to explain an ``ingest_labels`` filter
+    # ("doesn't carry an ingest label"); the pipeline itself filters
+    # server-side and never reads it. Empty = no labels, or unknown.
+    labels: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.slug:

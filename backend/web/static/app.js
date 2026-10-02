@@ -39106,7 +39106,8 @@ function StatePicker({ field, source, states, loadStates, onChange }) {
 	};
 	const remaining = states.filter((s) => !selected.includes(String(s.id)));
 	const commit = (list) => onChange({ [field.key]: list.join(",") });
-	const needsState = source.assignee_scope === "anyone" && !selected.length;
+	const hasLabels = !!(source.ingest_labels || "").trim();
+	const needsState = source.assignee_scope === "anyone" && !selected.length && !hasLabels;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-row",
 		children: [
@@ -39118,7 +39119,7 @@ function StatePicker({ field, source, states, loadStates, onChange }) {
 				className: "repo-list",
 				children: !selected.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "repo-empty",
-					children: needsState ? "Pick at least one state — Anyone's has nothing to go on without it, so this source is still only taking tickets assigned to you." : "Any state — every ticket assigned to you is auto-ingested."
+					children: needsState ? "Pick at least one state — Anyone's has nothing to go on without it, so this source is still only taking tickets assigned to you." : hasLabels ? "Any state — every ticket carrying an ingest label is auto-ingested." : "Any state — every ticket assigned to you is auto-ingested."
 				}) : selected.map((id) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "repo-chip",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -39745,20 +39746,27 @@ function TicketSourceCard({ source, catalog, agents, collapsed, onToggle, onChan
 					onChange
 				}, f.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "set-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: f.label
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: f.secret ? "password" : "text",
-						autoComplete: "off",
-						"data-tk-field": f.key,
-						placeholder: f.secret && source[f.key] === "•••set" ? "•••set (saved)" : f.placeholder || "",
-						defaultValue: f.secret ? "" : source[f.key] || "",
-						onBlur: (e) => {
-							if (f.secret && e.target.value === "") return;
-							if (e.target.value !== (source[f.key] || "")) onChange({ [f.key]: e.target.value });
-						}
-					})]
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: f.label
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: f.secret ? "password" : "text",
+							autoComplete: "off",
+							"data-tk-field": f.key,
+							placeholder: f.secret && source[f.key] === "•••set" ? "•••set (saved)" : f.placeholder || "",
+							defaultValue: f.secret ? "" : source[f.key] || "",
+							onBlur: (e) => {
+								if (f.secret && e.target.value === "") return;
+								if (e.target.value !== (source[f.key] || "")) onChange({ [f.key]: e.target.value });
+							}
+						}),
+						f.hint ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: f.hint
+						}) : null
+					]
 				}, f.key))
 			})
 		]
