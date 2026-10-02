@@ -343,6 +343,9 @@ export interface TicketingCatalogField {
 export interface TicketingCatalogEntry {
   id: string;
   label: string;
+  /** Branch/slug prefix (`sc` for Shortcut). A new source's `id` is seeded from
+   * it — the id IS the branch prefix (`feature/<id>-<ticket>/…`). */
+  slug_prefix?: string;
   blurb?: string;
   fields: TicketingCatalogField[];
 }
