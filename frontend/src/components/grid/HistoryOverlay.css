@@ -71,3 +71,63 @@
 .hist-msg.error {
   color: var(--red);
 }
+
+/* Find bar (Ctrl+F). The hits themselves are painted with the CSS Custom
+   Highlight API — ranges pooled under two names by HistoryOverlay.tsx — so
+   the <pre> stays one text node. */
+.hist-find {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.hist-find input {
+  width: 220px;
+  min-width: 80px;
+  flex: 0 1 auto;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+}
+
+.hist-find input:focus {
+  border-color: var(--accent);
+}
+
+.hist-find-count {
+  min-width: 56px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hist-find-btn {
+  padding: 0 6px;
+  line-height: 18px;
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.hist-find-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+::highlight(hist-find) {
+  background-color: #f5c04a66;
+  color: inherit;
+}
+
+::highlight(hist-find-cur) {
+  background-color: #ff9632;
+  color: #111;
+}

@@ -153,6 +153,42 @@ body.conn-lost #cs-errors {
   overflow-y: auto;
 }
 
+/* Card actions (errorPop's `actions`): the inline stand-in for confirm(),
+   which the Electron app never implements. */
+#cs-errors .cs-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+#cs-errors .cs-error-act {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+#cs-errors .cs-error-act:hover {
+  border-color: var(--accent);
+}
+
+#cs-errors .cs-error-act.primary {
+  border-color: var(--red);
+  color: var(--red);
+  background: none;
+  font-weight: 600;
+}
+
+#cs-errors .cs-error-act.primary:hover {
+  background: rgba(222, 97, 62, 0.12);
+}
+
 /* E2 — clickable notification toast (focus the session / open the PR). */
 #cs-toast.clickable {
   pointer-events: auto;

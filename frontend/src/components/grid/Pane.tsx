@@ -1,8 +1,9 @@
 /** One session pane (port of app.js makePane, section 14): header with grip /
  * title / diff-stat context line / tabs / next-step / usage chip / state pill
- * / history + copy-all + hide (✕), the terminal hosts, Diff + Queue tabs, and
- * the budget-lock overlay. Terminals are adopted from lib/terminals' registry
- * so they never remount with the pane. */
+ * / history + copy-all + hide (✕), the terminal hosts, Diff + Map + Queue
+ * tabs, and the budget-lock overlay (Map is git-gated exactly like Diff).
+ * Terminals are adopted from lib/terminals' registry so they never remount
+ * with the pane. */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Instance } from "../../api/types";
@@ -15,6 +16,7 @@ import { chipState, fastTrackStep, liveStep, nextStep, resetStep } from "../../l
 import { cleanupMissing, selectSession } from "../../lib/sessionActions";
 import {
   focusTerm,
+  freezeTerm,
   getTerm,
   peekTerm,
   type DragScreenCtx,
@@ -25,11 +27,16 @@ import { dropSideFor, type DropSide } from "./layout";
 import type { DragCtx } from "./TerminalGrid";
 import { DiffTab } from "./DiffTab";
 import { HistoryOverlay } from "./HistoryOverlay";
+import { PaneFindBar, type FindMode } from "./PaneFindBar";
 import { QueueTab } from "./QueueTab";
+import { CodeMapTab } from "./CodeMapTab";
 import { SessionUsageChip } from "../usage/SessionUsageChip";
 import { AccountChip } from "./AccountChip";
 
-type Tab = "agent" | "shell" | "diff" | "queue";
+type Tab = "agent" | "shell" | "diff" | "queue" | "map";
+
+/** Tabs that need git (the Map reads the worktree's files, diff and imports). */
+const GIT_TABS: ReadonlySet<string> = new Set(["diff", "map"]);
 
 function queueRelTime(ms: number): string {
   const m = Math.ceil(ms / 60000);
@@ -70,7 +77,7 @@ export function Pane({
 
   const savedTab = (lastTab as Tab) || "agent";
   const [tab, setTab] = useState<Tab>(
-    savedTab === "diff" && !caps.git ? "agent" : savedTab
+    GIT_TABS.has(savedTab) && !caps.git ? "agent" : savedTab
   );
   const [booted, setBooted] = useState(false);
   const [wsState, setWsState] = useState("connecting");
@@ -90,7 +97,38 @@ export function Pane({
     /** The TUI's pinned-prompt row at gesture time — the anchor of last
      * resort when the visible rows (tool output) aren't in the transcript. */
     ghostSel?: string | null;
+    /** Set by Ctrl+F: open in find mode, prefilled with this. */
+    find?: string;
   } | null>(null);
+  // The in-place find bar (Ctrl+F on a live terminal), which terminal it
+  // searches and how (see PaneFindBar); null = closed.
+  const [paneFind, setPaneFind] = useState<{
+    kind: "agent" | "shell";
+    query: string;
+    mode: FindMode;
+  } | null>(null);
+  // The server indexes an idle agent pane for Ctrl+F ahead of time (a
+  // briefly tall window, a sweep through its scrollback — see backend
+  // core/pane_scroll_find.background_index). It announces it first, and the
+  // pane shows a still snapshot until it's done, so none of it is seen.
+  useEffect(() => {
+    const ev = window.mindflock?.events;
+    if (!ev) return;
+    let thaw: (() => void) | null = null;
+    const off = ev.subscribe("pane.find_index", (env) => {
+      if (env.session !== title || ev.isReplay(env)) return;
+      if (env.data?.active) {
+        if (!thaw) thaw = freezeTerm(title, "agent");
+      } else if (thaw) {
+        thaw();
+        thaw = null;
+      }
+    });
+    return () => {
+      off();
+      thaw?.();
+    };
+  }, [title]);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const fitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -231,13 +269,58 @@ export function Pane({
     return () => document.removeEventListener("keydown", onKey, true);
   }, [focused, missing, loading, histPane, tab]);
 
+  // Ctrl+F on a focused terminal: find across the pane's WHOLE scrollback,
+  // the way a browser finds in a page (prefilled with a one-line terminal
+  // selection, as browsers do) — the live pane itself scrolls to each hit
+  // (PaneFindBar). The server says how, per pane, by what its mouse wheel
+  // scrolls (GET …/find): tmux's history, or the app's own; only a pane that
+  // scrolls from neither (an alternate screen with no mouse — a pager) gets
+  // the full-history overlay's find instead. Only when the keyboard is in
+  // this pane: a dialog's own Ctrl+F filter must win over a pane that merely
+  // stays "focused" underneath it.
+  useEffect(() => {
+    if (!focused || missing || loading || histPane || paneFind) return;
+    if (tab !== "agent" && tab !== "shell") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+      if (e.key !== "f" && e.key !== "F") return;
+      const a = document.activeElement;
+      if (a && a !== document.body && !paneRef.current?.contains(a)) return;
+      // A real text field in the pane keeps its own Ctrl+F; the terminal's
+      // hidden textarea is exempt — that IS the case this is for.
+      const editing =
+        a &&
+        (a.tagName === "INPUT" ||
+          a.tagName === "TEXTAREA" ||
+          a.tagName === "SELECT" ||
+          (a as HTMLElement).isContentEditable === true);
+      if (editing && !a.closest(".xterm")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const kind = tab === "shell" ? "shell" : "agent";
+      const sel = peekTerm(title, kind)?.term.getSelection().trim() ?? "";
+      const query = sel && !sel.includes("\n") && sel.length <= 200 ? sel : "";
+      instApi<{ mode: FindMode | "overlay" }>(title, `/find?pane=${kind}`)
+        .then((r) => r.mode)
+        .catch(() => "overlay" as const)
+        .then((mode) => {
+          if (mode === "overlay") setHistPane({ kind, dragSel: null, pos: "bottom", find: query });
+          else setPaneFind({ kind, query, mode });
+        });
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [focused, missing, loading, histPane, paneFind, tab, title]);
+
   const showTab = (t: Tab) => {
     // A tab click while the full-history overlay covers the body is
     // navigation, not a request to switch under glass: without this the
     // clicked tab highlighted while the overlay kept covering its content,
     // which reads as the tab being dead. Clicking the ACTIVE tab closes the
     // overlay too — "show me the tab" is what the press means either way.
+    // The find bar searches one terminal, so it goes with the tab.
     setHistPane(null);
+    setPaneFind(null);
     setTab(t);
     setLastTab(title, t);
     if (t === "shell") setShellStarted(true);
@@ -251,12 +334,13 @@ export function Pane({
   useEffect(() => {
     if (!lastTab) return;
     let t = lastTab as Tab;
-    if (t === "diff" && !caps.git) t = "agent";
+    if (GIT_TABS.has(t) && !caps.git) t = "agent";
     if (t === tab) return;
     // Same rule as showTab: a switch done FOR the user (the commit dialog
     // jumping to the shell to watch pre-commit hooks) must be visible, so the
     // history overlay closes rather than covering the tab it switched to.
     setHistPane(null);
+    setPaneFind(null);
     setTab(t);
     if (t === "shell") setShellStarted(true);
     setTimeout(() => peekTerm(title, t === "shell" ? "shell" : "agent")?.doFit(), 0);
@@ -426,6 +510,16 @@ export function Pane({
           {caps.git && (
             <button data-tab="diff" className={tab === "diff" ? "active" : ""} onClick={(e) => { e.stopPropagation(); showTab("diff"); }}>
               Diff
+            </button>
+          )}
+          {caps.git && (
+            <button
+              data-tab="map"
+              className={tab === "map" ? "active" : ""}
+              title="Code map — the worktree as a tree: agents, zones, plan, blast radius"
+              onClick={(e) => { e.stopPropagation(); showTab("map"); }}
+            >
+              Map
             </button>
           )}
           <button
@@ -681,9 +775,27 @@ export function Pane({
             <DiffTab title={title} active={tab === "diff"} />
           </div>
         )}
+        {caps.git && (
+          <div className={"pane-map" + (tab !== "map" ? " hidden" : "")}>
+            <CodeMapTab title={title} active={tab === "map"} />
+          </div>
+        )}
         <div className={"pane-queue" + (tab !== "queue" ? " hidden" : "")}>
           <QueueTab title={title} active={tab === "queue"} />
         </div>
+        {paneFind && (
+          <PaneFindBar
+            title={title}
+            pane={paneFind.kind}
+            mode={paneFind.mode}
+            initialQuery={paneFind.query}
+            onClose={() => {
+              const kind = paneFind.kind;
+              setPaneFind(null);
+              setTimeout(() => focusTerm(title, kind), 0);
+            }}
+          />
+        )}
         {histPane && (
           <HistoryOverlay
             title={title}
@@ -693,6 +805,7 @@ export function Pane({
             dragCtx={histPane.ctx ?? null}
             dragGhost={histPane.ghostSel ?? null}
             initialPos={histPane.pos ?? "bottom"}
+            initialFind={histPane.find}
             onClose={() => {
               const kind = histPane.kind;
               setHistPane(null);

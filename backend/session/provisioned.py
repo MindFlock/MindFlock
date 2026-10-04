@@ -89,6 +89,8 @@ __all__ = [
 
 _logger = logging.getLogger("mindflock.provision")
 
+_MISSING = object()
+
 # Canonical base clones live under the workspace dir, one per repo:
 # ``_base_<repo-slug>``.
 BASE_REPO_PREFIX = "_base_"
@@ -294,11 +296,7 @@ def load_provision_settings(
         default="main",
     )
 
-    open_cursor = _s.resolve_bool(
-        settings_getter=lambda s: s.engine.open_cursor,
-        toml_value=cs_section.get("open_cursor"),
-        default=False,
-    )
+    open_cursor = open_ide_on_ticket(toml_value=cs_section.get("open_cursor"))
     skip_permissions = _s.resolve_bool(
         settings_getter=lambda s: s.engine.skip_permissions,
         toml_value=cs_section.get("skip_permissions"),
@@ -313,6 +311,31 @@ def load_provision_settings(
         skip_permissions=bool(skip_permissions),
         setup_commands=setup_commands,
         caches=caches,
+    )
+
+
+def open_ide_on_ticket(*, toml_value=_MISSING, default: bool = False) -> bool:
+    """Whether a freshly provisioned workspace is opened in the IDE
+    (``engine.open_cursor``: settings.json → ``[mindflock].open_cursor`` in
+    config.toml → ``default``). Settings → IDE writes settings.json, so an
+    explicit switch there beats a ``config.toml`` that says ``true``.
+
+    Re-reads settings.json: the ingestion pipeline is a separate process from the
+    server that saves the switch, and its settings cache would otherwise hold the
+    value from pipeline start."""
+    from backend.config import settings as _s
+
+    _s.invalidate()
+    if toml_value is _MISSING:
+        path = _find_config()
+        raw = _read_config_toml(path) if path is not None else {}
+        toml_value = (raw.get("mindflock") or {}).get("open_cursor")
+    return bool(
+        _s.resolve_bool(
+            settings_getter=lambda s: s.engine.open_cursor,
+            toml_value=toml_value,
+            default=default,
+        )
     )
 
 
@@ -837,6 +860,43 @@ def is_base_repo_dirname(name: str) -> bool:
 def resolve_base_repo_dir(settings: ProvisionSettings) -> Path:
     """The base-clone directory for ``settings.repo_url``."""
     return settings.workspace_dir / base_repo_dirname(settings.repo_url)
+
+
+def launch_workdirs(repo_url: str = "") -> List[str]:
+    """Local checkouts sharing ``repo_url``'s repo identity, most specific
+    first — for keying a provisioned start's launch prompt (its red zones, the
+    repo's Plan-first flag) BEFORE the session's own worktree exists.
+
+    ``repo_url`` itself when it names a local directory; then the configured
+    default repo (``[repository].url`` / settings / ``MINDFLOCK_REPO_URL``)
+    when ``repo_url`` is empty and that default is a local directory; then the
+    provisioning base clone for the URL (or the default), whose origin IS the
+    URL. Callers take the first that exists; a first-ever start of a remote
+    URL has none yet, so its prompt carries no zone note (the hook guard still
+    arms at install time).
+
+    ONE helper for every intake path — the server's ticket/issue starts and
+    the ingestion pipeline's SessionRunner — so a ticket gets the same
+    Plan-first instruction whichever of them launches it. Never raises."""
+    out: List[str] = []
+
+    def _add(p: str) -> None:
+        if p and p not in out:
+            out.append(p)
+
+    u = (repo_url or "").strip()
+    try:
+        if u and os.path.isdir(os.path.expanduser(u)):
+            _add(os.path.expanduser(u))
+        s = load_provision_settings(repo_url_override=u or None)
+        if s is not None:
+            default = (s.repo_url or "").strip()
+            if not u and default and os.path.isdir(os.path.expanduser(default)):
+                _add(os.path.expanduser(default))
+            _add(str(resolve_base_repo_dir(s)))
+    except Exception:  # noqa: BLE001 — decoration is best-effort
+        pass
+    return out
 
 
 def ensure_base_repo(settings: ProvisionSettings) -> str:

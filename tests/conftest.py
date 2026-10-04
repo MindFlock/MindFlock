@@ -81,6 +81,22 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "MINDFLOCK_AUTOPILOT_FILE", str(tmp_path / "mindflock" / "autopilot.json")
     )
+    # Red-zone stores (roadmap: Code Map + red zones). Point the zone store, the
+    # per-root guard-file dir and the per-session tool-feed dir at tmp so the
+    # suite never reads or writes the owner's real ~/.mindflock /
+    # ~/.mindflock-assistant, and any reconcile loop a lifespan test starts sees
+    # an empty store.
+    monkeypatch.setenv(
+        "MINDFLOCK_RED_ZONES_FILE", str(tmp_path / "mindflock" / "red_zones.json")
+    )
+    monkeypatch.setenv("MINDFLOCK_RED_ZONE_DIR", str(tmp_path / "red-zones"))
+    monkeypatch.setenv("MINDFLOCK_TOOL_FEED_DIR", str(tmp_path / "tool-feed"))
+    # User event hooks (``~/.mindflock/hooks/<event>/*`` + ``hooks/all/*``): the
+    # events bus runs them on EVERY emit, so without this a developer's real
+    # Slack-ping / desktop-notify hooks fire with the suite's fake envelopes
+    # ("rz-c: red zone breached", "session.created rz-new", ...). Point the root
+    # at an empty per-test dir; tests that exercise hooks re-set it themselves.
+    monkeypatch.setenv("MINDFLOCK_HOOKS_DIR", str(tmp_path / "no-hooks"))
     # Neutralize the web auth gate's enable signals so the suite never depends on
     # the ambient shell. auth.auth_enabled() turns on when CS_WEB_MODE is a
     # non-local mode (a dev shell often exports CS_WEB_MODE=tailscale), when an

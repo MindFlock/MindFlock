@@ -286,6 +286,13 @@
 /* Covers the terminal's own pinned-prompt row (the TUI keeps drawing it in
    the PTY, shared with mobile) while the bar above mirrors its text: the
    6px pane gap plus one terminal row of terminal background. */
+/* The TUI's own pinned-prompt row, hidden the moment it's drawn (class set
+   from xterm's render callback in lib/terminals — see there). The prompt bar
+   above mirrors its text. */
+.term-container.tui-pinned-row .xterm-rows > div:first-child {
+  visibility: hidden;
+}
+
 .prompt-pin .ghost-row-mask {
   position: absolute;
   top: 100%;

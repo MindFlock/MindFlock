@@ -12,11 +12,17 @@
  * Opened from the pane header's history button or by drag-selecting past the
  * top edge of a live terminal (see attachDragHistoryGesture in
  * lib/terminals). Esc or the × closes it. Copy mirrors the terminals' house
- * rule: release the drag and the selection is already on the clipboard. */
+ * rule: release the drag and the selection is already on the clipboard.
+ *
+ * Ctrl+F on a terminal opens it straight into find mode (and Ctrl+F inside it
+ * focuses the find box): the search runs over the WHOLE history, not just
+ * the screen, highlights every hit, and teleports to the current one like a
+ * browser's find bar. */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { copyText } from "../../lib/clipboard";
 import type { DragScreenCtx } from "../../lib/terminals";
+import { FIND_MAX, findAll, pickStart, stepMatch } from "../../lib/textFind";
 import { toast } from "../../lib/toast";
 
 /** Caret under a viewport point, across the two DOM APIs. */
@@ -227,6 +233,39 @@ function findAnchor(
   return { anchor: text.length, matched: false };
 }
 
+// CSS Custom Highlight API (Chromium 105+, so every Electron we ship): paints
+// the hits without splitting the <pre>'s single text node, which the drag
+// continuation and caretAt both rely on. Absent (older browsers, jsdom), find
+// falls back to selecting the current hit.
+type HighlightRegistry = { set(name: string, h: unknown): void; delete(name: string): void };
+function highlightRegistry(): HighlightRegistry | null {
+  const reg = (globalThis as { CSS?: { highlights?: HighlightRegistry } }).CSS?.highlights;
+  return reg && typeof (globalThis as { Highlight?: unknown }).Highlight === "function"
+    ? reg
+    : null;
+}
+function makeHighlight(ranges: Range[]): unknown {
+  const H = (globalThis as unknown as { Highlight: new (...r: Range[]) => unknown }).Highlight;
+  return new H(...ranges);
+}
+// Highlight names are document-global and several panes can each have an
+// overlay open, so every overlay's ranges are pooled under the two names
+// (styled in HistoryOverlay.css) instead of each one clobbering the others.
+const FIND_HL = "hist-find";
+const FIND_HL_CUR = "hist-find-cur";
+const findHits = new Map<symbol, Range[]>();
+const findCur = new Map<symbol, Range>();
+function syncFindHighlights() {
+  const reg = highlightRegistry();
+  if (!reg) return;
+  const all = [...findHits.values()].flat();
+  const cur = [...findCur.values()];
+  if (all.length) reg.set(FIND_HL, makeHighlight(all));
+  else reg.delete(FIND_HL);
+  if (cur.length) reg.set(FIND_HL_CUR, makeHighlight(cur));
+  else reg.delete(FIND_HL_CUR);
+}
+
 // Last-fetched history per pane, so a reopen renders instantly and the fresh
 // capture replaces it when it lands (stale-while-revalidate, like DiffTab).
 const histCache = new Map<string, string>();
@@ -240,6 +279,7 @@ export function HistoryOverlay({
   dragCtx,
   dragGhost,
   initialPos,
+  initialFind,
   onClose,
 }: {
   title: string;
@@ -260,6 +300,9 @@ export function HistoryOverlay({
   dragGhost: string | null;
   /** Where the view opens: the tail by default, the very top for Ctrl+↑. */
   initialPos: "top" | "bottom";
+  /** Defined = open with the find bar focused, prefilled with this (Ctrl+F
+   * on the terminal passes its one-line selection, like a browser does). */
+  initialFind?: string;
   onClose: () => void;
 }) {
   const [text, setText] = useState<string | null>(null);
@@ -329,6 +372,9 @@ export function HistoryOverlay({
   useEffect(() => {
     const id = setInterval(() => {
       if (pressAt.current) return;
+      // Same reason while searching: a refresh that trims the top of the
+      // history shifts every hit, and the one being read jumps away.
+      if (findQueryRef.current) return;
       const sel = window.getSelection?.();
       if (sel && !sel.isCollapsed && sel.toString().trim()) return;
       load();
@@ -457,14 +503,152 @@ export function HistoryOverlay({
     return stop;
   }, [text, dragSelection, dragEdge, dragCtx, dragGhost]);
 
-  // Esc closes; Ctrl+↑ / Ctrl+↓ jump to the very top / bottom. Capture-phase
-  // so neither the focused xterm nor the global keymap sees the keystrokes.
+  // --- Find (Ctrl+F) ------------------------------------------------------
+  const [findOpen, setFindOpen] = useState(initialFind !== undefined);
+  const [query, setQuery] = useState(initialFind ?? "");
+  // The current hit, tagged with the hit list it indexes: a new list (query
+  // typed, history reloaded) makes a stale index read as "none" until the
+  // pick effect below chooses again, instead of pointing at a stranger.
+  const [pick, setPick] = useState<{ m: number[]; i: number }>({ m: [], i: -1 });
+  const findRef = useRef<HTMLInputElement | null>(null);
+  // Read by the live-tail timer, which must not refresh under an active find.
+  const findQueryRef = useRef("");
+  useEffect(() => {
+    findQueryRef.current = findOpen ? query : "";
+  }, [findOpen, query]);
+  const matches = useMemo(
+    () => (findOpen && text ? findAll(text, query) : []),
+    [findOpen, text, query]
+  );
+  const cur = pick.m === matches ? pick.i : -1;
+  // Offset of the hit we're on, so refining the query ("foo" → "foob")
+  // stays on it instead of hopping to another one in view.
+  const curOff = useRef<number | null>(null);
+  // Scroll only when the reader moved (typed, stepped) — not on re-renders.
+  const reveal = useRef(false);
+  const id = useMemo(() => Symbol("hist-find"), []);
+
+  const textNode = (): Text | null => {
+    const n = scrollRef.current?.querySelector("pre")?.firstChild;
+    return n && n.nodeType === Node.TEXT_NODE ? (n as Text) : null;
+  };
+  const hitRange = (node: Text, off: number) => {
+    const r = document.createRange();
+    r.setStart(node, Math.min(off, node.length));
+    r.setEnd(node, Math.min(off + query.length, node.length));
+    return r;
+  };
+
+  // New hit list (query typed, history loaded): land on the hit nearest the
+  // reader — the one they were on, else the last one above the bottom of
+  // the view (see pickStart).
+  useEffect(() => {
+    if (!matches.length) {
+      setPick({ m: matches, i: -1 });
+      return;
+    }
+    let anchor = curOff.current;
+    if (anchor == null) {
+      anchor = text?.length ?? 0;
+      const el = scrollRef.current;
+      const node = textNode();
+      if (el && node) {
+        const r = el.getBoundingClientRect();
+        const c = caretAt(r.right - 12, r.bottom - 6);
+        if (c && c.node === node) anchor = c.offset;
+      }
+    }
+    reveal.current = true;
+    setPick({ m: matches, i: pickStart(matches, anchor) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matches]);
+
+  // Paint every hit.
+  useEffect(() => {
+    const node = textNode();
+    if (node && matches.length) findHits.set(id, matches.map((o) => hitRange(node, o)));
+    else findHits.delete(id);
+    syncFindHighlights();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matches, id]);
+
+  // Paint the current hit and teleport to it.
+  useEffect(() => {
+    const node = textNode();
+    const el = scrollRef.current;
+    if (!node || !el || cur < 0) {
+      if (pick.m === matches) curOff.current = null;
+      findCur.delete(id);
+      syncFindHighlights();
+      return;
+    }
+    curOff.current = matches[cur];
+    const r = hitRange(node, matches[cur]);
+    findCur.set(id, r);
+    syncFindHighlights();
+    if (!reveal.current) return;
+    reveal.current = false;
+    const rr = r.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    if (rr.top < er.top + 24 || rr.bottom > er.bottom - 24)
+      el.scrollTop += rr.top - (er.top + er.height / 2);
+    if (!highlightRegistry()) {
+      // No Highlight API: select the hit so it still shows.
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(r);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pick, matches, id]);
+
+  useEffect(
+    () => () => {
+      findHits.delete(id);
+      findCur.delete(id);
+      syncFindHighlights();
+    },
+    [id]
+  );
+
+  const step = (dir: 1 | -1) => {
+    if (!matches.length) return;
+    reveal.current = true;
+    setPick((p) => (p.m.length ? { m: p.m, i: stepMatch(p.i, dir, p.m.length) } : p));
+  };
+  const openFind = () => {
+    setFindOpen(true);
+    // Mounting the input happens on the next commit when it was closed.
+    setTimeout(() => {
+      findRef.current?.focus();
+      findRef.current?.select();
+    }, 0);
+  };
+  const stepRef = useRef(step);
+  stepRef.current = step;
+
+  // Esc closes; Ctrl+↑ / Ctrl+↓ jump to the very top / bottom; Ctrl+F finds,
+  // F3 / Ctrl+G step UP to older hits (Shift = newer) — the same direction
+  // as Enter here and in the in-place PaneFindBar: you start at the bottom. Capture-phase so
+  // neither the focused xterm nor the global keymap sees the keystrokes.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
         onClose();
+        return;
+      }
+      const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
+      if (mod && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        e.stopPropagation();
+        openFind();
+        return;
+      }
+      if (e.key === "F3" || (mod && (e.key === "g" || e.key === "G"))) {
+        e.preventDefault();
+        e.stopPropagation();
+        stepRef.current(e.shiftKey ? 1 : -1);
         return;
       }
       if ((e.ctrlKey || e.metaKey) && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
@@ -476,6 +660,7 @@ export function HistoryOverlay({
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onClose]);
 
   // Same contract as the terminals: drag to select, release to copy.
@@ -498,7 +683,9 @@ export function HistoryOverlay({
   // recorded here).
   const pressAt = useRef<{ x: number; y: number; hadSelection: boolean } | null>(null);
   const onRootMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) {
+    // The header (find box, its buttons) is chrome, not page: a click there
+    // must neither deselect nor count as "return to live".
+    if (e.button !== 0 || (e.target as HTMLElement).closest?.(".hist-bar")) {
       pressAt.current = null;
       return;
     }
@@ -560,8 +747,61 @@ export function HistoryOverlay({
         <span className="hist-title">
           Full {pane === "shell" ? "terminal" : "agent"} history
         </span>
+        {findOpen ? (
+          <div className="hist-find" role="search">
+            <input
+              ref={findRef}
+              type="text"
+              autoFocus
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Find in history"
+              aria-label="Find in history"
+              value={query}
+              onFocus={(e) => e.currentTarget.select()}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  step(e.shiftKey ? 1 : -1);
+                }
+              }}
+            />
+            <span className="hist-find-count" aria-live="polite">
+              {!query
+                ? ""
+                : !matches.length
+                  ? text === null
+                    ? "…"
+                    : "No results"
+                  : `${cur + 1} / ${matches.length >= FIND_MAX ? FIND_MAX + "+" : matches.length}`}
+            </span>
+            <button
+              type="button"
+              className="hist-find-btn"
+              title="Older match (Enter)"
+              aria-label="Older match"
+              disabled={!matches.length}
+              onClick={() => step(-1)}
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              className="hist-find-btn"
+              title="Newer match (Shift+Enter)"
+              aria-label="Newer match"
+              disabled={!matches.length}
+              onClick={() => step(1)}
+            >
+              ↓
+            </button>
+          </div>
+        ) : null}
         <span className="hist-hint">
-          drag to select · release to copy · Ctrl+↑/↓ top/bottom · click or Esc returns to live
+          {findOpen
+            ? "Enter older · Shift+Enter newer · Esc returns to live"
+            : "drag to select · release to copy · Ctrl+F find · Ctrl+↑/↓ top/bottom · click or Esc returns to live"}
         </span>
       </div>
       <div className="hist-scroll" ref={scrollRef} onMouseUp={copyOnRelease}>

@@ -47,6 +47,18 @@ _NETWORK_GIT_TIMEOUT = 600.0  # clone / anything hitting the network
 _LOCAL_CMD_TIMEOUT = 120.0  # local git ops and small helper commands
 
 
+def _open_ide_on_ticket() -> bool:
+    """Settings → IDE "Open IDE when a ticket starts" (``engine.open_cursor``).
+    This standalone path always opened the IDE before the switch existed, so it
+    stays on unless the switch (or config.toml) says otherwise — and if the
+    engine half of the package doesn't import (the reason this path runs)."""
+    try:
+        from backend.session.provisioned import open_ide_on_ticket
+    except Exception:  # noqa: BLE001
+        return True
+    return open_ide_on_ticket(default=True)
+
+
 class ProvisioningError(Exception):
     """Raised when provisioning a workspace fails."""
 
@@ -73,7 +85,8 @@ class EnvironmentProvisioner:
         await self._run_setup_commands(story, directory)
         pin_cache_env(directory, self.config.caches)
         seed_caches(self.config.caches, directory, log_prefix=f"story {story.id}")
-        await self._launch_cursor(story, directory)
+        if _open_ide_on_ticket():
+            await self._launch_cursor(story, directory)
         await self._install_precommit_log_wrapper(story, directory)
         window_id = 0
         _logger.info("Workspace ready for story %s.", story.id)

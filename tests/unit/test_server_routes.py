@@ -1446,6 +1446,86 @@ def test_pane_history_falls_back_to_transcript(registered, monkeypatch):
     assert seen == [("/tmp/x", server.tmux.to_mindflock_tmux_name("ph-2"))]
 
 
+def test_pane_find_mode_asks_tmux_about_the_panes_session(registered, monkeypatch):
+    registered("pf-1", wt="/tmp/x")
+    monkeypatch.setattr(server, "_shell_tmux_name", lambda t: "shell_" + t)
+    monkeypatch.setattr(server, "_live_session_name", lambda base: base)
+    asked = []
+    monkeypatch.setattr(
+        server._pane_find,
+        "find_mode",
+        lambda name: (
+            asked.append(name),
+            "tmux" if name.startswith("shell_") else "scroll",
+        )[1],
+    )
+    assert client.get("/api/instances/pf-1/find").json() == {"mode": "scroll"}
+    assert client.get("/api/instances/pf-1/find", params={"pane": "shell"}).json() == {
+        "mode": "tmux"
+    }
+    assert asked == [server.tmux.to_mindflock_tmux_name("pf-1"), "shell_pf-1"]
+    # No live session: nothing to search in place.
+    monkeypatch.setattr(server, "_live_session_name", lambda base: None)
+    assert client.get("/api/instances/pf-1/find").json() == {"mode": "overlay"}
+
+
+def test_pane_find_step_dispatches_by_mode(registered, monkeypatch):
+    registered("pf-4", wt="/tmp/x")
+    monkeypatch.setattr(server, "_live_session_name", lambda base: base)
+    monkeypatch.setattr(server._pane_find, "find_mode", lambda name: "scroll")
+    calls = []
+    monkeypatch.setattr(
+        server._pane_scroll_find,
+        "find",
+        lambda name, q, op: (
+            calls.append((getattr(q, "text", q), op)),
+            {"mode": "scroll", "status": "found"},
+        )[1],
+    )
+    r = client.post(
+        "/api/instances/pf-4/find", json={"query": "err", "op": "search", "word": True}
+    )
+    assert r.json() == {"mode": "scroll", "status": "found"}
+    client.post("/api/instances/pf-4/find", json={"op": "cancel"})
+    assert calls == [("err", "search"), ("", "cancel")]
+
+
+def test_pane_find_step_routes_to_the_panes_tmux_session(registered, monkeypatch):
+    registered("pf-2", wt="/tmp/x")
+    monkeypatch.setattr(server, "_shell_tmux_name", lambda t: "shell_" + t)
+    monkeypatch.setattr(server, "_live_session_name", lambda base: base)
+    calls = []
+    monkeypatch.setattr(
+        server._pane_find,
+        "find",
+        lambda name, q, op: (
+            calls.append((name, q.text, op)),
+            {"total": 3, "index": 2},
+        )[1],
+    )
+    monkeypatch.setattr(server._pane_find, "find_mode", lambda name: "tmux")
+    r = client.post(
+        "/api/instances/pf-2/find",
+        json={"pane": "shell", "query": "err", "op": "older"},
+    )
+    assert r.json() == {"total": 3, "index": 2, "mode": "tmux"}
+    assert calls == [("shell_pf-2", "err", "older")]
+    assert (
+        client.post("/api/instances/pf-2/find", json={"op": "rm -rf"}).status_code
+        == 400
+    )
+
+
+def test_pane_find_step_404s(registered, monkeypatch):
+    assert (
+        client.post("/api/instances/nope/find", json={"query": "x"}).status_code == 404
+    )
+    registered("pf-3", wt="/tmp/x")
+    monkeypatch.setattr(server, "_live_session_name", lambda base: None)
+    r = client.post("/api/instances/pf-3/find", json={"query": "x"})
+    assert r.status_code == 404
+
+
 # --------------------------------------------------------------------------- #
 # review/ingest LIST endpoints (the force-START endpoints are deferred)        #
 # --------------------------------------------------------------------------- #
@@ -2484,3 +2564,111 @@ def test_update_start_reports_an_unreachable_github_as_502(monkeypatch):
     r = client.post("/api/update/start", json={})
     assert r.status_code == 502
     assert "could not reach GitHub" in r.json()["error"]
+
+
+def test_pane_find_prepare_is_a_noop_in_tmux_mode(registered, monkeypatch):
+    registered("pf-5", wt="/tmp/x")
+    monkeypatch.setattr(server, "_live_session_name", lambda base: base)
+    monkeypatch.setattr(server._pane_find, "find_mode", lambda name: "tmux")
+    monkeypatch.setattr(
+        server._pane_find, "find", lambda *a: pytest.fail("tmux search needs no index")
+    )
+    r = client.post("/api/instances/pf-5/find", json={"op": "prepare"})
+    assert r.json() == {"status": "ready", "mode": "tmux"}
+
+
+def test_find_index_tick_builds_only_where_it_cant_disturb(registered, monkeypatch):
+    import types
+
+    for t in ("fi-idle", "fi-busy", "fi-typing", "fi-noisy", "fi-watched"):
+        registered(t, wt="/tmp/x")
+    monkeypatch.setattr(
+        server,
+        "ENGINE",
+        types.SimpleNamespace(
+            instances={
+                t: None
+                for t in ("fi-idle", "fi-busy", "fi-typing", "fi-noisy", "fi-watched")
+            }
+        ),
+    )
+    name = server.tmux.to_mindflock_tmux_name
+    monkeypatch.setattr(server, "_live_session_name", lambda base: base)
+    monkeypatch.setattr(server._pane_find, "find_mode", lambda n: "scroll")
+    monkeypatch.setattr(
+        server._events,
+        "sessions_snapshot",
+        lambda: [
+            {"title": "fi-idle", "activity": "idle"},
+            {"title": "fi-busy", "activity": "clarify"},
+            {"title": "fi-typing", "activity": "idle"},
+            {"title": "fi-noisy", "activity": "idle"},
+            {"title": "fi-watched", "activity": "idle"},
+        ],
+    )
+    monkeypatch.setitem(server._HUMAN_INPUT_AT, "fi-typing", server.time.time())
+    still = {name("fi-noisy"): 1.0}
+    monkeypatch.setattr(
+        server._pane_scroll_find, "observe", lambda n: still.get(n, 60.0)
+    )
+    monkeypatch.setattr(server._pane_scroll_find, "needs_index", lambda n: True)
+    attached = {name("fi-watched"): "2"}
+    monkeypatch.setattr(
+        server._pane_find,
+        "_tmux",
+        lambda *a: types.SimpleNamespace(
+            returncode=0, stdout=attached.get(a[3], "1") + "\n"
+        ),
+    )
+    built = []
+    monkeypatch.setattr(
+        server._pane_scroll_find, "background_index", lambda n, notify: built.append(n)
+    )
+    server._find_index_tick()
+    assert built == [name("fi-idle")]
+
+
+def test_human_input_cancels_a_background_find_index(monkeypatch):
+    stopped = []
+    monkeypatch.setattr(server._pane_scroll_find, "cancel_background", stopped.append)
+    server._note_human_input("fi-x")
+    assert stopped == [server.tmux.to_mindflock_tmux_name("fi-x")]
+
+
+def test_cursor_autoadopt_toggle_persists_across_restart(monkeypatch):
+    """Switching auto-adopt off must survive a server restart: the boot value
+    comes from ui.cursor_autoadopt, not just the in-memory flag."""
+    from backend.config import settings as _settings
+
+    original = server._CURSOR_AUTOADOPT_ENABLED
+    monkeypatch.delenv("CS_CURSOR_AUTOADOPT", raising=False)
+    try:
+        client.post("/api/cursor/autoadopt", json={"enabled": False})
+        assert _settings.load_settings().ui.cursor_autoadopt is False
+        assert server._cursor_autoadopt_boot_value() is False
+        client.post("/api/cursor/autoadopt", json={"enabled": True})
+        assert server._cursor_autoadopt_boot_value() is True
+        # the env kill switch still wins over a persisted "on"
+        monkeypatch.setenv("CS_CURSOR_AUTOADOPT", "0")
+        assert server._cursor_autoadopt_boot_value() is False
+    finally:
+        server._CURSOR_AUTOADOPT_ENABLED = original
+
+
+def test_ide_open_on_ticket_overrides_config_toml(monkeypatch, tmp_path):
+    """config.toml says open_cursor = true; the Settings → IDE switch (saved in
+    settings.json) must turn it off, and GET reports the effective value."""
+    from backend.session import provisioned
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[mindflock]\nopen_cursor = true\n", encoding="utf-8")
+    monkeypatch.setattr(provisioned, "_find_config", lambda: cfg)
+
+    assert client.get("/api/ide/open-on-ticket").json()["enabled"] is True
+    r = client.post("/api/ide/open-on-ticket", json={"enabled": False})
+    assert r.json()["enabled"] is False
+    assert client.get("/api/ide/open-on-ticket").json()["enabled"] is False
+    # and provisioning itself honors it
+    assert provisioned.open_ide_on_ticket() is False
+    r = client.post("/api/ide/open-on-ticket", json={"enabled": True})
+    assert r.json()["enabled"] is True

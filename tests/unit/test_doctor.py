@@ -526,6 +526,108 @@ class TestClipboard:
         assert "built-in" in c.detail
 
 
+class TestCacheSeeds:
+    """A seed the refresher stopped publishing sent every ticket workspace
+    through the full testmon suite for a month, logged only as an hourly
+    ERROR in the ingestion log — the doctor has to say it out loud."""
+
+    def _settings(self, monkeypatch, tmp_path, **cache_kw):
+        from backend.session import provisioned
+        from backend.workspace_setup import CacheSeed
+
+        kw = dict(
+            name="testmon",
+            seed_path=tmp_path / "seed",
+            workspace_path=".testmondata",
+            refresh_branch="staging",
+            refresh_interval_seconds=3600,
+            refresh_command="pytest --testmon",
+        )
+        kw.update(cache_kw)
+        settings = provisioned.ProvisionSettings(
+            repo_url="git@x:o/r.git",
+            workspace_dir=tmp_path / "ws",
+            caches=[CacheSeed(**kw)],
+        )
+        monkeypatch.setattr(provisioned, "load_provision_settings", lambda: settings)
+        return settings
+
+    def _age(self, path, seconds):
+        import os
+        import time
+
+        path.write_bytes(b"x")
+        t = time.time() - seconds
+        os.utime(path, (t, t))
+
+    def test_no_caches_is_info(self, monkeypatch):
+        from backend.session import provisioned
+
+        monkeypatch.setattr(provisioned, "load_provision_settings", lambda: None)
+        c = doctor.check_cache_seeds()
+        assert (c.id, c.status) == ("cache-seeds", "info")
+
+    def test_refresh_disabled_cache_is_not_judged(self, monkeypatch, tmp_path):
+        self._settings(monkeypatch, tmp_path, refresh_enabled=False)
+        assert doctor.check_cache_seeds().status == "info"
+
+    def test_fresh_seed_is_ok(self, monkeypatch, tmp_path):
+        s = self._settings(monkeypatch, tmp_path)
+        self._age(s.caches[0].seed_path, 3600)
+        c = doctor.check_cache_seeds()
+        assert c.status == "ok"
+        assert "testmon" in c.detail
+
+    def test_missing_seed_warns(self, monkeypatch, tmp_path):
+        self._settings(monkeypatch, tmp_path)
+        c = doctor.check_cache_seeds()
+        assert c.status == "warn"
+        assert "no seed" in c.detail and c.fix
+
+    def test_stale_seed_warns_with_age(self, monkeypatch, tmp_path):
+        s = self._settings(monkeypatch, tmp_path)
+        self._age(s.caches[0].seed_path, 32 * 86400)
+        c = doctor.check_cache_seeds()
+        assert c.status == "warn"
+        assert "32d old" in c.detail and "full suite" in c.detail
+
+    def test_staleness_has_a_floor_for_short_intervals(self, monkeypatch, tmp_path):
+        # 3 x 60s would flag a single slow refresh; the floor keeps it quiet.
+        s = self._settings(monkeypatch, tmp_path, refresh_interval_seconds=60)
+        self._age(s.caches[0].seed_path, 2 * 3600)
+        assert doctor.check_cache_seeds().status == "ok"
+
+    def test_reports_how_far_behind_the_refresher_is(self, monkeypatch, tmp_path):
+        import subprocess
+
+        def git(cwd, *args):
+            subprocess.run(
+                ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+                cwd=cwd,
+                check=True,
+                capture_output=True,
+            )
+
+        s = self._settings(monkeypatch, tmp_path)
+        self._age(s.caches[0].seed_path, 32 * 86400)
+        forge = tmp_path / "forge"
+        forge.mkdir()
+        git(forge, "init", "-q", "-b", "staging")
+        git(forge, "commit", "-q", "--allow-empty", "-m", "one")
+        refresher = s.workspace_dir / "_testmon_refresher"
+        s.workspace_dir.mkdir()
+        git(s.workspace_dir, "clone", "-q", str(forge), str(refresher))
+        for msg in ("two", "three"):
+            git(forge, "commit", "-q", "--allow-empty", "-m", msg)
+        git(refresher, "fetch", "-q", "origin")
+
+        c = doctor.check_cache_seeds()
+        assert "2 commits behind origin/staging" in c.detail
+
+    def test_registered_for_run_and_fix(self):
+        assert doctor.CHECKS_BY_ID["cache-seeds"] is doctor.check_cache_seeds
+
+
 class TestRunner:
     def test_a_raising_check_degrades_to_warn(self, monkeypatch):
         def boom():

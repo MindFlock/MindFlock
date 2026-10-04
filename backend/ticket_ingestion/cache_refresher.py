@@ -196,9 +196,15 @@ class CacheRefresher:
             err="git fetch",
             timeout=_NETWORK_GIT_TIMEOUT,
         )
+        # -f: the refresh command itself can dirty tracked files (`uv run`
+        # re-locks uv.lock whenever the branch commits a stale lock). A plain
+        # checkout then refuses to move ("would be overwritten") BEFORE the
+        # reset below can discard them, wedging the refresher on that commit
+        # forever while every new workspace is seeded from an ever-staler cache.
         await self._check_run(
             "git",
             "checkout",
+            "-f",
             "-B",
             branch,
             f"origin/{branch}",

@@ -459,7 +459,23 @@ function makeTerm(
       /* buffer API moved */
     }
   };
+  // The agent TUI's own pinned-prompt row ("❯ …", drawn at the top while
+  // scrolled back) is mirrored by the pane's prompt bar, so the terminal's
+  // copy is hidden. Decided HERE, synchronously: xterm fires onRender inside
+  // the same animation frame it painted the rows in, before the browser
+  // shows it — so the row is never on screen, not even for the frame or two
+  // a React-state mask (throttled via onTopRow) takes to catch up on a jump.
+  const agent = wsPath === "/terminal";
   term.onRender(() => {
+    if (agent) {
+      try {
+        const buf = term.buffer.active;
+        const top = buf.getLine(buf.viewportY)?.translateToString(true) ?? "";
+        container.classList.toggle("tui-pinned-row", /^\s*[❯>]\s+\S/.test(top));
+      } catch {
+        /* buffer API moved */
+      }
+    }
     const now = performance.now();
     clearTimeout(topRowTimer);
     if (now - topRowAt > 150) {
@@ -686,6 +702,46 @@ if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) resyncAll();
   });
+}
+
+/** Lay a still snapshot over a session's terminal (a deep clone of its DOM
+ * — xterm's DOM renderer styles hang off a class on the terminal element, so
+ * the copy looks identical) while the real one changes underneath: the
+ * scroll-mode find moves the agent app's view through a tall window and a
+ * sweep, and none of that should be seen. Returns the thaw function, which
+ * waits until xterm has taken every byte that arrived meanwhile and painted
+ * it, so the reader sees one change — straight to the landing. */
+export function freezeTerm(title: string, kind: TermKind): () => void {
+  const h = peekTerm(title, kind);
+  const el = h?.term.element;
+  const host = h?.container.parentElement;
+  if (!h || !el || !host) return () => {};
+  const snap = el.cloneNode(true) as HTMLElement;
+  const er = el.getBoundingClientRect();
+  const hr = host.getBoundingClientRect();
+  Object.assign(snap.style, {
+    position: "absolute",
+    left: `${er.left - hr.left}px`,
+    top: `${er.top - hr.top}px`,
+    width: `${er.width}px`,
+    height: `${er.height}px`,
+    zIndex: "3",
+    pointerEvents: "none",
+  });
+  snap.setAttribute("aria-hidden", "true");
+  snap.querySelectorAll("textarea").forEach((t) => t.remove());
+  // The copy sits outside .term-container, so the rule hiding the TUI's
+  // pinned-prompt row (.tui-pinned-row) doesn't reach it — hide it on the
+  // copy itself, or the snapshot shows the row for as long as it's up.
+  if (h.container.classList.contains("tui-pinned-row")) {
+    const first = snap.querySelector(".xterm-rows > div") as HTMLElement | null;
+    if (first) first.style.visibility = "hidden";
+  }
+  host.appendChild(snap);
+  return () => {
+    // Everything written up to now is parsed, then one more frame paints it.
+    h.term.write("", () => requestAnimationFrame(() => snap.remove()));
+  };
 }
 
 /** Focus the logical terminal for a session (agent pane by default). */

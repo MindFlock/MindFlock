@@ -43,7 +43,8 @@ from .base import SECRET_MASK, Addon, AppContext, FrontendDescriptor
 
 #: Event → notification rules both channels apply. ``old``/``new`` of ``None``
 #: match any value; ``{session}`` in title/body is replaced with the envelope's
-#: session title. Each rule has a stable ``id``, a short ``label`` for the
+#: session title and ``{detail}`` with the envelope's ``data.detail`` (a
+#: sentence the emitter wrote for humans; empty when the event has none). Each rule has a stable ``id``, a short ``label`` for the
 #: settings UI, and a ``default_enabled`` flag: default-on rules are opt-out
 #: (muted via settings.notifications.muted_rules); default-off rules are opt-in
 #: (turned on via settings.notifications.enabled_rules) because they're noisy.
@@ -271,8 +272,9 @@ NOTIFY_RULES: List[dict] = [
         #
         # The envelope carries ``failed`` and ``needs_you``, which is what lets
         # the in-app toast say "8 passed, 3 need your eyes". A push cannot: the
-        # templates fill ``{session}`` and nothing else. So the body says where
-        # the numbers are rather than inventing them.
+        # templates fill ``{session}`` and ``{detail}``, and this event writes
+        # no ``detail``. So the body says where the numbers are rather than
+        # inventing them.
         "id": "verify_run_finished",
         "label": "An agent finishes checking a verification plan",
         "event": "session.test_plan_checked",
@@ -301,6 +303,62 @@ NOTIFY_RULES: List[dict] = [
         "default_enabled": False,
         "priority": 3,
         "tags": ["warning"],
+    },
+    {
+        # Zones: the guard DID its job — the agent tried to edit a red-zone
+        # path, or (green mode) a path outside its green scope, and was
+        # refused (`data.kind` says which; `detail` names it). Opt-in: a block is the system working, and a
+        # denied agent usually re-plans on its own. The monitor already dedupes
+        # to once per (session, zone) per work cycle, so turning it on is one
+        # push per zone per turn, not one per attempt.
+        "id": "red_zone_blocked",
+        "label": "Zone guard blocked an edit (red zone / outside green)",
+        "event": "session.red_zone_blocked",
+        "old": None,
+        "new": None,
+        "title": "{session}: zone guard held",
+        "body": "MindFlock {detail}.",
+        "default_enabled": False,
+        "priority": 3,
+        "tags": ["no_entry"],
+    },
+    {
+        # …and the case the guard could NOT stop: a red-zone file — or, in
+        # green mode, a file outside the scope — really changed
+        # (a shell write past the heuristic, a detect-only CLI, an edit made
+        # before the zone existed is excluded — that is seeded, not announced).
+        # Default-on: this is the "go look before it gets pushed" moment.
+        #
+        # The body claims nothing about pushing on its own: the push gate
+        # reads COMMITTED changes only and a git-ignored file never leaves
+        # the machine, so the monitor's `detail` ends with what THIS breach
+        # does ("pushing is blocked until it is reverted" / "committing it
+        # would block pushes, PRs and merges" / "git-ignored, so never
+        # pushed; restore it by hand"); `data.blocks_push` says the same.
+        "id": "red_zone_breached",
+        "label": "Zone breached (red zone / outside green)",
+        "event": "session.red_zone_breached",
+        "old": None,
+        "new": None,
+        "title": "{session}: zone breached",
+        "body": "The agent {detail}.",
+        "default_enabled": True,
+        "priority": 4,
+        "tags": ["warning"],
+    },
+    {
+        # The protection itself was interfered with (guard file, hook config,
+        # zone store). Default-on and loud: whatever did it, a human should know.
+        "id": "red_zone_tampered",
+        "label": "Red zone guard tampered",
+        "event": "session.red_zone_tampered",
+        "old": None,
+        "new": None,
+        "title": "{session}: red-zone guard tampered",
+        "body": "{detail}.",
+        "default_enabled": True,
+        "priority": 4,
+        "tags": ["rotating_light"],
     },
 ]
 
@@ -409,11 +467,20 @@ def _fill(template: str, envelope: dict) -> str:
       notification against a rail that agrees with it nowhere.
 
     The raw title remains the last resort, which is also the right answer for a
-    hand-made session: that IS its name."""
+    hand-made session: that IS its name.
+
+    ``{detail}`` → ``data.detail``, the human sentence an emitter wrote for
+    exactly this purpose (the red-zone events: "blocked 3 edits to
+    config.toml"); empty when the event carries none."""
     title = str(envelope.get("session") or "")
-    return str(template or "").replace(
-        "{session}", _aliases.display_name(title, _session_branch(title)) or "session"
-    )
+    data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+    out = str(template or "")
+    if "{session}" in out:
+        out = out.replace(
+            "{session}",
+            _aliases.display_name(title, _session_branch(title)) or "session",
+        )
+    return out.replace("{detail}", str(data.get("detail") or ""))
 
 
 class NotifyAddon(Addon):

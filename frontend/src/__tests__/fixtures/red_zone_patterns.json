@@ -1,0 +1,212 @@
+{
+  "about": "Shared red-zone pattern fixture. Each case is a user glob, the regex SOURCE that SPEC §1's compile rules produce for it (valid in both Python re and JS RegExp), and paths it must / must not match. Read by frontend/src/__tests__/codemap.test.ts (new RegExp) and tests/unit/test_frontend_codemap.py (Python re + backend.config.red_zones). Only cases whose behaviour is unambiguous under the spec are listed.",
+  "cases": [
+    {
+      "pattern": "config.toml",
+      "re": "^(?:.*/)?config\\.toml(?:/.*)?$",
+      "match": [
+        "config.toml",
+        "app/config.toml",
+        "a/b/c/config.toml"
+      ],
+      "miss": [
+        "config.tomlx",
+        "myconfig.toml",
+        "config.toml.bak",
+        "Config.toml",
+        "configxtoml"
+      ]
+    },
+    {
+      "pattern": "backend/athena",
+      "re": "^backend\\/athena(?:/.*)?$",
+      "match": [
+        "backend/athena",
+        "backend/athena/x.py",
+        "backend/athena/a/b.py"
+      ],
+      "miss": [
+        "x/backend/athena/y.py",
+        "backend/athenaeum.py",
+        "backend/athena.py",
+        "backend"
+      ]
+    },
+    {
+      "pattern": "/secrets",
+      "re": "^secrets(?:/.*)?$",
+      "match": [
+        "secrets",
+        "secrets/key.pem"
+      ],
+      "miss": [
+        "app/secrets/key.pem",
+        "secretsx"
+      ]
+    },
+    {
+      "pattern": "athena/",
+      "re": "^(?:.*/)?athena(?:/.*)?$",
+      "match": [
+        "athena/a.py",
+        "backend/athena/b.py",
+        "athena"
+      ],
+      "miss": [
+        "athena.py",
+        "backend/athenax/b.py"
+      ]
+    },
+    {
+      "pattern": "*.pem",
+      "re": "^(?:.*/)?[^/]*\\.pem(?:/.*)?$",
+      "match": [
+        "key.pem",
+        "a/b/key.pem",
+        ".pem"
+      ],
+      "miss": [
+        "key.pem.txt",
+        "keypem",
+        "a/keypem"
+      ]
+    },
+    {
+      "pattern": "*athena*",
+      "re": "^(?:.*/)?[^/]*athena[^/]*(?:/.*)?$",
+      "match": [
+        "athena",
+        "backend/athena/x.py",
+        "src/athena_client.py",
+        "old-athena-v1/a.txt"
+      ],
+      "miss": [
+        "backend/ath/ena.py",
+        "zeus.py"
+      ]
+    },
+    {
+      "pattern": "backend/**/secret.py",
+      "re": "^backend\\/(?:.*/)?secret\\.py(?:/.*)?$",
+      "match": [
+        "backend/secret.py",
+        "backend/a/secret.py",
+        "backend/a/b/secret.py"
+      ],
+      "miss": [
+        "other/a/secret.py",
+        "backend/a/secret.pyc",
+        "xbackend/secret.py"
+      ]
+    },
+    {
+      "pattern": "file?.txt",
+      "re": "^(?:.*/)?file[^/]\\.txt(?:/.*)?$",
+      "match": [
+        "file1.txt",
+        "a/fileA.txt"
+      ],
+      "miss": [
+        "file12.txt",
+        "file.txt",
+        "a/file/.txt"
+      ]
+    },
+    {
+      "pattern": "data[0-9].csv",
+      "re": "^(?:.*/)?data[0-9]\\.csv(?:/.*)?$",
+      "match": [
+        "data1.csv",
+        "x/data7.csv"
+      ],
+      "miss": [
+        "dataA.csv",
+        "data10.csv"
+      ]
+    },
+    {
+      "pattern": "log[!ab].txt",
+      "re": "^(?:.*/)?log[^ab]\\.txt(?:/.*)?$",
+      "match": [
+        "logc.txt",
+        "d/log1.txt"
+      ],
+      "miss": [
+        "loga.txt",
+        "logb.txt"
+      ]
+    },
+    {
+      "pattern": "docs/a+b (1).md",
+      "re": "^docs\\/a\\+b \\(1\\)\\.md(?:/.*)?$",
+      "match": [
+        "docs/a+b (1).md"
+      ],
+      "miss": [
+        "docs/aab (1).md",
+        "docs/a+b 1.md",
+        "x/docs/a+b (1).md"
+      ]
+    },
+    {
+      "pattern": "**/cfg",
+      "re": "^(?:.*/)?cfg(?:/.*)?$",
+      "match": [
+        "cfg",
+        "a/cfg",
+        "a/b/cfg/x.toml"
+      ],
+      "miss": [
+        "acfg",
+        "a/cfgx"
+      ]
+    },
+    {
+      "pattern": "[]x]",
+      "re": "^(?:.*/)?[\\]x](?:/.*)?$",
+      "match": [
+        "]",
+        "x",
+        "a/x"
+      ],
+      "miss": [
+        "y"
+      ]
+    },
+    {
+      "pattern": "[!]x]",
+      "re": "^(?:.*/)?[^\\]x](?:/.*)?$",
+      "match": [
+        "y"
+      ],
+      "miss": [
+        "x",
+        "]"
+      ]
+    },
+    {
+      "pattern": "a[]]b",
+      "re": "^(?:.*/)?a[\\]]b(?:/.*)?$",
+      "match": [
+        "a]b"
+      ],
+      "miss": [
+        "ab",
+        "a]]b"
+      ]
+    }
+  ],
+  "ci": [
+    {
+      "pattern": "config.toml",
+      "re": "^(?:.*/)?config\\.toml(?:/.*)?$",
+      "match": [
+        "Config.TOML",
+        "APP/config.toml"
+      ],
+      "miss": [
+        "config.tomlx"
+      ]
+    }
+  ]
+}

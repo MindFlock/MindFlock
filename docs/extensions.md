@@ -54,6 +54,9 @@ Core vocabulary (emitted by the server):
 | `session.turn_ended` | A session's work really is over — corroborated work, idle ever since, nothing queued | `data: {idle_for}` |
 | `session.pr_state_changed` | The branch's PR genuinely moved | `"" · OPEN · MERGED · CLOSED`, `data: {url}` |
 | `session.pr_review_changed` | A reviewer decided on the branch's open PR | `"" · approved · changes_requested` |
+| `session.red_zone_blocked` | The red-zone guard denied the agent an edit — or a push/PR while zoned files are committed (`push: true`) — once per session and zone (or push) per work cycle | `data: {count, zone_ids, patterns, paths, tool, push, detail}` |
+| `session.red_zone_breached` | A file inside a red zone actually changed (verified against git / the content baseline) — once per worktree and path, seeded silently on first sight | `data: {paths, patterns, total, blocks_push, detail}` |
+| `session.red_zone_tampered` | The guard file, the hook config or the zone store was interfered with (`session` may be `""` for a store change) | `data: {what: guard·hooks·store, detail}` |
 
 Addon-originated events (see `AppContext.emit`) live under the `addon.`
 namespace, e.g. `addon.notify.ping`. Notable transitions:

@@ -117,6 +117,15 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       acts.push({ label: `Open in ${ideName} — ${t}`, hint: "Ctrl+K O", run: () => ideSession(t) });
       acts.push({ label: `Duplicate session — ${t}`, hint: "Ctrl+K D", run: () => copySession(t) });
       acts.push({ label: `Hide window — ${t}`, hint: "Ctrl+K H", run: () => hideSession(t) });
+      if (caps.git)
+        acts.push({
+          label: `Code map — ${t}`,
+          hint: "Ctrl+K M",
+          run: () => {
+            selectSession(t);
+            ui.setLastTab(t, "map");
+          },
+        });
       // Merge is deliberately unbound (most consequential action) — palette or
       // sidebar menu only, and mergeSession() itself confirms.
       if (caps.git)
@@ -146,6 +155,12 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       hint: "Alt+V",
       run: () => ui.openDialogFor("verify"),
     });
+    if (caps.git)
+      acts.push({
+        label: "Zones…",
+        hint: "keep-out paths per repo, and derived outputs",
+        run: () => ui.openDialogFor("red-zones"),
+      });
     acts.push({ label: "Open Settings", run: () => ui.openDialogFor("settings") });
     acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
     acts.push({ label: "Open Setup checklist", run: () => ui.openDialogFor("setup") });

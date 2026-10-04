@@ -155,6 +155,251 @@ export interface Instance {
    * whose session does not exist yet (it is still cloning). The row shows as
    * provisioning; there is nothing to act on until it becomes real. */
   pending?: boolean;
+  /** Red-zone summary for the rail chip (backend/web/core/red_zone_monitor
+   * .summary). null/absent = no zones and nothing to say. */
+  redzone?: RedZoneSummary | null;
+}
+
+// --- Code map + red zones (docs/web-api.md "Code map & red zones") ----------
+
+/** One red zone as the effective-zones routes return it. `re` is a regex
+ * source valid in both Python and JS (red_zones.compile_pattern). */
+export interface RedZone {
+  id: string;
+  pattern: string;
+  name: string;
+  note?: string;
+  created?: number;
+  scope?: "repo" | "worktree" | string;
+  re?: string;
+  /** A repo zone allowed ("waived") in this worktree: drawn, not enforced. */
+  waived?: boolean;
+  /** "red" = keep out (the v2 zone, the default when absent); "green" = only
+   * here — while any enforced green zone exists, everything outside every
+   * green zone is read-only. Green zones are worktree-scope only. */
+  kind?: "red" | "green" | string;
+}
+
+export interface RedZoneSummary {
+  zones: number;
+  breaches: number;
+  last_block_ts: number | null;
+  guard: "guarded" | "arming" | "detect" | "off" | "none" | string;
+  /** v3: "green" while the worktree has an enforced green zone. */
+  mode?: "green" | "red" | null | string;
+}
+
+export interface RepoRef {
+  id: string;
+  label: string;
+}
+
+/** GET /api/instances/{title}/code-map. `files` rows are `[rel, size, flags]`
+ * (flag 1 = zone-matched ignored file, 2 = test file); `edges` are
+ * `[src, dst]` indices into `files` meaning "src imports dst". */
+export interface CodeMapSnapshot {
+  root: string;
+  repo: RepoRef | null;
+  fingerprint: string | null;
+  files: Array<[string, number, number]>;
+  truncated: boolean;
+  edges: Array<[number, number]>;
+  graph_partial: boolean;
+  langs: Record<string, number>;
+}
+
+export interface ChangedFile {
+  path: string;
+  status: string;
+  added: number;
+  removed: number;
+}
+
+/** One tool-feed record (backend/providers/_tool_hook_src.py), with writes and
+ * reads made repo-relative by the live route. */
+export interface FeedRecord {
+  v?: number;
+  ts: number;
+  ev: "pre" | "post" | "fail" | string;
+  tool: string;
+  kind: "edit" | "read" | "bash" | "plan" | "agent" | "mcp" | "other" | string;
+  id?: string;
+  /** set on a call made INSIDE a subagent: its agent_id (and agent_type) —
+   * the Map draws each subagent as its own bird */
+  agent?: string | null;
+  agent_type?: string;
+  /** the parent's Agent / Task call: its description and subagent_type */
+  desc?: string;
+  atype?: string;
+  writes?: string[];
+  reads?: string[];
+  cmd?: string;
+  /** A guard refusal. `push` marks a refused `git push` / `gh pr` / GitHub
+   * push tool (the branch carries a breach): `path` is then the first breached
+   * file, `pattern` null — the refusal is about the branch, not that file. */
+  deny?: {
+    path: string;
+    pattern: string | null;
+    name?: string;
+    zone_id?: string | null;
+    reason?: string;
+    push?: boolean;
+    /** v3: "green" = refused because the path is outside the green zone(s)
+     * (pattern is then "outside green"); absent/"red" = a keep-out zone. */
+    kind?: "red" | "green" | string;
+  } | null;
+  /** v3: reads outside the green zone(s) — advisory, never denied ("peeked
+   * outside scope" in Activity). */
+  peek?: string[] | null;
+  /** v3 green backstop: new untracked files outside scope (soft flag). */
+  artifact?: string[] | null;
+  breach?: Array<{ path: string; pattern: string; kind?: string }> | null;
+  plan?: string;
+  err?: string;
+  intr?: boolean;
+}
+
+export interface PlanItem {
+  path: string;
+  intent: string;
+  new: boolean;
+  /** v3: the item is outside the worktree's green zone(s). */
+  outside?: boolean;
+}
+
+export interface CodeMapPlan {
+  source: "declared" | "exitplan" | null | string;
+  ts: number | null;
+  items: PlanItem[];
+  thread?: string | null;
+}
+
+export interface RedZoneBreach {
+  path: string;
+  /** The red pattern, or "outside green" for a green breach. */
+  pattern: string;
+  /** null for a green breach (it is outside every zone, not inside one). */
+  zone_id: string | null;
+  committed: boolean;
+  kind?: "red" | "green" | string;
+}
+
+/** One companion rule (v3): a path the agent may write although it is outside
+ * the green zone(s) — lockfiles, snapshots, tests importing the zone, the
+ * repo's declared derived outputs. Allowed, flagged amber, never a breach.
+ * `re` is a regex source like RedZone.re; a bare string is an exact path. */
+export interface CompanionRule {
+  pattern?: string;
+  re?: string;
+  source?: string;
+}
+
+export interface OtherEdit {
+  session: string;
+  path: string;
+  ts: number;
+}
+
+/** GET /api/instances/{title}/code-map/live?since=. */
+export interface CodeMapLive {
+  now: number;
+  fingerprint: string | null;
+  repo: RepoRef | null;
+  changed: ChangedFile[];
+  feed: FeedRecord[];
+  plan: CodeMapPlan | null;
+  off_plan: string[];
+  zones: RedZone[];
+  breaches: RedZoneBreach[];
+  /** `state` picks the pill's label; `detail` is the server's one-sentence
+   * explanation (its tooltip). */
+  guard: { state: string; detail?: string; hard: boolean; mode?: "green" | "red" | null | string } | null;
+  activity: string;
+  plan_supported: boolean;
+  others: OtherEdit[];
+  /** The worktree's filesystem is case-insensitive (macOS/Windows): the guard
+   * matches zones ignoring case, so the Map must too. Absent on older servers
+   * (treated as false). */
+  ci?: boolean;
+  /** v3: "green" while an enforced green zone exists, "red" with only red
+   * zones, null with none. */
+  mode?: "green" | "red" | null | string;
+  /** v3: paths already changed outside the green zone(s) when it was added,
+   * exempt from breaching while their content is unchanged. The server may
+   * send `{rel: blob_sha}` or a list of paths. */
+  exempt?: Record<string, string> | string[] | null;
+  /** v3: companion rules (see CompanionRule) and exact companion files. */
+  companions?: Array<CompanionRule | string> | null;
+  companion_files?: string[] | null;
+}
+
+/** POST /api/instances/{title}/red-zones/preview. The green-only fields are
+ * v3 (`kind: "green"` in the request). */
+export interface RedZonePreview {
+  re: string;
+  count: number;
+  sample: string[];
+  ignored_count: number;
+  changed: string[];
+  writable_files?: number;
+  changed_outside?: string[] | number;
+  committed_outside?: number;
+  roots?: string[];
+  /** The typed green pattern is unanchored (matches at any depth). */
+  unanchored?: boolean;
+  /** Its anchored twin, offered as a one-click fix (null when no single
+   * root matches). */
+  anchored?: string | null;
+  warnings?: string[];
+}
+
+// --- File cards + search (backend/web/core/code_outline.py) ----------------
+
+export interface OutlineSymbol {
+  name: string;
+  kind: string;
+  line: number;
+  end?: number;
+  public: boolean;
+  sig: string;
+  parent?: string | null;
+  children?: OutlineSymbol[];
+}
+
+export interface EntryPoint {
+  kind: "http" | "cli" | "event" | "main" | string;
+  method: string;
+  route: string;
+  line: number;
+  handler: string;
+  path?: string;
+  /** File view only: the route's lines changed vs the fork point. */
+  changed?: boolean;
+}
+
+/** GET /api/instances/{title}/code-map/file?path=. */
+export interface FileView {
+  path: string;
+  lang: string;
+  loc: number;
+  symbols: OutlineSymbol[];
+  imports: { internal: Array<{ path: string; names: string[] }>; external: string[] };
+  entry: EntryPoint[];
+  used_by: Array<{ path: string; names: string[] }>;
+  changed_lines: Array<[number, number]>;
+  changed_symbols: string[];
+  zones: { red: boolean; green: boolean | null };
+  partial?: boolean;
+  /** Test files that import this one (kept out of used_by). */
+  tested_by?: string[];
+}
+
+export interface SearchItem {
+  path: string;
+  name: string;
+  kind: string;
+  line: number;
+  score?: number;
 }
 
 export interface Caps {
@@ -343,6 +588,9 @@ export interface TicketingCatalogField {
 export interface TicketingCatalogEntry {
   id: string;
   label: string;
+  /** Branch/slug prefix (`sc` for Shortcut). A new source's `id` is seeded from
+   * it — the id IS the branch prefix (`feature/<id>-<ticket>/…`). */
+  slug_prefix?: string;
   blurb?: string;
   fields: TicketingCatalogField[];
 }

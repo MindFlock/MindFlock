@@ -180,11 +180,20 @@ def _session_fork_point(inst, wt: str) -> str:
     """The commit the session's work is measured against: the merge-base of
     HEAD and the K1-resolved per-session base branch (``origin/<base>`` first,
     then local ``<base>``), falling back to the worktree's recorded base
-    commit, then ``HEAD``. Shared by the header diff stat and the Diff tab so
-    the two always agree on the baseline.
+    commit, then ``HEAD``. Shared by the header diff stat, the Diff tab and
+    the red-zone push gate, so all three agree on the baseline.
+
+    FULL REFS (``refs/remotes/origin/<base>``, ``refs/heads/<base>``), never
+    the short names: git resolves ``origin/main`` through ``refs/tags/`` and
+    ``refs/heads/`` BEFORE ``refs/remotes/``, so a tag the agent names
+    ``origin/main`` pointed at HEAD would make the fork point HEAD itself —
+    an empty committed range, and the push gate waves the branch through.
     """
-    base = _server()._session_base_branch(inst)
-    for ref in ("origin/" + base, base):
+    base = str(_server()._session_base_branch(inst) or "").strip()
+    refs = []
+    if base and not base.startswith("-"):
+        refs = ["refs/remotes/origin/" + base, "refs/heads/" + base]
+    for ref in refs:
         cp = subprocess.run(
             ["git", "-C", wt, "merge-base", "HEAD", ref],
             stdout=subprocess.PIPE,
@@ -366,4 +375,19 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         "has_origin": bool(
             not cheap and not workspace_missing and srv._has_origin(folder)
         ),
+        # Zones: {"zones", "breaches", "last_block_ts", "guard", "mode"} for
+        # the rail chip ("mode": "green" while a green scope is in force),
+        # or null when there is nothing to say. An in-memory read of
+        # what the red-zone loop last computed — never a probe on this path.
+        "redzone": _red_zone_summary(inst.Title),
     }
+
+
+def _red_zone_summary(title: str):
+    """``red_zone_monitor.summary(title)``, never raising into the row build."""
+    try:
+        from backend.web.core import red_zone_monitor
+
+        return red_zone_monitor.summary(title)
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None

@@ -165,7 +165,12 @@ log_level = "INFO"                # REQUIRED
 # Seeding NEVER overwrites a file already present in the workspace. With a
 # refresh_command, a background refresher rebuilds the artifact against
 # refresh_branch every refresh_interval_seconds and publishes it back to
-# seed_path.
+# seed_path. The refresher runs inside ticket ingestion; `mindflock doctor`
+# (check `cache-seeds`) warns once a seed is older than 3 intervals (min 6h)
+# and says how far the refresher's checkout is behind refresh_branch. For
+# testmon, a stale seed means the FULL suite: testmon re-runs everything when
+# any installed package's minor version differs from the seed's (list volatile
+# deps under pytest's `testmon_ignore_dependencies` ini to exempt them).
 # [[workspace.cache]]
 # name = "testmon"
 # seed_path = "./.cache/testmondata"       # host-side warm copy
@@ -235,7 +240,7 @@ these fields and a "Test connection" button that auto-fills `member_id`.
 | Provider | Required keys | Notes |
 |---|---|---|
 | `github_issues` | **none** | The zero-config on-ramp, and the catalog's first entry. `api_token` falls back to the GitHub connection (`[github].token` / `$GH_TOKEN` / `gh auth token`); `project` falls back to the source's `repo_url`, then `[repository].url`, then this checkout's `origin`. No workflow states. |
-| `shortcut` | `api_token`, `member_id` | `workflow_state` optional (workflow-state id; integer `workflow_state_id` also works), `start_state` optional. Archived stories, and stories under an archived epic, are always excluded — see below. |
+| `shortcut` | `api_token`, `member_id` | `workflow_state` optional (workflow-state id; integer `workflow_state_id` also works), `ingest_labels` optional (see below), `start_state` optional. Archived stories, and stories under an archived epic, are always excluded — see below. |
 | `jira` | `base_url`, `email`, `api_token` | Jira Cloud, `assignee = currentUser()`. `member_id` (accountId) optional. `workflow_state` optional (status id → `status = <id>`), `start_state` optional. |
 | `linear` | `api_token` | GraphQL `viewer.assignedIssues`. `workflow_state` optional (state id), `start_state` optional. |
 | `asana` | `api_token`, `project` (workspace gid) | Tasks with `assignee = me`. No workflow states. |
@@ -252,6 +257,19 @@ of type **`state_one`** — a single destination, as against the multi-select
 filter `workflow_state` renders as — and it is only offered by the providers
 that can write a state back.
 
+**Shortcut can also gate ingestion on a label.** `ingest_labels` takes one or
+more comma-separated label names (`ingest_labels = "brainflight"`); a story is
+only auto-ingested once it carries at least one of them, matched
+case-insensitively. It stacks with `workflow_state` (in an ingest state AND
+labelled), so it is the opt-in for a board where every story sits in the same
+state for everyone and the label is how you hand one ticket to MindFlock. It
+also bounds `assignee_scope = "anyone"` on its own — "anyone's stories labelled
+`qa`" is as narrow as "anyone's stories in Ready for QA". The Assigned tickets
+panel still lists unlabelled stories, marked *missing an ingest label*, and they
+can still be started by hand. A story filed from MindFlock (New → **Ticket**)
+gets the first label, so the source can see it. Other providers reject the key
+at load time.
+
 **`project` has a second job: it is the FILING target.** Reading tickets works
 without it on three of the five providers; filing one (New → **Ticket**, which
 every provider supports) does not, because a tracker has no workspace-level
@@ -263,7 +281,7 @@ ticket to create:
 | `linear` | The **team key** (`ENG`), which MindFlock translates to the team id `issueCreate` wants. Optional only in a **single-team** workspace, where there is exactly one right answer; with two or more teams it is required. |
 | `asana` | The **workspace gid**, which this provider already required for reading. |
 | `github_issues` | Nothing new — it resolves through the existing repo ladder (`project` → `repo_url` → `[repository].url` → this checkout's `origin`). |
-| `shortcut` | Nothing — a new story lands in the **first state this source ingests from** (`workflow_state`), or Shortcut's own default when the source ingests from everywhere. |
+| `shortcut` | Nothing — a new story lands in the **first state this source ingests from** (`workflow_state`), or Shortcut's own default when the source ingests from everywhere, carrying the first `ingest_labels` label when one is set. |
 
 **`member_id` becomes the assignee of a filed ticket** on every provider that
 supports it. That is not a nicety: `search_assigned` looks tickets up *by*
@@ -271,8 +289,8 @@ assignee, so a ticket filed onto nobody is one the source can never list again �
 and never auto-ingest. (GitHub's assignment is best effort: a token without push
 rights makes GitHub drop the field silently, and the issue is still filed.)
 
-**Shortcut also filters archived work, implicitly.** Alongside `workflow_state`
-and `assignee_scope`, a Shortcut source silently narrows to what Shortcut's own
+**Shortcut also filters archived work, implicitly.** Alongside `workflow_state`,
+`ingest_labels` and `assignee_scope`, a Shortcut source silently narrows to what Shortcut's own
 boards show: archived stories, and stories under an archived epic, are neither
 ingested nor listed, so an otherwise-matching `workflow_state` will ingest less
 than the state's own count suggests. **No setting disables it**, it applies to
@@ -468,6 +486,19 @@ server merges on save so multiple processes can share it.
 - `worktrees/` — worktree-mode session directories,
   `<sanitized-branch>_<hex-timestamp>`.
 - `recently_closed.json` — closed-but-reopenable sessions (cap 50).
+- `red_zones.json` — red zones per repo (keyed by the normalized `origin`) and
+  per worktree, per-worktree waivers, each repo's Plan-first flag (applied
+  to intake starts of CLIs that support plans) and companion patterns
+  ("derived outputs" writable outside a green scope), plus per-worktree GREEN
+  zones (`worktrees[wt].green` — worktree scope only, under their own key so an
+  older build never reads them as red) and their exemptions
+  (`green_exempt: {rel: "sha [sha …]"}` — work already changed outside the
+  scope when it was set, with every blob it had then: working tree, `HEAD`,
+  `origin/<branch>`). A worktree's own zones go when
+  its folder is removed — not when an in-place session on it is deleted. Written
+  atomically by the web routes; an edit made outside MindFlock is reported as
+  `session.red_zone_tampered` (never reverted). Override with
+  `$MINDFLOCK_RED_ZONES_FILE`. See [web-api.md](web-api.md#code-map--red-zones).
 - `run/<tmux-session>.env` — the credentials one running session needs, as
   sourceable `export` lines (mode 0600, dir 0700). Written at launch, replaced
   on every relaunch, removed when the session closes; absent for a session with
@@ -493,6 +524,9 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `scroll-speed` | Terminal wheel speed, 1–20 (also settable in the UI) |
 | `.exit-markers/<session>.code` | Last exit code per session (clean-quit vs crash detection) |
 | `prompts/` | Generated ticket prompts (pruned after 1 h) |
+| `.red-zones/<sha1>.json` | Per-worktree zone guard files the tool hook reads at fire time (`v: 2`: red `rules`/`files`/`dirs`/`sym`, green `green_rules` + `companions`; GC'd a day after their worktree stops being live) |
+| `.tool-feed/.snap/<tool_use_id>.json` | The Bash backstop's pre-command snapshot (zoned-file stats + the `git status` dirty set), consumed by the post hook; stale ones GC'd hourly |
+| `.tool-feed/<session>.jsonl` | Per-session tool feed the hook appends to — the Code Map's live trail; trimmed to its tail past 2 MB. A feed no registered session owns (a manual `claude` in a checkout that keeps MindFlock's hooks, the `_sh` shell pane) is trimmed too and deleted after a day without writes |
 
 ## Environment variables
 
@@ -546,6 +580,9 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_PROMPT_QUEUE_FILE` | `~/.mindflock/prompt_queues.json` | Path of the per-session prompt-queue store (queued prompts, loop/enabled flags) |
 | `MINDFLOCK_PORTS_FILE` | `~/.mindflock/ports.json` | Path of the session port-block allocation store (the O4 `PORT`/`MINDFLOCK_PORT_BASE` blocks) |
 | `MINDFLOCK_WINDOW_REFRESH_FILE` | `~/.mindflock/window_refresh.json` | Path of the scheduled window-refresh keepalive's config + per-provider `last_fired` state |
+| `MINDFLOCK_RED_ZONES_FILE` | `~/.mindflock/red_zones.json` | Path of the zone store (per-repo and per-worktree red zones, per-worktree green zones + exemptions, waivers, the per-repo Plan-first flag and companion patterns) — see [web-api.md](web-api.md#code-map--red-zones) |
+| `MINDFLOCK_RED_ZONE_DIR` | `~/.mindflock-assistant/.red-zones` | Per-worktree guard files the red-zone hook reads **at fire time** (resolved in the firing CLI's environment, like the marker dirs). Follows `MINDFLOCK_ASSISTANT_DIR` |
+| `MINDFLOCK_TOOL_FEED_DIR` | `~/.mindflock-assistant/.tool-feed` | Per-session tool-feed `.jsonl` files the hook appends to (the Map's live trail, blocked/breach records). Follows `MINDFLOCK_ASSISTANT_DIR` |
 | `MINDFLOCK_SESSION_NAME` | — | Read by the injected CLI hook commands at fire time to attribute activity/thread markers to a MindFlock window; unset, the hooks fall back to the live tmux `#{session_name}` |
 | `MINDFLOCK_PROVIDER_BIN_<NAME>` | — | Per-provider binary override (provider name uppercased, non-alphanumerics → `_`; e.g. `MINDFLOCK_PROVIDER_BIN_CLAUDE=/opt/claude`). Wins over Settings → `coding_cli.binary_paths` and the provider TOML's `binary_path` |
 | `MINDFLOCK_ACTIVITY_MARKER_DIR` | `~/.mindflock-assistant/.activity-markers` | Per-session `{state, ts}` markers the CLI activity hooks write (working/idle/clarify detection — Claude, Codex, and opt-in TOML providers; see [providers.md](providers.md)). Read by the hook **at fire-time from the firing CLI's environment**, not by the server at install time — so a sandboxed CLI (redirected `HOME`) writes into its own sandbox instead of poisoning the shared hooks file's path for cohabiting sessions. Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |

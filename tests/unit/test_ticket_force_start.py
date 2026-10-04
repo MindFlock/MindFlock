@@ -31,6 +31,20 @@ def _story(**over):
 MEMBER_IDS = ["member-123"]
 
 
+def test_missing_ingest_label_is_a_skip_reason():
+    unlabelled = ticket_start.skip_reasons(
+        _story(), {}, set(), set(), MEMBER_IDS, ingest_labels=["brainflight"]
+    )
+    assert unlabelled == ["missing an ingest label (brainflight) — won't auto-ingest"]
+    labelled = _story(labels=["BrainFlight"])
+    assert (
+        ticket_start.skip_reasons(
+            labelled, {}, set(), set(), MEMBER_IDS, ingest_labels=["brainflight"]
+        )
+        == []
+    )
+
+
 def test_eligible_ticket_has_no_skip_reasons():
     # Nothing in the ledger, not pending, no branch, assigned, no state filter.
     assert ticket_start.skip_reasons(_story(), {}, set(), set(), MEMBER_IDS) == []
@@ -798,6 +812,10 @@ def test_the_pipeline_launch_translates_the_rung_for_the_cli_it_resolved(monkeyp
     monkeypatch.setattr(real, "InstanceOptions", _FakeOpts)
     monkeypatch.setattr(real, "NewInstance", lambda opts: _FakeInst())
     monkeypatch.setattr(sr, "_resolve_program", lambda agent: "claude")
+    # The launch-prompt decoration resolves the configured default repo and
+    # its base clone: keep both out of the developer's real config.
+    monkeypatch.setenv("MINDFLOCK_WORKSPACE_DIR", "/nonexistent/mf-test-ws")
+    monkeypatch.setenv("MINDFLOCK_REPO_URL", "git@example.invalid:pinned/none.git")
 
     runner = sr.SessionRunner.__new__(sr.SessionRunner)
     runner._mode = "worktree"
@@ -830,6 +848,10 @@ def test_no_effort_leaves_the_launch_flags_exactly_as_they_were(monkeypatch):
     monkeypatch.setattr(real, "InstanceOptions", _FakeOpts)
     monkeypatch.setattr(real, "NewInstance", lambda opts: _FakeInst())
     monkeypatch.setattr(sr, "_resolve_program", lambda agent: "claude")
+    # The launch-prompt decoration resolves the configured default repo and
+    # its base clone: keep both out of the developer's real config.
+    monkeypatch.setenv("MINDFLOCK_WORKSPACE_DIR", "/nonexistent/mf-test-ws")
+    monkeypatch.setenv("MINDFLOCK_REPO_URL", "git@example.invalid:pinned/none.git")
 
     runner = sr.SessionRunner.__new__(sr.SessionRunner)
     runner._mode = "worktree"

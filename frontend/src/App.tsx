@@ -35,6 +35,7 @@ import { PromptsDialog } from "./components/dialogs/PromptsDialog";
 import { SetupDialog, useDoctorAutoShow } from "./components/dialogs/SetupDialog";
 import { TodoDialog } from "./components/dialogs/TodoDialog";
 import { AssistantAgentDialog } from "./components/dialogs/AssistantAgentDialog";
+import { RedZonesDialog } from "./components/dialogs/RedZonesDialog";
 import { WelcomeTour } from "./components/onboarding/WelcomeTour";
 import { Breaks } from "./components/breaks/Breaks";
 
@@ -273,6 +274,7 @@ export default function App() {
       <SetupDialog />
       <TodoDialog />
       <AssistantAgentDialog />
+      <RedZonesDialog />
       <ExtensionDialog />
       <CommandPalette host={host} />
       <ShortcutsSheet />

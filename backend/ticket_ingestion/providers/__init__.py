@@ -144,10 +144,11 @@ PROVIDER_META: list[dict] = [
                 "auto": True,
             },
             _scope_field(
-                "Anyone's — by state",
+                "Anyone's — by state or label",
                 "Anyone's picks up every story sitting in the ingest states "
-                "below, whoever owns it — the QA queue. It needs at least one "
-                "state selected; without one it stays assigned-to-me.",
+                "below (or carrying an ingest label), whoever owns it — the QA "
+                "queue. It needs at least one state or label; without one it "
+                "stays assigned-to-me.",
             ),
             {
                 "key": "workflow_state",
@@ -156,6 +157,19 @@ PROVIDER_META: list[dict] = [
                 "secret": False,
                 "required": False,
                 "placeholder": "any state (add one or more)",
+            },
+            {
+                "key": "ingest_labels",
+                "label": "Ingest labels",
+                "secret": False,
+                "required": False,
+                "placeholder": "any label — or e.g. mindflock, needs-agent",
+                "hint": (
+                    "Optional: only ingest stories carrying one of these labels "
+                    "(comma-separated, case-insensitive), on top of the states "
+                    "above. Use it when every ticket sits in the same state and "
+                    "adding the label is how you hand one to MindFlock."
+                ),
             },
             _start_state_field(
                 "state",

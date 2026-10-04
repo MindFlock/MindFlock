@@ -230,6 +230,13 @@ def _provider_view(p) -> dict:
         )
     # Per-provider binary override currently in effect (settings/env), if any.
     view["binary_override"] = provider_config.binary_override(p.name)
+    # Whether the Map can show this CLI's plan and send it "Go" — the New
+    # Session dialog offers "Plan first" only when it can (the server drops
+    # plan-first for the rest: the agent would wait for a Go nobody can send).
+    try:
+        view["plan_supported"] = bool(p.plan_supported())
+    except Exception:  # noqa: BLE001 — a broken provider just has no plans
+        view["plan_supported"] = False
     return view
 
 
@@ -508,6 +515,8 @@ def _source_cfg_from_body(body: dict):
         # Carried so Test exercises the query the pipeline will actually run:
         # an any-assignee source searches by state, not by member id.
         assignee_scope=pick("assignee_scope", sp("assignee_scope")),
+        # Carried for the same reason: a label can bound an any-assignee search.
+        ingest_labels=pick("ingest_labels", sp("ingest_labels")),
         # Carried so a provider that derives its scope from the repo (GitHub
         # Issues auto-detects owner/repo from repo_url) can Test with nothing but
         # a repo filled in, and so the agent shows up in the round-tripped config.
@@ -733,10 +742,26 @@ class SettingsAddon(Addon):
         @router.get("/settings/providers/ticketing")
         def ticketing_providers() -> JSONResponse:
             """The provider catalog (id/label/blurb + credential fields) the
-            Ticket Ingestion settings screen renders."""
-            from backend.ticket_ingestion.providers import PROVIDER_META
+            Ticket Ingestion settings screen renders.
 
-            return JSONResponse({"providers": PROVIDER_META})
+            Each entry carries the provider's ``slug_prefix`` (``sc`` for
+            Shortcut): the UI seeds a new source's ``id`` from it, and that id
+            IS the branch prefix, so seeding from the provider name branched
+            Shortcut tickets as ``feature/shortcut-<id>/`` instead of
+            ``feature/sc-<id>/``."""
+            from backend.ticket_ingestion.providers import (
+                PROVIDER_META,
+                provider_slug_prefix,
+            )
+
+            return JSONResponse(
+                {
+                    "providers": [
+                        {**m, "slug_prefix": provider_slug_prefix(m["id"])}
+                        for m in PROVIDER_META
+                    ]
+                }
+            )
 
         @router.post("/settings/test/ticketing")
         async def test_ticketing(body: Optional[dict] = None) -> JSONResponse:

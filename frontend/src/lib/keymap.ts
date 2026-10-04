@@ -30,6 +30,7 @@ import {
   makePrSession,
   pushSession,
   selectRailKey,
+  selectSession,
   undoLastClose,
 } from "./sessionActions";
 import { toast } from "./toast";
@@ -124,6 +125,10 @@ const MODAL_DIALOG_NAMES: DialogName[] = [
   // An extension's dialog body is arbitrary UI (forms, editable grids) — a
   // stray Delete or Ctrl+W meant for it must never reach the session behind.
   "extension",
+  // Red zones…: per-zone × Remove buttons (Delete is the natural "remove this"
+  // key) and pattern inputs where Ctrl+W is muscle memory — both would end the
+  // focused session's agent behind the dialog.
+  "red-zones",
 ];
 const MODAL_DOM_IDS = [
   "new-dialog",
@@ -133,6 +138,7 @@ const MODAL_DOM_IDS = [
   "device-dialog",
   "intake-dialog",
   "verify-dialog",
+  "red-zones-dialog",
   // The take-a-break screen owns the whole window and holds the keyboard on
   // its own buttons; a Delete meant for the card must not reach the session
   // running behind it.
@@ -272,6 +278,15 @@ export const CHORDS: Record<string, ChordEntry> = {
   o: { desc: "Open / focus IDE", run: (t) => ideSession(t) },
   d: { desc: "Duplicate session", run: (t) => copySession(t) },
   h: { desc: "Hide / show window", run: (t) => hideSession(t) },
+  // The Map tab: red zones, the plan, the blast radius. Switching tabs from
+  // outside the pane goes through lastTab, which the pane follows.
+  m: {
+    desc: "Code map",
+    run: (t) => {
+      selectSession(t, { noKeyboard: true });
+      useUi.getState().setLastTab(t, "map");
+    },
+  },
 };
 
 /** Effective second key for a chord action: the user's override or the
@@ -394,6 +409,8 @@ export const KEYMAP: KeymapEntry[] = [
     help: ["Navigation", "/", "Filter sessions (when the list is long)"],
     when: () => {
       if (isEditingTarget(document.activeElement)) return false;
+      // Inside a Map tab, `/` is that map's find box (CodeMapTab handles it).
+      if ((document.activeElement as HTMLElement | null)?.closest?.(".cm-root")) return false;
       const box = document.getElementById("sidebar-search");
       return !!box && !box.classList.contains("hidden");
     },
@@ -442,8 +459,15 @@ export const KEYMAP: KeymapEntry[] = [
     key: "Delete",
     shift: "any",
     aliasOf: "close", // browser-safe alias
+    // Not from inside a Map tab: its cards and per-zone × Remove buttons are
+    // focusable, a click there focuses this session, and Delete is the natural
+    // "remove this" key — it must never end the agent (the Red zones dialog is
+    // guarded the same way, via modalOpen). Ctrl+W still works there.
     when: () =>
-      !!useUi.getState().focused && !modalOpen() && !isEditingTarget(document.activeElement),
+      !!useUi.getState().focused &&
+      !modalOpen() &&
+      !isEditingTarget(document.activeElement) &&
+      !(document.activeElement as HTMLElement | null)?.closest?.(".cm-root"),
     run: () => {
       const f = useUi.getState().focused;
       if (f) killSession(f);

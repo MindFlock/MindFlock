@@ -110,6 +110,8 @@ export type DialogName =
   | "assistant-agent"
   | "palette"
   | "shortcuts"
+  // Repo-level red zones + Plan-first, managed outside any one session.
+  | "red-zones"
   // The one dialog every extension's dialog surfaces share; the extension id +
   // surface ride in dialogTarget ("<ext>:<surface>[:<ref>]").
   | "extension";

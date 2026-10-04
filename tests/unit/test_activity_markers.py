@@ -260,12 +260,190 @@ def test_merge_routes_notification_event_through_payload_inspection(
     assert "notification_type" not in stop_cmd
 
 
-def test_merge_tolerates_corrupt_settings(tmp_path, marker_dir):
+def test_merge_never_clobbers_an_unparsable_settings_file(tmp_path, marker_dir):
+    # A user's hand-edited settings.local.json with a trailing comma (or one a
+    # writer is caught mid-write on) must NOT be replaced by `{}` + our hooks:
+    # that erased their permissions/env/own hooks, and the red-zone monitor
+    # re-installs every tick. Left byte-identical; False = nothing written.
+    path = tmp_path / "settings.local.json"
+    broken = (
+        '{"permissions": {"allow": ["Bash(ls:*)"]},\n'
+        ' "env": {"FOO": "1"},\n'
+        ' "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo mine"}]}]},\n'
+        "}\n"
+    )
+    path.write_text(broken)
+    assert am.merge_activity_hooks(path, _EVENTS, "sess") is False
+    assert path.read_text() == broken
+    # Same for valid JSON that isn't an object.
+    path.write_text("[1, 2]")
+    assert am.merge_activity_hooks(path, _EVENTS, "sess") is False
+    assert path.read_text() == "[1, 2]"
+
+
+def test_merge_installs_into_an_empty_settings_file(tmp_path, marker_dir):
+    # An empty (or whitespace-only) file holds nothing to lose: install into it.
     path = tmp_path / "hooks.json"
-    path.write_text("{broken json")
-    am.merge_activity_hooks(path, _EVENTS, "sess")
-    data = json.loads(path.read_text())  # rewritten as valid JSON with our hooks
-    assert _tagged(data["hooks"]["Stop"])
+    path.write_text("  \n")
+    assert am.merge_activity_hooks(path, _EVENTS, "sess") is True
+    assert _tagged(json.loads(path.read_text())["hooks"]["Stop"])
+
+
+# --------------------------------------------------------------------------- #
+# tool-hook (red-zone guard) merge + arming
+# --------------------------------------------------------------------------- #
+def test_hook_command_none_is_byte_identical(marker_dir):
+    # The default (no guard) command must not change a single byte.
+    a = am.hook_command("working", record_thread=True)
+    b = am.hook_command("working", record_thread=True, tool_hook=None)
+    assert a == b
+    assert am._HOOK_TAG in a and am.TOOL_HOOK_TAG not in a
+
+
+def test_hook_command_tool_hook_carries_guard_and_tag(marker_dir):
+    cmd = am.hook_command("working", tool_hook="pre")
+    assert am.TOOL_HOOK_TAG in cmd
+    assert am._HOOK_TAG in cmd  # the version tag CONTAINS the base tag
+    assert "_mf_tool_hook" in cmd
+    # The guard runs before the `if not s` exit (guard text precedes the marker
+    # write, so an unresolved session never skips enforcement).
+    assert cmd.index("_mf_tool_hook") < cmd.index("SystemExit")
+
+
+def test_merge_sets_disable_all_hooks_only_for_a_hard_guard(tmp_path, marker_dir):
+    p1 = tmp_path / "a" / "hooks.json"
+    am.merge_activity_hooks(p1, _EVENTS, "s")
+    assert "disableAllHooks" not in json.loads(p1.read_text())
+    # Tool hooks WITHOUT a hard guard (Codex): no key — Codex's hooks.json schema
+    # rejects `disableAllHooks` and then loads none of the file's hooks.
+    p2 = tmp_path / "b" / "hooks.json"
+    am.merge_activity_hooks(p2, _EVENTS, "s", tool_hook_events={"PreToolUse": "pre"})
+    assert "disableAllHooks" not in json.loads(p2.read_text())
+    # The hard guard (Claude) pins it false so a project-level true can't disarm.
+    p3 = tmp_path / "c" / "settings.local.json"
+    am.merge_activity_hooks(
+        p3,
+        _EVENTS,
+        "s",
+        tool_hook_events={"PreToolUse": "pre"},
+        resist_disable_all=True,
+    )
+    assert json.loads(p3.read_text())["disableAllHooks"] is False
+
+
+def test_merge_heals_a_codex_file_an_earlier_build_broke(tmp_path, marker_dir):
+    # A hooks.json this branch's first cut wrote `disableAllHooks: false` into
+    # (Codex then loaded NO hooks) is repaired by the next tool-hook install.
+    p = tmp_path / ".codex" / "hooks.json"
+    am.merge_activity_hooks(
+        p, _EVENTS, "s", tool_hook_events={"Stop": "post"}, resist_disable_all=True
+    )
+    assert json.loads(p.read_text())["disableAllHooks"] is False
+    assert am.merge_activity_hooks(p, _EVENTS, "s", tool_hook_events={"Stop": "post"})
+    assert "disableAllHooks" not in json.loads(p.read_text())
+    # A user's own `true` in a non-guard file is never touched.
+    q = tmp_path / "other" / "hooks.json"
+    q.parent.mkdir()
+    q.write_text('{"disableAllHooks": true}')
+    am.merge_activity_hooks(q, _EVENTS, "s", tool_hook_events={"Stop": "post"})
+    assert json.loads(q.read_text())["disableAllHooks"] is True
+
+
+def test_merge_skips_write_when_unchanged(tmp_path, marker_dir):
+    p = tmp_path / "hooks.json"
+    assert am.merge_activity_hooks(p, _EVENTS, "s1") is True  # created
+    # The command is session-agnostic, so a re-pin with a new name is a no-op.
+    assert am.merge_activity_hooks(p, _EVENTS, "s2") is False  # unchanged -> skipped
+
+
+def test_hooks_armed(tmp_path):
+    events = (("PreToolUse", "working"), ("Stop", "idle"))
+    p = tmp_path / ".claude" / "settings.local.json"
+    am.merge_activity_hooks(
+        p,
+        events,
+        "s",
+        tool_hook_events={"PreToolUse": "pre"},
+        resist_disable_all=True,
+    )
+    assert am.hooks_armed(p) is True
+    # A project-level settings.json forcing disableAllHooks true does NOT disarm
+    # us, because our own file sets it false (verified behaviour).
+    (p.parent / "settings.json").write_text('{"disableAllHooks": true}')
+    assert am.hooks_armed(p) is True
+    # But setting it true in OUR file does.
+    data = json.loads(p.read_text())
+    data["disableAllHooks"] = True
+    p.write_text(json.dumps(data))
+    assert am.hooks_armed(p) is False
+
+
+def test_hooks_armed_false_without_tool_hook(tmp_path):
+    p = tmp_path / ".claude" / "settings.local.json"
+    am.merge_activity_hooks(p, (("PreToolUse", "working"),), "s")  # no guard
+    assert am.hooks_armed(p) is False
+    assert am.hooks_armed(tmp_path / "nope.json") is False
+
+
+def test_tool_hook_tag_is_stamped_with_the_embedded_source_hash():
+    """C1: the tag carries a hash of the guard source baked into the command,
+    and keeps the `# mindflock-activity` substring uninstall looks for."""
+    import hashlib
+
+    h = hashlib.sha1(am._tool_hook_source().encode("utf-8")).hexdigest()[:8]
+    th_rev = __import__("backend.providers._tool_hook_src", fromlist=["x"])._MF_HOOK_REV
+    assert am.TOOL_HOOK_REV == th_rev
+    assert am.TOOL_HOOK_TAG == "# mindflock-activity tool-hook v2.%d %s" % (th_rev, h)
+    assert am.TOOL_HOOK_TAG.startswith(am.TOOL_HOOK_TAG_PREFIX)
+    assert am._HOOK_TAG in am.TOOL_HOOK_TAG
+
+
+def test_tool_hook_tag_rank_orders_builds():
+    """Older revision / another hash of the same revision = stale (-1); a
+    NEWER revision another build installed is left alone (1)."""
+    r = am.TOOL_HOOK_REV
+    pre = am.TOOL_HOOK_TAG_PREFIX
+    assert am.tool_hook_tag_rank("x " + am.TOOL_HOOK_TAG) == 0
+    assert am.tool_hook_tag_rank(pre + " v2.%d deadbeef" % (r + 1)) == 1
+    assert am.tool_hook_tag_rank(pre + " v3 deadbeef") == 1
+    assert am.tool_hook_tag_rank(pre + " v2.%d deadbeef" % r) == -1
+    assert am.tool_hook_tag_rank(pre + " v2 deadbeef") == -1
+    assert am.tool_hook_tag_rank(pre + " v1") == -1
+    assert am.tool_hook_tag_rank("# mindflock-activity") is None
+
+
+def test_a_stale_tool_hook_is_not_armed(tmp_path):
+    """C1: a hooks file whose guard was baked by an older build (the v1 tag,
+    or another source hash) counts as NOT armed, so the reconcile loop
+    reinstalls it — a v1 hook read green rules as red and was never
+    replaced because "armed" only looked for the tag."""
+    p = tmp_path / ".claude" / "settings.local.json"
+    am.merge_activity_hooks(
+        p,
+        (("PreToolUse", "working"),),
+        "s",
+        tool_hook_events={"PreToolUse": "pre"},
+        resist_disable_all=True,
+    )
+    assert am.hooks_armed(p) is True
+    for stale in (
+        "# mindflock-activity tool-hook v1",
+        "# mindflock-activity tool-hook v2 deadbeef",
+    ):
+        p.write_text(p.read_text().replace(am.TOOL_HOOK_TAG, stale))
+        assert am.hooks_armed(p) is False
+        # uninstall still recognises it as ours
+        data = json.loads(p.read_text())
+        entry = data["hooks"]["PreToolUse"][-1]
+        assert am.is_mindflock_hook_entry(entry)
+        am.merge_activity_hooks(
+            p,
+            (("PreToolUse", "working"),),
+            "s",
+            tool_hook_events={"PreToolUse": "pre"},
+            resist_disable_all=True,
+        )
+        assert am.hooks_armed(p) is True
 
 
 # --------------------------------------------------------------------------- #

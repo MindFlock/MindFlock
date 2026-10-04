@@ -39,6 +39,19 @@ export default defineConfig({
       },
     },
   },
+  // The Code Tree's layout search runs in a module Web Worker
+  // (lib/codetree/layout.worker.ts). It ships as one more stable,
+  // unminified file next to app.js, served by the same static mount.
+  worker: {
+    format: "es",
+    rollupOptions: {
+      output: {
+        entryFileNames: "codetree-worker.js",
+        chunkFileNames: "js/chunks/[name].js",
+        comments: { legal: true, annotation: true, jsdoc: false },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: Object.fromEntries(

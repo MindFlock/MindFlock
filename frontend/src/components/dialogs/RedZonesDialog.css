@@ -1,0 +1,273 @@
+/* Red zones dialog (RedZonesDialog.tsx) — a modal like #recent-panel: one
+   card per repo, its zones as rows, an inline add row, and the per-repo
+   Plan-first switch. The hatched swatch is .cm-zone-swatch from
+   CodeMapTab.css, so a zone looks the same here as on the map. */
+#red-zones-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  width: 720px;
+  max-width: 92vw;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Focused programmatically on open (so keys land in the dialog), never by
+   the user tabbing — no ring for that. */
+#red-zones-panel:focus {
+  outline: none;
+}
+
+#red-zones-panel .rzd-total {
+  flex: 1;
+  font-size: 12px;
+}
+
+.rzd-intro {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.rzd-intro b {
+  color: var(--text);
+}
+
+.rzd-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 60px;
+}
+
+.rzd-empty {
+  font-size: 13px;
+  padding: 10px 2px;
+}
+
+.rzd-repo {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rzd-repo-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rzd-repo-label {
+  font-weight: 700;
+  font-size: 13px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rzd-sessions {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--muted);
+  flex: none;
+}
+
+.rzd-planfirst {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  flex: none;
+}
+
+.rzd-zones {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rzd-zones li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.rzd-zone-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rzd-zone-pattern {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--red);
+  font-weight: 600;
+}
+
+.rzd-zone-name {
+  font-size: 12px;
+}
+
+.rzd-zone-note {
+  font-size: 11.5px;
+}
+
+.rzd-x {
+  flex: none;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 1px 7px 3px;
+}
+
+.rzd-x:hover:enabled {
+  color: var(--red);
+  border-color: var(--border);
+}
+
+.rzd-none {
+  margin: 0;
+  font-size: 12px;
+}
+
+.rzd-add {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.rzd-add input {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.rzd-add input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.rzd-add-pattern {
+  flex: 2 1 220px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.rzd-add-name {
+  flex: 1 1 120px;
+}
+
+.rzd-add button {
+  flex: none;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.rzd-add button:hover:enabled {
+  border-color: var(--accent);
+}
+
+.rzd-add button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.rzd-err {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* Zone kind mark (⛔ keep out / ✓ only here). */
+.rzd-kind {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  font-size: 11px;
+}
+
+.rzd-kind.green {
+  color: var(--green);
+}
+
+/* Derived outputs ("companions"). */
+.rzd-comp {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.rzd-comp > summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 11.5px;
+}
+
+.rzd-comp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin: 6px 0 0;
+}
+
+.rzd-comp-lab {
+  font-size: 11px;
+  min-width: 64px;
+}
+
+.rzd-comp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+}
+
+.rzd-comp-chip.builtin {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.rzd-comp-input {
+  flex: 1 1 200px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}

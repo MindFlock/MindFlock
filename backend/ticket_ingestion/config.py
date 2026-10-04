@@ -152,6 +152,12 @@ class TicketProviderConfig:
       not by assignment). ``"anyone"`` is only honoured together with a
       workflow-state filter; see
       :func:`~backend.ticket_ingestion.providers.base.ingests_any_assignee`.
+    * ``ingest_labels`` — optional comma-separated label names; a ticket is only
+      ingested once it carries at least one of them (case-insensitive). Applied
+      on top of ``workflow_state`` — the opt-in for a board where every ticket
+      sits in the same state and the label is what says "MindFlock, take this
+      one". Also bounds an ``"anyone"`` scope. Shortcut only; see
+      :func:`~backend.ticket_ingestion.providers.base.ingest_label_list`.
     * ``poll_interval_seconds`` — poll cadence.
     """
 
@@ -164,6 +170,9 @@ class TicketProviderConfig:
     workflow_state: str = ""
     workflow_state_id: int | None = None
     assignee_scope: str = ""
+    #: Comma-separated label names a ticket must carry (any one of them) to be
+    #: ingested, or ``""`` for no label filter. See the class docstring.
+    ingest_labels: str = ""
     #: Provider-native state id a ticket is moved into when its session starts,
     #: or ``""`` to leave it alone. See the class docstring.
     start_state: str = ""
@@ -921,6 +930,7 @@ def _parse_source(
     # Local: providers.base imports TicketProviderConfig from this module.
     from backend.ticket_ingestion.providers.base import (
         ANY_ASSIGNEE_PROVIDERS,
+        LABEL_FILTER_PROVIDERS,
         STATE_BOUNDED_PROVIDERS,
         STATE_SETTING_PROVIDERS,
     )
@@ -949,6 +959,20 @@ def _parse_source(
     if scope not in ("", "mine", "anyone"):
         problems.append(f"{label}.assignee_scope must be 'mine' or 'anyone'")
         scope = ""
+    ingest_labels = ", ".join(
+        x.strip()
+        for x in str(src.get("ingest_labels", "") or "").split(",")
+        if x.strip()
+    )
+    if ingest_labels and provider not in LABEL_FILTER_PROVIDERS:
+        # Same reasoning as start_state below: a label filter that is silently
+        # dropped reads as "it ingests everything now", which is the opposite of
+        # what the user asked for — say so at load.
+        problems.append(
+            f"{label}.ingest_labels is not supported for {provider} — only "
+            f"Shortcut can gate ingestion on a label"
+        )
+        ingest_labels = ""
     if scope == "anyone":
         # Say the narrowing out loud rather than letting a source look wider
         # than it polls. `ingests_any_assignee` enforces the same two rules.
@@ -960,10 +984,13 @@ def _parse_source(
         elif (
             provider in STATE_BOUNDED_PROVIDERS
             and not str(src.get("workflow_state", "") or "").strip()
+            and not ingest_labels
         ):
             problems.append(
                 f"{label}.assignee_scope 'anyone' needs at least one "
-                f"workflow_state — without one it would pull every ticket in "
+                f"workflow_state"
+                + (" or ingest label" if provider in LABEL_FILTER_PROVIDERS else "")
+                + " — without one it would pull every ticket in "
                 f"the tracker, so it stays assigned-to-me"
             )
     start_state = str(src.get("start_state", "") or "").strip()
@@ -986,6 +1013,7 @@ def _parse_source(
         workflow_state=str(src.get("workflow_state", "") or ""),
         workflow_state_id=int(wsid) if wsid is not None else None,
         assignee_scope=scope,
+        ingest_labels=ingest_labels,
         start_state=start_state,
         poll_interval_seconds=int(poll),
         id=str(src.get("id", "") or ""),

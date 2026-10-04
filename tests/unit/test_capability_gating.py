@@ -143,6 +143,18 @@ def test_git_endpoints_409_without_git(monkeypatch):
         ("POST", "/api/instances/nope/push-branch"),
         ("POST", "/api/instances/nope/make-pr"),
         ("POST", "/api/instances/nope/merge-pr"),
+        # Code Map + red zones (per-session; all git-backed).
+        ("GET", "/api/instances/nope/code-map"),
+        ("GET", "/api/instances/nope/code-map/live"),
+        ("GET", "/api/instances/nope/code-map/atlas"),
+        ("GET", "/api/instances/nope/code-map/file?path=a.py"),
+        ("GET", "/api/instances/nope/code-map/search?q=a"),
+        ("GET", "/api/instances/nope/code-map/entry-points"),
+        ("POST", "/api/instances/nope/code-map/ask-plan"),
+        ("POST", "/api/instances/nope/code-map/go"),
+        ("GET", "/api/instances/nope/red-zones"),
+        ("POST", "/api/instances/nope/red-zones"),
+        ("POST", "/api/instances/nope/red-zones/preview"),
     ]
     for method, url in calls:
         r = client.request(method, url, json={} if method == "POST" else None)

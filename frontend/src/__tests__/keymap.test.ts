@@ -9,7 +9,9 @@ import {
   chordKeyFor,
   setKeyCombos,
   resetAllOverrides,
+  modalOpen,
 } from "../lib/keymap";
+import { useUi } from "../state/store";
 
 afterEach(() => resetAllOverrides());
 
@@ -92,5 +94,47 @@ describe("chordKeyFor", () => {
   it("returns the default letter with no override", () => {
     expect(chordKeyFor("c")).toBe("c");
     expect(chordKeyFor("p")).toBe("p");
+  });
+});
+
+describe("modalOpen", () => {
+  afterEach(() => useUi.getState().closeDialog());
+
+  it("counts the Red zones dialog: Delete on a zone's × or Ctrl+W in its input must not close the session behind", () => {
+    // The store slot answers before any DOM lookup, so this runs without a DOM.
+    useUi.getState().openDialogFor("red-zones");
+    expect(modalOpen()).toBe(true);
+  });
+});
+
+describe("Delete never ends the agent from inside a Map tab", () => {
+  const g = globalThis as Record<string, unknown>;
+  const hadDoc = "document" in g;
+  const prevDoc = g.document;
+  afterEach(() => {
+    useUi.setState({ focused: null } as never);
+    if (hadDoc) g.document = prevDoc;
+    else delete g.document;
+  });
+
+  const withActive = (el: unknown) => {
+    g.document = { activeElement: el, getElementById: () => null };
+  };
+  const button = (inMap: boolean) => ({
+    tagName: "BUTTON",
+    className: "cm-row-act cm-x quiet",
+    closest: (sel: string) => (inMap && sel === ".cm-root" ? {} : null),
+  });
+
+  it("a focused Map card / zone × button: the Delete alias stands down", () => {
+    useUi.setState({ focused: "sess-A" } as never);
+    withActive(button(true));
+    expect(aliasFor("close").when!()).toBe(false);
+  });
+
+  it("elsewhere (a sidebar button) Delete still ends the focused session", () => {
+    useUi.setState({ focused: "sess-A" } as never);
+    withActive(button(false));
+    expect(aliasFor("close").when!()).toBe(true);
   });
 });

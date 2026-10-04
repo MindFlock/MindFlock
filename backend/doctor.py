@@ -619,6 +619,106 @@ def check_local_model() -> Check:
     return Check("local-model", label, "ok", f"{wanted} at {result['base_url']}")
 
 
+#: A seed this many refresh intervals old means the refresher is not publishing.
+_SEED_STALE_INTERVALS = 3
+#: Floor for the staleness window, so a short interval doesn't warn on a single
+#: slow refresh (a full-suite testmon rebuild can take most of an hour).
+_SEED_STALE_FLOOR_S = 6 * 3600
+
+
+def _human_age(seconds: float) -> str:
+    hours = seconds / 3600
+    if hours < 48:
+        return f"{hours:.0f}h"
+    return f"{hours / 24:.0f}d"
+
+
+def _refresher_lag(directory: Path, branch: str) -> Optional[int]:
+    """Commits the refresher checkout is behind its (already fetched) remote
+    branch, or None when that can't be read. Local refs only — no fetch — so
+    the doctor stays fast; the refresher's own fetch runs even on a cycle that
+    then fails, so ``origin/<branch>`` is current exactly when it matters."""
+    if not (directory / ".git").exists():
+        return None
+    rc, out = _run(
+        ["git", "-C", str(directory), "rev-list", "--count", f"HEAD..origin/{branch}"]
+    )
+    if rc != 0:
+        return None
+    try:
+        return int(out.strip())
+    except ValueError:
+        return None
+
+
+def check_cache_seeds() -> Check:
+    """Warn when a warm cache seed (e.g. testmon's) has stopped refreshing.
+
+    Every provisioned workspace is seeded from ``seed_path``; the background
+    refresher rebuilds it from ``refresh_branch`` every interval. When it stops
+    publishing — a failing cycle only logs, hourly, to the ingestion log — each
+    new workspace starts from an ever-older seed, and for testmon that means
+    the FULL suite on its first commit (a changed package list, or a month of
+    base-branch drift, invalidates everything). This went unnoticed for a month
+    once, hence the check. ``warn``, never ``fail``: tests still run, just slow.
+    """
+    import time
+
+    from backend.session import provisioned
+    from backend.workspace_setup import refresher_dirname
+
+    settings = provisioned.load_provision_settings()
+    caches = [
+        c
+        for c in (settings.caches if settings else [])
+        if c.refresh_enabled and c.refresh_command
+    ]
+    if not caches:
+        return Check("cache-seeds", "warm cache seeds", "info", "none configured")
+
+    problems: List[str] = []
+    healthy: List[str] = []
+    for cache in caches:
+        directory = settings.workspace_dir / refresher_dirname(cache.name)
+        lag = _refresher_lag(directory, cache.refresh_branch)
+        lag_note = (
+            f"; refresher is {lag} commits behind origin/{cache.refresh_branch}"
+            if lag
+            else ""
+        )
+        if not cache.seed_path.is_file():
+            problems.append(
+                f"'{cache.name}' has no seed at {cache.seed_path}{lag_note}"
+            )
+            continue
+        age = time.time() - cache.seed_path.stat().st_mtime
+        limit = max(
+            _SEED_STALE_INTERVALS * cache.refresh_interval_seconds, _SEED_STALE_FLOOR_S
+        )
+        if age > limit:
+            problems.append(
+                f"'{cache.name}' seed is {_human_age(age)} old "
+                f"(refreshes every {_human_age(cache.refresh_interval_seconds)}){lag_note}"
+            )
+        else:
+            healthy.append(f"'{cache.name}' {_human_age(age)} old")
+
+    if problems:
+        return Check(
+            "cache-seeds",
+            "warm cache seeds",
+            "warn",
+            "; ".join(problems)
+            + " — new workspaces start cold (testmon re-runs the full suite)",
+            fix=(
+                "the refresher runs inside ticket ingestion — make sure it is on, "
+                "then `grep cache_refresher logs/ticket-ingestion.log | tail` for "
+                "the failing step"
+            ),
+        )
+    return Check("cache-seeds", "warm cache seeds", "ok", ", ".join(healthy))
+
+
 CHECKS_BY_ID: dict[str, Callable[[], Check]] = {
     "git": check_git,
     "tmux": check_tmux,
@@ -630,6 +730,7 @@ CHECKS_BY_ID: dict[str, Callable[[], Check]] = {
     "clipboard": check_clipboard,
     "tailscale": check_tailscale,
     "state-schema": check_state_schema,
+    "cache-seeds": check_cache_seeds,
 }
 
 _ALL_CHECKS: List[Callable[[], Check]] = list(CHECKS_BY_ID.values())

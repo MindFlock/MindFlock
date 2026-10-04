@@ -223,6 +223,38 @@ def workflow_state_list(cfg: TicketProviderConfig) -> list[str]:
     return [s for s in (x.strip() for x in raw.split(",")) if s]
 
 
+def ingest_label_list(cfg) -> list[str]:
+    """The source's ingest-label filter as a list of label names.
+
+    ``cfg.ingest_labels`` holds one name or several comma-separated names.
+    Empty = no label filter. Fails narrow like :func:`start_state_id`: a
+    provider that cannot filter by label answers ``[]``, so a stale value left
+    in a hand-edited config after a provider switch is ignored rather than
+    half-applied. Order-preserving, blanks and case-insensitive repeats dropped.
+    """
+    provider = (getattr(cfg, "provider", "") or "").strip().lower()
+    if provider not in LABEL_FILTER_PROVIDERS:
+        return []
+    raw = getattr(cfg, "ingest_labels", "") or ""
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in (x.strip() for x in raw.split(",")):
+        if name and name.casefold() not in seen:
+            seen.add(name.casefold())
+            out.append(name)
+    return out
+
+
+def has_ingest_label(labels, wanted) -> bool:
+    """Whether a ticket carrying ``labels`` passes an ingest-label filter of
+    ``wanted``. Case-insensitive — "Brainflight" and "brainflight" are the same
+    label to the person typing it. An empty filter passes everything."""
+    if not wanted:
+        return True
+    want = {w.casefold() for w in wanted}
+    return any((name or "").casefold() in want for name in labels or [])
+
+
 #: Providers that can search by something other than the assignee. Asana is
 #: absent on purpose: its task list endpoint requires an assignee (paired with a
 #: workspace) or a project scope, so "anyone" has nothing to stand on there.
@@ -240,6 +272,15 @@ STATE_SETTING_PROVIDERS = frozenset({"shortcut", "jira", "linear"})
 #: picked. GitHub Issues is not listed — it has no workflow states, and the
 #: ``owner/repo`` it is pinned to is the bound.
 STATE_BOUNDED_PROVIDERS = frozenset({"shortcut", "jira", "linear"})
+
+#: Providers that can gate ingestion on a ticket label (``ingest_labels``): a
+#: story is only auto-ingested once it carries one of the configured labels.
+#: The opt-in for a board where the workflow state says nothing about whether a
+#: robot should take the ticket — everything sits in "Will do" for everyone,
+#: and adding the label is the per-ticket "MindFlock, take this one".
+#: Shortcut only for now; its search takes a label name server-side, which is
+#: what lets a label (rather than a state) bound an any-assignee search.
+LABEL_FILTER_PROVIDERS = frozenset({"shortcut"})
 
 
 def start_state_id(cfg) -> str:
@@ -268,14 +309,20 @@ def ingests_any_assignee(cfg) -> bool:
     Fails narrow on purpose: an unsupported provider, or a state-bounded one with
     no ingest state selected, stays assignee-scoped. Widening the scope is a
     setting; fetching an entire tracker by accident is not something a typo
-    should be able to do.
+    should be able to do. An ingest label is a bound too, on the providers that
+    search by one (``LABEL_FILTER_PROVIDERS``): "anyone's tickets labelled X" is
+    as narrow as "anyone's tickets in state X".
     """
     if (getattr(cfg, "assignee_scope", "") or "").strip().lower() != "anyone":
         return False
     provider = (getattr(cfg, "provider", "") or "").strip().lower()
     if provider not in ANY_ASSIGNEE_PROVIDERS:
         return False
-    if provider in STATE_BOUNDED_PROVIDERS and not workflow_state_list(cfg):
+    if (
+        provider in STATE_BOUNDED_PROVIDERS
+        and not workflow_state_list(cfg)
+        and not ingest_label_list(cfg)
+    ):
         return False
     return True
 

@@ -1,0 +1,537 @@
+[
+  {
+    "name": "no zones at all: everything writable",
+    "zones": {
+      "red": [],
+      "green": [],
+      "companions": []
+    },
+    "path": "src/a.py",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "red match",
+    "zones": {
+      "red": [
+        "config/"
+      ],
+      "green": [],
+      "companions": []
+    },
+    "path": "config/settings.toml",
+    "ci": false,
+    "expect": "blocked"
+  },
+  {
+    "name": "red basename pattern matches at any depth",
+    "zones": {
+      "red": [
+        "secret"
+      ],
+      "green": [],
+      "companions": []
+    },
+    "path": "a/b/secret/s.py",
+    "ci": false,
+    "expect": "blocked"
+  },
+  {
+    "name": "red miss",
+    "zones": {
+      "red": [
+        "config/"
+      ],
+      "green": [],
+      "companions": []
+    },
+    "path": "src/config.py",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "red wins over green on the same path",
+    "zones": {
+      "red": [
+        "src/green/keys.py"
+      ],
+      "green": [
+        "src/green"
+      ],
+      "companions": []
+    },
+    "path": "src/green/keys.py",
+    "ci": false,
+    "expect": "blocked"
+  },
+  {
+    "name": "red wins over a companion",
+    "zones": {
+      "red": [
+        "uv.lock"
+      ],
+      "green": [
+        "/src"
+      ],
+      "companions": [
+        "uv.lock",
+        "poetry.lock",
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "Cargo.lock",
+        "go.sum",
+        "Gemfile.lock",
+        "__snapshots__/",
+        "*.snap"
+      ]
+    },
+    "path": "uv.lock",
+    "ci": false,
+    "expect": "blocked"
+  },
+  {
+    "name": "inside green",
+    "zones": {
+      "red": [],
+      "green": [
+        "src/green"
+      ],
+      "companions": []
+    },
+    "path": "src/green/a.py",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "green dir itself",
+    "zones": {
+      "red": [],
+      "green": [
+        "src/green"
+      ],
+      "companions": []
+    },
+    "path": "src/green",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "outside green",
+    "zones": {
+      "red": [],
+      "green": [
+        "src/green"
+      ],
+      "companions": []
+    },
+    "path": "src/other/b.py",
+    "ci": false,
+    "expect": "outside"
+  },
+  {
+    "name": "green prefix is a path segment, not a string prefix",
+    "zones": {
+      "red": [],
+      "green": [
+        "src/green"
+      ],
+      "companions": []
+    },
+    "path": "src/greenhouse/x.py",
+    "ci": false,
+    "expect": "outside"
+  },
+  {
+    "name": "the root itself is outside a green scope",
+    "zones": {
+      "red": [],
+      "green": [
+        "src/green"
+      ],
+      "companions": []
+    },
+    "path": "",
+    "ci": false,
+    "expect": "outside"
+  },
+  {
+    "name": "companion lockfile",
+    "zones": {
+      "red": [],
+      "green": [
+        "/src"
+      ],
+      "companions": [
+        "uv.lock",
+        "poetry.lock",
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "Cargo.lock",
+        "go.sum",
+        "Gemfile.lock",
+        "__snapshots__/",
+        "*.snap"
+      ]
+    },
+    "path": "uv.lock",
+    "ci": false,
+    "expect": "companion"
+  },
+  {
+    "name": "companion lockfile at depth",
+    "zones": {
+      "red": [],
+      "green": [
+        "/src"
+      ],
+      "companions": [
+        "uv.lock",
+        "poetry.lock",
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "Cargo.lock",
+        "go.sum",
+        "Gemfile.lock",
+        "__snapshots__/",
+        "*.snap"
+      ]
+    },
+    "path": "frontend/package-lock.json",
+    "ci": false,
+    "expect": "companion"
+  },
+  {
+    "name": "companion snapshot dir",
+    "zones": {
+      "red": [],
+      "green": [
+        "/src"
+      ],
+      "companions": [
+        "uv.lock",
+        "poetry.lock",
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "Cargo.lock",
+        "go.sum",
+        "Gemfile.lock",
+        "__snapshots__/",
+        "*.snap"
+      ]
+    },
+    "path": "tests/__snapshots__/x.ambr",
+    "ci": false,
+    "expect": "companion"
+  },
+  {
+    "name": "companion *.snap",
+    "zones": {
+      "red": [],
+      "green": [
+        "/src"
+      ],
+      "companions": [
+        "uv.lock",
+        "poetry.lock",
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "Cargo.lock",
+        "go.sum",
+        "Gemfile.lock",
+        "__snapshots__/",
+        "*.snap"
+      ]
+    },
+    "path": "web/ui/Button.test.tsx.snap",
+    "ci": false,
+    "expect": "companion"
+  },
+  {
+    "name": "companion exact test file (regex entry)",
+    "zones": {
+      "red": [],
+      "green": [
+        "/src"
+      ],
+      "companions": [
+        {
+          "pattern": "/tests/test_a.py",
+          "re": "^tests/test_a\\.py$"
+        }
+      ]
+    },
+    "path": "tests/test_a.py",
+    "ci": false,
+    "expect": "companion"
+  },
+  {
+    "name": "companion exact test file does not cover a sibling",
+    "zones": {
+      "red": [],
+      "green": [
+        "/src"
+      ],
+      "companions": [
+        {
+          "pattern": "/tests/test_a.py",
+          "re": "^tests/test_a\\.py$"
+        }
+      ]
+    },
+    "path": "tests/test_b.py",
+    "ci": false,
+    "expect": "outside"
+  },
+  {
+    "name": "companions mean nothing without green",
+    "zones": {
+      "red": [],
+      "green": [],
+      "companions": [
+        "uv.lock",
+        "poetry.lock",
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "Cargo.lock",
+        "go.sum",
+        "Gemfile.lock",
+        "__snapshots__/",
+        "*.snap"
+      ]
+    },
+    "path": "uv.lock",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "workspace artifact under green",
+    "zones": {
+      "red": [],
+      "green": [
+        "src/green"
+      ],
+      "companions": []
+    },
+    "path": ".mindflock_verify.json",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "workspace artifact dir under green",
+    "zones": {
+      "red": [],
+      "green": [
+        "src/green"
+      ],
+      "companions": []
+    },
+    "path": ".mindflock_pastes/p1.png",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "nested sandbox dir itself is bookkeeping",
+    "zones": {
+      "red": [],
+      "green": [
+        "src/green"
+      ],
+      "companions": []
+    },
+    "path": ".claude/worktrees/w1",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "nested sandbox path inside green (stripped candidate)",
+    "zones": {
+      "red": [],
+      "green": [
+        "src/green"
+      ],
+      "companions": []
+    },
+    "path": ".claude/worktrees/w1/src/green/a.py",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "nested sandbox path outside green",
+    "zones": {
+      "red": [],
+      "green": [
+        "src/green"
+      ],
+      "companions": []
+    },
+    "path": ".claude/worktrees/w1/src/other/b.py",
+    "ci": false,
+    "expect": "outside"
+  },
+  {
+    "name": "nested sandbox path in a red zone",
+    "zones": {
+      "red": [
+        "secret"
+      ],
+      "green": [],
+      "companions": []
+    },
+    "path": ".claude/worktrees/w1/secret/s.py",
+    "ci": false,
+    "expect": "blocked"
+  },
+  {
+    "name": "anchored red does not match the nested copy by prefix but does by stripping",
+    "zones": {
+      "red": [
+        "/config"
+      ],
+      "green": [],
+      "companions": []
+    },
+    "path": ".claude/worktrees/w2/config/a.toml",
+    "ci": false,
+    "expect": "blocked"
+  },
+  {
+    "name": "case-insensitive filesystem: green matches ignoring case",
+    "zones": {
+      "red": [],
+      "green": [
+        "Src/Green"
+      ],
+      "companions": []
+    },
+    "path": "src/green/a.py",
+    "ci": true,
+    "expect": "ok"
+  },
+  {
+    "name": "case-sensitive filesystem: green does not",
+    "zones": {
+      "red": [],
+      "green": [
+        "Src/Green"
+      ],
+      "companions": []
+    },
+    "path": "src/green/a.py",
+    "ci": false,
+    "expect": "outside"
+  },
+  {
+    "name": "case-insensitive red",
+    "zones": {
+      "red": [
+        "Config"
+      ],
+      "green": [],
+      "companions": []
+    },
+    "path": "config/x.toml",
+    "ci": true,
+    "expect": "blocked"
+  },
+  {
+    "name": "unanchored basename green matches at any depth",
+    "zones": {
+      "red": [],
+      "green": [
+        "tests"
+      ],
+      "companions": []
+    },
+    "path": "backend/tests/x.py",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "anchored green only at the root",
+    "zones": {
+      "red": [],
+      "green": [
+        "/tests"
+      ],
+      "companions": []
+    },
+    "path": "backend/tests/x.py",
+    "ci": false,
+    "expect": "outside"
+  },
+  {
+    "name": "anchored green at the root",
+    "zones": {
+      "red": [],
+      "green": [
+        "/tests"
+      ],
+      "companions": []
+    },
+    "path": "tests/x.py",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "globstar green",
+    "zones": {
+      "red": [],
+      "green": [
+        "src/**/*.py"
+      ],
+      "companions": []
+    },
+    "path": "src/a/b/c.py",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "globstar green miss by extension",
+    "zones": {
+      "red": [],
+      "green": [
+        "src/**/*.py"
+      ],
+      "companions": []
+    },
+    "path": "src/a/b/c.ts",
+    "ci": false,
+    "expect": "outside"
+  },
+  {
+    "name": "two green zones: second one matches",
+    "zones": {
+      "red": [],
+      "green": [
+        "/src/a",
+        "/docs"
+      ],
+      "companions": []
+    },
+    "path": "docs/guide.md",
+    "ci": false,
+    "expect": "ok"
+  },
+  {
+    "name": "green regex entry (a zone dict)",
+    "zones": {
+      "red": [],
+      "green": [
+        {
+          "pattern": "/lib",
+          "re": "^lib(?:/.*)?$"
+        }
+      ],
+      "companions": []
+    },
+    "path": "lib/x.js",
+    "ci": false,
+    "expect": "ok"
+  }
+]

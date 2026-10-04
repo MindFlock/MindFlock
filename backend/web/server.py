@@ -28,17 +28,25 @@ short-TTL probe memo they share. Helper logic lives in focused modules under
     agent_state      activity detection: working/clarify/idle/offline, stage
     auth             the access-token gate
     budget           per-session cost budgets: guardrail event + input lock
+    code_map         Code Map analysis: files, change set, import graph, blast
+                     radius, tool feed, declared plans, zone dry-run
+    code_outline     Code Map Atlas: symbol outlines, tiered directory levels,
+                     file view, symbol search, repo-wide entry points
     cursor_windows   IDE window adoption/focus/close (Cursor & friends)
     engine           the Engine singleton: instance registry + state reload
     events           the event bus behind /api/events
     git_ops          git primitives (branch/sha/dirty/origin probes, caches)
     ide_launch       launching the configured IDE on a folder
     mobile_access    phone access: tailscale URLs, QR codes, startup banner
+    pane_find        in-place Ctrl+F in a live pane (tmux copy-mode search)
+    pane_scroll_find in-place Ctrl+F for apps that scroll themselves (wheel + look)
     plain_repo       base-folder selection/validation for plain sessions
     ports            per-session port-block reservations
     pr_review        automated PR-review pipeline glue
     prompt_queue     the per-session prompt queue store
     recently_closed  the undo store behind reopen / Ctrl+Z
+    red_zone_monitor red-zone reconcile loop: guard files, hook health,
+                     blocked/breached/tampered events, the row summary
     remote           tailnet multi-device discovery + proxying
     repo_picker      ranked repo suggestions for the New Session folder field
     session_stats    token/cost telemetry + transcript history rendering
@@ -91,6 +99,7 @@ from backend.providers import config as provider_config
 from backend.providers import effort as _provider_effort
 from backend.providers.claude import remove_trust_entry as _remove_trust_entry
 from backend.config import ide as ide_cfg
+from backend.config import red_zones as _red_zones
 from backend.session import instance as _instance
 from backend.session import provisioned as provisioning
 from backend.session import tmux
@@ -104,6 +113,8 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 from backend.web.core import aliases as _aliases
 from backend.web.core import auth as _auth
 from backend.web.core import autopilot as _autopilot
+from backend.web.core import code_map as _code_map
+from backend.web.core import code_outline as _code_outline
 from backend.web.core import commit_message as _commit_message
 from backend.web.core import events as _events
 from backend.web.core import ports as _ports
@@ -121,7 +132,11 @@ from backend.web.core import remote as _remote
 from backend.web.core import stage_reset as _stage_reset
 from backend.web.core import pending as _pending
 from backend.web.core import prompt_queue as _prompt_queue
+from backend.web.core import red_zone_monitor as _red_zone_monitor
 from backend.web.core import ntfy as _ntfy
+from backend.web.core import find_query as _find_query
+from backend.web.core import pane_find as _pane_find
+from backend.web.core import pane_scroll_find as _pane_scroll_find
 from backend.web.core import session_plan as _session_plan
 from backend.web.core import test_plans as _test_plans
 from backend.web.core import window_refresh as _window_refresh
@@ -437,6 +452,13 @@ async def lifespan(app: FastAPI):
     # kicks, *_changed events, the addon sessions snapshot). Always-on so they
     # keep firing with zero clients connected; the GET is now read-only.
     _register_task(_instances_tick_loop())
+    # Red zones: keep every live worktree's guard file current, re-arm hooks
+    # that were disarmed, and turn the tool feed into blocked/breached/
+    # tampered events. Its own loop (not a piggyback on the instances tick) so
+    # its git work can never slow the sidebar snapshot. Off under pytest (see
+    # _RED_ZONE_LOOP_ENABLED): ENGINE is the developer's real state there.
+    if _red_zone_loop_enabled():
+        _register_task(_red_zone_loop())
     # Cursor auto-adopt: always runs; checks its runtime flag each tick.
     _register_task(_cursor_autoadopt_loop())
     # Prompt-queue drain: feed queued prompts to idle agents (keeps runs going
@@ -447,6 +469,9 @@ async def lifespan(app: FastAPI):
     # still start an edge watcher (asyncio.create_task needs the loop).
     _live_stage.set_loop(asyncio.get_running_loop())
     _register_task(_window_refresh_loop())
+    # Ctrl+F ahead of time: keep agent panes' find indexes current, build
+    # missing ones where nobody is looking (see _find_index_tick).
+    _register_task(_find_index_loop())
     # Verify: watch origin until each generated test plan's work reaches the
     # live branch, and poll the verify sessions that are working through one.
     _register_task(_test_plans_due_loop())
@@ -943,6 +968,11 @@ _HUMAN_INPUT_AT: Dict[str, float] = {}
 def _note_human_input(title: str) -> None:
     """Record that a human just put input into ``title``'s window."""
     _HUMAN_INPUT_AT[title] = time.time()
+    # A person in the pane: a background find index there stops at once.
+    try:
+        _pane_scroll_find.cancel_background(tmux.to_mindflock_tmux_name(title))
+    except Exception:  # noqa: BLE001 — presence stamping must never fail
+        pass
 
 
 def _tmux_client_input_recent(title: str, within: float) -> bool:
@@ -2470,8 +2500,9 @@ async def _autopilot_act(title, wt, rec, snap, action, detail) -> None:
                 low = msg.lower()
                 # GitHub says "not mergeable" while required checks are still
                 # queued. That is a WAIT — halting there raced the CI we are
-                # deliberately waiting for.
-                if any(
+                # deliberately waiting for. A red-zone refusal is never a wait,
+                # even when a breached path happens to contain "pending".
+                if not _resp_json(resp).get("red_zone_breaches") and any(
                     k in low
                     for k in (
                         "not mergeable",
@@ -5133,6 +5164,119 @@ async def _instances_tick_loop() -> None:
         await asyncio.sleep(_INSTANCES_TICK_INTERVAL)
 
 
+# ---- Red-zone reconcile loop ------------------------------------------------ #
+_RED_ZONE_INTERVAL = 4.0
+#: None = automatic: on in a real server, OFF under pytest. The loop WRITES
+#: into worktrees (it re-arms a disarmed hooks file) and ``ENGINE`` is the
+#: developer's REAL state.json in a test run, so every ``with TestClient(...)``
+#: would otherwise re-arm the owner's live sessions and point them at a tmp
+#: guard dir. Tests that exercise the loop set this to True with an isolated
+#: ``ENGINE.instances``.
+_RED_ZONE_LOOP_ENABLED: Optional[bool] = None
+
+
+# Ctrl+F ahead of time (core.pane_scroll_find): keep every indexed agent pane's
+# index current, and build the first one for a pane nobody is using. None =
+# on unless under pytest (ENGINE is the developer's real state there).
+_FIND_INDEX_LOOP_ENABLED: Optional[bool] = None
+_FIND_INDEX_INTERVAL = 1.5
+_FIND_INDEX_QUIET_S = 20.0  # the pane's screen unchanged this long
+_FIND_INDEX_HANDS_OFF_S = 30.0  # no human input into it this long
+
+
+def _find_index_loop_enabled() -> bool:
+    if _FIND_INDEX_LOOP_ENABLED is not None:
+        return bool(_FIND_INDEX_LOOP_ENABLED)
+    return not _restart._under_pytest()
+
+
+def _find_index_tick() -> None:
+    """One pass: observe() every scroll-mode agent pane (one capture each —
+    folds new output into existing indexes), then build at most ONE missing
+    index, only where it can't disturb anyone: the agent idle (never while
+    it waits on a question — paging keys could move a dialog's selection),
+    no input from a person for a while, the screen still, and at most one
+    screen attached (the browser freezes its view on the notify event;
+    other screens wouldn't)."""
+    activity: Dict[str, str] = {}
+    try:
+        for row in _events.sessions_snapshot():
+            if isinstance(row, dict) and row.get("title"):
+                activity[row["title"]] = str(row.get("activity") or "")
+    except Exception:  # noqa: BLE001
+        pass
+    now = time.time()
+    pick = None
+    for title in list(ENGINE.instances):
+        name = _live_session_name(tmux.to_mindflock_tmux_name(title))
+        if not name or _pane_find.find_mode(name) != "scroll":
+            continue
+        still = _pane_scroll_find.observe(name)
+        if (
+            pick is None
+            and _pane_scroll_find.needs_index(name)
+            and activity.get(title) == "idle"
+            and now - _HUMAN_INPUT_AT.get(title, 0.0) > _FIND_INDEX_HANDS_OFF_S
+            and still >= _FIND_INDEX_QUIET_S
+        ):
+            out = _pane_find._tmux(
+                "display-message", "-p", "-t", name, "#{session_attached}"
+            )
+            if out.returncode == 0 and int(out.stdout.strip() or 0) <= 1:
+                pick = (title, name)
+    if pick is not None:
+        title, name = pick
+        _pane_scroll_find.background_index(
+            name,
+            lambda on: _events.BUS.emit(
+                "pane.find_index", session=title, data={"active": bool(on)}
+            ),
+        )
+
+
+async def _find_index_loop() -> None:
+    """Drive :func:`_find_index_tick` forever (started by the lifespan)."""
+    if not _find_index_loop_enabled():
+        return
+    while True:
+        try:
+            await asyncio.to_thread(_find_index_tick)
+        except Exception:  # noqa: BLE001 — the loop must never die
+            pass
+        await asyncio.sleep(_FIND_INDEX_INTERVAL)
+
+
+def _red_zone_loop_enabled() -> bool:
+    if _RED_ZONE_LOOP_ENABLED is not None:
+        return bool(_RED_ZONE_LOOP_ENABLED)
+    return not _restart._under_pytest()
+
+
+def _red_zone_tick() -> None:
+    """One red-zone reconcile pass (see core.red_zone_monitor). Activity comes
+    from the published sessions snapshot — an in-memory read, never a probe."""
+    activity = {}
+    try:
+        for row in _events.sessions_snapshot():
+            if isinstance(row, dict) and row.get("title"):
+                activity[row["title"]] = str(row.get("activity") or "")
+    except Exception:  # noqa: BLE001
+        pass
+    _red_zone_monitor.tick(dict(ENGINE.instances), activity)
+
+
+async def _red_zone_loop() -> None:
+    """Drive :func:`_red_zone_tick` forever (started by the lifespan)."""
+    if not _red_zone_loop_enabled():
+        return
+    while True:
+        try:
+            await asyncio.to_thread(_red_zone_tick)
+        except Exception:  # noqa: BLE001 — the loop must never die
+            pass
+        await asyncio.sleep(_RED_ZONE_INTERVAL)
+
+
 # _mobile_svg / _mobile_info moved to core.mobile_access (imported above).
 
 
@@ -6141,6 +6285,52 @@ def _profile_model_error(model: str) -> str:
     return ""
 
 
+def _repo_url_workdirs(repo_url: str) -> list:
+    """Local checkouts that share ``repo_url``'s repo identity, for decorating
+    a provisioned start's prompt BEFORE its worktree exists — the shared
+    :func:`provisioning.launch_workdirs`, which the ingestion pipeline's
+    SessionRunner uses too, so a ticket gets the same decoration whichever
+    path launches it. Never raises."""
+    return provisioning.launch_workdirs(repo_url)
+
+
+def _red_zone_prompt(
+    prompt: str, program: str, workdirs, plan_first: Optional[bool]
+) -> str:
+    """``red_zones.decorate_prompt`` against the first existing dir in
+    ``workdirs`` (``""`` when none — plan-first can still apply, zones can't).
+    ``plan_first=None`` lets the repo's Plan-first flag decide (intake
+    starts); True/False is the New Session checkbox. ``hard_guard`` is the
+    provider's: a detect-only CLI is told its zones are flagged, not blocked.
+
+    Plan-first applies only to a provider with ``plan_supported()``: the
+    instruction ends "then wait for my go-ahead", and the Go button that
+    gives it lives in the Map's Plan section, which exists for those CLIs
+    only — any other agent would sit waiting for a button nobody can press.
+    Idempotent and best-effort — decoration never fails a start. Blocking."""
+    if not prompt:
+        return prompt
+    try:
+        wd = next((d for d in workdirs or () if d and os.path.isdir(d)), "")
+        prov = providers.resolve(program)
+        hard = bool(prov.red_zone_guard())
+        if not _provider_plans(prov):
+            plan_first = False
+        return _red_zones.decorate_prompt(
+            prompt, wd, hard_guard=hard, plan_first=plan_first
+        )
+    except Exception:  # noqa: BLE001
+        return prompt
+
+
+def _provider_plans(prov) -> bool:
+    """``prov.plan_supported()``, False on any doubt."""
+    try:
+        return bool(prov.plan_supported())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 @app.post("/api/instances")
 async def create_instance(payload: dict) -> JSONResponse:
     """Create a session and Start it in the background (returns 202 immediately).
@@ -6173,6 +6363,10 @@ async def create_instance(payload: dict) -> JSONResponse:
       ambient login, anything else must name a configured profile.
     * ``profile_model`` — this session's model override of the profile's own
       model pin (e.g. an OpenRouter model id); blank keeps the pin.
+    * ``plan_first`` — append the plan-first instruction to ``prompt``: the
+      agent lists every file it intends to touch (a ``mindflock-plan`` block)
+      and waits for Go before editing. The repo's red zones are named in the
+      prompt either way.
 
     The three creation modes are provisioned, plain-worktree, and in-place. A
     409 is returned when the title already exists; the instance registers as
@@ -6323,6 +6517,17 @@ async def create_instance(payload: dict) -> JSONResponse:
         if is_provisioned:
             provision_repo = plain_path
 
+    # Red zones + plan-first: the launch prompt names the repo's zones and, when
+    # the New Session "Plan first" box was ticked, asks for a file plan before
+    # any edit. Keyed off the folder the session is cut from — its repo
+    # identity is the future worktree's (same origin).
+    if prompt:
+
+        def _decorate(p=prompt, local=bool(repo_path or not is_provisioned)):
+            dirs = [plain_path] if local else _repo_url_workdirs("")
+            return _red_zone_prompt(p, program, dirs, bool(payload.get("plan_first")))
+
+        prompt = await asyncio.to_thread(_decorate)
     inst = session.NewInstance(
         session.InstanceOptions(
             title=title,
@@ -6546,17 +6751,36 @@ async def delete_instance(title: str) -> JSONResponse:
         wt = inst.GetWorktreePath()
     except Exception:  # noqa: BLE001
         wt = ""
+    # Red zones: drop the feed cursor/plan latches (titles are reused) and
+    # tombstone the title so the reconcile loop can't re-adopt it while Kill
+    # runs; when no other session shares the worktree, remove its guard file.
+    # BEFORE Kill, while the worktree path still resolves the way the guard
+    # file's name was derived from it. The worktree-scope zones are settled
+    # AFTER Kill (after_kill), once we know whether the folder is really gone
+    # — an in-place session's folder is the user's own checkout and keeps
+    # its "This worktree" zones.
+    rz_shared = _worktree_in_use_by_other(wt, title)
+    await asyncio.to_thread(
+        lambda: _red_zone_monitor.forget(
+            title, wt, rz_shared, worktree_removed=False, inst=inst
+        )
+    )
     try:
         await asyncio.to_thread(inst.Kill)
     except Exception as err:  # noqa: BLE001
         # Even if kill partially failed, drop it from the active set.
         if log.ErrorLog is not None:
             log.ErrorLog.Printf("kill error for %s: %v", title, err)
+    # The dying agent's last Post hooks can recreate the feed file between
+    # forget and Kill; and the zones go only with a folder that is gone.
+    await asyncio.to_thread(_red_zone_monitor.after_kill, title, wt, rz_shared)
     _kill_shell_session(title)
     # Keep the Cursor window open if another live session (e.g. a copy) still
     # shares this worktree — only close it when this is the last one on the dir.
     if not _worktree_in_use_by_other(wt, title):
         _close_cursor_window(wt)
+        # The Atlas index of a worktree nobody uses any more.
+        _code_outline.forget(wt)
         # GC the ~/.claude.json trust entry pre_trust_workdir seeded for this
         # worktree (G3) — guarded internally to MindFlock-owned paths only.
         await asyncio.to_thread(_remove_trust_entry, wt)
@@ -6866,6 +7090,1219 @@ async def instance_check_run(title: str) -> JSONResponse:
 
 
 # --------------------------------------------------------------------------- #
+# Code Map + red zones. The analysis lives in core.code_map, the store and the
+# guard file in config.red_zones, the reconcile loop + events in
+# core.red_zone_monitor; these routes are the thin HTTP skin over them. Every
+# git/store touch runs off the event loop — the Map polls /live every 2 s.
+# --------------------------------------------------------------------------- #
+_RZ_SYNC_CAP = 50
+
+
+def _rz_repo(wt: str):
+    """``(repo_id, {"id", "label"})`` for a worktree, ``(None, None)`` when git
+    can't say (the UI then shows worktree-scope zones only)."""
+    ident = _red_zones.repo_identity(wt)
+    if not ident:
+        return None, None
+    return ident[0], {"id": ident[0], "label": ident[1]}
+
+
+def _rz_doc(wt: str, repo_id: Optional[str], zones=None, ci=None) -> dict:
+    """``red_zones.zones_doc`` — what every zone check here classifies
+    against (red, green, companions, exemptions)."""
+    return _red_zones.zones_doc(wt, repo_id, zones=zones, ci=ci)
+
+
+def _rz_hard(inst) -> bool:
+    """Whether ``inst``'s CLI is hard-guarded (the hook blocks before an
+    edit) — the agent messages say "blocked" vs "flagged and block pushes"."""
+    try:
+        prov = providers.resolve(getattr(inst, "Program", "") or "")
+        return bool(prov.red_zone_guard())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _rz_changed_paths(inst, wt: str) -> tuple:
+    """``(changed, committed)`` path lists of the session (working + committed
+    vs its fork point; committed ``fork..HEAD``)."""
+    changed = [c.get("path") or "" for c in _code_map.changed_files(inst, wt)]
+    committed = _code_map.committed_changed(inst, wt, "HEAD")
+    return [p for p in changed if p], list(committed)
+
+
+def _rz_exempt_ids(root: str, paths: list) -> dict:
+    """``{rel: "sha [sha …]"}`` — every identity a path had when it was
+    exempted: its working-tree blob AND its blob at ``HEAD`` and at
+    ``origin/<branch>`` (when pushed). The monitor compares the working
+    tree, the push gate the blob at ``HEAD`` and the PR gate the one at
+    ``origin/<branch>``: recording only the working tree blocked the push of
+    work committed before the scope and then edited further."""
+    if not paths:
+        return {}
+    wt_b = _red_zones.worktree_blobs(root, paths)
+    revs = [_red_zones.rev_blobs(root, "HEAD", paths)]
+    branch = _current_branch(root) or ""
+    if branch:
+        ref = _pr_content_ref(root, branch)
+        if ref != "HEAD":
+            revs.append(_red_zones.rev_blobs(root, ref, paths))
+    out = {}
+    for p in paths:
+        if p not in wt_b:
+            continue
+        ids = [wt_b[p]]
+        for rb in revs:
+            v = rb.get(p)
+            if v and v not in ids:
+                ids.append(v)
+        out[p] = " ".join(ids)
+    return out
+
+
+def _rz_green_exempt(inst, wt: str, old_doc: dict, new_doc: dict) -> tuple:
+    """Exempt the work a green scope change would suddenly call a breach.
+
+    Every path already changed (working tree or committed) that is OUTSIDE
+    under ``new_doc`` but was NOT a breach under ``old_doc`` is recorded with
+    its current blob (``green_exempt``): the monitor and the push/PR gate
+    skip it while its content stays the same. Scoping a session mid-flight —
+    or narrowing its scope — must not block its push on work that was
+    legitimate when it was done; editing such a file AFTER the scope exists
+    is a breach again. ``(exempt paths, committed_outside count)``."""
+    ci = bool(new_doc.get("ci"))
+    changed, committed = _rz_changed_paths(inst, wt)
+    root = os.path.realpath(wt)
+    cand = sorted(set(changed) | set(committed))
+    now_out = [
+        p
+        for p in cand
+        if (_red_zones.verdict(new_doc, p, ci) or {}).get("kind") == "green"
+    ]
+    was = (
+        _red_zones.breach_verdicts(old_doc, now_out, ci, root=root)
+        if (old_doc.get("red") or old_doc.get("green"))
+        else {}
+    )
+    fresh = [p for p in now_out if p not in was]
+    if not fresh:
+        return [], 0
+    mapping = _rz_exempt_ids(root, fresh)
+    if mapping:
+        _red_zones.set_green_exempt(wt, mapping)
+    csets = set(committed)
+    return sorted(mapping), sum(1 for p in mapping if p in csets)
+
+
+def _code_map_fp(inst, wt: str, zones, fp: Optional[str] = None) -> Optional[str]:
+    """The Map's snapshot fingerprint: the worktree fingerprint (``fp`` when
+    the caller already has it) plus a digest of the zone set, because a new
+    zone changes the snapshot (the zone-matched git-ignored files it adds)
+    without touching git at all."""
+    if fp is None:
+        fp = _code_map.fingerprint(inst, wt)
+    if fp is None or not zones:
+        return fp
+    import hashlib
+
+    sig = "\n".join(
+        sorted("%s %s %s" % (z.get("id"), z.get("kind"), z.get("re")) for z in zones)
+    )
+    return fp + "." + hashlib.sha1(sig.encode("utf-8", "replace")).hexdigest()[:10]
+
+
+def _live_repo_roots(repo_id: Optional[str], extra_from: str = "") -> list:
+    """``[(root, lroot)]`` of every worktree a repo-scope zone change must
+    reach NOW: each live session's worktree with that repo id, plus (with
+    ``extra_from``) that repo's own ``git worktree list`` — a checkout MindFlock
+    isn't running can still carry an armed hook from an earlier session."""
+    out, seen = [], set()
+
+    def _add(p: str) -> None:
+        if not p or not os.path.isdir(p) or len(out) >= _RZ_SYNC_CAP:
+            return
+        real = os.path.realpath(p)
+        if real not in seen:
+            seen.add(real)
+            out.append((real, p))
+
+    if not repo_id:
+        return out
+    for _t, other in list(ENGINE.instances.items()):
+        try:
+            if not other.Started():
+                continue
+            owt = other.GetWorktreePath()
+        except Exception:  # noqa: BLE001
+            continue
+        if not owt or not os.path.isdir(owt):
+            continue
+        ident = _red_zones.repo_identity(owt)
+        if ident and ident[0] == repo_id:
+            _add(owt)
+    if extra_from:
+        cp = _run_capped(
+            ["git", "-C", extra_from, "worktree", "list", "--porcelain"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+        )
+        if cp.returncode == 0:
+            for line in cp.stdout.decode("utf-8", "replace").splitlines():
+                if line.startswith("worktree "):
+                    _add(line[len("worktree ") :].strip())
+    return out
+
+
+def _rz_resync_after(res: Optional[dict], wt: str = "") -> None:
+    """Re-sync the guard files a removed/added zone reaches (``res`` is
+    ``remove_zone``'s ``{"zone", "scope", "owner"}``)."""
+    if not res:
+        return
+    if res.get("scope") == "repo":
+        _red_zone_monitor.resync(
+            _live_repo_roots(res.get("owner"), wt), res.get("owner")
+        )
+    else:
+        owner = res.get("owner") or ""
+        lroot = wt if wt and os.path.realpath(wt) == owner else owner
+        _red_zone_monitor.resync([(owner, lroot)])
+
+
+def _snapshot_activity(title: str) -> str:
+    """The session's activity off the published snapshot (in-memory; the Map
+    polls too often to pay for a pane probe)."""
+    try:
+        for row in _events.sessions_snapshot():
+            if isinstance(row, dict) and row.get("title") == title:
+                return str(row.get("activity") or "offline")
+    except Exception:  # noqa: BLE001
+        pass
+    return "offline"
+
+
+def _feed_out(rec: dict, wt: str, doc: Optional[dict] = None) -> dict:
+    """A feed record for the browser: writes/reads made worktree-relative
+    (paths outside the worktree dropped — a plan file under ~/.claude/plans is
+    not a tile), the transcript path and plan text left out (the plan travels
+    as ``plan``). With a green scope in force (``doc``), reads outside it are
+    listed as ``peek`` — "peeked outside scope", advisory: reads are never
+    blocked (a shell ``cat`` can't be, and blinding the agent to its callers
+    breaks them)."""
+    out = {k: v for k, v in rec.items() if k not in ("tp", "plan", "writes", "reads")}
+    for key in ("writes", "reads"):
+        rels = []
+        for p in rec.get(key) or []:
+            rel = _code_map._rel_in_wt(p, wt)
+            if rel and rel not in rels:
+                rels.append(rel)
+        if rels:
+            out[key] = rels
+    if doc and doc.get("green") and out.get("reads"):
+        ci = bool(doc.get("ci"))
+        peek = [
+            r
+            for r in out["reads"]
+            if _red_zones.classify(r, None, doc, ci) == "outside"
+        ]
+        if peek:
+            out["peek"] = peek[:40]
+    if isinstance(rec.get("artifact"), list):
+        arts = []
+        for p in rec["artifact"]:
+            p = str(p)
+            if p and p not in arts:
+                arts.append(p)
+        if arts:
+            out["artifact"] = arts[:50]
+    return out
+
+
+def _live_breaches(inst, wt: str, changed, doc, ci: bool = False) -> list:
+    """``[{"path", "pattern", "zone_id", "committed", "kind"}]``: the
+    session's changed files that are breaches under ``doc`` — inside an
+    enforced red zone, or outside the green scope and not exempt
+    (``pattern`` = "outside green") — ``committed`` = already in a commit,
+    i.e. what blocks a push; plus red-zone-matched git-ignored files the
+    monitor saw change. Computed per request, never from the throttled row
+    summary. ``ci``: the worktree's filesystem is case-insensitive, so match
+    the way the hook does (IGNORECASE). ``doc`` may also be a bare list of
+    enforced red zones (older callers)."""
+    if isinstance(doc, list):
+        doc = {"red": doc, "green": [], "companions": [], "exempt": {}}
+    hits: Dict[str, dict] = {}
+    rels = [c.get("path") or "" for c in changed or []]
+    for rel, v in _red_zones.breach_verdicts(
+        doc, rels, ci, root=os.path.realpath(wt)
+    ).items():
+        hits[rel] = {
+            "path": rel,
+            "pattern": v.get("pattern"),
+            "zone_id": v.get("zone_id"),
+            "committed": False,
+            "kind": v.get("kind") or "red",
+        }
+    if hits:
+        for rel in _code_map.committed_changed(inst, wt, "HEAD"):
+            if rel in hits:
+                hits[rel]["committed"] = True
+    for rel, m in _red_zone_monitor.ignored_breaches(wt).items():
+        if rel not in hits:
+            hits[rel] = {
+                "path": rel,
+                "pattern": m.get("pattern"),
+                "zone_id": m.get("zone_id"),
+                "committed": False,
+                "kind": "red",
+            }
+    return [hits[k] for k in sorted(hits)]
+
+
+#: Appended to a snapshot fingerprint whose import graph is still partial,
+#: so it never equals the live poll's and the client refetches (see below).
+_PARTIAL_FP_SUFFIX = ".partial"
+
+
+@app.get("/api/instances/{title}/code-map")
+async def instance_code_map(title: str, fp: str = "") -> JSONResponse:
+    """The Map's structural snapshot: the worktree's files (``[rel, size,
+    flags]``; flag 1 = zone-matched git-ignored file, 2 = test file) and the
+    import graph over them (``edges`` = ``[src, dst]`` indices, "src imports
+    dst"). ``?fp=`` = the fingerprint the client already holds; when it is
+    still current the answer is just ``{"unchanged": true, "fingerprint"}``.
+
+    A PARTIAL import graph (the read budget ran out on a big/cold repo) is
+    never "unchanged": the next build resumes from the per-file memo, but
+    only if a next build happens, and an idle worktree (the agent waiting on
+    plan review) never moves the fingerprint. So while the graph is partial
+    the route skips the shortcut, and the snapshot's fingerprint carries a
+    ``.partial`` suffix — it then differs from the live poll's, which is what
+    makes the client come back for the rest until the graph is complete."""
+    if not git_available():
+        return _no_git_response()
+    inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+
+    def _build() -> dict:
+        repo_id, repo = _rz_repo(wt)
+        zones = _red_zones.effective_zones(wt, repo_id)
+        raw = _code_map.fingerprint(inst, wt)
+        cur = _code_map_fp(inst, wt, zones, raw)
+        if (
+            fp
+            and cur is not None
+            and fp == cur
+            and not _code_map.last_graph_partial(wt)
+        ):
+            return {"unchanged": True, "fingerprint": cur}
+        extra: list = []
+        red = [z for z in zones if z.get("kind", "red") == "red"]
+        if red:
+            # Git-ignored files are shown for RED zones only ("my config
+            # file"); a green scope never makes an ignored file interesting.
+            _files, _dirs, extra, _trunc = _red_zones.zone_files(wt, red)
+        files, truncated = _code_map.list_files(wt, extra, fp=raw)
+        graph = _code_map.build_graph(wt, files, fp=raw)
+        partial = bool(graph.get("partial"))
+        return {
+            "root": wt,
+            "repo": repo,
+            "fingerprint": (cur + _PARTIAL_FP_SUFFIX) if (cur and partial) else cur,
+            "files": files,
+            "truncated": truncated,
+            "edges": graph.get("edges") or [],
+            "graph_partial": partial,
+            "langs": graph.get("langs") or {},
+        }
+
+    try:
+        return JSONResponse(await asyncio.to_thread(_build))
+    except Exception as err:  # noqa: BLE001
+        return JSONResponse({"error": str(err)}, status_code=500)
+
+
+@app.get("/api/instances/{title}/code-map/live")
+async def instance_code_map_live(title: str, since: float = 0.0) -> JSONResponse:
+    """The Map's 2-second poll: change set, the tool feed since ``since``
+    (paths worktree-relative), the agent's current plan and off-plan edits,
+    zones (waived included, flagged), breaches, guard state (``detail`` is
+    an explanatory sentence for the pill's tooltip), activity, and other
+    sessions' recent edits on the same repo. ``fingerprint`` moves when the
+    snapshot (``GET /code-map``) is worth refetching. ``ci`` = the worktree's
+    filesystem is case-insensitive: the hook matches zones with IGNORECASE
+    there, so the Map's zone matchers must too."""
+    if not git_available():
+        return _no_git_response()
+    inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+
+    def _build() -> dict:
+        now = time.time()
+        repo_id, repo = _rz_repo(wt)
+        zones = _red_zones.effective_zones(wt, repo_id)
+        ci = _red_zone_monitor.root_ci(wt)
+        doc = _rz_doc(wt, repo_id, zones, ci)
+        enforced_n = len(doc["red"]) + len(doc["green"])
+        tmux_name = tmux.to_mindflock_tmux_name(title)
+        changed = _code_map.changed_files(inst, wt)
+        records = _code_map.read_feed(tmux_name, 0.0, 500)
+        plan = _code_map.current_plan(inst, tmux_name, wt, records)
+        if doc["mode"] and isinstance(plan, dict):
+            # Plan items outside the scope (or in a red zone) are flagged
+            # every poll — the scope can change after the plan was written.
+            items = []
+            for it in plan.get("items") or []:
+                if isinstance(it, dict) and it.get("path"):
+                    v = _red_zones.classify(it["path"], None, doc, ci)
+                    it = dict(it)
+                    if v == "outside":
+                        it["outside"] = True
+                    elif v == "blocked":
+                        it["blocked"] = True
+                items.append(it)
+            plan = dict(plan, items=items)
+        prov = providers.resolve(getattr(inst, "Program", "") or "")
+        try:
+            plan_supported = bool(prov.plan_supported())
+        except Exception:  # noqa: BLE001
+            plan_supported = False
+        return {
+            "now": now,
+            # After changed_files: its `add -N` is part of the state this
+            # fingerprint describes, so the next snapshot read agrees with it.
+            "fingerprint": _code_map_fp(inst, wt, zones),
+            "repo": repo,
+            "changed": changed,
+            "feed": [
+                _feed_out(r, wt, doc)
+                for r in records
+                if float(r.get("ts") or 0) > since
+            ][-300:],
+            "plan": plan,
+            "off_plan": _code_map.off_plan(plan, changed, records, wt=wt),
+            "zones": zones,
+            "breaches": _live_breaches(inst, wt, changed, doc, ci),
+            "guard": _red_zone_monitor.guard_info(title, inst, enforced_n, doc["mode"]),
+            "mode": doc["mode"],
+            "exempt": doc["exempt"],
+            "companions": [
+                {"pattern": c["pattern"], "re": c["re"], "source": c.get("source")}
+                for c in doc["companions"]
+            ],
+            "companion_files": [
+                c["pattern"][1:]
+                for c in doc["companions"]
+                if c.get("source") == "tests"
+            ],
+            "activity": _snapshot_activity(title),
+            "plan_supported": plan_supported,
+            "ci": ci,
+            "others": _code_map.others(inst, repo_id, 0.0),
+        }
+
+    try:
+        return JSONResponse(await asyncio.to_thread(_build))
+    except Exception as err:  # noqa: BLE001
+        return JSONResponse({"error": str(err)}, status_code=500)
+
+
+# --------------------------------------------------------------------------- #
+# Code Map Atlas (the drill-down board). The analysis — per-file outlines,
+# tiered directory levels, the file view, search and entry points — lives in
+# core.code_outline and is keyed on the worktree's content fingerprint, so
+# these routes are plain reads: git gate, worktree check, off the event loop
+# (the first call on a big repo builds the index for a few seconds), and a
+# bad ``path`` (absolute / ``..`` / not a file) is a 400, not a 500.
+# --------------------------------------------------------------------------- #
+async def _atlas_call(title: str, fn, *args) -> JSONResponse:
+    """Run ``fn(inst, wt, *args)`` for ``title``'s worktree off the loop."""
+    if not git_available():
+        return _no_git_response()
+    inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+    try:
+        return JSONResponse(await asyncio.to_thread(fn, inst, wt, *args))
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    except Exception as err:  # noqa: BLE001
+        return JSONResponse({"error": str(err)}, status_code=500)
+
+
+@app.get("/api/instances/{title}/code-map/atlas")
+async def instance_code_map_atlas(
+    title: str, path: str = "", fp: str = ""
+) -> JSONResponse:
+    """One Atlas level: the children of directory ``path`` (``""`` = the repo
+    root) as tiered cards with their interfaces and sibling relations (shape:
+    ``code_outline.atlas``). ``fp`` is accepted and ignored — the level is
+    cached per content fingerprint server-side, so a refetch is cheap."""
+    return await _atlas_call(
+        title, lambda inst, wt: _code_outline.atlas(inst, wt, path, fp or None)
+    )
+
+
+@app.get("/api/instances/{title}/code-map/file")
+async def instance_code_map_file(title: str, path: str = "") -> JSONResponse:
+    """The file view: detailed outline, imports, entry points, used-by and
+    what changed vs the session's fork point (``code_outline.file_view``).
+    400 for an absolute / ``..`` / escaping / missing path."""
+    return await _atlas_call(title, _code_outline.file_view, path)
+
+
+@app.get("/api/instances/{title}/code-map/search")
+async def instance_code_map_search(
+    title: str, q: str = "", limit: int = 40
+) -> JSONResponse:
+    """Files, folders, symbols and routes matching ``q`` (camel/snake-aware,
+    ranked; ``code_outline.search``)."""
+    return await _atlas_call(title, lambda inst, wt: _code_outline.search(wt, q, limit))
+
+
+@app.get("/api/instances/{title}/code-map/entry-points")
+async def instance_code_map_entry_points(title: str) -> JSONResponse:
+    """The repo-wide "swagger" lens: HTTP routes, CLI commands, event
+    handlers and mains (``code_outline.entry_points``; tests excluded)."""
+    return await _atlas_call(title, lambda inst, wt: _code_outline.entry_points(wt))
+
+
+def _told_body(told, reason) -> dict:
+    body = {"ok": told is not False, "told": told}
+    if reason:
+        body["reason"] = reason
+    return body
+
+
+@app.post("/api/instances/{title}/code-map/ask-plan")
+async def instance_code_map_ask_plan(
+    title: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Ask the agent for its file plan: ``{"mode": "plan"}`` (before it starts)
+    or ``"remaining"`` (mid-flight: what it changed + what it still intends).
+    Typed when the agent is idle, QUEUED while it works or waits on a prompt —
+    ``{"ok", "told": "sent"|"queued"|false, "reason"?}``; never reboots it."""
+    if not git_available():
+        return _no_git_response()
+    inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+    mode = str((payload or {}).get("mode") or "plan")
+    if mode not in ("plan", "remaining"):
+        return JSONResponse(
+            {"error": "mode must be plan or remaining"}, status_code=400
+        )
+    text = _red_zones.PLAN_PROMPT if mode == "plan" else _red_zones.REMAINING_PROMPT
+    told, reason = await asyncio.to_thread(lambda: _deliver_to_agent(inst, title, text))
+    return JSONResponse(_told_body(told, reason))
+
+
+def _plan_scope_patterns(inst, title: str, wt: str) -> list:
+    """Anchored green patterns for the agent's current plan: an existing
+    file or dir → its exact path; a NEW file → its parent directory (the
+    agent must be able to create it; a new file at the root → itself).
+    Every path is :func:`red_zones.glob_escape`-d — it is literal."""
+    tmux_name = tmux.to_mindflock_tmux_name(title)
+    records = _code_map.read_feed(tmux_name, 0.0, 500)
+    plan = _code_map.current_plan(inst, tmux_name, wt, records)
+    out: list = []
+    for it in (plan or {}).get("items") or []:
+        rel = str((it or {}).get("path") or "").strip().strip("/")
+        if not rel or rel.startswith("..") or os.path.isabs(rel):
+            continue
+        abs_p = os.path.join(wt, rel)
+        # Literal paths: glob-escaped, or `app/[slug]/page.tsx` would be a
+        # character class that misses the planned file itself.
+        esc = _red_zones.glob_escape
+        if os.path.exists(abs_p) or not it.get("new"):
+            pat = "/" + esc(rel)
+        else:
+            parent = os.path.dirname(rel)
+            pat = ("/" + esc(parent) + "/") if parent else ("/" + esc(rel))
+        try:
+            _red_zones.normalize_pattern(pat)
+        except ValueError:
+            continue
+        if pat not in out:
+            out.append(pat)
+    return out
+
+
+@app.post("/api/instances/{title}/code-map/go")
+async def instance_code_map_go(
+    title: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """The plan loop's **Go**: one message that green-lights the plan and names
+    the zones staged during review (``{"zone_ids": [...]}`` — ids of this
+    worktree's effective zones; unknown/waived ids are ignored).
+
+    ``{"scope_to_plan": true}`` is **Go — only the planned files**: every
+    plan item becomes an anchored worktree GREEN zone (exact paths; the
+    parent dir of a new file), files already changed outside that scope are
+    exempted, the guard is synced, and the go message names the scope. The
+    answer then also carries ``zones`` (the created green zones) and
+    ``exempt``; 409 when the plan names no usable path."""
+    if not git_available():
+        return _no_git_response()
+    inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+    p = payload or {}
+    ids = [str(i) for i in (p.get("zone_ids") or []) if i]
+    scope_to_plan = bool(p.get("scope_to_plan"))
+
+    def _go():
+        repo_id, _repo = _rz_repo(wt)
+        by_id = {
+            z["id"]: z
+            for z in _red_zones.effective_zones(wt, repo_id)
+            if not z.get("waived")
+        }
+        chosen = [by_id[i] for i in dict.fromkeys(ids) if i in by_id]
+        created: list = []
+        exempt: list = []
+        if scope_to_plan:
+            pats = _plan_scope_patterns(inst, title, wt)
+            if not pats:
+                return None
+            ci = _red_zone_monitor.root_ci(wt)
+            old_doc = _rz_doc(wt, repo_id, ci=ci)
+            with _red_zone_monitor.route_write():
+                for pat in pats:
+                    try:
+                        created.append(
+                            _red_zones.add_zone(
+                                "worktree",
+                                os.path.realpath(wt),
+                                pat,
+                                # Unnamed on purpose: the agent's deny reason
+                                # and the UI name a zone by its name, and
+                                # "planned" x N says nothing; the path does.
+                                note="from the plan (Go — only the planned files)",
+                                repo_id=repo_id,
+                                kind="green",
+                            )
+                        )
+                    except (ValueError, LookupError):
+                        continue  # a red zone on the same path wins
+                new_doc = _rz_doc(wt, repo_id, ci=ci)
+                exempt, _n = _rz_green_exempt(inst, wt, old_doc, new_doc)
+            _red_zone_monitor.resync([(os.path.realpath(wt), wt)], repo_id)
+        msg = _red_zones.go_message(chosen, scope=created or None, hard=_rz_hard(inst))
+        told, reason = _deliver_to_agent(inst, title, msg)
+        return told, reason, created, exempt
+
+    res = await asyncio.to_thread(_go)
+    if res is None:
+        return JSONResponse(
+            {"error": "the plan names no file to scope the session to"},
+            status_code=409,
+        )
+    told, reason, created, exempt = res
+    body = _told_body(told, reason)
+    if scope_to_plan:
+        body["zones"] = created
+        body["exempt"] = exempt
+    return JSONResponse(body)
+
+
+@app.get("/api/instances/{title}/red-zones")
+async def instance_red_zones(title: str) -> JSONResponse:
+    """This worktree's effective zones (repo + worktree scope; waived repo zones
+    included and flagged; green ones ``kind: "green"``), its repo's Plan-first
+    flag, the zone ``mode``, the green exemption set and the companion rules
+    in force."""
+    if not git_available():
+        return _no_git_response()
+    _inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+
+    def _read():
+        repo_id, repo = _rz_repo(wt)
+        zones = _red_zones.effective_zones(wt, repo_id)
+        doc = _rz_doc(wt, repo_id, zones)
+        return {
+            "repo": repo,
+            "plan_first": _red_zones.plan_first(repo_id),
+            "zones": zones,
+            "mode": doc["mode"],
+            "exempt": doc["exempt"],
+            "companions": _red_zones.companions_config(repo_id),
+            "sessions_here": _sessions_on_worktree(wt),
+        }
+
+    return JSONResponse(await asyncio.to_thread(_read))
+
+
+def _sessions_on_worktree(wt: str) -> int:
+    """How many registered sessions share ``wt`` — a green zone is worktree
+    scope, so it applies to all of them (the add row says so)."""
+    real = os.path.realpath(wt)
+    n = 0
+    for _t, other in list(ENGINE.instances.items()):
+        try:
+            owt = other.GetWorktreePath()
+        except Exception:  # noqa: BLE001
+            continue
+        if owt and os.path.realpath(owt) == real:
+            n += 1
+    return n
+
+
+@app.post("/api/instances/{title}/red-zones")
+async def instance_red_zones_add(
+    title: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Add a zone from a session: ``{"pattern", "name", "note", "kind":
+    "red"|"green", "scope": "repo"|"worktree", "tell_agent", "exempt"}``.
+
+    RED (default): as v2 — the guard files it reaches are synced before this
+    returns, so the agent's very next tool call is checked against it; files
+    already changed inside it come back as ``already_changed`` and are
+    recorded as pre-existing (never announced as a fresh breach).
+
+    GREEN ("only here"): worktree scope only (``scope: "repo"`` → 400; the
+    default scope is the worktree). Every path already changed outside the
+    new scope is EXEMPT by default (``"exempt": false`` = treat them as
+    breaches) — ``exempt`` / ``committed_outside`` in the answer. The same
+    pattern as both kinds → 409. ``tell_agent`` sends the notice (queued
+    mid-turn); a green notice never says "revert"."""
+    if not git_available():
+        return _no_git_response()
+    inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+    p = payload or {}
+    pattern = str(p.get("pattern") or "")
+    kind = str(p.get("kind") or "red")
+    if kind not in ("red", "green"):
+        return JSONResponse({"error": "kind must be 'red' or 'green'"}, status_code=400)
+    scope = str(p.get("scope") or ("worktree" if kind == "green" else "repo"))
+    if scope not in ("repo", "worktree"):
+        return JSONResponse(
+            {"error": "scope must be 'repo' or 'worktree'"}, status_code=400
+        )
+    if kind == "green" and scope != "worktree":
+        return JSONResponse(
+            {
+                "error": "green zones are worktree-scope only — they scope a task, "
+                "not the repo (a repo-wide one would leak into every session of it)"
+            },
+            status_code=400,
+        )
+    want_exempt = p.get("exempt", True) is not False
+
+    def _add():
+        repo_id, repo = _rz_repo(wt)
+        if scope == "repo" and not repo_id:
+            raise LookupError(
+                "couldn't identify this repo (git failed) — try again, or add "
+                "the zone to this worktree only"
+            )
+        ci = _red_zone_monitor.root_ci(wt)
+        old_doc = _rz_doc(wt, repo_id, ci=ci) if kind == "green" else None
+        with _red_zone_monitor.route_write():
+            zone = _red_zones.add_zone(
+                scope,
+                repo_id if scope == "repo" else os.path.realpath(wt),
+                pattern,
+                name=str(p.get("name") or ""),
+                note=str(p.get("note") or ""),
+                label=(repo or {}).get("label", ""),
+                repo_id=repo_id,
+                kind=kind,
+            )
+            exempt, committed_outside = [], 0
+            if kind == "green" and want_exempt:
+                new_doc = _rz_doc(wt, repo_id, ci=ci)
+                exempt, committed_outside = _rz_green_exempt(inst, wt, old_doc, new_doc)
+        already: list = []
+        if kind == "red":
+            already = _code_map.changed_matching(
+                inst, wt, _red_zones.compile_pattern(zone["pattern"])
+            )
+            _red_zone_monitor.seed_breaches(wt, already)
+        if scope == "repo":
+            targets = _live_repo_roots(repo_id, wt)
+        else:
+            targets = [(os.path.realpath(wt), wt)]
+        _red_zone_monitor.resync(targets, repo_id)
+        zones = _red_zones.effective_zones(wt, repo_id)
+        green = [z for z in zones if z.get("kind") == "green"]
+        return zone, zones, already, exempt, committed_outside, green
+
+    try:
+        zone, zones, already, exempt, committed_outside, green = (
+            await asyncio.to_thread(_add)
+        )
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    except LookupError as err:  # incl. ZoneConflict (same pattern, other kind)
+        return JSONResponse({"error": str(err)}, status_code=409)
+    told, reason = False, None
+    if p.get("tell_agent"):
+        msg = _red_zones.zone_added_message(
+            dict(zone, kind=kind), hard=_rz_hard(inst), green=green
+        )
+        told, reason = await asyncio.to_thread(
+            lambda: _deliver_to_agent(inst, title, msg)
+        )
+    body = {
+        "ok": True,
+        "zone": dict(zone, kind=kind),
+        "zones": zones,
+        "told": told,
+        "already_changed": already,
+    }
+    if kind == "green":
+        body["exempt"] = exempt
+        body["committed_outside"] = committed_outside
+    if reason:
+        body["reason"] = reason
+    return JSONResponse(body)
+
+
+def _clean_rel_arg(raw) -> Optional[str]:
+    """A worktree-relative path from a request, or None when it is empty,
+    absolute or climbs out (``..``)."""
+    rel = str(raw or "").strip().replace("\\", "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
+    rel = rel.strip("/")
+    if not rel or "\x00" in rel or os.path.isabs(str(raw or "").strip()):
+        return None
+    if any(seg == ".." for seg in rel.split("/")):
+        return None
+    return rel
+
+
+@app.post("/api/instances/{title}/red-zones/allow")
+async def instance_red_zones_allow(
+    title: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """**Allow this file** on a green-zone scope request: ``{"path"}`` →
+    an anchored worktree green zone for exactly that path, synced now, and
+    the agent told it may edit it (``tell_agent: false`` to skip). 409 when
+    the worktree has no green scope (a first green zone would suddenly
+    scope the whole session to one file) or a red zone covers the path
+    (red wins); 400 for an absolute / ``..`` path."""
+    if not git_available():
+        return _no_git_response()
+    inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+    p = payload or {}
+    rel = _clean_rel_arg(p.get("path"))
+    if rel is None:
+        return JSONResponse({"error": "path must be repo-relative"}, status_code=400)
+
+    def _allow():
+        repo_id, _repo = _rz_repo(wt)
+        ci = _red_zone_monitor.root_ci(wt)
+        doc = _rz_doc(wt, repo_id, ci=ci)
+        if not doc["green"]:
+            return 409, "this worktree has no green zones — nothing to allow", None
+        if _red_zones.classify(rel, None, doc, ci) == "blocked":
+            return 409, "%s is in a red zone — remove that zone first" % rel, None
+        with _red_zone_monitor.route_write():
+            zone = _red_zones.add_zone(
+                "worktree",
+                os.path.realpath(wt),
+                "/" + _red_zones.glob_escape(rel),  # exactly this path
+                note="allowed from a scope request",
+                repo_id=repo_id,
+                kind="green",
+            )
+        _red_zone_monitor.resync([(os.path.realpath(wt), wt)], repo_id)
+        return 200, zone, _red_zones.effective_zones(wt, repo_id)
+
+    try:
+        status, zone, zones = await asyncio.to_thread(_allow)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    except LookupError as err:
+        return JSONResponse({"error": str(err)}, status_code=409)
+    if status != 200:
+        return JSONResponse({"error": zone}, status_code=status)
+    told, reason = False, None
+    if p.get("tell_agent", True) is not False:
+        msg = (
+            "MindFlock: the user allowed `%s` — you may now edit it (it is part "
+            "of your green-zone scope)." % rel
+        )
+        told, reason = await asyncio.to_thread(
+            lambda: _deliver_to_agent(inst, title, msg)
+        )
+    body = {"ok": True, "zone": dict(zone, kind="green"), "zones": zones, "told": told}
+    if reason:
+        body["reason"] = reason
+    return JSONResponse(body)
+
+
+@app.post("/api/instances/{title}/red-zones/exempt")
+async def instance_red_zones_exempt(
+    title: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """The green exemption choice: ``{"exempt": false, "paths"?: [...]}`` =
+    "Treat as breaches" (drop those / all exemptions); ``{"exempt": true,
+    "paths": [...]}`` = exempt those paths at their current content.
+    Answers ``{"ok", "exempt": {rel: sha}}``."""
+    if not git_available():
+        return _no_git_response()
+    _inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+    p = payload or {}
+    raw = p.get("paths")
+    paths = None
+    if raw is not None:
+        if not isinstance(raw, list):
+            return JSONResponse({"error": "paths must be a list"}, status_code=400)
+        paths = [r for r in (_clean_rel_arg(x) for x in raw) if r]
+
+    def _set():
+        repo_id, _repo = _rz_repo(wt)
+        with _red_zone_monitor.route_write():
+            if p.get("exempt", True) is False:
+                left = _red_zones.drop_green_exempt(wt, paths)
+            else:
+                blobs = _rz_exempt_ids(os.path.realpath(wt), paths or [])
+                left = _red_zones.set_green_exempt(wt, blobs)
+        _red_zone_monitor.resync([(os.path.realpath(wt), wt)], repo_id)
+        return left
+
+    return JSONResponse({"ok": True, "exempt": await asyncio.to_thread(_set)})
+
+
+@app.post("/api/instances/{title}/red-zones/preview")
+async def instance_red_zones_preview(
+    title: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Dry run a pattern over this worktree (nothing is saved): ``{"re",
+    "count", "sample", "ignored_count", "changed", "truncated"}``; 400 for a
+    pattern that could never be a zone.
+
+    ``"kind": "green"`` adds what a SCOPE needs to be checked against:
+    ``writable_files`` (files it covers), ``changed_outside`` (changed paths
+    that would be outside the scope with it added), ``committed_outside``
+    (how many of those are committed), ``roots`` (the distinct top paths it
+    matches — an unanchored ``tests`` matching ``tests/`` AND
+    ``backend/tests/`` shows both), ``unanchored`` + ``anchored`` (the
+    anchored twin, offered when it matches exactly one root) and
+    ``warnings``."""
+    if not git_available():
+        return _no_git_response()
+    inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+    pattern = str((payload or {}).get("pattern") or "")
+    kind = str((payload or {}).get("kind") or "red")
+    try:
+        res = await asyncio.to_thread(_code_map.preview, wt, pattern, inst)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    if kind == "green":
+        try:
+            res = dict(res)
+            res.update(await asyncio.to_thread(_green_preview, inst, wt, pattern, res))
+        except Exception as err:  # noqa: BLE001 — the base preview still stands
+            res.setdefault("warnings", []).append("green check failed: %s" % err)
+    return JSONResponse(res)
+
+
+def _green_preview(inst, wt: str, pattern: str, base: dict) -> dict:
+    """The green-only preview fields (see the route)."""
+    norm, anchored = _red_zones.normalize_pattern(pattern)
+    re_src = base.get("re") or _red_zones.compile_pattern(pattern)
+    ci = _red_zone_monitor.root_ci(wt)
+    files, _d, _ign, _t = _red_zones.zone_files(
+        wt, [{"re": re_src, "pattern": pattern}], cap=_code_map.MAX_FILES, ci=ci
+    )
+    roots: list = []
+    for rel in files:
+        parts = rel.split("/")
+        for i in range(1, len(parts) + 1):
+            pre = "/".join(parts[:i])
+            if _red_zones.matches(re_src, pre, ci):
+                if pre not in roots:
+                    roots.append(pre)
+                break
+        if len(roots) >= 20:
+            break
+    repo_id, _repo = _rz_repo(wt)
+    doc = _rz_doc(wt, repo_id, ci=ci)
+    doc = dict(doc, green=list(doc["green"]) + [{"pattern": pattern, "re": re_src}])
+    if len(doc["green"]) == 1:
+        doc["companions"] = _red_zones.zones_doc(
+            wt,
+            repo_id,
+            zones=[{"pattern": pattern, "re": re_src, "kind": "green"}],
+            ci=ci,
+        )["companions"]
+    changed, committed = _rz_changed_paths(inst, wt)
+    outside = sorted(
+        p
+        for p in set(changed) | set(committed)
+        if _red_zones.classify(p, None, doc, ci) == "outside"
+    )
+    cset = set(committed)
+    body = norm.rstrip("/")
+    unanchored = not anchored and "/" not in body
+    warnings: list = []
+    if not files:
+        warnings.append(
+            "nothing exists here yet; the agent may only create new files under it"
+        )
+    anchored_twin = None
+    if unanchored:
+        if len(roots) == 1:
+            anchored_twin = "/" + roots[0]
+        warnings.append(
+            "`%s` is unanchored: it matches at any depth (%s) — anchor it with a "
+            "leading / to scope exactly one folder"
+            % (pattern, ", ".join(roots[:5]) or "nowhere yet")
+        )
+    return {
+        "writable_files": len(files),
+        "changed_outside": outside[:200],
+        "committed_outside": sum(1 for p in outside if p in cset),
+        "roots": roots,
+        "unanchored": unanchored,
+        "anchored": anchored_twin,
+        "warnings": warnings,
+    }
+
+
+@app.delete("/api/instances/{title}/red-zones/{zone_id}")
+async def instance_red_zones_delete(
+    title: str, zone_id: str, tell_agent: Optional[bool] = None
+) -> JSONResponse:
+    """Remove a zone (whatever its scope) and re-sync the guards it reached.
+    Removing a GREEN zone narrows the scope: work already done inside it is
+    exempted (it was legitimate), and the agent is told (``?tell_agent=0``
+    to skip). A red removal never messages the agent (as in v2)."""
+    if not git_available():
+        return _no_git_response()
+    inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+
+    def _del():
+        repo_id, _repo = _rz_repo(wt)
+        ci = _red_zone_monitor.root_ci(wt)
+        old_doc = _rz_doc(wt, repo_id, ci=ci)
+        with _red_zone_monitor.route_write():
+            res = _red_zones.remove_zone(zone_id)
+            if res is not None and res.get("kind") == "green":
+                new_doc = _rz_doc(wt, repo_id, ci=ci)
+                if new_doc["green"]:
+                    _rz_green_exempt(inst, wt, old_doc, new_doc)
+        if res is None:
+            return None
+        _rz_resync_after(res, wt)
+        return res, _red_zones.effective_zones(wt, repo_id)
+
+    out = await asyncio.to_thread(_del)
+    if out is None:
+        return JSONResponse({"error": "unknown zone: %s" % zone_id}, status_code=404)
+    res, zones = out
+    green = [z for z in zones if z.get("kind") == "green"]
+    told = False
+    tell = tell_agent if tell_agent is not None else res.get("kind") == "green"
+    body: dict = {"ok": True, "zones": zones}
+    if tell and res.get("kind") == "green":
+        msg = _red_zones.green_scope_message(res["zone"], green, hard=_rz_hard(inst))
+        told, reason = await asyncio.to_thread(
+            lambda: _deliver_to_agent(inst, title, msg)
+        )
+        if reason:
+            body["reason"] = reason
+    body["told"] = told
+    return JSONResponse(body)
+
+
+@app.post("/api/instances/{title}/red-zones/{zone_id}/waive")
+async def instance_red_zones_waive(
+    title: str, zone_id: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Waive ("Allow here") — or un-waive, ``{"waived": false}`` — a REPO zone
+    for this worktree only — shown on the map, not enforced here. A worktree zone
+    is simply removed instead (400)."""
+    if not git_available():
+        return _no_git_response()
+    _inst, wt, err = _wt_or_409(title)
+    if err is not None:
+        return err
+    waived = bool((payload or {}).get("waived", True))
+
+    def _waive():
+        repo_id, _repo = _rz_repo(wt)
+        zone = next(
+            (
+                z
+                for z in _red_zones.effective_zones(wt, repo_id)
+                if z.get("id") == zone_id
+            ),
+            None,
+        )
+        if zone is None:
+            return 404, None
+        if zone.get("scope") != "repo":
+            return 400, None
+        with _red_zone_monitor.route_write():
+            _red_zones.set_waiver(wt, zone_id, waived)
+        _red_zone_monitor.resync([(os.path.realpath(wt), wt)], repo_id)
+        return 200, _red_zones.effective_zones(wt, repo_id)
+
+    status, zones = await asyncio.to_thread(_waive)
+    if status == 404:
+        return JSONResponse({"error": "unknown zone: %s" % zone_id}, status_code=404)
+    if status == 400:
+        return JSONResponse(
+            {"error": "only repo zones can be waived — remove a worktree zone"},
+            status_code=400,
+        )
+    return JSONResponse({"ok": True, "zones": zones})
+
+
+@app.get("/api/red-zones")
+async def red_zones_all() -> JSONResponse:
+    """Every repo's zones + Plan-first flag, for Red zones… (outside sessions)."""
+    return JSONResponse({"repos": await asyncio.to_thread(_red_zones.all_repos)})
+
+
+@app.post("/api/red-zones")
+async def red_zones_add(payload: Optional[dict] = None) -> JSONResponse:
+    """Add a REPO zone by repo id (``{"repo_id", "pattern", "name", "note",
+    "label"}``) and re-sync every live worktree of that repo."""
+    p = payload or {}
+    repo_id = str(p.get("repo_id") or "").strip()
+    if not repo_id:
+        return JSONResponse({"error": "repo_id is required"}, status_code=400)
+    if str(p.get("kind") or "red") != "red":
+        return JSONResponse(
+            {
+                "error": "green zones are worktree-scope only — add one from the "
+                "session's Map, not for the whole repo"
+            },
+            status_code=400,
+        )
+
+    def _add():
+        with _red_zone_monitor.route_write():
+            zone = _red_zones.add_zone(
+                "repo",
+                repo_id,
+                str(p.get("pattern") or ""),
+                name=str(p.get("name") or ""),
+                note=str(p.get("note") or ""),
+                label=str(p.get("label") or ""),
+            )
+        _red_zone_monitor.resync(_live_repo_roots(repo_id), repo_id)
+        return zone, _red_zones.all_repos()
+
+    try:
+        zone, repos = await asyncio.to_thread(_add)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    except LookupError as err:  # ZoneConflict: already green in a worktree
+        return JSONResponse({"error": str(err)}, status_code=409)
+    return JSONResponse({"ok": True, "zone": zone, "repos": repos})
+
+
+@app.get("/api/red-zones/companions")
+async def red_zones_companions(repo_id: str = "") -> JSONResponse:
+    """A repo's companion patterns — "derived outputs" an agent may write
+    outside its green scope (a built bundle, generated clients) — plus the
+    built-in defaults (lockfiles, snapshots) for display."""
+    rid = str(repo_id or "").strip()
+    if not rid:
+        return JSONResponse({"error": "repo_id is required"}, status_code=400)
+    pats = await asyncio.to_thread(_red_zones.companions_config, rid)
+    return JSONResponse(
+        {
+            "repo_id": rid,
+            "patterns": pats,
+            "defaults": list(_red_zones.DEFAULT_COMPANIONS),
+        }
+    )
+
+
+@app.put("/api/red-zones/companions")
+async def red_zones_companions_set(payload: Optional[dict] = None) -> JSONResponse:
+    """Replace a repo's companion patterns: ``{"repo_id", "patterns": [...],
+    "label"?}``. 400 on a missing repo id or any invalid pattern (nothing is
+    saved). Live worktrees of the repo are re-synced at once."""
+    p = payload or {}
+    rid = str(p.get("repo_id") or "").strip()
+    pats = p.get("patterns")
+    if not rid:
+        return JSONResponse({"error": "repo_id is required"}, status_code=400)
+    if not isinstance(pats, list) or not all(isinstance(x, str) for x in pats):
+        return JSONResponse(
+            {"error": "patterns must be a list of strings"}, status_code=400
+        )
+
+    def _set():
+        with _red_zone_monitor.route_write():
+            out = _red_zones.set_companions(rid, pats, label=str(p.get("label") or ""))
+        _red_zone_monitor.resync(_live_repo_roots(rid), rid)
+        return out
+
+    try:
+        stored = await asyncio.to_thread(_set)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=400)
+    return JSONResponse(
+        {
+            "ok": True,
+            "repo_id": rid,
+            "patterns": stored,
+            "defaults": list(_red_zones.DEFAULT_COMPANIONS),
+        }
+    )
+
+
+@app.post("/api/red-zones/plan-first")
+async def red_zones_plan_first(payload: Optional[dict] = None) -> JSONResponse:
+    """Turn a repo's Plan-first flag on/off: its intake sessions (tickets,
+    issues, PR reviews) open with the plan-first instruction."""
+    p = payload or {}
+    repo_id = str(p.get("repo_id") or "").strip()
+    if not repo_id:
+        return JSONResponse({"error": "repo_id is required"}, status_code=400)
+
+    def _set():
+        with _red_zone_monitor.route_write():
+            _red_zones.set_plan_first(
+                repo_id, bool(p.get("on")), label=str(p.get("label") or "")
+            )
+        return _red_zones.all_repos()
+
+    return JSONResponse({"ok": True, "repos": await asyncio.to_thread(_set)})
+
+
+@app.delete("/api/red-zones/{zone_id}")
+async def red_zones_delete(zone_id: str) -> JSONResponse:
+    """Remove a zone by id (any scope) and re-sync the guards it reached."""
+
+    def _del():
+        with _red_zone_monitor.route_write():
+            res = _red_zones.remove_zone(zone_id)
+        if res is None:
+            return None
+        _rz_resync_after(res)
+        return _red_zones.all_repos()
+
+    repos = await asyncio.to_thread(_del)
+    if repos is None:
+        return JSONResponse({"error": "unknown zone: %s" % zone_id}, status_code=404)
+    return JSONResponse({"ok": True, "repos": repos})
+
+
+# --------------------------------------------------------------------------- #
 # Send a message to an agent + the per-session prompt queue (M-series).
 #
 # ``/send`` is the one-off primitive: type a message into an agent window and
@@ -6880,6 +8317,63 @@ def _agent_session_ready(inst, title: str):
     the queue /send_now endpoint (post_queue_send_now); the drain loop calls
     _ensure_agent_session directly."""
     return _ensure_agent_session(inst, title)
+
+
+#: Activities in which typing into the agent's window lands in the wrong place:
+#: a clarify/permission prompt (the text would ANSWER it), the usage-limit menu
+#: (it would pick a menu item), or a turn in progress (it would interleave with
+#: the running turn). The message is queued instead and the drain delivers it
+#: the moment the agent is idle.
+_DELIVER_QUEUE_ACTIVITIES = ("clarify", "limit", "working")
+_SEND_FAILED = "failed to send to agent session"
+
+
+def _deliver_to_agent(
+    inst, title: str, text: str, *, boot: bool = False, submit: bool = True
+):
+    """Type ``text`` into ``title``'s agent → ``(told, reason)``.
+
+    ``told`` is ``"sent"``, ``"queued"`` or ``False`` (with ``reason``).
+
+    ``boot=True`` is ``/send``'s contract: (re)boot a dead agent session, then
+    type unconditionally — the human at the send box is looking at the pane.
+    ``boot=False`` is for messages MindFlock composes on a button press (the
+    Code Map's plan/go/zone notices): it never reboots an agent (a message that
+    silently relaunches a session the user closed is worse than "not running"),
+    reports an over-budget session instead of 409ing, and QUEUES instead of
+    typing while the agent is mid-turn or waiting on a prompt.
+
+    Blocking (tmux + an activity probe) — call it via ``asyncio.to_thread``.
+    Every collaborator is read off this module so tests patch the server.
+    """
+    if boot:
+        name, err = _agent_session_ready(inst, title)
+        if err is not None:
+            return False, err
+    else:
+        if _budget_locked(title):
+            return False, "over budget"
+        name = _live_session_name(tmux.to_mindflock_tmux_name(title))
+        if name is None:
+            return False, "the agent isn't running — open the session to start it"
+        try:
+            activity = _agent_activity(inst, title)
+        except Exception:  # noqa: BLE001 — unknown reads as "don't type blind"
+            activity = "working"
+        if activity in _DELIVER_QUEUE_ACTIVITIES:
+            try:
+                _prompt_queue.enqueue(title, text)
+            except ValueError as err:
+                return False, str(err)
+            _emit_queue_changed(title)
+            return "queued", None
+    # Only reachable from human surfaces (the send box, the palette, the
+    # prompts dialog, the Map's buttons) — automation types via
+    # _send_queued_item and the limit watcher, never through here.
+    _note_human_input(title)
+    if not _send_to_agent(name, text, submit):
+        return False, _SEND_FAILED
+    return "sent", None
 
 
 @app.post("/api/instances/{title}/send")
@@ -6903,17 +8397,12 @@ async def instance_send(title: str, payload: dict) -> JSONResponse:
             },
             status_code=409,
         )
-    name, err = await asyncio.to_thread(_agent_session_ready, inst, title)
-    if err is not None:
-        return JSONResponse({"error": err}, status_code=409)
-    # This route is only reachable from human surfaces (the send box, the
-    # command palette, the prompts dialog) — automation types via
-    # _send_queued_item and the limit watcher, never through here.
-    _note_human_input(title)
-    ok = await asyncio.to_thread(_send_to_agent, name, text, submit)
-    if not ok:
+    told, reason = await asyncio.to_thread(
+        lambda: _deliver_to_agent(inst, title, text, boot=True, submit=submit)
+    )
+    if told is False:
         return JSONResponse(
-            {"error": "failed to send to agent session"}, status_code=502
+            {"error": reason}, status_code=502 if reason == _SEND_FAILED else 409
         )
     return JSONResponse({"sent": True, "submitted": submit})
 
@@ -8290,6 +9779,139 @@ async def instance_reset_stage(title: str) -> JSONResponse:
     return JSONResponse({"ok": True, "row": row, **res})
 
 
+def _red_zone_breaches_for(inst, wt: str, target: str = "HEAD") -> list:
+    """Zone breaches COMMITTED on the way to ``target`` — computed now, from
+    git, never from the monitor's throttled summary (a gate that reads a
+    10-second-old answer lets exactly the commit it exists for through).
+
+    The committed range (``fork..HEAD`` for a push, see
+    :func:`_pr_committed_changed` for a PR/merge target), classified by the
+    ONE predicate (``red_zones.classify``): a path in an enforced red zone
+    (repo + worktree scope; a repo zone waived here is excluded), or —
+    while a green scope exists — outside it and not a companion, minus the
+    exemptions whose blob AT ``target`` still equals the recorded one (work
+    committed before the scope existed; editing it again re-arms the gate)
+    → ``[{"path", "pattern", "zone_id", "kind"}]``, matched
+    case-insensitively where the filesystem is (as the hook does). A git
+    failure is ``[]``: the gate fails open like every other probe in the push
+    path."""
+    ident = _red_zones.repo_identity(wt)
+    ci = _red_zone_monitor.root_ci(wt)
+    doc = _rz_doc(wt, ident[0] if ident else None, ci=ci)
+    if not doc["red"] and not doc["green"]:
+        return []
+    if target == "HEAD":
+        rels = _code_map.committed_changed(inst, wt, "HEAD")
+    else:
+        rels = _pr_committed_changed(inst, wt, target)
+    rev = _code_map._rev(target) or target
+    hits = _red_zones.breach_verdicts(doc, rels, ci, root=os.path.realpath(wt), rev=rev)
+    return [
+        {
+            "path": rel,
+            "pattern": hits[rel].get("pattern"),
+            "zone_id": hits[rel].get("zone_id"),
+            "kind": hits[rel].get("kind") or "red",
+        }
+        for rel in rels
+        if rel in hits
+    ]
+
+
+def _pr_committed_changed(inst, wt: str, target: str) -> list:
+    """What a PR/merge of ``target`` (``origin/<branch>``) would carry, as the
+    FORGE sees it: ``<base>...<target>`` — the diff from the merge-base of the
+    base branch and the target to the target (``refs/remotes/origin/<base>``
+    first, then the local ``refs/heads/<base>``; full refs, so a tag or branch
+    named like one can't stand in for it).
+
+    WHY NOT ``fork..target``. The session's fork point is the merge-base of
+    the LOCAL ``HEAD`` with the base. Merge (or rebase onto) a newer main
+    locally without pushing and the fork jumps to the new main tip, while the
+    pushed branch still sits on the old one — so a teammate's legitimate
+    change to a zoned file on main shows up, reversed, as this branch's
+    breach, and Make PR / Merge / the autopilot halt on a change the PR
+    doesn't contain. The same happens the other way round after GitHub's
+    "Update branch" merged main into the remote branch. Falls back to
+    ``committed_changed`` when no base ref resolves. ``[]`` on git failure."""
+    try:
+        tgt = _code_map._rev(target)
+        base = str(_session_base_branch(inst) or "").strip()
+        if tgt and base and not base.startswith("-"):
+            for ref in ("refs/remotes/origin/" + base, "refs/heads/" + base):
+                if not _git_ref_exists(wt, ref):
+                    continue
+                out = _code_map._git(
+                    wt,
+                    "diff",
+                    "--name-only",
+                    "-z",
+                    "--no-renames",
+                    ref + "..." + tgt,
+                    "--",
+                )
+                return sorted(set(_code_map._z_fields(out))) if out is not None else []
+        return _code_map.committed_changed(inst, wt, target)
+    except Exception:  # noqa: BLE001 — the gate fails open on its own bugs
+        return []
+
+
+def _pr_content_ref(wt: str, branch: str) -> str:
+    """What a PR/merge would actually carry: ``origin/<branch>`` when that ref
+    exists (the pushed branch IS the PR), else the local ``HEAD``."""
+    if branch:
+        cp = _run_capped(
+            [
+                "git",
+                "-C",
+                wt,
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "refs/remotes/origin/" + branch,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        if cp.returncode == 0:
+            return "origin/" + branch
+    return "HEAD"
+
+
+async def _red_zone_gate(
+    inst, wt: str, payload: Optional[dict], branch: Optional[str] = None
+) -> Optional[JSONResponse]:
+    """409 when red-zone files are committed on this branch, else None.
+
+    ``branch=None`` gates a push (``fork..HEAD``); a branch name gates a PR or
+    merge (``<base>...origin/<branch>`` when pushed — what the forge will
+    diff, see :func:`_pr_committed_changed`). ``override_red_zones: true``
+    in the payload is the UI's explicit "push anyway". The autopilot calls
+    these routes without it, so a fast-track chain halts here with the error
+    as its reason — which is the point."""
+    if (payload or {}).get("override_red_zones"):
+        return None
+
+    def _hits():
+        target = "HEAD" if branch is None else _pr_content_ref(wt, branch)
+        return _red_zone_breaches_for(inst, wt, target)
+
+    try:
+        hits = await asyncio.to_thread(_hits)
+    except Exception:  # noqa: BLE001 — the gate fails open on its own bugs
+        return None
+    if not hits:
+        return None
+    if hits[0].get("kind") == "green":
+        msg = "outside green zone: %s" % hits[0]["path"]
+    else:
+        msg = "red zone breached: %s (%s)" % (hits[0]["path"], hits[0]["pattern"])
+    if len(hits) > 1:
+        msg += " and %d more" % (len(hits) - 1)
+    return JSONResponse({"error": msg, "red_zone_breaches": hits}, status_code=409)
+
+
 @app.post("/api/instances/{title}/push-branch")
 async def instance_push_branch(
     title: str, payload: Optional[dict] = None
@@ -8303,6 +9925,12 @@ async def instance_push_branch(
     wt = inst.GetWorktreePath()
     if not wt:
         return JSONResponse({"error": "workspace not ready"}, status_code=409)
+    # Red zones: a zoned file committed on this branch blocks the push (409 +
+    # red_zone_breaches; the UI re-POSTs override_red_zones to push anyway).
+    # Before the O3 check gate — the graver of the two refusals comes first.
+    gate = await _red_zone_gate(inst, wt, payload)
+    if gate is not None:
+        return gate
     # O3 verification gate (soft): a repo that declares a check_command wants
     # a passing run against the current HEAD before pushing. 409 carries the
     # check state; the UI offers "push anyway" which re-POSTs {"force": true}.
@@ -8481,6 +10109,9 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
             },
             status_code=409,
         )
+    gate = await _red_zone_gate(inst, wt, payload, branch)
+    if gate is not None:
+        return gate
 
     def _do_gh():
         cp = _run_capped(
@@ -8561,13 +10192,15 @@ def _merge_browser_fallback(
 
 
 @app.post("/api/instances/{title}/merge-pr")
-async def instance_merge_pr(title: str) -> JSONResponse:
+async def instance_merge_pr(title: str, payload: Optional[dict] = None) -> JSONResponse:
     """Merge the branch's PR into the base (a true merge commit). Confirmed in
     the UI; surfaces the underlying refusal (e.g. if the repo requires
     squash/review).
 
     Same three rungs as :func:`instance_make_pr` — ``gh``, then REST with a
-    resolved token, then a link to the PR so the user can press Merge there."""
+    resolved token, then a link to the PR so the user can press Merge there.
+    A red-zone file committed on the pushed branch refuses with 409 unless the
+    payload carries ``override_red_zones: true``."""
     if not git_available():
         return _no_git_response()
     inst, err = _inst_or_404(title)
@@ -8580,6 +10213,9 @@ async def instance_merge_pr(title: str) -> JSONResponse:
     # inst.Branch can drift when the user switches branches in the workspace,
     # which would merge the wrong branch's PR.
     branch = await asyncio.to_thread(_current_branch, wt) or inst.Branch or ""
+    gate = await _red_zone_gate(inst, wt, payload, branch)
+    if gate is not None:
+        return gate
 
     def _do_gh():
         cp = _run_capped(
@@ -9007,6 +10643,10 @@ async def github_force_review(payload: dict) -> JSONResponse:
                 or ENGINE.default_program()
             )
             prompt = _provider_effort.decorate_prompt(prompt, program, effort_override)
+            # The review workspace already exists here: decorate against it.
+            prompt = await asyncio.to_thread(
+                _red_zone_prompt, prompt, program, [str(directory)], None
+            )
             inst = session.NewInstance(
                 session.InstanceOptions(
                     title=title,
@@ -9205,6 +10845,16 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
             # ask for LESS thinking than the queue's default, not just more.
             level = effort_override or _ticket_start.effort_for(story)
             prompt = _provider_effort.decorate_prompt(prompt, program, level)
+            # Red zones + the repo's Plan-first flag (worktree not cut yet:
+            # key off the source repo's local checkout / base clone).
+            prompt = await asyncio.to_thread(
+                lambda p=prompt: _red_zone_prompt(
+                    p,
+                    program,
+                    _repo_url_workdirs(getattr(story, "repo_url", "") or ""),
+                    None,
+                )
+            )
             inst = session.NewInstance(
                 session.InstanceOptions(
                     title=title,
@@ -9590,6 +11240,14 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
                 or ENGINE.default_program()
             )
             prompt = _provider_effort.decorate_prompt(prompt, program, effort_override)
+            prompt = await asyncio.to_thread(
+                lambda p=prompt: _red_zone_prompt(
+                    p,
+                    program,
+                    _repo_url_workdirs(getattr(story, "repo_url", "") or ""),
+                    None,
+                )
+            )
             inst = session.NewInstance(
                 session.InstanceOptions(
                     title=title,
@@ -11142,9 +12800,23 @@ def _create_inplace_session(abs_path: str):
 
 
 # Continuous auto-adopt: turn every folder open in Cursor into an in-place
-# session, the whole time the server runs. Toggleable at runtime (the sidebar
-# switch / the API below); CS_CURSOR_AUTOADOPT=0 just makes it start OFF.
-_CURSOR_AUTOADOPT_ENABLED = os.environ.get("CS_CURSOR_AUTOADOPT", "1") != "0"
+# session, the whole time the server runs. Toggleable at runtime (Settings →
+# IDE / the API below) and persisted as ``ui.cursor_autoadopt``, so switching it
+# off survives a server restart — it used to be memory-only and every restart
+# (self-update, Restart server) silently switched it back on.
+# CS_CURSOR_AUTOADOPT=0 forces it OFF at boot regardless of the setting.
+def _cursor_autoadopt_boot_value() -> bool:
+    if os.environ.get("CS_CURSOR_AUTOADOPT", "1") == "0":
+        return False
+    try:
+        from backend.config import settings as _settings
+
+        return _settings.load_settings().ui.cursor_autoadopt is not False
+    except Exception:  # noqa: BLE001 — an unreadable store keeps the old default
+        return True
+
+
+_CURSOR_AUTOADOPT_ENABLED = _cursor_autoadopt_boot_value()
 
 
 # The cursor auto-adopt loop is started by the lifespan handler (it checks the
@@ -11162,7 +12834,38 @@ def cursor_autoadopt_set(payload: dict) -> JSONResponse:
     """Toggle IDE-folder auto-adoption. Body: ``{"enabled": <bool>}``."""
     global _CURSOR_AUTOADOPT_ENABLED
     _CURSOR_AUTOADOPT_ENABLED = bool((payload or {}).get("enabled"))
+    try:
+        from backend.config import settings as _settings
+
+        _settings.update_settings(ui={"cursor_autoadopt": _CURSOR_AUTOADOPT_ENABLED})
+    except Exception as err:  # noqa: BLE001 — the live toggle still applies
+        if log.ErrorLog is not None:
+            log.ErrorLog.Printf("cursor auto-adopt: persisting failed: %v", err)
     return JSONResponse({"enabled": _CURSOR_AUTOADOPT_ENABLED})
+
+
+@app.get("/api/ide/open-on-ticket")
+def ide_open_on_ticket_status() -> JSONResponse:
+    """Whether a newly provisioned ticket/issue workspace is opened in the IDE.
+
+    The EFFECTIVE value (env → settings.json → config.toml ``open_cursor``), so
+    the switch shows what will actually happen, not just what settings.json
+    holds."""
+    from backend.session import provisioned as _prov
+
+    return JSONResponse({"enabled": _prov.open_ide_on_ticket()})
+
+
+@app.post("/api/ide/open-on-ticket")
+def ide_open_on_ticket_set(payload: dict) -> JSONResponse:
+    """Persist ``engine.open_cursor``. Body: ``{"enabled": <bool>}``. Saved in
+    settings.json, which outranks a ``config.toml`` ``open_cursor = true``."""
+    from backend.config import settings as _settings
+    from backend.session import provisioned as _prov
+
+    want = bool((payload or {}).get("enabled"))
+    _settings.update_settings(engine={"open_cursor": want})
+    return JSONResponse({"enabled": _prov.open_ide_on_ticket()})
 
 
 @app.get("/api/scroll-speed")
@@ -11395,6 +13098,63 @@ def pane_history(title: str, pane: str = "agent") -> PlainTextResponse:
             out.stderr.strip() or "capture failed", status_code=500
         )
     return PlainTextResponse(out.stdout.rstrip("\n") + "\n")
+
+
+@app.get("/api/instances/{title}/find")
+def pane_find_mode(title: str, pane: str = "agent") -> JSONResponse:
+    """How Ctrl+F searches this pane: ``{"mode": "tmux" | "scroll" |
+    "overlay"}`` — whichever scrollback its mouse wheel actually moves (see
+    pane_find.find_mode). ``overlay`` also when there's no live session."""
+    if ENGINE.instances.get(title) is None:
+        return JSONResponse({"error": "instance not found"}, status_code=404)
+    name = _live_session_name(_find_base(title, pane))
+    mode = (_pane_find.find_mode(name) if name else None) or "overlay"
+    return JSONResponse({"mode": mode})
+
+
+def _find_base(title: str, pane: Optional[str]) -> str:
+    return (
+        _shell_tmux_name(title)
+        if pane == "shell"
+        else tmux.to_mindflock_tmux_name(title)
+    )
+
+
+@app.post("/api/instances/{title}/find")
+async def pane_find_step(title: str, payload: dict) -> JSONResponse:
+    """One in-place find step in the live agent/shell pane, run the way the
+    pane scrolls (tmux copy-mode search, or indexing the app's own scrollback
+    and jumping to hits): ``op`` is ``prepare`` (build the index now — the
+    bar just opened; a no-op in tmux mode), ``search`` (fresh query, lands on
+    the newest hit), ``older`` / ``newer``, ``close`` (back to live) or
+    ``cancel`` (stop a running step). Returns the engine's result plus
+    ``mode``."""
+    if ENGINE.instances.get(title) is None:
+        return JSONResponse({"error": "instance not found"}, status_code=404)
+    op = str(payload.get("op") or "search")
+    if op not in ("prepare", "search", "older", "newer", "close", "cancel"):
+        return JSONResponse({"error": "bad op"}, status_code=400)
+    query = _find_query.Query.from_payload(payload)
+    name = _live_session_name(_find_base(title, payload.get("pane")))
+    if name is None:
+        return JSONResponse({"error": "no live session"}, status_code=404)
+    if op == "cancel":
+        # Never queued behind the walk it cancels.
+        return JSONResponse(_pane_scroll_find.find(name, "", "cancel"))
+    mode = await asyncio.to_thread(_pane_find.find_mode, name)
+    # Off the loop: a tmux step is several round trips; a scroll walk can
+    # take seconds.
+    if mode == "scroll":
+        res = await asyncio.to_thread(_pane_scroll_find.find, name, query, op)
+    elif op == "prepare":
+        res = {"status": "ready", "mode": "tmux"}  # tmux search needs no index
+    else:
+        res = await asyncio.to_thread(_pane_find.find, name, query, op)
+        if res is not None:
+            res = {**res, "mode": "tmux"}
+    if res is None:
+        return JSONResponse({"error": "tmux unreachable"}, status_code=500)
+    return JSONResponse(res)
 
 
 @app.websocket("/api/instances/{title}/terminal")

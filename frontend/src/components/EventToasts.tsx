@@ -170,6 +170,42 @@ function instByTitle(title: string): Instance | null {
   return instances().find((i) => i.title === title) || null;
 }
 
+/** Jump to a session's Map — where every red-zone event is explained. A
+ * store-level event (no session) opens the repo-wide Red zones dialog. */
+function openMap(session: string) {
+  if (!session || !instByTitle(session)) {
+    useUi.getState().openDialogFor("red-zones");
+    return;
+  }
+  selectSession(session);
+  useUi.getState().setLastTab(session, "map");
+}
+
+/** The toast line for a red-zone event, or null for an unknown event. */
+export function redZoneToast(env: EventEnvelope, name: string): string | null {
+  const d = (env.data || {}) as { detail?: string; what?: string; paths?: string[] };
+  const detail = String(d.detail || "").trim();
+  switch (env.event) {
+    case "session.red_zone_blocked":
+      return "⛔ " + name + " — " + (detail || "a zone blocked an edit");
+    case "session.red_zone_breached":
+      return (
+        "⛔ Zone breached on " +
+        name +
+        " — " +
+        (detail || (d.paths && d.paths.length ? d.paths.slice(0, 3).join(", ") : "a protected file changed"))
+      );
+    case "session.red_zone_tampered": {
+      const what = d.what === "hooks" ? "its hooks" : d.what === "store" ? "the zone list" : "the guard file";
+      return env.session
+        ? "⚠ Red-zone guard tampered on " + name + " (" + what + " changed outside MindFlock)" + (detail ? " — " + detail : "")
+        : "⚠ Red zones changed outside MindFlock (" + what + ")";
+    }
+    default:
+      return null;
+  }
+}
+
 export function EventToasts() {
   // Keep the title badge fresh on every poll (clarify flips arrive both via
   // events and the 4s snapshot).
@@ -318,6 +354,22 @@ export function EventToasts() {
         }
       })
     );
+    // Red zones: a block, a breach, or someone disarming the guard. The rail
+    // chip reads the row summary, so refresh it now instead of on the next poll.
+    for (const name of ["session.red_zone_blocked", "session.red_zone_breached", "session.red_zone_tampered"]) {
+      unsubs.push(
+        ev.subscribe(name, (env) => {
+          refreshInstances();
+          if (isReplay(env)) return;
+          const msg = redZoneToast(env, env.session ? namedSlot(env.session) : "");
+          if (!msg) return;
+          notifyOnce(env.session || "*", name, msg, {
+            onClick: () => openMap(env.session),
+            duration: name === "session.red_zone_blocked" ? 6000 : 9000,
+          });
+        })
+      );
+    }
     unsubs.push(
       ev.subscribe("session.deleted", (env) => {
         dropActivity(env.session);

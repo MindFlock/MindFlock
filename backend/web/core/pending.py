@@ -162,6 +162,8 @@ def rows(engine=None) -> list:
                 "diff_stat": None,
                 "workspace_missing": False,
                 "has_origin": False,
+                # No worktree yet, so no zones (red or green) to summarize.
+                "redzone": None,
                 "stage": "provisioning",
                 "pr_url": None,
                 "merge_state": None,

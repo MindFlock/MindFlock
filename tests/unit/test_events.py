@@ -112,7 +112,32 @@ def test_event_names_vocabulary_is_complete():
         "session.test_plan_gave_up",
         "session.test_plan_due",
         "session.profile_changed",
+        "session.red_zone_blocked",
+        "session.red_zone_breached",
+        "session.red_zone_tampered",
     }
+
+
+def test_red_zone_events_are_documented_for_extension_authors():
+    """The three red-zone events are part of the hook/extension contract, so
+    each needs its vocabulary row in docs/extensions.md (the table authors key
+    their ``~/.mindflock/hooks/<event>/`` dirs off)."""
+    from pathlib import Path
+
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "extensions.md").read_text(
+        encoding="utf-8"
+    )
+    rows = [ln for ln in doc.splitlines() if ln.startswith("| `session.")]
+    documented = {
+        name for ln in rows for name in re.findall(r"`(session\.[a-z_]+)`", ln)
+    }
+    for name in (
+        "session.red_zone_blocked",
+        "session.red_zone_breached",
+        "session.red_zone_tampered",
+    ):
+        assert name in documented, name
+        assert name in EVENT_NAMES, name
 
 
 def test_the_turn_boundary_event_is_documented_for_extension_authors():

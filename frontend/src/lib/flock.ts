@@ -60,7 +60,7 @@ const tints = new Map<string, HTMLCanvasElement>();
 
 /** One <img> for the whole app: several flocks can be alive at once (the break
  * screen over the idle overlay, briefly) and they share the decode. */
-function birdSprite(): HTMLImageElement | null {
+export function birdSprite(): HTMLImageElement | null {
   if (typeof Image === "undefined") return null;
   if (!sprite) {
     sprite = new Image();
@@ -71,7 +71,7 @@ function birdSprite(): HTMLImageElement | null {
 
 /** Tint the alpha-only sprite on an offscreen canvas, once per colour. Returns
  * null until the sprite has decoded — the caller falls back to vectors. */
-function tinted(color: string): HTMLCanvasElement | null {
+export function tinted(color: string): HTMLCanvasElement | null {
   const img = birdSprite();
   if (!img || !img.complete || !img.naturalWidth) return null;
   const cached = tints.get(color);

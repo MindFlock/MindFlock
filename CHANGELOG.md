@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Map tab: see where your agents are changing code, as a tree.** Each
+  session's Map draws its repo as a tree — the trunk is the repo, branches are
+  folders, leaves are files, roots underground are the tests — and your agents
+  are birds that nest in the folder they are working in. Unchanged code recedes
+  to a calm silhouette; every changed file glows in its agent's colour and the
+  branch from the trunk to it lights up, so "where are the changes?" is a
+  glance, not a hunt. A left column lists the agents (and their subagents),
+  sums the changes by area, and names the riskiest one ("config/settings.py —
+  73 import it"). "⚠ Could break" shows, on demand, which code imports what
+  changed. Click a bird's card to fly to it and follow it as it works. Scroll
+  to zoom, drag to move, `/` to find a file, click a leaf for its functions.
+  The layout runs off the main thread and is cached per repo, so a 5k-file
+  repo grows its tree in about two seconds once and reopens instantly.
+
+- **Red zones and green zones: fence agents in or out of parts of the
+  code.** Mark a folder or file **Keep out** (red) and Claude Code is stopped
+  before it edits it — through any tool, in subagents too, including shell
+  writes caught right after they happen — with the reason fed back to the
+  agent. Mark one **Only here** (green) and the agent may change nothing
+  outside it (lockfiles and the tests of the code you scoped stay writable).
+  Set either from the Map in one click on any changed folder, from the
+  **Zones…** dialog for a whole repo, or mid-flight with "tell the agent".
+  Pushes, pull requests and merges refuse to ship a red-zone change unless you
+  override, and the guard re-arms itself if anything disables its hook. Other
+  coding CLIs get the same zones as detection, alerts and the push gate.
+
+- **Plan first, then let the agent go.** "Ask for plan" (or **Plan first** in
+  New Session, or per repo for intake) has the agent list every file it
+  intends to touch and why; the Map shows those files before any edit, you
+  fence off what it should not touch, and **Go** sends one message with the
+  rules — or **Go — only the planned files** turns the plan itself into the
+  allowed area.
+
+- **Ctrl+F in a live terminal pane.** Find text in a session's terminal —
+  its tmux history and, for full-screen apps like Claude Code, the content you
+  would scroll to — with a match count first, then next/previous that jumps
+  straight to each hit.
+
+- **Find inside the history overlay.** The overlay you get by scrolling past
+  the screen edge now has its own search, with case, whole-word, regex and
+  "near each other" options.
+
+- **"Open the IDE when a ticket starts"** — a toggle in Settings → IDE.
+
+### Changed
+
+- **Shortcut ingestion can require a label.** A Shortcut source can name one
+  or more labels (comma-separated); a ticket must carry one of them, on top of
+  its workflow state, before it is ingested.
+
+- **New ticket sources start with their provider's branch prefix** (`sc/`,
+  `jira/`, `lin/`, `gh/`, `asana/`); a custom id still overrides it.
+
+- **Each ticket queue can set its own effort level**, independent of which
+  agent it uses.
+
+### Fixed
+
+- **Turning IDE auto-adopt off now survives a restart.** The toggle used to be
+  remembered only in memory, so every restart quietly switched it back on.
+
 ## [0.4.0] - 2026-09-15
 
 ### Added

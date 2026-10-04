@@ -136,3 +136,4 @@ node_modules/
 # Vite build artifacts land in backend/web/static/ (committed); the
 # sourcemap is dev convenience only
 backend/web/static/app.js.map
+backend/web/static/codetree-worker.js.map

@@ -81,6 +81,21 @@ export function notifFromEvent(env: EventEnvelope): { text: string; cls: string 
       return env.new === "ok"
         ? { text: "checks passed ✓", cls: "n-done" }
         : { text: "checks failed ✗ (exit " + ((d as { rc?: number }).rc ?? "?") + ")", cls: "n-warn" };
+    // Red zones (SPEC §3). `detail` is the server's own sentence ("blocked 3
+    // edits to config.toml"), so the bell says what happened, not just that
+    // something did.
+    case "session.red_zone_blocked": {
+      const detail = String((d as { detail?: string }).detail || "").trim();
+      return { text: "zone — " + (detail || "blocked an edit"), cls: "n-warn" };
+    }
+    case "session.red_zone_breached": {
+      const detail = String((d as { detail?: string }).detail || "").trim();
+      return { text: "zone breached — " + (detail || "a protected file changed"), cls: "n-warn" };
+    }
+    case "session.red_zone_tampered": {
+      const what = String((d as { what?: string }).what || "guard");
+      return { text: "red-zone guard tampered (" + what + ")", cls: "n-warn" };
+    }
     default:
       return null;
   }

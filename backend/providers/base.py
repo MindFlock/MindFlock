@@ -371,6 +371,43 @@ class BaseProvider:
         best-effort right before a session launches. Default: no-op."""
         return None
 
+    # --- red-zone guard (roadmap: Code Map + red zones) -------------------- #
+    def red_zone_guard(self) -> bool:
+        """Whether this CLI's tool hooks can HARD-BLOCK a red-zone edit (a
+        PreToolUse deny that MindFlock installs and manages).
+
+        Only Claude Code returns True today: its hooks hot-reload and MindFlock
+        controls the settings file. Every other provider is *detect-only* — its
+        feed records still light up the map and register breaches, but nothing is
+        blocked. Default: False."""
+        return False
+
+    def hooks_hot_reload(self) -> bool:
+        """Whether the CLI re-reads its hooks config mid-session, so re-pinning
+        the settings file arms a running session with no relaunch. Claude Code
+        does (verified against 2.1.284). Default: False."""
+        return False
+
+    def plan_supported(self) -> bool:
+        """Whether the plan loop (declared ``mindflock-plan`` block or ExitPlanMode
+        capture) works for this CLI. Requires a readable transcript, so only
+        Claude returns True. The Map hides the plan UI when this is False.
+        Default: False."""
+        return False
+
+    def last_assistant_text(
+        self,
+        session_name: str,
+        workdir: str,
+        contains: Optional[str] = None,
+        transcript_path: Optional[str] = None,
+    ) -> Optional[str]:
+        """The newest assistant text block for this window, optionally filtered to
+        blocks containing ``contains`` (e.g. ``"mindflock-plan"``). Used by the
+        Map's plan capture. ``transcript_path`` (from a feed record) is preferred
+        when given and readable. Default: provider has no transcript (None)."""
+        return None
+
     def last_turn_snippet(self, session_name: str, workdir: str) -> Optional[str]:
         """A one-line snippet of the session's latest conversational turn
         (newest assistant/user message, first meaningful line, ≤120 chars) for

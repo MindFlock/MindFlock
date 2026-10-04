@@ -23,6 +23,8 @@ from backend.ticket_ingestion.providers import (
 from backend.ticket_ingestion.providers.asana import AsanaProvider
 from backend.ticket_ingestion.providers.base import (
     extract_link_attachments,
+    has_ingest_label,
+    ingest_label_list,
     ingests_any_assignee,
     parse_acceptance_criteria,
     workflow_state_list,
@@ -2666,3 +2668,186 @@ class TestSetStateDetails:
             with pytest.raises(ProviderError, match="no transition"):
                 await prov.set_state("PROJ-1", "In Progress")
         assert session.post_calls == []
+
+
+# --------------------------------------------------------------------------- #
+# Ingest labels: a Shortcut story is only auto-ingested once it carries one of
+# the source's labels — the per-ticket opt-in for a board where every story sits
+# in the same state.
+# --------------------------------------------------------------------------- #
+class TestIngestLabels:
+    def test_label_list_parses_and_dedups_case_insensitively(self):
+        cfg = TicketProviderConfig(
+            provider="shortcut", ingest_labels=" brainflight, ,Brainflight,qa "
+        )
+        assert ingest_label_list(cfg) == ["brainflight", "qa"]
+
+    def test_label_list_is_empty_for_a_provider_without_label_filtering(self):
+        # A stale value left behind by a provider switch filters nothing.
+        cfg = TicketProviderConfig(provider="jira", ingest_labels="brainflight")
+        assert ingest_label_list(cfg) == []
+
+    def test_has_ingest_label(self):
+        assert has_ingest_label(["Brainflight"], ["brainflight"])
+        assert not has_ingest_label(["other"], ["brainflight"])
+        assert not has_ingest_label([], ["brainflight"])
+        assert has_ingest_label([], [])  # no filter passes everything
+
+    def test_a_label_bounds_an_anyone_scope(self):
+        assert ingests_any_assignee(
+            TicketProviderConfig(
+                provider="shortcut", assignee_scope="anyone", ingest_labels="qa"
+            )
+        )
+
+    def test_a_label_does_not_bound_jira(self):
+        # Jira cannot filter by label here, so the label is no bound at all.
+        assert not ingests_any_assignee(
+            TicketProviderConfig(
+                provider="jira", assignee_scope="anyone", ingest_labels="qa"
+            )
+        )
+
+    def test_story_carries_its_label_names(self):
+        t = story_from_api_response(
+            {
+                "id": 1,
+                "name": "n",
+                "created_at": "2025-01-01T00:00:00Z",
+                "labels": [{"id": 5, "name": "brainflight"}, "junk", {"id": 6}],
+            }
+        )
+        assert t.labels == ["brainflight"]
+
+    def _prov(self, **over):
+        base = dict(provider="shortcut", api_token="t", member_id="m")
+        base.update(over)
+        return ShortcutProvider(TicketProviderConfig(**base))
+
+    async def test_poll_searches_each_state_label_pair_by_canonical_name(
+        self, monkeypatch
+    ):
+        prov = self._prov(workflow_state="100,200", ingest_labels="BrainFlight")
+        bodies: list[dict] = []
+        labelled = {
+            "id": 1,
+            "name": "a",
+            "created_at": "2025-01-01T00:00:00Z",
+            "labels": [{"name": "brainflight"}],
+        }
+        # A row the server should never have returned: the client-side net
+        # drops it rather than ingesting an unlabelled story.
+        stray = {"id": 2, "name": "b", "created_at": "2025-01-01T00:00:00Z"}
+
+        async def fake_search(body):
+            bodies.append(body)
+            return [labelled, stray]
+
+        async def fake_hydrate(session, sid):
+            return {"id": sid, "name": "full", "created_at": "2025-01-01T00:00:00Z"}
+
+        monkeypatch.setattr(prov, "_search_stories", fake_search)
+        monkeypatch.setattr(prov, "_hydrate_story", fake_hydrate)
+        session = _FakeSession(
+            get_responses=[_FakeResp(200, json_data=[{"id": 5, "name": "brainflight"}])]
+        )
+        with _patch_session(session):
+            out = await prov.search_assigned(_SINCE)
+
+        since = _SINCE.isoformat()
+        assert bodies == [
+            {
+                "updated_at_start": since,
+                "owner_id": "m",
+                "workflow_state_id": 100,
+                "label_name": "brainflight",
+            },
+            {
+                "updated_at_start": since,
+                "owner_id": "m",
+                "workflow_state_id": 200,
+                "label_name": "brainflight",
+            },
+        ]
+        assert [t.id for t in out] == [1]
+
+    async def test_label_only_poll_has_no_state_filter(self, monkeypatch):
+        prov = self._prov(ingest_labels="qa")
+        bodies: list[dict] = []
+
+        async def fake_search(body):
+            bodies.append(body)
+            return []
+
+        monkeypatch.setattr(prov, "_search_stories", fake_search)
+        # /labels fails: the name is searched as typed rather than not at all.
+        with _patch_session(_ExplodingSession()):
+            await prov.search_assigned(_SINCE)
+        assert bodies == [
+            {
+                "updated_at_start": _SINCE.isoformat(),
+                "owner_id": "m",
+                "label_name": "qa",
+            }
+        ]
+
+    async def test_anyone_by_label_drops_owner_and_keeps_the_label(self, monkeypatch):
+        prov = self._prov(assignee_scope="anyone", ingest_labels="qa")
+        bodies: list[dict] = []
+
+        async def fake_search(body):
+            bodies.append(body)
+            return []
+
+        monkeypatch.setattr(prov, "_search_stories", fake_search)
+        monkeypatch.setattr(prov, "_canonical_labels", lambda: _acoro(["qa"]))
+        monkeypatch.setattr(prov, "list_states", lambda: _acoro([]))
+        monkeypatch.setattr(prov, "_member_names", lambda: _acoro({}))
+        with _patch_session(_FakeSession()):
+            await prov.search_assigned(_SINCE)
+        await prov.search_assigned_all()
+        assert bodies == [
+            {"updated_at_start": _SINCE.isoformat(), "label_name": "qa"},
+            # The panel: no owner filter, so the label is the only bound.
+            {"label_name": "qa"},
+        ]
+
+    async def test_assigned_to_me_panel_lists_unlabelled_stories_too(self, monkeypatch):
+        # The panel shows every bucket; skip_reasons explains the missing label.
+        prov = self._prov(ingest_labels="qa")
+        bodies: list[dict] = []
+
+        async def fake_search(body):
+            bodies.append(body)
+            return [{"id": 3, "name": "n", "created_at": "2025-01-01T00:00:00Z"}]
+
+        monkeypatch.setattr(prov, "_search_stories", fake_search)
+        monkeypatch.setattr(prov, "list_states", lambda: _acoro([]))
+        monkeypatch.setattr(prov, "_member_names", lambda: _acoro({}))
+        out = await prov.search_assigned_all()
+        assert bodies == [{"owner_id": "m"}]
+        assert [t.id for t in out] == [3]
+
+    async def test_create_ticket_carries_the_first_label(self, monkeypatch):
+        prov = self._prov(ingest_labels="brainflight, qa")
+        monkeypatch.setattr(
+            prov, "_canonical_labels", lambda: _acoro(["brainflight", "qa"])
+        )
+        session = _FakeSession(
+            post_responses=[
+                _FakeResp(
+                    201,
+                    json_data={
+                        "id": 7,
+                        "name": "n",
+                        "created_at": "2025-01-01T00:00:00Z",
+                        "labels": [{"name": "brainflight"}],
+                    },
+                )
+            ]
+        )
+        with _patch_session(session):
+            t = await prov.create_ticket("n", "d")
+        body = session.post_calls[0][1]["json"]
+        assert body["labels"] == [{"name": "brainflight"}]
+        assert t.labels == ["brainflight"]

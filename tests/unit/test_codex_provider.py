@@ -205,6 +205,28 @@ def test_build_launch_installs_activity_hooks(provider, tmp_path, monkeypatch):
     assert cmd.startswith("codex")
     # The provider config points at .codex/hooks.json; the install writes it.
     assert (wd / ".codex" / "hooks.json").exists()
+    # The tool-hook (red-zone feed) rides Codex's Pre/Post events, so the
+    # installed PreToolUse command carries the guard — but Codex is DETECT-ONLY.
+    import json
+
+    data = json.loads((wd / ".codex" / "hooks.json").read_text())
+    pre = data["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "_mf_tool_hook" in pre
+    # NO `disableAllHooks` key: Codex's hooks.json schema rejects it ("unknown
+    # field `disableAllHooks`, expected `description` or `hooks`") and then
+    # loads none of the file's hooks — markers, feed, everything.
+    assert "disableAllHooks" not in data
+    assert set(data) == {"hooks"}
+
+
+def test_codex_is_detect_only(provider):
+    # MindFlock does not manage Codex's repo-local hook trust, so it never
+    # claims a HARD guard — the feed lights up the map, nothing is blocked.
+    assert provider.red_zone_guard() is False
+    assert provider.cfg.tool_hook_events == (
+        ("PreToolUse", "pre"),
+        ("PostToolUse", "post"),
+    )
 
 
 def test_activity_state_reads_marker(provider, tmp_path, monkeypatch):

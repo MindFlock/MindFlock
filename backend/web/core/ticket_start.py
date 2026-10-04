@@ -173,6 +173,7 @@ def skip_reasons(
     member_ids,
     ingest_state: list | None = None,
     failures: dict | None = None,
+    ingest_labels: list | None = None,
 ) -> list[str]:
     """Why auto ingestion would skip ``story`` right now (empty = eligible).
 
@@ -184,13 +185,21 @@ def skip_reasons(
     ``search_assigned``, so a ticket in any other bucket is never
     auto-ingested; the unfiltered panel listing has to re-state that here.
     Only checked when the ticket's own state is known (providers that don't
-    annotate it already filtered server-side).
+    annotate it already filtered server-side). ``ingest_labels`` is the same
+    idea for the source's label filter: a ticket carrying none of them is
+    never auto-ingested, however eligible it is otherwise.
     """
     from backend.ticket_ingestion.filter import AssigneeFilter
+    from backend.ticket_ingestion.providers.base import has_ingest_label
 
     reasons: list[str] = []
     if ingest_state and story.state and story.state not in ingest_state:
         reasons.append("not in an ingest state — won't auto-ingest")
+    if ingest_labels and not has_ingest_label(story.labels, ingest_labels):
+        reasons.append(
+            "missing an ingest label (" + ", ".join(ingest_labels) + ")"
+            " — won't auto-ingest"
+        )
     status = ledger.get(story.slug) or ledger.get(str(story.id))
     if status:
         if status == "failed":
@@ -304,6 +313,7 @@ async def list_assigned_tickets() -> dict:
         # bucket names — tickets in any other bucket must not read as
         # "queued for auto ingestion".
         from backend.ticket_ingestion.providers.base import (
+            ingest_label_list,
             ingests_any_assignee,
             workflow_state_list,
         )
@@ -343,6 +353,7 @@ async def list_assigned_tickets() -> dict:
                 member_ids,
                 ingest_state=ingest_state,
                 failures=failures,
+                ingest_labels=ingest_label_list(src),
             )
             bucket = story.state or NO_STATE_BUCKET
             if bucket not in bucket_order:

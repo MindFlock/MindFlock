@@ -676,6 +676,8 @@ async def _cursor_autoadopt_loop() -> None:
                 tombs = {}
         seed_tombs = False
         for p, real in _cursor_autoadopt_tick(open_paths, tombs):
+            if not _server()._CURSOR_AUTOADOPT_ENABLED:
+                break  # switched off mid-tick (the folder scan runs off-loop)
             try:
                 inst = _server()._create_inplace_session(p)
                 _server()._CURSOR_SEEN.add(real)

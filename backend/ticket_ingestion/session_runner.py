@@ -103,6 +103,52 @@ def _resolve_program(agent: str = "") -> str:
     return resolve_default_program()
 
 
+def _launch_workdirs(repo_url: str) -> list:
+    """``provisioned.launch_workdirs`` — the local checkouts sharing the
+    ticket repo's identity. ``[]`` on any failure."""
+    try:
+        from backend.session import provisioned
+
+        return provisioned.launch_workdirs(repo_url)
+    except Exception:  # noqa: BLE001 — decoration is best-effort
+        return []
+
+
+def _decorate_red_zones(prompt: str, program: str, workdirs) -> str:
+    """The launch prompt with the repo's red-zone note and — when the repo's
+    Plan-first flag is on AND the CLI supports plans — the plan-first
+    instruction, keyed off the first existing dir in ``workdirs``. The same
+    decoration the server's intake starts apply (``server._red_zone_prompt``),
+    so a ticket reads the same whichever path launches it.
+
+    Plan-first only for ``plan_supported()`` providers: it tells the agent to
+    wait for a go-ahead, and the Go button lives in the Map's Plan section,
+    which only those CLIs have. Idempotent; best-effort — never fails a
+    launch."""
+    if not prompt:
+        return prompt
+    try:
+        import os
+
+        from backend import providers as _providers
+        from backend.config import red_zones as _red_zones
+
+        provider = _providers.resolve(program)
+        try:
+            plans = bool(provider.plan_supported())
+        except Exception:  # noqa: BLE001
+            plans = False
+        wd = next((d for d in workdirs or () if d and os.path.isdir(d)), "")
+        return _red_zones.decorate_prompt(
+            prompt,
+            wd,
+            hard_guard=bool(provider.red_zone_guard()),
+            plan_first=None if plans else False,
+        )
+    except Exception:  # noqa: BLE001
+        return prompt
+
+
 class SessionRunner:
     """Launches a story as an engine provisioned ``Instance`` (in-process)."""
 
@@ -397,6 +443,15 @@ class SessionRunner:
         prompt = _effort.decorate_prompt(prompt, program, effort)
         args = _effort.launch_args(program, effort)
 
+        # Red-zone / plan-first decoration (roadmap: Code Map + red zones). The
+        # provisioned worktree does not exist yet, so key off a local checkout
+        # that shares its repo identity — the same launch_workdirs the server's
+        # ticket/issue starts use (the URL itself when local, else the configured
+        # default when local, else the provisioning base clone). Unconditional:
+        # with no such checkout yet the repo's Plan-first flag can't be read
+        # either, and decorate_prompt leaves the prompt alone.
+        prompt = _decorate_red_zones(prompt, program, _launch_workdirs(repo_url))
+
         opts = cs_session.InstanceOptions(
             title=title,
             path=".",
@@ -438,6 +493,9 @@ class SessionRunner:
                 self.config.pr_agent(repo) if self.config else "",
             )
         )
+        # Same decoration as the server's PR-review start: the workspace exists
+        # already, so it is the key (zones note + the repo's Plan-first flag).
+        prompt = _decorate_red_zones(prompt, program, [directory])
 
         # Adopt the already-provisioned PR workspace: clone-style worktree at the
         # exact directory, on the PR's existing head branch (verbatim, no fork).
