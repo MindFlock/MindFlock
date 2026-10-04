@@ -757,6 +757,9 @@ def test_ci_probe_swaps_the_basename_not_the_whole_path(tmp_path, monkeypatch):
 
 def test_ci_probe_falls_back_to_git_core_ignorecase(tmp_path):
     wt = _init_repo(tmp_path / "123")
+    # Set it explicitly both ways: `git init` on macOS already writes
+    # core.ignorecase=true (APFS), so "fresh repo = False" only holds on Linux.
+    _git("config", "core.ignorecase", "false", cwd=wt)
     assert rz._probe_case_insensitive(os.path.realpath(wt)) is False
     _git("config", "core.ignorecase", "true", cwd=wt)
     assert rz._probe_case_insensitive(os.path.realpath(wt)) is True
@@ -864,3 +867,36 @@ def test_glob_escape_round_trips_literal_paths():
         src = rz.compile_pattern("/" + rz.glob_escape(rel))
         assert rz.matches(src, rel), rel
         assert rz.matches(src, rel + "/child"), rel
+
+
+def test_case_insensitive_root_still_scopes_the_ignored_scan(tmp_path, monkeypatch):
+    """macOS (case-insensitive by default): the ignored-file walk must stay
+    scoped by the zone's pathspec (with git's `icase` magic) — dropping the
+    scoping let a big ignored `.venv` fill the scan bound, so a gitignored
+    zoned config file previewed as 0 files and went unguarded."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    # what `git init` sets on macOS: ignore rules then match case-insensitively
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "core.ignorecase", "true"], check=True
+    )
+    (repo / ".gitignore").write_text(".venv/\nconfig/local.toml\n")
+    for i in range(60):
+        p = repo / ".venv" / "lib" / f"pkg{i:03d}.py"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("")
+    (repo / "config").mkdir()
+    (repo / "config" / "Local.toml").write_text("secret = 1\n")
+    monkeypatch.setattr(rz, "_IGNORED_SCAN_MAX", 50, raising=False)
+    rules = [
+        {"re": rz.compile_pattern("config/local.toml"), "pattern": "config/local.toml"}
+    ]
+    _f, _d, ignored, _t = rz.zone_files(str(repo), rules, ci=True)
+    assert ignored == ["config/Local.toml"]
+
+
+def test_icase_pathspec_keeps_the_existing_magic():
+    assert rz._icase_pathspec(":(literal)config") == ":(literal,icase)config"
+    assert rz._icase_pathspec(":(glob)**/x") == ":(glob,icase)**/x"
+    assert rz._icase_pathspec("plain") == ":(icase)plain"

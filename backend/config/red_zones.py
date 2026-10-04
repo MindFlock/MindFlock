@@ -1410,6 +1410,15 @@ def _git_z(root: str, *args: str, cap: int = 0) -> List[str]:
 _IGNORED_SCAN_MAX = 250000
 
 
+def _icase_pathspec(spec: str) -> str:
+    """``:(literal)x`` → ``:(literal,icase)x`` (and the same for ``glob``): the
+    case-insensitive twin of a pathspec from :func:`_ignored_pathspecs`."""
+    if spec.startswith(":(") and ")" in spec:
+        magic, rest = spec[2:].split(")", 1)
+        return ":(" + magic + ",icase)" + rest
+    return ":(icase)" + spec
+
+
 def _ignored_pathspecs(rules: List[dict]) -> Optional[List[str]]:
     """Git pathspecs covering (a SUPERSET of) every path the rules can match, or
     None when some rule cannot be scoped — the caller then lists the whole
@@ -1497,9 +1506,13 @@ def zone_files(
     tracked = _git_z(
         root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"
     )
-    # Git pathspecs match case-sensitively, so a case-insensitive root lists
-    # the whole ignored tree (still bounded) rather than risk missing a match.
-    specs = None if ci else _ignored_pathspecs(rules)
+    # Git pathspecs match case-sensitively by default, so on a case-insensitive
+    # root (the macOS default) each one gains the `icase` magic. Dropping the
+    # scoping there instead would walk the whole ignored tree, where a big
+    # `.venv` fills the scan bound before a gitignored zoned config file.
+    specs = _ignored_pathspecs(rules)
+    if specs and ci:
+        specs = [_icase_pathspec(s) for s in specs]
     ign_args = ["ls-files", "-z", "--others", "--ignored", "--exclude-standard"]
     if specs:
         ign_args += ["--"] + specs

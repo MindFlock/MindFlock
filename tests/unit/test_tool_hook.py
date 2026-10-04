@@ -632,7 +632,9 @@ def _breach_records(env):
     [
         "touch src/app/brand_new.py",
         "printf 'x\\n' > src/app/new_mod.py",
-        "sed -i s/o/p/ src/app/other.py",  # sed -i renames a temp file
+        # sed -i renames a temp file; the attached suffix is the one spelling
+        # both GNU sed and macOS BSD sed accept (BSD needs `-i ''` otherwise).
+        "sed -i.bak s/o/p/ src/app/other.py",
         "rm src/app/other.py",
     ],
 )
