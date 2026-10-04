@@ -110,8 +110,17 @@ function sessionLabel(title) {
   return name;
 }
 
+// {session} -> the window's display name; {detail} -> env.data.detail, the
+// human sentence an emitter wrote for exactly this (the zone events:
+// "blocked 3 edits to config.toml", "blocked an edit outside the green
+// zone(s): src/x.py"), empty when absent. The twin of notify.py
+// `_fill` — keep the two in step.
 function fill(template, env) {
-  return String(template || "").replace(/\{session\}/g, sessionLabel(env.session));
+  const data = env && env.data && typeof env.data === "object" ? env.data : {};
+  const detail = data.detail == null ? "" : String(data.detail);
+  return String(template || "")
+    .replace(/\{session\}/g, () => sessionLabel(env.session))
+    .replace(/\{detail\}/g, () => detail);
 }
 
 window.mindflockAddons = window.mindflockAddons || {};

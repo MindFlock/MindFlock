@@ -115,3 +115,97 @@
   border-color: rgba(154, 107, 0, 0.5);
   background: rgba(154, 107, 0, 0.08);
 }
+
+/* Map tab (CodeMapTab.css): softer shadows on white, and the accent-tinted
+   badges take the deeper accent so they don't wash out. */
+.light .cm-search-list,
+.light .ct-drawer,
+.light .ct-toast,
+.light .ct-tip {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+}
+
+/* The Code Tree by day: a pale sky, warm soil, mid-green foliage, dark labels
+   on a white halo. The dark values are the approved prototype's; these keep
+   the same relations (canopy darker than leaves, wood darker than both,
+   roots browner underground) on a light page. */
+.light .ct-root {
+  --ct-sky-top: color-mix(in srgb, var(--bg) 70%, #cfdcec);
+  --ct-sky-bottom: color-mix(in srgb, var(--bg) 88%, #e6ecf3);
+  --ct-soil-top: #dccfbd;
+  --ct-soil-bottom: #c9b69d;
+  --ct-glow: 120, 175, 135;
+  --ct-ground-line: hsl(30, 22%, 58%);
+  --ct-mass: hsl(142, 26%, 52%);
+  --ct-bark: hsl(28, 20%, 46%);
+  --ct-bark-hi: hsl(30, 24%, 58%);
+  --ct-root: hsl(27, 26%, 44%);
+  --ct-root-hi: hsl(28, 30%, 56%);
+  --ct-root-dusk: #cfc6bb;
+  --ct-fol-a: 27;
+  --ct-fol-l: 0.78;
+  --ct-fol-s: 1.15;
+  --ct-root-a: 46;
+  --ct-root-l: 0.55;
+  --ct-label-l: 26;
+  /* by day the calm canopy is a pale wash: the edited leaves (bird colours) must outweigh it */
+  --ct-calm-s: 0.2;
+  --ct-calm-k: 0.2;
+  --ct-calm-mid: 78;
+  --ct-calm-bark: color-mix(in srgb, var(--ct-bark) 45%, var(--bg));
+  --ct-calm-mass: hsl(150, 9%, 83%);
+  --ct-calm-label: color-mix(in srgb, var(--muted) 90%, var(--text));
+  --ct-lit-bark: hsl(28, 34%, 30%);
+  --ct-dusk: #d6dae1;
+  --ct-dusk-b: #d0d4dc;
+  --ct-dusk-c: #dadde4;
+  --ct-dusk-hi: #e3e6eb;
+  --ct-dusk-sh: #c4c8d0;
+  --ct-dusk-blob: #dfe2e8;
+  --ct-dusk-blob-hi: #e6e8ed;
+  --ct-dusk-leaf: #c3c8d1;
+  --ct-dusk-leaf-b: #bcc1cb;
+  --ct-dusk-doc: #c7cbd3;
+  --ct-dusk-bark: #c2bcb6;
+  --ct-dusk-fold: #d4d8df;
+  --ct-dusk-label: #59606e;
+  --ct-dusk-leaf-label: #7b8292;
+  --ct-halo: rgba(255, 255, 255, 0.9);
+  --ct-pill: rgba(255, 255, 255, 0.94);
+  --ct-pill-edge: rgba(20, 24, 34, 0.12);
+  --ct-pill-text: var(--text);
+  --ct-leaf-label: #2a3040;
+  --ct-root-label: hsl(30, 35%, 26%);
+  --ct-pile-label: hsl(30, 35%, 28%);
+  --ct-keep-text: color-mix(in srgb, var(--red) 75%, #000);
+  --ct-only-text: color-mix(in srgb, var(--green) 70%, #000);
+  --ct-keep-bg: color-mix(in srgb, var(--red) 12%, #fff);
+  --ct-only-bg: color-mix(in srgb, var(--green) 12%, #fff);
+  --ct-keep-wrap: color-mix(in srgb, var(--red) 25%, #fff);
+  --ct-only-wrap: color-mix(in srgb, var(--green) 25%, #fff);
+  --ct-hatch: 196, 62, 30;
+  --ct-badge-bg: rgba(255, 249, 222, 0.97);
+  --ct-select: 27, 32, 48;
+  --ct-hover: rgba(60, 66, 82, 0.7);
+  --ct-sep: #9aa1b0;
+  --ct-bud: rgba(219, 61, 140, 0.88);
+  --ct-bud-ghost: rgba(219, 61, 140, 0.55);
+  --ct-bonk-bg: rgba(255, 233, 227, 0.96);
+  --ct-bonk-x: #c0391b;
+  --ct-nest: hsl(33, 38%, 42%);
+  --ct-nest-twig: hsl(34, 34%, 56%);
+  --ct-nest-rim: hsl(34, 30%, 68%);
+  --ct-mini-bg: #e8ecf2;
+  --ct-mini-soil: #d8cab6;
+  --ct-mini-dim: rgba(240, 242, 246, 0.66);
+  --ct-mini-view: rgba(27, 32, 48, 0.75);
+  --ct-mini-root: hsl(30, 26%, 58%);
+  --ct-legend-leaf: hsl(148, 36%, 40%);
+}
+
+.light .cm-badge.agent,
+.light .cm-badge.scope-worktree,
+.light .cm-status {
+  color: var(--accent-deep);
+}
+

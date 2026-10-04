@@ -37,6 +37,7 @@ import {
 } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
 import { peekTerm, subscribeTermStates } from "../../lib/terminals";
+import { codemapSeenAt, redZoneChip, subscribeCodemapSeen } from "../../lib/codemapSeen";
 
 /** How long a click on the selected row waits for a second click before it
  * turns into an inline rename. Under the browser's ~500ms dblclick ceiling,
@@ -108,6 +109,15 @@ export const SidebarRow = memo(function SidebarRow({
     useCallback(() => peekTerm(title, "agent")?.state, [title])
   );
   const disconnected = inst.status === "running" && onScreen && agentWs === "disconnected";
+  // Red-zone chip: breaches / an unseen block (red), a guard that isn't holding
+  // (amber), or a shield while it is. "Unseen" is against when this browser last
+  // had the Map open for the session — subscribed, so opening the Map clears it
+  // at once rather than on the next poll.
+  const mapSeen = useSyncExternalStore(
+    subscribeCodemapSeen,
+    useCallback(() => codemapSeenAt(title), [title])
+  );
+  const rz = caps.git ? redZoneChip(inst.redzone, mapSeen) : null;
 
   const act = async (fn: () => void | Promise<void>, e?: MouseEvent) => {
     e?.stopPropagation();
@@ -246,6 +256,22 @@ export const SidebarRow = memo(function SidebarRow({
           <span className={"stagechip checkchip " + check.cls} title={check.title}>
             {check.label}
           </span>
+        )}
+        {rz && !pending && (
+          <button
+            type="button"
+            className={"stagechip rzchip " + rz.cls}
+            title={rz.title}
+            aria-label={rz.title}
+            onClick={(e) =>
+              act(() => {
+                selectSession(title);
+                useUi.getState().setLastTab(title, "map");
+              }, e)
+            }
+          >
+            {rz.label}
+          </button>
         )}
         {!pending && (
           <button

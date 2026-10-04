@@ -308,10 +308,43 @@ class TestSyncToBranch:
         verbs = [a[1] for a in calls]
         assert verbs == ["fetch", "checkout", "reset", "clean"]
         # checkout / reset target the fetched remote branch.
-        assert ("git", "checkout", "-B", "main", "origin/main") == calls[1]
+        assert ("git", "checkout", "-f", "-B", "main", "origin/main") == calls[1]
         assert ("git", "reset", "--hard", "origin/main") == calls[2]
         # clean preserves the venv and the cache artifact.
         assert ".venv" in calls[3] and ".testmondata" in calls[3]
+
+    async def test_dirty_tracked_file_does_not_wedge_the_sync(self, tmp_path):
+        """Regression: the refresh command's `uv run` re-locked a stale uv.lock,
+        and the next cycle's checkout aborted ("would be overwritten") before
+        the reset could discard it — the refresher stayed on that commit for a
+        month, so every ticket workspace seeded a cache testmon threw away."""
+        import subprocess
+
+        def git(cwd, *args):
+            subprocess.run(
+                ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+                cwd=cwd,
+                check=True,
+                capture_output=True,
+            )
+
+        forge = tmp_path / "forge"
+        forge.mkdir()
+        git(forge, "init", "-q", "-b", "main")
+        (forge / "uv.lock").write_text("v1\n")
+        git(forge, "add", "uv.lock")
+        git(forge, "commit", "-qm", "one")
+
+        r = _cmd_refresher(tmp_path)
+        r.directory.rmdir()
+        git(tmp_path, "clone", "-q", str(forge), str(r.directory))
+        (r.directory / "uv.lock").write_text("relocked by uv run\n")
+
+        (forge / "uv.lock").write_text("v2\n")
+        git(forge, "commit", "-qam", "two")
+
+        await r._sync_to_branch()
+        assert (r.directory / "uv.lock").read_text() == "v2\n"
 
 
 # --------------------------------------------------------------------------- #

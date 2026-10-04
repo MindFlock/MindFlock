@@ -297,8 +297,9 @@ class ClaudeProvider(BaseProvider):
 
     def write_launcher(self, ctx: LaunchContext) -> str:
         # Install the activity-reporting hooks alongside the launcher so the
-        # very first Claude run in this worktree already announces its state
-        # (Claude snapshots hook config at process start). Pre-trusting the
+        # very first Claude run in this worktree already announces its state and
+        # arrives with the red-zone guard armed (Claude Code hot-reloads its hook
+        # config mid-session, so a later re-pin also arms a running run). Pre-trusting the
         # worktree in the same breath means that first run never stalls on the
         # invisible "do you trust this folder?" gate (F2) — MindFlock created
         # the folder, so it is trusted by construction.
@@ -405,6 +406,37 @@ class ClaudeProvider(BaseProvider):
         # starting the CLI), so every launch is also pre-trusted (F2).
         pre_trust_workdir(workdir)
 
+    # --- red-zone guard --------------------------------------------------- #
+    def red_zone_guard(self) -> bool:
+        # Claude Code's PreToolUse deny hard-blocks a zoned edit (verified under
+        # --dangerously-skip-permissions and inside subagents), and MindFlock
+        # owns its settings.local.json — so the guard is real, not detect-only.
+        # One hook enforces both zone kinds: red (keep out) and green (only
+        # here — anything outside the worktree's green zones is refused).
+        return True
+
+    def hooks_hot_reload(self) -> bool:
+        # Claude Code 2.1.284 re-reads .claude/settings*.json mid-session, so a
+        # running pre-feature session is armed by re-pinning, with no relaunch.
+        # It is also how a STALE guard heals: the tool-hook tag carries a hash
+        # of the embedded source, a hooks file with another hash reads as not
+        # armed, and the reconcile loop re-pins the current one.
+        return True
+
+    def plan_supported(self) -> bool:
+        return True
+
+    def last_assistant_text(
+        self,
+        session_name: str,
+        workdir: str,
+        contains=None,
+        transcript_path=None,
+    ):
+        return _claude_last_assistant_text(
+            workdir, session_name, contains, transcript_path
+        )
+
     # --- telemetry -------------------------------------------------------- #
     def session_tokens(
         self,
@@ -456,9 +488,12 @@ def _keychain_login_evidence() -> bool:
 # .claude/settings.local.json; each writes the shared per-session marker at
 # ~/.mindflock-assistant/.activity-markers/<session>.json (the read/write and
 # hook-command machinery live in the provider-agnostic activity_markers module,
-# shared with Codex). Claude Code snapshots hook config at process start, so the
-# session name resolved by the command is pinned to the run launched right after
-# installing — copies sharing a worktree each re-install with their own name.
+# shared with Codex). The session name is resolved at FIRE time
+# ($MINDFLOCK_SESSION_NAME, else tmux #{session_name}), not baked in, so copies
+# sharing a worktree each attribute their own events. Claude Code 2.1.284 HOT-
+# RELOADS this config mid-session (mid-turn), so a re-pin arms a running session
+# with no relaunch — which is what lets the red-zone guard's tool hooks take
+# effect on the very next tool call.
 # --------------------------------------------------------------------------- #
 
 # Which hook event maps to which reported state. PreToolUse keeps "working"
@@ -485,8 +520,22 @@ _HOOK_EVENT_STATES = (
     ("UserPromptSubmit", "working"),
     ("PreToolUse", "working"),
     ("PostToolUse", "working"),
+    # A failed tool fires PostToolUseFailure (payload: error, is_interrupt; no
+    # tool_response). It refreshes "working" like PostToolUse AND is where the
+    # tool-feed records a fail, so the stat-diff backstop can catch a breach a
+    # crashing command still made.
+    ("PostToolUseFailure", "working"),
     ("PermissionRequest", "clarify"),
     ("Notification", "clarify"),
+)
+
+# Which hook events run the red-zone guard + tool feed, and in which phase.
+# PreToolUse denies zoned edits; PostToolUse/PostToolUseFailure run the Bash
+# stat-diff backstop. These are the events that carry the guard code.
+_TOOL_HOOK_EVENTS = (
+    ("PreToolUse", "pre"),
+    ("PostToolUse", "post"),
+    ("PostToolUseFailure", "fail"),
 )
 
 
@@ -678,15 +727,28 @@ def install_activity_hooks(workdir: str, session_name: str) -> None:
         settings_path = Path(workdir) / ".claude" / "settings.local.json"
         # record_thread defaults True: the Claude hook also persists the
         # payload's session_id as this window's resume-thread marker (the id
-        # `claude --resume <id>` targets after a crash).
+        # `claude --resume <id>` targets after a crash). tool_hook_events carries
+        # the red-zone guard on the Pre/Post events; resist_disable_all has the
+        # merge write disableAllHooks:false so a project-level `true` can't
+        # silently disarm the guard.
         merge_activity_hooks(
             settings_path,
             _HOOK_EVENT_STATES,
             session_name,
             notification_event="Notification",
+            tool_hook_events=dict(_TOOL_HOOK_EVENTS),
+            resist_disable_all=True,
         )
         _ensure_git_excluded(workdir, ".claude/settings.local.json")
     except Exception:  # noqa: BLE001 — never break a launch over hook install
+        pass
+    # Best-effort: write this worktree's guard file so a zone already set on the
+    # repo is enforced from the very first tool call (lazy import; never raises).
+    try:
+        from backend.config import red_zones as _red_zones
+
+        _red_zones.sync_for_workdir(workdir)
+    except Exception:  # noqa: BLE001 — guard sync is enrichment only
         pass
 
 
@@ -1132,6 +1194,85 @@ def _snippet_from_transcript(
     except OSError:
         snippet = None
     return snippet
+
+
+_LAST_ASSISTANT_TTL = 3.0
+_LAST_ASSISTANT_CACHE: dict = {}  # (path,mtime,size,contains) -> text|None
+
+
+def _claude_last_assistant_text(
+    workdir: str,
+    session_name: str,
+    contains: Optional[str] = None,
+    transcript_path: Optional[str] = None,
+) -> Optional[str]:
+    """Newest assistant text block for THIS window, optionally containing
+    ``contains`` (the Map's plan capture reads ``contains="mindflock-plan"``).
+
+    Prefers ``transcript_path`` (from a feed record — the exact file Claude
+    wrote) when it exists; else THIS window's transcript via
+    :func:`_session_transcript`; NEVER :func:`_newest_transcript` (a sibling's
+    conversation). Caches on ``(path, mtime, size, contains)`` so the UI poll
+    costs one stat, not a parse. Never raises.
+    """
+    import json
+    import os
+
+    path = None
+    if transcript_path and os.path.isfile(transcript_path):
+        path = transcript_path
+    else:
+        tr = _session_transcript(workdir, session_name)
+        if tr:
+            path = tr[2]
+    if not path:
+        return None
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (path, st.st_mtime, st.st_size, contains or "")
+    cached = _LAST_ASSISTANT_CACHE.get(key)
+    if cached is not None or key in _LAST_ASSISTANT_CACHE:
+        return cached
+
+    result = None
+    try:
+        with open(path, "rb") as f:
+            size = st.st_size
+            tail = 8 * 1024 * 1024
+            if size > tail:
+                f.seek(-tail, os.SEEK_END)
+                lines = f.read().decode("utf-8", "replace").splitlines()[1:]
+            else:
+                lines = f.read().decode("utf-8", "replace").splitlines()
+        for line in reversed(lines):
+            if '"assistant"' not in line:
+                continue
+            if contains and contains not in line:
+                continue
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if not _is_role(obj, "assistant"):
+                continue
+            text = _entry_text(obj)
+            if text is None:
+                continue
+            if contains and contains not in text:
+                continue
+            result = text
+            break
+    except OSError:
+        result = None
+    if len(_LAST_ASSISTANT_CACHE) > 256:
+        _LAST_ASSISTANT_CACHE.clear()
+    _LAST_ASSISTANT_CACHE[key] = result
+    return result
 
 
 def _claude_last_turn_snippet(workdir: str, session_name: str = "") -> Optional[str]:

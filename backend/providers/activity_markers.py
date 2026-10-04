@@ -25,6 +25,7 @@ call-sites and tests.
 
 from __future__ import annotations
 
+import re
 import shlex
 from typing import Optional, Sequence, Tuple
 
@@ -37,6 +38,32 @@ _ACTIVITY_STALE_AFTER = 6 * 3600.0
 # Tag embedded in every hook command we write, so a re-install can recognise
 # and replace only its own entries (never a user-authored hook).
 _HOOK_TAG = "# mindflock-activity"
+# The variant tag a guard-carrying (tool-hook) command uses. It CONTAINS the
+# base tag as a substring, so ``is_mindflock_hook_entry`` and uninstall keep
+# recognising it, while ``hooks_armed`` can tell an armed session (this tag
+# present on a PreToolUse entry) from a bare activity install.
+#
+# VERSION STAMP. The hook source is baked into the hooks file at install time,
+# so a checkout keeps running whatever guard it was armed with — a v1 hook
+# read a green rule as red and nothing ever replaced it, because "armed" only
+# looked for the tag. The tag now carries the guard REVISION
+# (``_tool_hook_src._MF_HOOK_REV``) and a short hash of the embedded source:
+# ``hooks_armed`` requires the current hash or a NEWER revision, so the
+# reconcile loop reinstalls a stale hook (Claude hot-reloads the file) while
+# two builds on one worktree converge on the newer guard instead of
+# overwriting each other every tick.
+TOOL_HOOK_TAG_PREFIX = "# mindflock-activity tool-hook"
+
+
+def _source_hash8() -> str:
+    try:
+        import hashlib
+
+        return hashlib.sha1(_tool_hook_source().encode("utf-8", "replace")).hexdigest()[
+            :8
+        ]
+    except Exception:  # noqa: BLE001 — never break an import over a stamp
+        return "00000000"
 
 
 def marker_dir():
@@ -114,7 +141,64 @@ def read_activity_marker_age(session_name: str) -> Optional[float]:
     return (time.time() - entry[1]) if entry else None
 
 
-def hook_command(state: str, marker_dir=None, record_thread: bool = True) -> str:
+def _tool_hook_source() -> str:
+    """The embeddable source text of :mod:`backend.providers._tool_hook_src`.
+
+    Read once via ``inspect.getsource`` (the module is pure defs + constants, so
+    exec-compiling it defines ``_mf_tool_hook``) and cached. This is what makes
+    the guard self-contained: the whole source is baked into the ``python3 -c``
+    command as a literal, so the fire-time hook needs no ``backend`` import.
+    """
+    global _TOOL_HOOK_SRC
+    if _TOOL_HOOK_SRC is None:
+        import inspect
+
+        from . import _tool_hook_src as _src
+
+        _TOOL_HOOK_SRC = inspect.getsource(_src)
+    return _TOOL_HOOK_SRC
+
+
+_TOOL_HOOK_SRC = None
+
+
+def _hook_rev() -> int:
+    try:
+        from . import _tool_hook_src as _src
+
+        return int(getattr(_src, "_MF_HOOK_REV", 0))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+TOOL_HOOK_REV = _hook_rev()
+TOOL_HOOK_TAG = "%s v2.%d %s" % (TOOL_HOOK_TAG_PREFIX, TOOL_HOOK_REV, _source_hash8())
+_TAG_RE = re.compile(
+    re.escape(TOOL_HOOK_TAG_PREFIX) + r" v(\d+)(?:\.(\d+))?(?: ([0-9a-f]{8}))?"
+)
+
+
+def tool_hook_tag_rank(command: str) -> Optional[int]:
+    """How a tool-hook command's tag compares to THIS build's: ``0`` = this
+    build's exact hook, ``1`` = a NEWER revision (another build's; left
+    alone), ``-1`` = older (a stale guard to heal) or same revision with
+    another hash (a dev build — healed, but never called tampering). None
+    when the command carries no MindFlock tool-hook tag."""
+    if TOOL_HOOK_TAG in (command or ""):
+        return 0
+    m = _TAG_RE.search(command or "")
+    if not m:
+        return None
+    major = int(m.group(1))
+    rev = int(m.group(2) or 0)
+    if major > 2 or (major == 2 and rev > TOOL_HOOK_REV):
+        return 1
+    return -1
+
+
+def hook_command(
+    state: str, marker_dir=None, record_thread: bool = True, tool_hook=None
+) -> str:
     """The command a CLI hook runs to record ``state``.
 
     Resolves the *live* tmux session at fire-time (``tmux display-message
@@ -198,8 +282,27 @@ def hook_command(state: str, marker_dir=None, record_thread: bool = True) -> str
             "    if a:",
             "        open(os.path.join(td,s+'@'+a+'.thread'),'w').write(sid)",
         ]
+    tag = _HOOK_TAG
+    if tool_hook in ("pre", "post", "fail"):
+        # Run the red-zone guard FIRST — before the `if not s` exit and before
+        # any marker/thread write — in its own try, so an unwritable marker dir
+        # or an unresolved session name can never skip enforcement. The guard is
+        # fail-open on its own bugs (the wrapped exec) and reads its guard file
+        # at fire time, so a zone added mid-flight applies on the next tool call.
+        guard_lines = [
+            "_MF_SRC=%s" % repr(_tool_hook_source()),
+            "try:",
+            "    _mf_ns={}",
+            "    exec(compile(_MF_SRC,'<mf-tool-hook>','exec'),_mf_ns)",
+            "    _mf_ns['_mf_tool_hook'](p,s,%s)" % json.dumps(tool_hook),
+            "except Exception:",
+            "    pass",
+        ]
+        insert_at = lines.index("    raise SystemExit(0)") - 1
+        lines[insert_at:insert_at] = guard_lines
+        tag = TOOL_HOOK_TAG
     code = "\n".join(lines) + "\n"
-    return "python3 -c %s || true %s" % (shlex.quote(code), _HOOK_TAG)
+    return "python3 -c %s || true %s" % (shlex.quote(code), tag)
 
 
 def notification_hook_command(marker_dir=None) -> str:
@@ -307,6 +410,11 @@ def remove_activity_hooks(settings_path) -> bool:
             hooks[event] = kept
         else:
             del hooks[event]
+    # A `disableAllHooks: false` we added alongside our guard hooks has no reason
+    # to outlive them (popping a False is harmless — the default is already off).
+    if data.get("disableAllHooks") is False:
+        data.pop("disableAllHooks", None)
+        changed = True
     if not changed:
         return False
 
@@ -319,9 +427,7 @@ def remove_activity_hooks(settings_path) -> bool:
             return False
         return True
 
-    try:
-        settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    except OSError:
+    if not _atomic_write_json(settings_path, data):
         return False
     return True
 
@@ -402,12 +508,98 @@ def ensure_git_excluded(workdir: str, rel: str) -> None:
         pass
 
 
+def _atomic_write_json(path, data) -> bool:
+    """Write ``data`` as pretty JSON to ``path`` via a tmp file + ``os.replace``.
+
+    Atomic so a hot-reloading CLI (Claude Code re-reads settings mid-turn) never
+    observes a truncated file and drops ALL local hooks. Returns True on success.
+    """
+    import json
+    import os
+    import tempfile
+    from pathlib import Path
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = json.dumps(data, indent=2) + "\n"
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(body)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(path))
+        return True
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def hooks_armed(settings_path, any_version: bool = False) -> bool:
+    """Whether the red-zone guard is armed in ``settings_path``.
+
+    True when the file parses, has a PreToolUse entry whose command carries
+    :data:`TOOL_HOOK_TAG` — the CURRENT source hash, or a NEWER guard
+    revision another build installed (:func:`tool_hook_tag_rank`); a hook
+    baked by an older build counts as not armed and gets reinstalled
+    (``any_version=True``: any MindFlock tool hook counts) — and neither it
+    nor the sibling ``settings.json`` sets
+    ``disableAllHooks: true`` (a project-level ``true`` disables everything; a
+    local ``false`` resists it — we require the effective value to be non-true).
+    Never raises.
+    """
+    import json
+    from pathlib import Path
+
+    p = Path(settings_path)
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    pre = hooks.get("PreToolUse")
+    if not isinstance(pre, list):
+        return False
+    ok = (-1, 0, 1) if any_version else (0, 1)
+    tagged = any(
+        tool_hook_tag_rank(h.get("command") or "") in ok
+        for e in pre
+        if isinstance(e, dict)
+        for h in e.get("hooks", [])
+        if isinstance(h, dict)
+    )
+    if not tagged:
+        return False
+    if data.get("disableAllHooks") is True:
+        return False
+    # A sibling project-level settings.json can force-disable, unless THIS file
+    # (settings.local.json) explicitly sets false, which resists it (verified).
+    if data.get("disableAllHooks") is not False:
+        sibling = p.parent / "settings.json"
+        try:
+            sdata = json.loads(sibling.read_text(encoding="utf-8"))
+            if isinstance(sdata, dict) and sdata.get("disableAllHooks") is True:
+                return False
+        except (OSError, ValueError):
+            pass
+    return True
+
+
 def merge_activity_hooks(
     settings_path,
     event_states: Sequence[Tuple[str, str]],
     session_name: str,
     notification_event: Optional[str] = None,
     record_thread: bool = True,
+    tool_hook_events: Optional[dict] = None,
+    resist_disable_all: bool = False,
 ) -> bool:
     """Merge MindFlock's activity-reporting hooks into ``settings_path``.
 
@@ -422,11 +614,22 @@ def merge_activity_hooks(
     (Claude's ``Notification`` idle-timeout filter); pass None for CLIs without
     such an event (Codex has a dedicated ``PermissionRequest`` instead).
 
+    ``resist_disable_all`` writes ``"disableAllHooks": false`` — only for a CLI
+    whose hard guard reads this file (Claude: a local ``false`` beats a
+    project-level ``true``). It is NOT keyed on ``tool_hook_events``: Codex
+    carries tool hooks too, but its ``hooks.json`` schema rejects the key and
+    drops EVERY hook in the file; a ``false`` an earlier build left there is
+    removed so such a file heals on the next install.
+
     Merge, never clobber: user-authored keys and hook entries are preserved;
     only prior MindFlock entries (recognised by :data:`_HOOK_TAG`) are replaced,
-    so re-installing with a new session name is idempotent. Returns True when the
-    file was written. Raises nothing on the happy path but callers still wrap it
-    — a launch must never break over hook install.
+    so re-installing with a new session name is idempotent. A file that EXISTS
+    but does not parse (a hand edit with a trailing comma, a writer caught
+    mid-write) or is not a JSON object is left untouched and False returned —
+    rewriting it as ``{}`` + our hooks would erase the user's permissions/env/
+    own hooks, and the red-zone monitor re-installs every few seconds. Returns
+    True when the file was written. Raises nothing on the happy path but callers
+    still wrap it — a launch must never break over hook install.
     """
     import json
     from pathlib import Path
@@ -434,15 +637,25 @@ def merge_activity_hooks(
     settings_path = Path(settings_path)
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        raw = settings_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raw = ""
     except (OSError, ValueError):
-        data = {}
-    if not isinstance(data, dict):
+        return False  # unreadable (permissions, bad encoding): hands off
+    if raw.strip():
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return False
+        if not isinstance(data, dict):
+            return False
+    else:
         data = {}
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
         hooks = {}
         data["hooks"] = hooks
+    th_map = dict(tool_hook_events or ())
     for event, state in event_states:
         entries = hooks.get(event)
         if not isinstance(entries, list):
@@ -451,8 +664,28 @@ def merge_activity_hooks(
         if notification_event is not None and event == notification_event:
             cmd = notification_hook_command()
         else:
-            cmd = hook_command(state, record_thread=record_thread)
+            cmd = hook_command(
+                state, record_thread=record_thread, tool_hook=th_map.get(event)
+            )
         entries.append({"hooks": [{"type": "command", "command": cmd}]})
         hooks[event] = entries
-    settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    # Resist an accidental or malicious project-level `disableAllHooks: true`
+    # (settings.json) with an explicit `false` here — verified to win. Only for
+    # a hard-guard install (Claude); a tool-hook install without one (Codex)
+    # must not carry the key at all — Codex's hooks.json schema rejects it and
+    # loads NO hooks — so a `false` an earlier build wrote there is dropped.
+    if resist_disable_all:
+        data["disableAllHooks"] = False
+    elif tool_hook_events is not None and data.get("disableAllHooks") is False:
+        data.pop("disableAllHooks")
+    # Skip the write when nothing changed, so a hot-reloading CLI's watcher never
+    # sees a needless rewrite (and the tick can re-pin every 4s for free). The
+    # command is session-agnostic now, so a re-pin with a new name is a no-op.
+    body = json.dumps(data, indent=2) + "\n"
+    try:
+        if settings_path.exists() and settings_path.read_text(encoding="utf-8") == body:
+            return False
+    except OSError:
+        pass
+    _atomic_write_json(settings_path, data)
     return True

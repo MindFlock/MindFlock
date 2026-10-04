@@ -588,10 +588,37 @@ def test_install_hooks_writes_all_events(tmp_path, marker_dir):
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
+        "PostToolUseFailure",
         "Notification",
     ):
         cmds = [h["command"] for e in data["hooks"][event] for h in e["hooks"]]
         assert any(_HOOK_TAG in c for c in cmds), event
+    # The tool-hook (red-zone guard) rides Pre/Post/PostToolUseFailure and
+    # carries the versioned tool-hook tag; disableAllHooks:false resists a
+    # project-level force-disable.
+    from backend.providers.activity_markers import TOOL_HOOK_TAG
+
+    pre_cmd = data["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert TOOL_HOOK_TAG in pre_cmd
+    assert "_mf_tool_hook" in pre_cmd
+    assert data.get("disableAllHooks") is False
+    # Pin the PHASE each event runs: PreToolUse mapped to "post" would leave
+    # the guard detect-only (only ev == "pre" denies) with hooks_armed still
+    # True, so every other test would stay green.
+    for event, phase in (
+        ("PreToolUse", "pre"),
+        ("PostToolUse", "post"),
+        ("PostToolUseFailure", "fail"),
+    ):
+        ev_cmd = data["hooks"][event][0]["hooks"][0]["command"]
+        assert '(p,s,"%s")' % phase in ev_cmd, event
+    from backend.providers import claude as _claude
+
+    assert _claude._TOOL_HOOK_EVENTS == (
+        ("PreToolUse", "pre"),
+        ("PostToolUse", "post"),
+        ("PostToolUseFailure", "fail"),
+    )
     # PostToolUse refreshes the working marker when a tool returns, so the
     # think-before-the-next-tool stretch starts with a fresh trust window
     # instead of aging out (the "thinking reads as idle" gap).
@@ -676,9 +703,11 @@ def test_install_hooks_tolerates_corrupt_settings(tmp_path, marker_dir):
     wt = tmp_path / "wt"
     (wt / ".claude").mkdir(parents=True)
     (wt / ".claude" / "settings.local.json").write_text("{broken json")
-    install_activity_hooks(str(wt), "mindflock_sess")
-    data = _read_settings(wt)  # rewritten as valid JSON with our hooks
-    assert "hooks" in data
+    install_activity_hooks(str(wt), "mindflock_sess")  # never raises
+    # Left untouched: the file may be the user's mid-edit settings (trailing
+    # comma) holding permissions/env/own hooks. Rewriting it as `{}` + our hooks
+    # erased them — and the red-zone monitor re-installs every few seconds.
+    assert (wt / ".claude" / "settings.local.json").read_text() == "{broken json"
 
 
 def test_install_hooks_adds_git_exclude(tmp_path, marker_dir):

@@ -44,6 +44,15 @@ from tests._factories import make_ticket
 # --------------------------------------------------------------------------- #
 # Fixtures                                                                     #
 # --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def _no_real_workspaces(tmp_path, monkeypatch):
+    """The launch-prompt decoration resolves the provisioning base clone and
+    the configured default repo; pin both into tmp so no test ever stats (or
+    runs git in) the developer's real workspace dir or configured repo."""
+    monkeypatch.setenv("MINDFLOCK_WORKSPACE_DIR", str(tmp_path / "ws-pinned"))
+    monkeypatch.setenv("MINDFLOCK_REPO_URL", "git@example.invalid:pinned/none.git")
+
+
 @pytest.fixture
 def config(tmp_path) -> PipelineConfig:
     return PipelineConfig(
@@ -674,3 +683,127 @@ def test_the_move_is_handed_the_runners_own_config_as_the_fallback(config):
             _run(runner.run(story))
 
     assert move.await_args.args == (story, config)
+
+
+# --------------------------------------------------------------------------- #
+# Launch-prompt decoration: red zones + the repo's Plan-first flag             #
+# --------------------------------------------------------------------------- #
+_REMOTE = "git@github.com:rzorg/rzrepo.git"
+
+
+def _git(cwd, *args) -> str:
+    import subprocess
+
+    cp = subprocess.run(
+        ["git", "-C", str(cwd), "-c", "user.email=t@t", "-c", "user.name=t", *args],
+        capture_output=True,
+        text=True,
+    )
+    assert cp.returncode == 0, cp.stderr
+    return cp.stdout.strip()
+
+
+def _repo_with_flag(path: Path, origin: str = "") -> str:
+    """A git repo at ``path`` (origin ``origin`` when given) whose repo id has
+    a red zone and Plan-first on. Returns the repo id."""
+    import subprocess
+
+    from backend.config import red_zones
+
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+    (path / "config").mkdir()
+    (path / "config" / "settings.toml").write_text("a = 1\n")
+    _git(path, "add", "-A")
+    _git(path, "commit", "-qm", "init")
+    if origin:
+        _git(path, "remote", "add", "origin", origin)
+    rid = red_zones.repo_identity(str(path))[0]
+    red_zones.add_zone("repo", rid, "config/")
+    red_zones.set_plan_first(rid, True)
+    return rid
+
+
+def _base_clone(tmp_path, monkeypatch, url: str) -> Path:
+    from backend.session import provisioned
+
+    monkeypatch.setenv("MINDFLOCK_WORKSPACE_DIR", str(tmp_path / "ws"))
+    s = provisioned.load_provision_settings(repo_url_override=url)
+    return provisioned.resolve_base_repo_dir(s)
+
+
+@pytest.mark.parametrize("case", ["remote-url", "empty-url-remote-default"])
+def test_pipeline_start_reads_plan_first_off_the_base_clone(
+    config, monkeypatch, tmp_path, case
+):
+    """F24: a remote repo_url (or none, falling back to a remote
+    [repository].url) has no local path, but the provisioning base clone
+    shares its identity — the same key the server's Intake starts use."""
+    from backend.config import red_zones
+
+    _repo_with_flag(_base_clone(tmp_path, monkeypatch, _REMOTE), _REMOTE)
+    repo_url = _REMOTE
+    if case == "empty-url-remote-default":
+        monkeypatch.setenv("MINDFLOCK_REPO_URL", _REMOTE)
+        repo_url = ""
+    runner = SessionRunner(config)
+    _, _, options_seen = _install_fake_cs_modules(monkeypatch)
+    with patch.object(runner, "_persist"):
+        runner._create_instance("sc-9", "b", "THE PROMPT", repo_url, "claude")
+    prompt = options_seen[0].kwargs["prompt"]
+    assert prompt.startswith("THE PROMPT")
+    assert red_zones.PLAN_PROMPT in prompt
+    assert "`config/`" in prompt
+    # The provisioning URL itself is untouched.
+    assert options_seen[0].kwargs["provision_repo_url"] == repo_url
+
+
+def test_pipeline_start_reads_a_local_default_repo(config, monkeypatch, tmp_path):
+    """…and a local-path [repository].url with no base clone yet."""
+    from backend.config import red_zones
+
+    local = tmp_path / "local-repo"
+    _repo_with_flag(local)
+    monkeypatch.setenv("MINDFLOCK_REPO_URL", str(local))
+    runner = SessionRunner(config)
+    _, _, options_seen = _install_fake_cs_modules(monkeypatch)
+    with patch.object(runner, "_persist"):
+        runner._create_instance("sc-10", "b", "P", "", "claude")
+    assert red_zones.PLAN_PROMPT in options_seen[0].kwargs["prompt"]
+
+
+def test_pipeline_start_never_asks_a_planless_cli_to_wait_for_go(
+    config, monkeypatch, tmp_path
+):
+    """F40: the Go button lives in the Map's Plan section, which only
+    plan-capable CLIs have — codex gets the zone note, not the wait."""
+    from backend.config import red_zones
+
+    local = tmp_path / "local-repo"
+    _repo_with_flag(local)
+    runner = SessionRunner(config)
+    _, _, options_seen = _install_fake_cs_modules(monkeypatch)
+    with patch.object(runner, "_persist"):
+        runner._create_instance("sc-11", "b", "P", str(local), "codex")
+    prompt = options_seen[0].kwargs["prompt"]
+    assert red_zones.PLAN_PROMPT not in prompt
+    assert "`config/`" in prompt
+
+
+def test_pipeline_pr_review_is_decorated_off_its_workspace(
+    config, monkeypatch, tmp_path
+):
+    from backend.config import red_zones
+
+    ws = tmp_path / "pr-ws"
+    _repo_with_flag(ws)
+    runner = SessionRunner(config)
+    _, _, options_seen = _install_fake_cs_modules(monkeypatch)
+    monkeypatch.setattr(
+        "backend.ticket_ingestion.session_runner._resolve_program", lambda a: "claude"
+    )
+    with patch.object(runner, "_persist"):
+        runner._create_pr_instance("pr-9", "feature/x", str(ws), "REVIEW IT")
+    prompt = options_seen[0].kwargs["prompt"]
+    assert prompt.startswith("REVIEW IT")
+    assert red_zones.PLAN_PROMPT in prompt and "`config/`" in prompt

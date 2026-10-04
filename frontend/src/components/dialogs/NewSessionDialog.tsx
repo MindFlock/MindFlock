@@ -7,6 +7,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -64,6 +65,10 @@ interface Provider {
   name: string;
   aliases?: string[];
   command?: string;
+  /** The CLI can declare a plan the Map shows with a Go button (Claude).
+   * Absent on older servers, which offered Plan first for every CLI — so
+   * only an explicit `false` hides it. */
+  plan_supported?: boolean;
 }
 
 /** One folder /api/repos/suggest thinks the user might mean. */
@@ -690,7 +695,7 @@ export function newFolderBlockReason(where: { gate: string; confirmed: boolean }
     where.gate +
     " yet — tick “Yes, create " +
     where.gate +
-    "” under “Describe it” to have Create make it, or put a folder that " +
+    "” under Folder to have Create make it, or put a folder that " +
     "already exists in Folder."
   );
 }
@@ -735,6 +740,10 @@ export function NewSessionDialog() {
   const [strategy, setStrategy] = useState("worktree");
   const [inPlace, setInPlace] = useState(true);
   const [initRepo, setInitRepo] = useState(false);
+  // Plan first: the launch prompt also asks the agent to list every file it
+  // means to touch (with intent) and wait — the Map tab turns that list into
+  // ghost tiles and blast arms you can red-zone before a single edit.
+  const [planFirst, setPlanFirst] = useState(false);
   const [error, setError] = useState("");
   // "Git & workspace" starts OPEN — hiding those choices behind a click had
   // people launch with the wrong strategy rather than discover it, and they
@@ -953,6 +962,7 @@ export function NewSessionDialog() {
     setProvision(false);
     setInPlace(true);
     setInitRepo(false);
+    setPlanFirst(false);
     // Matches the initial state, and has to be set here too: this reset runs
     // on EVERY open, so a useState default alone left the fold shut from the
     // second open onward.
@@ -1210,6 +1220,16 @@ export function NewSessionDialog() {
     },
     [providers]
   );
+
+  /** Plan first needs a CLI that can declare a plan the Map shows with a Go
+   * button (Claude). Any other CLI would list its files and then wait on a Go
+   * the UI can't send, so the option is off for it. An unknown agent (or an
+   * older server without the field) keeps the option. */
+  const planOk = useMemo(() => {
+    const name = canonAgent(program);
+    const prov = providers.find((p) => p.name === name);
+    return !prov || prov.plan_supported !== false;
+  }, [canonAgent, program, providers]);
 
   /** Picking an account steers the Agent field: with an OpenRouter (or any
    * key) account the identity is the choice that matters, so an agent the
@@ -1593,7 +1613,7 @@ export function NewSessionDialog() {
   // Recomputed from the Folder field on every render rather than remembered, so
   // there is no state to forget to clear: see newFolderGate for the six writers
   // that would each have had to remember. Both readers come off the one value —
-  // the confirm row in the Describe strip, and submit's refusal.
+  // the confirm row (newFolderRow, below), and submit's refusal.
   const newFolderAsk = newFolderGate({
     // planGatePath answers the "is it already there" half, so the gate itself
     // only ever compares paths — one place for that question, so the confirm
@@ -1606,6 +1626,42 @@ export function NewSessionDialog() {
     gate: newFolderAsk,
     confirmed: newFolderOk,
   });
+  /* The confirm row, built once and drawn on BOTH pages: under the sentence on
+     page 1, and under the Folder field on page 2. It used to live only in the
+     Describe strip, which "Review details first" leaves behind — so a plan that
+     proposed a new folder landed on a page whose Create refused, naming a tick
+     that was on the other page. The one control in this dialog whose "no" is
+     the safe answer, so it is drawn as a question and not as a fourth checkbox:
+     a folder is the only thing a plan proposes that survives the session, and
+     an option row reads as something you may skim past.
+
+     It is announced as well as the note above it. Two polite regions firing
+     together is a little chatty; a gate a screen reader never mentioned, on a
+     form whose Create then refuses, is worse. */
+  const newFolderRow = newFolderAsk ? (
+    <div className="nf-newfolder" role="group" aria-labelledby="new-describe-newfolder-q">
+      <p id="new-describe-newfolder-q" className="nf-newfolder-q" aria-live="polite">
+        There is no folder at <b>{newFolderAsk}</b> yet. Make it?
+      </p>
+      <label className="check">
+        <input
+          type="checkbox"
+          id="new-describe-newfolder"
+          checked={newFolderOk}
+          onChange={(e) => setNewFolderOk(e.target.checked)}
+        />
+        {/* Word for word what newFolderBlockReason quotes, because the
+            refusal is read several screens below this row and has to
+            name a control the user can go and find. */}
+        Yes, create {newFolderAsk}{" "}
+        <span className="muted">
+          — a new directory, made when you press Create. Not the same as “Create a git repo in
+          this folder” under Git &amp; workspace, which runs git init inside it; a new project
+          usually wants both.
+        </span>
+      </label>
+    </div>
+  ) : null;
   // The note is derived from the same fact as the gate above, and for the same
   // reason: nothing cleared it when the Folder field moved off the plan's path,
   // so a suggestion chip clicked after a `new:` plan left a muted line still
@@ -1668,6 +1724,8 @@ export function NewSessionDialog() {
     };
     const promptVal = p.prompt.trim();
     if (promptVal) body.prompt = promptVal;
+    // The server appends the plan request to the prompt (and never twice).
+    if (planFirst && planOk) body.plan_first = true;
     // Sent EXPLICITLY (even empty) so a toggled-off default is honored.
     body.launch_args = tokenize(launchArgs);
     // Absent = inherit the app-wide default account (same tri-state as
@@ -1945,46 +2003,7 @@ export function NewSessionDialog() {
                   {planError}
                 </p>
               )}
-              {newFolderAsk && (
-                /* The one control in this dialog whose "no" is the safe answer, so
-                   it is drawn as a question and not as a fourth checkbox: a folder
-                   is the only thing a plan proposes that survives the session, and
-                   an option row reads as something you may skim past. It sits at
-                   the FOOT of the strip — below the note that explains the folder
-                   and below the error, which is about the sentence rather than
-                   about this — so the eye meets it on its way down to the form it
-                   is holding up.
-  
-                   It is announced as well as the note above it. Two polite regions
-                   firing together is a little chatty; a gate a screen reader never
-                   mentioned, on a form whose Create then refuses, is worse. */
-                <div
-                  className="nf-newfolder"
-                  role="group"
-                  aria-labelledby="new-describe-newfolder-q"
-                >
-                  <p id="new-describe-newfolder-q" className="nf-newfolder-q" aria-live="polite">
-                    There is no folder at <b>{newFolderAsk}</b> yet. Make it?
-                  </p>
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      id="new-describe-newfolder"
-                      checked={newFolderOk}
-                      onChange={(e) => setNewFolderOk(e.target.checked)}
-                    />
-                    {/* Word for word what newFolderBlockReason quotes, because the
-                        refusal is read several screens below this row and has to
-                        name a control the user can go and find. */}
-                    Yes, create {newFolderAsk}{" "}
-                    <span className="muted">
-                      — a new directory, made when you press Create. Not the same as “Create a git
-                      repo in this folder” under Git &amp; workspace, which runs git init inside it;
-                      a new project usually wants both.
-                    </span>
-                  </label>
-                </div>
-              )}
+              {newFolderRow}
             </div>
             </>
           ) : (
@@ -2375,6 +2394,8 @@ export function NewSessionDialog() {
               </div>
             )}
   
+            {newFolderRow}
+
             {plainFolder && (
               <p className="nf-git-nudge">
                 {initRepo ? (
@@ -2692,6 +2713,34 @@ export function NewSessionDialog() {
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
                   />
+                </label>
+                <label
+                  className={"check" + (planOk ? "" : " disabled")}
+                  id="new-plan-first-row"
+                  title={
+                    planOk
+                      ? "The agent first lists every file it intends to create, modify or delete, with a one-line " +
+                        "intent for each, then waits for your go-ahead. Open the session's Map tab to see that plan " +
+                        "and its blast radius, red-zone anything it shouldn't touch, and press Go."
+                      : "Only a CLI that can declare a plan gets the Map's plan review and Go button — pick Claude " +
+                        "for Plan first."
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    id="new-plan-first"
+                    checked={planFirst && planOk}
+                    disabled={!planOk}
+                    onChange={(e) => setPlanFirst(e.target.checked)}
+                  />
+                  Plan first{" "}
+                  <span className="muted">
+                    {!planOk
+                      ? "(needs a CLI with plan support — Claude)"
+                      : prompt.trim()
+                        ? "(list files + intent, then wait for Go on the Map tab)"
+                        : "(takes effect with a prompt)"}
+                  </span>
                 </label>
               </div>
             </details>

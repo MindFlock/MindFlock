@@ -201,10 +201,11 @@ def _ensure_agent_session(inst, title: str):
             cmd = _env_prefix(name, local_env) + cmd
     if prof_env:
         cmd = _env_prefix(name, prof_env) + cmd
-    # (Re)install the provider's activity-reporting hooks with THIS session's
-    # name right before launching, so the CLI announces working/idle/clarify
-    # for the run we are about to start (Claude snapshots hook config at
-    # process start; copies sharing a worktree each pin their own name here).
+    # (Re)install the provider's activity-reporting + red-zone hooks right before
+    # launching, so the CLI announces working/idle/clarify and arrives with the
+    # guard armed. The session name is resolved at fire time (not baked in), so
+    # copies sharing a worktree each attribute their own events; Claude Code hot-
+    # reloads its hook config, so the reconcile tick can also re-arm a live run.
     try:
         provider.install_activity_hooks(wt, name)
     except Exception:  # noqa: BLE001 — activity hooks are best-effort

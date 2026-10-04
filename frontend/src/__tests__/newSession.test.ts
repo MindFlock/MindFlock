@@ -517,6 +517,16 @@ describe("newFolderBlockReason — the create that would make a folder nobody ag
     expect(reason).toContain("Yes, create ~/code/invoice-parser");
   });
 
+  it("points at the tick where page 2 draws it, not at the sentence page", () => {
+    // This refusal is only ever read on page 2 (submit() is page 2's Create).
+    // It used to send the reader to "Describe it" — page 1, which "Review
+    // details first" had just left — so a plan that proposed a new folder was a
+    // dead end: Create refused, naming a box that was not on screen.
+    const reason = newFolderBlockReason({ gate, confirmed: false });
+    expect(reason).toContain("under Folder");
+    expect(reason).not.toContain("Describe it");
+  });
+
   it("lets Create through once the folder has been agreed to in as many words", () => {
     expect(newFolderBlockReason({ gate, confirmed: true })).toBe("");
   });

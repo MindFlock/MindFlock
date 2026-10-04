@@ -182,15 +182,38 @@ class GenericProvider(BaseProvider):
             if not workdir or not session_name or not os.path.isdir(workdir):
                 return
             settings_path = Path(workdir) / cfg.activity_hooks_file
+            # tool_hook_events carries the red-zone guard + tool feed on this
+            # CLI's Pre/Post events when its config opts in (Codex, or a user
+            # TOML with [activity] tool_hook_events); None-valued for a CLI that
+            # only reports activity, keeping its hook bytes unchanged.
             activity_markers.merge_activity_hooks(
                 settings_path,
                 cfg.activity_hook_events,
                 session_name,
                 record_thread=False,
+                tool_hook_events=dict(cfg.tool_hook_events) or None,
+                # Only a CLI whose hard guard reads this file gets the
+                # disableAllHooks:false pin — Codex's hooks.json rejects the key.
+                resist_disable_all=bool(cfg.red_zone_guard),
             )
             activity_markers.ensure_git_excluded(workdir, cfg.activity_hooks_file)
         except Exception:  # noqa: BLE001 — never break a launch over hook install
             return
+        # Best-effort: write this worktree's guard file so an already-set repo
+        # zone is enforced/detected from the first tool call (never raises).
+        try:
+            from backend.config import red_zones as _red_zones
+
+            _red_zones.sync_for_workdir(workdir)
+        except Exception:  # noqa: BLE001 — guard sync is enrichment only
+            pass
+
+    # --- red-zone guard --------------------------------------------------- #
+    def red_zone_guard(self) -> bool:
+        # Hard block for BOTH zone kinds (red keep-out, green only-here) when
+        # the TOML opts in; otherwise zone violations are detect-only (the
+        # agent is told they are "flagged and block pushes", not "blocked").
+        return bool(self.cfg.red_zone_guard)
 
     def reports_activity(self) -> bool:
         # Configured hooks are the whole capability here: without them this CLI

@@ -42,7 +42,10 @@ from backend.ticket_ingestion.pr_comments import (
 from backend.ticket_ingestion.pr_monitor import PRMonitor
 from backend.ticket_ingestion.pr_provisioner import PRProvisioner
 from backend.ticket_ingestion.pr_runner import PRClaudeRunner
-from backend.ticket_ingestion.provisioner import EnvironmentProvisioner
+from backend.ticket_ingestion.provisioner import (
+    EnvironmentProvisioner,
+    _open_ide_on_ticket,
+)
 from backend.ticket_ingestion.state import (
     clear_issue_attempts,
     clear_pr_attempts,
@@ -630,7 +633,9 @@ class PipelineOrchestrator:
                 # addressed in a single window), instead of a tab per comment.
                 await self._cs_runner.run_pr(pr, comments)
             else:
-                workspace = await self._pr_provisioner.provision(pr)
+                workspace = await self._pr_provisioner.provision(
+                    pr, launch_cursor=_open_ide_on_ticket()
+                )
                 # Refresh the CLI first: the runner was built with the provider
                 # configured at process start, which may be several Settings
                 # changes ago.

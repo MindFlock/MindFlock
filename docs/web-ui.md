@@ -368,6 +368,313 @@ waits it out correctly must not then be halted for "no progress".
 The command palette has **Send message…** and **Queue prompt…** for the focused
 session (keyboard-only via a prompt).
 
+## Code map (Map tab): the Code Tree, zones and the plan loop
+
+Every git session pane has a **Map** tab (after Diff; hidden with Diff when git
+isn't available). It answers "what is this code, where is this agent working,
+what depends on what it changed, and what may it touch at all" — as one picture
+of the worktree, the **Code Tree**.
+
+### Reading the tree
+
+- **Trunk = the repo, branch = a folder, leaf = a file.** A branch is as thick
+  as the square root of the code beneath it (sizes are the files' bytes, ~32
+  bytes a line). A folder with no sub-folders is a round clump of leaves on its
+  own twig; chains of single-child folders are one branch; boilerplate source
+  roots (`src/main/java/com/acme/…`) are not labelled, the first telling folder
+  below them is.
+- **Roots = tests**, underground, under the code they test: a test named after
+  a code file (`test_foo.py`, `foo.test.ts`, `FooTest.java`) roots under that
+  file's folder, preferring a candidate it imports; otherwise under the deepest
+  folder holding most of what it imports (`tests for backend/web`). Tests that
+  say nothing are `tests: tests/unit`.
+- **Ground piles** = docs, CI and root config (`.github`, `docs`, `repo root
+  files`), and any top-level folder that is mostly non-code.
+- **Birds = agents.** This session is the bird in the accent colour (●); other
+  live sessions on the same repo fly too, in colour-blind-safe secondary
+  colours with their own glyph (▲ ■ ◆). A bird **nests** in the deepest folder
+  holding most of its recent edits (its eggs are in the bird's colour; the
+  nest's folder is named by the same pill as any changed folder) and
+  **perches on the leaf** it is touching; a leaf it edited takes its colour, a
+  **dot** = read, a **bud** = planned (a planned new file buds on the folder
+  that will hold it). A refused edit is a red ✕ where the bird hit the rule.
+- **Helpers = subagents.** Every subagent the session sends out (Claude's
+  `Agent` / `Task` tool) is a smaller bird of its own, in a tint of its
+  parent's colour with the parent's glyph HOLLOW and an index (○1, ○2 — the
+  glyph, not the tint, is what tells them apart for colour-blind eyes, and a
+  solid `●4` after a folder name is always a change count, never a helper), named
+  `<agent_type> · <description>` on its card and `explore#1` on the tree. It
+  flies out from its parent when its first call arrives, perches on its own
+  leaves (its own dots, coloured leaves, ✕ and gold badges — "4 depend on
+  explore#1's edits"), and when its Agent call returns (or after 120 s
+  without a call) flies home into the parent's nest and fades. Finished
+  helpers stay listed for 45 s, then drop off; their work stays on the tree
+  as the parent's. While a helper is listed, files it edited are its own, not
+  also the parent's branch changes.
+- **Changes are the loudest thing; the rest of the tree is a calm silhouette.**
+  The unchanged canopy is a muted, low-contrast grey-green; the wood from the
+  trunk to every change is **lit** in the changing bird's colour, so the eye
+  follows lit branches to the edited leaves (the newest changes glow
+  brightest). A changed leaf is drawn large and glowing in its bird's colour
+  at every zoom; seen from far out, a folder's changed leaves are nudged a few
+  pixels apart so each change stays a separate, countable mark, and no label,
+  tag or badge is ever placed over one. Labels are quiet lozenges with a
+  neutral hairline (only the counts inside carry the birds' colours), so they
+  never compete with the leaves. Each changed folder — the nest's folder too —
+  is one clickable pill that names its limb —
+  `backend › web/core ●4`, `frontend › lib ●2` (a nested folder always carries
+  its top-level folder) — every name is PINNED to its own cluster: it never
+  touches another folder's loud things (a glowing clump, a nest, a zone sign or
+  territory), none of them is nearer to it than its own clump / nest / stem,
+  and the quiet canopy nearest its centre is its own. A name with no such room
+  is shortened instead of moved — `backend › web/core ●4`, then `web/core ●4`,
+  then just `●4` — or not drawn, never parked on a long leader beside a
+  neighbour — with
+  a count per bird in the bird's colour and glyph; a bird's tag says just the
+  file when its folder is already named; a click
+  opens its folder card (Keep out / Only here are there). Labels appear only on
+  top-level folders and folders that hold changes, a nest, a rule or the
+  selection; file names wait until you zoom close, and even then only the
+  files a bird touched, the hovered one and the folder you are looking at.
+- **What could break is on demand, never the default layer.** Hover or select
+  a changed leaf and the files that import it light up **gold** (no per-folder
+  pills — the file card carries the count); **Show the N that depend on it**
+  pins the full picture with per-folder badges (`web/core · 10 depend on …`,
+  click one for the list). The bird index's **⚠ Could break** opens a ranked
+  bar list of the changed files by importer count AND draws the same answer on
+  the map: a soft gold wash over each clump holding files that import a
+  change, with one gold count per folder (`⚠ web 15`, `⚠ backend · other 8`
+  for a limb's smaller folders; the counts sum to the dependents, never a count
+  inside a count; click one for the list). **Most at risk** (or a ranked row)
+  shows that one file's dependents the same way without moving the camera; a
+  second click or Esc clears it.
+- **Off-screen birds** get a compact edge chip — glyph and arrow (`○2 →`) — on
+  the edge of the visible canvas in the bird's direction (the details card
+  counts as an edge); it slides along that edge, never into the tree, and never
+  over a nest or the selection ring. Esc (or the followed row again) stops
+  following and flies back to the view you had before.
+- **⛔ Keep out** is a red territory, filled and hatched with a solid border:
+  the hull of the folder's whole branch (from the fork it leaves) and every
+  clump on it, grown by ~16 px on screen, so even a small folder seen from far
+  out is an area, not a dot. It never covers what is not the zone's: another
+  folder's clumps are cut out of it (the border runs round the cut), and so
+  are a bird working outside it and the lit wood of a change outside it — a
+  lit branch that only passes by is never read as working inside. Its sign
+  sits on the territory's rim or inside it — `⛔ providers`, `⛔ Keep out ·
+  backend/providers` once you zoom close, the bare `⛔` when there is no room —
+  and once the rule has stopped an edit it says so (`⛔ providers · 1 edit
+  blocked`). It prefers a spot well clear of every other folder's nest and
+  glowing leaves, never sits on one, and no bird's tag is laid across a
+  territory the bird is not working in. **✓ Only here** is the same territory
+  in green (a spotlight: no hatching) and dims
+  everything else to dusk — the names, pills, bird tags and lit wood outside
+  it too; changed leaves outside stay visible but unlit.
+
+**Semantic zoom:** at the whole-tree zoom folders are leafy clumps with ~25
+names on a big repo (more on a small one); zoom in and single leaves appear on
+stalks, then file names (only around the middle of the view at mid zoom). No
+name ever sits on another folder's foliage. A breadcrumb (`repo › backend ›
+web`) says where you are once zoomed in.
+
+**Moving around:** scroll to zoom (gently — one notch ≈ ×1.15, a flick never
+jumps from a leaf to the whole tree), drag or arrow keys to pan, double-click a
+folder to zoom to it, `0` / **⌂ Whole tree**, **← Back** (`Backspace`) undoes
+the last move, the minimap (bottom-left, shown only once you zoom in past the
+whole-tree view — there it would only repeat the canvas) jumps. **Find file or symbol** (`/`)
+flies to a file — or to the file holding a symbol — and opens its card.
+
+**Cards:** click a leaf for its **file card** (lines, kind, used by N, imports,
+what each bird did to it, its zone, then Classes / Functions — public first —
+/ Routes / Tested by, from `GET …/code-map/file`) with **Show the N that depend
+on it**, Centre, Folder, Open diff, **⛔ Keep out** and **✓ Only here** (or
+**Allow this file** when it is outside the green scope). Click a branch, a
+clump or a folder name for its **folder card** (files, lines, sub-folders,
+which birds work there) with **Zoom to it / Fold / ⛔ Keep agents out / ✓ Only
+here** (or Remove). The trunk is the repo card. Click a bird to follow it.
+
+**Following a bird:** click a bird, its row in the bird index (or a helper's
+row, or a rail row in a small pane). The camera glides to it (a jump under reduced motion) at a zoom
+where its folder's and leaves' names show, then keeps it centred as it flies
+from leaf to leaf, until you pan, zoom, drag, press `Esc`, click the card
+again or click another bird's row (which switches). The followed row is marked
+in its bird's colour (`aria-pressed` on the row's button).
+
+**The bird index** is a compact column on the **left** of the Map at every pane
+size — never a strip along the top. **Agents:** one row per bird (glyph,
+colour, status, what it is doing now, `7 changed (2 by helpers) · web/core 4,
+lib 2` — the session's count includes its helpers', so it agrees with the
+pane header and with Changes' `this session 7`), its
+helpers nested under it ("editing x.py" / "reading …" / "done"); a click
+follows the bird, `▸` expands the row (task, nest, read / planned / could
+break, its changed files most-depended-on first); this session's row links its
+**Plan** and any **scope requests** or **breaches** to the Session panel.
+**Changes:** where
+the changes are (`Changes 9 in all`, then `this session 7 + other sessions 2`
+— this session's 7 is the pane header's `7 files` — and `backend 5 · frontend
+4`), **Most at risk · 73 import it — config/settings.py** (click to show its
+importers on the map), **⚠ Could break** (the ranked list + the map layer), a
+caption saying what the row buttons do (`⛔ keep out ✓ only here`), and one
+row per changed folder (`backend › web/core ✎4`, the agents' colour dots, its
+first files) with **⛔** / **✓** buttons: blocking or allowing an area is one
+click from where you read about it (a second click on the same button removes
+the rule; a folder already inside a rule says so, and with an only-here zone a
+folder of this session's outside it reads `already changed · exempt from ✓`,
+and another session's folder reads `other worktree · not affected` — only
+here binds this session's worktree, so another session's marks on the map are
+never dimmed as if restricted; the row height never
+changes, so nothing reflows under the pointer). **Rules** come last (a rule
+added from a Changes row lands below it): every zone, a click zooms there, ×
+removes it; a rule goes by its short name (`providers`, `web/core`, the full
+path on hover) and says what it stopped in one wording everywhere
+(`1 edit blocked`). Helper rows say where the helper is on their own line (`in
+backend/config · 2 changed`). A bird working inside a keep-out (or outside an only-here) says so
+on its own "now" line (`⚠ editing Sidebar.tsx · in ⛔ keep out`), never on a
+new one. The **Legend** is behind `?`.
+**Activity** (each bird's reads, edits and refusals and each rule, newest
+first; a row flies to its file) starts folded to its latest line — in a small
+pane a one-line ticker, never a block over the roots. Labels and
+badges keep off the HUD. Below 760 × 560 px the column becomes a slim left
+**rail** (glyph + short name + changed count per bird, then `✎9 changed` /
+`⛔1 rule` tiles); `»` (or a tile) expands the full column over the canvas and
+cards open as a bottom sheet; the paint-tool hint sits at the bottom, so arming
+a tool never moves what you aim at.
+
+**Painting rules:** **⛔ Keep out** / **✓ Only here** in the toolbar arm a
+tool; click a folder name, a branch or a leaf (a leaf paints its folder unless
+you are zoomed in on single files) and it disarms — `Shift`-click to paint
+several, `Esc` cancels. Each paint is one `POST …/red-zones` (keep-out: repo
+scope; only-here: worktree scope); the tree draws what the server answers, and
+a toast offers **Undo**. Clicking a branch that already carries the rule takes
+it off. **+ Zone** types a pattern instead.
+
+**The Session panel** (toolbar) is the same session as lists — the accessible
+twin of the picture: **Breaches**, **Scope requests** (green mode, each with
+**Allow this file**), **Activity**, **Plan** (Ask for plan / Go / Go — only the
+planned files), **Blast radius** (direct importers of what changed, per
+folder), **Zones**, **Changed** and **Other agents here**. Blocks and breaches
+are also announced through a polite live region.
+
+**Cost:** nothing mounts until the tab is first opened, and nothing polls or
+draws unless it is showing and the window is visible (`GET …/code-map/live`
+every 2 s). The layout search runs in a Web Worker (`/codetree-worker.js`)
+behind a "Growing the tree…" state with progress; its placements are cached
+per repo and data in IndexedDB, so the next open replays them in milliseconds,
+and a changed worktree warm-starts from the previous layout — unchanged
+subtrees keep their place, a changed folder is pushed clear of its neighbours —
+so a small change doesn't reshuffle the tree. Measured (Node, same engine):
+cold 0.2 s for ~730 files, 0.8 s for ~2.9k, 2.6 s for ~4.8k; replay 10–60 ms;
+warm 10–200 ms. The picture is re-drawn only when the camera, the data or the
+hover changes (plus a 12 fps bob for perched birds; nothing animates under
+reduced motion), into a static layer at ≤ 1.5× DPR plus an overlay.
+
+### Zones: keep out (red) and only here (green)
+
+A zone is a path glob. **⛔ Keep out** (red): the agent may **read but not
+change** it (create, modify, delete or move). **✓ Only here** (green): while a
+worktree has a green zone, the agent may change **only** what is inside a
+green zone — everything else is read-only. Red always wins over green.
+Patterns are gitignore-flavoured, over worktree-relative paths: a bare name
+(`config.toml`, `*.pem`) matches at any depth, a path with a slash
+(`backend/athena`) is anchored at the repo root, a leading `/` anchors a bare
+name, `*`/`?`/`[…]` stay within one folder and `**` crosses folders (a `**/`
+segment spans zero or more, so `backend/**/secret.py` also covers
+`backend/secret.py`); a zone covers the path **and everything under it**.
+Git-ignored files a red zone matches (the usual home of "my configuration
+file") are guarded too. On a case-insensitive filesystem (macOS, Windows)
+zones match ignoring case — on the map as in the guard; the Map classifies
+every path with the same predicate the guard, the monitor and the push gate
+use.
+
+Make one from wherever you are looking: paint it on the tree (the toolbar's
+**⛔ Keep out** / **✓ Only here** tools, or a folder or file card's buttons),
+click **⛔** on a blast-radius row, or **+ Zone**. The inline **+ Zone** row
+starts with the kind — **⛔ Keep out | ✓ Only here** — then the pattern (a
+map-picked root-level path is entered as `/name`, so it means that one path),
+an optional name, the scope and **Tell the agent**. A keep-out zone's scope is
+**Whole repo** (the default: every worktree and future session on the repo,
+keyed by its origin URL) or **This worktree**. A green zone is always **this
+worktree** — it scopes a *task*, and as repo policy it would lock every other
+session (verify runs, intake sessions) out of their own files — and the row
+says how many sessions share the worktree. The preview underneath says what
+the pattern covers: for green, how many files become writable, under which
+roots, and how many already-changed files would fall outside; an unanchored
+green pattern (it matches at any depth) offers **anchor to /…**, and one that
+matches nothing says the agent may only create new files there.
+
+After a green add, files **already changed outside the new scope** are exempt
+by default (they were changed before the scope existed, and stay exempt while
+their content is unchanged): the row says "N files already changed outside
+this scope" with **Keep exempt** and **Treat as breaches**.
+
+**Green mode** dims everything outside the green zone(s) to dusk on the tree
+(folder names stay readable; the minimap dims too), and the guard pill reads
+**✓ Only here: providers**. Some
+files outside a green zone are still writable as **companions**, flagged amber
+and never a breach: lockfiles, snapshots, tests that import a file inside the
+zone, and the repo's declared **derived outputs** (Zones… → Derived outputs —
+e.g. a committed build bundle). Reads are never blocked — shell reads can't be,
+and blinding the agent to the callers of what it edits breaks things — so a
+read outside the scope is only noted, as **peeked outside scope** in Activity.
+Every edit the guard refuses for being outside the scope is a **scope
+request** with **Allow this file**, which adds an anchored green zone for
+exactly that path and tells the agent.
+
+The **guard pill** says how much the zones hold right now: **Guarded**
+(Claude Code: the edit is refused before it happens, subagents included),
+**Arming…** (installed, proven on the next tool call), **Detect-only
+(codex)** (no hook guard for this CLI: breaches are detected, flagged and
+block pushes, but not prevented), **Guard off — re-arming** (the hooks went
+missing; MindFlock is reinstalling them), **No zones**, or in green mode
+**✓ Only here: …** (tinted amber/red by the same states). Hovering it gives the
+server's one-line explanation.
+
+A branch carrying a breach can't leave: **Push**, **Make PR** and **Merge**
+refuse with the offending paths. The refusal is an error card (bottom right)
+with **Open map** and **Push / Open PR / Merge anyway** — the override is one
+explicit click for that one action, never a browser `confirm()` (which the
+desktop app doesn't implement).
+
+**Zones…** in the command palette manages keep-out zones per repo outside any
+session (every repo you have a session on is listed, zones or not; each zone
+shows its kind), holds each repo's **Plan first** switch, and its **Derived
+outputs** (companions for green-scoped agents; the built-in lockfile/snapshot
+set is shown beside them). It is a modal like Intake: `Esc` closes it from
+anywhere, and `Delete` / `Ctrl+W` pressed inside it never close the session
+behind.
+
+### The plan loop
+
+**Ask for plan** (mid-flight: **Ask what's left**) asks the agent to list every
+file it intends to create, modify or delete, one `path — intent` per line in a
+`mindflock-plan` block, and wait. While a plan exists and nothing has been
+edited since, the Map is in plan mode: the blast radius grows from the plan
+instead of from the diff, so you can see "this reaches ticket_ingestion"
+before a line is written, add zones, and press **Go — with N zones** (carry
+on; the zones added since the plan are named in the message). **Go — only the
+planned files** goes further: it turns the plan into anchored green zones for
+this worktree (each planned file exactly; a new file's parent folder) and tells
+the agent its scope — "if you need a file that isn't in your plan, say so".
+Once work starts, plan rows tick off as files change, anything edited that
+wasn't in the plan is marked off-plan, and planned files outside the green
+zones are flagged. Ask/Go/Tell are disabled while the agent is waiting on a
+question in the terminal. Plan-first can be set at launch (the New-session
+dialog's **Plan first** checkbox) or per repo (Zones…) for sessions started
+from Intake.
+
+### The rail chip
+
+A session's sidebar row carries a zone chip when there is something to
+say: red **⛔n** for breached files on the branch (or **⛔** for a block you
+haven't looked at since you last opened its Map), amber **!** while the guard is
+arming or off, and a quiet **🛡** while it is guarded (**✓** when the
+worktree is scoped by green zones). "Since you last
+looked" is kept on the server's clock (the block time is the server's), so a
+browser on another machine, or a WSL2 clock that drifted after sleep, neither
+hides a block nor keeps a seen one red. Clicking it selects the
+session and opens its Map. Blocks, breaches and tampering also arrive as toasts
+(clickable, straight to the Map) and in the 🔔 feed; the "Red zone blocked an
+edit" notification rule is off by default, the other two are on.
+
 ## Notifications (🔔)
 
 The header bell keeps a running feed of notable session events — finished,
@@ -613,8 +920,10 @@ built-in alias.
 | `Ctrl+K O` | Open/focus IDE |
 | `Ctrl+K D` | Duplicate session |
 | `Ctrl+K H` | Hide/show window |
+| `Ctrl+K M` | Code map — open the focused session's Map tab |
 | `Ctrl+W` / `Delete` | End the focused session (`Delete` only when not typing; never fires for a selected non-session window — those close from their ✕) |
 | `Ctrl+V` (in a terminal) | Paste into the PTY: an image or file on the clipboard uploads and pastes its path, plain text pastes with a "Pasted N chars" toast, and an empty clipboard event falls back to reading `navigator.clipboard`. Same in session panes and the Assistant |
+| `Ctrl+F` (in a terminal) | Find across the pane's **whole** scrollback, prefilled with a one-line terminal selection — **in the live pane**: a find bar floats top-right with an `n / total` count, the pane itself jumps to each hit, every visible hit yellow, the current one orange. It searches whatever scrollback the pane's mouse wheel moves, decided per pane, so it holds for every agent CLI. Where the app leaves the mouse to tmux (shells, codex, aider, gemini, cursor-agent, goose) it's tmux's copy-mode search. Where the app scrolls itself (Claude Code, opencode, cline) the server **indexes** everything the app would show the moment the bar opens — the window is briefly made tall at the same width, read top to bottom (PageUp/PageDown where the app pages with keys, measured wheel bursts where it doesn't), and put back — while the pane shows a frozen snapshot, so none of it is seen; the count is then instant, each step is one jump, and reopening find on an unchanged pane reuses the index. The server also keeps indexes current as the agent writes (one screen read every 1.5 s, nothing moves), and builds a missing one ahead of time for a pane nobody is using — agent idle (never while it waits on a question), no input from you for 30 s, screen still for 20 s, at most one screen attached — with that pane frozen meanwhile; any input into it cancels and snaps back. Claude Code's own pinned `❯ prompt` row is hidden the frame it's drawn (the prompt bar above mirrors it), so jumping never flashes it. Only rows that move with the content are indexed — never the input box, a status bar, a pinned prompt row or a floating hint. Only a pane that scrolls from neither (a pager on the alternate screen) opens the full-history view's find instead. Options, as in an editor: **Aa** match case (`Alt+C`), **ab** whole word (`Alt+W`), **.\*** regular expression (`Alt+R`), and **near** — a second term that must be on the same line or within N lines (1–50) of the first; both terms are highlighted and the options apply to both (matching is server-side, `core/find_query`, and painted with the same rules in the browser; the tmux path reads tmux's history rather than using tmux's own search, which can't do these). You start at the newest hit at or above what you were looking at: `Enter` / `F3` / `Ctrl+G` step **up** to older hits, add `Shift` to step back down, wrapping at the ends; `Esc` returns to live. Literal and case-insensitive unless the options say otherwise |
 | `Ctrl+Shift+T` | Reopen the last-closed session |
 | `Ctrl+Enter` | Submit the commit dialog |
 
@@ -655,6 +964,15 @@ picks it. The parent is never in question, which matters: MindFlock has always
 created folders as a side effect of **Create** (a Folder path that does not exist
 yet is `mkdir`'d, and *create new repo* `git init`s it), and a bare name typed
 into that field once produced a directory beside the server's own checkout.
+
+**Plan first** (under the Prompt fold) appends a request to the prompt: list
+every file you intend to touch with a one-line intent, then wait. The session's
+Map tab shows that list, and what depends on it, to review and fence off with
+zones before you press Go (see [the plan loop](#the-plan-loop)). It needs a prompt to
+ride on; with none it does nothing. It is only offered for a CLI that can
+declare a plan the Map shows (Claude): for any other agent the checkbox is
+disabled with "needs a CLI with plan support — Claude", since that agent would
+wait on a Go the UI can't send.
 
 **Launch flags** are extra CLI flags appended to the agent on every start/resume
 of the session. The field is pre-filled from the global per-provider default

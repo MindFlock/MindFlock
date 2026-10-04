@@ -5341,6 +5341,13 @@ p.set-hint {
 /* Covers the terminal's own pinned-prompt row (the TUI keeps drawing it in
    the PTY, shared with mobile) while the bar above mirrors its text: the
    6px pane gap plus one terminal row of terminal background. */
+/* The TUI's own pinned-prompt row, hidden the moment it's drawn (class set
+   from xterm's render callback in lib/terminals — see there). The prompt bar
+   above mirrors its text. */
+.term-container.tui-pinned-row .xterm-rows > div:first-child {
+  visibility: hidden;
+}
+
 .prompt-pin .ghost-row-mask {
   position: absolute;
   top: 100%;
@@ -6244,6 +6251,2947 @@ p.set-hint {
 /* 150 */
 
 @layer components{
+
+/* --- Map tab: the Code Tree + zones + plan loop (CodeMapTab.tsx, codemap/*) ---
+   The tree is a canvas (lib/codetree/draw.ts) whose colours all come from the
+   app tokens and the --ct-* properties below, derived from those tokens (with
+   light-theme overrides in styles/theme-light.css). The HUD around it is the
+   app's own furniture — a --panel-2 toolbar, 11px controls with a 6px radius,
+   --panel cards with a 1px --border, 10px uppercase heads like the Session
+   lists, accent for "on". Red is reserved for keep-out zones, breaches and
+   denials; green for only-here zones; gold for the blast radius. */
+
+.pane-map {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: var(--text);
+}
+
+.pane-map.hidden {
+  display: none;
+}
+
+.cm-root {
+  /* Local tokens: derived from the theme so accent/light flips follow. */
+  --cm-acc-t: color-mix(in srgb, var(--accent) 62%, #fff);
+  --cm-sep: rgba(255, 255, 255, 0.035);
+  --cm-hover: color-mix(in srgb, var(--border) 70%, var(--text) 18%);
+  --cm-row-alt: rgba(255, 255, 255, 0.018);
+  --cm-green-rgb: 81, 189, 115;
+  --cm-red-rgb: 222, 97, 62;
+  --cm-gold-rgb: 255, 215, 0;
+  --cm-mono: ui-monospace, Menlo, Consolas, monospace;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  font-size: 12px;
+  position: relative;
+}
+
+.light .cm-root {
+  --cm-acc-t: var(--accent-deep);
+  --cm-sep: rgba(0, 0, 0, 0.06);
+  --cm-row-alt: rgba(0, 0, 0, 0.025);
+  --cm-gold-rgb: 176, 128, 0;
+}
+
+.cm-mono {
+  font-family: var(--cm-mono);
+}
+
+.cm-acc-t {
+  color: var(--cm-acc-t);
+}
+
+/* --- toolbar --- */
+.cm-toolbar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 7px 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.cm-grow {
+  flex: 1;
+}
+
+.cm-crumbs {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  font-family: var(--cm-mono);
+  font-size: 12px;
+}
+
+.cm-crumb-wrap {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.cm-crumb-sep {
+  color: var(--border);
+  padding: 0 1px;
+}
+
+.cm-crumb {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cm-crumb:hover:enabled {
+  color: var(--text);
+  background: var(--panel);
+}
+
+.cm-crumb.current {
+  color: var(--text);
+  font-weight: 600;
+  cursor: default;
+}
+
+.cm-btn,
+.cm-actions button,
+.cm-add button,
+.cm-add select {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 3px 9px;
+  border-radius: 6px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.cm-btn:hover:enabled,
+.cm-actions button:hover:enabled,
+.cm-add button:hover:enabled {
+  border-color: var(--accent);
+}
+
+.cm-btn.on {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+.cm-btn.red {
+  color: var(--red);
+  border-color: rgba(var(--cm-red-rgb), 0.45);
+}
+
+.cm-btn.green {
+  color: var(--green);
+  border-color: rgba(var(--cm-green-rgb), 0.45);
+}
+
+.cm-btn.red:hover:enabled {
+  border-color: var(--red);
+}
+
+.cm-btn.green:hover:enabled {
+  border-color: var(--green);
+}
+
+.cm-btn:disabled,
+.cm-actions button:disabled,
+.cm-add button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Segmented control: Blast 1 2 3, entry kinds, zone kind. */
+.cm-seg {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 11px;
+}
+
+.cm-seg .lab,
+.cm-seg button {
+  padding: 3px 8px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  font: inherit;
+  line-height: 1.4;
+}
+
+.cm-seg button {
+  cursor: pointer;
+}
+
+.cm-seg .lab {
+  border-right: 1px solid var(--border);
+}
+
+.cm-seg button:hover:enabled {
+  color: var(--text);
+}
+
+.cm-seg button.on {
+  color: var(--text);
+  background: rgba(var(--accent-rgb), 0.18);
+}
+
+.cm-seg button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.cm-seg.cm-kind button.on.red {
+  color: var(--red);
+  background: rgba(var(--cm-red-rgb), 0.12);
+}
+
+.cm-seg.cm-kind button.on.green {
+  color: var(--green);
+  background: rgba(var(--cm-green-rgb), 0.12);
+}
+
+.cm-linkbtn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.cm-linkbtn.warn {
+  color: var(--red);
+}
+
+.cm-linkbtn:hover:enabled {
+  text-decoration: underline;
+}
+
+.cm-linkbtn:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+/* Search: "Find file or symbol  /". */
+.cm-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 220px;
+  max-width: 40%;
+  min-width: 110px;
+}
+
+.cm-search input,
+.cm-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 26px 4px 8px;
+  color: var(--text);
+  font-size: 11.5px;
+  font-family: inherit;
+}
+
+.cm-input {
+  padding-right: 8px;
+}
+
+.cm-search input:focus,
+.cm-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.cm-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.cm-search kbd {
+  position: absolute;
+  right: 6px;
+  font-family: var(--cm-mono);
+  font-size: 10px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  pointer-events: none;
+}
+
+.cm-search-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  width: min(460px, 80vw);
+  max-height: 360px;
+  overflow: auto;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+}
+
+.cm-search-list li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  font: 11.5px/1.45 var(--cm-mono);
+  min-width: 0;
+}
+
+.cm-search-list li.cur {
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+.cm-search-list li.muted {
+  color: var(--muted);
+  cursor: default;
+  font-family: inherit;
+}
+
+.cm-search-k {
+  flex: none;
+  font-size: 9px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 3px;
+}
+
+.cm-search-n {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cm-search-p {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 55%;
+  direction: rtl;
+  text-align: left;
+}
+
+/* Guard pill: how much the zones actually hold right now. */
+.cm-guard {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cm-guard-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+
+.cm-guard.g-guarded {
+  color: var(--green);
+  border-color: rgba(var(--cm-green-rgb), 0.35);
+}
+
+.cm-guard.g-guarded .cm-guard-dot {
+  background: var(--green);
+}
+
+.cm-guard.g-green {
+  color: var(--green);
+  border-color: rgba(var(--cm-green-rgb), 0.5);
+  background: rgba(var(--cm-green-rgb), 0.08);
+}
+
+.cm-guard.g-green .cm-guard-dot {
+  display: none;
+}
+
+.cm-guard.g-arming .cm-guard-dot {
+  display: block;
+  background: var(--gold);
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+.cm-guard.g-arming:not(.g-green) {
+  color: var(--gold);
+}
+
+.cm-guard.g-detect:not(.g-green) {
+  color: var(--text);
+}
+
+.cm-guard.g-off {
+  color: var(--gold);
+  border-color: var(--gold);
+}
+
+.cm-guard.g-off .cm-guard-dot {
+  display: block;
+  background: var(--gold);
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+/* --- add zone row --- */
+.cm-add {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 7px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  box-shadow: inset 3px 0 0 var(--red);
+}
+
+.cm-add.green {
+  box-shadow: inset 3px 0 0 var(--green);
+}
+
+.cm-add input[type="text"] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.cm-add input[type="text"]:focus,
+.cm-add select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.cm-add-pattern {
+  flex: 2 1 220px;
+  font-family: var(--cm-mono);
+}
+
+.cm-add-name {
+  flex: 1 1 110px;
+  max-width: 180px;
+}
+
+.cm-add select {
+  padding: 3px 6px;
+  background: var(--panel);
+}
+
+.cm-add-scope-note {
+  font-size: 11px;
+  color: var(--green);
+  white-space: nowrap;
+}
+
+.cm-add-quick {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.cm-add .cm-chip {
+  font-size: 10.5px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  color: var(--muted);
+}
+
+.cm-add .cm-chip.on {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.cm-add-tell {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cm-add-tell.disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.cm-add button.cm-add-go {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.cm-add-status {
+  flex: 1 1 100%;
+  font-size: 11.5px;
+  min-height: 0;
+}
+
+.cm-add-status:empty {
+  display: none;
+}
+
+/* --- the tree's colours (read by lib/codetree/palette.ts) --- */
+.ct-root {
+  --ct-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* night sky over the crown, soil under the ground line */
+  --ct-sky-top: color-mix(in srgb, var(--bg) 86%, #000);
+  --ct-sky-bottom: color-mix(in srgb, var(--bg) 62%, var(--panel-2));
+  --ct-soil-top: color-mix(in srgb, var(--bg) 30%, #2a1e12);
+  --ct-soil-bottom: color-mix(in srgb, var(--bg) 25%, #0a0805);
+  --ct-glow: 90, 150, 110;
+  --ct-ground-line: hsl(30, 14%, 24%);
+  --ct-mass: hsl(142, 26%, 20%);
+  /* wood */
+  --ct-bark: hsl(28, 14%, 37%);
+  --ct-bark-hi: hsl(30, 14%, 46%);
+  --ct-root: hsl(27, 22%, 30%);
+  --ct-root-hi: hsl(28, 26%, 42%);
+  --ct-root-dusk: #1f1c1a;
+  /* foliage lightness: l' = a + b * l (the dark theme is the prototype's) */
+  --ct-fol-a: 0;
+  --ct-fol-l: 1;
+  --ct-fol-s: 1;
+  --ct-root-a: 0;
+  --ct-root-l: 1;
+  --ct-label-l: 72;
+  /* LIT PATHS: the unchanged tree is a calm silhouette; changes and the wood leading to them are lit */
+  --ct-calm-s: 0.22;
+  --ct-calm-k: 0.42;
+  --ct-calm-mid: 22;
+  --ct-calm-bark: color-mix(in srgb, var(--ct-bark) 62%, var(--bg));
+  --ct-calm-mass: color-mix(in srgb, hsl(150, 10%, 19%) 80%, var(--bg));
+  --ct-calm-label: color-mix(in srgb, var(--muted) 85%, var(--bg));
+  --ct-lit-bark: hsl(34, 30%, 66%);
+  /* dusk: everything outside "only here" */
+  --ct-dusk: color-mix(in srgb, var(--bg) 70%, var(--panel-2));
+  --ct-dusk-b: color-mix(in srgb, var(--bg) 78%, var(--panel-2));
+  --ct-dusk-c: color-mix(in srgb, var(--bg) 62%, var(--panel-2));
+  --ct-dusk-hi: color-mix(in srgb, var(--bg) 50%, var(--border));
+  --ct-dusk-sh: color-mix(in srgb, var(--bg) 70%, #000);
+  --ct-dusk-blob: color-mix(in srgb, var(--bg) 80%, var(--panel-2));
+  --ct-dusk-blob-hi: color-mix(in srgb, var(--bg) 70%, var(--panel-2));
+  --ct-dusk-leaf: color-mix(in srgb, var(--panel-2) 60%, var(--border));
+  --ct-dusk-leaf-b: color-mix(in srgb, var(--panel-2) 80%, var(--border));
+  --ct-dusk-doc: color-mix(in srgb, var(--panel-2) 75%, var(--border));
+  --ct-dusk-bark: color-mix(in srgb, var(--panel-2) 70%, #3a2f25);
+  --ct-dusk-fold: color-mix(in srgb, var(--bg) 60%, var(--panel-2));
+  --ct-dusk-label: color-mix(in srgb, var(--muted) 70%, var(--text));
+  --ct-dusk-leaf-label: var(--muted);
+  /* text on the canvas */
+  --ct-halo: color-mix(in srgb, var(--bg) 92%, transparent);
+  --ct-pill: color-mix(in srgb, var(--bg) 90%, transparent);
+  --ct-pill-text: color-mix(in srgb, var(--text) 80%, #fff);
+  --ct-leaf-label: color-mix(in srgb, var(--text) 90%, var(--muted));
+  --ct-root-label: hsl(34, 30%, 70%);
+  --ct-pile-label: hsl(32, 32%, 66%);
+  --ct-keep-text: color-mix(in srgb, var(--red) 45%, #fff);
+  --ct-only-text: color-mix(in srgb, var(--green) 45%, #fff);
+  --ct-keep-bg: color-mix(in srgb, var(--red) 22%, var(--bg));
+  --ct-only-bg: color-mix(in srgb, var(--green) 20%, var(--bg));
+  --ct-keep-wrap: color-mix(in srgb, var(--red) 15%, #000);
+  --ct-only-wrap: color-mix(in srgb, var(--green) 15%, #000);
+  --ct-hatch: 255, 150, 120;
+  --ct-badge-bg: color-mix(in srgb, var(--gold) 8%, var(--bg));
+  --ct-select: 255, 255, 255;
+  --ct-hover: color-mix(in srgb, var(--muted) 85%, transparent);
+  --ct-sep: color-mix(in srgb, var(--muted) 60%, var(--bg));
+  --ct-bud: rgba(255, 228, 240, 0.95);
+  --ct-bud-ghost: rgba(255, 240, 246, 0.92);
+  --ct-bonk-bg: color-mix(in srgb, var(--red) 18%, #000);
+  --ct-bonk-x: color-mix(in srgb, var(--red) 60%, #fff);
+  --ct-nest: hsl(33, 32%, 26%);
+  --ct-nest-twig: hsl(34, 30%, 44%);
+  --ct-nest-rim: hsl(34, 26%, 58%);
+  --ct-mini-bg: color-mix(in srgb, var(--bg) 80%, var(--panel));
+  --ct-mini-soil: color-mix(in srgb, var(--bg) 40%, #2a1e12);
+  --ct-mini-dim: color-mix(in srgb, var(--bg) 62%, transparent);
+  --ct-mini-view: color-mix(in srgb, var(--text) 80%, transparent);
+  --ct-mini-root: hsl(30, 22%, 22%);
+  /* legend swatches (HTML) */
+  --ct-legend-leaf: hsl(148, 33%, 45%);
+}
+
+/* --- the tree: canvas + HUD --- */
+.cm-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  position: relative;
+}
+
+.ct-body {
+  overflow: hidden;
+}
+
+.ct-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.ct-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+  outline: none;
+}
+
+.ct-canvas:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.ct-canvas.dragging {
+  cursor: grabbing;
+}
+
+.ct-canvas.tool-keep,
+.ct-canvas.tool-only {
+  cursor: crosshair;
+}
+
+.ct-card {
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.light .ct-card {
+  box-shadow: 0 4px 14px rgba(20, 30, 50, 0.1);
+}
+
+.ct-card h4,
+.ct-card h5 {
+  margin: 0 0 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  display: flex;
+  align-items: center;
+}
+
+.ct-card h5 {
+  margin: 8px 0 3px;
+}
+
+.ct-h5-note {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  margin-left: 4px;
+}
+
+.ct-muted {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 4px 0 0;
+}
+
+.ct-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 2px;
+}
+
+.ct-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.ct-link.warn {
+  color: var(--gold);
+}
+
+.ct-link.bad {
+  color: var(--red);
+}
+
+.ct-x,
+.ct-close {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  min-width: 22px;
+  min-height: 20px;
+  padding: 0 4px;
+}
+
+.ct-x:hover:enabled,
+.ct-close:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.ct-close {
+  float: right;
+  margin: -2px -4px 0 6px;
+  font-size: 17px;
+}
+
+/* the left column: the bird index (BirdIndex.tsx) — wide panes a column, small panes a slim rail */
+.ct-left {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  width: 238px;
+  max-height: calc(100% - 140px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  z-index: 3;
+}
+
+.ct-left > .ct-card {
+  flex: none;
+}
+
+.ct-bird-ic {
+  width: 22px;
+  height: 16px;
+  flex: none;
+}
+
+.ct-st {
+  margin-left: auto;
+  flex: none;
+  font-size: 10px;
+  padding: 0 7px;
+  line-height: 16px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.ct-st.editing,
+.ct-st.creating {
+  color: var(--text);
+  border-color: currentColor;
+}
+
+.ct-st.blocked {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.ct-agent-task {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 3px 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ct-agent-nest {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ct-agent-nums {
+  display: flex;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10.5px;
+  margin-top: 5px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.ct-agent-nums b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.ct-agent-nums .aff b {
+  color: var(--gold);
+}
+
+.ct-agent-extra {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--cm-sep);
+  font-size: 11px;
+}
+
+/* Rules */
+.ct-legend ul,
+.ct-act-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ct-rule {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0;
+}
+
+.ct-rule-go {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 1px 0;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ct-rule-go:disabled {
+  cursor: default;
+}
+
+.ct-rule-go .sw {
+  width: 12px;
+  flex: none;
+  font-size: 10px;
+  text-align: center;
+}
+
+.ct-rule-go .tx {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--cm-mono);
+}
+
+.ct-rule.keep .tx {
+  color: var(--ct-keep-text);
+}
+
+.ct-rule.only .tx {
+  color: var(--ct-only-text);
+}
+
+.ct-rule.waived .tx {
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+
+.ct-rule-go small {
+  color: var(--muted);
+  flex: none;
+  font-size: 10px;
+}
+
+.ct-rule-go:hover:enabled .tx {
+  text-decoration: underline;
+}
+
+/* Legend */
+.ct-tog {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex: 1;
+  justify-content: space-between;
+}
+
+.ct-activity .ct-tog {
+  flex: none;
+  margin-left: auto;
+  min-width: 20px;
+  justify-content: center;
+}
+
+.ct-legend.collapsed h4 {
+  margin: 0;
+}
+
+.ct-legend li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 3px 0;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
+.ct-legend .sw {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.ct-legend small {
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+/* minimap */
+.ct-mini {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  width: 168px;
+  height: 120px;
+  padding: 0;
+  overflow: hidden;
+  z-index: 3;
+}
+
+.ct-mini canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: pointer;
+}
+
+/* activity */
+.ct-activity-wrap {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 300px;
+  max-width: calc(100% - 16px);
+  z-index: 3;
+}
+
+.ct-activity {
+  padding: 7px 4px 5px;
+}
+
+.ct-activity h4 {
+  margin: 0 6px 3px;
+}
+
+.ct-act-list {
+  max-height: 168px;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+.ct-activity.collapsed .ct-act-list {
+  max-height: none;
+}
+
+.ct-act-row {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  align-items: baseline;
+}
+
+.ct-act-row:hover:enabled {
+  background: var(--panel-2);
+}
+
+.ct-act-row:disabled {
+  cursor: default;
+}
+
+.ct-act-row .tm {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 46px;
+  font-size: 10.5px;
+  flex: none;
+}
+
+.ct-act-row .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  transform: translateY(-1px);
+}
+
+.ct-act-row .tx {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.ct-act-row .who {
+  font-weight: 600;
+}
+
+.ct-act-row.bad .tx {
+  color: var(--ct-keep-text);
+}
+
+.ct-act-row.rule .tx {
+  color: var(--muted);
+}
+
+/* the file / folder / blast card */
+.ct-info {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 300px;
+  max-width: calc(100% - 16px);
+  max-height: calc(100% - 96px);
+  min-height: 90px;
+  overflow: auto;
+  z-index: 5;
+  padding: 10px 12px;
+}
+
+.ct-info h3 {
+  margin: 0 0 2px;
+  font: 600 13.5px/1.3 var(--cm-mono);
+  overflow-wrap: anywhere;
+}
+
+.ct-path {
+  color: var(--muted);
+  font: 11px/1.4 var(--cm-mono);
+  overflow-wrap: anywhere;
+  margin-bottom: 7px;
+}
+
+.ct-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 7px;
+}
+
+.ct-facts span {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.ct-facts span.gold {
+  border-color: rgba(var(--cm-gold-rgb), 0.5);
+  color: var(--gold);
+}
+
+.ct-who {
+  font-size: 11.5px;
+  margin: 2px 0;
+  line-height: 1.35;
+}
+
+.ct-who.keep,
+.ct-who.block {
+  color: var(--ct-keep-text);
+}
+
+.ct-who.only {
+  color: var(--ct-only-text);
+}
+
+.ct-gold {
+  color: var(--gold);
+}
+
+.ct-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ct-chip {
+  font: 11px var(--cm-mono);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0 6px;
+  line-height: 18px;
+  color: var(--text);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.ct-chip {
+  cursor: pointer;
+}
+
+button.ct-chip:hover {
+  border-color: var(--accent);
+}
+
+.ct-chip.gold {
+  border-color: rgba(var(--cm-gold-rgb), 0.45);
+}
+
+.ct-chip.more {
+  color: var(--muted);
+}
+
+.ct-chip .n {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.ct-actions {
+  display: flex;
+  gap: 5px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.cm-btn.gold {
+  color: var(--gold);
+  border-color: rgba(var(--cm-gold-rgb), 0.5);
+}
+
+/* the hover tooltip */
+.ct-tip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 8;
+  max-width: 300px;
+  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 5px 8px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  overflow-wrap: anywhere;
+}
+
+.ct-tip i {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 11px;
+}
+
+.ct-tip .keep {
+  color: var(--ct-keep-text);
+}
+
+.ct-tip .only {
+  color: var(--ct-only-text);
+}
+
+.ct-tip .act.keep {
+  color: var(--ct-keep-text);
+}
+
+.ct-tip .act.only {
+  color: var(--ct-only-text);
+}
+
+/* the armed tool says what a click does */
+.ct-modehint {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  max-width: calc(100% - 24px);
+  background: color-mix(in srgb, var(--red) 10%, var(--panel));
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+
+.ct-modehint.only {
+  background: color-mix(in srgb, var(--green) 10%, var(--panel));
+  border-color: var(--green);
+}
+
+.ct-modehint kbd,
+.ct-toast kbd {
+  font: 10.5px var(--cm-mono);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+/* toast with Undo: ONE line at the top of the canvas — never over the Activity card or the Rules list at the
+   bottom (the whole story is its tooltip) */
+.ct-toast {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(640px, calc(100% - 24px));
+  padding: 6px 6px 6px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.32);
+  font-size: 12px;
+}
+
+.ct-toast.bad {
+  border-color: rgba(var(--cm-red-rgb), 0.6);
+}
+
+.ct-toast .tx {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "Growing the tree…" */
+.ct-growing {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 12.5px;
+  min-width: 220px;
+  text-align: center;
+  z-index: 4;
+}
+
+.ct-bar {
+  display: block;
+  width: 180px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.ct-bar span {
+  display: block;
+  height: 100%;
+  background: var(--green);
+  transition: width 0.3s;
+}
+
+.ct-sprout {
+  width: 14px;
+  height: 14px;
+  border-radius: 50% 0;
+  background: var(--green);
+  transform: rotate(45deg);
+  animation: ct-sprout 1.6s ease-in-out infinite;
+}
+
+@keyframes ct-sprout {
+  50% {
+    transform: rotate(45deg) scale(1.25);
+    opacity: 0.7;
+  }
+}
+
+.ct-regrow {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  font-size: 10.5px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 0 8px;
+  line-height: 18px;
+}
+
+/* the Session drawer: the lists over the right of the tree */
+.cm-side {
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  padding: 0 0 12px;
+}
+
+.ct-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 340px;
+  max-width: 100%;
+  z-index: 10;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+}
+
+.ct-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px 6px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ct-drawer-head h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: auto;
+}
+
+.ct-toolbar .cm-count {
+  margin-left: 5px;
+}
+
+.cm-count.bad {
+  background: rgba(var(--cm-red-rgb), 0.18);
+  color: var(--red);
+}
+
+/* tool buttons in the segmented control */
+.ct-tools button.red.on {
+  color: var(--red);
+  background: rgba(var(--cm-red-rgb), 0.16);
+  box-shadow: 0 0 0 1px rgba(var(--cm-red-rgb), 0.5) inset;
+}
+
+.ct-tools button.green.on {
+  color: var(--green);
+  background: rgba(var(--cm-green-rgb), 0.14);
+  box-shadow: 0 0 0 1px rgba(var(--cm-green-rgb), 0.5) inset;
+}
+
+.ct-stage.narrow .ct-info {
+  left: 8px;
+  right: 8px;
+  top: auto;
+  bottom: 8px;
+  width: auto;
+  max-height: 46%;
+}
+
+.ct-stage.narrow .ct-activity-wrap {
+  width: min(300px, calc(100% - 16px));
+}
+
+.ct-stage.narrow .ct-act-list {
+  max-height: 92px;
+}
+
+/* a small pane: the folded activity is a one-line ticker (latest row + "+"), never a block over the roots */
+.ct-activity.ticker {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  padding: 2px 2px 2px 4px;
+}
+
+.ct-activity.ticker h4 {
+  margin: 0;
+  flex: none;
+}
+
+.ct-activity.ticker .ct-act-list {
+  flex: 1;
+  min-width: 0;
+}
+
+.ct-activity.ticker .ct-act-row .tx {
+  -webkit-line-clamp: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.ct-activity.ticker .ct-act-row .tm {
+  min-width: 0;
+}
+
+@container (max-width: 760px) {
+  .ct-toolbar .lbl {
+    display: none;
+  }
+
+  .cm-search {
+    width: 130px;
+  }
+
+  .cm-search kbd {
+    display: none;
+  }
+}
+
+@container (max-width: 480px) {
+  .ct-toolbar {
+    gap: 5px 6px;
+    padding: 6px 8px;
+  }
+
+  .cm-search {
+    width: 96px;
+  }
+}
+
+/* Kind glyphs: C/S classes, I/T interfaces, E enums, ƒ functions. */
+.cm-g {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  display: inline-grid;
+  place-items: center;
+  font: 700 9px/1 var(--cm-mono);
+  font-style: normal;
+  color: var(--muted);
+  background: rgba(138, 144, 162, 0.12);
+}
+
+.cm-g.k-class,
+.cm-g.k-struct,
+.cm-g.k-record,
+.cm-g.k-object {
+  color: var(--cm-acc-t);
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+.cm-g.k-interface,
+.cm-g.k-trait,
+.cm-g.k-type {
+  color: var(--green);
+  background: rgba(var(--cm-green-rgb), 0.13);
+}
+
+.cm-g.k-enum {
+  color: var(--gold);
+  background: rgba(var(--cm-gold-rgb), 0.1);
+}
+
+.cm-g.k-function,
+.cm-g.k-method {
+  font-style: italic;
+  font-weight: 600;
+  font-family: Georgia, serif;
+  font-size: 11px;
+}
+
+.cm-note {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 20px);
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11.5px;
+  pointer-events: none;
+}
+
+.cm-note.cm-note-bottom {
+  left: auto;
+  right: 10px;
+  top: auto;
+  bottom: 10px;
+  transform: none;
+}
+
+.cm-note.cm-note-err {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: center;
+  color: var(--text);
+  font-size: 12.5px;
+  padding: 10px 16px;
+  pointer-events: auto;
+  user-select: text;
+}
+
+.cm-note.cm-note-err .muted {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* --- session lists (inspector with nothing selected) --- */
+
+/* Calm, like the inspector: 10px uppercase headers with the count on the
+   right, no bands or pills. */
+.cm-sec {
+  padding: 10px 12px 4px;
+}
+
+.cm-sec h4 {
+  margin: 0 4px 6px;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.cm-count {
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+}
+
+.cm-sec-breach h4,
+.cm-sec-breach .cm-count {
+  color: var(--red);
+}
+
+.cm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cm-list li {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cm-list li.is-waived {
+  opacity: 0.7;
+}
+
+.cm-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 8px;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 6px;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+}
+
+.cm-row:hover:enabled,
+.cm-row:focus-visible {
+  background: var(--panel-2);
+  outline: none;
+  border-color: var(--border);
+}
+
+.cm-row:disabled {
+  cursor: default;
+}
+
+.cm-row-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.cm-target {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-row-sub {
+  flex: 1 1 100%;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cm-row-time {
+  flex: none;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cm-row-time .cm-tests {
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.cm-row-time .add {
+  color: var(--green);
+}
+
+.cm-row-time .del {
+  color: var(--red);
+}
+
+.cm-row.bad .cm-target,
+.cm-row.bad .cm-row-main {
+  color: var(--red);
+}
+
+.cm-row.failed {
+  opacity: 0.75;
+}
+
+.cm-tool {
+  flex: none;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.cm-status {
+  flex: none;
+  width: 12px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.cm-row-act {
+  flex: none;
+  align-self: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10.5px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.cm-row-act:hover:enabled {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--panel-2);
+}
+
+/* Secondary row actions (⛔ on a blast row, a zone's Allow here / ×) show on
+   hover or keyboard focus only — the lists stay readable at rest. */
+.cm-list li .cm-row-act.quiet {
+  opacity: 0;
+}
+
+.cm-list li:hover .cm-row-act.quiet,
+.cm-list li:focus-within .cm-row-act.quiet {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .cm-list li .cm-row-act.quiet {
+    opacity: 1;
+  }
+}
+
+.cm-row-act.cm-x {
+  font-size: 14px;
+  line-height: 1;
+  padding: 1px 6px 3px;
+}
+
+.cm-row-act.cm-x:hover:enabled {
+  color: var(--red);
+}
+
+.cm-badge {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.cm-badge.bad {
+  background: rgba(222, 97, 62, 0.16);
+  color: var(--red);
+}
+
+.cm-badge.warn {
+  background: var(--gold-fill);
+  color: var(--gold-ink);
+}
+
+.cm-badge.agent {
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--text);
+}
+
+.cm-badge.scope-worktree {
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--text);
+}
+
+.cm-zone-swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--red);
+  border-radius: 2px;
+  align-self: center;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(222, 97, 62, 0.55) 0 1.5px,
+    transparent 1.5px 4px
+  );
+}
+
+.cm-other-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  align-self: center;
+}
+
+.cm-plan-mark {
+  flex: none;
+  width: 12px;
+  text-align: center;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.cm-row.plan-done .cm-plan-mark {
+  color: var(--green);
+}
+
+.cm-row.plan-new .cm-plan-mark {
+  color: var(--accent);
+}
+
+.cm-row.plan-off .cm-plan-mark {
+  color: var(--gold);
+}
+
+.cm-empty-line,
+.cm-hint {
+  margin: 2px 0 4px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.cm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.cm-actions button {
+  color: var(--text);
+  padding: 4px 11px;
+}
+
+.cm-actions button.cm-primary {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.cm-actions button.cm-primary:hover:enabled {
+  filter: brightness(1.1);
+}
+
+.cm-err {
+  color: var(--red);
+  font-size: 11.5px;
+  margin: 2px 0;
+}
+
+.cm-ok {
+  color: var(--green);
+  font-size: 11.5px;
+  margin: 2px 0;
+}
+
+.cm-warn-text {
+  color: var(--gold);
+}
+
+.cm-running {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 2px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cm-running-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: cs-pulse 1.4s ease-in-out infinite;
+}
+
+/* Screen-reader-only live region. */
+.cm-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.cm-row-kind {
+  flex: none;
+  margin-left: auto;
+  font: 10.5px/1.6 var(--cm-mono);
+  color: var(--muted);
+}
+
+.cm-row-kind.green {
+  color: var(--green);
+}
+
+/* Advisory badges (peeks, outside scope, companions): an outline, not a fill —
+   they are information, not alarms. */
+.cm-badge.soft-warn,
+.cm-badge.soft-bad {
+  background: transparent;
+  font-weight: 500;
+  border: 1px solid currentColor;
+  line-height: 1.3;
+}
+
+.cm-badge.soft-warn {
+  color: var(--gold);
+}
+
+.cm-badge.soft-bad {
+  color: var(--red);
+}
+
+.cm-sec-req h4 {
+  color: var(--gold);
+}
+
+.cm-zone-mark {
+  flex: none;
+  font-size: 10px;
+}
+
+.cm-zone-mark.green {
+  color: var(--green);
+}
+
+.cm-badge.kind-green {
+  color: var(--green);
+  border-color: rgba(var(--cm-green-rgb), 0.45);
+}
+
+.cm-badge.kind-red {
+  color: var(--red);
+  border-color: rgba(var(--cm-red-rgb), 0.45);
+}
+
+.cm-row-act.cm-allow {
+  color: var(--green);
+  border-color: rgba(var(--cm-green-rgb), 0.45);
+  white-space: nowrap;
+}
+
+.cm-actions button.cm-primary.green {
+  background: transparent;
+  color: var(--green);
+  border-color: rgba(var(--cm-green-rgb), 0.55);
+}
+
+.cm-actions button.cm-primary.green:hover:enabled {
+  border-color: var(--green);
+  background: rgba(var(--cm-green-rgb), 0.08);
+}
+
+.cm-blast-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--gold);
+  align-self: center;
+}
+
+.cm-sel-hint {
+  padding: 10px 12px 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cm-running-dot,
+  .cm-guard-dot,
+  .ct-sprout {
+    animation: none !important;
+  }
+
+  .ct-bar span {
+    transition: none;
+  }
+}
+
+/* --- rail chip (SidebarRow) ------------------------------------------------ */
+.stagechip.rzchip {
+  cursor: pointer;
+  font-size: 10px;
+  padding: 1px 6px;
+  border: none;
+  font-family: inherit;
+  line-height: inherit;
+  flex: none !important;
+}
+
+.stagechip.rzchip.rz-ok {
+  background: rgba(81, 189, 115, 0.14);
+  color: var(--green);
+}
+
+.stagechip.rzchip.rz-warn {
+  background: var(--gold-fill);
+  color: var(--gold-ink);
+  font-weight: 700;
+}
+
+.stagechip.rzchip.rz-breach {
+  background: rgba(222, 97, 62, 0.2);
+  color: var(--red);
+  font-weight: 700;
+}
+
+.stagechip.rzchip:hover {
+  filter: brightness(1.15);
+}
+
+.stagechip.rzchip:focus-visible {
+  outline: 1px solid var(--accent);
+}
+
+/* --- LIT PATHS: the bird index, a compact LEFT column (wide) / slim LEFT rail (small panes) --- */
+.ct-bix {
+  width: 224px;
+  gap: 0;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+  padding: 6px 0 4px;
+  font-size: 11.5px;
+  color: var(--text);
+  max-height: calc(100% - 16px);
+}
+
+/* the minimap only shows zoomed in: then the column scrolls above it instead of running under it */
+.ct-stage.mini-on .ct-bix:not(.ct-bix-pop) {
+  max-height: calc(100% - 146px);
+}
+
+.light .ct-bix,
+.light .ct-bix-rail {
+  box-shadow: 0 4px 14px rgba(20, 30, 50, 0.1);
+}
+
+.ct-bix h4,
+.ct-bix h5 {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.ct-bix-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 4px 10px;
+}
+
+.ct-bix-head h4 {
+  flex: 1;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.ct-bix-total {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.ct-bix-q {
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font: 600 11px/1 inherit;
+  cursor: pointer;
+  padding: 0 5px;
+}
+
+.ct-bix-q:hover,
+.ct-bix-q[aria-expanded="true"] {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.ct-bix-list,
+.ct-bix-subs,
+.ct-bix-files,
+.ct-bix-rules ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ct-bix-row {
+  border-left: 3px solid var(--border);
+  padding: 5px 8px 6px 7px;
+  margin: 0 0 2px;
+}
+
+.ct-bix-row + .ct-bix-row {
+  border-top: 1px solid var(--cm-sep, var(--border));
+}
+
+.ct-bix-row.following {
+  background: color-mix(in srgb, var(--panel-2) 70%, transparent);
+}
+
+.ct-bix-row.done {
+  opacity: 0.65;
+}
+
+.ct-bix-main {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ct-bix-follow {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ct-bix-follow .ct-bird-ic {
+  width: 18px;
+  height: 13px;
+}
+
+.ct-bix-follow .nm {
+  font-weight: 650;
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ct-bix-follow:focus-visible,
+.ct-bix-more:focus-visible,
+.ct-bix-sub:focus-visible,
+.ct-rail-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ct-bix-more {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+  font-size: 10px;
+}
+
+.ct-bix-more:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.ct-bix-now {
+  margin: 2px 0 0 23px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ct-bix-now .ct-link {
+  color: var(--text);
+}
+
+.ct-bix-now .bad {
+  color: var(--red);
+}
+
+.ct-bix-now.warn,
+.ct-bix-now .zw {
+  color: var(--gold);
+}
+
+.ct-bix-chg {
+  margin: 1px 0 0 23px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ct-bix-chg b {
+  font-weight: 650;
+}
+
+.ct-bix-subs {
+  margin: 4px 0 0 14px;
+  padding-left: 6px;
+  border-left: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ct-bix-sub {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 5px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ct-bix-sub:hover,
+.ct-bix-sub.following {
+  background: var(--panel-2);
+}
+
+.ct-bix-sub.done {
+  opacity: 0.6;
+}
+
+.ct-bix-sub .g {
+  font-weight: 700;
+}
+
+.ct-bix-sub .nm {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ct-bix-sub .st {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ct-bix-sub .st.editing,
+.ct-bix-sub .st.creating {
+  color: var(--text);
+}
+
+.ct-bix-row .ct-agent-extra {
+  margin: 4px 0 0 23px;
+  padding-top: 3px;
+}
+
+.ct-bix-detail {
+  margin: 5px 0 0 23px;
+  padding-top: 4px;
+  border-top: 1px solid var(--cm-sep, var(--border));
+}
+
+.ct-bix-detail h5 {
+  margin: 6px 0 2px;
+}
+
+.ct-bix-files button {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 1px 3px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ct-bix-files button:hover {
+  background: var(--panel-2);
+}
+
+.ct-bix-files .fn {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--cm-mono);
+}
+
+.ct-bix-files .dep {
+  flex: none;
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+}
+
+.ct-bix-rules {
+  border-top: 1px solid var(--cm-sep, var(--border));
+  margin-top: 2px;
+  padding: 6px 8px 0 10px;
+}
+
+.ct-bix-rules h4 {
+  margin-bottom: 2px;
+}
+
+.ct-bix-rules .ct-muted {
+  margin: 0 0 2px;
+  font-size: 10.5px;
+}
+
+.ct-bix-legend {
+  position: absolute;
+  left: 240px;
+  top: 8px;
+  width: 280px;
+  z-index: 6;
+}
+
+.ct-stage.narrow .ct-bix-legend {
+  left: 8px;
+  right: 8px;
+  width: auto;
+  max-width: 300px;
+  top: auto;
+  bottom: 8px;
+}
+
+/* the slim rail of small panes: glyph + short name, never a strip along the top */
+.ct-bix-rail {
+  width: 112px;
+  gap: 0;
+  padding: 4px 0;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+  font-size: 11px;
+  max-height: calc(100% - 16px);
+}
+
+.ct-bix-rail.tiny {
+  width: 88px;
+}
+
+.ct-rail-head {
+  display: flex;
+  gap: 4px;
+  padding: 0 5px 4px;
+}
+
+.ct-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-left: 3px solid var(--border);
+  padding: 3px 5px 3px 5px;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.ct-rail-row.sub {
+  padding-left: 13px;
+  font-size: 10.5px;
+  border-left-style: dashed;
+}
+
+.ct-rail-row:hover,
+.ct-rail-row.following {
+  background: var(--panel-2);
+}
+
+.ct-rail-row.done {
+  opacity: 0.6;
+}
+
+.ct-rail-row .g {
+  font-weight: 700;
+  flex: none;
+}
+
+.ct-rail-row .nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip;
+  font-weight: 600;
+}
+
+.ct-rail-row.sub .nm {
+  font-weight: 500;
+}
+
+.ct-rail-row .n {
+  flex: none;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ct-rail-row .dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+}
+
+.ct-rail-row .dot.editing,
+.ct-rail-row .dot.creating {
+  background: var(--green);
+}
+
+.ct-rail-row .dot.reading,
+.ct-rail-row .dot.planning {
+  background: var(--muted);
+}
+
+.ct-rail-row .dot.blocked {
+  background: var(--red);
+}
+
+/* the rail expanded: the full column over the canvas, beside the rail */
+.ct-bix-pop {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  max-height: calc(100% - 16px);
+  width: min(240px, calc(100% - 16px));
+}
+
+.ct-stage.narrow .ct-info {
+  left: 128px;
+}
+
+.ct-stage.tiny .ct-info {
+  left: 104px;
+}
+
+.ct-stage.narrow .ct-activity-wrap {
+  left: 128px;
+  width: auto;
+  max-width: 300px;
+  right: 8px;
+  margin-left: auto;
+}
+
+/* CHANGES: where the changes are, what could break, and ⛔ / ✓ per changed folder */
+.ct-bix-changes {
+  border-top: 1px solid var(--cm-sep, var(--border));
+  margin-top: 4px;
+  padding: 6px 8px 2px 10px;
+}
+
+.ct-bix-chead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+.ct-bix-chead h4 {
+  flex: 1;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.ct-bix-risk-tog {
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 7px;
+  cursor: pointer;
+}
+
+.ct-bix-risk-tog:hover,
+.ct-bix-risk-tog.on {
+  color: var(--gold);
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--border));
+}
+
+.ct-bix-sum {
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ct-bix-sum b {
+  font-weight: 650;
+  color: var(--text);
+}
+
+.ct-bix-atrisk {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  margin: 5px 0 3px;
+  padding: 3px 7px 4px;
+  border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--gold) 6%, transparent);
+  font: inherit;
+  font-size: 11px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ct-bix-atrisk:hover {
+  border-color: var(--gold);
+}
+
+.ct-bix-atrisk .k {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ct-bix-atrisk .k b {
+  font-size: 11px;
+  letter-spacing: 0;
+}
+
+.ct-bix-atrisk .v {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+
+.ct-bix-atrisk .fn {
+  font-family: var(--cm-mono);
+}
+
+.ct-bix-atrisk b,
+.ct-bix-ranked .dep {
+  color: var(--gold);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.ct-bix-ranked,
+.ct-bix-folders {
+  list-style: none;
+  margin: 4px 0 2px;
+  padding: 0;
+}
+
+.ct-bix-ranked button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px 22px;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 1px 2px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ct-bix-ranked button:hover {
+  background: var(--panel-2);
+}
+
+.ct-bix-ranked .fn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--cm-mono);
+}
+
+.ct-bix-ranked .bar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.ct-bix-ranked .bar > span {
+  display: block;
+  height: 100%;
+  background: var(--gold);
+}
+
+.ct-bix-ranked .dep {
+  text-align: right;
+}
+
+/* a changed folder: one fixed-height row (the second line is always there, so a ⛔ / ✓ click never reflows the
+   list under the cursor) */
+.ct-bix-folder {
+  padding: 3px 0 3px;
+  border-top: 1px solid var(--cm-sep, var(--border));
+}
+
+.ct-bix-folder:first-child {
+  border-top: none;
+}
+
+.ct-bix-fl1 {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.ct-bix-fname {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 1px 2px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ct-bix-fname:hover {
+  background: var(--panel-2);
+}
+
+.ct-bix-fname .dots {
+  flex: none;
+  display: inline-flex;
+  gap: 2px;
+}
+
+.ct-bix-fname .dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.ct-bix-fname .nm {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.ct-bix-fname .cnt {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ct-bix-zb {
+  flex: none;
+  width: 22px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}
+
+.ct-bix-zb.keep:hover:enabled,
+.ct-bix-zb.keep.on {
+  color: var(--red);
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 12%, var(--panel-2));
+}
+
+.ct-bix-zb.only:hover:enabled,
+.ct-bix-zb.only.on {
+  color: var(--green);
+  border-color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, var(--panel-2));
+}
+
+.ct-bix-zb:disabled {
+  cursor: default;
+}
+
+/* quiet until wanted: a grey sign, in colour on hover or when the rule is on */
+.ct-bix-zb:not(.on) {
+  filter: grayscale(1);
+}
+
+.ct-bix-zb:hover:enabled {
+  filter: none;
+}
+
+.ct-bix-zb:disabled:not(.on) {
+  opacity: 0.45;
+}
+
+.ct-bix-fname:focus-visible,
+.ct-bix-zb:focus-visible,
+.ct-bix-atrisk:focus-visible,
+.ct-bix-risk-tog:focus-visible,
+.ct-bix-ranked button:focus-visible,
+.ct-rail-tile:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ct-bix-fl2 {
+  margin: 0 0 0 16px;
+  height: 15px;
+  font-size: 10.5px;
+  line-height: 15px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ct-bix-fl2 .keep {
+  color: var(--ct-keep-text);
+}
+
+.ct-bix-fl2 .exempt {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.ct-bix-folder.exempt .ct-bix-fname .nm {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* the rail's summary tiles: "✎9 changed", "⛔1 rule" — a click opens the column */
+.ct-rail-tiles {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+  padding: 5px 5px 1px;
+  border-top: 1px solid var(--cm-sep, var(--border));
+}
+
+.ct-rail-tile {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10.5px;
+  padding: 2px 5px;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ct-rail-tile b {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.ct-rail-tile.keep b {
+  color: var(--red);
+}
+
+.ct-rail-tile.only b {
+  color: var(--green);
+}
+
+.ct-rail-tile:hover {
+  border-color: var(--muted);
+}
+
+/* --- verify r2: totals, helper whereabouts, row-button caption, other worktrees, could-break focus --- */
+.ct-bix-total {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.ct-bix-total b {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.ct-bix-sub .wh {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ct-bix-split b {
+  font-weight: 650;
+}
+
+/* the ⛔ / ✓ row buttons, captioned once above the list (always visible, not only on hover) */
+.ct-bix-fcap {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 5px 0 0;
+  font-size: 9.5px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ct-bix-fcap span:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.ct-bix-fcap .k {
+  color: var(--ct-keep-text);
+}
+
+.ct-bix-fcap .o {
+  color: var(--ct-only-text);
+}
+
+/* another session's folder under this session's ✓ only here: its own worktree, not restricted — never dimmed */
+.ct-bix-fl2 .other {
+  color: var(--muted);
+}
+
+.ct-rule-go {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+
+.ct-rule-go small.nb {
+  flex-basis: 100%;
+  padding-left: 18px;
+  color: var(--ct-keep-text);
+}
+
+.ct-bix-atrisk.on {
+  border-color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 14%, transparent);
+}
+
+.ct-bix-ranked button.on {
+  background: color-mix(in srgb, var(--gold) 14%, var(--panel-2));
+}
+}
+
+/* 155 — after
+   DiffTab.css, whose .stagechip base the rail's red-zone chip extends */
+
+@layer components{
 /* Boot loader: fills the grid from page open until the first /api/instances
    snapshot arrives, so restored sessions don't flash an empty environment. */
 #boot-loading {
@@ -6418,6 +9366,182 @@ p.set-hint {
     transform: rotate(360deg);
   }
 }
+
+
+/* In-place find bar (PaneFindBar.tsx) — floats top-right over the live
+   terminal like a browser's find bar; the hits themselves are painted by tmux
+   (copy-mode match styles, set server-side in core/pane_find.py). z-index 4:
+   level with the history overlay (never both open), below the drop cue. */
+.pane-find {
+  position: absolute;
+  top: 6px;
+  right: 18px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 36px);
+  padding: 4px 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pane-find input {
+  width: 200px;
+  min-width: 60px;
+  flex: 0 1 auto;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+}
+
+.pane-find input:focus {
+  border-color: var(--accent);
+}
+
+.pane-find-count {
+  min-width: 56px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pane-find-count.busy {
+  opacity: 0.6;
+}
+
+.pane-find-count.error {
+  color: var(--red);
+}
+
+.pane-find-btn {
+  flex: none;
+  padding: 0 6px;
+  line-height: 18px;
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pane-find-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Scroll-mode find highlights (FindHighlights.tsx): boxes over the live
+   terminal's cells — tmux paints its own copy-mode hits, but an app that
+   scrolls itself paints none. Translucent so the text shows through; under
+   the find bar (4), over the terminal. */
+.find-hl-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.find-hl {
+  position: absolute;
+  border-radius: 2px;
+  background: rgba(255, 215, 95, 0.42);
+}
+
+.find-hl.cur {
+  background: rgba(255, 135, 0, 0.55);
+  box-shadow: 0 0 0 1px #ff8700;
+}
+
+/* Find options (PaneFindBar): Aa / ab / .* inside the field, VS Code style,
+   and the "near" row for a two-term proximity search. */
+.pane-find {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.pane-find-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pane-find-field {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: 0 1 auto;
+  min-width: 0;
+  padding-right: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.pane-find-field:focus-within {
+  border-color: var(--accent);
+}
+
+.pane-find .pane-find-field input {
+  border: none;
+  background: transparent;
+}
+
+.pane-find-opt {
+  flex: none;
+  padding: 0 4px;
+  line-height: 16px;
+  font-size: 11px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.pane-find-opt.on,
+.pane-find-btn.on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.pane-find-near {
+  padding-left: 2px;
+}
+
+.pane-find-near input {
+  width: 140px;
+}
+
+.pane-find-near select {
+  font-size: 11px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.pane-find-count {
+  max-width: 180px;
+}
+
+/* No count yet (nothing typed): no reserved gap before the buttons. */
+.pane-find-count:empty {
+  display: none;
+}
 }
 
 /* 160 */
@@ -6495,6 +9619,66 @@ p.set-hint {
 
 .hist-msg.error {
   color: var(--red);
+}
+
+/* Find bar (Ctrl+F). The hits themselves are painted with the CSS Custom
+   Highlight API — ranges pooled under two names by HistoryOverlay.tsx — so
+   the <pre> stays one text node. */
+.hist-find {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.hist-find input {
+  width: 220px;
+  min-width: 80px;
+  flex: 0 1 auto;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+}
+
+.hist-find input:focus {
+  border-color: var(--accent);
+}
+
+.hist-find-count {
+  min-width: 56px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hist-find-btn {
+  padding: 0 6px;
+  line-height: 18px;
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.hist-find-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+::highlight(hist-find) {
+  background-color: #f5c04a66;
+  color: inherit;
+}
+
+::highlight(hist-find-cur) {
+  background-color: #ff9632;
+  color: #111;
 }
 }
 
@@ -8512,6 +11696,284 @@ p.set-hint {
 /* 180 */
 
 @layer components{
+/* Red zones dialog (RedZonesDialog.tsx) — a modal like #recent-panel: one
+   card per repo, its zones as rows, an inline add row, and the per-repo
+   Plan-first switch. The hatched swatch is .cm-zone-swatch from
+   CodeMapTab.css, so a zone looks the same here as on the map. */
+#red-zones-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  width: 720px;
+  max-width: 92vw;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Focused programmatically on open (so keys land in the dialog), never by
+   the user tabbing — no ring for that. */
+#red-zones-panel:focus {
+  outline: none;
+}
+
+#red-zones-panel .rzd-total {
+  flex: 1;
+  font-size: 12px;
+}
+
+.rzd-intro {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.rzd-intro b {
+  color: var(--text);
+}
+
+.rzd-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 60px;
+}
+
+.rzd-empty {
+  font-size: 13px;
+  padding: 10px 2px;
+}
+
+.rzd-repo {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rzd-repo-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rzd-repo-label {
+  font-weight: 700;
+  font-size: 13px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rzd-sessions {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--muted);
+  flex: none;
+}
+
+.rzd-planfirst {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  flex: none;
+}
+
+.rzd-zones {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rzd-zones li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.rzd-zone-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.rzd-zone-pattern {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--red);
+  font-weight: 600;
+}
+
+.rzd-zone-name {
+  font-size: 12px;
+}
+
+.rzd-zone-note {
+  font-size: 11.5px;
+}
+
+.rzd-x {
+  flex: none;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 1px 7px 3px;
+}
+
+.rzd-x:hover:enabled {
+  color: var(--red);
+  border-color: var(--border);
+}
+
+.rzd-none {
+  margin: 0;
+  font-size: 12px;
+}
+
+.rzd-add {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.rzd-add input {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.rzd-add input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.rzd-add-pattern {
+  flex: 2 1 220px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.rzd-add-name {
+  flex: 1 1 120px;
+}
+
+.rzd-add button {
+  flex: none;
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.rzd-add button:hover:enabled {
+  border-color: var(--accent);
+}
+
+.rzd-add button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.rzd-err {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* Zone kind mark (⛔ keep out / ✓ only here). */
+.rzd-kind {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  font-size: 11px;
+}
+
+.rzd-kind.green {
+  color: var(--green);
+}
+
+/* Derived outputs ("companions"). */
+.rzd-comp {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.rzd-comp > summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 11.5px;
+}
+
+.rzd-comp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin: 6px 0 0;
+}
+
+.rzd-comp-lab {
+  font-size: 11px;
+  min-width: 64px;
+}
+
+.rzd-comp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+}
+
+.rzd-comp-chip.builtin {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+.rzd-comp-input {
+  flex: 1 1 200px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+}
+
+/* 185 */
+
+@layer components{
 /* --------------------------------------------------------------------------- *
  * E1 — connection-lost card + stale grid overlay. A compact bottom-right card
  * (never a full-width strip: that covered the top bar and its controls) that
@@ -8665,6 +12127,42 @@ body.conn-lost #cs-errors {
   overflow-wrap: anywhere;
   max-height: 40vh;
   overflow-y: auto;
+}
+
+/* Card actions (errorPop's `actions`): the inline stand-in for confirm(),
+   which the Electron app never implements. */
+#cs-errors .cs-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+#cs-errors .cs-error-act {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+#cs-errors .cs-error-act:hover {
+  border-color: var(--accent);
+}
+
+#cs-errors .cs-error-act.primary {
+  border-color: var(--red);
+  color: var(--red);
+  background: none;
+  font-weight: 600;
+}
+
+#cs-errors .cs-error-act.primary:hover {
+  background: rgba(222, 97, 62, 0.12);
 }
 
 /* E2 — clickable notification toast (focus the session / open the PR). */
@@ -13211,6 +16709,99 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
   color: #9a6b00;
   border-color: rgba(154, 107, 0, 0.5);
   background: rgba(154, 107, 0, 0.08);
+}
+
+/* Map tab (CodeMapTab.css): softer shadows on white, and the accent-tinted
+   badges take the deeper accent so they don't wash out. */
+.light .cm-search-list,
+.light .ct-drawer,
+.light .ct-toast,
+.light .ct-tip {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+}
+
+/* The Code Tree by day: a pale sky, warm soil, mid-green foliage, dark labels
+   on a white halo. The dark values are the approved prototype's; these keep
+   the same relations (canopy darker than leaves, wood darker than both,
+   roots browner underground) on a light page. */
+.light .ct-root {
+  --ct-sky-top: color-mix(in srgb, var(--bg) 70%, #cfdcec);
+  --ct-sky-bottom: color-mix(in srgb, var(--bg) 88%, #e6ecf3);
+  --ct-soil-top: #dccfbd;
+  --ct-soil-bottom: #c9b69d;
+  --ct-glow: 120, 175, 135;
+  --ct-ground-line: hsl(30, 22%, 58%);
+  --ct-mass: hsl(142, 26%, 52%);
+  --ct-bark: hsl(28, 20%, 46%);
+  --ct-bark-hi: hsl(30, 24%, 58%);
+  --ct-root: hsl(27, 26%, 44%);
+  --ct-root-hi: hsl(28, 30%, 56%);
+  --ct-root-dusk: #cfc6bb;
+  --ct-fol-a: 27;
+  --ct-fol-l: 0.78;
+  --ct-fol-s: 1.15;
+  --ct-root-a: 46;
+  --ct-root-l: 0.55;
+  --ct-label-l: 26;
+  /* by day the calm canopy is a pale wash: the edited leaves (bird colours) must outweigh it */
+  --ct-calm-s: 0.2;
+  --ct-calm-k: 0.2;
+  --ct-calm-mid: 78;
+  --ct-calm-bark: color-mix(in srgb, var(--ct-bark) 45%, var(--bg));
+  --ct-calm-mass: hsl(150, 9%, 83%);
+  --ct-calm-label: color-mix(in srgb, var(--muted) 90%, var(--text));
+  --ct-lit-bark: hsl(28, 34%, 30%);
+  --ct-dusk: #d6dae1;
+  --ct-dusk-b: #d0d4dc;
+  --ct-dusk-c: #dadde4;
+  --ct-dusk-hi: #e3e6eb;
+  --ct-dusk-sh: #c4c8d0;
+  --ct-dusk-blob: #dfe2e8;
+  --ct-dusk-blob-hi: #e6e8ed;
+  --ct-dusk-leaf: #c3c8d1;
+  --ct-dusk-leaf-b: #bcc1cb;
+  --ct-dusk-doc: #c7cbd3;
+  --ct-dusk-bark: #c2bcb6;
+  --ct-dusk-fold: #d4d8df;
+  --ct-dusk-label: #59606e;
+  --ct-dusk-leaf-label: #7b8292;
+  --ct-halo: rgba(255, 255, 255, 0.9);
+  --ct-pill: rgba(255, 255, 255, 0.94);
+  --ct-pill-edge: rgba(20, 24, 34, 0.12);
+  --ct-pill-text: var(--text);
+  --ct-leaf-label: #2a3040;
+  --ct-root-label: hsl(30, 35%, 26%);
+  --ct-pile-label: hsl(30, 35%, 28%);
+  --ct-keep-text: color-mix(in srgb, var(--red) 75%, #000);
+  --ct-only-text: color-mix(in srgb, var(--green) 70%, #000);
+  --ct-keep-bg: color-mix(in srgb, var(--red) 12%, #fff);
+  --ct-only-bg: color-mix(in srgb, var(--green) 12%, #fff);
+  --ct-keep-wrap: color-mix(in srgb, var(--red) 25%, #fff);
+  --ct-only-wrap: color-mix(in srgb, var(--green) 25%, #fff);
+  --ct-hatch: 196, 62, 30;
+  --ct-badge-bg: rgba(255, 249, 222, 0.97);
+  --ct-select: 27, 32, 48;
+  --ct-hover: rgba(60, 66, 82, 0.7);
+  --ct-sep: #9aa1b0;
+  --ct-bud: rgba(219, 61, 140, 0.88);
+  --ct-bud-ghost: rgba(219, 61, 140, 0.55);
+  --ct-bonk-bg: rgba(255, 233, 227, 0.96);
+  --ct-bonk-x: #c0391b;
+  --ct-nest: hsl(33, 38%, 42%);
+  --ct-nest-twig: hsl(34, 34%, 56%);
+  --ct-nest-rim: hsl(34, 30%, 68%);
+  --ct-mini-bg: #e8ecf2;
+  --ct-mini-soil: #d8cab6;
+  --ct-mini-dim: rgba(240, 242, 246, 0.66);
+  --ct-mini-view: rgba(27, 32, 48, 0.75);
+  --ct-mini-root: hsl(30, 26%, 58%);
+  --ct-legend-leaf: hsl(148, 36%, 40%);
+}
+
+.light .cm-badge.agent,
+.light .cm-badge.scope-worktree,
+.light .cm-status {
+  color: var(--accent-deep);
 }
 }
 

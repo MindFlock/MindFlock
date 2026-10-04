@@ -131,3 +131,17 @@ def test_provider_catalog_served(client):
         "github_issues",
         "asana",
     }
+
+
+def test_provider_catalog_carries_the_branch_prefix(client):
+    # The Intake "Add source" button seeds a new source's id from this, and the
+    # id IS the branch prefix. Seeding from the provider name instead shipped
+    # Shortcut tickets as feature/shortcut-<id>/… rather than feature/sc-<id>/….
+    provs = client.get("/api/settings/providers/ticketing").json()["providers"]
+    assert {p["id"]: p["slug_prefix"] for p in provs} == {
+        "shortcut": "sc",
+        "jira": "jira",
+        "linear": "lin",
+        "github_issues": "gh",
+        "asana": "asana",
+    }

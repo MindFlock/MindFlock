@@ -258,6 +258,10 @@ state = "idle"
 [[activity.events]]
 event = "UserPromptSubmit"
 state = "working"
+
+# opt-in red-zone guard + tool feed (see "Red-zone guard" below)
+red_zone_guard = false             # true = MindFlock manages a HARD block for this CLI
+tool_hook_events = { PreToolUse = "pre", PostToolUse = "post" }
 ```
 
 **Give your CLI a `working_patterns` regex if it shows an interrupt hint.** It
@@ -282,6 +286,75 @@ event to the state it records (`working`/`idle`/`clarify`). Declaring a
 (above). An empty/omitted
 `hooks_file` means pane-inspection only (unchanged behaviour); the `[classify]`
 pane patterns remain as a fallback for CLI builds without hooks.
+
+### Red-zone guard (`red_zone_guard`, `tool_hook_events`)
+
+(The guard covers both zone kinds — red "keep out" and green "only here".)
+
+A **red zone** is a path glob the agent may read but must never create, modify,
+delete or move (`backend/config/red_zones.py`). It is enforced by a per-tool
+hook MindFlock installs into the same hooks config as the activity markers, on
+the events named by `tool_hook_events` (event → phase, one of `pre` / `post` /
+`fail`). The hook's whole body is `backend/providers/_tool_hook_src.py`, baked
+into the `python3 -c` command as a literal so it stays stdlib-only and needs no
+`backend` import at fire time. On a `pre` event it reads a **guard file** —
+one per worktree root, keyed `sha1(realpath(root))`, resolved from
+`MINDFLOCK_RED_ZONE_DIR` at fire time — and prints a PreToolUse `deny` for an
+edit (or an MCP write / a Bash write it can spot) that lands in a zone; a Bash
+`post`/`fail` stat-diff backstop catches shell edits the pre-heuristic misses.
+Because Claude Code hot-reloads its hooks, a zone added mid-flight applies on
+the very next tool call.
+
+- `red_zone_guard` (bool, default `false`): whether MindFlock manages a **hard
+  block** for this CLI. Only Claude sets it — its PreToolUse `deny` blocks even
+  under `--dangerously-skip-permissions` and inside subagents, and MindFlock
+  owns its `settings.local.json` (writing `disableAllHooks: false` so a
+  project-level `true` cannot silently disarm the guard).
+- `tool_hook_events` (table, `Event = "phase"`): which activity events also
+  carry the guard. These events must also appear in `[[activity.events]]`.
+
+**Green zones ("only here").** The same hook enforces the inverse: while the
+worktree has a green zone, an edit to anything outside every green zone (and
+not a companion — lockfiles, snapshots, tests that import the scope, the
+repo's derived outputs) is denied with a scope reason that tells the agent to
+finish the in-scope work and list what else it needs. The guard file (`v: 2`)
+keeps green in its own keys (`green_rules`, `companions`) — `rules`, `files`,
+`dirs` and `sym` stay red-only — so a hook baked by an older build can never
+read a green rule as red. Every hook branch is gated on "red OR green rules",
+reads are never blocked, and a failed parse never denies for green. The Bash
+backstop diffs `git --no-optional-locks status` before/after each command (see
+[web-api.md](web-api.md#green-zones-only-here)) and its feedback never tells
+the agent to revert a file that already had changes; a `git checkout -- p` /
+`git restore p` / `rm p` of a path the session's own backstop just flagged as
+an exact revert is let through.
+
+**Subagents in the feed.** Claude fires the project's PreToolUse /
+PostToolUse hooks for a subagent's tool calls too, with the parent's
+`session_id` plus `agent_id` and `agent_type`; the hook records them on that
+call's feed record as `agent` / `agent_type`. The parent's own `Agent` /
+`Task` call records its `description` (≤ 120 chars) as `desc` and its
+`subagent_type` as `atype` — never the prompt. The Map draws each `agent` as a
+helper bird of its own, named after that call.
+
+**Version stamp.** The hook tag is `# mindflock-activity tool-hook
+v2.<rev> <hash8>` — the guard revision (`_tool_hook_src._MF_HOOK_REV`, bumped
+whenever the guard's behaviour changes) and a hash of the embedded source.
+`activity_markers.hooks_armed` accepts the CURRENT hash or a NEWER revision,
+so a hooks file still carrying an older guard counts as not armed and the
+reconcile loop reinstalls it (Claude hot-reloads the file), while two
+MindFlock builds on one worktree (the uv-tool copy next to a dev server)
+converge on the newer guard instead of rewriting the file every tick. Another
+build's same-revision hook is healed only at the 30 s retry pace, and a
+version swap is never reported as `session.red_zone_tampered` — only a
+removed or disabled hook is. The `# mindflock-activity` substring keeps
+uninstall recognising every version.
+
+**"Detect-only"** means the CLI runs the hook (its feed records light up the
+Code Map and register breaches) but nothing is *blocked*. Codex is detect-only:
+it ships `tool_hook_events`, but `red_zone_guard = false`, because Codex
+gates repo-local hooks behind a trust hash MindFlock does not manage, so the
+deny is not guaranteed to fire. Every provider without a guard is detect-only by
+default (`BaseProvider.red_zone_guard()` → `False`).
 
 ### Reasoning effort (`EffortSpec`, `providers/effort.py`)
 

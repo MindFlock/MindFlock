@@ -150,6 +150,12 @@ CLI's own default). Rejected with **400** when longer than 200 chars or
 carrying a newline/NUL, since the value ends up in an env var and a launch
 flag.
 
+`plan_first` (optional, boolean) appends the plan-first instruction to
+`prompt`: the agent lists every file it intends to create, modify or delete in
+a `mindflock-plan` block and waits for the go-ahead (the Map's **Go** button).
+Independently, a prompt always names the repo's red zones when it has any —
+see [Code map & red zones](#code-map--red-zones).
+
 The 202 body is the usual session object, plus a `note` when the chosen account
 has no verified route for the chosen agent — the session will run on the CLI's
 own login, and the web UI warns about that at selection time while API and CLI
@@ -273,10 +279,10 @@ no response whose only content is "gh is not installed".
 |---|---|---|
 | POST | `/api/instances/{title}/commit` | Body `{message}`. Runs `git add -A` + `git commit` **in the session's shell tmux** (watch pre-commit hooks in the Terminal tab), retrying up to 5× when hooks auto-fix files. Works for every session type (plain, in-place, provisioned). Writes `.mindflock_commit_status` (exit code) and `.mindflock_commit_msg` (reused on empty re-commit). |
 | GET | `/api/instances/{title}/commit-message` | `{message}` — the message of a commit the pre-commit hooks blocked, so the Commit dialog can offer it back instead of making you retype it. Reads `.mindflock_commit_msg` (the file `git commit -F` uses), but **only when `.mindflock_commit_status` records a non-zero exit** — the same condition that raises the `interrupt` stage. Absent or successful status → `{"message": ""}`, since a committed message pre-filled into the next commit is worse than an empty box. 404 unknown title, 409 workspace not ready |
-| POST | `/api/instances/{title}/push-branch` | `git push --no-verify -u origin HEAD` in the shell (hooks already ran on commit). **O3 soft gate:** when the repo's `.mindflock.toml` declares `check_command` and no check run passed against the current HEAD, returns `409 {error, check_required: true, check}`; re-POST with body `{"force": true}` to push anyway. |
+| POST | `/api/instances/{title}/push-branch` | `git push --no-verify -u origin HEAD` in the shell (hooks already ran on commit). **O3 soft gate:** when the repo's `.mindflock.toml` declares `check_command` and no check run passed against the current HEAD, returns `409 {error, check_required: true, check}`; re-POST with body `{"force": true}` to push anyway. **Red-zone gate** (checked first): a file inside an enforced red zone — or, while a green scope exists, outside it (not a companion, not an exemption still at its recorded blob) — committed between the fork point and `HEAD` returns `409 {error: "red zone breached: <path> (<pattern>)" | "outside green zone: <path>", red_zone_breaches: [{path, pattern, zone_id, kind}]}`; re-POST with `{"override_red_zones": true}` to push anyway (carry `force` too if the check gate also applies). See [Code map & red zones](#code-map--red-zones). |
 | GET | `/api/instances/{title}/branches` | `{branches, current, default}` — the branch list backing the **Make PR** dialog's base picker. `branches` are `origin`'s remote heads (falling back to local heads when origin is unreachable, so it's never blank); `current` is the session's own branch (never a valid PR target); `default` is the pre-selected base (`repository.pr_base_branch` → the session's fork base). 404 unknown title, 409 workspace not ready |
-| POST | `/api/instances/{title}/make-pr` | Opens a PR → `{ok: true, url}` (or `note: "PR already open"`). Three tiers, in order: `gh pr create --base <base> --fill` when `gh` is installed **and** authenticated; else the GitHub REST API with a token from the usual resolution chain; else **`200 {ok: false, compare_url}`** — a prefilled compare URL the UI opens in the browser, plus the remedy sentence "add a GitHub token in Intake → Pull requests, or install the GitHub CLI". A missing `gh` is never an error status. The UI's Make-PR dialog collects `<base>` from the branch picker above (and the frontend remembers the last base per repo — `prBaseByRepo` in `localStorage`); an omitted base falls back to the session's base branch |
-| POST | `/api/instances/{title}/merge-pr` | Merges the branch's PR, same three tiers: `gh pr merge <branch> --merge`; else the REST API with a token; else **`200 {ok: false, pr_url}`** so the UI can send you to the PR page to merge it yourself |
+| POST | `/api/instances/{title}/make-pr` | Opens a PR → `{ok: true, url}` (or `note: "PR already open"`). Three tiers, in order: `gh pr create --base <base> --fill` when `gh` is installed **and** authenticated; else the GitHub REST API with a token from the usual resolution chain; else **`200 {ok: false, compare_url}`** — a prefilled compare URL the UI opens in the browser, plus the remedy sentence "add a GitHub token in Intake → Pull requests, or install the GitHub CLI". A missing `gh` is never an error status. The UI's Make-PR dialog collects `<base>` from the branch picker above (and the frontend remembers the last base per repo — `prBaseByRepo` in `localStorage`); an omitted base falls back to the session's base branch. Same **red-zone gate** as push-branch, over `<base>...origin/<branch>` when that ref exists (the pushed branch is what the PR carries, diffed the way the forge diffs it — so upstream merges never read as breaches; `fork..origin/<branch>` when no base ref resolves), else `fork..HEAD`; `override_red_zones: true` in the body overrides |
+| POST | `/api/instances/{title}/merge-pr` | Merges the branch's PR, same three tiers: `gh pr merge <branch> --merge`; else the REST API with a token; else **`200 {ok: false, pr_url}`** so the UI can send you to the PR page to merge it yourself. Optional body `{override_red_zones}` — the same red-zone gate as make-pr (409 + `red_zone_breaches`). The fast-track autopilot never sends the override, so a chain halts on a breach with the error as its reason |
 | POST · DELETE | `/api/instances/{title}/fast-track` | ⏩ **arm / disarm the autopilot** for this session: carry it to `depth` (`commit`, `push`, `pr`, `merge`; default from Settings → Workspace) and stop. Arm-and-*wait* — pressing it while the agent is still working records the target and lets the driver act once the agent is verifiably done, rather than committing a half-written tree. Body `{depth?, message?, base?}`. **An omitted `message` inherits the previously armed one along with its `message_auto` placeholder flag** — an intake-armed run carries the ticket / PR / issue name, and re-arming used to overwrite that with a generated *"Work on `<slug>`"*; carrying the flag across is what stops a re-arm from freezing a placeholder into the commit. With no message anywhere, a *pending* on-disk one from a blocked commit is adopted (the rule `GET /commit-message` applies), else a default subject is generated from the tree and marked a placeholder. Every placeholder is replaced at commit time by a message written from the final diff (see [web-ui.md](web-ui.md#intake)); a message a human typed never is. → `{ok: true, autopilot}`, the authoritative record, so the client settles its toggle without a follow-up read (arming touches a JSON file and does no PR lookup — the press must not wait on the network). 400 unknown depth or the `agent` rung (that one is for intake, where the session does not exist yet), 404 unknown title, 409 workspace not ready. DELETE stops the driver taking the *next* step — anything already typed into the shell keeps running → `{ok, stopped}` |
 | POST | `/api/instances/{title}/reset-stage` | ↺ **back to idle** — pins this window's guided ladder back to its start on a clean branch, so the header stops insisting on Push / Make PR / Merge while you keep working on the same branch. **Nothing git-facing happens**: no reset, no revert, no PR close, and the published `stage` is untouched — the pin (`backend/web/core/stage_reset.py`) rides the row as `stage_reset` and only the UI ladder reads it. It releases itself when the worktree moves (dirty tree or new commit), never on the stage label. Also takes down the finished cycle's leftovers: a **halted** fast-track record (a live chain is left strictly alone) and a **stale** verification result (a current failure is never touched — the push gate reads it). → `{ok: true, pinned, dirty, cleared[], row}`, where `row` is the recomputed instance row so the presser's window flips now rather than on the next tick, and `pinned` is `false` on an already-dirty tree (that ladder is at its start already). 404 unknown title, 409 workspace not ready |
 
@@ -556,6 +562,245 @@ survives server restarts. Events: `session.setup_started/finished`,
 | GET | `/api/instances/{title}/check?lines=200` | `{status, log}` — check state incl. `sha` it ran against and `stale` vs current HEAD |
 | POST | `/api/instances/{title}/check` | Run `check_command` in the worktree → 202; 400 without config, 409 while running. Also auto-runs when a session reaches the `committed`/`pushed` stage with no (or a stale) result. |
 
+### Code map & red zones
+
+A **red zone** is a path glob the agent may read but must never create, modify,
+delete or move — per repo (the default: every worktree and clone of the same
+origin) or per worktree. The Map pane tab (see [web-ui.md](web-ui.md)) is the
+**Code Tree**: the worktree as a tree (folders as branches, files as leaves,
+tests as roots) laid out in the browser from `GET …/code-map` (files + import
+graph), with the agents as birds from `GET …/code-map/live` (this session's
+tool trail and plan, other sessions' edits on the repo), the blast radius of
+what they edited, zones, breaches and off-plan edits; a leaf's card reads
+`GET …/code-map/file`, the search box `GET …/code-map/search`. The `atlas` and
+`entry-points` routes below are kept for API clients; the bundled UI no longer
+calls them.
+
+A **green zone** is the inverse ("only here"): while a worktree has one, the
+agent may modify ONLY files inside its green zones — see [Green zones](#green-zones-only-here)
+below. Routes and modules keep the `red-zones` / `red_zones` names; zones carry
+`kind: "red"|"green"`.
+
+**Storage.** Zones live in `~/.mindflock/red_zones.json`
+(`MINDFLOCK_RED_ZONES_FILE`; `{version, repos: {repo_id: {label, zones,
+plan_first, companions}}, worktrees: {realpath: {repo_id, zones, waive, green,
+green_exempt}}}`, atomic writes). `zones` are RED everywhere; green zones live
+under their own `green` key (worktree scope only) so an older server or an
+older baked-in hook — which reads `zones`/`rules` as red — never sees one.
+A repo id is the normalized `origin` (`github.com/owner/repo` — SSH and HTTPS
+spellings agree; a local-path origin is followed up to 3 hops), else
+`path:<repo root>`. Enforcement reads a **guard file** per worktree root
+(`~/.mindflock-assistant/.red-zones/<sha1(realpath)[:20]>.json`,
+`MINDFLOCK_RED_ZONE_DIR`) at hook fire time, so a zone added mid-flight applies
+to the agent's very next tool call; the per-session **tool feed** the hook
+appends to lives in `~/.mindflock-assistant/.tool-feed/<tmux>.jsonl`
+(`MINDFLOCK_TOOL_FEED_DIR`). See [providers.md](providers.md) for the hook
+itself and what "detect-only" means.
+
+**Reconcile loop** (`backend/web/core/red_zone_monitor.py`, every 4s on a
+worker thread): re-syncs each live worktree's guard file (v2: red `rules` /
+`files` / `dirs` / `sym`, green `green_rules` + `companions`, `protect` whenever
+either kind is present) (a rewritten or
+deleted guard → `session.red_zone_tampered {what: "guard"}`), re-arms a hot-
+reload provider's hook config when it lost the tool hook, gained
+`disableAllHooks`, or still carries a tool hook baked by another build (the
+hook tag ends in a hash of its embedded source — a stale one is reinstalled,
+silently on first sight) (only a transition away from armed is announced:
+`{what: "hooks"}`; a hooks file that exists but isn't valid JSON is never
+rewritten — the guard reads `off` with the reason instead, and re-arms once it
+parses), turns feed denies into `session.red_zone_blocked` (once per session
+and zone per work cycle — the cycle resets when the session goes idle; a
+refused push/PR carries `push: true` and is its own key) and computes
+**breaches per worktree**: the session's change set ∩ enforced zones
+(recomputed only when the worktree fingerprint moves, at most every 10s) and
+zone-matched git-ignored files whose content left their baseline (taken **as
+the file is when first listed** — a `__pycache__` that appears is not a
+breach). The Bash stat-diff backstop's feed records only trigger that check:
+a backstop path git and the content baseline don't confirm is dropped (the
+one path it can add is a git-ignored zoned file an agent command created
+since the last complete listing, and a `.claude/worktrees/<n>/…` sandbox
+path its own checkout's git confirms) → `session.red_zone_breached` once per
+(worktree, path), `detail` ending with what it blocks (only a committed
+change blocks a push). Everything is **seeded silently** on first sight — a
+restart announces nothing — and a zone-set change silently absorbs only the
+paths no previously-enforced zone covers (a zone created over files already
+changed is not news; a pending breach of an existing zone still is, and an
+ignored file's baseline survives the change) — precisely: it compares the
+breach set under the zone document before the change with the one after,
+never "was an old rule matching it" (backwards for green, where an old green
+rule ALLOWED the path). Paths are matched
+case-insensitively where the worktree's filesystem is. A zone-store
+change no route of ours made → `{what: "store"}` (reported, never reverted).
+Feeds no registered session owns are size-trimmed and deleted after a day
+quiet. Deleting a session (`DELETE /api/instances/{title}`) removes its guard
+before Kill and tombstones the title so the loop can't re-adopt it mid-Kill;
+its "This worktree" zones go only if Kill actually removed the folder (an
+in-place session's checkout keeps them).
+The row field `redzone` (`GET /api/instances`) is its summary: `{zones,
+breaches, last_block_ts, guard, mode}` (`mode`: `"green"` while a green scope
+is in force, `"red"` with red zones only, `null`) with `guard` one of `guarded` (armed; a feed
+record seen since arming, or no tool call yet), `arming` (a hook fired since
+arming but no feed record yet), `detect` (the provider has no hard guard),
+`off` (not armed and re-arming failed, or the hooks file isn't valid JSON),
+`none` (no zones) — or `null` when there is nothing to say. Committed
+breaches also go into the guard's `breaches`, which makes the hook refuse
+`git push` / `gh pr create|merge` / GitHub MCP writes; the push/make-pr/merge
+routes compute their own at request time (see the guided-workflow table) —
+a push over `fork..HEAD`, a PR/merge over `<base>...origin/<branch>` (what
+the forge diffs, so upstream changes merged locally never read as this
+branch's breach).
+
+#### Green zones ("only here")
+
+**One predicate.** `red_zones.classify(rel_real, rel_lex, zones_doc, ci)` →
+`blocked | outside | companion | ok` decides every path for every consumer —
+the hook (a mirror in `_tool_hook_src._mf_classify`), the monitor, the push/PR
+gate, `/live`, the preview, plan flags and the Map (`classifyPath` in the
+frontend). `tests/fixtures/zone_classify_cases.json` pins all three to the same
+answers. Order: a red match on ANY representation of the path (and its
+`.claude/worktrees/<n>/`-stripped form) → **blocked** (red always wins); no
+green zone → **ok**; else EVERY in-root representation must be writable —
+judged on the realpath too, so a symlink inside the scope pointing outside is
+outside: a green match, a MindFlock workspace artifact (`.mindflock_*`) or the
+nested sandbox dir itself → **ok**; a **companion** → writable, flagged amber,
+never a breach; else **outside**. Paths outside the worktree root (`/tmp`,
+another checkout such as the main clone of a worktree session) are not
+governed — a green zone bounds the worktree, nothing else.
+
+**Companions** — files an agent legitimately writes outside its scope as a
+side effect of in-scope work: lockfiles (`uv.lock`, `poetry.lock`,
+`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, `go.sum`,
+`Gemfile.lock`), `__snapshots__/`, `*.snap`, **test files that import a file
+inside the scope** (from the Code Map import graph; "test" is the Atlas's own
+predicate, `code_map.effective_tests` — a test-NAMED file that non-test code
+imports, e.g. `test_plans.py` imported by `server.py`, is code and never a
+companion), and the repo's configured
+"derived outputs" (`GET/PUT /api/red-zones/companions`, e.g. a built bundle).
+
+**Worktree scope only.** A green zone describes a task, not repo policy: a
+repo-wide one would leak into Verify/intake sessions of the same repo and deny
+their own bookkeeping. `scope: "repo"` → 400. It applies to every session on
+that worktree (`sessions_here` in `GET …/red-zones`).
+
+**Hook.** Denies `Edit`/`Write`/`NotebookEdit`/patches, MCP writes (for green
+only the explicit verbs `write|create|update|edit|delete|move` — an MCP
+"upload" reads a local file) and high-confidence Bash write targets (redirects,
+`tee`, `rm`/`mv`/`touch`/`chmod`, `cp`/`ln`/`rsync` destinations, `sed`/`perl
+-i`, `git rm|mv|checkout|restore`) that are blocked or outside; `mkdir`,
+`git clean` (untracked files only; `-n` is a no-op), a word the shell would
+still expand (`"$out"`, `${X:-y}`, a backtick) and anything outside the root
+are not checked for green (a leading `~` is expanded), and an unparseable
+command is never denied for green — the backstop covers all of them. An
+`Edit`/`Write`/MCP write is judged by the guard of its REALPATH too, so a
+symlink outside every worktree (`/tmp/x.py -> <root>/lib/a.py`) cannot write
+past a red or green zone. The green reason: "MindFlock scope: {rel} is outside
+the green zone(s) the user scoped this task to (≤5 names, then `(+N more)`).
+Finish the in-scope work and list any out-of-scope files you need in your reply
+instead of editing them." Each green deny lands in the feed as `deny: {path,
+pattern: "outside green", kind: "green", request: true, reason}` — the Map
+shows it as a scope request with **[Allow this file]**. **Reads are never
+blocked** (a shell `cat` can't be, and blinding the agent to the callers of
+what it edits breaks them); reads outside the scope come back in `/live` as
+`peek` ("peeked outside scope", advisory). A read-restricted checkout (sparse
+checkout of the scope + manifests) is future work.
+
+**Revert allowance** (red and green). `git checkout [HEAD] [--] p`, `git
+restore [--source=HEAD] p` and `rm p` are let through when `p` is in a backstop
+`breach` of the session's own feed from the last 15 minutes that says the
+revert is exact: `clean_at_pre: true` (and not `committed`) for
+checkout/restore (the file had no uncommitted change before the flagged
+command), `new: true` for `rm` (the command created it). A restore from any
+OTHER tree-ish (`git checkout <ref> -- p`, `git restore --source=<ref> p`)
+writes that ref's content and is never a revert. The v2
+backstop suggested a `git checkout` its own pre-hook then denied.
+
+**Backstop.** On every Bash call with zones in force the pre hook snapshots
+`git --no-optional-locks status --porcelain=v1 -z -unormal` per base (the root
+and the nested `.claude/worktrees/<n>` containing the cwd; 3 s timeout, 5000
+entries; `--no-optional-locks` so it never takes `index.lock`; R/C entries'
+origin consumed as a second field and counted as a write; submodules are one
+path; `.claude/worktrees/` and embedded repos skipped). On a timeout the snap
+stores "no baseline" and the post skips the green diff. Post: a tracked path
+newly dirty — or dirty before with its stat changed — that is outside/blocked
+is a breach (`{path, pattern: "outside green", kind: "green", clean_at_pre}`).
+So is a path the command COMMITTED in the same call (`git commit`,
+`cherry-pick`, a merge of a local branch): the pre snap records each base's
+`HEAD`, and a forward move adds `git log --name-only <pre>..<post> --not
+--remotes` (a pull/rebase/reset onto upstream is not this session's edit) —
+those carry `committed: true` and are never offered a `git checkout --`.
+A new untracked path outside is only a soft `artifact` flag on the record.
+Feedback never tells the agent to revert work it may not own: "these files
+outside your green zone(s) changed while your command ran … if you changed
+them, stop and tell the user; don't revert files you didn't intend to change",
+with a `git checkout --` offered only for paths clean at pre. Red breaches get
+the same rule (a path that had WIP before is named "don't revert it").
+Git-ignored files are out of scope for green.
+
+**Exemptions.** When a green zone is added (or removed — the scope narrows),
+every path already changed (working tree or committed vs the fork point) that
+the change makes outside is recorded in `green_exempt: {rel: "sha [sha …]"}`
+— every identity the path had then, space-separated: its working-tree blob
+(`git hash-object`, or `"deleted"`) AND its blob at `HEAD` and at
+`origin/<branch>` when pushed (a v3.0 single sha still reads). The monitor,
+`/live` and the push/PR gate skip it while its content — the working tree's,
+or the blob at the gated ref — equals any recorded one, so work committed
+before the scope and then edited further no longer blocks the push; edited
+again after the scope it is a breach. The add answer
+carries `exempt` + `committed_outside`, and the UI offers "N files already
+changed outside this scope — [Keep exempt] [Treat as breaches]" (default
+exempt; `POST …/red-zones/exempt`).
+
+**Messaging.** A green notice never says "revert" ("keep what you already
+changed"); adding, widening (an allow) and removing a green zone each tell the
+agent; a CLI without a hard guard is told edits are "flagged and block pushes",
+not "blocked". A launch prompt names the scope ("Scope (MindFlock green zones):
+only modify files under `a`, `b` — everything else is read-only (…)").
+**Go — only the planned files** (`POST …/code-map/go {scope_to_plan: true}`)
+turns the approved plan into anchored green zones (exact paths; the parent dir
+of a new file) and names that scope in the go message; `/live` flags plan
+items outside the scope (`outside: true`) on every poll.
+
+Per-session routes return 404 for an unknown title, 409 `{"error": "workspace
+not ready"}` without a worktree, and 409 "git is not installed" without git.
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/api/instances/{title}/code-map?fp=` | `{root, repo: {id, label}\|null, fingerprint, files: [[rel, size, flags]], truncated, edges: [[src, dst]], graph_partial, langs}`. `flags`: 1 = zone-matched git-ignored file, 2 = test file; an edge means *src imports dst* (Python, JS/TS, CSS resolvers). `fingerprint` = worktree fingerprint + a digest of the zone set; when `fp` equals it → `{unchanged: true, fingerprint}` — except while the import graph is partial (`graph_partial: true`, the read budget ran out on a big/cold repo): then the route always rebuilds (resuming from the per-file memo) and the snapshot's `fingerprint` carries a `.partial` suffix, so it differs from `/live`'s and the client refetches until the graph is complete |
+| GET | `/api/instances/{title}/code-map/live?since=` | `{now, fingerprint, repo, changed: [{path, status, added, removed}], feed: [records with ts > since, writes/reads worktree-relative, outside paths dropped, deny/breach/artifact passed through, subagent fields `agent`/`agent_type` (a call made inside a subagent) and `desc`/`atype` (the parent's Agent call) passed through, `peek: [rel]` = reads outside the green scope; ≤300], plan: {source: "declared"\|"exitplan"\|null, ts, items: [{path, intent, new, outside?, blocked?}], thread}, off_plan: [rel], zones: [effective zones incl. waived: {id, pattern, name, note, created, scope, re, waived, kind}], breaches: [{path, pattern, zone_id, committed, kind}], guard: {state, detail, hard, mode}, mode: "green"\|"red"\|null, exempt: {rel: "sha [sha …]"}, companions: [{pattern, re, source: "default"\|"repo"\|"tests"}], companion_files: [rel], activity, plan_supported, ci, others: [{session, path, ts}]}` — a green breach has `pattern: "outside green"`, `zone_id: null`, `kind: "green"` — `guard.detail` is a full sentence for the pill's tooltip (what the state prevents and what it doesn't, e.g. "Claude Code is blocked before it edits a red zone (hook verified 2 min ago)"), never the label; `ci` = the worktree's filesystem is case-insensitive, so zones match with IGNORECASE (the hook does); `others` are edits by other live sessions on the same repo in the last 10 minutes, on paths that exist here |
+| GET | `/api/instances/{title}/code-map/atlas?path=` | One **Atlas** level: the children of directory `path` (`""` = repo root; single-child chains collapsed, JVM `src/main/<lang>/<package>` chains transparent — only for a real JVM source set, whose `main`/`test` holds a `java`/`kotlin`/`scala`/`groovy` root; its other children such as `src/integrationTest` are nodes of their own; a symlink resolving outside the worktree contributes no names) → `{path, crumbs: [{path, name}], nodes: [Node], tiers, partial, truncated, hidden, back_edges: [[from, to]], extras: {tests, files: [{path, name, files}]}, fingerprint}`. Node = `{path, name, kind: "dir"\|"file"\|"more", role: "code"\|"tests"\|"files", lang, langs: {ext: n}, files, loc, symbols, public, interface: [{name, kind, path, line, used_by, scope: "external"\|"internal"\|"declared"}] (≤ 8), interface_total, deps_out: [sibling path], deps_in: [sibling path], ext_out, ext_in, tier, entry, tested_by, tests}`. `tier` 0 = top row (callers) … increasing = more depended upon; −1 standalone code, −2 tests, −3 files / the "+N more" fold; `tiers: 0` = no relations (plain grid). `back_edges` = the lighter edge of each cycle (render "both ways"). Cached per worktree content fingerprint (`fp` is accepted and ignored). 400 for an absolute or `..` path |
+| GET | `/api/instances/{title}/code-map/file?path=` | The file view → `{path, lang (family), loc, role, symbols: [{name, kind, line, end, public, sig, parent, children, changed?}], imports: {internal: [{path, name, folder, names}], external: [str]}, entry: [{kind: "http"\|"cli"\|"event"\|"main", method, route, line, handler, changed}], entry_groups: [{prefix, count, changed, items}] (only past 24 routes), used_by: [{path, name, folder, names}], tested_by: [path], changed_lines: [[a, b]] (new-side hunks vs the fork point), changed_symbols: ["Class.method"], zones: {red, green: bool\|null}, partial}`. `zones` goes through the shared classifier on the realpath AND the path as written (a symlink into a red zone is red): `red` = blocked, `green` = writable under the green scope (null = no green zone). An unreadable file (mode 000, EIO) is an empty view, never a 500. Paths are taken literally first (git tracks ` lead/` and `back\\slash/` on Linux), leniently (whitespace-trimmed, `\\` as `/`) only when the literal names nothing. 400 for an absolute / `..` / escaping / missing / directory path |
+| GET | `/api/instances/{title}/code-map/search?q=&limit=40` | Files, folders, symbols and routes matching `q` (case-insensitive, camel/snake-aware, initials; tests rank lower) → `{items: [{path, name, kind, line, score}], partial}`; `kind` is a symbol kind, `"file"`, `"dir"` or `"route"` (a route matches by its route or by the `METHOD /route` label it shows); `limit` ≤ 200 |
+| GET | `/api/instances/{title}/code-map/entry-points` | The repo-wide "swagger" lens → `{items: [{kind, method, route, line, handler, path, folder}] (≤ 500), total, dropped (entry points in test files, excluded), counts: {kind: n}, partial}` |
+| POST | `/api/instances/{title}/code-map/ask-plan` | Body `{mode: "plan"\|"remaining"}` → sends the plan prompt (list every file you intend to touch in a `mindflock-plan` block, then wait) or its mid-flight variant → `{ok, told: "sent"\|"queued"\|false, reason?}` |
+| POST | `/api/instances/{title}/code-map/go` | Body `{zone_ids: [...], scope_to_plan?: bool}` (zones staged during plan review) → one "go ahead, and don't modify these" message → `{ok, told, reason?}`. `scope_to_plan: true` = **Go — only the planned files**: the plan's items become anchored worktree green zones (an existing path exactly; a new file's parent dir; a new root-level file itself — every path glob-escaped, so `pages/[id].tsx` is literal), earlier work outside is exempted, the guard synced, and the message names the scope → also `{zones: [created], exempt: [rel]}`; 409 when the plan names no usable path |
+| GET | `/api/instances/{title}/red-zones` | `{repo: {id, label}\|null, plan_first, zones: [effective, with kind], mode, exempt: {rel: "sha [sha …]"}, companions: [repo patterns], sessions_here}` (`sessions_here` = sessions sharing this worktree — a green zone applies to all of them) |
+| POST | `/api/instances/{title}/red-zones` | Body `{pattern, name?, note?, kind: "red"\|"green" (default red), scope: "repo"\|"worktree" (default repo for red, worktree for green), tell_agent?, exempt?: bool}` → adds the zone, syncs the guard of every live worktree it reaches (repo scope: every live session on that repo id plus the repo's `git worktree list`) **before returning**, records files already changed inside it as pre-existing → `{ok, zone, zones, told, already_changed: [rel], reason?}`. 400 invalid pattern (empty, `..`, absolute, > 400 chars) or scope; 409 when repo scope is asked for and git can't identify the repo, or when the same pattern is already the other kind. `tell_agent` sends the zone notice. **Green**: `scope: "repo"` → 400; paths already changed outside the new scope are exempted (unless `exempt: false`) → also `{exempt: [rel], committed_outside: n}`; no `already_changed` seeding |
+| POST | `/api/instances/{title}/red-zones/allow` | Body `{path, tell_agent?: bool (default true)}` — **[Allow this file]** on a scope request: an anchored worktree green zone for exactly `path` (glob-escaped by `red_zones.glob_escape`, so `app/[slug]/page.tsx` is literal, not a character class; synced now) and a "you may now edit it" notice → `{ok, zone, zones, told, reason?}`; 409 when the worktree has no green zone (a first one would scope the whole session to one file) or a red zone covers the path; 400 for an absolute / `..` path |
+| POST | `/api/instances/{title}/red-zones/exempt` | Body `{exempt: bool, paths?: [rel]}` — `false` = "Treat as breaches" (drop those / all exemptions); `true` + `paths` = exempt them at their current content (working tree, `HEAD` and `origin/<branch>` blobs) → `{ok, exempt: {rel: "sha [sha …]"}}` |
+| POST | `/api/instances/{title}/red-zones/preview` | Body `{pattern, kind?}` → dry run, nothing saved: `{re, count, sample: [≤20 rel], ignored_count, changed: [rel], truncated}`; 400 invalid pattern. `kind: "green"` adds `{writable_files, changed_outside: [rel], committed_outside: n, roots: [distinct matched top paths], unanchored: bool, anchored: "/<root>"\|null (offered when exactly one root), warnings: [str]}` — warns on an unanchored basename pattern (it matches at any depth) and on zero matches ("nothing exists here yet; the agent may only create new files under it") |
+| DELETE | `/api/instances/{title}/red-zones/{zone_id}?tell_agent=` | Remove the zone (any scope) and re-sync the guards it reached → `{ok, zones, told}`; 404 unknown id. Removing a GREEN zone exempts the work already done inside it and tells the agent the scope narrowed (`?tell_agent=0` to skip) |
+| POST | `/api/instances/{title}/red-zones/{zone_id}/waive` | Body `{waived: bool}` — "Allow here": a repo zone stays drawn but is not enforced in this worktree → `{ok, zones}`; 400 for a worktree zone, 404 unknown id |
+| GET | `/api/red-zones` | `{repos: {repo_id: {label, zones, plan_first, companions}}}` — every repo, outside any session (`zones` are red; green is worktree-only) |
+| POST | `/api/red-zones` | Body `{repo_id, pattern, name?, note?, label?}` → add a repo zone + re-sync every live worktree of that repo → `{ok, zone, repos}`; 400 missing repo_id / invalid pattern / `kind: "green"`; 409 when a worktree of the repo has the same pattern as a green zone |
+| GET | `/api/red-zones/companions?repo_id=` | `{repo_id, patterns, defaults}` — the repo's companion patterns ("derived outputs" writable outside a green scope) and the built-in defaults; 400 without `repo_id` |
+| PUT | `/api/red-zones/companions` | Body `{repo_id, patterns: [str], label?}` → replaces them (validated like zone patterns; nothing saved on a bad one), re-syncs the repo's live worktrees → `{ok, repo_id, patterns, defaults}` |
+| DELETE | `/api/red-zones/{zone_id}` | → `{ok, repos}`; 404 unknown id |
+| POST | `/api/red-zones/plan-first` | Body `{repo_id, on, label?}` → the repo's intake sessions (tickets, issues, PR reviews — started from Intake or by the ingestion pipeline) open with the plan-first instruction when their CLI supports plans → `{ok, repos}` |
+
+**Delivering messages** (`ask-plan`, `go`, `tell_agent`): typed into the agent
+when it is idle, **queued** on the session's prompt queue while it is
+`working`, on a `clarify` prompt, or on the usage-limit screen (typing there
+would interleave with the turn or answer the prompt), and never used to reboot
+an agent — a dead session reports `told: false` with a reason, as does one over
+its cost budget. `POST /api/instances` accepts `plan_first: true` to append the
+plan instruction to the initial prompt — for a CLI whose provider has
+`plan_supported` (see `/api/providers/manage`) only: the instruction ends
+"wait for my go-ahead", and the Go button is in the Map's Plan section, which
+other CLIs don't have. Every launch prompt (manual, ticket, issue, PR review;
+Intake or pipeline) names the repo's zones; a provisioned start keys off the
+repo's local checkout, the configured default repo when local, or the
+provisioning base clone.
+
 ### IDE
 
 | Method | Path | Behavior |
@@ -619,6 +864,8 @@ per-session
 | `WS /api/instances/{title}/terminal` | The **agent** terminal — attaches (or restarts) the session's tmux |
 | `WS /api/instances/{title}/shell` | An interactive **shell** in the workspace (separate tmux `<name>_sh`, created on demand, `history-limit 100000`) |
 | `GET /api/instances/{title}/history` | The full tmux scrollback as text (the UI's "Copy all") |
+| `GET /api/instances/{title}/find?pane=agent\|shell` | `{"mode": "tmux" \| "scroll" \| "overlay"}` — how Ctrl+F searches the pane, by what its mouse wheel scrolls: `tmux` when the app leaves the mouse to tmux (copy-mode search), `scroll` when the app grabbed the mouse and scrolls itself, `overlay` for an alternate screen without the mouse (or no live session) — the UI's history view then |
+| `POST /api/instances/{title}/find` | One in-place find step, body `{pane, query, op, case?, word?, regex?, near?, within?}` (match case, whole word, regular expression, and a proximity term that must be within `within` lines — 0 = same line; an invalid pattern answers `{"status": "error"}`) with `op` = `prepare` (build the index now — the UI sends it as the bar opens; a no-op in tmux mode) / `search` (fresh query, lands on the newest hit at or above the reader's view) / `older` / `newer` / `close` (back to live) / `cancel` (stop a running step, never queued behind it). `tmux` mode returns `{"mode", "total", "index"}` (tmux scrolls and paints the hits). `scroll` mode indexes the app's own scrollback (a briefly tall window, swept by PageUp/PageDown or measured wheel bursts, only rows that move with the content) and jumps: `{"mode": "scroll", "status": "found"\|"none"\|"ready"\|"cancelled"\|"error", "total", "index", "row", "col", "region"}` — `row`/`col` the current hit on the screen, `region` the rows that scroll (the UI paints hits there); `prepare` on an unchanged pane answers `"cached": true`. Hits carry `len` and `spans` (the hit and its proximity partner) for painting |
 
 Protocol (shared by all terminal sockets, implemented in
 `static/core/ws-xterm.js` / `core/terminal.py::pump_pty`):
@@ -698,7 +945,8 @@ Events: `session.created|create_failed|deleted|paused|resumed|status_changed|
 activity_changed|stage_changed|setup_started|setup_finished|check_started|
 check_finished|budget_exceeded|budget_raised|prompt_sent|queue_changed|
 usage_restored|turn_ended|pr_state_changed|pr_review_changed|test_plan_ready|
-test_plan_failed|test_plan_due|test_plan_checked|test_plan_gave_up`
+test_plan_failed|test_plan_due|test_plan_checked|test_plan_gave_up|
+red_zone_blocked|red_zone_breached|red_zone_tampered`
 (plus addon-originated `addon.*`). `session.pr_review_changed` reports a
 *reviewer's* verdict on the branch's open PR (`"" → approved →
 changes_requested`), read off the PR's review list rather than from
@@ -718,7 +966,19 @@ drain-loop pass that nudges sessions parked on a limit screen to carry on
 off). It only ever fires for sessions that had actually run out, so it is the
 "your usage is back" signal; running *out* is `session.activity_changed` with
 `new == "limit"`. `session.turn_ended` is the one that says an agent has
-**finished** (`data: {"idle_for": <float>}`) — see below. The notification-center
+**finished** (`data: {"idle_for": <float>}`) — see below. The three
+`session.red_zone_*` events (see [Code map & red zones](#code-map--red-zones))
+carry `data.detail`, a sentence for humans that notification templates fill as
+`{detail}`: `red_zone_blocked` `{count, zone_ids, patterns, paths, tool,
+push, kind, detail}` (`push: true` = a refused `git push` / `gh pr` /
+GitHub-MCP write, "blocked a push (zone breaches committed on this branch)";
+`kind: "green"` = edits outside the green scope, one per work cycle whatever
+the file: "blocked 2 edits outside the green zone(s): a.py, b.py"),
+`red_zone_breached` `{paths, patterns, total, blocks_push, kind, detail}`
+(`patterns` holds `"outside green"` for a green breach; `detail` ends with
+what the breach blocks — only a committed change blocks a push),
+`red_zone_tampered` `{what: "guard"|"hooks"|"store", detail}`. They are seeded
+rather than boot-gated. The notification-center
 bell (frontend) curates these into a "what happened while I was away" feed.
 
 `session.activity_changed` transitions **into** `idle`, `clarify`, or `limit`
@@ -883,7 +1143,7 @@ or the UI starts writing the literal mask into the store as a password.
 | GET/PUT | `/api/settings/ticketing/sources` | The multi-source ticketing config (per-source provider/repo/state) |
 | GET/PUT | `/api/settings/auth-profiles` | The auth-profiles list (multiple Claude accounts / OpenRouter keys — see [accounts.md](accounts.md)) plus `default_profile` and the `kinds` catalog. Same masked round-trip as the ticketing sources: `api_key` reads back as `•••set`, and a PUT that sends `""`/the mask keeps the stored key (matched by `id` — so **renaming** an id counts as a new profile and must re-send the real key; a key-kind profile that would land keyless is a 400, not a silent no-auth store). PUT validates everything **before writing anything** (a 400 always means nothing changed): ids (slug, unique), kinds, and a body `default_profile` against the incoming list. `account`-kind profiles get their isolated config dir created (0700). GET reports an env-pinned default as `default_profile` with `default_profile_env` + `default_profile_locked: true` when `$MINDFLOCK_AUTH_PROFILE` is set in the server's environment (it wins over the stored value at launch, so reporting the stored one would have the screen name one identity while every session runs as another). GET also derives `resolved_config_dir`, `login_command` and `supported_agents` per profile for the Settings → Accounts cards and the New dialog's agent steering. Removing a profile that live sessions are **pinned** to is a **409** naming them (`{error, in_use: [title]}`) — they would fall back to the CLI's own login without being told; resend with `force: true` to proceed anyway. Sessions that merely *inherit* the app default never block a removal |
 | POST | `/api/settings/test/openrouter` | Validate an OpenRouter key (body `{api_key}` or `{profile_id}` for the stored one, optional `base_url`) → `{ok, label, usage, limit, models, error}` — the key's real spend from OpenRouter's `/key` plus the model list that turns the profile's model field into a picker. Always 200; branch on `ok` |
-| GET | `/api/providers/manage` | Custom coding-CLI providers (user TOMLs) for the Settings CRUD screen |
+| GET | `/api/providers/manage` | Custom coding-CLI providers (user TOMLs) for the Settings CRUD screen. Each entry carries `plan_supported` — whether the Map can show the CLI's plan and send it Go (the New Session "Plan first" box is offered only then) |
 | POST/PUT/DELETE | `/api/providers` · `/api/providers/{name}` | Create / update / delete a custom provider TOML. The body may carry `launch_args` (a list of saved flag tokens) alongside `resume_flag`/`skip_perms_flag`/`trust_patterns`/…; it is validated (400 on invalid) and all string values are TOML-escaped via `json.dumps`, so quotes in names/flags/patterns can't corrupt the file. |
 | GET | `/api/providers/status` | Per-provider connection status → `{providers: [{name, aliases, binary, installed, path, authenticated, auth_detail, auth_known, login_command, install_hint, is_default}], default}`. The catch-all `generic` provider is omitted. This is the source for the Settings → **Agent CLI** default-provider picker — it reads `installed`/`path` to list only installed CLIs and self-correct a missing default. The `authenticated`/`auth_detail`/`auth_known`/`login_command` fields are still returned but **no longer read by the UI** (sign-in is delegated to each CLI; see [providers.md](providers.md)). |
 | WS | `/api/providers/{name}/login-terminal` | **Unused by the UI.** PTY↔websocket bridge to a throwaway tmux session running the provider's login flow in `$HOME`. No frontend surfaces the one-click login any more (each CLI prompts for sign-in itself), but the bridge stays served and now takes `?profile=<id>` to run the login under an auth profile's isolation env (the credential lands in that account's config dir — see [accounts.md](accounts.md)). Closes 4500 with an `{type:"error"}` frame for an unknown provider/profile or a spawn failure. |

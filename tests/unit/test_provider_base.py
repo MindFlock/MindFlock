@@ -86,6 +86,15 @@ def test_activity_and_snippet_defaults_are_none(base):
     assert base.record_thread("s", "/wd") is None
 
 
+def test_red_zone_defaults_are_off(base):
+    # A provider is detect-only until it declares otherwise.
+    assert base.red_zone_guard() is False
+    assert base.hooks_hot_reload() is False
+    assert base.plan_supported() is False
+    assert base.last_assistant_text("s", "/wd") is None
+    assert base.last_assistant_text("s", "/wd", contains="x") is None
+
+
 def test_resume_thread_id_reads_marker(base, tmp_path, monkeypatch):
     monkeypatch.setenv("MINDFLOCK_THREAD_MARKER_DIR", str(tmp_path / "th"))
     from backend.providers import thread_markers

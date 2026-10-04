@@ -4,7 +4,7 @@
  * Dialog-opening actions (commit/rename/device) go through the UI store; the
  * dialog components own their submit logic. */
 
-import { api, instApi } from "../api/client";
+import { ApiError, api, instApi } from "../api/client";
 import type { AutopilotRun, Caps, Config, Instance } from "../api/types";
 import { computeVisibleSlots } from "../components/grid/layout";
 import { orderWithAfter } from "../components/sidebar/ordering";
@@ -16,6 +16,7 @@ import { errMsg } from "./format";
 import { clearLoopReset, clearStep, markLoopReset, markStep } from "./stage";
 import { depthLabel, normalizeDepth } from "./autopilot";
 import { focusTerm, releaseTerms } from "./terminals";
+import { errorPop } from "./errorPop";
 
 function caps() {
   return queryClient.getQueryData<Config>(["config"])?.caps ?? {
@@ -396,7 +397,70 @@ export function commitSession(title: string) {
   useUi.getState().openDialogFor("commit", title);
 }
 
-export async function pushSession(title: string, force = false) {
+/* --- Red-zone gate ----------------------------------------------------------
+ * push-branch / make-pr / merge-pr refuse with 409 when the branch carries
+ * changes inside a red zone (`red_zone_breaches` in the body). The override is
+ * an explicit second click on an inline card — never confirm(), which the
+ * Electron app does not implement (it would silently mean "no"). */
+
+export interface RedZoneBreachHit {
+  path: string;
+  pattern: string;
+  zone_id?: string | null;
+  /** "green" = changed outside the session's green (only-here) scope. */
+  kind?: string;
+}
+
+/** The breaches a red-zone 409 carries, or null for any other failure. */
+export function redZoneBreaches(err: unknown): RedZoneBreachHit[] | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const body = err.body as { red_zone_breaches?: unknown } | null;
+  const list = body && Array.isArray(body.red_zone_breaches) ? (body.red_zone_breaches as RedZoneBreachHit[]) : null;
+  return list && list.length ? list : null;
+}
+
+/** Explain the block and offer the two ways out: look at it on the map, or do
+ * it anyway for this one action. */
+export function offerRedZoneOverride(
+  title: string,
+  verb: "Push" | "Open PR" | "Merge",
+  breaches: RedZoneBreachHit[],
+  retry: () => void
+) {
+  const n = breaches.length;
+  const shown = breaches
+    .slice(0, 5)
+    .map((b) => b.path + (b.pattern && b.pattern !== b.path ? " (" + b.pattern + ")" : ""))
+    .join(" · ");
+  // A green (only-here) breach is a file changed OUTSIDE the scope, not a
+  // protected file — say which one it is.
+  const green = breaches.every((b) => b.kind === "green");
+  errorPop(
+    green ? `${verb} blocked — changes outside the green zone` : `${verb} blocked — red zone changed`,
+    `${displayName(title)} changed ${n} ${green ? "file" + (n === 1 ? "" : "s") + " outside its scope" : "protected file" + (n === 1 ? "" : "s")}: ${shown}` +
+      (n > 5 ? ` · and ${n - 5} more` : "") +
+      ". Revert them (the agent can: “revert your changes to …”), or override for this " +
+      verb.toLowerCase() +
+      " only.",
+    [
+      {
+        label: "Open map",
+        run: () => {
+          selectSession(title);
+          useUi.getState().setLastTab(title, "map");
+        },
+      },
+      {
+        label: verb + " anyway",
+        primary: true,
+        title: "Override the zone gate for this one " + verb.toLowerCase(),
+        run: retry,
+      },
+    ]
+  );
+}
+
+export async function pushSession(title: string, force = false, overrideRedZones = false): Promise<void> {
   if (!title || !requireGit()) return;
   selectSession(title, { noKeyboard: true });
   // Push/PR/merge have no stage of their own until the RESULT is observable, so
@@ -404,19 +468,30 @@ export async function pushSession(title: string, force = false) {
   // pressed the button twice.
   markStep(title, "push");
   try {
-    await instApi(title, "/push-branch", { json: force ? { force: true } : {} });
+    const body: Record<string, unknown> = {};
+    if (force) body.force = true;
+    if (overrideRedZones) body.override_red_zones = true;
+    await instApi(title, "/push-branch", { json: body });
   } catch (err) {
-    // O3 soft gate: checks haven't passed — offer an explicit override.
-    if ((err as Error).message === "checks haven't passed for this commit") {
+    const rz = redZoneBreaches(err);
+    if (rz) {
+      clearStep(title);
+      offerRedZoneOverride(title, "Push", rz, () => void pushSession(title, force, true));
+      // Falls through to freshStage below: that re-read is what repaints the
+      // header off the cleared "pushing" marker.
+    } else if ((err as Error).message === "checks haven't passed for this commit") {
+      // O3 soft gate: checks haven't passed — offer an explicit override.
       if (
         confirm("Checks haven't passed for this commit (see the ✗ checks chip).\nPush anyway?")
       )
-        return pushSession(title, true);
+        // A red-zone override already given still applies to the re-push.
+        return overrideRedZones ? pushSession(title, true, true) : pushSession(title, true);
       clearStep(title);
       return;
+    } else {
+      clearStep(title);
+      toast("Push failed: " + errMsg(err), { duration: 6000 });
     }
-    clearStep(title);
-    toast("Push failed: " + errMsg(err), { duration: 6000 });
   }
   // The old `setTimeout(refreshInstances, 1000)` could not observe anything: the
   // server serves GET /api/instances from its tick snapshot for up to 10s. Read
@@ -577,13 +652,14 @@ export function makePrSession(title: string) {
  * I can't file the PR for you" case (no gh, no token): it comes with a
  * prefilled `compare_url`, so we send the user straight there rather than
  * showing them a modal about a CLI they never asked for. */
-export async function submitMakePr(title: string, base: string) {
+export async function submitMakePr(title: string, base: string, overrideRedZones = false) {
   if (!title || !requireGit()) return;
   markStep(title, "pr");
   try {
-    const r = await instApi<MakePrResult>(title, "/make-pr", {
-      json: base ? { base } : {},
-    });
+    const body: Record<string, unknown> = {};
+    if (base) body.base = base;
+    if (overrideRedZones) body.override_red_zones = true;
+    const r = await instApi<MakePrResult>(title, "/make-pr", { json: body });
     if (r && r.ok === false) {
       const msg = r.message || PR_REMEDY;
       if (r.compare_url) offerUrl(r.compare_url, "Opened GitHub’s compare page — " + msg);
@@ -598,19 +674,26 @@ export async function submitMakePr(title: string, base: string) {
     }
   } catch (err) {
     clearStep(title);
-    toast("Make PR failed: " + errMsg(err), { duration: 6000 });
+    const rz = redZoneBreaches(err);
+    if (rz) offerRedZoneOverride(title, "Open PR", rz, () => void submitMakePr(title, base, true));
+    else toast("Make PR failed: " + errMsg(err), { duration: 6000 });
   }
   await freshStage(title);
 }
 
 /** Merge the branch's PR. Same shape as make-pr: `ok: false` + `pr_url` means
  * "merge it yourself on GitHub", which is a link, not a failure. */
-export async function mergeSession(title: string) {
+export async function mergeSession(title: string, overrideRedZones = false) {
   if (!title || !requireGit()) return;
-  if (!confirm("Merge this branch's PR into staging?")) return;
+  // The override re-entry skips the question: its click on the card IS the answer.
+  if (!overrideRedZones && !confirm("Merge this branch's PR into staging?")) return;
   markStep(title, "merge");
   try {
-    const r = await instApi<MergePrResult>(title, "/merge-pr", { method: "POST" });
+    const r = await instApi<MergePrResult>(
+      title,
+      "/merge-pr",
+      overrideRedZones ? { json: { override_red_zones: true } } : { method: "POST" }
+    );
     if (r && r.ok === false) {
       const msg = r.message || PR_REMEDY;
       if (r.pr_url) offerUrl(r.pr_url, "Opened the PR on GitHub to merge there — " + msg);
@@ -618,7 +701,9 @@ export async function mergeSession(title: string) {
     }
   } catch (err) {
     clearStep(title);
-    toast("Merge failed: " + errMsg(err), { duration: 6000 });
+    const rz = redZoneBreaches(err);
+    if (rz) offerRedZoneOverride(title, "Merge", rz, () => void mergeSession(title, true));
+    else toast("Merge failed: " + errMsg(err), { duration: 6000 });
   }
   await freshStage(title);
 }

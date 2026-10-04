@@ -173,3 +173,178 @@
   }
 }
 
+
+/* In-place find bar (PaneFindBar.tsx) — floats top-right over the live
+   terminal like a browser's find bar; the hits themselves are painted by tmux
+   (copy-mode match styles, set server-side in core/pane_find.py). z-index 4:
+   level with the history overlay (never both open), below the drop cue. */
+.pane-find {
+  position: absolute;
+  top: 6px;
+  right: 18px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 36px);
+  padding: 4px 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pane-find input {
+  width: 200px;
+  min-width: 60px;
+  flex: 0 1 auto;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  outline: none;
+}
+
+.pane-find input:focus {
+  border-color: var(--accent);
+}
+
+.pane-find-count {
+  min-width: 56px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pane-find-count.busy {
+  opacity: 0.6;
+}
+
+.pane-find-count.error {
+  color: var(--red);
+}
+
+.pane-find-btn {
+  flex: none;
+  padding: 0 6px;
+  line-height: 18px;
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pane-find-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Scroll-mode find highlights (FindHighlights.tsx): boxes over the live
+   terminal's cells — tmux paints its own copy-mode hits, but an app that
+   scrolls itself paints none. Translucent so the text shows through; under
+   the find bar (4), over the terminal. */
+.find-hl-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.find-hl {
+  position: absolute;
+  border-radius: 2px;
+  background: rgba(255, 215, 95, 0.42);
+}
+
+.find-hl.cur {
+  background: rgba(255, 135, 0, 0.55);
+  box-shadow: 0 0 0 1px #ff8700;
+}
+
+/* Find options (PaneFindBar): Aa / ab / .* inside the field, VS Code style,
+   and the "near" row for a two-term proximity search. */
+.pane-find {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.pane-find-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pane-find-field {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: 0 1 auto;
+  min-width: 0;
+  padding-right: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.pane-find-field:focus-within {
+  border-color: var(--accent);
+}
+
+.pane-find .pane-find-field input {
+  border: none;
+  background: transparent;
+}
+
+.pane-find-opt {
+  flex: none;
+  padding: 0 4px;
+  line-height: 16px;
+  font-size: 11px;
+  font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.pane-find-opt.on,
+.pane-find-btn.on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.pane-find-near {
+  padding-left: 2px;
+}
+
+.pane-find-near input {
+  width: 140px;
+}
+
+.pane-find-near select {
+  font-size: 11px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.pane-find-count {
+  max-width: 180px;
+}
+
+/* No count yet (nothing typed): no reserved gap before the buttons. */
+.pane-find-count:empty {
+  display: none;
+}

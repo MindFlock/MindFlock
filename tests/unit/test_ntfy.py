@@ -1036,3 +1036,113 @@ def test_a_failed_generation_is_not_delivered_as_a_ready_plan(pushes):
     client.post("/api/notify/rules/verify_plan_failed", json={"enabled": True})
     addon._on_event(_verify_env("session.test_plan_failed", data={"error": "no CLI"}))
     assert len(pushes) == 1 and "failed" in pushes[0]["title"]
+
+
+# --------------------------------------------------------------------------- #
+# Red zones: three rules + the {detail} placeholder both channels fill
+# --------------------------------------------------------------------------- #
+_RED_ZONE_RULES = {
+    # id: (event, default_enabled, priority, tags)
+    "red_zone_blocked": ("session.red_zone_blocked", False, 3, ["no_entry"]),
+    "red_zone_breached": ("session.red_zone_breached", True, 4, ["warning"]),
+    "red_zone_tampered": ("session.red_zone_tampered", True, 4, ["rotating_light"]),
+}
+
+
+def test_red_zone_rules_have_the_specified_shape():
+    by_id = {r["id"]: r for r in notify_addon.NOTIFY_RULES}
+    for rid, (event, default_on, prio, tags) in _RED_ZONE_RULES.items():
+        rule = by_id[rid]
+        assert rule["event"] == event
+        assert rule["old"] is None and rule["new"] is None
+        assert rule["default_enabled"] is default_on, rid
+        assert rule["priority"] == prio and rule["tags"] == tags
+        assert rule["label"] and "{session}" in rule["title"]
+        assert "{detail}" in rule["body"], rid
+
+
+def test_fill_substitutes_detail_from_data():
+    env = {"session": "plain", "data": {"detail": "blocked 3 edits to config.toml"}}
+    assert notify_addon._fill("{session}: {detail}", env) == (
+        "plain: blocked 3 edits to config.toml"
+    )
+    # Absent -> empty, never the literal placeholder.
+    assert notify_addon._fill("x{detail}y", {"session": "s"}) == "xy"
+    assert notify_addon._fill("x{detail}y", {"session": "s", "data": None}) == "xy"
+
+
+def test_breach_push_carries_the_detail(pushes):
+    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    _addon()._on_event(
+        {
+            "seq": 9,
+            "event": "session.red_zone_breached",
+            "session": "alpha",
+            "old": None,
+            "new": None,
+            "ts": 0.0,
+            "data": {
+                "paths": ["config.toml"],
+                "patterns": ["config.toml"],
+                "total": 1,
+                "detail": "changed a file in red zone config.toml: config.toml",
+            },
+        }
+    )
+    (push,) = pushes
+    assert push["title"] == "alpha: zone breached"
+    assert push["message"].startswith(
+        "The agent changed a file in red zone config.toml: config.toml."
+    )
+    assert push["priority"] == 4
+
+
+def test_breach_push_claims_only_what_the_monitor_says_it_blocks(pushes):
+    """F47: the push gate reads COMMITTED changes and an ignored file never
+    leaves the machine, so the rule itself must not assert "pushing is
+    blocked" — the monitor's detail carries the consequence for THIS breach."""
+    rule = next(r for r in notify_addon.NOTIFY_RULES if r["id"] == "red_zone_breached")
+    assert "block" not in rule["body"].lower()
+    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    detail = (
+        "changed a file in red zone local.env: local.env — git-ignored, so "
+        "never pushed; restore it by hand"
+    )
+    _addon()._on_event(
+        {
+            "seq": 11,
+            "event": "session.red_zone_breached",
+            "session": "alpha",
+            "old": None,
+            "new": None,
+            "ts": 0.0,
+            "data": {"paths": ["local.env"], "blocks_push": False, "detail": detail},
+        }
+    )
+    (push,) = pushes
+    assert push["message"] == "The agent " + detail + "."
+
+
+def test_blocked_rule_is_opt_in(pushes):
+    S.update_settings(notifications={"ntfy_enabled": True, "ntfy_topic": "t1"})
+    env = {
+        "seq": 10,
+        "event": "session.red_zone_blocked",
+        "session": "alpha",
+        "old": None,
+        "new": None,
+        "ts": 0.0,
+        "data": {"detail": "blocked an edit to config/"},
+    }
+    _addon()._on_event(env)
+    assert pushes == []
+    client.post("/api/notify/rules/red_zone_blocked", json={"enabled": True})
+    _addon()._on_event(env)
+    (push,) = pushes
+    assert push["message"].startswith("MindFlock blocked an edit to config/.")
+
+
+def test_browser_fill_twin_handles_detail():
+    js = client.get("/addons/notify.js").text
+    assert "{detail}" in js or "\\{detail\\}" in js
+    assert "data.detail" in js

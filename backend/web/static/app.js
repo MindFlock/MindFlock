@@ -24211,7 +24211,7 @@ function host() {
 	}
 	return el;
 }
-function errorPop(title, detail) {
+function errorPop(title, detail, actions) {
 	const box = host();
 	const key = title + "\0" + detail;
 	for (const existing of Array.from(box.children)) if (existing.dataset.key === key) return;
@@ -24233,6 +24233,23 @@ function errorPop(title, detail) {
 	body.textContent = detail;
 	card.appendChild(head);
 	card.appendChild(body);
+	if (actions && actions.length) {
+		const row = document.createElement("div");
+		row.className = "cs-error-actions";
+		for (const a of actions) {
+			const b = document.createElement("button");
+			b.type = "button";
+			b.className = "cs-error-act" + (a.primary ? " primary" : "");
+			b.textContent = a.label;
+			if (a.title) b.title = a.title;
+			b.onclick = () => {
+				card.remove();
+				a.run();
+			};
+			row.appendChild(b);
+		}
+		card.appendChild(row);
+	}
 	box.appendChild(card);
 	while (box.children.length > MAX_CARDS) box.removeChild(box.children[0]);
 }
@@ -25627,7 +25644,7 @@ function clampSidebarWidth(px) {
 	if (!isFinite(px)) return SIDEBAR_DEFAULT_W;
 	return Math.round(Math.min(SIDEBAR_MAX_W, Math.max(SIDEBAR_MIN_W, px)));
 }
-function load(key, fallback, parse = true) {
+function load$1(key, fallback, parse = true) {
 	try {
 		const raw = localStorage.getItem(key);
 		if (raw === null) return fallback;
@@ -25653,36 +25670,36 @@ function windowKey(kind, ref = "") {
 }
 var useUi = create((set, get) => ({
 	focused: null,
-	viewMode: load("cs_viewmode", "auto", false),
-	gridRows: load("cs_gridrows", []),
-	sidebarHidden: load("cs_sidebar", "", false) === "hidden",
-	sidebarWidth: clampSidebarWidth(load("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
-	order: load("cs_order", []),
+	viewMode: load$1("cs_viewmode", "auto", false),
+	gridRows: load$1("cs_gridrows", []),
+	sidebarHidden: load$1("cs_sidebar", "", false) === "hidden",
+	sidebarWidth: clampSidebarWidth(load$1("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
+	order: load$1("cs_order", []),
 	railOrder: [],
-	mru: load("cs_mru", []),
+	mru: load$1("cs_mru", []),
 	filter: "",
-	hidden: new Set(load("mf_hidden", [])),
+	hidden: new Set(load$1("mf_hidden", [])),
 	verifyPanes: [],
 	extPanes: [],
 	specialOpen: [],
 	bulkSelected: /* @__PURE__ */ new Set(),
-	aliases: load("mf_aliases", {}),
-	collapsedDevices: new Set(load("cs_devcollapse", [])),
-	hiddenBars: new Set(firstRun("mf_hiddenbars") ? defaultHiddenBars() : load("mf_hiddenbars", [])),
-	barOrder: load("mf_barorder", []),
-	reduceMotion: load("mf_reduce_motion", false),
-	breakReminder: load("mf_break_on", false),
-	breakEveryMin: clampBreakMinutes(load("mf_break_every", BREAK_DEFAULT_MINUTES)),
-	idleFlock: load("mf_idle_flock", true),
-	idleFlockAfterMin: clampIdleMinutes(load("mf_idle_after", IDLE_DEFAULT_MINUTES)),
-	hintsEnabled: load("mf_hints", true),
-	dismissedHints: new Set(load("mf_hints_seen", [])),
-	tourDone: load("mf_tour_done", false),
+	aliases: load$1("mf_aliases", {}),
+	collapsedDevices: new Set(load$1("cs_devcollapse", [])),
+	hiddenBars: new Set(firstRun("mf_hiddenbars") ? defaultHiddenBars() : load$1("mf_hiddenbars", [])),
+	barOrder: load$1("mf_barorder", []),
+	reduceMotion: load$1("mf_reduce_motion", false),
+	breakReminder: load$1("mf_break_on", false),
+	breakEveryMin: clampBreakMinutes(load$1("mf_break_every", BREAK_DEFAULT_MINUTES)),
+	idleFlock: load$1("mf_idle_flock", true),
+	idleFlockAfterMin: clampIdleMinutes(load$1("mf_idle_after", IDLE_DEFAULT_MINUTES)),
+	hintsEnabled: load$1("mf_hints", true),
+	dismissedHints: new Set(load$1("mf_hints_seen", [])),
+	tourDone: load$1("mf_tour_done", false),
 	tourOpen: false,
-	lastTab: load("cs_lasttab", {}),
+	lastTab: load$1("cs_lasttab", {}),
 	openDialog: null,
 	dialogTarget: null,
-	prBaseByRepo: load("mf_prbase", {}),
+	prBaseByRepo: load$1("mf_prbase", {}),
 	setFocused: (title) => set({ focused: title }),
 	touchMru: (title) => {
 		const mru = [title, ...get().mru.filter((t) => t !== title)].slice(0, 50);
@@ -26236,7 +26253,13 @@ function makeTerm(title, wsPath, interactive) {
 			handle.onTopRow(buf.getLine(buf.viewportY)?.translateToString(true) ?? "");
 		} catch {}
 	};
+	const agent = wsPath === "/terminal";
 	term.onRender(() => {
+		if (agent) try {
+			const buf = term.buffer.active;
+			const top = buf.getLine(buf.viewportY)?.translateToString(true) ?? "";
+			container.classList.toggle("tui-pinned-row", /^\s*[❯>]\s+\S/.test(top));
+		} catch {}
 		const now = performance.now();
 		clearTimeout(topRowTimer);
 		if (now - topRowAt > 150) {
@@ -26409,6 +26432,34 @@ function resyncAll() {
 if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => {
 	if (!document.hidden) resyncAll();
 });
+function freezeTerm(title, kind) {
+	const h = peekTerm(title, kind);
+	const el = h?.term.element;
+	const host = h?.container.parentElement;
+	if (!h || !el || !host) return () => {};
+	const snap = el.cloneNode(true);
+	const er = el.getBoundingClientRect();
+	const hr = host.getBoundingClientRect();
+	Object.assign(snap.style, {
+		position: "absolute",
+		left: `${er.left - hr.left}px`,
+		top: `${er.top - hr.top}px`,
+		width: `${er.width}px`,
+		height: `${er.height}px`,
+		zIndex: "3",
+		pointerEvents: "none"
+	});
+	snap.setAttribute("aria-hidden", "true");
+	snap.querySelectorAll("textarea").forEach((t) => t.remove());
+	if (h.container.classList.contains("tui-pinned-row")) {
+		const first = snap.querySelector(".xterm-rows > div");
+		if (first) first.style.visibility = "hidden";
+	}
+	host.appendChild(snap);
+	return () => {
+		h.term.write("", () => requestAnimationFrame(() => snap.remove()));
+	};
+}
 function focusTerm(title, kind = "agent") {
 	peekTerm(title, kind)?.term.focus();
 }
@@ -26631,20 +26682,51 @@ function commitSession(title) {
 	if (!requireGit() || !title) return;
 	useUi.getState().openDialogFor("commit", title);
 }
-async function pushSession(title, force = false) {
+function redZoneBreaches(err) {
+	if (!(err instanceof ApiError) || err.status !== 409) return null;
+	const body = err.body;
+	const list = body && Array.isArray(body.red_zone_breaches) ? body.red_zone_breaches : null;
+	return list && list.length ? list : null;
+}
+function offerRedZoneOverride(title, verb, breaches, retry) {
+	const n = breaches.length;
+	const shown = breaches.slice(0, 5).map((b) => b.path + (b.pattern && b.pattern !== b.path ? " (" + b.pattern + ")" : "")).join(" · ");
+	const green = breaches.every((b) => b.kind === "green");
+	errorPop(green ? `${verb} blocked — changes outside the green zone` : `${verb} blocked — red zone changed`, `${displayName(title)} changed ${n} ${green ? "file" + (n === 1 ? "" : "s") + " outside its scope" : "protected file" + (n === 1 ? "" : "s")}: ${shown}` + (n > 5 ? ` · and ${n - 5} more` : "") + ". Revert them (the agent can: “revert your changes to …”), or override for this " + verb.toLowerCase() + " only.", [{
+		label: "Open map",
+		run: () => {
+			selectSession(title);
+			useUi.getState().setLastTab(title, "map");
+		}
+	}, {
+		label: verb + " anyway",
+		primary: true,
+		title: "Override the zone gate for this one " + verb.toLowerCase(),
+		run: retry
+	}]);
+}
+async function pushSession(title, force = false, overrideRedZones = false) {
 	if (!title || !requireGit()) return;
 	selectSession(title, { noKeyboard: true });
 	markStep(title, "push");
 	try {
-		await instApi(title, "/push-branch", { json: force ? { force: true } : {} });
+		const body = {};
+		if (force) body.force = true;
+		if (overrideRedZones) body.override_red_zones = true;
+		await instApi(title, "/push-branch", { json: body });
 	} catch (err) {
-		if (err.message === "checks haven't passed for this commit") {
-			if (confirm("Checks haven't passed for this commit (see the ✗ checks chip).\nPush anyway?")) return pushSession(title, true);
+		const rz = redZoneBreaches(err);
+		if (rz) {
+			clearStep(title);
+			offerRedZoneOverride(title, "Push", rz, () => void pushSession(title, force, true));
+		} else if (err.message === "checks haven't passed for this commit") {
+			if (confirm("Checks haven't passed for this commit (see the ✗ checks chip).\nPush anyway?")) return overrideRedZones ? pushSession(title, true, true) : pushSession(title, true);
 			clearStep(title);
 			return;
+		} else {
+			clearStep(title);
+			toast("Push failed: " + errMsg(err), { duration: 6e3 });
 		}
-		clearStep(title);
-		toast("Push failed: " + errMsg(err), { duration: 6e3 });
 	}
 	freshStage(title);
 }
@@ -26719,11 +26801,14 @@ function makePrSession(title) {
 	if (!title || !requireGit()) return;
 	useUi.getState().openDialogFor("make-pr", title);
 }
-async function submitMakePr(title, base) {
+async function submitMakePr(title, base, overrideRedZones = false) {
 	if (!title || !requireGit()) return;
 	markStep(title, "pr");
 	try {
-		const r = await instApi(title, "/make-pr", { json: base ? { base } : {} });
+		const body = {};
+		if (base) body.base = base;
+		if (overrideRedZones) body.override_red_zones = true;
+		const r = await instApi(title, "/make-pr", { json: body });
 		if (r && r.ok === false) {
 			const msg = r.message || PR_REMEDY;
 			if (r.compare_url) offerUrl(r.compare_url, "Opened GitHub’s compare page — " + msg);
@@ -26734,16 +26819,18 @@ async function submitMakePr(title, base) {
 		}
 	} catch (err) {
 		clearStep(title);
-		toast("Make PR failed: " + errMsg(err), { duration: 6e3 });
+		const rz = redZoneBreaches(err);
+		if (rz) offerRedZoneOverride(title, "Open PR", rz, () => void submitMakePr(title, base, true));
+		else toast("Make PR failed: " + errMsg(err), { duration: 6e3 });
 	}
 	await freshStage(title);
 }
-async function mergeSession(title) {
+async function mergeSession(title, overrideRedZones = false) {
 	if (!title || !requireGit()) return;
-	if (!confirm("Merge this branch's PR into staging?")) return;
+	if (!overrideRedZones && !confirm("Merge this branch's PR into staging?")) return;
 	markStep(title, "merge");
 	try {
-		const r = await instApi(title, "/merge-pr", { method: "POST" });
+		const r = await instApi(title, "/merge-pr", overrideRedZones ? { json: { override_red_zones: true } } : { method: "POST" });
 		if (r && r.ok === false) {
 			const msg = r.message || PR_REMEDY;
 			if (r.pr_url) offerUrl(r.pr_url, "Opened the PR on GitHub to merge there — " + msg);
@@ -26751,7 +26838,9 @@ async function mergeSession(title) {
 		}
 	} catch (err) {
 		clearStep(title);
-		toast("Merge failed: " + errMsg(err), { duration: 6e3 });
+		const rz = redZoneBreaches(err);
+		if (rz) offerRedZoneOverride(title, "Merge", rz, () => void mergeSession(title, true));
+		else toast("Merge failed: " + errMsg(err), { duration: 6e3 });
 	}
 	await freshStage(title);
 }
@@ -27776,7 +27865,8 @@ var MODAL_DIALOG_NAMES = [
 	"device",
 	"intake",
 	"verify",
-	"extension"
+	"extension",
+	"red-zones"
 ];
 var MODAL_DOM_IDS = [
 	"new-dialog",
@@ -27786,6 +27876,7 @@ var MODAL_DOM_IDS = [
 	"device-dialog",
 	"intake-dialog",
 	"verify-dialog",
+	"red-zones-dialog",
 	"break-screen"
 ];
 function modalOpen() {
@@ -27896,6 +27987,13 @@ var CHORDS = {
 	h: {
 		desc: "Hide / show window",
 		run: (t) => hideSession(t)
+	},
+	m: {
+		desc: "Code map",
+		run: (t) => {
+			selectSession(t, { noKeyboard: true });
+			useUi.getState().setLastTab(t, "map");
+		}
 	}
 };
 function chordKeyFor(id) {
@@ -28045,6 +28143,7 @@ var KEYMAP = [
 		],
 		when: () => {
 			if (isEditingTarget(document.activeElement)) return false;
+			if (document.activeElement?.closest?.(".cm-root")) return false;
 			const box = document.getElementById("sidebar-search");
 			return !!box && !box.classList.contains("hidden");
 		},
@@ -28099,7 +28198,7 @@ var KEYMAP = [
 		key: "Delete",
 		shift: "any",
 		aliasOf: "close",
-		when: () => !!useUi.getState().focused && !modalOpen() && !isEditingTarget(document.activeElement),
+		when: () => !!useUi.getState().focused && !modalOpen() && !isEditingTarget(document.activeElement) && !document.activeElement?.closest?.(".cm-root"),
 		run: () => {
 			const f = useUi.getState().focused;
 			if (f) killSession(f);
@@ -28313,11 +28412,11 @@ var records = /* @__PURE__ */ new Map();
 var known = /* @__PURE__ */ new Map();
 var epochCounter = 0;
 var version = 0;
-var listeners = /* @__PURE__ */ new Set();
+var listeners$1 = /* @__PURE__ */ new Set();
 function subscribeHost(cb) {
-	listeners.add(cb);
+	listeners$1.add(cb);
 	return () => {
-		listeners.delete(cb);
+		listeners$1.delete(cb);
 	};
 }
 function hostVersion() {
@@ -28325,7 +28424,7 @@ function hostVersion() {
 }
 function bump() {
 	version++;
-	for (const cb of listeners) cb();
+	for (const cb of listeners$1) cb();
 }
 function buildTarget(extId, surfaceId, ref) {
 	return extId + ":" + surfaceId + (ref ? ":" + ref : "");
@@ -29016,6 +29115,18 @@ function notifFromEvent(env) {
 			text: "checks failed ✗ (exit " + (d.rc ?? "?") + ")",
 			cls: "n-warn"
 		};
+		case "session.red_zone_blocked": return {
+			text: "zone — " + (String(d.detail || "").trim() || "blocked an edit"),
+			cls: "n-warn"
+		};
+		case "session.red_zone_breached": return {
+			text: "zone breached — " + (String(d.detail || "").trim() || "a protected file changed"),
+			cls: "n-warn"
+		};
+		case "session.red_zone_tampered": return {
+			text: "red-zone guard tampered (" + String(d.what || "guard") + ")",
+			cls: "n-warn"
+		};
 		default: return null;
 	}
 }
@@ -29351,6 +29462,27 @@ function namedSlot(session) {
 function instByTitle(title) {
 	return instances().find((i) => i.title === title) || null;
 }
+function openMap(session) {
+	if (!session || !instByTitle(session)) {
+		useUi.getState().openDialogFor("red-zones");
+		return;
+	}
+	selectSession(session);
+	useUi.getState().setLastTab(session, "map");
+}
+function redZoneToast(env, name) {
+	const d = env.data || {};
+	const detail = String(d.detail || "").trim();
+	switch (env.event) {
+		case "session.red_zone_blocked": return "⛔ " + name + " — " + (detail || "a zone blocked an edit");
+		case "session.red_zone_breached": return "⛔ Zone breached on " + name + " — " + (detail || (d.paths && d.paths.length ? d.paths.slice(0, 3).join(", ") : "a protected file changed"));
+		case "session.red_zone_tampered": {
+			const what = d.what === "hooks" ? "its hooks" : d.what === "store" ? "the zone list" : "the guard file";
+			return env.session ? "⚠ Red-zone guard tampered on " + name + " (" + what + " changed outside MindFlock)" + (detail ? " — " + detail : "") : "⚠ Red zones changed outside MindFlock (" + what + ")";
+		}
+		default: return null;
+	}
+}
 function EventToasts() {
 	const snapshot = queryClient.getQueryData(["instances"]);
 	(0, import_react.useEffect)(() => {
@@ -29432,6 +29564,20 @@ function EventToasts() {
 				else selectSession(title);
 			} });
 			else if (env.old === "OPEN") notifyOnce(title, "merged", displayName(title) + ": PR merged or closed ✓", { onClick: () => selectSession(title) });
+		}));
+		for (const name of [
+			"session.red_zone_blocked",
+			"session.red_zone_breached",
+			"session.red_zone_tampered"
+		]) unsubs.push(ev.subscribe(name, (env) => {
+			refreshInstances();
+			if (isReplay(env)) return;
+			const msg = redZoneToast(env, env.session ? namedSlot(env.session) : "");
+			if (!msg) return;
+			notifyOnce(env.session || "*", name, msg, {
+				onClick: () => openMap(env.session),
+				duration: name === "session.red_zone_blocked" ? 6e3 : 9e3
+			});
 		}));
 		unsubs.push(ev.subscribe("session.deleted", (env) => {
 			dropActivity(env.session);
@@ -30018,6 +30164,84 @@ function rowDndProps(key, cbs, draggable = true) {
 	};
 }
 //#endregion
+//#region src/lib/codemapSeen.ts
+var KEY = "mf_codemap_seen";
+var MAX_TITLES = 200;
+var cache = null;
+var listeners = /* @__PURE__ */ new Set();
+function load() {
+	if (cache) return cache;
+	try {
+		const raw = localStorage.getItem(KEY);
+		const v = raw ? JSON.parse(raw) : null;
+		cache = v && typeof v === "object" ? v : {};
+	} catch {
+		cache = {};
+	}
+	return cache;
+}
+function codemapSeenAt(title) {
+	return Number(load()[title]) || 0;
+}
+function serverNow(skew, clientNowS = Date.now() / 1e3) {
+	return clientNowS + (Number.isFinite(skew) ? skew : 0);
+}
+function markCodemapSeen(title, ts) {
+	if (!Number.isFinite(ts) || ts <= 0) return;
+	const cur = load();
+	if ((cur[title] || 0) >= ts - 1) return;
+	const next = {
+		...cur,
+		[title]: ts
+	};
+	const keys = Object.keys(next);
+	if (keys.length > MAX_TITLES) {
+		keys.sort((a, b) => next[a] - next[b]);
+		for (const k of keys.slice(0, keys.length - MAX_TITLES)) delete next[k];
+	}
+	cache = next;
+	try {
+		localStorage.setItem(KEY, JSON.stringify(next));
+	} catch {}
+	listeners.forEach((l) => l());
+}
+function subscribeCodemapSeen(cb) {
+	listeners.add(cb);
+	return () => listeners.delete(cb);
+}
+function redZoneChip(rz, seenAt) {
+	if (!rz) return null;
+	const zones = rz.zones || 0;
+	const breaches = rz.breaches || 0;
+	const blockTs = rz.last_block_ts || 0;
+	if (breaches > 0) return {
+		cls: "rz-breach",
+		label: "⛔" + breaches,
+		title: `${breaches} red-zone file${breaches === 1 ? "" : "s"} changed on this branch — pushing is blocked until reverted. Click to open the map.`
+	};
+	if (blockTs > seenAt) return {
+		cls: "rz-breach",
+		label: "⛔",
+		title: "A red zone blocked an edit since you last looked. Click to open the map."
+	};
+	if (zones > 0 && (rz.guard === "off" || rz.guard === "arming")) return {
+		cls: "rz-warn",
+		label: "!",
+		title: rz.guard === "off" ? "Red-zone guard is off — MindFlock is re-arming it. Edits are detected, not blocked, until then." : "Red-zone guard is arming — it takes effect on the agent's next tool call."
+	};
+	if (zones > 0 && rz.guard === "guarded" && rz.mode === "green") return {
+		cls: "rz-ok",
+		label: "✓",
+		title: "Scoped to its green zones — edits outside them are blocked. Click to open the map."
+	};
+	if (zones > 0 && rz.guard === "guarded") return {
+		cls: "rz-ok",
+		label: "🛡",
+		title: `${zones} red zone${zones === 1 ? "" : "s"} guarded — edits there are blocked. Click to open the map.`
+	};
+	return null;
+}
+//#endregion
 //#region src/components/sidebar/SidebarRow.tsx
 var DBLCLICK_MS = 300;
 function displayTitle(inst) {
@@ -30055,6 +30279,8 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	const folder = inst.folder || inst.path || "";
 	const agentWs = (0, import_react.useSyncExternalStore)(subscribeTermStates, (0, import_react.useCallback)(() => peekTerm(title, "agent")?.state, [title]));
 	const disconnected = inst.status === "running" && onScreen && agentWs === "disconnected";
+	const mapSeen = (0, import_react.useSyncExternalStore)(subscribeCodemapSeen, (0, import_react.useCallback)(() => codemapSeenAt(title), [title]));
+	const rz = caps.git ? redZoneChip(inst.redzone, mapSeen) : null;
 	const act = async (fn, e) => {
 		e?.stopPropagation();
 		await fn();
@@ -30173,6 +30399,17 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 					className: "stagechip checkchip " + check.cls,
 					title: check.title,
 					children: check.label
+				}),
+				rz && !pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "stagechip rzchip " + rz.cls,
+					title: rz.title,
+					"aria-label": rz.title,
+					onClick: (e) => act(() => {
+						selectSession(title);
+						useUi.getState().setLastTab(title, "map");
+					}, e),
+					children: rz.label
 				}),
 				!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "kill" + (missing ? " cleanup" : ""),
@@ -32715,6 +32952,34 @@ function SplitDiff({ content }) {
 	});
 }
 //#endregion
+//#region src/lib/textFind.ts
+var FIND_MAX = 5e3;
+function findAll(text, query, max = FIND_MAX) {
+	const out = [];
+	if (!query || !text) return out;
+	const re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+	let m;
+	while (out.length < max && (m = re.exec(text)) !== null) out.push(m.index);
+	return out;
+}
+function pickStart(matches, anchor) {
+	if (!matches.length) return -1;
+	let lo = 0, hi = matches.length - 1, best = -1;
+	while (lo <= hi) {
+		const mid = lo + hi >> 1;
+		if (matches[mid] <= anchor) {
+			best = mid;
+			lo = mid + 1;
+		} else hi = mid - 1;
+	}
+	return best >= 0 ? best : 0;
+}
+function stepMatch(cur, dir, n) {
+	if (n <= 0) return -1;
+	if (cur < 0) return dir === 1 ? 0 : n - 1;
+	return (cur + dir + n) % n;
+}
+//#endregion
 //#region src/components/grid/HistoryOverlay.tsx
 function caretAt(x, y) {
 	const doc = document;
@@ -32860,9 +33125,31 @@ function findAnchor(text, sel, edge, ctx, ghost) {
 		matched: false
 	};
 }
+function highlightRegistry() {
+	const reg = globalThis.CSS?.highlights;
+	return reg && typeof globalThis.Highlight === "function" ? reg : null;
+}
+function makeHighlight(ranges) {
+	const H = globalThis.Highlight;
+	return new H(...ranges);
+}
+var FIND_HL = "hist-find";
+var FIND_HL_CUR = "hist-find-cur";
+var findHits = /* @__PURE__ */ new Map();
+var findCur = /* @__PURE__ */ new Map();
+function syncFindHighlights() {
+	const reg = highlightRegistry();
+	if (!reg) return;
+	const all = [...findHits.values()].flat();
+	const cur = [...findCur.values()];
+	if (all.length) reg.set(FIND_HL, makeHighlight(all));
+	else reg.delete(FIND_HL);
+	if (cur.length) reg.set(FIND_HL_CUR, makeHighlight(cur));
+	else reg.delete(FIND_HL_CUR);
+}
 var histCache = /* @__PURE__ */ new Map();
 var HIST_CACHE_MAX = 8;
-function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGhost, initialPos, onClose }) {
+function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGhost, initialPos, initialFind, onClose }) {
 	const [text, setText] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)("");
 	const scrollRef = (0, import_react.useRef)(null);
@@ -32908,6 +33195,7 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 	(0, import_react.useEffect)(() => {
 		const id = setInterval(() => {
 			if (pressAt.current) return;
+			if (findQueryRef.current) return;
 			const sel = window.getSelection?.();
 			if (sel && !sel.isCollapsed && sel.toString().trim()) return;
 			load();
@@ -32999,12 +33287,136 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 		dragCtx,
 		dragGhost
 	]);
+	const [findOpen, setFindOpen] = (0, import_react.useState)(initialFind !== void 0);
+	const [query, setQuery] = (0, import_react.useState)(initialFind ?? "");
+	const [pick, setPick] = (0, import_react.useState)({
+		m: [],
+		i: -1
+	});
+	const findRef = (0, import_react.useRef)(null);
+	const findQueryRef = (0, import_react.useRef)("");
+	(0, import_react.useEffect)(() => {
+		findQueryRef.current = findOpen ? query : "";
+	}, [findOpen, query]);
+	const matches = (0, import_react.useMemo)(() => findOpen && text ? findAll(text, query) : [], [
+		findOpen,
+		text,
+		query
+	]);
+	const cur = pick.m === matches ? pick.i : -1;
+	const curOff = (0, import_react.useRef)(null);
+	const reveal = (0, import_react.useRef)(false);
+	const id = (0, import_react.useMemo)(() => Symbol("hist-find"), []);
+	const textNode = () => {
+		const n = scrollRef.current?.querySelector("pre")?.firstChild;
+		return n && n.nodeType === Node.TEXT_NODE ? n : null;
+	};
+	const hitRange = (node, off) => {
+		const r = document.createRange();
+		r.setStart(node, Math.min(off, node.length));
+		r.setEnd(node, Math.min(off + query.length, node.length));
+		return r;
+	};
+	(0, import_react.useEffect)(() => {
+		if (!matches.length) {
+			setPick({
+				m: matches,
+				i: -1
+			});
+			return;
+		}
+		let anchor = curOff.current;
+		if (anchor == null) {
+			anchor = text?.length ?? 0;
+			const el = scrollRef.current;
+			const node = textNode();
+			if (el && node) {
+				const r = el.getBoundingClientRect();
+				const c = caretAt(r.right - 12, r.bottom - 6);
+				if (c && c.node === node) anchor = c.offset;
+			}
+		}
+		reveal.current = true;
+		setPick({
+			m: matches,
+			i: pickStart(matches, anchor)
+		});
+	}, [matches]);
+	(0, import_react.useEffect)(() => {
+		const node = textNode();
+		if (node && matches.length) findHits.set(id, matches.map((o) => hitRange(node, o)));
+		else findHits.delete(id);
+		syncFindHighlights();
+	}, [matches, id]);
+	(0, import_react.useEffect)(() => {
+		const node = textNode();
+		const el = scrollRef.current;
+		if (!node || !el || cur < 0) {
+			if (pick.m === matches) curOff.current = null;
+			findCur.delete(id);
+			syncFindHighlights();
+			return;
+		}
+		curOff.current = matches[cur];
+		const r = hitRange(node, matches[cur]);
+		findCur.set(id, r);
+		syncFindHighlights();
+		if (!reveal.current) return;
+		reveal.current = false;
+		const rr = r.getBoundingClientRect();
+		const er = el.getBoundingClientRect();
+		if (rr.top < er.top + 24 || rr.bottom > er.bottom - 24) el.scrollTop += rr.top - (er.top + er.height / 2);
+		if (!highlightRegistry()) {
+			const sel = window.getSelection();
+			sel?.removeAllRanges();
+			sel?.addRange(r);
+		}
+	}, [
+		pick,
+		matches,
+		id
+	]);
+	(0, import_react.useEffect)(() => () => {
+		findHits.delete(id);
+		findCur.delete(id);
+		syncFindHighlights();
+	}, [id]);
+	const step = (dir) => {
+		if (!matches.length) return;
+		reveal.current = true;
+		setPick((p) => p.m.length ? {
+			m: p.m,
+			i: stepMatch(p.i, dir, p.m.length)
+		} : p);
+	};
+	const openFind = () => {
+		setFindOpen(true);
+		setTimeout(() => {
+			findRef.current?.focus();
+			findRef.current?.select();
+		}, 0);
+	};
+	const stepRef = (0, import_react.useRef)(step);
+	stepRef.current = step;
 	(0, import_react.useEffect)(() => {
 		const onKey = (e) => {
 			if (e.key === "Escape") {
 				e.preventDefault();
 				e.stopPropagation();
 				onClose();
+				return;
+			}
+			const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
+			if (mod && (e.key === "f" || e.key === "F")) {
+				e.preventDefault();
+				e.stopPropagation();
+				openFind();
+				return;
+			}
+			if (e.key === "F3" || mod && (e.key === "g" || e.key === "G")) {
+				e.preventDefault();
+				e.stopPropagation();
+				stepRef.current(e.shiftKey ? 1 : -1);
 				return;
 			}
 			if ((e.ctrlKey || e.metaKey) && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
@@ -33029,7 +33441,7 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 	};
 	const pressAt = (0, import_react.useRef)(null);
 	const onRootMouseDown = (e) => {
-		if (e.button !== 0) {
+		if (e.button !== 0 || e.target.closest?.(".hist-bar")) {
 			pressAt.current = null;
 			return;
 		}
@@ -33072,17 +33484,67 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 		onDragStart: (e) => e.preventDefault(),
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "hist-bar",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "hist-title",
-				children: [
-					"Full ",
-					pane === "shell" ? "terminal" : "agent",
-					" history"
-				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "hist-hint",
-				children: "drag to select · release to copy · Ctrl+↑/↓ top/bottom · click or Esc returns to live"
-			})]
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "hist-title",
+					children: [
+						"Full ",
+						pane === "shell" ? "terminal" : "agent",
+						" history"
+					]
+				}),
+				findOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "hist-find",
+					role: "search",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							ref: findRef,
+							type: "text",
+							autoFocus: true,
+							autoComplete: "off",
+							spellCheck: false,
+							placeholder: "Find in history",
+							"aria-label": "Find in history",
+							value: query,
+							onFocus: (e) => e.currentTarget.select(),
+							onChange: (e) => setQuery(e.target.value),
+							onKeyDown: (e) => {
+								if (e.key === "Enter") {
+									e.preventDefault();
+									step(e.shiftKey ? 1 : -1);
+								}
+							}
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "hist-find-count",
+							"aria-live": "polite",
+							children: !query ? "" : !matches.length ? text === null ? "…" : "No results" : `${cur + 1} / ${matches.length >= FIND_MAX ? FIND_MAX + "+" : matches.length}`
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "hist-find-btn",
+							title: "Older match (Enter)",
+							"aria-label": "Older match",
+							disabled: !matches.length,
+							onClick: () => step(-1),
+							children: "↑"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "hist-find-btn",
+							title: "Newer match (Shift+Enter)",
+							"aria-label": "Newer match",
+							disabled: !matches.length,
+							onClick: () => step(1),
+							children: "↓"
+						})
+					]
+				}) : null,
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "hist-hint",
+					children: findOpen ? "Enter older · Shift+Enter newer · Esc returns to live" : "drag to select · release to copy · Ctrl+F find · Ctrl+↑/↓ top/bottom · click or Esc returns to live"
+				})
+			]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "hist-scroll",
 			ref: scrollRef,
@@ -33099,6 +33561,449 @@ function HistoryOverlay({ title, pane, dragSelection, dragEdge, dragCtx, dragGho
 			})
 		})]
 	});
+}
+//#endregion
+//#region src/lib/screenFind.ts
+function buildPattern(text, opts) {
+	if (!text) return /* @__PURE__ */ new Error("empty");
+	let src = opts.regex ? text : text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	if (opts.word) src = `(?<!\\w)(?:${src})(?!\\w)`;
+	try {
+		return new RegExp(src, opts.case ? "gu" : "giu");
+	} catch (e) {
+		const why = e.message.replace(/^Invalid regular expression: \/.*\/[a-z]*: /, "");
+		return /* @__PURE__ */ new Error("invalid regular expression: " + why.charAt(0).toLowerCase() + why.slice(1));
+	}
+}
+function rowHits(cells, pattern) {
+	let text = "";
+	const cellAt = [];
+	const cpAt = [];
+	let cp = 0;
+	cells.forEach((cell, i) => {
+		for (const c of Array.from(cell.ch || " ")) {
+			for (let k = 0; k < c.length; k++) {
+				cellAt.push(i);
+				cpAt.push(cp);
+			}
+			text += c;
+			cp++;
+		}
+	});
+	cellAt.push(cells.length);
+	cpAt.push(cp);
+	const out = [];
+	const re = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g");
+	let m;
+	while ((m = re.exec(text)) !== null) {
+		if (!m[0].length) {
+			re.lastIndex++;
+			continue;
+		}
+		const s = m.index;
+		const e = s + m[0].length;
+		const a = cells[cellAt[s]];
+		const b = cells[cellAt[e - 1]];
+		out.push({
+			start: cpAt[s],
+			len: cpAt[e] - cpAt[s],
+			x: a.x,
+			width: b.x + b.w - a.x
+		});
+	}
+	return out;
+}
+//#endregion
+//#region src/components/grid/FindHighlights.tsx
+function FindHighlights({ term, patterns, region, current }) {
+	const [boxes, setBoxes] = (0, import_react.useState)([]);
+	const layerRef = (0, import_react.useRef)(null);
+	const lo = region?.[0];
+	const hi = region?.[1];
+	const curKey = current.map((c) => c.join(",")).join(";");
+	const patKey = patterns.map((p) => p.source + "/" + p.flags).join("\n");
+	(0, import_react.useEffect)(() => {
+		let raf = 0;
+		const compute = () => {
+			raf = 0;
+			const layer = layerRef.current;
+			const screenEl = term.element?.querySelector(".xterm-screen");
+			if (!layer || !screenEl || lo == null || hi == null || !layer.parentElement) {
+				setBoxes([]);
+				return;
+			}
+			const host = layer.parentElement.getBoundingClientRect();
+			const sr = screenEl.getBoundingClientRect();
+			const cw = sr.width / (term.cols || 80);
+			const chh = sr.height / (term.rows || 24);
+			const buf = term.buffer.active;
+			const out = [];
+			for (let r = lo; r <= Math.min(hi, term.rows - 1); r++) {
+				const line = buf.getLine(buf.viewportY + r);
+				if (!line) continue;
+				const cells = [];
+				for (let x = 0; x < line.length; x++) {
+					const c = line.getCell(x);
+					if (!c) continue;
+					const w = c.getWidth();
+					if (w === 0) continue;
+					cells.push({
+						ch: c.getChars(),
+						x,
+						w
+					});
+				}
+				const seen = /* @__PURE__ */ new Set();
+				for (const h of patterns.flatMap((pat) => rowHits(cells, pat))) {
+					const k = h.start + ":" + h.len;
+					if (seen.has(k)) continue;
+					seen.add(k);
+					out.push({
+						left: sr.left - host.left + h.x * cw,
+						top: sr.top - host.top + r * chh,
+						width: h.width * cw,
+						height: chh,
+						cur: current.some(([cr, cc]) => cr === r && cc === h.start)
+					});
+				}
+			}
+			setBoxes(out);
+		};
+		const schedule = () => {
+			if (!raf) raf = requestAnimationFrame(compute);
+		};
+		schedule();
+		const sub = term.onRender(schedule);
+		window.addEventListener("resize", schedule);
+		return () => {
+			sub.dispose();
+			cancelAnimationFrame(raf);
+			window.removeEventListener("resize", schedule);
+		};
+	}, [
+		term,
+		patKey,
+		lo,
+		hi,
+		curKey
+	]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "find-hl-layer",
+		ref: layerRef,
+		"aria-hidden": "true",
+		children: boxes.map((b, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "find-hl" + (b.cur ? " cur" : ""),
+			style: {
+				left: b.left,
+				top: b.top,
+				width: b.width,
+				height: b.height
+			}
+		}, i))
+	});
+}
+//#endregion
+//#region src/components/grid/PaneFindBar.tsx
+function PaneFindBar({ title, pane, mode, initialQuery, onClose }) {
+	const [query, setQuery] = (0, import_react.useState)(initialQuery);
+	const [opts, setOpts] = (0, import_react.useState)({
+		case: false,
+		word: false,
+		regex: false
+	});
+	const [nearOpen, setNearOpen] = (0, import_react.useState)(false);
+	const [near, setNear] = (0, import_react.useState)("");
+	const [within, setWithin] = (0, import_react.useState)(0);
+	const [res, setRes] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	const inputRef = (0, import_react.useRef)(null);
+	const rootRef = (0, import_react.useRef)(null);
+	const chain = (0, import_react.useRef)(Promise.resolve());
+	const inflight = (0, import_react.useRef)(0);
+	const [frozen, setFrozen] = (0, import_react.useState)(false);
+	const thaw = (0, import_react.useRef)(null);
+	const spec = {
+		query,
+		...opts,
+		near: nearOpen ? near : "",
+		within: nearOpen ? within : 0
+	};
+	const specKey = JSON.stringify(spec);
+	const specRef = (0, import_react.useRef)(spec);
+	specRef.current = spec;
+	const keyRef = (0, import_react.useRef)(specKey);
+	keyRef.current = specKey;
+	const patterns = [];
+	let localError = "";
+	for (const t of [query, nearOpen ? near : ""]) {
+		if (!t) continue;
+		const pat = buildPattern(t, opts);
+		if (pat instanceof Error) localError = pat.message;
+		else patterns.push(pat);
+	}
+	const post = (0, import_react.useCallback)((op, body) => instApi(title, "/find", { json: {
+		pane,
+		op,
+		...body
+	} }), [title, pane]);
+	const run = (0, import_react.useCallback)((op) => {
+		const body = op === "close" || op === "prepare" ? {} : specRef.current;
+		const key = keyRef.current;
+		if (inflight.current && op === "close") post("cancel", {}).catch(() => {});
+		inflight.current += 1;
+		setBusy(true);
+		if (mode === "scroll" && op !== "close" && !thaw.current) {
+			thaw.current = freezeTerm(title, pane);
+			setFrozen(true);
+		}
+		chain.current = chain.current.then(async () => {
+			try {
+				const r = await post(op, body);
+				if (op !== "close" && op !== "prepare" && key === keyRef.current && r.status !== "cancelled") {
+					setRes(r);
+					setError(r.status === "error" ? r.error || "find failed" : "");
+				} else if (op === "prepare" && r.status === "error") setError(r.error || "find failed");
+			} catch (e) {
+				if (op !== "close") setError(e.message || "find failed");
+			} finally {
+				inflight.current -= 1;
+				if (!inflight.current) {
+					setBusy(false);
+					const done = thaw.current;
+					thaw.current = null;
+					if (done) {
+						done();
+						setFrozen(false);
+					}
+				}
+			}
+		});
+		return chain.current;
+	}, [
+		post,
+		mode,
+		title,
+		pane
+	]);
+	(0, import_react.useEffect)(() => {
+		if (mode === "scroll") run("prepare");
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!query || localError || nearOpen && !near) {
+			setRes(null);
+			setError(localError);
+			if (mode === "tmux" && !query) run("close");
+			return;
+		}
+		setError("");
+		const t = setTimeout(() => run("search"), 140);
+		return () => clearTimeout(t);
+	}, [
+		specKey,
+		localError,
+		run,
+		mode
+	]);
+	(0, import_react.useEffect)(() => () => {
+		thaw.current?.();
+		thaw.current = null;
+		run("close");
+	}, [run]);
+	const found = !!res?.total;
+	const step = (dir) => {
+		if (found) run(dir);
+	};
+	const stepRef = (0, import_react.useRef)(step);
+	stepRef.current = step;
+	const toggle = (k) => setOpts((o) => ({
+		...o,
+		[k]: !o[k]
+	}));
+	const toggleRef = (0, import_react.useRef)(toggle);
+	toggleRef.current = toggle;
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			const a = document.activeElement;
+			const paneEl = rootRef.current?.closest(".pane");
+			if (!paneEl || !a || !paneEl.contains(a)) return;
+			const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
+			const opt = e.altKey && !e.ctrlKey && !e.metaKey ? {
+				c: "case",
+				w: "word",
+				r: "regex"
+			}[e.key.toLowerCase()] : void 0;
+			if (e.key === "Escape") {
+				e.preventDefault();
+				e.stopPropagation();
+				onClose();
+			} else if (mod && (e.key === "f" || e.key === "F")) {
+				e.preventDefault();
+				e.stopPropagation();
+				inputRef.current?.focus();
+				inputRef.current?.select();
+			} else if (e.key === "F3" || mod && (e.key === "g" || e.key === "G")) {
+				e.preventDefault();
+				e.stopPropagation();
+				stepRef.current(e.shiftKey ? "newer" : "older");
+			} else if (opt) {
+				e.preventDefault();
+				e.stopPropagation();
+				toggleRef.current(opt);
+			}
+		};
+		document.addEventListener("keydown", onKey, true);
+		return () => document.removeEventListener("keydown", onKey, true);
+	}, [onClose]);
+	let count = "";
+	if (error) count = error;
+	else if (!query) count = "";
+	else if (nearOpen && !near) count = "…and what?";
+	else if (res == null) count = busy && mode === "scroll" ? "Indexing…" : "…";
+	else count = res.total ? `${res.index || "?"} / ${res.total}` : "No results";
+	const term = peekTerm(title, pane)?.term;
+	const current = res && res.total && res.row != null ? res.spans ?? [[
+		res.row,
+		res.col ?? 0,
+		res.len ?? 0
+	]] : [];
+	const optBtn = (k, label, tip) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "pane-find-opt" + (opts[k] ? " on" : ""),
+		title: tip,
+		"aria-label": tip,
+		"aria-pressed": opts[k],
+		onClick: () => toggle(k),
+		children: label
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [term && query && !frozen && patterns.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FindHighlights, {
+		term,
+		patterns,
+		region: res?.region ?? null,
+		current
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pane-find",
+		role: "search",
+		ref: rootRef,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "pane-find-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "pane-find-field",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							ref: inputRef,
+							type: "text",
+							autoFocus: true,
+							autoComplete: "off",
+							spellCheck: false,
+							placeholder: "Find in pane",
+							"aria-label": "Find in pane",
+							value: query,
+							onFocus: (e) => e.currentTarget.select(),
+							onChange: (e) => setQuery(e.target.value),
+							onKeyDown: (e) => {
+								if (e.key === "Enter") {
+									e.preventDefault();
+									step(e.shiftKey ? "newer" : "older");
+								}
+							}
+						}),
+						optBtn("case", "Aa", "Match case (Alt+C)"),
+						optBtn("word", "ab", "Match whole word (Alt+W)"),
+						optBtn("regex", ".*", "Use regular expression (Alt+R)")
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pane-find-count" + (error ? " error" : "") + (busy ? " busy" : ""),
+					"aria-live": "polite",
+					title: count,
+					children: count
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "pane-find-btn" + (nearOpen ? " on" : ""),
+					title: "Find two terms near each other",
+					"aria-label": "Near",
+					"aria-pressed": nearOpen,
+					onClick: () => setNearOpen((v) => !v),
+					children: "near"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "pane-find-btn",
+					title: "Older match (Enter)",
+					"aria-label": "Older match",
+					disabled: !found,
+					onClick: () => step("older"),
+					children: "↑"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "pane-find-btn",
+					title: "Newer match (Shift+Enter)",
+					"aria-label": "Newer match",
+					disabled: !found,
+					onClick: () => step("newer"),
+					children: "↓"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "pane-find-btn",
+					title: "Close (Esc)",
+					"aria-label": "Close find",
+					onClick: onClose,
+					children: "×"
+				})
+			]
+		}), nearOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "pane-find-row pane-find-near",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "…and" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "text",
+					autoComplete: "off",
+					spellCheck: false,
+					placeholder: "second term",
+					"aria-label": "Second term",
+					value: near,
+					autoFocus: true,
+					onChange: (e) => setNear(e.target.value),
+					onKeyDown: (e) => {
+						if (e.key === "Enter") {
+							e.preventDefault();
+							step(e.shiftKey ? "newer" : "older");
+						}
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "within" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+					"aria-label": "Lines apart",
+					value: within,
+					onChange: (e) => setWithin(Number(e.target.value)),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: 0,
+						children: "same line"
+					}), [
+						1,
+						2,
+						3,
+						5,
+						10,
+						20,
+						50
+					].map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+						value: n,
+						children: [
+							n,
+							" line",
+							n > 1 ? "s" : ""
+						]
+					}, n))]
+				})
+			]
+		}) : null]
+	})] });
 }
 //#endregion
 //#region src/components/grid/queueDnd.ts
@@ -33647,6 +34552,14692 @@ function InsertComposer({ value, onChange, onSave, onCancel }) {
 	});
 }
 //#endregion
+//#region src/lib/codemap.ts
+function dirname$1(p) {
+	const i = p.lastIndexOf("/");
+	return i < 0 ? "" : p.slice(0, i);
+}
+function basename$1(p) {
+	const i = p.lastIndexOf("/");
+	return i < 0 ? p : p.slice(i + 1);
+}
+function reverseIndex(edges, n) {
+	const count = new Int32Array(n + 1);
+	let m = 0;
+	for (const e of edges) {
+		const s = e[0], d = e[1];
+		if (s === d || s < 0 || d < 0 || s >= n || d >= n) continue;
+		count[d + 1]++;
+		m++;
+	}
+	for (let i = 0; i < n; i++) count[i + 1] += count[i];
+	const off = Int32Array.from(count);
+	const fill = Int32Array.from(count);
+	const adj = new Int32Array(m);
+	for (const e of edges) {
+		const s = e[0], d = e[1];
+		if (s === d || s < 0 || d < 0 || s >= n || d >= n) continue;
+		adj[fill[d]++] = s;
+	}
+	return {
+		n,
+		off,
+		adj
+	};
+}
+function importersOf(rev, i) {
+	if (i < 0 || i >= rev.n) return /* @__PURE__ */ new Int32Array(0);
+	return rev.adj.subarray(rev.off[i], rev.off[i + 1]);
+}
+function blastFrom(seeds, rev, depth) {
+	const out = /* @__PURE__ */ new Map();
+	const seen = /* @__PURE__ */ new Set();
+	let frontier = [];
+	for (const s of seeds) if (s >= 0 && s < rev.n && !seen.has(s)) {
+		seen.add(s);
+		frontier.push(s);
+	}
+	const max = Math.max(0, Math.min(3, depth | 0));
+	for (let d = 1; d <= max && frontier.length; d++) {
+		const next = [];
+		for (const f of frontier) {
+			const imp = importersOf(rev, f);
+			for (let k = 0; k < imp.length; k++) {
+				const t = imp[k];
+				if (seen.has(t)) continue;
+				seen.add(t);
+				out.set(t, d);
+				next.push(t);
+			}
+		}
+		frontier = next;
+	}
+	return out;
+}
+var RUNNING_AFTER_S = 1.5;
+var RUNNING_STALE_S = 600;
+function feedState(records, now, activity) {
+	const files = /* @__PURE__ */ new Map();
+	const recs = records.slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
+	const closed = /* @__PURE__ */ new Set();
+	const started = /* @__PURE__ */ new Map();
+	for (const r of recs) {
+		if (!r.id) continue;
+		if (r.ev === "post" || r.ev === "fail") closed.add(r.id);
+		else if (r.ev === "pre" && !started.has(r.id)) started.set(r.id, {
+			ts: r.ts || 0,
+			agent: r.agent || ""
+		});
+	}
+	const movedOn = /* @__PURE__ */ new Map();
+	for (const id of closed) {
+		const st = started.get(id);
+		if (st && st.ts > (movedOn.get(st.agent) ?? -Infinity)) movedOn.set(st.agent, st.ts);
+	}
+	const working = activity === "working";
+	const touch = (path, ts, kind, agent) => {
+		let f = files.get(path);
+		if (!f) {
+			f = {
+				lastTs: 0,
+				kind,
+				running: false,
+				deniedTs: 0,
+				breachTs: 0,
+				agent: ""
+			};
+			files.set(path, f);
+		}
+		if (ts >= f.lastTs) {
+			if (kind === "edit" || f.kind !== "edit" || ts > f.lastTs) f.kind = kind;
+			f.lastTs = ts;
+			f.agent = agent;
+		}
+		return f;
+	};
+	let lastEditTs = 0;
+	const running = [];
+	for (const r of recs) {
+		const ts = r.ts || 0;
+		const agent = r.agent || "";
+		if (r.deny) {
+			const p = r.deny.path;
+			if (p && !r.deny.push) {
+				let f = files.get(p);
+				if (!f) {
+					f = {
+						lastTs: 0,
+						kind: "edit",
+						running: false,
+						deniedTs: 0,
+						breachTs: 0,
+						agent
+					};
+					files.set(p, f);
+				}
+				f.deniedTs = Math.max(f.deniedTs, ts);
+			}
+			continue;
+		}
+		for (const b of r.breach || []) {
+			if (!b || !b.path) continue;
+			const f = touch(b.path, ts, "edit", agent);
+			f.breachTs = Math.max(f.breachTs, ts);
+		}
+		if (r.ev === "pre") {
+			const open = !!r.id && !closed.has(r.id);
+			if (r.kind === "bash" && open) {
+				const age = now - ts;
+				const passed = (movedOn.get(agent) ?? -Infinity) > ts;
+				if (working && !passed && age > RUNNING_AFTER_S && age < RUNNING_STALE_S) {
+					running.push({
+						id: r.id || "",
+						cmd: r.cmd || "",
+						ts,
+						agent
+					});
+					for (const p of r.writes || []) touch(p, ts, "edit", agent).running = true;
+					for (const p of r.reads || []) touch(p, ts, "read", agent).running = true;
+				}
+				continue;
+			}
+			if (r.kind === "read") for (const p of r.reads || []) touch(p, ts, "read", agent);
+			continue;
+		}
+		if (r.ev === "post") {
+			for (const p of r.writes || []) {
+				touch(p, ts, "edit", agent);
+				lastEditTs = Math.max(lastEditTs, ts);
+			}
+			if (r.kind !== "edit") for (const p of r.reads || []) touch(p, ts, "read", agent);
+			continue;
+		}
+	}
+	return {
+		files,
+		running,
+		lastEditTs
+	};
+}
+function currentBreaches(breaches) {
+	const out = /* @__PURE__ */ new Set();
+	for (const b of breaches || []) if (b && b.path) out.add(b.path);
+	return out;
+}
+function snapStale(o) {
+	const snap = o.snap;
+	if (!snap) return true;
+	if (o.liveFp && o.liveFp !== snap.fingerprint) return true;
+	if (!o.liveFp && o.sinceSnapMs > o.nullFpMs) return true;
+	return !!snap.graph_partial && o.sinceSnapMs > o.partialMs;
+}
+function planProgress(items, changed, edited) {
+	const out = /* @__PURE__ */ new Map();
+	for (const it of items) if (changed.has(it.path) || edited.has(it.path)) out.set(it.path, "done");
+	else out.set(it.path, it.new ? "new" : "untouched");
+	return out;
+}
+function autoMode(plan, lastEditTs) {
+	if (!plan || !plan.items || !plan.items.length) return "watch";
+	return lastEditTs > (plan.ts || 0) ? "watch" : "plan";
+}
+function parseFilterToPattern(text) {
+	let t = String(text || "").trim().replace(/\\/g, "/");
+	if (!t) return "";
+	if (t.startsWith("./")) t = t.slice(2);
+	if (/[*?[\]]/.test(t) || t.includes("/")) return t;
+	return "*" + t + "*";
+}
+function findPattern(filter, zone) {
+	if (zone && zone.pattern && filter === zone.pattern) return zone.pattern;
+	return parseFilterToPattern(filter);
+}
+function anchoredZonePath(path) {
+	const p = globEscape(String(path || "").replace(/\/+$/, ""));
+	if (!p || p.startsWith("/") || p.includes("/")) return p;
+	return "/" + p;
+}
+function globEscape(rel) {
+	return String(rel || "").replace(/[[\]*?]/g, (c) => "[" + c + "]");
+}
+var PILL_BASE = (s) => s.replace(/\s*\([^)]*\)\s*$/, "").trim().toLowerCase();
+function nameList(names, max = 2) {
+	const u = Array.from(new Set(names.filter(Boolean)));
+	if (u.length <= max) return u.join(", ");
+	return u.slice(0, max).join(", ") + ` +${u.length - max}`;
+}
+function guardPill(guard, zonesEnforced, provider, green = []) {
+	const state = guard?.state || (zonesEnforced ? "guarded" : "none");
+	let cls, label, explain;
+	switch (state) {
+		case "guarded":
+			cls = "g-guarded";
+			label = "Guarded";
+			explain = "Edits to red zones are blocked before they happen (hook guard armed).";
+			break;
+		case "arming":
+			cls = "g-arming";
+			label = "Arming…";
+			explain = "The guard is installed; it proves itself on the agent's next tool call.";
+			break;
+		case "detect":
+			cls = "g-detect";
+			label = `Detect-only${provider ? " (" + provider + ")" : ""}`;
+			explain = "This agent CLI has no hook guard MindFlock manages: red-zone edits are detected, flagged and block pushes, but not prevented.";
+			break;
+		case "off":
+			cls = "g-off";
+			label = "Guard off — re-arming";
+			explain = "The guard's hooks went missing; MindFlock is reinstalling them.";
+			break;
+		default:
+			cls = "g-none";
+			label = "No zones";
+			explain = "Nothing is off-limits in this repo yet.";
+	}
+	const d = String(guard?.detail || "").trim();
+	if (green.length) {
+		const g = nameList(green);
+		const how = state === "detect" ? " Edits outside are detected, flagged and block pushes, but not prevented (" + (provider || "this agent") + " has no hook guard)." : state === "off" ? " The guard's hooks went missing; MindFlock is reinstalling them." : state === "arming" ? " The guard takes effect on the agent's next tool call." : " Edits outside are blocked before they happen.";
+		const base = `Agents may only change files inside ${g}. Everything else is read-only.` + how;
+		return {
+			cls: "g-green" + (state === "guarded" || state === "none" ? "" : " " + cls),
+			label: "✓ Only here: " + g,
+			title: d && PILL_BASE(d) !== PILL_BASE(label) ? d : base
+		};
+	}
+	const title = d && PILL_BASE(d) !== PILL_BASE(label) ? d : explain;
+	return {
+		cls,
+		label,
+		title
+	};
+}
+function isGreen(z) {
+	return !!z && z.kind === "green";
+}
+var REGEX_SPECIAL = new Set(".^$*+?()[]{}|\\/".split(""));
+function translateGlob(body) {
+	const out = [];
+	let i = 0;
+	const n = body.length;
+	while (i < n) {
+		const c = body[i];
+		if (c === "*") {
+			if (body[i + 1] === "*") {
+				if (body[i + 2] === "/" && (i === 0 || body[i - 1] === "/")) {
+					out.push("(?:.*/)?");
+					i += 3;
+					continue;
+				}
+				out.push(".*");
+				i += 2;
+				continue;
+			}
+			out.push("[^/]*");
+			i++;
+			continue;
+		}
+		if (c === "?") {
+			out.push("[^/]");
+			i++;
+			continue;
+		}
+		if (c === "[") {
+			let j = i + 1;
+			if (j < n && (body[j] === "!" || body[j] === "^")) j++;
+			if (j < n && body[j] === "]") j++;
+			while (j < n && body[j] !== "]") j++;
+			if (j >= n) {
+				out.push("\\[");
+				i++;
+				continue;
+			}
+			let inner = body.slice(i + 1, j);
+			const neg = inner.startsWith("!") || inner.startsWith("^");
+			if (neg) inner = inner.slice(1);
+			inner = inner.replace(/\\/g, "\\\\").replace(/\[/g, "\\[");
+			if (inner.startsWith("]")) inner = "\\" + inner;
+			out.push("[" + (neg ? "^" : "") + inner + "]");
+			i = j + 1;
+			continue;
+		}
+		out.push(REGEX_SPECIAL.has(c) ? "\\" + c : c);
+		i++;
+	}
+	return out.join("");
+}
+function compilePattern(p) {
+	let s = String(p ?? "").trim().replace(/\\/g, "/");
+	if (s.startsWith("./")) s = s.slice(2);
+	let anchored = false;
+	if (s.startsWith("/")) {
+		anchored = true;
+		s = s.replace(/^\/+/, "");
+	}
+	if (!s || s.includes("\0") || s.length > 400) return null;
+	if (s.startsWith("~") || s.length >= 2 && s[1] === ":") return null;
+	if (s.split("/").some((seg) => seg === "..")) return null;
+	const body = s.replace(/\/+$/, "");
+	return (!body.includes("/") && !anchored ? "^(?:.*/)?" : "^") + translateGlob(body) + "(?:/.*)?$";
+}
+function exactRe(rel) {
+	return "^" + Array.from(rel, (c) => REGEX_SPECIAL.has(c) ? "\\" + c : c).join("") + "$";
+}
+function rx(src, ci) {
+	try {
+		return new RegExp(src, ci ? "i" : "");
+	} catch {
+		return null;
+	}
+}
+function entryRx(e, ci) {
+	if (!e) return null;
+	if (typeof e === "string") {
+		const src = compilePattern(e);
+		return src ? rx(src, ci) : null;
+	}
+	if (e.re) return rx(String(e.re), ci);
+	if (e.pattern) return entryRx(String(e.pattern), ci);
+	return null;
+}
+function zoneDocFrom(d, ci = false) {
+	const doc = {
+		red: [],
+		green: [],
+		greenZones: [],
+		companions: [],
+		ci
+	};
+	for (const e of d.red || []) {
+		const r = entryRx(e, ci);
+		if (r) doc.red.push(r);
+	}
+	for (const e of d.green || []) {
+		const r = entryRx(e, ci);
+		if (r) doc.green.push(r);
+	}
+	for (const e of d.companions || []) {
+		const r = entryRx(e, ci);
+		if (r) doc.companions.push(r);
+	}
+	return doc;
+}
+function zoneDoc(zones, companions, companionFiles, ci = false) {
+	const red = [];
+	const green = [];
+	const greenZones = [];
+	for (const z of zones || []) {
+		if (!z || z.waived || !z.re && !z.pattern) continue;
+		if (isGreen(z)) {
+			green.push(z);
+			greenZones.push(z);
+		} else red.push(z);
+	}
+	const comps = (companions || []).slice();
+	for (const f of companionFiles || []) if (f) comps.push({ re: exactRe(f) });
+	const doc = zoneDocFrom({
+		red,
+		green,
+		companions: comps
+	}, ci);
+	doc.greenZones = greenZones.filter((z) => entryRx(z, ci));
+	return doc;
+}
+var ARTIFACT_RE = /^\.mindflock_[^/]*(?:\/.*)?$/;
+var NESTED_WT_RE = /^\.claude\/worktrees\/[^/]+(?:\/(.*))?$/;
+function anyMatch(rs, p) {
+	for (const r of rs) if (r.test(p)) return true;
+	return false;
+}
+function greenOne(doc, rel) {
+	if (anyMatch(doc.green, rel) || ARTIFACT_RE.test(rel)) return "ok";
+	const m = NESTED_WT_RE.exec(rel);
+	let inner = null;
+	if (m) {
+		inner = m[1] || "";
+		if (!inner) return "ok";
+		if (anyMatch(doc.green, inner) || ARTIFACT_RE.test(inner)) return "ok";
+	}
+	if (anyMatch(doc.companions, rel) || inner && anyMatch(doc.companions, inner)) return "companion";
+	return "outside";
+}
+function classifyPath(relReal, doc, relLex) {
+	const cands = [String(relReal ?? "")];
+	if (relLex != null && relLex !== cands[0]) cands.push(relLex);
+	if (doc.red.length) for (const c of cands) {
+		if (anyMatch(doc.red, c)) return "blocked";
+		const m = NESTED_WT_RE.exec(c);
+		if (m && m[1] && anyMatch(doc.red, m[1])) return "blocked";
+	}
+	if (!doc.green.length) return "ok";
+	const verdicts = cands.map((c) => greenOne(doc, c));
+	if (verdicts.includes("outside")) return "outside";
+	if (verdicts.includes("companion")) return "companion";
+	return "ok";
+}
+function underPath(p, dir) {
+	if (!dir) return true;
+	return p === dir || p.startsWith(dir + "/");
+}
+function nodeOf(path, nodePaths) {
+	let p = path;
+	while (p) {
+		if (nodePaths.has(p)) return p;
+		p = dirname$1(p);
+	}
+	return null;
+}
+var KIND_GLYPH = {
+	class: "C",
+	struct: "S",
+	interface: "I",
+	trait: "T",
+	enum: "E",
+	type: "T",
+	function: "ƒ",
+	method: "ƒ",
+	const: "K",
+	module: "M",
+	field: "·",
+	route: "→",
+	variable: "V",
+	output: "O"
+};
+function isTestPath(p) {
+	const s = String(p || "");
+	if (/(^|\/)(tests?[\w-]*|__tests__|testdata|fixtures|spec)(\/|$)/.test(s)) return true;
+	const b = basename$1(s);
+	return /^test_.*\.(py|c)$|_test\.(py|go|rs)$|\.(test|spec)\.[\w]+$|Tests?\.(java|kt|cs)$|Spec\.kt$/.test(b);
+}
+var BLAST_PATHS_CAP = 200;
+function blastRows(dependents, level, isTest) {
+	const nodePaths = new Set((level?.nodes || []).filter((n) => n.kind !== "more").map((n) => n.path));
+	const lp = level?.path || "";
+	const acc = /* @__PURE__ */ new Map();
+	for (const [p, hops] of dependents) {
+		let key = nodeOf(p, nodePaths);
+		let outside = false;
+		if (key === null) {
+			outside = !!level;
+			key = lp && !underPath(p, lp) ? p.split("/")[0] : dirname$1(p) || p;
+		}
+		let r = acc.get(key);
+		if (!r) {
+			r = {
+				path: key,
+				count: 0,
+				tests: 0,
+				hops,
+				outside,
+				paths: []
+			};
+			acc.set(key, r);
+		}
+		r.hops = Math.min(r.hops, hops);
+		if (isTest(p)) r.tests++;
+		else {
+			r.count++;
+			if (r.paths.length < BLAST_PATHS_CAP) r.paths.push(p);
+		}
+	}
+	return Array.from(acc.values()).sort((a, b) => Number(a.outside) - Number(b.outside) || b.count - a.count || b.tests - a.tests || (a.path < b.path ? -1 : 1));
+}
+function isGreenDeny(r) {
+	const d = r.deny;
+	if (!d || d.push || !d.path) return false;
+	return d.kind === "green" || d.pattern === "outside green";
+}
+function scopeRequests(feed, stillOutside) {
+	const seen = /* @__PURE__ */ new Set();
+	const out = [];
+	for (let i = feed.length - 1; i >= 0; i--) {
+		const r = feed[i];
+		if (!isGreenDeny(r)) continue;
+		const p = r.deny.path;
+		if (seen.has(p)) continue;
+		seen.add(p);
+		if (!stillOutside(p)) continue;
+		out.push({
+			path: p,
+			ts: r.ts || 0,
+			reason: r.deny.reason || "",
+			agent: r.agent || ""
+		});
+	}
+	return out;
+}
+function peeksOf(r, outside) {
+	if (Array.isArray(r.peek)) return r.peek.filter(Boolean);
+	if (r.deny || r.ev === "fail") return [];
+	if (r.kind !== "read" && r.kind !== "bash") return [];
+	return (r.reads || []).filter((p) => p && outside(p));
+}
+function planScope(items) {
+	const out = /* @__PURE__ */ new Set();
+	for (const it of items) {
+		if (!it || !it.path) continue;
+		if (it.new) {
+			const d = dirname$1(it.path);
+			out.add(d ? anchoredZonePath(d) : anchoredZonePath(it.path));
+		} else out.add(anchoredZonePath(it.path));
+	}
+	return Array.from(out);
+}
+function exemptSet(ex) {
+	if (!ex) return /* @__PURE__ */ new Set();
+	return new Set(Array.isArray(ex) ? ex : Object.keys(ex));
+}
+function zoneAddTell(tell, override, clarify) {
+	return (override ?? tell) && !clarify;
+}
+function liveAllowState(reqBusy, stillOutside) {
+	let out = reqBusy;
+	for (const [p, st] of Object.entries(reqBusy)) {
+		if (st !== "done" || !stillOutside(p)) continue;
+		if (out === reqBusy) out = { ...reqBusy };
+		delete out[p];
+	}
+	return out;
+}
+function sessionsOnWorktree(list, title) {
+	const norm = (f) => String(f || "").replace(/\/+$/, "");
+	const f = norm(list.find((i) => i.title === title)?.folder);
+	if (!f) return 1;
+	return Math.max(1, list.filter((i) => norm(i.folder) === f).length);
+}
+function effectiveTests(snap) {
+	const files = snap.files || [];
+	const flagged = /* @__PURE__ */ new Set();
+	files.forEach((f, i) => {
+		if ((f && f[2] || 0) & 2) flagged.add(i);
+	});
+	const importedByCode = /* @__PURE__ */ new Set();
+	for (const e of snap.edges || []) if (!flagged.has(e[0])) importedByCode.add(e[1]);
+	for (const i of importedByCode) flagged.delete(i);
+	return flagged;
+}
+//#endregion
+//#region src/lib/codemapApi.ts
+var arr = (v) => Array.isArray(v) ? v : [];
+var num$1 = (v, d = 0) => typeof v === "number" && isFinite(v) ? v : d;
+var str = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
+var obj = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
+var enc = encodeURIComponent;
+function normSym(v) {
+	const o = obj(v);
+	return {
+		name: str(o.name),
+		kind: str(o.kind, "function"),
+		line: num$1(o.line),
+		end: num$1(o.end),
+		public: o.public !== false,
+		sig: str(o.sig),
+		parent: o.parent == null ? null : str(o.parent),
+		children: arr(o.children).map(normSym)
+	};
+}
+function normEntry(v) {
+	const o = obj(v);
+	return {
+		kind: str(o.kind, "http"),
+		method: str(o.method, "ANY"),
+		route: str(o.route),
+		line: num$1(o.line),
+		handler: str(o.handler),
+		path: o.path == null ? void 0 : str(o.path),
+		changed: o.changed === true ? true : void 0
+	};
+}
+var normDep = (v) => ({
+	path: str(obj(v).path),
+	names: arr(obj(v).names).map((x) => str(x))
+});
+function normFileView(v) {
+	const o = obj(v);
+	const imp = obj(o.imports);
+	const z = obj(o.zones);
+	return {
+		path: str(o.path),
+		lang: str(o.lang),
+		loc: num$1(o.loc),
+		symbols: arr(o.symbols).map(normSym),
+		imports: {
+			internal: arr(imp.internal).map(normDep).filter((d) => d.path),
+			external: arr(imp.external).map((x) => str(x))
+		},
+		entry: arr(o.entry).map(normEntry),
+		used_by: arr(o.used_by).map(normDep).filter((d) => d.path),
+		changed_lines: arr(o.changed_lines).filter((h) => Array.isArray(h) && h.length >= 2).map((h) => [num$1(h[0]), num$1(h[1])]),
+		changed_symbols: arr(o.changed_symbols).map((x) => str(x)),
+		zones: {
+			red: !!z.red,
+			green: z.green == null ? null : !!z.green
+		},
+		partial: !!o.partial,
+		tested_by: arr(o.tested_by).map((x) => str(x))
+	};
+}
+async function fetchFileView(title, path) {
+	return normFileView(await instApi(title, "/code-map/file?path=" + enc(path)));
+}
+async function searchCode(title, q) {
+	return arr(obj(await instApi(title, "/code-map/search?q=" + enc(q))).items).map((v) => {
+		const o = obj(v);
+		return {
+			path: str(o.path),
+			name: str(o.name),
+			kind: str(o.kind, "file"),
+			line: num$1(o.line),
+			score: num$1(o.score)
+		};
+	});
+}
+function fetchSnapshot(title, fp) {
+	return instApi(title, "/code-map" + (fp ? "?fp=" + enc(fp) : ""));
+}
+function fetchLive(title, since) {
+	return instApi(title, "/code-map/live?since=" + since);
+}
+function askPlan(title, mode) {
+	return instApi(title, "/code-map/ask-plan", { json: { mode } });
+}
+function goPlan(title, zoneIds, scopeToPlan) {
+	return instApi(title, "/code-map/go", { json: {
+		zone_ids: zoneIds,
+		scope_to_plan: scopeToPlan
+	} });
+}
+function addZone(title, body) {
+	return instApi(title, "/red-zones", { json: body });
+}
+function previewZone(title, pattern, kind) {
+	return instApi(title, "/red-zones/preview", { json: {
+		pattern,
+		kind
+	} });
+}
+function removeZone(title, id) {
+	return instApi(title, "/red-zones/" + enc(id), { method: "DELETE" });
+}
+function waiveZone(title, id, waived) {
+	return instApi(title, "/red-zones/" + enc(id) + "/waive", { json: { waived } });
+}
+function allowPath(title, path) {
+	return instApi(title, "/red-zones/allow", { json: { path } });
+}
+function setExempt(title, paths, exempt) {
+	return instApi(title, "/red-zones/exempt", { json: {
+		paths,
+		exempt
+	} });
+}
+function normCompanions(v) {
+	const d = obj(v);
+	return {
+		companions: arr(Array.isArray(d.patterns) ? d.patterns : d.companions).map((x) => str(x)),
+		defaults: arr(d.defaults).map((x) => str(x))
+	};
+}
+async function fetchCompanions(repoId) {
+	return normCompanions(await api("/api/red-zones/companions?repo_id=" + enc(repoId)));
+}
+async function saveCompanions(repoId, companions, label = "") {
+	return normCompanions(await api("/api/red-zones/companions", {
+		method: "PUT",
+		json: {
+			repo_id: repoId,
+			patterns: companions,
+			...label ? { label } : {}
+		}
+	}));
+}
+//#endregion
+//#region src/lib/codetree/cache.ts
+var DB = "mindflock-codetree";
+var STORE = "layouts";
+var KEEP_PER_REPO = 3;
+var KEEP_REPOS = 24;
+var dbp = null;
+function db() {
+	if (dbp) return dbp;
+	dbp = new Promise((res) => {
+		try {
+			if (typeof indexedDB === "undefined") return res(null);
+			const rq = indexedDB.open(DB, 1);
+			rq.onupgradeneeded = () => {
+				try {
+					rq.result.createObjectStore(STORE, { keyPath: "repo" });
+				} catch {}
+			};
+			rq.onsuccess = () => res(rq.result);
+			rq.onerror = () => res(null);
+			rq.onblocked = () => res(null);
+		} catch {
+			res(null);
+		}
+	});
+	return dbp;
+}
+function tx(mode, fn) {
+	return db().then((d) => new Promise((res) => {
+		if (!d) return res(null);
+		try {
+			const rq = fn(d.transaction(STORE, mode).objectStore(STORE));
+			if (!rq) return res(null);
+			rq.onsuccess = () => res(rq.result ?? null);
+			rq.onerror = () => res(null);
+		} catch {
+			res(null);
+		}
+	}));
+}
+async function loadRecords(repo) {
+	const row = await tx("readonly", (s) => s.get(repo));
+	return row && Array.isArray(row.recs) ? row.recs.slice().sort((a, b) => b.at - a.at) : [];
+}
+async function saveRecord(repo, sig, rec) {
+	try {
+		const row = await tx("readonly", (s) => s.get(repo)) || {
+			repo,
+			at: 0,
+			recs: []
+		};
+		const now = Date.now();
+		row.recs = [{
+			sig,
+			at: now,
+			rec
+		}, ...(row.recs || []).filter((r) => r.sig !== sig)].slice(0, KEEP_PER_REPO);
+		row.at = now;
+		await tx("readwrite", (s) => s.put(row));
+		const keys = await tx("readonly", (s) => s.getAllKeys());
+		if (keys && keys.length > KEEP_REPOS) {
+			const rows = await tx("readonly", (s) => s.getAll()) || [];
+			rows.sort((a, b) => a.at - b.at);
+			for (const r of rows.slice(0, rows.length - KEEP_REPOS)) await tx("readwrite", (s) => s.delete(r.repo));
+		}
+	} catch {}
+}
+//#endregion
+//#region src/lib/codetree/layout.ts
+var S0 = 10;
+var TAU = Math.PI * 2;
+function rng(seed) {
+	let s = seed >>> 0 || 1;
+	return () => {
+		s ^= s << 13;
+		s >>>= 0;
+		s ^= s >> 17;
+		s ^= s << 5;
+		s >>>= 0;
+		return s / 4294967296;
+	};
+}
+function hashStr(str) {
+	let h = 2166136261;
+	for (let i = 0; i < str.length; i++) {
+		h ^= str.charCodeAt(i);
+		h = Math.imul(h, 16777619);
+	}
+	return h >>> 0;
+}
+function h2(str) {
+	let a = 2166136261, b = -624069552;
+	for (let i = 0; i < str.length; i++) {
+		const c = str.charCodeAt(i);
+		a ^= c;
+		a = Math.imul(a, 16777619);
+		b = Math.imul(b ^ c, 16777619) + (b >>> 13);
+	}
+	return (a >>> 0).toString(36) + (b >>> 0).toString(36);
+}
+var cmpStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+function mkDisc(x, y, rho, t) {
+	return {
+		k: 0,
+		x,
+		y,
+		rho,
+		t,
+		x0: 0,
+		y0: 0,
+		x1: 0,
+		y1: 0,
+		hw: 0,
+		sf: 0,
+		ef: 0,
+		term: null,
+		bx0: x - rho,
+		by0: y - rho,
+		bx1: x + rho,
+		by1: y + rho,
+		d: 0,
+		sub: -1,
+		dead: false,
+		m: 0,
+		st: 0
+	};
+}
+function mkSeg(x0, y0, x1, y1, hw, sf, ef, term) {
+	return {
+		k: 1,
+		x: 0,
+		y: 0,
+		rho: 0,
+		t: null,
+		x0,
+		y0,
+		x1,
+		y1,
+		hw,
+		sf,
+		ef,
+		term,
+		bx0: (x0 < x1 ? x0 : x1) - hw,
+		by0: (y0 < y1 ? y0 : y1) - hw,
+		bx1: (x0 > x1 ? x0 : x1) + hw,
+		by1: (y0 > y1 ? y0 : y1) + hw,
+		d: 0,
+		sub: -1,
+		dead: false,
+		m: 0,
+		st: 0
+	};
+}
+function setSeg(q, x0, y0, x1, y1, hw, sf, ef, term) {
+	q.x0 = x0;
+	q.y0 = y0;
+	q.x1 = x1;
+	q.y1 = y1;
+	q.hw = hw;
+	q.sf = sf;
+	q.ef = ef;
+	q.term = term;
+	q.bx0 = (x0 < x1 ? x0 : x1) - hw;
+	q.by0 = (y0 < y1 ? y0 : y1) - hw;
+	q.bx1 = (x0 > x1 ? x0 : x1) + hw;
+	q.by1 = (y0 > y1 ? y0 : y1) + hw;
+}
+var mkPool = (n) => Array.from({ length: n }, () => mkSeg(0, 0, 0, 0, 0, 0, 0, null));
+var SWEEP_POOL = mkPool(5);
+var LOC_POOL = mkPool(1)[0];
+var COMPACT_POOL = mkPool(5);
+function clonePrim(p, ox, oy) {
+	return p.k === 0 ? mkDisc(p.x + ox, p.y + oy, p.rho, p.t) : mkSeg(p.x0 + ox, p.y0 + oy, p.x1 + ox, p.y1 + oy, p.hw, p.sf, p.ef, p.term);
+}
+var PK = {
+	gapTT: .8,
+	gapTW: 1.6,
+	gapWW: 1.8,
+	CS: 16,
+	ax: 1,
+	ay: 1,
+	down: .4,
+	heart: 1,
+	compact: 6,
+	cstep: .07,
+	stemR: false,
+	rtop: 9,
+	cmax: 9,
+	leader: 0,
+	leaderOrder: "mid",
+	cwx: 1,
+	cwy: 1,
+	flat: 0,
+	flatA: .8
+};
+var CROWN = {
+	ax: 1,
+	ay: 1,
+	down: .4,
+	heart: 1,
+	lim: 1.4,
+	stemR: false,
+	rtop: 9,
+	cmax: 9,
+	trunk: .42,
+	leader: 0,
+	leaderOrder: "mid",
+	cheart: 1,
+	cwx: 1,
+	cwy: 1,
+	flat: 0,
+	flatA: .8
+};
+var CROWN_BIG = {
+	min: 2500,
+	cwx: 2.5,
+	cwy: .5,
+	cmax: 1.1
+};
+var ROOTS = {
+	ax: 1,
+	ay: 2.2,
+	down: 0,
+	heart: .5,
+	lim: 1.4,
+	stemR: false,
+	rtop: 9,
+	cmax: 9,
+	leader: 0,
+	leaderOrder: "mid",
+	cwx: 1,
+	cwy: 1,
+	flat: 0,
+	flatA: .8
+};
+var LEAN = {
+	k: .6,
+	lim: 1.4
+};
+function pkUse(P) {
+	PK.ax = P.ax;
+	PK.ay = P.ay;
+	PK.down = P.down;
+	PK.heart = P.heart;
+	LEAN.lim = P.lim;
+	PK.stemR = P.stemR;
+	PK.rtop = P.rtop;
+	PK.cmax = P.cmax;
+	PK.leader = P.leader;
+	PK.leaderOrder = P.leaderOrder;
+	PK.cwx = P.cwx;
+	PK.cwy = P.cwy;
+	PK.flat = P.flat;
+	PK.flatA = P.flatA;
+}
+var PK_FORK = 0;
+var PK_STAMP = 0;
+var PK_IG0 = -1;
+var PK_IG1 = -1;
+var PK_ONLY = false;
+var CTX;
+function newCtx(kW) {
+	return {
+		kW,
+		cache: null,
+		ci: 0,
+		unions: [],
+		memo: /* @__PURE__ */ new Map(),
+		memoHits: 0,
+		final: null,
+		warmFailed: false,
+		resolved: 0,
+		prevSigs: null,
+		sigs: [],
+		splits: /* @__PURE__ */ new Map(),
+		prevSplits: null,
+		orders: /* @__PURE__ */ new Map(),
+		prevOrders: null,
+		passes: PK.compact,
+		quantise: false,
+		phase: 0,
+		work: 0,
+		workTotal: 1,
+		stats: {
+			hits: 0,
+			pens: 0,
+			sweeps: 0
+		}
+	};
+}
+function unionRecs(ctx) {
+	return ctx.unions.map((U) => U.place.flatMap((p) => [
+		p.Ex,
+		p.Ey,
+		p.rho,
+		p.f
+	]));
+}
+function finalRecs(ctx) {
+	return ctx.unions.map((U) => [
+		U.skey,
+		U.place.flatMap((p) => [
+			p.Ex,
+			p.Ey,
+			p.rho,
+			p.f
+		]),
+		U.sig
+	]);
+}
+function beginBuild(ctx) {
+	CTX = ctx;
+	PK_FORK = 0;
+}
+var Grid = class {
+	i0 = 0;
+	j0 = 0;
+	ni = 0;
+	nj = 0;
+	lists = [];
+	occ;
+	constructor(_cap = 256) {
+		this.occ = new Occ();
+	}
+	reserve(i0, j0, i1, j1) {
+		if (this.ni && i0 >= this.i0 && j0 >= this.j0 && i1 < this.i0 + this.ni && j1 < this.j0 + this.nj) return;
+		let a0 = i0, b0 = j0, a1 = i1, b1 = j1;
+		if (this.ni) {
+			a0 = Math.min(a0, this.i0);
+			b0 = Math.min(b0, this.j0);
+			a1 = Math.max(a1, this.i0 + this.ni - 1);
+			b1 = Math.max(b1, this.j0 + this.nj - 1);
+			const mi = Math.max(8, a1 - a0 + 1 >> 1), mj = Math.max(8, b1 - b0 + 1 >> 1);
+			if (i0 < this.i0) a0 -= mi;
+			if (i1 >= this.i0 + this.ni) a1 += mi;
+			if (j0 < this.j0) b0 -= mj;
+			if (j1 >= this.j0 + this.nj) b1 += mj;
+		}
+		const ni = a1 - a0 + 1, nj = b1 - b0 + 1;
+		const lists = new Array(ni * nj);
+		for (let i = 0; i < this.ni; i++) for (let j = 0; j < this.nj; j++) {
+			const v = this.lists[i * this.nj + j];
+			if (v) lists[(i + this.i0 - a0) * nj + (j + this.j0 - b0)] = v;
+		}
+		this.i0 = a0;
+		this.j0 = b0;
+		this.ni = ni;
+		this.nj = nj;
+		this.lists = lists;
+	}
+	purge() {
+		const L = this.lists;
+		for (let k = 0; k < L.length; k++) {
+			const a = L[k];
+			if (!a) continue;
+			let w = 0;
+			for (let r = 0; r < a.length; r++) if (!a[r].dead) a[w++] = a[r];
+			if (w === 0) L[k] = void 0;
+			else a.length = w;
+		}
+	}
+	push(i, j, p) {
+		if (!this.ni || i < this.i0 || j < this.j0 || i >= this.i0 + this.ni || j >= this.j0 + this.nj) this.reserve(i, j, i, j);
+		const k = (i - this.i0) * this.nj + (j - this.j0);
+		const a = this.lists[k];
+		if (!a) this.lists[k] = [p];
+		else if (a[a.length - 1] !== p) a.push(p);
+	}
+};
+var Occ = class {
+	i0 = 0;
+	j0 = 0;
+	ni = 0;
+	nj = 0;
+	v = /* @__PURE__ */ new Int32Array(0);
+	constructor(_cap = 0) {}
+	get(i, j) {
+		const a = i - this.i0, b = j - this.j0;
+		return a < 0 || b < 0 || a >= this.ni || b >= this.nj ? 0 : this.v[a * this.nj + b];
+	}
+	add(i, j, d) {
+		if (!this.ni || i < this.i0 || j < this.j0 || i >= this.i0 + this.ni || j >= this.j0 + this.nj) {
+			let a0 = i, b0 = j, a1 = i, b1 = j;
+			if (this.ni) {
+				a0 = Math.min(a0, this.i0);
+				b0 = Math.min(b0, this.j0);
+				a1 = Math.max(a1, this.i0 + this.ni - 1);
+				b1 = Math.max(b1, this.j0 + this.nj - 1);
+				const mi = Math.max(4, a1 - a0 + 1 >> 1), mj = Math.max(4, b1 - b0 + 1 >> 1);
+				if (i < this.i0) a0 -= mi;
+				if (i >= this.i0 + this.ni) a1 += mi;
+				if (j < this.j0) b0 -= mj;
+				if (j >= this.j0 + this.nj) b1 += mj;
+			} else {
+				a0 -= 4;
+				b0 -= 4;
+				a1 += 4;
+				b1 += 4;
+			}
+			const ni = a1 - a0 + 1, nj = b1 - b0 + 1;
+			const v = new Int32Array(ni * nj);
+			for (let x = 0; x < this.ni; x++) for (let y = 0; y < this.nj; y++) {
+				const c = this.v[x * this.nj + y];
+				if (c) v[(x + this.i0 - a0) * nj + (y + this.j0 - b0)] = c;
+			}
+			this.i0 = a0;
+			this.j0 = b0;
+			this.ni = ni;
+			this.nj = nj;
+			this.v = v;
+		}
+		this.v[(i - this.i0) * this.nj + (j - this.j0)] += d;
+	}
+};
+var OCC_CS = 32;
+var OCC_PAD = 1.5;
+function occBox(p, ox, oy, out) {
+	const x0 = p.k === 0 ? p.x - p.rho : p.bx0, y0 = p.k === 0 ? p.y - p.rho : p.by0, x1 = p.k === 0 ? p.x + p.rho : p.bx1, y1 = p.k === 0 ? p.y + p.rho : p.by1;
+	out[0] = Math.floor((x0 + ox - OCC_PAD) / OCC_CS);
+	out[1] = Math.floor((y0 + oy - OCC_PAD) / OCC_CS);
+	out[2] = Math.floor((x1 + ox + OCC_PAD) / OCC_CS);
+	out[3] = Math.floor((y1 + oy + OCC_PAD) / OCC_CS);
+}
+var OB = [
+	0,
+	0,
+	0,
+	0
+];
+function occAdd(o, p, d) {
+	occBox(p, 0, 0, OB);
+	for (let i = OB[0]; i <= OB[2]; i++) for (let j = OB[1]; j <= OB[3]; j++) o.add(i, j, d);
+}
+var OWN = null;
+function occMay(G, p, ox, oy) {
+	occBox(p, ox, oy, OB);
+	return occMayCells(G.occ);
+}
+function occMayBox(G, x0, y0, x1, y1) {
+	OB[0] = Math.floor((x0 - OCC_PAD) / OCC_CS);
+	OB[1] = Math.floor((y0 - OCC_PAD) / OCC_CS);
+	OB[2] = Math.floor((x1 + OCC_PAD) / OCC_CS);
+	OB[3] = Math.floor((y1 + OCC_PAD) / OCC_CS);
+	return occMayCells(G.occ);
+}
+function occMayCells(o) {
+	const i0 = Math.max(OB[0], o.i0), i1 = Math.min(OB[2], o.i0 + o.ni - 1), j0 = Math.max(OB[1], o.j0), j1 = Math.min(OB[3], o.j0 + o.nj - 1);
+	const nj = o.nj, v = o.v;
+	const own = OWN;
+	for (let i = i0; i <= i1; i++) {
+		const row = (i - o.i0) * nj - o.j0;
+		for (let j = j0; j <= j1; j++) {
+			const c = v[row + j];
+			if (own) {
+				const w = own.get(i, j);
+				if (PK_ONLY ? w > 0 : c - w > 0) return true;
+			} else if (c > 0) return true;
+		}
+	}
+	return false;
+}
+var pkKey = (i, j) => i + 32768 << 16 | j + 32768 & 65535;
+function pkSpan(p, ox, oy, out) {
+	const CS = PK.CS;
+	out.length = 0;
+	if (p.k === 0) {
+		const r = p.rho + 2, x = p.x + ox, y = p.y + oy;
+		out.push(Math.floor((x - r) / CS), Math.floor((y - r) / CS), Math.floor((x + r) / CS), Math.floor((y + r) / CS));
+		return out;
+	}
+	const r = p.hw + 2, ax = p.x0 + ox, ay = p.y0 + oy, bx = p.x1 + ox, by = p.y1 + oy;
+	const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / (CS * 3)));
+	for (let k = 0; k < n; k++) {
+		const x0 = ax + (bx - ax) * k / n, y0 = ay + (by - ay) * k / n, x1 = ax + (bx - ax) * (k + 1) / n, y1 = ay + (by - ay) * (k + 1) / n;
+		out.push(Math.floor((Math.min(x0, x1) - r) / CS), Math.floor((Math.min(y0, y1) - r) / CS), Math.floor((Math.max(x0, x1) + r) / CS), Math.floor((Math.max(y0, y1) + r) / CS));
+	}
+	return out;
+}
+var PK_SPAN = [];
+function pkAdd(G, p) {
+	occAdd(G.occ, p, 1);
+	const sp = pkSpan(p, 0, 0, PK_SPAN);
+	for (let s = 0; s < sp.length; s += 4) {
+		G.reserve(sp[s], sp[s + 1], sp[s + 2], sp[s + 3]);
+		for (let i = sp[s]; i <= sp[s + 2]; i++) for (let j = sp[s + 1]; j <= sp[s + 3]; j++) G.push(i, j, p);
+	}
+}
+function dPS(px, py, ax, ay, bx, by) {
+	const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+	let t = L2 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0;
+	t = t < 0 ? 0 : t > 1 ? 1 : t;
+	const ex = px - ax - dx * t, ey = py - ay - dy * t;
+	return Math.sqrt(ex * ex + ey * ey);
+}
+var orient = (px, py, qx, qy, rx, ry) => (qx - px) * (ry - py) - (qy - py) * (rx - px);
+function dSS(ax, ay, bx, by, cx, cy, dx, dy) {
+	const o1 = orient(ax, ay, bx, by, cx, cy), o2 = orient(ax, ay, bx, by, dx, dy), o3 = orient(cx, cy, dx, dy, ax, ay), o4 = orient(cx, cy, dx, dy, bx, by);
+	if ((o1 > 0 && o2 < 0 || o1 < 0 && o2 > 0) && (o3 > 0 && o4 < 0 || o3 < 0 && o4 > 0)) return 0;
+	return Math.min(dPS(ax, ay, cx, cy, dx, dy), dPS(bx, by, cx, cy, dx, dy), dPS(cx, cy, ax, ay, bx, by), dPS(dx, dy, ax, ay, bx, by));
+}
+var PKC = {
+	x: 0,
+	y: 0,
+	need: 0
+};
+var CPX = 0;
+var CPY = 0;
+function dPSc(px, py, ax, ay, bx, by) {
+	const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+	let t = L2 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0;
+	t = t < 0 ? 0 : t > 1 ? 1 : t;
+	CPX = ax + dx * t;
+	CPY = ay + dy * t;
+	const ex = px - CPX, ey = py - CPY;
+	return Math.sqrt(ex * ex + ey * ey);
+}
+function pkPen(p, ox, oy, q) {
+	if (p.k === 0) {
+		const px = p.x + ox, py = p.y + oy;
+		if (q.k === 0) {
+			const need = p.rho + q.rho + PK.gapTT, dx = px - q.x, dy = py - q.y, d2 = dx * dx + dy * dy;
+			if (d2 >= need * need) return 0;
+			PKC.x = dx;
+			PKC.y = dy;
+			PKC.need = need;
+			return need - Math.sqrt(d2);
+		}
+		if (q.term === p.t) return 0;
+		const need = p.rho + q.hw + PK.gapTW;
+		const gx = px < q.bx0 ? q.bx0 - px : px > q.bx1 ? px - q.bx1 : 0, gy = py < q.by0 ? q.by0 - py : py > q.by1 ? py - q.by1 : 0;
+		if (gx * gx + gy * gy >= (need - q.hw) * (need - q.hw) && (gx > 0 || gy > 0)) return 0;
+		const d = dPSc(px, py, q.x0, q.y0, q.x1, q.y1);
+		if (d >= need) return 0;
+		PKC.x = px - CPX;
+		PKC.y = py - CPY;
+		PKC.need = need;
+		return need - d;
+	}
+	const ax = p.x0 + ox, ay = p.y0 + oy, bx = p.x1 + ox, by = p.y1 + oy;
+	if (q.k === 0) {
+		if (p.term === q.t) return 0;
+		const need = q.rho + p.hw + PK.gapTW;
+		const px0 = p.bx0 + ox + p.hw, px1 = p.bx1 + ox - p.hw, py0 = p.by0 + oy + p.hw, py1 = p.by1 + oy - p.hw;
+		const gx = q.x < px0 ? px0 - q.x : q.x > px1 ? q.x - px1 : 0, gy = q.y < py0 ? py0 - q.y : q.y > py1 ? q.y - py1 : 0;
+		if (gx * gx + gy * gy >= need * need) return 0;
+		const d = dPSc(q.x, q.y, ax, ay, bx, by);
+		if (d >= need) return 0;
+		PKC.x = CPX - q.x;
+		PKC.y = CPY - q.y;
+		PKC.need = need;
+		return need - d;
+	}
+	if (p.sf === q.sf || p.ef === q.sf || q.ef === p.sf) return 0;
+	const need = p.hw + q.hw + PK.gapWW;
+	{
+		const px0 = p.bx0 + ox + p.hw, px1 = p.bx1 + ox - p.hw, py0 = p.by0 + oy + p.hw, py1 = p.by1 + oy - p.hw;
+		const qx0 = q.bx0 + q.hw, qx1 = q.bx1 - q.hw, qy0 = q.by0 + q.hw, qy1 = q.by1 - q.hw;
+		const gx = px0 > qx1 ? px0 - qx1 : qx0 > px1 ? qx0 - px1 : 0, gy = py0 > qy1 ? py0 - qy1 : qy0 > py1 ? qy0 - py1 : 0;
+		if (gx * gx + gy * gy >= need * need) return 0;
+	}
+	const d = dSS(ax, ay, bx, by, q.x0, q.y0, q.x1, q.y1);
+	if (d >= need) return 0;
+	let best = 0xde0b6b3a7640000, vx = 0, vy = 0, e;
+	e = dPSc(ax, ay, q.x0, q.y0, q.x1, q.y1);
+	if (e < best) {
+		best = e;
+		vx = ax - CPX;
+		vy = ay - CPY;
+	}
+	e = dPSc(bx, by, q.x0, q.y0, q.x1, q.y1);
+	if (e < best) {
+		best = e;
+		vx = bx - CPX;
+		vy = by - CPY;
+	}
+	e = dPSc(q.x0, q.y0, ax, ay, bx, by);
+	if (e < best) {
+		best = e;
+		vx = CPX - q.x0;
+		vy = CPY - q.y0;
+	}
+	e = dPSc(q.x1, q.y1, ax, ay, bx, by);
+	if (e < best) {
+		best = e;
+		vx = CPX - q.x1;
+		vy = CPY - q.y1;
+	}
+	PKC.x = d === 0 ? 0 : vx;
+	PKC.y = d === 0 ? 0 : vy;
+	PKC.need = need;
+	return need - d;
+}
+function pkHit(G, p, ox, oy) {
+	if (!occMay(G, p, ox, oy)) return 0;
+	const st = ++PK_STAMP, CS = PK.CS;
+	if (p.k === 0) {
+		const r = p.rho + 2, x = p.x + ox, y = p.y + oy;
+		return scanCells(G, p, ox, oy, st, Math.floor((x - r) / CS), Math.floor((y - r) / CS), Math.floor((x + r) / CS), Math.floor((y + r) / CS));
+	}
+	const r = p.hw + 2, ax = p.x0 + ox, ay = p.y0 + oy, bx = p.x1 + ox, by = p.y1 + oy;
+	const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / (CS * 3)));
+	for (let k = 0; k < n; k++) {
+		const x0 = ax + (bx - ax) * k / n, y0 = ay + (by - ay) * k / n, x1 = ax + (bx - ax) * (k + 1) / n, y1 = ay + (by - ay) * (k + 1) / n;
+		const v = scanCells(G, p, ox, oy, st, Math.floor((Math.min(x0, x1) - r) / CS), Math.floor((Math.min(y0, y1) - r) / CS), Math.floor((Math.max(x0, x1) + r) / CS), Math.floor((Math.max(y0, y1) + r) / CS));
+		if (v) return v;
+	}
+	return 0;
+}
+function scanCells(G, p, ox, oy, st, i0, j0, i1, j1) {
+	if (i0 < G.i0) i0 = G.i0;
+	if (j0 < G.j0) j0 = G.j0;
+	if (i1 > G.i0 + G.ni - 1) i1 = G.i0 + G.ni - 1;
+	if (j1 > G.j0 + G.nj - 1) j1 = G.j0 + G.nj - 1;
+	const nj = G.nj, lists = G.lists;
+	for (let i = i0; i <= i1; i++) {
+		const row = (i - G.i0) * nj - G.j0;
+		for (let j = j0; j <= j1; j++) {
+			const a = lists[row + j];
+			if (!a) continue;
+			for (let k = 0; k < a.length; k++) {
+				const q = a[k];
+				if (q.st === st) continue;
+				q.st = st;
+				if (q.sub !== -1 && (q.dead || (q.sub >= PK_IG0 && q.sub < PK_IG1) !== PK_ONLY)) continue;
+				const v = pkPen(p, ox, oy, q);
+				if (v > 0) return v;
+			}
+		}
+	}
+	return 0;
+}
+function pkDist(p) {
+	return p.k === 0 ? Math.max(0, Math.hypot(p.x, p.y) - p.rho) : Math.min(Math.hypot(p.x0, p.y0), Math.hypot(p.x1, p.y1)) - p.hw;
+}
+var STEM = {
+	a0: .9,
+	a1: 1.3,
+	k0: .42,
+	k1: .22,
+	Lref: 180
+};
+function stemCP(Ex, Ey, rho) {
+	const L = Math.hypot(Ex, Ey) || 1, ux = Ex / L, uy = Ey / L, kL = Math.min(1, STEM.Lref / L);
+	let t0x = ux, t0y = uy - STEM.a0 * kL;
+	const l0 = Math.hypot(t0x, t0y) || 1;
+	t0x /= l0;
+	t0y /= l0;
+	let t1x = ux + STEM.a1 * kL * Math.sin(rho), t1y = uy - STEM.a1 * kL * Math.cos(rho);
+	const l1 = Math.hypot(t1x, t1y) || 1;
+	t1x /= l1;
+	t1y /= l1;
+	const k0 = L * STEM.k0, k1 = L * STEM.k1;
+	return [
+		0,
+		0,
+		t0x * k0,
+		t0y * k0,
+		Ex - t1x * k1,
+		Ey - t1y * k1,
+		Ex,
+		Ey
+	];
+}
+function bez(c, t) {
+	const mt = 1 - t;
+	return [mt * mt * mt * c[0] + 3 * mt * mt * t * c[2] + 3 * mt * t * t * c[4] + t * t * t * c[6], mt * mt * mt * c[1] + 3 * mt * mt * t * c[3] + 3 * mt * t * t * c[5] + t * t * t * c[7]];
+}
+var STEM_SEG = 10;
+var taperHW = (wb, we, t) => (wb + (we - wb) * Math.pow(t, .9)) / 2;
+var TAP5 = [
+	0,
+	1,
+	2,
+	3,
+	4,
+	5
+].map((i) => Math.pow(i / 5, .9));
+function pkStemSegs(S, c, fid, pool) {
+	const out = pool || [], n = 5;
+	let px = c[0], py = c[1];
+	const ef = S.fork != null ? S.fork : S.efId;
+	for (let i = 1; i <= n; i++) {
+		const q = bez(c, i / n);
+		const hw = Math.max(S.wb + (S.we - S.wb) * TAP5[i - 1], S.wb + (S.we - S.wb) * TAP5[i]) / 2 + .35;
+		if (pool) setSeg(pool[i - 1], px, py, q[0], q[1], hw, fid, ef, S.term || null);
+		else out.push(mkSeg(px, py, q[0], q[1], hw, fid, ef, S.term || null));
+		px = q[0];
+		py = q[1];
+	}
+	return out;
+}
+function pkRotPrim(p, c, s, f) {
+	const q = p.k === 0 ? mkDisc(c * f * p.x - s * p.y, s * f * p.x + c * p.y, p.rho, p.t) : mkSeg(c * f * p.x0 - s * p.y0, s * f * p.x0 + c * p.y0, c * f * p.x1 - s * p.y1, s * f * p.x1 + c * p.y1, p.hw, p.sf, p.ef, p.term);
+	q.d = p.d;
+	return q;
+}
+function pkRotated(S, rho, f) {
+	if (!rho && f === 1) return S.prims;
+	const key = Math.round(rho * 1e4) * 2 + (f < 0 ? 1 : 0);
+	if (!S.rc) S.rc = /* @__PURE__ */ new Map();
+	let P = S.rc.get(key);
+	if (P) return P;
+	const c = Math.cos(rho), s = Math.sin(rho);
+	P = S.prims.map((p) => pkRotPrim(p, c, s, f));
+	S.rc.set(key, P);
+	return P;
+}
+function pkMom(S, rho, f) {
+	const c = Math.cos(rho), s = Math.sin(rho), sx = f * S.sx, sxy = f * S.sxy;
+	return {
+		sx: c * sx - s * S.sy,
+		sy: s * sx + c * S.sy,
+		sxx: c * c * S.sxx - 2 * c * s * sxy + s * s * S.syy,
+		syy: s * s * S.sxx + 2 * c * s * sxy + c * c * S.syy,
+		sxy: c * s * (S.sxx - S.syy) + (c * c - s * s) * sxy
+	};
+}
+function pkCost(S, mo, Ex, Ey, h) {
+	const cy = Ey + mo.sy / S.m, Ey2 = Ey + h;
+	let c = (mo.sxx + 2 * Ex * mo.sx + S.m * Ex * Ex) * PK.ax + (mo.syy + 2 * Ey2 * mo.sy + S.m * Ey2 * Ey2) * PK.ay + PK.down * S.m * Math.max(0, cy) * Math.abs(cy);
+	if (PK.flat) {
+		const e = Math.max(0, Math.abs(Math.atan2(Ex, -Ey)) - PK.flatA);
+		c += PK.flat * S.m * h * h * e * e;
+	}
+	return c;
+}
+var BUCKET_CS = 64;
+function bucketsOf(P) {
+	const ids = /* @__PURE__ */ new Map();
+	const of = new Int32Array(P.length);
+	const boxes = [];
+	for (let i = 0; i < P.length; i++) {
+		const p = P[i];
+		const x0 = p.k === 0 ? p.x - p.rho : p.bx0, y0 = p.k === 0 ? p.y - p.rho : p.by0, x1 = p.k === 0 ? p.x + p.rho : p.bx1, y1 = p.k === 0 ? p.y + p.rho : p.by1;
+		const key = pkKey(Math.floor((x0 + x1) / 2 / BUCKET_CS), Math.floor((y0 + y1) / 2 / BUCKET_CS));
+		let b = ids.get(key);
+		if (b === void 0) {
+			b = ids.size;
+			ids.set(key, b);
+			boxes.push(x0, y0, x1, y1);
+		} else {
+			const o = b * 4;
+			if (x0 < boxes[o]) boxes[o] = x0;
+			if (y0 < boxes[o + 1]) boxes[o + 1] = y0;
+			if (x1 > boxes[o + 2]) boxes[o + 2] = x1;
+			if (y1 > boxes[o + 3]) boxes[o + 3] = y1;
+		}
+		of[i] = b;
+	}
+	return {
+		of,
+		box: Float64Array.from(boxes),
+		flag: new Int32Array(ids.size),
+		gen: 0
+	};
+}
+function pkSweep(S, psi, rho, f, Phi, l0, fid, maxL, costCap, costBase, h) {
+	CTX.stats.sweeps++;
+	const ux = Math.sin(psi), uy = -Math.cos(psi);
+	const P = pkRotated(S, rho, f), mo = pkMom(S, rho, f), cr = Math.cos(-rho), sr = Math.sin(-rho);
+	let l = l0, selfN = 0;
+	for (let it = 0; it < 120 && l <= maxL; it++) {
+		const Ex = ux * l, Ey = uy * l;
+		if (costCap !== void 0 && costBase + pkCost(S, mo, Ex, Ey, h) >= costCap) return null;
+		const c = stemCP(Ex, Ey, rho);
+		const stem = pkStemSegs(S, c, fid, SWEEP_POOL);
+		let pen = 0, self = false, frac = 1;
+		for (let i = 0; i < stem.length && !pen; i++) {
+			pen = pkHit(Phi, stem[i], 0, 0);
+			if (pen) frac = Math.max(.35, (i + .5) / stem.length);
+		}
+		if (!pen && S.grid) for (let i = 0; i < stem.length && !pen; i++) {
+			const g = stem[i];
+			const loc = LOC_POOL;
+			setSeg(loc, f * (cr * (g.x0 - Ex) - sr * (g.y0 - Ey)), sr * (g.x0 - Ex) + cr * (g.y0 - Ey), f * (cr * (g.x1 - Ex) - sr * (g.y1 - Ey)), sr * (g.x1 - Ex) + cr * (g.y1 - Ey), g.hw, g.sf, g.ef, g.term);
+			pen = pkHit(S.grid, loc, 0, 0);
+			if (pen && i >= 3) self = true;
+		}
+		if (!pen) for (let i = 0; i < P.length && !pen; i++) pen = pkHit(Phi, P[i], Ex, Ey);
+		if (!pen) return {
+			l,
+			Ex,
+			Ey,
+			c,
+			stem: stem.map((q) => clonePrim(q, 0, 0)),
+			rho,
+			f,
+			mo
+		};
+		if (self && ++selfN > 4) return null;
+		const dot = PKC.x * ux + PKC.y * uy, dd = PKC.x * PKC.x + PKC.y * PKC.y;
+		let step = -dot + Math.sqrt(Math.max(0, dot * dot - dd + PKC.need * PKC.need));
+		if (self) step = pen;
+		else step /= frac;
+		l += Math.max(.6, Math.min(step + .15, 400), l * .015);
+	}
+	return null;
+}
+function pkTerm(node, own, files, region) {
+	const n = files.length;
+	const s = S0 * (region === "root" ? .84 : .92);
+	const rnd = rng(hashStr(node.path + (own ? "#" : "") + region));
+	const K = Math.ceil(Math.sqrt(Math.max(1, n))) + 2;
+	const pts = [];
+	for (let j = -K; j <= K; j++) for (let i = -K; i <= K; i++) {
+		const x = (i + (j & 1) * .5) * s, y = j * s * .866;
+		pts.push([
+			x,
+			y,
+			Math.hypot(x, y * 1.08) + (rnd() - .5) * .01
+		]);
+	}
+	pts.sort((a, b) => a[2] - b[2]);
+	const P = pts.slice(0, n);
+	let cx = 0, cy = 0;
+	for (const p of P) {
+		cx += p[0];
+		cy += p[1];
+	}
+	cx /= Math.max(1, n);
+	cy /= Math.max(1, n);
+	const loc = P.map((p) => [p[0] - cx + (rnd() - .5) * s * .3, p[1] - cy + (rnd() - .5) * s * .3]);
+	let R = 0;
+	for (const p of loc) R = Math.max(R, Math.hypot(p[0], p[1]));
+	return {
+		own,
+		node,
+		files,
+		s,
+		region,
+		loc,
+		R,
+		rho: R + .66 * s,
+		cy0: 0
+	};
+}
+function pkWidth(kW, lines, files) {
+	const w = Math.max(.55, kW * Math.sqrt(lines + 40 * files));
+	return CTX && CTX.quantise ? Math.exp(Math.round(Math.log(w) / .03) * .03) : w;
+}
+function pkFinishShape(S) {
+	if (S.prims) {
+		S.prims.sort((a, b) => a.d - b.d);
+		let r = 0;
+		for (const p of S.prims) r = Math.max(r, p.k === 0 ? Math.hypot(p.x, p.y) + p.rho : Math.max(Math.hypot(p.x0, p.y0), Math.hypot(p.x1, p.y1)) + p.hw);
+		S.rad = r;
+	}
+	return S;
+}
+function emptyShape(kind) {
+	return {
+		kind,
+		term: null,
+		fork: null,
+		efId: 0,
+		prims: null,
+		place: [],
+		m: 0,
+		area: 0,
+		sx: 0,
+		sy: 0,
+		sxx: 0,
+		syy: 0,
+		sxy: 0,
+		r0: 0,
+		r1: 0,
+		lines: 0,
+		files: 0,
+		w: 0,
+		wb: 0,
+		we: 0,
+		rad: 0,
+		grid: null,
+		rc: null,
+		sig: "",
+		skey: ""
+	};
+}
+function pkTermShape(t, kind, node) {
+	const n = t.loc.length;
+	const cy = -(t.R * .42 + t.s * .6);
+	let sxx = 0, syy = 0, sy = 0, sxy = 0;
+	for (const p of t.loc) {
+		sxx += p[0] * p[0];
+		syy += (cy + p[1]) * (cy + p[1]);
+		sy += cy + p[1];
+		sxy += p[0] * (cy + p[1]);
+	}
+	t.cy0 = cy;
+	let lines = 0, files = 0;
+	for (const f of t.files) if (!f.ghost) {
+		lines += f.lines;
+		files++;
+	}
+	const w = pkWidth(CTX.kW, lines, files);
+	const S = emptyShape(kind);
+	S.node = node;
+	S.term = t;
+	S.efId = -(1e6 + ++PK_FORK);
+	const d0 = mkDisc(0, cy, t.rho, t);
+	S.prims = [d0];
+	S.m = Math.max(1, n);
+	S.area = Math.PI * t.rho * t.rho;
+	S.sy = sy;
+	S.sxx = sxx;
+	S.syy = syy;
+	S.sxy = sxy;
+	S.lines = lines;
+	S.files = files;
+	S.w = w;
+	S.wb = w;
+	S.we = w * .35;
+	d0.d = pkDist(d0);
+	S.skey = h2((kind === "own" ? "o" : "l") + ":" + node.path + ":" + t.region);
+	S.sig = h2(S.skey + ":" + n + ":" + w.toFixed(4));
+	CTX.sigs.push(S.sig);
+	return pkFinishShape(S);
+}
+function pkLmin(S) {
+	return S.kind === "virtual" ? S0 * .5 + S.w * .3 : S.term ? S0 * .6 + S.w * .5 : S0 * .8 + S.w * .6;
+}
+var PSI_H = [
+	0,
+	.25,
+	.5,
+	.75,
+	1
+];
+var EXT_H = [
+	0,
+	.8,
+	1.6
+];
+var PSI_L = [
+	.12,
+	.3,
+	.48,
+	.66,
+	.84,
+	1.02,
+	1.2,
+	1.38,
+	1.56
+];
+function pkRange(S, pp) {
+	let a = pp.rho + (pp.f > 0 ? S.r0 : -S.r1), b = pp.rho + (pp.f > 0 ? S.r1 : -S.r0);
+	if (PK.stemR) {
+		const psi = Math.atan2(pp.Ex, -pp.Ey);
+		a = Math.min(a, psi);
+		b = Math.max(b, psi);
+	}
+	return [a, b];
+}
+var leanOf = (S, psi, f) => {
+	const r0 = f > 0 ? S.r0 : -S.r1, r1 = f > 0 ? S.r1 : -S.r0;
+	return Math.max(-LEAN.lim - r0, Math.min(LEAN.lim - r1, LEAN.k * psi));
+};
+var flipFor = (S, side) => S.place.length && S.sx * side < 0 ? -1 : 1;
+function pkUnion(owner, X, Y, fid, w) {
+	const U = emptyShape("virtual");
+	U.owner = owner;
+	U.fork = fid;
+	U.lines = X.lines + Y.lines;
+	U.files = X.files + Y.files;
+	U.w = w;
+	U.wb = w;
+	U.we = Math.min(w, Math.max(X.wb, Y.wb));
+	U.m = X.m + Y.m;
+	U.area = X.area + Y.area;
+	U.r0 = 1e9;
+	U.r1 = -1e9;
+	return U;
+}
+function unionFromRec(owner, X, Y, fid, w, r, withPrims) {
+	const U = pkUnion(owner, X, Y, fid, w);
+	const pls = [[X, 0], [Y, 4]];
+	if (withPrims) U.prims = [];
+	for (const [S, o] of pls) {
+		const pl = {
+			S,
+			Ex: r[o],
+			Ey: r[o + 1],
+			rho: r[o + 2],
+			f: r[o + 3],
+			c: stemCP(r[o], r[o + 1], r[o + 2])
+		};
+		U.place.push(pl);
+		if (!withPrims) continue;
+		const mo = pkMom(S, pl.rho, pl.f);
+		for (const sg of pkStemSegs(S, pl.c, fid)) {
+			sg.d = pkDist(sg);
+			U.prims.push(sg);
+		}
+		for (const p of pkRotated(S, pl.rho, pl.f)) {
+			const q = clonePrim(p, pl.Ex, pl.Ey);
+			q.d = pkDist(q);
+			U.prims.push(q);
+		}
+		const ex = pl.Ex, ey = pl.Ey;
+		U.sx += mo.sx + S.m * ex;
+		U.sy += mo.sy + S.m * ey;
+		U.sxx += mo.sxx + 2 * ex * mo.sx + S.m * ex * ex;
+		U.syy += mo.syy + 2 * ey * mo.sy + S.m * ey * ey;
+		U.sxy += mo.sxy + ex * mo.sy + ey * mo.sx + S.m * ex * ey;
+		const rr = pkRange(S, pl);
+		U.r0 = Math.min(U.r0, rr[0]);
+		U.r1 = Math.max(U.r1, rr[1]);
+		S.grid = null;
+		S.rc = null;
+	}
+	if (withPrims) pkFinishShape(U);
+	return U;
+}
+function pkCombine(X, Y, owner, base, key) {
+	const fid = ++PK_FORK;
+	const w = pkWidth(CTX.kW, X.lines + Y.lines, X.files + Y.files);
+	const sig = h2("(" + X.sig + "|" + Y.sig + "|" + w.toFixed(4) + (base ? "|B" + base[0].hw.toFixed(4) : "") + ")");
+	const skey = key || h2("U(" + X.skey + "," + Y.skey + ")");
+	if (CTX.cache) {
+		const U = unionFromRec(owner, X, Y, fid, w, CTX.cache[CTX.ci++] || [
+			0,
+			-10,
+			0,
+			1,
+			0,
+			-10,
+			0,
+			1
+		], false);
+		U.sig = sig;
+		U.skey = skey;
+		CTX.unions.push(U);
+		return U;
+	}
+	if (CTX.final) {
+		const fv = CTX.final.get(skey);
+		if (fv) {
+			CTX.memoHits++;
+			const U = unionFromRec(owner, X, Y, fid, w, fv.u, true);
+			U.sig = sig;
+			U.skey = skey;
+			U.fromWarm = true;
+			U.changed = fv.sig !== sig;
+			CTX.unions.push(U);
+			progress();
+			return U;
+		}
+	}
+	const memo = CTX.memo.get(sig);
+	if (memo) {
+		CTX.memoHits++;
+		const U = unionFromRec(owner, X, Y, fid, w, memo, true);
+		U.sig = sig;
+		U.skey = skey;
+		U.changed = !!CTX.final;
+		CTX.unions.push(U);
+		progress();
+		return U;
+	}
+	const Lc = Math.max(S0 * 2.2, w * 1.5);
+	const basePrims = base ? base.map((p) => p.ef === -3 ? mkSeg(p.x0, p.y0, p.x1, p.y1, p.hw, p.sf, fid, p.term) : p) : [
+		-.5,
+		0,
+		.5
+	].map((a) => mkSeg(Math.sin(a) * Lc, Math.cos(a) * Lc, 0, 0, w * .5 + .8, -1, fid, null));
+	const mkPhi = () => {
+		const G = new Grid(64);
+		for (const p of basePrims) pkAdd(G, p);
+		return G;
+	};
+	const Phi0 = mkPhi();
+	const H = X.m >= Y.m ? X : Y, L = H === X ? Y : X;
+	const sH = H === X ? -1 : 1, sL = -sH;
+	const fr = L.m / (H.m + L.m);
+	for (const S of [H, L]) if (!S.grid && S.place.length) {
+		S.grid = new Grid(S.prims.length * 4);
+		for (const p of S.prims) pkAdd(S.grid, p);
+	}
+	const maxL = 3 * (H.rad + L.rad) + 300;
+	const h = PK.heart * Math.sqrt((X.area + Y.area) / Math.PI) / .72;
+	let best = null;
+	const topLim = !!base && PK.rtop < 9 && !PK.stemR;
+	let strict = true;
+	const tryH = (aH, ext, lim) => {
+		if (strict && topLim && aH > PK.rtop) return;
+		const psiH = sH * aH, fH = flipFor(H, sH);
+		const pH = pkSweep(H, psiH, leanOf(H, psiH, fH), fH, Phi0, pkLmin(H) + ext * L.rad, fid, lim, void 0, 0, h);
+		if (!pH) return;
+		const cH = pkCost(H, pH.mo, pH.Ex, pH.Ey, h);
+		if (best && cH >= best.c) return;
+		const Phi1 = mkPhi();
+		for (const sg of pH.stem) pkAdd(Phi1, sg);
+		for (const p of pkRotated(H, pH.rho, pH.f)) pkAdd(Phi1, clonePrim(p, pH.Ex, pH.Ey));
+		const fL = flipFor(L, sL);
+		for (const aL of PSI_L) {
+			if (strict && topLim && aL > PK.rtop) continue;
+			const psiL = sL * aL;
+			const pL = pkSweep(L, psiL, leanOf(L, psiL, fL), fL, Phi1, pkLmin(L), fid, lim, best ? best.c : void 0, cH, h);
+			if (!pL) continue;
+			const c = cH + pkCost(L, pL.mo, pL.Ex, pL.Ey, h);
+			if (strict && PK.stemR) {
+				const rH = pkRange(H, pH), rL = pkRange(L, pL), lo = Math.min(rH[0], rL[0]), hi = Math.max(rH[1], rL[1]);
+				if (hi - lo > 2 * LEAN.lim || base && (lo < -PK.rtop || hi > PK.rtop)) continue;
+			}
+			if (!best || c < best.c) best = {
+				c,
+				pH,
+				pL
+			};
+		}
+	};
+	for (const ext of EXT_H) for (const aH of PSI_H) tryH(aH * (.35 + 1.3 * fr), ext, maxL);
+	if (!best && PK.stemR) for (const ext of [2.4, 3.4]) for (const aH of PSI_H) tryH(aH * (.35 + 1.3 * fr), ext, maxL);
+	strict = false;
+	if (!best) for (const aH of [
+		.3,
+		.6,
+		.9
+	]) tryH(aH, .6, maxL);
+	if (!best) for (const aH of [.5, .9]) tryH(aH, 1.2, 1e5);
+	if (!best) {
+		const far = 4 * (H.rad + L.rad) + 400;
+		const r = [
+			sH * far * .3,
+			-far,
+			0,
+			1,
+			sL * far * .3,
+			-far,
+			0,
+			1
+		];
+		if (H !== X) r.splice(0, 8, r[4], r[5], r[6], r[7], r[0], r[1], r[2], r[3]);
+		const U = unionFromRec(owner, X, Y, fid, w, r, true);
+		U.sig = sig;
+		U.skey = skey;
+		U.changed = true;
+		CTX.unions.push(U);
+		return U;
+	}
+	const B = best;
+	const pX = H === X ? B.pH : B.pL, pY = H === X ? B.pL : B.pH;
+	const U = pkUnion(owner, X, Y, fid, w);
+	U.prims = [];
+	U.sig = sig;
+	U.skey = skey;
+	U.changed = !!CTX.final;
+	for (const [S, pp] of [[X, pX], [Y, pY]]) {
+		U.place.push({
+			S,
+			Ex: pp.Ex,
+			Ey: pp.Ey,
+			rho: pp.rho,
+			f: pp.f,
+			c: pp.c
+		});
+		for (const sg of pp.stem) {
+			sg.d = pkDist(sg);
+			U.prims.push(sg);
+		}
+		for (const p of pkRotated(S, pp.rho, pp.f)) {
+			const q = clonePrim(p, pp.Ex, pp.Ey);
+			q.d = pkDist(q);
+			U.prims.push(q);
+		}
+		const mo = pp.mo, ex = pp.Ex, ey = pp.Ey;
+		U.sx += mo.sx + S.m * ex;
+		U.sy += mo.sy + S.m * ey;
+		U.sxx += mo.sxx + 2 * ex * mo.sx + S.m * ex * ex;
+		U.syy += mo.syy + 2 * ey * mo.sy + S.m * ey * ey;
+		U.sxy += mo.sxy + ex * mo.sy + ey * mo.sx + S.m * ex * ey;
+		const rr = pkRange(S, pp);
+		U.r0 = Math.min(U.r0, rr[0]);
+		U.r1 = Math.max(U.r1, rr[1]);
+		S.grid = null;
+		S.rc = null;
+	}
+	const rec = U.place.flatMap((p) => [
+		p.Ex,
+		p.Ey,
+		p.rho,
+		p.f
+	]);
+	CTX.unions.push(U);
+	CTX.memo.set(sig, rec);
+	progress();
+	return pkFinishShape(U);
+}
+var PHASE_SEARCH = .45;
+function progress() {
+	CTX.work += 1;
+	if (CTX.tick) CTX.tick(PHASE_SEARCH * Math.min(1, CTX.work / CTX.workTotal));
+}
+function splitAt(list, owner) {
+	const tw = list.reduce((s, x) => s + x.m, 0);
+	let acc = 0, k2 = 1, best = 0xde0b6b3a7640000;
+	const cum = [];
+	for (let i = 0; i < list.length - 1; i++) {
+		acc += list[i].m;
+		cum.push(acc);
+		const dd = Math.abs(acc - tw / 2);
+		if (dd < best) {
+			best = dd;
+			k2 = i + 1;
+		}
+	}
+	const key = h2(owner.path + "|" + list[0].skey + "|" + list[list.length - 1].skey);
+	const was = CTX.prevSplits ? CTX.prevSplits.get(key) : void 0;
+	if (was !== void 0) {
+		const j = list.findIndex((x) => x.skey === was);
+		if (j >= 1 && Math.abs(cum[j - 1] - tw / 2) <= best + .12 * tw) k2 = j;
+	}
+	CTX.splits.set(key, list[k2].skey);
+	return k2;
+}
+function pkFan(list, owner, base, key) {
+	if (list.length === 1) return list[0];
+	const k2 = splitAt(list, owner);
+	const rk = (l) => h2("r:" + owner.path + "|" + l[0].skey + "|" + l[l.length - 1].skey);
+	return pkCombine(pkFan(list.slice(0, k2), owner, void 0, rk(list.slice(0, k2))), pkFan(list.slice(k2), owner, void 0, rk(list.slice(k2))), owner, base, key || rk(list));
+}
+function pkNode(n, region, terms) {
+	if (!n.kids.length) {
+		const t = pkTerm(n, false, n.files, region);
+		n.term = t;
+		terms.push(t);
+		return pkTermShape(t, "leaf", n);
+	}
+	const items = [];
+	if (n.files.length) {
+		const t = pkTerm(n, true, n.files, region);
+		terms.push(t);
+		items.push(pkTermShape(t, "own", n));
+	}
+	for (const k of n.kids) items.push(pkNode(k, region, terms));
+	const S = items.length === 1 ? items[0] : pkFan(items, n, void 0, h2("n:" + n.path + ":" + region));
+	if (S.kind === "virtual") {
+		S.kind = "node";
+		S.node = n;
+		S.wb = S.w;
+	}
+	return S;
+}
+function pkLeaderSeq(items) {
+	const byW = items.slice().sort((a, b) => b.m - a.m || cmpStr(a.node.name, b.node.name));
+	if (PK.leaderOrder === "asc") return byW.slice().reverse();
+	if (PK.leaderOrder === "desc") return byW;
+	const lo = [], hi = [];
+	byW.forEach((it, i) => (i % 2 ? hi : lo).push(it));
+	return lo.reverse().concat(hi);
+}
+function pkLayout(root, region, order, trunkHW) {
+	const terms = [];
+	const items = [];
+	if (root.files.length) {
+		const t = pkTerm(root, true, root.files, region);
+		terms.push(t);
+		items.push(pkTermShape(t, "own", root));
+	}
+	for (const k of root.kids) items.push(pkNode(k, region, terms));
+	if (!items.length) return {
+		terms,
+		top: null
+	};
+	let ord = order(items);
+	const was = CTX.prevOrders ? CTX.prevOrders.get(region) : void 0;
+	if (was) {
+		const at = new Map(ord.map((x, i) => [x.skey, i]));
+		const kept = was.map((k) => ord.find((x) => x.skey === k)).filter((x) => !!x);
+		const keptSet = new Set(kept);
+		const out = kept.slice();
+		for (const x of ord) if (!keptSet.has(x)) out.splice(Math.min(out.length, at.get(x.skey)), 0, x);
+		ord = out;
+	}
+	CTX.orders.set(region, ord.map((x) => x.skey));
+	const base = [];
+	for (let i = 0; i < 6; i++) base.push(mkSeg(0, i * S0 * 6, 0, (i + 1) * S0 * 6, trunkHW * (1 + .25 * i), -2, -3, null));
+	let top = ord.length === 1 ? ord[0] : null;
+	if (!top && PK.leader && ord.length > PK.leader) {
+		const seq = pkLeaderSeq(ord);
+		let U = seq[seq.length - 1];
+		for (let i = seq.length - 2; i >= 0; i--) {
+			const left = (seq.length - 2 - i) % 2 === 0, bse = i === 0 ? base : void 0;
+			const k = h2("lead:" + region + ":" + i);
+			U = left ? pkCombine(seq[i], U, root, bse, k) : pkCombine(U, seq[i], root, bse, k);
+		}
+		top = U;
+		top.base = base;
+	}
+	if (!top) {
+		const k2 = splitAt(ord, root);
+		const rk = (l) => h2("r:" + region + "|" + l[0].skey + "|" + l[l.length - 1].skey);
+		top = pkCombine(pkFan(ord.slice(0, k2), root, void 0, rk(ord.slice(0, k2))), pkFan(ord.slice(k2), root, void 0, rk(ord.slice(k2))), root, base, h2("top:" + region));
+		top.base = base;
+	}
+	return {
+		terms,
+		top
+	};
+}
+var mul = (A, B) => [
+	A[0] * B[0] + A[1] * B[2],
+	A[0] * B[1] + A[1] * B[3],
+	A[2] * B[0] + A[3] * B[2],
+	A[2] * B[1] + A[3] * B[3]
+];
+var app = (A, x, y) => [A[0] * x + A[1] * y, A[2] * x + A[3] * y];
+function pkCompact(top, base, C, passes, region) {
+	const recs = [];
+	const G = new Grid(4096);
+	for (const p of base) {
+		const q = mkSeg(p.x0, p.y0, p.x1, p.y1, p.hw, p.sf, top.fork, p.term);
+		q.sub = -5;
+		pkAdd(G, q);
+	}
+	function mkStemWorld(rec, Ex, Ey, pool) {
+		const pl = rec.pl, c = stemCP(Ex, Ey, pl.rho);
+		const w = [];
+		for (let i = 0; i < 8; i += 2) {
+			const q = app(rec.A, c[i], c[i + 1]);
+			w.push(rec.O[0] + q[0], rec.O[1] + q[1]);
+		}
+		return {
+			c,
+			segs: pkStemSegs(pl.S, w, rec.U.fork, pool)
+		};
+	}
+	const discOf = (rec, S) => {
+		const q = app(rec.Ac, 0, S.term.cy0);
+		const d = mkDisc(rec.E[0] + q[0], rec.E[1] + q[1], S.term.rho, S.term);
+		d.sub = rec.lo;
+		d.m = S.m;
+		return d;
+	};
+	(function walk(U, O, A, depth) {
+		for (const pl of U.place) {
+			const rec = {
+				U,
+				pl,
+				O,
+				A,
+				Ac: A,
+				E: [0, 0],
+				lo: recs.length,
+				hi: 0,
+				depth,
+				own: []
+			};
+			recs.push(rec);
+			for (const sg of mkStemWorld(rec, pl.Ex, pl.Ey).segs) {
+				sg.sub = rec.lo;
+				rec.own.push(sg);
+				pkAdd(G, sg);
+			}
+			const e = app(A, pl.Ex, pl.Ey);
+			rec.E = [O[0] + e[0], O[1] + e[1]];
+			const cr = Math.cos(pl.rho), sr = Math.sin(pl.rho), f = pl.f || 1;
+			rec.Ac = mul(A, [
+				cr * f,
+				-sr,
+				sr * f,
+				cr
+			]);
+			if (pl.S.term) {
+				const d = discOf(rec, pl.S);
+				rec.own.push(d);
+				pkAdd(G, d);
+			} else walk(pl.S, rec.E, rec.Ac, depth + 1);
+			rec.hi = recs.length;
+		}
+	})(top, [0, 0], [
+		1,
+		0,
+		0,
+		1
+	], 0);
+	const order = recs.map((_r, i) => i).sort((a, b) => recs[a].depth - recs[b].depth || recs[b].hi - recs[b].lo - (recs[a].hi - recs[a].lo));
+	const prev = CTX.prevSigs;
+	const totalPasses = passes;
+	const changes = [];
+	const evalAt = new Int32Array(recs.length).fill(-1);
+	const reach = new Float64Array(recs.length * 4);
+	const REACH_PAD = 3 * PK.CS + 8;
+	const logChange = (b) => changes.push(b[0], b[1], b[2], b[3]);
+	let deadN = 0;
+	let moved = 0;
+	const evalRec = (ri, mode) => {
+		const rec = recs[ri], pl = rec.pl, S = pl.S;
+		if (mode === 0 && evalAt[ri] >= 0) {
+			let dirty = false;
+			const r0 = ri * 4;
+			for (let c = evalAt[ri] * 4; c < changes.length && !dirty; c += 4) dirty = changes[c] <= reach[r0 + 2] && changes[c + 2] >= reach[r0] && changes[c + 1] <= reach[r0 + 3] && changes[c + 3] >= reach[r0 + 1];
+			if (!dirty) return true;
+		}
+		const sub = [];
+		let m = 0, sx = 0, sy = 0;
+		let bx0 = 0xde0b6b3a7640000, by0 = 0xde0b6b3a7640000, bx1 = -0xde0b6b3a7640000, by1 = -0xde0b6b3a7640000;
+		for (let k = rec.lo; k < rec.hi; k++) for (const p of recs[k].own) {
+			if (k === rec.lo && p.k === 1) continue;
+			sub.push(p);
+			if (p.k === 0) {
+				m += p.m;
+				sx += p.m * (p.x - C[0]);
+				sy += p.m * (p.y - C[1]);
+			}
+			if (p.bx0 < bx0) bx0 = p.bx0;
+			if (p.by0 < by0) by0 = p.by0;
+			if (p.bx1 > bx1) bx1 = p.bx1;
+			if (p.by1 > by1) by1 = p.by1;
+		}
+		if (!m) return true;
+		const own = new Occ(sub.length * 2 + 8);
+		for (let k = rec.lo; k < rec.hi; k++) for (const p of recs[k].own) occAdd(own, p, 1);
+		const ox = rec.O[0], oy = rec.O[1];
+		const dO = (p) => p.k === 0 ? Math.hypot(p.x - ox, p.y - oy) - p.rho : Math.min(Math.hypot(p.x0 - ox, p.y0 - oy), Math.hypot(p.x1 - ox, p.y1 - oy));
+		const dk = new Float64Array(sub.length);
+		for (let i = 0; i < sub.length; i++) dk[i] = dO(sub[i]);
+		const subS = Array.from(sub.keys()).sort((a, b) => dk[a] - dk[b]).map((i) => sub[i]);
+		const groups = bucketsOf(subS);
+		const cost = (dx, dy) => PK.cwx * (2 * dx * sx + m * dx * dx) + PK.cwy * (2 * dy * sy + m * dy * dy);
+		const psi0 = Math.atan2(pl.Ex, -pl.Ey), lmin = pkLmin(S), l0 = Math.hypot(pl.Ex, pl.Ey);
+		const lmax = Math.max(l0 * 1.3, l0 + 30);
+		let best = null;
+		let rdx0 = 0, rdx1 = 0, rdy0 = 0, rdy1 = 0, sbx0 = 0xde0b6b3a7640000, sby0 = 0xde0b6b3a7640000, sbx1 = -0xde0b6b3a7640000, sby1 = -0xde0b6b3a7640000;
+		const test = (Ex, Ey, dx, dy) => {
+			const st = mkStemWorld(rec, Ex, Ey, COMPACT_POOL);
+			if (dx < rdx0) rdx0 = dx;
+			if (dx > rdx1) rdx1 = dx;
+			if (dy < rdy0) rdy0 = dy;
+			if (dy > rdy1) rdy1 = dy;
+			for (const g of st.segs) {
+				if (g.bx0 < sbx0) sbx0 = g.bx0;
+				if (g.by0 < sby0) sby0 = g.by0;
+				if (g.bx1 > sbx1) sbx1 = g.bx1;
+				if (g.by1 > sby1) sby1 = g.by1;
+				if (g.bx0 - dx < sbx0) sbx0 = g.bx0 - dx;
+				if (g.by0 - dy < sby0) sby0 = g.by0 - dy;
+				if (g.bx1 - dx > sbx1) sbx1 = g.bx1 - dx;
+				if (g.by1 - dy > sby1) sby1 = g.by1 - dy;
+			}
+			let pen = 0, frac = 1, self = false;
+			PK_IG0 = rec.lo;
+			PK_IG1 = rec.hi;
+			PK_ONLY = false;
+			OWN = own;
+			for (let i = 0; i < st.segs.length && !pen; i++) {
+				pen = pkHit(G, st.segs[i], 0, 0);
+				if (pen) frac = Math.max(.35, (i + .5) / st.segs.length);
+			}
+			if (!pen) {
+				PK_ONLY = true;
+				for (let i = 0; i < st.segs.length && !pen; i++) {
+					pen = pkHit(G, st.segs[i], -dx, -dy);
+					if (pen) self = true;
+				}
+				PK_ONLY = false;
+			}
+			if (!pen) pen = hitGroups(G, subS, groups, dx, dy);
+			PK_IG0 = PK_IG1 = -1;
+			OWN = null;
+			return {
+				pen,
+				frac,
+				self,
+				st
+			};
+		};
+		if (mode !== 0) {
+			if (!test(pl.Ex, pl.Ey, 0, 0).pen) return true;
+			if (mode === 2) return false;
+			for (const da of [
+				0,
+				.08,
+				-.08,
+				.16,
+				-.16,
+				.3,
+				-.3,
+				.5,
+				-.5
+			]) {
+				const ux = Math.sin(psi0 + da), uy = -Math.cos(psi0 + da);
+				const uw = app(rec.A, ux, uy);
+				let l = l0;
+				for (let it = 0; it < 80 && l <= l0 * 2.5 + 300; it++) {
+					const Ex = ux * l, Ey = uy * l;
+					const ew = app(rec.A, Ex, Ey);
+					const dx = rec.O[0] + ew[0] - rec.E[0], dy = rec.O[1] + ew[1] - rec.E[1];
+					const r = test(Ex, Ey, dx, dy);
+					if (!r.pen) {
+						best = {
+							cc: 0,
+							Ex,
+							Ey,
+							dx,
+							dy,
+							st: {
+								c: r.st.c,
+								segs: r.st.segs.map((q) => clonePrim(q, 0, 0))
+							}
+						};
+						break;
+					}
+					const dot = PKC.x * uw[0] + PKC.y * uw[1], dd = PKC.x * PKC.x + PKC.y * PKC.y;
+					const step = (-dot + Math.sqrt(Math.max(0, dot * dot - dd + PKC.need * PKC.need))) / r.frac;
+					l += Math.max(.6, Math.min(step + .15, 400), l * .015);
+				}
+				if (best) break;
+			}
+			if (!best) return false;
+			CTX.resolved++;
+		} else {
+			const cands = [psi0];
+			for (let a = -1.56; a <= 1.57; a += PK.cstep) if (Math.abs(a - psi0) > .03) cands.push(a);
+			const wAng = (v) => Math.abs(Math.atan2(v[0], -v[1]));
+			const wa0 = wAng(app(rec.A, Math.sin(psi0), -Math.cos(psi0)));
+			for (const psi of cands) {
+				const ux = Math.sin(psi), uy = -Math.cos(psi);
+				const uw = app(rec.A, ux, uy);
+				if (wAng(uw) > Math.max(PK.cmax, wa0) + 1e-9) continue;
+				let l = lmin;
+				for (let it = 0; it < 120 && l <= lmax; it++) {
+					const Ex = ux * l, Ey = uy * l;
+					const ew = app(rec.A, Ex, Ey);
+					const dx = rec.O[0] + ew[0] - rec.E[0], dy = rec.O[1] + ew[1] - rec.E[1];
+					const cc = cost(dx, dy);
+					if (cc >= (best ? best.cc : -1e-6)) break;
+					const r = test(Ex, Ey, dx, dy);
+					if (!r.pen) {
+						best = {
+							cc,
+							Ex,
+							Ey,
+							dx,
+							dy,
+							st: {
+								c: r.st.c,
+								segs: r.st.segs.map((q) => clonePrim(q, 0, 0))
+							}
+						};
+						break;
+					}
+					if (r.self) break;
+					const dot = PKC.x * uw[0] + PKC.y * uw[1], dd = PKC.x * PKC.x + PKC.y * PKC.y;
+					const step = (-dot + Math.sqrt(Math.max(0, dot * dot - dd + PKC.need * PKC.need))) / r.frac;
+					l += Math.max(.6, Math.min(step + .15, 400), l * .015);
+				}
+			}
+		}
+		if (!best) {
+			{
+				evalAt[ri] = changes.length / 4;
+				const r0 = ri * 4;
+				reach[r0] = Math.min(bx0 + rdx0, sbx0) - REACH_PAD;
+				reach[r0 + 1] = Math.min(by0 + rdy0, sby0) - REACH_PAD;
+				reach[r0 + 2] = Math.max(bx1 + rdx1, sbx1) + REACH_PAD;
+				reach[r0 + 3] = Math.max(by1 + rdy1, sby1) + REACH_PAD;
+			}
+			return true;
+		}
+		evalAt[ri] = -1;
+		moved++;
+		const chg = [
+			0xde0b6b3a7640000,
+			0xde0b6b3a7640000,
+			-0xde0b6b3a7640000,
+			-0xde0b6b3a7640000
+		];
+		const grow = (p) => {
+			if (p.bx0 < chg[0]) chg[0] = p.bx0;
+			if (p.by0 < chg[1]) chg[1] = p.by0;
+			if (p.bx1 > chg[2]) chg[2] = p.bx1;
+			if (p.by1 > chg[3]) chg[3] = p.by1;
+		};
+		for (let k = rec.lo; k < rec.hi; k++) for (const p of recs[k].own) grow(p);
+		pl.Ex = best.Ex;
+		pl.Ey = best.Ey;
+		pl.c = best.st.c;
+		for (const p of rec.own) {
+			p.dead = true;
+			occAdd(G.occ, p, -1);
+			deadN++;
+		}
+		rec.own = [];
+		for (const sg of best.st.segs) {
+			sg.sub = rec.lo;
+			rec.own.push(sg);
+			pkAdd(G, sg);
+		}
+		for (let k = rec.lo; k < rec.hi; k++) {
+			const r = recs[k];
+			if (k > rec.lo) {
+				r.O = [r.O[0] + best.dx, r.O[1] + best.dy];
+				const nw = [];
+				for (const p of r.own) {
+					p.dead = true;
+					occAdd(G.occ, p, -1);
+					deadN++;
+					const q = clonePrim(p, best.dx, best.dy);
+					q.sub = k;
+					q.m = p.m;
+					nw.push(q);
+					pkAdd(G, q);
+				}
+				r.own = nw;
+			}
+			r.E = [r.E[0] + best.dx, r.E[1] + best.dy];
+		}
+		if (S.term) {
+			const d = discOf(rec, S);
+			rec.own.push(d);
+			pkAdd(G, d);
+		}
+		for (let k = rec.lo; k < rec.hi; k++) for (const p of recs[k].own) grow(p);
+		logChange(chg);
+		if (deadN > 2048) {
+			G.purge();
+			deadN = 0;
+		}
+		return true;
+	};
+	if (prev) {
+		const parentOf = new Int32Array(recs.length).fill(-1);
+		for (let i = 0; i < recs.length; i++) for (let k = recs[i].lo + 1; k < recs[i].hi; k++) if (recs[k].depth === recs[i].depth + 1) parentOf[k] = i;
+		const deep = order.slice().reverse();
+		let must = /* @__PURE__ */ new Set();
+		for (let i = 0; i < recs.length; i++) if (!prev.has(recs[i].pl.S.sig)) must.add(i);
+		for (let round = 0; round < 8 && must.size; round++) {
+			const next = /* @__PURE__ */ new Set();
+			for (const ri of deep) {
+				if (!must.has(ri)) continue;
+				if (!evalRec(ri, 1) && parentOf[ri] >= 0) next.add(parentOf[ri]);
+			}
+			must = next;
+		}
+		for (let i = 0; i < recs.length && !CTX.warmFailed; i++) if (!evalRec(i, 2)) CTX.warmFailed = true;
+	}
+	for (let pass = 0; pass < totalPasses; pass++) {
+		moved = 0;
+		for (const ri of order) evalRec(ri, 0);
+		(CTX.passLog || (CTX.passLog = [])).push([
+			region,
+			pass,
+			moved,
+			recs.length
+		]);
+		if (CTX.tick) CTX.tick(PHASE_SEARCH + .55 * ((pass + 1) / totalPasses) * (region === "c" ? .92 : 1));
+	}
+}
+function hitGroups(G, P, B, dx, dy) {
+	CTX.stats.hits++;
+	const g = ++B.gen * 2, of = B.of, flag = B.flag, box = B.box;
+	for (let i = 0; i < P.length; i++) {
+		const b = of[i];
+		let f = flag[b];
+		if (f < g) {
+			const o = b * 4;
+			f = flag[b] = g + (occMayBox(G, box[o] + dx, box[o + 1] + dy, box[o + 2] + dx, box[o + 3] + dy) ? 1 : 0);
+		}
+		if (f === g) continue;
+		const v = pkHit(G, P[i], dx, dy);
+		if (v) return v;
+	}
+	return 0;
+}
+function pkEmit(out, S, T, map, region) {
+	const tp = (x, y) => map(T.ox + T.a * x + T.b * y, T.oy + T.c * x + T.d * y);
+	if (S.term) {
+		const t = S.term;
+		t.leaves = t.loc.map((p, i) => {
+			const q = tp(p[0], t.cy0 + p[1]);
+			return {
+				x: q[0],
+				y: q[1],
+				file: t.files[i]
+			};
+		});
+		return;
+	}
+	const own = S.kind === "node" ? S.node : S.owner;
+	for (const pl of S.place) {
+		const C = pl.S, c = pl.c;
+		const p0 = tp(c[0], c[1]), p1 = tp(c[2], c[3]), p2 = tp(c[4], c[5]), p3 = tp(c[6], c[7]);
+		const cp = [
+			p0[0],
+			p0[1],
+			p1[0],
+			p1[1],
+			p2[0],
+			p2[1],
+			p3[0],
+			p3[1]
+		];
+		const ex = cp[6], ey = cp[7];
+		const node = C.kind === "node" || C.kind === "leaf" ? C.node : null;
+		const b = {
+			x0: cp[0],
+			y0: cp[1],
+			x1: ex,
+			y1: ey,
+			cp,
+			w: C.w,
+			wb: C.wb,
+			we: C.we,
+			node,
+			owner: node ? node.parent : C.kind === "own" ? C.node : C.owner || null,
+			virtual: C.kind === "virtual",
+			own: C.kind === "own",
+			term: C.term || null,
+			region,
+			depth: (own ? own.depth : 0) + 1,
+			id: out.length
+		};
+		out.push(b);
+		if (node) {
+			node.F = [ex, ey];
+			node.branch = b;
+			node.w = C.w;
+		}
+		if (C.term) {
+			C.term.F = [ex, ey];
+			C.term.branch = b;
+		}
+		const cr = Math.cos(pl.rho), sr = Math.sin(pl.rho), f = pl.f || 1;
+		const b00 = cr * f, b01 = -sr, b10 = sr * f, b11 = cr;
+		const ox = T.ox + T.a * pl.Ex + T.b * pl.Ey, oy = T.oy + T.c * pl.Ex + T.d * pl.Ey;
+		pkEmit(out, C, {
+			a: T.a * b00 + T.b * b10,
+			b: T.a * b01 + T.b * b11,
+			c: T.c * b00 + T.d * b10,
+			d: T.c * b01 + T.d * b11,
+			ox,
+			oy
+		}, map, region);
+	}
+}
+function pkEmitTop(out, S, owner, map, region) {
+	const T = {
+		a: 1,
+		b: 0,
+		c: 0,
+		d: 1,
+		ox: 0,
+		oy: 0
+	};
+	if (S.kind === "virtual") return pkEmit(out, S, T, map, region);
+	const wrap = emptyShape("virtual");
+	wrap.owner = owner;
+	wrap.place = [{
+		S,
+		Ex: 0,
+		Ey: -20,
+		rho: 0,
+		f: 1,
+		c: stemCP(0, -20, 0)
+	}];
+	pkEmit(out, wrap, T, map, region);
+}
+//#endregion
+//#region src/lib/codetree/model.ts
+var dirOf = (p) => {
+	const i = p.lastIndexOf("/");
+	return i < 0 ? "" : p.slice(0, i);
+};
+var baseOf = (p) => p.slice(p.lastIndexOf("/") + 1);
+function shortName(name) {
+	if (name.length <= 24 || !name.includes("/")) return name;
+	const s = name.split("/");
+	return s[0] + "/…/" + s[s.length - 1];
+}
+var LAYOUT_VERSION = 1;
+function mkNode(name, path, parent, kind) {
+	return {
+		name,
+		path,
+		parent,
+		kids: [],
+		files: [],
+		depth: parent ? parent.depth + 1 : 0,
+		kind,
+		nFiles: 0,
+		nGhost: 0,
+		lines: 0,
+		id: -1,
+		limb: 0,
+		bx0: 0,
+		by0: 0,
+		bx1: 0,
+		by1: 0,
+		sx: 0,
+		sy: 0,
+		cnt: 0,
+		cx: 0,
+		cy: 0,
+		rad: 0
+	};
+}
+function* allNodesGen(n) {
+	yield n;
+	for (const k of n.kids) yield* allNodesGen(k);
+}
+function allNodes(n) {
+	return [...allNodesGen(n)];
+}
+function parseFiles(raw) {
+	const F = raw.files.map((f, i) => ({
+		id: i,
+		path: f.p,
+		name: baseOf(f.p),
+		lines: f.n,
+		kind: f.k,
+		test: !!f.t,
+		imports: f.i || [],
+		usedBy: [],
+		target: f.g,
+		ghost: false,
+		place: "crown",
+		node: null,
+		leaf: null,
+		tests: null
+	}));
+	for (const f of F) for (const j of f.imports) if (F[j]) F[j].usedBy.push(f.id);
+	const top = {};
+	for (const f of F) {
+		if (f.test || !f.path.includes("/")) continue;
+		const k = f.path.split("/")[0];
+		const s = top[k] || (top[k] = {
+			n: 0,
+			c: 0
+		});
+		s.n += f.lines + 1;
+		if (f.kind === "c") s.c += f.lines + 1;
+	}
+	for (const f of F) if (f.test && f.kind === "c") f.place = "root";
+	else if (f.test) f.place = "ground";
+	else if (!f.path.includes("/")) f.place = f.kind === "c" ? "crown" : "ground";
+	else {
+		const s = top[f.path.split("/")[0]];
+		f.place = s.c / s.n < .3 ? "ground" : "crown";
+	}
+	return F;
+}
+function buildTree(rootName, entries, kind) {
+	const root = mkNode(rootName, "", null, kind);
+	const byPath = /* @__PURE__ */ new Map([["", root]]);
+	for (const { segs, file } of entries) {
+		let n = root, p = "";
+		for (const s of segs) {
+			p = p ? p + "/" + s : s;
+			let c = byPath.get(p);
+			if (!c) {
+				c = mkNode(s, p, n, kind);
+				n.kids.push(c);
+				byPath.set(p, c);
+			}
+			n = c;
+		}
+		n.files.push(file);
+	}
+	const alias = /* @__PURE__ */ new Map();
+	(function compact(n) {
+		for (const k of n.kids) {
+			while (k.files.length === 0 && k.kids.length === 1) {
+				const c = k.kids[0];
+				alias.set(k.path, c.path);
+				k.name += "/" + c.name;
+				k.path = c.path;
+				k.kids = c.kids;
+				k.files = c.files;
+				for (const g of k.kids) g.parent = k;
+			}
+			compact(k);
+		}
+	})(root);
+	const nodeOf = /* @__PURE__ */ new Map();
+	(function fin(n, d) {
+		n.depth = d;
+		nodeOf.set(n.path, n);
+		n.kids.sort((a, b) => cmpStr(a.name, b.name));
+		n.files.sort((a, b) => b.lines - a.lines || cmpStr(a.name, b.name));
+		n.nFiles = 0;
+		n.nGhost = 0;
+		n.lines = 0;
+		for (const f of n.files) if (f.ghost) n.nGhost++;
+		else {
+			n.nFiles++;
+			n.lines += f.lines;
+		}
+		for (const k of n.kids) {
+			fin(k, d + 1);
+			n.nFiles += k.nFiles;
+			n.nGhost += k.nGhost;
+			n.lines += k.lines;
+		}
+	})(root, 0);
+	for (const [a] of alias) {
+		let p = a;
+		while (alias.has(p)) p = alias.get(p);
+		if (nodeOf.has(p)) nodeOf.set(a, nodeOf.get(p));
+	}
+	return {
+		root,
+		nodeOf
+	};
+}
+var qlog = (v) => v > 0 ? Math.exp(Math.round(Math.log(v) / .03) * .03) : v;
+function dataSig(raw) {
+	let h = 2166136261;
+	const mix = (s) => {
+		for (let i = 0; i < s.length; i++) {
+			h ^= s.charCodeAt(i);
+			h = Math.imul(h, 16777619);
+		}
+	};
+	mix(raw.name);
+	for (const f of raw.files) mix("\0" + f.p + "" + f.n + "" + f.k + (f.t ? "t" : "") + "" + (f.g ?? ""));
+	return raw.files.length + ":" + (h >>> 0).toString(36);
+}
+function mixAng(a, b, t) {
+	let d = b - a;
+	while (d > Math.PI) d -= TAU;
+	while (d < -Math.PI) d += TAU;
+	return a + d * t;
+}
+function buildModel(raw, opts = {}) {
+	let replay = opts.replay && opts.replay.v === LAYOUT_VERSION ? opts.replay : null;
+	if (replay && replay.files !== raw.files.length) replay = null;
+	const warm = !replay && opts.warm && opts.warm.v === LAYOUT_VERSION ? opts.warm : null;
+	const F = parseFiles(raw);
+	const crownEntries = [];
+	const groundGroups = /* @__PURE__ */ new Map();
+	for (const f of F) if (f.place === "crown") crownEntries.push({
+		segs: dirOf(f.path) ? dirOf(f.path).split("/") : [],
+		file: f
+	});
+	else if (f.place === "ground") {
+		const k = f.path.includes("/") ? f.path.split("/")[0] : "(repo root)";
+		if (!groundGroups.has(k)) groundGroups.set(k, []);
+		groundGroups.get(k).push(f);
+	}
+	const crown = buildTree(raw.name, crownEntries, "crown");
+	const M = {
+		name: raw.name,
+		files: F,
+		crown: crown.root,
+		nodeOf: crown.nodeOf,
+		branches: [],
+		leaves: [],
+		terms: []
+	};
+	for (const n of allNodes(M.crown)) for (const f of n.files) f.node = n;
+	const nCrown = crownEntries.length;
+	const Rest = Math.sqrt(Math.max(1, nCrown) * S0 * S0 / 1.6) * 1.15;
+	const allLines = M.crown.lines + 40 * M.crown.nFiles;
+	M.kW = Rest * .05 / Math.sqrt(Math.max(1, allLines));
+	if (opts.quantise) M.kW = qlog(M.kW);
+	const widthOf = (lines, files) => Math.max(.55, M.kW * Math.sqrt(lines + 40 * files));
+	M.trunkW = widthOf(M.crown.lines, M.crown.nFiles);
+	const ctx = newCtx(M.kW);
+	ctx.quantise = !!opts.quantise;
+	if (replay) {
+		ctx.cache = replay.u;
+		ctx.prevSplits = new Map(replay.splits || []);
+		ctx.prevOrders = new Map(replay.orders || []);
+	}
+	if (warm) {
+		ctx.memo = new Map(warm.memo);
+		ctx.final = new Map(warm.final.map(([k, u, sg]) => [k, {
+			u,
+			sig: sg
+		}]));
+		ctx.prevSigs = new Set(warm.sigs);
+		ctx.prevSplits = new Map(warm.splits);
+		ctx.prevOrders = new Map(warm.orders);
+	}
+	ctx.passes = opts.passes ?? (warm ? 0 : PK.compact);
+	ctx.tick = opts.tick;
+	let clumps = 0;
+	for (const n of allNodes(M.crown)) if (n.files.length) clumps++;
+	ctx.workTotal = Math.max(1, clumps + Math.ceil(F.filter((f) => f.place === "root").length / 6));
+	beginBuild(ctx);
+	const CR = nCrown >= CROWN_BIG.min ? Object.assign({}, CROWN, CROWN_BIG) : CROWN;
+	pkUse(CR);
+	const LC = pkLayout(M.crown, "crown", (items) => {
+		const byW = items.slice().sort((a, b) => b.m - a.m || cmpStr(a.node.name, b.node.name));
+		const L = [], R = [];
+		byW.forEach((it, i) => (i % 2 ? R : L).push(it));
+		return L.reverse().concat(R);
+	}, M.trunkW * .62);
+	ctx.phase = 1;
+	const tCompact0 = typeof performance !== "undefined" ? performance.now() : 0;
+	if (LC.top && LC.top.base && !ctx.cache) pkCompact(LC.top, LC.top.base, [0, -PK.heart * (CR.cheart || 1) * Math.sqrt(LC.top.area / Math.PI) / .72], ctx.passes, "c");
+	const tCompact = (typeof performance !== "undefined" ? performance.now() : 0) - tCompact0;
+	const emitted = M.branches;
+	if (LC.top) {
+		M.crown.F = [0, 0];
+		M.crown.w = M.trunkW;
+		pkEmitTop(emitted, LC.top, M.crown, (x, y) => [x, y], "crown");
+	}
+	const limbOfPath = (p) => {
+		if (p == null) return null;
+		let q = typeof p === "number" ? dirOf(F[p].path) : p;
+		while (q && !M.nodeOf.has(q)) q = dirOf(q);
+		if (!q) return null;
+		let n = M.nodeOf.get(q);
+		while (n && n.depth > 2) n = n.parent;
+		return n && n.depth >= 1 ? n : null;
+	};
+	const rootEntriesArr = [];
+	for (const f of F) {
+		if (f.place !== "root") continue;
+		const n = limbOfPath(f.target);
+		f.tests = n;
+		let segs;
+		if (n) {
+			const chain = [];
+			let q = n;
+			while (q && q.depth >= 1) {
+				chain.unshift(q.name);
+				q = q.parent;
+			}
+			segs = chain.map((nm, i) => (i === 0 ? "T:" : "") + nm);
+		} else {
+			const d = dirOf(f.path).split("/");
+			const lm = M.nodeOf.get(d[0]);
+			if (lm && lm.depth === 1) {
+				f.tests = lm;
+				segs = ["T:" + lm.name];
+			} else segs = ["U:" + d[0]].concat(d.length > 1 ? [d[1]] : []);
+		}
+		rootEntriesArr.push({
+			segs,
+			file: f
+		});
+	}
+	const roots = buildTree("tests", rootEntriesArr, "root");
+	M.roots = roots.root;
+	M.rootNodeOf = roots.nodeOf;
+	for (const n of allNodes(M.roots)) {
+		if (n.depth === 0) continue;
+		n.unmatched = n.path.split("/")[0].startsWith("U:");
+		const crownPath = n.path.split("/").map((s) => s.replace(/^[TU]:/, "")).join("/");
+		n.crownTwin = n.unmatched ? null : M.nodeOf.get(crownPath) || null;
+		n.name = n.name.replace(/^[TU]:/, "");
+		n.label = n.unmatched ? "tests: " + shortName(crownPath) : "tests for " + shortName(n.crownTwin ? n.crownTwin.path : n.name);
+		for (const f of n.files) f.node = n;
+	}
+	const crownX = /* @__PURE__ */ new Map();
+	for (const t of LC.terms) for (const l of t.leaves || []) {
+		let n = t.node;
+		while (n && n.depth > 1) n = n.parent;
+		if (!n || n.depth < 1) continue;
+		const e = crownX.get(n) || [0, 0];
+		e[0] += l.x;
+		e[1]++;
+		crownX.set(n, e);
+	}
+	pkUse(ROOTS);
+	const LR = pkLayout(M.roots, "root", (items) => items.slice().sort((A2, B2) => {
+		const x = (it) => {
+			const nd = it.node;
+			if (it.kind === "own" || nd.unmatched) return 0;
+			let q = nd.crownTwin || null;
+			while (q && q.depth > 1) q = q.parent;
+			const e = q ? crownX.get(q) : void 0;
+			return e ? e[0] / e[1] : 0;
+		};
+		return x(A2) - x(B2) || cmpStr(A2.node.name, B2.node.name);
+	}), M.trunkW * .62);
+	if (LR.top && LR.top.base && !ctx.cache) pkCompact(LR.top, LR.top.base, [0, -PK.heart * Math.sqrt(LR.top.area / Math.PI) / .72], warm ? 0 : 1, "r");
+	if (ctx.warmFailed) {
+		const M2 = buildModel(raw, {
+			...opts,
+			warm: null,
+			replay: null
+		});
+		M2.buildStats.warmFallback = true;
+		return M2;
+	}
+	let maxY = 0, minX = 0, maxX = 0, minY = 0;
+	for (const t of LC.terms) for (const l of t.leaves || []) {
+		maxY = Math.max(maxY, l.y);
+		minX = Math.min(minX, l.x);
+		maxX = Math.max(maxX, l.x);
+		minY = Math.min(minY, l.y);
+	}
+	M.Rtyp = Math.max((maxX - minX) / 2, -minY) * .8;
+	const groundY = Math.max(M.Rtyp * (CR.trunk || .42), maxY + S0 * 4, M.trunkW * 2.5);
+	M.groundY = groundY;
+	if (LR.top) {
+		const ry = groundY + S0 * 1.6;
+		M.roots.F = [0, ry];
+		M.roots.w = widthOf(M.roots.lines, M.roots.nFiles) * .8;
+		const n0 = M.branches.length;
+		pkEmitTop(emitted, LR.top, M.roots, (x, y) => [x, ry - y], "root");
+		for (let i = n0; i < M.branches.length; i++) {
+			const b = M.branches[i];
+			b.w *= .9;
+			b.wb *= .9;
+			b.we *= .9;
+		}
+	}
+	M.piles = [];
+	const gg = [...groundGroups.entries()].sort((a, b) => b[1].length - a[1].length || cmpStr(a[0], b[0]));
+	let xl = -S0 * 9 - M.trunkW, xr = S0 * 9 + M.trunkW;
+	gg.forEach(([k, fs], i) => {
+		fs.sort((a, b) => b.lines - a.lines || cmpStr(a.name, b.name));
+		const n = fs.length, s = S0 * .95;
+		const W = Math.max(S0 * 3, Math.sqrt(n) * s * 2.1), H = Math.max(S0 * 1.2, W * .28);
+		const left = i % 2 === 0;
+		const cx = left ? xl - W / 2 : xr + W / 2;
+		if (left) xl -= W + S0 * 5;
+		else xr += W + S0 * 5;
+		const pts = [];
+		const rnd = rng(hashStr(k));
+		for (let y = 0; pts.length < n * 3 && y < H * 3; y += s * .62) for (let x = -W; x <= W; x += s * .95) {
+			const xx = x + (y / (s * .62) % 2 ? s * .45 : 0);
+			const e = xx * xx / (W * W / 4) + y * y / (H * H);
+			pts.push([
+				xx + (rnd() - .5) * s * .3,
+				y,
+				e
+			]);
+		}
+		pts.sort((a, b) => a[2] - b[2]);
+		const node = mkNode(k, "~" + k, null, "pile");
+		node.label = k === "(repo root)" ? "repo root files" : k;
+		node.files = fs;
+		node.nFiles = n;
+		node.lines = fs.reduce((a, f) => a + f.lines, 0);
+		node.depth = 1;
+		const leaves = pts.slice(0, n).map((p, j) => ({
+			x: cx + p[0],
+			y: groundY - p[1] - S0 * .35,
+			file: fs[j],
+			flat: true,
+			rot: (rnd() - .5) * 1.2
+		}));
+		for (const f of fs) f.node = node;
+		node.cx = cx;
+		node.pw = W;
+		node.h = H;
+		node.leaves = leaves;
+		M.piles.push(node);
+	});
+	const finishTerms = (terms, region) => {
+		for (const t0 of terms) {
+			const t = t0;
+			t.region = region;
+			let cx = 0, cy = 0;
+			for (const l of t.leaves) {
+				cx += l.x;
+				cy += l.y;
+			}
+			t.cx = cx / Math.max(1, t.leaves.length);
+			t.cy = cy / Math.max(1, t.leaves.length);
+			t.rad = 0;
+			for (const l of t.leaves) t.rad = Math.max(t.rad, Math.hypot(l.x - t.cx, l.y - t.cy));
+			t.rad += t.s * .5;
+			M.terms.push(t);
+		}
+	};
+	finishTerms(LC.terms, "crown");
+	finishTerms(LR.terms, "root");
+	for (const t of M.terms) {
+		const tb = t.branch;
+		const bx = tb ? tb.x1 : t.cx, by = tb ? tb.y1 : t.cy;
+		const r2 = rng(hashStr(t.node.path + "@"));
+		const hb = tb ? Math.atan2(tb.cp[7] - tb.cp[5], tb.cp[6] - tb.cp[4]) : -Math.PI / 2;
+		for (const l of t.leaves) {
+			const f = l.file;
+			const fz = Math.min(1, Math.log10(Math.max(1, f.lines) + 1) / 3.6);
+			l.len = Math.min(t.s * 1.12, S0 * (.5 + .62 * fz)) * (t.region === "root" ? .55 : 1);
+			const radial = Math.atan2(l.y - by, l.x - bx);
+			l.ang = (Math.hypot(l.y - by, l.x - bx) < t.s * .6 ? hb : mixAng(radial, hb, .4)) + (r2() - .5) * .7;
+			l.term = t;
+			l.region = t.region;
+			l.shade = r2() < .5 ? 0 : 1;
+			f.leaf = l;
+			l.id = M.leaves.length;
+			M.leaves.push(l);
+		}
+	}
+	for (const p of M.piles) for (const l of p.leaves) {
+		const f = l.file;
+		l.len = S0 * (.55 + .5 * Math.min(1, Math.log10(Math.max(1, f.lines) + 1) / 3.6));
+		l.ang = l.rot;
+		l.region = "ground";
+		l.pile = p;
+		l.shade = 0;
+		f.leaf = l;
+		l.id = M.leaves.length;
+		M.leaves.push(l);
+	}
+	M.nodes = [];
+	for (const R of [M.crown, M.roots]) for (const n of allNodes(R)) {
+		n.id = M.nodes.length;
+		M.nodes.push(n);
+	}
+	for (const p of M.piles) {
+		p.id = M.nodes.length;
+		M.nodes.push(p);
+		p.F = [p.cx, groundY - p.h * .5];
+	}
+	let limbI = 0;
+	for (const n of M.crown.kids.slice().sort((a, b) => (a.F ? a.F[0] : 0) - (b.F ? b.F[0] : 0))) n.limb = limbI++;
+	M.limbCount = limbI;
+	let rl = 0;
+	for (const n of M.roots.kids) n.limb = rl++;
+	for (const n of M.nodes) if (n.depth > 1) {
+		let q = n;
+		while (q && q.depth > 1) q = q.parent;
+		n.limb = q && q.limb !== void 0 ? q.limb : 0;
+	}
+	for (const n of M.nodes) {
+		n.bx0 = 1e9;
+		n.by0 = 1e9;
+		n.bx1 = -1e9;
+		n.by1 = -1e9;
+		n.sx = 0;
+		n.sy = 0;
+		n.cnt = 0;
+	}
+	for (const l of M.leaves) {
+		let n = l.file.node;
+		while (n) {
+			if (l.x < n.bx0) n.bx0 = l.x;
+			if (l.x > n.bx1) n.bx1 = l.x;
+			if (l.y < n.by0) n.by0 = l.y;
+			if (l.y > n.by1) n.by1 = l.y;
+			n.sx += l.x;
+			n.sy += l.y;
+			n.cnt++;
+			n = n.parent;
+		}
+	}
+	for (const n of M.nodes) {
+		n.cx = n.sx / Math.max(1, n.cnt);
+		n.cy = n.sy / Math.max(1, n.cnt);
+		n.rad = Math.max(S0, Math.hypot(n.bx1 - n.bx0, n.by1 - n.by0) / 2);
+	}
+	M.crown.F = [0, 0];
+	let wx0 = 1e9, wy0 = 1e9, wx1 = -1e9, wy1 = -1e9;
+	for (const l of M.leaves) {
+		wx0 = Math.min(wx0, l.x);
+		wx1 = Math.max(wx1, l.x);
+		wy0 = Math.min(wy0, l.y);
+		wy1 = Math.max(wy1, l.y);
+	}
+	if (!M.leaves.length) {
+		wx0 = -S0 * 4;
+		wx1 = S0 * 4;
+		wy0 = -S0 * 4;
+		wy1 = groundY;
+	}
+	M.bounds = {
+		x0: wx0 - S0 * 6,
+		y0: wy0 - S0 * 6,
+		x1: wx1 + S0 * 6,
+		y1: wy1 + S0 * 6
+	};
+	M.crownBounds = {
+		x0: minX,
+		x1: maxX,
+		y0: minY,
+		y1: maxY
+	};
+	for (const b of M.branches) buildBranchGeom(b);
+	for (const b of M.branches) b.subOf = b.node ? b.node.parent : b.owner;
+	M.grid = buildGrid(M);
+	assignDisplayNames(M);
+	M.nameCount = /* @__PURE__ */ new Map();
+	for (const f of F) M.nameCount.set(f.name, (M.nameCount.get(f.name) || 0) + 1);
+	M.byPath = new Map(F.map((f) => [f.path, f]));
+	M.layoutRec = {
+		v: LAYOUT_VERSION,
+		files: raw.files.length,
+		u: unionRecs(ctx),
+		memo: [...ctx.memo],
+		final: finalRecs(ctx),
+		sigs: replay ? replay.sigs : ctx.sigs,
+		splits: replay ? replay.splits : [...ctx.splits],
+		orders: replay ? replay.orders : [...ctx.orders],
+		warmRun: replay ? replay.warmRun : warm ? warm.warmRun + 1 : 0,
+		sig: dataSig(raw)
+	};
+	M.buildStats = {
+		memoHits: ctx.memoHits,
+		unions: ctx.unions.length,
+		replay: !!replay,
+		warm: !!warm,
+		resolved: ctx.resolved,
+		compactMs: Math.round(tCompact),
+		passLog: ctx.passLog,
+		...ctx.stats
+	};
+	if (ctx.cache && ctx.ci !== ctx.cache.length) M.replayMismatch = true;
+	return M;
+}
+var BOILER = /* @__PURE__ */ new Set([
+	"src",
+	"main",
+	"java",
+	"kotlin",
+	"scala",
+	"com",
+	"org",
+	"net",
+	"io",
+	"pkg",
+	"internal"
+]);
+var normSeg = (s) => s.toLowerCase().replace(/[-_.\s]/g, "");
+function assignDisplayNames(M) {
+	const crown = M.nodes.filter((n) => n.kind === "crown" && n.depth >= 1);
+	const nonFinal = /* @__PURE__ */ new Map();
+	for (const n of crown) {
+		const s = n.name.split("/");
+		for (let i = 0; i < s.length - 1; i++) nonFinal.set(normSeg(s[i]), (nonFinal.get(normSeg(s[i])) || 0) + 1);
+	}
+	const boiler = (s) => BOILER.has(s.toLowerCase()) || (nonFinal.get(normSeg(s)) || 0) >= 3;
+	const said = (n) => {
+		const out = /* @__PURE__ */ new Set([normSeg(M.name)]);
+		for (let q = n.parent; q && q.depth >= 1; q = q.parent) for (const s of q.name.split("/")) out.add(normSeg(s));
+		return out;
+	};
+	for (const n of crown) {
+		const segs = n.name.split("/");
+		const anc = said(n);
+		if (n.depth === 1 || segs.length === 1 && !(n.depth > 2 && anc.has(normSeg(n.name)))) {
+			n.quiet = false;
+			n.disp = shortName(n.name);
+			n.core = segs.length === 1 ? n.name : baseOf(n.name);
+			continue;
+		}
+		const keep = segs.filter((s) => !boiler(s) && !anc.has(normSeg(s)));
+		if (!keep.length) {
+			n.quiet = true;
+			n.core = null;
+			n.disp = (n.parent && n.parent.depth >= 1 ? baseOf(n.parent.name) + "/" : "") + shortName(n.name);
+			continue;
+		}
+		n.quiet = false;
+		n.core = keep.join("/");
+		n.disp = n.core;
+	}
+	const telling = (n) => {
+		let q = n.parent;
+		while (q && q.depth >= 1 && q.quiet) q = q.parent;
+		return q && q.depth >= 1 ? q : null;
+	};
+	for (let round = 0; round < 2; round++) {
+		const cnt = /* @__PURE__ */ new Map();
+		for (const n of crown) if (!n.quiet) cnt.set(n.disp, (cnt.get(n.disp) || 0) + 1);
+		let changed = false;
+		for (const n of crown) {
+			if (n.quiet || (cnt.get(n.disp) || 0) < 2) continue;
+			let q = telling(n);
+			for (let k = 0; k < round && q; k++) q = telling(q);
+			if (!q) continue;
+			const pre = baseOf(q.core || q.name);
+			if (!n.disp.startsWith(pre + "/")) {
+				n.disp = pre + "/" + n.disp;
+				changed = true;
+			}
+		}
+		if (!changed) break;
+	}
+	for (const n of crown) n.disp = shortName(n.disp);
+}
+function buildBranchGeom(b) {
+	const c = b.cp, SEG = STEM_SEG;
+	const left = [], right = [], pts = [];
+	const L = Math.hypot(b.x1 - b.x0, b.y1 - b.y0) || 1;
+	for (let i = 0; i <= SEG; i++) {
+		const t = i / SEG, mt = 1 - t;
+		const x = mt * mt * mt * c[0] + 3 * mt * mt * t * c[2] + 3 * mt * t * t * c[4] + t * t * t * c[6];
+		const y = mt * mt * mt * c[1] + 3 * mt * mt * t * c[3] + 3 * mt * t * t * c[5] + t * t * t * c[7];
+		let tx = 3 * mt * mt * (c[2] - c[0]) + 6 * mt * t * (c[4] - c[2]) + 3 * t * t * (c[6] - c[4]);
+		let ty = 3 * mt * mt * (c[3] - c[1]) + 6 * mt * t * (c[5] - c[3]) + 3 * t * t * (c[7] - c[5]);
+		const tl = Math.hypot(tx, ty) || 1;
+		tx /= tl;
+		ty /= tl;
+		const w = taperHW(b.wb, b.we, t);
+		pts.push([
+			x,
+			y,
+			tx,
+			ty
+		]);
+		left.push(x - ty * w, y + tx * w);
+		right.push(x + ty * w, y - tx * w);
+	}
+	b.c = c.slice();
+	b.len = L;
+	b.pts = pts;
+	const poly = new Float32Array((SEG + 1) * 4);
+	for (let i = 0; i <= SEG; i++) {
+		poly[i * 2] = left[i * 2];
+		poly[i * 2 + 1] = left[i * 2 + 1];
+	}
+	for (let i = 0; i <= SEG; i++) {
+		const j = SEG - i;
+		poly[(SEG + 1) * 2 + i * 2] = right[j * 2];
+		poly[(SEG + 1) * 2 + i * 2 + 1] = right[j * 2 + 1];
+	}
+	b.poly = poly;
+	let bx0 = 1e9, by0 = 1e9, bx1 = -1e9, by1 = -1e9;
+	for (const q of pts) {
+		bx0 = Math.min(bx0, q[0]);
+		bx1 = Math.max(bx1, q[0]);
+		by0 = Math.min(by0, q[1]);
+		by1 = Math.max(by1, q[1]);
+	}
+	b.bx0 = bx0 - b.wb;
+	b.bx1 = bx1 + b.wb;
+	b.by0 = by0 - b.wb;
+	b.by1 = by1 + b.wb;
+}
+function buildGrid(M) {
+	const G = S0 * 4, cells = /* @__PURE__ */ new Map();
+	const key = (i, j) => i * 100003 + j;
+	const add = (x, y, item) => {
+		const k = key(Math.floor(x / G), Math.floor(y / G));
+		let a = cells.get(k);
+		if (!a) cells.set(k, a = []);
+		a.push(item);
+	};
+	for (const l of M.leaves) add(l.x, l.y, { leaf: l });
+	for (const b of M.branches) for (const p of b.pts) add(p[0], p[1], {
+		br: b,
+		p
+	});
+	return {
+		G,
+		near(x, y, r) {
+			const out = [];
+			const i0 = Math.floor((x - r) / G), i1 = Math.floor((x + r) / G), j0 = Math.floor((y - r) / G), j1 = Math.floor((y + r) / G);
+			for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+				const a = cells.get(key(i, j));
+				if (a) for (const it of a) out.push(it);
+			}
+			return out;
+		}
+	};
+}
+function isUnder(n, anc) {
+	while (n) {
+		if (n === anc) return true;
+		n = n.parent;
+	}
+	return false;
+}
+//#endregion
+//#region src/lib/codetree/engine.ts
+var WARM_RUN_MAX = 25;
+var MODELS_MAX = 8;
+var MODELS = /* @__PURE__ */ new Map();
+var INFLIGHT = /* @__PURE__ */ new Map();
+var LAST_INFO = /* @__PURE__ */ new Map();
+function cachedModel(repo, raw) {
+	return MODELS.get(repo + "\0" + dataSig(raw)) || null;
+}
+var worker;
+var nextId = 1;
+var waiting = /* @__PURE__ */ new Map();
+function getWorker() {
+	if (worker !== void 0) return worker;
+	try {
+		worker = new Worker(new URL(
+			/* @vite-ignore */
+			"/codetree-worker.js",
+			"" + import.meta.url
+		), {
+			type: "module",
+			name: "codetree-layout"
+		});
+		worker.onmessage = (e) => {
+			const d = e.data || {};
+			const w = waiting.get(d.id);
+			if (!w) return;
+			if (typeof d.progress === "number") w.prog?.(d.progress);
+			else {
+				waiting.delete(d.id);
+				if (d.rec) w.ok({
+					rec: d.rec,
+					ms: d.ms || 0
+				});
+				else w.bad(new Error(d.error || "layout failed"));
+			}
+		};
+		worker.onerror = () => {
+			for (const [, w] of waiting) w.bad(/* @__PURE__ */ new Error("layout worker failed"));
+			waiting.clear();
+			worker = null;
+		};
+	} catch {
+		worker = null;
+	}
+	return worker;
+}
+function inWorker(raw, warm, prog) {
+	const w = getWorker();
+	if (!w) return Promise.reject(/* @__PURE__ */ new Error("no worker"));
+	const id = nextId++;
+	return new Promise((ok, bad) => {
+		waiting.set(id, {
+			ok,
+			bad,
+			prog
+		});
+		try {
+			w.postMessage({
+				id,
+				raw,
+				warm
+			});
+		} catch (err) {
+			waiting.delete(id);
+			bad(err);
+		}
+	});
+}
+var paint = () => new Promise((r) => setTimeout(r, 30));
+function remember(key, M) {
+	MODELS.delete(key);
+	MODELS.set(key, M);
+	while (MODELS.size > MODELS_MAX) MODELS.delete(MODELS.keys().next().value);
+}
+function layoutModel(repo, raw, onProgress) {
+	const sig = dataSig(raw);
+	const key = repo + "\0" + sig;
+	const hit = MODELS.get(key);
+	if (hit) {
+		LAST_INFO.set(repo, {
+			how: "memory",
+			ms: 0,
+			files: raw.files.length
+		});
+		return Promise.resolve(hit);
+	}
+	const fl = INFLIGHT.get(key);
+	if (fl) return fl;
+	const p = (async () => {
+		const t0 = performance.now();
+		const recs = await loadRecords(repo);
+		const exact = recs.find((r) => r.sig === sig);
+		if (exact) {
+			const M = buildModel(raw, {
+				quantise: true,
+				replay: exact.rec
+			});
+			if (!M.replayMismatch) {
+				LAST_INFO.set(repo, {
+					how: "replay",
+					ms: Math.round(performance.now() - t0),
+					files: raw.files.length
+				});
+				remember(key, M);
+				return M;
+			}
+		}
+		const newest = recs.find((r) => r.rec && r.rec.warmRun < WARM_RUN_MAX) || null;
+		const warm = newest ? newest.rec : null;
+		let rec;
+		let how = warm ? "warm" : "cold";
+		try {
+			rec = (await inWorker(raw, warm, onProgress)).rec;
+		} catch {
+			await paint();
+			how = "main-thread";
+			rec = buildModel(raw, {
+				quantise: true,
+				warm,
+				tick: onProgress
+			}).layoutRec;
+		}
+		const M = buildModel(raw, {
+			quantise: true,
+			replay: rec
+		});
+		LAST_INFO.set(repo, {
+			how,
+			ms: Math.round(performance.now() - t0),
+			files: raw.files.length
+		});
+		remember(key, M);
+		saveRecord(repo, sig, rec);
+		return M;
+	})();
+	INFLIGHT.set(key, p);
+	p.finally(() => INFLIGHT.delete(key)).catch(() => void 0);
+	return p;
+}
+//#endregion
+//#region src/lib/codetree/input.ts
+var BYTES_PER_LINE = 32;
+var CODE_EXT = new Set("py ts tsx js jsx mjs cjs java kt kts scala go rs sh bash zsh ps1 sql html htm css scss sass less groovy rb c h cc cpp cxx hpp hh swift m mm cs fs vue svelte php pl pm lua dart ex exs erl clj r jl".split(" "));
+var ASSET_EXT = new Set("png jpg jpeg gif webp ico icns bmp tiff svgz woff woff2 ttf otf eot pdf zip gz tgz bz2 xz 7z jar war ear class so dylib dll exe bin dat db sqlite sqlite3 mp3 mp4 mov wav ogg webm pyc wasm node pkl pickle joblib onnx pt pth ckpt h5 hdf5 npy npz safetensors tflite pb parquet avro orc feather arrow mmdb model weights psd ai sketch fig".split(" "));
+function extOf(p) {
+	const b = p.slice(p.lastIndexOf("/") + 1);
+	const i = b.lastIndexOf(".");
+	return i > 0 ? b.slice(i + 1).toLowerCase() : "";
+}
+function kindOf(p) {
+	const e = extOf(p);
+	return CODE_EXT.has(e) ? "c" : ASSET_EXT.has(e) ? "a" : "d";
+}
+var MAX_DOC_LINES = 2e3;
+var MAX_CODE_LINES = 2e4;
+function linesOf(size, kind) {
+	if (kind === "a") return 0;
+	if (kind === "d") return Math.max(1, Math.min(MAX_DOC_LINES, Math.round((size || 0) / 40)));
+	return Math.max(1, Math.min(MAX_CODE_LINES, Math.round((size || 0) / BYTES_PER_LINE)));
+}
+var dirname = (p) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+var basename = (p) => p.slice(p.lastIndexOf("/") + 1);
+function testStem(b) {
+	let s = b.includes(".") ? b.slice(0, b.lastIndexOf(".")) : b;
+	s = s.replace(/\.(test|spec)$/, "");
+	s = s.replace(/^test_/, "");
+	s = s.replace(/_test$/, "");
+	s = s.replace(/(Tests|Test|IT)$/, "");
+	return s.toLowerCase();
+}
+var codeStem = (b) => (b.includes(".") ? b.slice(0, b.lastIndexOf(".")) : b).toLowerCase();
+function testTargets(paths, kinds, tests, imports) {
+	const stemMap = /* @__PURE__ */ new Map();
+	paths.forEach((p, i) => {
+		if (tests.has(i) || kinds[i] !== "c") return;
+		const st = codeStem(basename(p));
+		const a = stemMap.get(st);
+		if (a) a.push(i);
+		else stemMap.set(st, [i]);
+	});
+	const out = /* @__PURE__ */ new Map();
+	for (const i of tests) {
+		const p = paths[i];
+		const cands = stemMap.get(testStem(basename(p))) || [];
+		const imps = (imports[i] || []).filter((j) => !tests.has(j));
+		let tgt = null;
+		if (cands.length) {
+			const both = cands.filter((c) => imps.includes(c));
+			const pool = both.length ? both : cands;
+			const me = new Set(p.split("/"));
+			let best = -1, bestK = null;
+			for (const j of pool) {
+				const segs = new Set(paths[j].split("/"));
+				let shared = 0;
+				for (const s of segs) if (me.has(s)) shared++;
+				const k = [shared, -paths[j].length];
+				if (!bestK || k[0] > bestK[0] || k[0] === bestK[0] && k[1] > bestK[1]) {
+					bestK = k;
+					best = j;
+				}
+			}
+			tgt = best;
+		} else if (imps.length) {
+			const dirs = /* @__PURE__ */ new Map();
+			for (const j of imps) {
+				const parts = paths[j].split("/").slice(0, -1);
+				for (let k = 1; k <= parts.length; k++) {
+					const d = parts.slice(0, k).join("/");
+					dirs.set(d, (dirs.get(d) || 0) + 1);
+				}
+			}
+			const need = Math.max(1, Math.floor((imps.length + 1) / 2));
+			let bestD = null;
+			for (const [d, c] of dirs) if (c >= need && (bestD === null || d.split("/").length > bestD.split("/").length)) bestD = d;
+			if (bestD !== null) {
+				out.set(i, bestD);
+				continue;
+			}
+			tgt = imps[0];
+		}
+		out.set(i, tgt === null ? null : dirname(paths[tgt]));
+	}
+	return out;
+}
+function rawFromSnapshot(snap, name) {
+	const rows = snap.files || [];
+	const paths = rows.map((r) => String(r[0] || ""));
+	const kinds = paths.map(kindOf);
+	const tests = effectiveTests({
+		files: rows,
+		edges: snap.edges || []
+	});
+	const imports = rows.map(() => []);
+	for (const e of snap.edges || []) {
+		const [a, b] = e;
+		if (a === b || a < 0 || b < 0 || a >= rows.length || b >= rows.length) continue;
+		const l = imports[a];
+		if (l[l.length - 1] !== b && !l.includes(b)) l.push(b);
+	}
+	for (const l of imports) l.sort((x, y) => x - y);
+	const targets = testTargets(paths, kinds, tests, imports);
+	const files = rows.map((r, i) => {
+		const f = {
+			p: paths[i],
+			n: linesOf(Number(r[1]) || 0, kinds[i]),
+			k: kinds[i]
+		};
+		if (tests.has(i)) f.t = true;
+		if (imports[i].length) f.i = imports[i];
+		const g = targets.get(i);
+		if (g !== void 0 && g !== null) f.g = g;
+		return f;
+	});
+	return {
+		name: name || "repo",
+		files
+	};
+}
+//#endregion
+//#region src/lib/codetree/palette.ts
+var HUES = [
+	146,
+	104,
+	172,
+	124,
+	88,
+	158,
+	116,
+	186,
+	98,
+	136,
+	166,
+	80,
+	130,
+	178,
+	110,
+	152
+];
+var BIRD_FALLBACK = [
+	"#ffa24d",
+	"#56b4e9",
+	"#ee5d8f",
+	"#e6d75a",
+	"#4fd1a5",
+	"#c58cff"
+];
+var BIRD_GLYPHS = [
+	"●",
+	"▲",
+	"■",
+	"◆",
+	"★",
+	"✚",
+	"⬟"
+];
+var HOLLOW = {
+	"●": "○",
+	"▲": "△",
+	"■": "□",
+	"◆": "◇",
+	"★": "☆",
+	"✚": "✛",
+	"⬟": "⬠"
+};
+function helperGlyph(parent, index) {
+	return (HOLLOW[parent] || "○") + index;
+}
+function glyphShape(glyph) {
+	const g = glyph.replace(/\d+$/, "");
+	for (const k in HOLLOW) if (HOLLOW[k] === g) return k;
+	return g;
+}
+var PROBE = null;
+function resolveColor(v) {
+	if (!/color-mix|var\(|light-dark/.test(v) || typeof document === "undefined") return v;
+	try {
+		if (!PROBE || !PROBE.isConnected) {
+			PROBE = document.createElement("span");
+			PROBE.style.display = "none";
+			PROBE.setAttribute("aria-hidden", "true");
+			document.body.appendChild(PROBE);
+		}
+		PROBE.style.color = "";
+		PROBE.style.color = v;
+		return getComputedStyle(PROBE).color || v;
+	} catch {
+		return v;
+	}
+}
+function readVar(cs, name, dflt) {
+	if (!cs) return dflt;
+	const v = cs.getPropertyValue(name).trim();
+	return v ? resolveColor(v) : dflt;
+}
+function num(cs, name, dflt) {
+	const v = parseFloat(readVar(cs, name, ""));
+	return Number.isFinite(v) ? v : dflt;
+}
+function readPalette(el) {
+	const cs = el && typeof getComputedStyle !== "undefined" ? getComputedStyle(el) : null;
+	const light = typeof document !== "undefined" && document.documentElement.classList.contains("light");
+	const v = (n, d) => readVar(cs, n, d);
+	const A = num(cs, "--ct-fol-a", 0);
+	const L = num(cs, "--ct-fol-l", 1);
+	const Sat = num(cs, "--ct-fol-s", 1);
+	const LL = num(cs, "--ct-label-l", 72);
+	const cl = (x) => Math.max(4, Math.min(92, x));
+	const hsl = (h, s, l) => `hsl(${h},${Math.min(100, Math.round(s * Sat))}%,${cl(A + l * L).toFixed(1)}%)`;
+	const PAL = [];
+	const PALV = [];
+	const CS = num(cs, "--ct-calm-s", .2), CK = num(cs, "--ct-calm-k", .3), CM = num(cs, "--ct-calm-mid", 23);
+	const calm = (h, s, l) => hsl(h, s * CS, CM + (l - CM) * CK);
+	for (let i = 0; i < 40; i++) {
+		const h = HUES[i % HUES.length];
+		for (const [arr, f] of [[PAL, calm], [PALV, hsl]]) arr.push({
+			blob: f(h, 26, 21),
+			blobHi: f(h, 30, 27),
+			leafA: f(h, 34, 46),
+			leafB: f(h + 8, 29, 39),
+			doc: f(h - 20, 9, 42),
+			fold: f(h, 20, 26),
+			label: arr === PAL ? v("--ct-calm-label", "#8a90a2") : `hsl(${h},30%,${LL}%)`,
+			cv: [
+				f(h, 30, 33),
+				f(h + 9, 27, 29),
+				f(h - 7, 33, 38)
+			],
+			cvHi: f(h + 4, 36, 47),
+			cvSh: f(h, 28, 13)
+		});
+	}
+	const dusk = v("--ct-dusk", "#23262d");
+	const DUSK = {
+		blob: v("--ct-dusk-blob", "#191c22"),
+		blobHi: v("--ct-dusk-blob-hi", "#1c1f26"),
+		leafA: v("--ct-dusk-leaf", "#2b2f37"),
+		leafB: v("--ct-dusk-leaf-b", "#272a31"),
+		doc: v("--ct-dusk-doc", "#262930"),
+		bark: v("--ct-dusk-bark", "#2a2827"),
+		fold: v("--ct-dusk-fold", "#1f2228"),
+		label: v("--ct-dusk-label", "#a3a9b8"),
+		cv: [
+			dusk,
+			v("--ct-dusk-b", "#212329"),
+			v("--ct-dusk-c", "#25282f")
+		],
+		cvHi: v("--ct-dusk-hi", "#2b2e35"),
+		cvSh: v("--ct-dusk-sh", "#131519")
+	};
+	const KEEP = {
+		blob: hsl(10, 30, 18),
+		blobHi: hsl(10, 34, 22),
+		leafA: hsl(10, 48, 46),
+		leafB: hsl(14, 40, 38),
+		doc: hsl(10, 24, 38),
+		fold: hsl(10, 30, 24),
+		label: v("--ct-keep-text", "#ffb7a3"),
+		cv: [
+			hsl(10, 40, 33),
+			hsl(14, 36, 29),
+			hsl(8, 42, 37)
+		],
+		cvHi: hsl(12, 48, 46),
+		cvSh: hsl(10, 30, 13)
+	};
+	const RA = num(cs, "--ct-root-a", 0);
+	const RL = num(cs, "--ct-root-l", 1);
+	const rh = (h, s, l) => `hsl(${h},${s}%,${Math.max(4, Math.min(92, RA + l * RL)).toFixed(1)}%)`;
+	const ROOTPAL = {
+		blob: rh(28, 24, 10.5),
+		blobHi: rh(28, 22, 12),
+		leafA: rh(34, 20, 40),
+		leafB: rh(30, 16, 34),
+		doc: rh(30, 10, 30),
+		fold: rh(28, 20, 15),
+		label: v("--ct-root-label", "hsl(34,30%,70%)"),
+		cv: [
+			rh(30, 18, 24),
+			rh(26, 16, 21),
+			rh(33, 20, 27)
+		],
+		cvHi: rh(34, 20, 33),
+		cvSh: rh(28, 20, 8)
+	};
+	const PILEPAL = {
+		leafA: rh(30, 30, 40),
+		leafB: rh(22, 25, 33),
+		doc: rh(30, 30, 40)
+	};
+	const red = v("--red", "#de613e"), green = v("--green", "#51bd73"), gold = v("--gold", "#ffd700");
+	const raw = (n, d) => cs ? cs.getPropertyValue(n).trim() || d : d;
+	const glowRgb = raw("--ct-glow", "90, 150, 110");
+	const hatchRgb = raw("--ct-hatch", "255, 150, 120");
+	const selRgb = raw("--ct-select", "255, 255, 255");
+	const P = {
+		key: "",
+		light,
+		font: v("--ct-font", "system-ui, -apple-system, Segoe UI, sans-serif"),
+		bg: v("--bg", "#0f1117"),
+		panel: v("--panel", "#171a23"),
+		panel2: v("--panel-2", "#1e222e"),
+		border: v("--border", "#2a2f3c"),
+		text: v("--text", "#d7dae3"),
+		muted: v("--muted", "#8a90a2"),
+		accent: v("--accent", "#7d56f4"),
+		red,
+		green,
+		gold,
+		PAL,
+		PALV,
+		litBark: v("--ct-lit-bark", "hsl(32,22%,62%)"),
+		calmLabel: v("--ct-calm-label", "#8a90a2"),
+		signKeepText: v("--ct-sign-keep-text", "#fff"),
+		signOnlyText: v("--ct-sign-only-text", "#062611"),
+		DUSK,
+		KEEP,
+		ROOTPAL,
+		PILEPAL,
+		BARK: {
+			crown: v("--ct-calm-bark", v("--ct-bark", "hsl(28,14%,37%)")),
+			crownHi: v("--ct-bark-hi", "hsl(30,14%,46%)"),
+			root: v("--ct-root", "hsl(27,22%,30%)"),
+			rootHi: v("--ct-root-hi", "hsl(28,26%,42%)"),
+			rootDusk: v("--ct-root-dusk", "#1f1c1a")
+		},
+		duskLabel: DUSK.label,
+		duskLeafLabel: v("--ct-dusk-leaf-label", "#7c8291"),
+		rootLabel: ROOTPAL.label,
+		pileLabel: v("--ct-pile-label", "hsl(32,32%,66%)"),
+		keepText: v("--ct-keep-text", "#ffb7a3"),
+		onlyText: v("--ct-only-text", "#a8f0c0"),
+		leafLabel: v("--ct-leaf-label", "#c9cdd6"),
+		sky: [v("--ct-sky-top", "#0d0f15"), v("--ct-sky-bottom", "#131722")],
+		soil: [v("--ct-soil-top", "#16120e"), v("--ct-soil-bottom", "#0c0a08")],
+		glow: `rgba(${glowRgb},0.035)`,
+		glow0: `rgba(${glowRgb},0)`,
+		groundLine: v("--ct-ground-line", "hsl(30,14%,24%)"),
+		mass: v("--ct-calm-mass", v("--ct-mass", "hsl(142,26%,20%)")),
+		halo: v("--ct-halo", "rgba(12,14,19,0.92)"),
+		pill: v("--ct-pill", "rgba(15,17,23,0.9)"),
+		pillEdge: v("--ct-pill-edge", "rgba(255,255,255,0.08)"),
+		pillText: v("--ct-pill-text", "#eef0f5"),
+		keepBg: v("--ct-keep-bg", "rgba(60,20,14,0.95)"),
+		onlyBg: v("--ct-only-bg", "rgba(16,46,28,0.95)"),
+		keepWrap: v("--ct-keep-wrap", "rgba(40,10,6,0.95)"),
+		onlyWrap: v("--ct-only-wrap", "rgba(6,30,14,0.95)"),
+		hatch: `rgba(${hatchRgb},0.5)`,
+		hatchDim: `rgba(${hatchRgb},0.32)`,
+		badgeBg: v("--ct-badge-bg", "rgba(24,22,10,0.94)"),
+		sel: `rgb(${selRgb})`,
+		selHalo: `rgba(${selRgb},0.35)`,
+		mark: `rgba(${selRgb},0.7)`,
+		hover: v("--ct-hover", "rgba(170,176,190,0.8)"),
+		sep: v("--ct-sep", "#5a6070"),
+		bud: v("--ct-bud", "rgba(255,228,240,0.95)"),
+		budGhost: v("--ct-bud-ghost", "rgba(255,240,246,0.92)"),
+		bonkBg: v("--ct-bonk-bg", "rgba(40,12,8,0.9)"),
+		bonkX: v("--ct-bonk-x", "#ff9b80"),
+		nestBowl: v("--ct-nest", "hsl(33,32%,26%)"),
+		nestTwig: v("--ct-nest-twig", "hsl(34,30%,44%)"),
+		nestRim: v("--ct-nest-rim", "hsl(34,26%,58%)"),
+		editStroke: `rgba(${selRgb},0.85)`,
+		glyphStroke: v("--ct-halo", "rgba(12,14,19,0.9)"),
+		vine: "rgba(255,215,0,0.22)",
+		miniBg: v("--ct-mini-bg", "#12151d"),
+		miniSoil: v("--ct-mini-soil", "#17130f"),
+		miniDim: v("--ct-mini-dim", "rgba(10,12,16,0.62)"),
+		miniView: v("--ct-mini-view", "rgba(215,218,227,0.8)"),
+		miniRoot: v("--ct-mini-root", "hsl(30,22%,22%)")
+	};
+	P.key = [
+		light,
+		P.bg,
+		P.accent,
+		P.text,
+		P.red,
+		P.green,
+		P.gold,
+		P.sky.join(),
+		P.BARK.crown,
+		A,
+		L,
+		Sat,
+		P.halo
+	].join("|");
+	return P;
+}
+function birdColours(accent, n, extra = BIRD_FALLBACK) {
+	const hue = (c) => {
+		const m = /^#([0-9a-f]{6})$/i.exec(c.trim());
+		if (!m) return null;
+		const x = parseInt(m[1], 16);
+		const r = (x >> 16) / 255, g = (x >> 8 & 255) / 255, b = (x & 255) / 255;
+		const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+		if (mx === mn) return null;
+		const d = mx - mn;
+		return ((mx === r ? (g - b) / d % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4) * 60 + 360) % 360;
+	};
+	const ha = hue(accent);
+	const pool = extra.filter((c) => {
+		const h = hue(c);
+		if (ha === null || h === null) return true;
+		const d = Math.abs(h - ha);
+		return Math.min(d, 360 - d) > 28;
+	});
+	const out = [accent];
+	for (let i = 1; i < n; i++) out.push(pool[(i - 1) % Math.max(1, pool.length)] || extra[(i - 1) % extra.length]);
+	return out;
+}
+//#endregion
+//#region src/lib/codetree/subagents.ts
+var SUB_IDLE_S = 120;
+var SUB_LINGER_S = 45;
+function splitFeed(feed) {
+	const main = [];
+	const byAgent = /* @__PURE__ */ new Map();
+	for (const r of feed) {
+		const a = r.agent ? String(r.agent) : "";
+		if (!a) {
+			main.push(r);
+			continue;
+		}
+		const list = byAgent.get(a);
+		if (list) list.push(r);
+		else byAgent.set(a, [r]);
+	}
+	return {
+		main,
+		byAgent
+	};
+}
+function subName(atype, desc, index) {
+	const t = atype.trim(), d = desc.trim();
+	if (t && d) return `${t} · ${d}`;
+	return t || d || `helper ${index}`;
+}
+function subShort(atype, index) {
+	return `${atype.trim().toLowerCase().replace(/\s+/g, "-") || "helper"}#${index}`;
+}
+function subagentsOf(feed, serverNow, activity = "", idx = /* @__PURE__ */ new Map()) {
+	const recs = feed.slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
+	const calls = [];
+	const callById = /* @__PURE__ */ new Map();
+	const subs = /* @__PURE__ */ new Map();
+	for (const r of recs) {
+		const ts = r.ts || 0;
+		if (r.agent) {
+			const id = String(r.agent);
+			let s = subs.get(id);
+			if (!s) subs.set(id, s = {
+				first: ts,
+				last: ts,
+				type: "",
+				recs: []
+			});
+			s.last = Math.max(s.last, ts);
+			if (!s.type && r.agent_type) s.type = String(r.agent_type);
+			s.recs.push(r);
+			continue;
+		}
+		if (r.kind !== "agent") continue;
+		const id = r.id || "";
+		let c = id ? callById.get(id) : void 0;
+		if (r.ev === "pre") {
+			if (!c) {
+				c = {
+					id,
+					ts,
+					desc: r.desc || "",
+					atype: r.atype || "",
+					closedTs: null,
+					taken: false
+				};
+				calls.push(c);
+				if (id) callById.set(id, c);
+			}
+		} else if (c) c.closedTs = ts;
+		else if (id) {
+			c = {
+				id,
+				ts: -Infinity,
+				desc: r.desc || "",
+				atype: r.atype || "",
+				closedTs: ts,
+				taken: false
+			};
+			calls.push(c);
+			callById.set(id, c);
+		}
+	}
+	let next = 1;
+	for (const v of idx.values()) next = Math.max(next, v + 1);
+	const idle = activity === "idle" || activity === "offline";
+	const out = [];
+	const order = [...subs.entries()].sort((a, b) => a[1].first - b[1].first);
+	for (const [id, s] of order) {
+		const before = calls.filter((c) => !c.taken && c.ts <= s.first);
+		const rank = (c) => (c.closedTs === null || c.closedTs >= s.first ? 2 : 0) + (s.type && c.atype === s.type ? 1 : 0);
+		let call = null;
+		for (const c of before) if (!call || rank(c) > rank(call) || rank(c) === rank(call) && c.ts >= call.ts) call = c;
+		if (call) call.taken = true;
+		let index = idx.get(id);
+		if (index === void 0) {
+			index = next++;
+			idx.set(id, index);
+		}
+		const atype = s.type || (call ? call.atype : "");
+		const desc = call ? call.desc : "";
+		let doneTs = Infinity;
+		if (call && call.closedTs !== null && call.closedTs >= s.last) doneTs = call.closedTs;
+		else if (serverNow - s.last > SUB_IDLE_S) doneTs = s.last + SUB_IDLE_S;
+		else if (idle) doneTs = s.last;
+		const done = doneTs !== Infinity;
+		out.push({
+			id,
+			index,
+			atype,
+			desc,
+			name: subName(atype, desc, index),
+			short: subShort(atype, index),
+			firstTs: s.first,
+			lastTs: s.last,
+			callId: call ? call.id : null,
+			done,
+			doneTs,
+			listed: !done || serverNow - doneTs < SUB_LINGER_S,
+			recs: s.recs
+		});
+	}
+	return out;
+}
+function parseColour(c) {
+	const s = c.trim();
+	let m = /^#([0-9a-f]{6})$/i.exec(s);
+	if (m) {
+		const x = parseInt(m[1], 16);
+		return [
+			x >> 16,
+			x >> 8 & 255,
+			x & 255
+		];
+	}
+	m = /^#([0-9a-f]{3})$/i.exec(s);
+	if (m) return [
+		0,
+		1,
+		2
+	].map((i) => parseInt(m[1][i] + m[1][i], 16));
+	m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i.exec(s);
+	if (m) return [
+		+m[1],
+		+m[2],
+		+m[3]
+	].map((v) => Math.max(0, Math.min(255, Math.round(v))));
+	return null;
+}
+function toHsl([r, g, b]) {
+	const R = r / 255, G = g / 255, B = b / 255;
+	const mx = Math.max(R, G, B), mn = Math.min(R, G, B);
+	const l = (mx + mn) / 2;
+	if (mx === mn) return [
+		0,
+		0,
+		l
+	];
+	const d = mx - mn;
+	const s = l > .5 ? d / (2 - mx - mn) : d / (mx + mn);
+	return [
+		mx === R ? ((G - B) / d + (G < B ? 6 : 0)) * 60 : mx === G ? ((B - R) / d + 2) * 60 : ((R - G) / d + 4) * 60,
+		s,
+		l
+	];
+}
+function fromHsl(h, s, l) {
+	const k = (n) => (n + h / 30) % 12;
+	const a = s * Math.min(l, 1 - l);
+	const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+	const hex = (v) => Math.round(v * 255).toString(16).padStart(2, "0");
+	return "#" + hex(f(0)) + hex(f(8)) + hex(f(4));
+}
+function subColour(parent, index, light) {
+	const rgb = parseColour(parent);
+	if (!rgb) return parent;
+	const [h, s, l] = toHsl(rgb);
+	const k = Math.max(1, index);
+	const step = 14 + 9 * Math.floor((k - 1) / 2);
+	const dh = (k % 2 ? 1 : -1) * Math.min(40, step);
+	const L = light ? Math.max(.22, Math.min(.42, l - .1 - .02 * ((k - 1) % 3))) : Math.max(.62, Math.min(.84, l + .1 + .03 * ((k - 1) % 3)));
+	const S = Math.max(.35, Math.min(.9, s * .92));
+	return fromHsl((h + dh + 360) % 360, S, L);
+}
+function helperLine(status, file) {
+	if (status === "done") return "done";
+	if (status === "blocked") return file ? `blocked at ${file}` : "blocked";
+	if ((status === "reading" || status === "editing" || status === "creating") && file) return `${status} ${file}`;
+	if (status === "planning") return "planning";
+	return "thinking";
+}
+//#endregion
+//#region src/lib/codetree/live.ts
+var PERCH_S = 75;
+function deepestMajority(M, ids) {
+	if (!ids.length) return M.crown;
+	const cnt = /* @__PURE__ */ new Map();
+	for (const id of ids) {
+		let n = M.files[id]?.node || null;
+		if (n && n.kind === "root") n = M.files[id].tests || null;
+		if (n && n.kind === "pile") n = null;
+		while (n) {
+			cnt.set(n, (cnt.get(n) || 0) + 1);
+			n = n.parent;
+		}
+	}
+	let best = null;
+	for (const [n, c] of cnt) if (c * 2 > ids.length && n.kind === "crown" && (!best || n.depth > best.depth)) best = n;
+	if (!best) {
+		for (const [n, c] of cnt) if (c * 2 >= ids.length && n.kind === "crown" && (!best || n.depth > best.depth)) best = n;
+	}
+	return best || M.crown;
+}
+function nestFor(M, A) {
+	const recent = [...A.edits.keys()].slice(-5);
+	if (recent.length) return deepestMajority(M, recent);
+	if (A.plan.size) return deepestMajority(M, [...A.plan]);
+	if (A.planNew.length) {
+		const ids = A.planNew.map((p) => p.node.files[0]?.id).filter((x) => x !== void 0);
+		if (ids.length) return deepestMajority(M, ids);
+	}
+	const reads = [...A.reads.keys()].slice(-5);
+	return reads.length ? deepestMajority(M, reads) : M.crown;
+}
+function folderFor(M, path) {
+	let d = dirOf(path);
+	while (d && !M.nodeOf.has(d)) d = dirOf(d);
+	return d && M.nodeOf.get(d) || M.crown;
+}
+function touchesOf(feed) {
+	const out = [];
+	const recs = feed.slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
+	for (const r of recs) {
+		const ts = r.ts || 0;
+		if (r.deny) {
+			if (r.deny.path && !r.deny.push) out.push({
+				ts,
+				type: "blocked",
+				path: r.deny.path,
+				zoneId: r.deny.zone_id,
+				green: r.deny.kind === "green"
+			});
+			continue;
+		}
+		if (r.kind === "plan" && r.ev !== "pre") {
+			out.push({
+				ts,
+				type: "plan",
+				path: ""
+			});
+			continue;
+		}
+		if (r.ev === "pre") {
+			if (r.kind === "read") for (const p of r.reads || []) out.push({
+				ts,
+				type: "read",
+				path: p
+			});
+			continue;
+		}
+		if (r.ev === "post") {
+			for (const p of r.writes || []) out.push({
+				ts,
+				type: r.tool === "Write" ? "create" : "edit",
+				path: p
+			});
+			if (r.kind !== "edit" && r.kind !== "read") for (const p of r.reads || []) out.push({
+				ts,
+				type: "read",
+				path: p
+			});
+		}
+	}
+	return out;
+}
+var LiveBirds = class {
+	byKey = /* @__PURE__ */ new Map();
+	lastKey = /* @__PURE__ */ new Map();
+	M = null;
+	subIdx = /* @__PURE__ */ new Map();
+	subIds = /* @__PURE__ */ new Map();
+	nextId = 100;
+	primed = false;
+	agents = [];
+	update(M, inp) {
+		const fresh = this.M !== M;
+		if (fresh) this.primed = false;
+		this.M = M;
+		const live = inp.live;
+		const others = /* @__PURE__ */ new Map();
+		for (const o of live?.others || []) {
+			if (!o || !o.session || o.session === inp.title) continue;
+			const a = others.get(o.session) || [];
+			a.push({
+				path: o.path,
+				ts: o.ts || 0
+			});
+			others.set(o.session, a);
+		}
+		const { main } = splitFeed(inp.feed);
+		const subs = subagentsOf(inp.feed, inp.serverNow, live?.activity || "", this.subIdx);
+		const listed = subs.filter((s) => s.listed);
+		const own = touchesOf(main);
+		const foldT = touchesOf(subs.filter((s) => !s.listed).flatMap((s) => s.recs)).map((t) => ({
+			...t,
+			fold: true
+		}));
+		const claimed = /* @__PURE__ */ new Set();
+		const subTouches = /* @__PURE__ */ new Map();
+		for (const s of listed) {
+			const ts = touchesOf(s.recs);
+			subTouches.set(s.id, ts);
+			for (const t of ts) if (t.type === "edit" || t.type === "create") claimed.add(t.path);
+		}
+		const keys = [inp.title, ...[...others.keys()].sort()];
+		const colours = birdColours(inp.accent, keys.length);
+		const out = [];
+		const seen = /* @__PURE__ */ new Set();
+		keys.forEach((key, i) => {
+			const ag = {
+				id: i,
+				key,
+				name: key,
+				color: colours[i],
+				glyph: BIRD_GLYPHS[i % BIRD_GLYPHS.length],
+				primary: i === 0
+			};
+			let A = this.byKey.get(key);
+			if (!A || fresh) {
+				A = emptyAgent(ag);
+				this.byKey.set(key, A);
+			} else A.ag = ag;
+			seen.add(key);
+			if (i === 0) {
+				const all = foldT.length ? own.concat(foldT).sort((a, b) => a.ts - b.ts) : own;
+				fill(M, A, all, {
+					prim: inp,
+					viewNow: inp.viewNow,
+					zones: inp.zones,
+					exclude: claimed
+				});
+				this.place(M, A, own, inp, live?.activity || "", false);
+				out.push(A);
+				for (const s of listed) {
+					const S = this.subBird(M, A, s, subTouches.get(s.id) || [], inp, fresh);
+					seen.add(S.ag.key);
+					out.push(S);
+				}
+				return;
+			}
+			const touches = (others.get(key) || []).slice().sort((a, b) => a.ts - b.ts).map((e) => ({
+				ts: e.ts,
+				type: "edit",
+				path: e.path
+			}));
+			fill(M, A, touches, {
+				prim: null,
+				viewNow: null,
+				zones: inp.zones
+			});
+			this.place(M, A, touches, inp, "working", false);
+			out.push(A);
+		});
+		for (const k of [...this.byKey.keys()]) if (!seen.has(k)) {
+			this.byKey.delete(k);
+			this.lastKey.delete(k);
+		}
+		this.agents = out;
+		this.primed = true;
+		return out;
+	}
+	subBird(M, P, s, touches, inp, fresh) {
+		const key = P.ag.key + "::" + s.id;
+		let id = this.subIds.get(key);
+		if (id === void 0) {
+			id = this.nextId++;
+			this.subIds.set(key, id);
+		}
+		const ag = {
+			id,
+			key,
+			name: s.name,
+			short: s.short,
+			color: subColour(P.ag.color, s.index, !!inp.light),
+			glyph: helperGlyph(P.ag.glyph, s.index),
+			primary: false,
+			parent: P.ag.key,
+			sub: s.index
+		};
+		let A = this.byKey.get(key);
+		const born = !A || fresh;
+		if (!A || fresh) {
+			A = emptyAgent(ag);
+			this.byKey.set(key, A);
+			this.lastKey.delete(key);
+			if (P.cur) A.evs = [{
+				...P.cur,
+				t: inp.viewNow - 100
+			}];
+		} else A.ag = ag;
+		A.subInfo = s;
+		fill(M, A, touches, {
+			prim: null,
+			viewNow: inp.viewNow,
+			zones: inp.zones
+		});
+		A.nest = P.nest;
+		A.nestSince = P.nestSince;
+		this.place(M, A, touches, inp, s.done ? "idle" : "working", born && this.primed);
+		A.task = s.desc;
+		return A;
+	}
+	place(M, A, touches, inp, activity, flyIn) {
+		let last = null;
+		for (let k = touches.length - 1; k >= 0; k--) {
+			const t = touches[k];
+			if (t.type === "plan" || M.byPath.has(t.path)) {
+				last = t;
+				break;
+			}
+		}
+		const age = last ? inp.serverNow - last.ts : Infinity;
+		const perched = !!last && last.type !== "plan" && age < PERCH_S && activity !== "idle" && activity !== "offline";
+		let status;
+		if (!touches.length && !A.edits.size && !A.plan.size) status = activity === "working" ? "thinking" : activity === "idle" && A.ag.parent ? "done" : "waiting";
+		else if (activity === "idle" || activity === "offline") status = "done";
+		else if (activity === "clarify") status = "waiting";
+		else if (perched && last) status = last.type === "blocked" ? "blocked" : last.type === "read" ? "reading" : last.type === "create" ? "creating" : "editing";
+		else if (A.plan.size && last && last.type === "plan") status = "planning";
+		else status = "thinking";
+		A.status = status;
+		A.done = status === "done";
+		A.activity = activity;
+		A.file = perched && last ? M.byPath.get(last.path) || null : null;
+		const evKey = perched && last ? last.type + "|" + last.path + "|" + last.ts : "nest|" + (A.nest ? A.nest.path : "");
+		const prevKey = this.lastKey.get(A.ag.key);
+		if (prevKey !== evKey) {
+			const t = prevKey === void 0 && !flyIn ? inp.viewNow - 100 : inp.viewNow;
+			const ev = {
+				t,
+				type: perched && last ? last.type === "blocked" ? "edit" : last.type : "nest",
+				f: perched && last ? M.byPath.get(last.path) || null : null,
+				blocked: perched && last && last.type === "blocked" ? A.blocked[A.blocked.length - 1]?.z || null : null,
+				nestNode: A.nest
+			};
+			A.evs = [...A.evs.slice(-1), ev];
+			A.cur = ev;
+			if (perched && last && last.type === "blocked" && A.blocked.length) A.blocked[A.blocked.length - 1].t = t;
+			this.lastKey.set(A.ag.key, evKey);
+		} else if (A.cur) A.cur.nestNode = A.nest;
+		if (!A.cur) {
+			const ev = {
+				t: inp.viewNow - 100,
+				type: "nest",
+				f: null,
+				blocked: null,
+				nestNode: A.nest
+			};
+			A.evs = [ev];
+			A.cur = ev;
+		}
+	}
+};
+var EDIT_SEEN = /* @__PURE__ */ new WeakMap();
+function emptyAgent(ag) {
+	return {
+		ag,
+		reads: /* @__PURE__ */ new Map(),
+		edits: /* @__PURE__ */ new Map(),
+		plan: /* @__PURE__ */ new Set(),
+		planNew: [],
+		created: /* @__PURE__ */ new Set(),
+		blocked: [],
+		nest: null,
+		nestSince: 0,
+		evs: [],
+		cur: null,
+		lastEdit: null,
+		status: "waiting",
+		file: null,
+		done: false,
+		activity: "",
+		task: ""
+	};
+}
+function fill(M, A, touches, ctx) {
+	const { prim, zones } = ctx;
+	const reads = /* @__PURE__ */ new Map(), edits = /* @__PURE__ */ new Map(), created = /* @__PURE__ */ new Set();
+	const blocked = [];
+	const oldBlocked = new Map(A.blocked.map((b) => [b.path + "|" + b.kind, b.t]));
+	let lastEdit = null;
+	const live = prim?.live || null;
+	if (prim && live) for (const c of live.changed || []) {
+		if (ctx.exclude && ctx.exclude.has(c.path)) continue;
+		const f = M.byPath.get(c.path);
+		if (f) edits.set(f.id, 0);
+	}
+	for (const t of touches) {
+		const f = M.byPath.get(t.path) || null;
+		if (t.type === "read" && f) {
+			reads.delete(f.id);
+			reads.set(f.id, t.ts);
+		} else if ((t.type === "edit" || t.type === "create") && f) {
+			edits.delete(f.id);
+			edits.set(f.id, t.ts);
+			if (t.type === "create") created.add(f.id);
+			if (!t.fold) lastEdit = {
+				f,
+				t: t.ts
+			};
+		} else if (t.type === "blocked") {
+			const z = zoneById(zones, t.zoneId, f, !!t.green);
+			const kind = t.green ? "only" : "keep";
+			blocked.push({
+				t: oldBlocked.get(t.path + "|" + kind) ?? -100,
+				f,
+				z,
+				kind,
+				path: t.path
+			});
+		}
+	}
+	if (lastEdit) {
+		const key = lastEdit.f.id + "|" + lastEdit.t;
+		const prev = EDIT_SEEN.get(A);
+		lastEdit.t = prev && prev.key === key ? prev.t : prev && ctx.viewNow !== null ? ctx.viewNow : -100;
+		EDIT_SEEN.set(A, {
+			key,
+			t: lastEdit.t
+		});
+	} else if (!EDIT_SEEN.has(A)) EDIT_SEEN.set(A, {
+		key: "",
+		t: -100
+	});
+	A.reads = reads;
+	A.edits = edits;
+	A.created = created;
+	A.blocked = blocked.slice(-12);
+	A.lastEdit = lastEdit;
+	const plan = /* @__PURE__ */ new Set();
+	const planNew = [];
+	const items = prim && live?.plan?.items || [];
+	const pts = prim && live?.plan?.ts || 0;
+	for (const it of items) {
+		if (!it || !it.path) continue;
+		const f = M.byPath.get(it.path);
+		if (f) {
+			const e = edits.get(f.id);
+			if (e === void 0 || e > 0 && e < pts || e === 0 && !pts) plan.add(f.id);
+		} else planNew.push({
+			path: it.path,
+			node: folderFor(M, it.path)
+		});
+	}
+	A.plan = plan;
+	A.planNew = planNew;
+	const nest = nestFor(M, A);
+	if (nest !== A.nest) {
+		A.nest = nest;
+		A.nestSince = ctx.viewNow !== null ? ctx.viewNow : 0;
+	}
+}
+function zoneById(zones, id, f, green) {
+	if (id) {
+		const z = zones.find((z) => z.z.id === id && (!f || z.file === f.id || !!z.node && isUnderNode(f.node, z.node)));
+		if (z) return z;
+		const any = zones.find((z) => z.z.id === id);
+		if (any) return any;
+	}
+	if (green) return zones.find((z) => z.type === "only") || null;
+	return null;
+}
+function isUnderNode(n, anc) {
+	for (let q = n; q; q = q.parent) if (q === anc) return true;
+	return false;
+}
+var STATUS_TXT = {
+	waiting: "waiting",
+	planning: "planning",
+	reading: "reading",
+	editing: "editing",
+	creating: "creating",
+	blocked: "blocked",
+	thinking: "thinking",
+	done: "done"
+};
+//#endregion
+//#region src/lib/codetree/zones.ts
+var FILE_ZONE_CAP = 300;
+function compile(z, ci) {
+	if (!z.re) return null;
+	try {
+		return new RegExp(z.re, ci ? "i" : "");
+	} catch {
+		return null;
+	}
+}
+function treeZones(M, zones, ci = false) {
+	const out = [];
+	const regions = [
+		M.crown,
+		M.roots,
+		...M.piles
+	];
+	for (const z of zones) {
+		const rx = compile(z, ci);
+		if (!rx) continue;
+		const hit = /* @__PURE__ */ new Set();
+		for (const f of M.files) if (!f.ghost && rx.test(f.path)) hit.add(f.id);
+		if (!hit.size) continue;
+		const type = isGreen(z) ? "only" : "keep";
+		const label = z.name || shortName(z.pattern.replace(/^\/+/, "").replace(/\/(\*\*)?$/, ""));
+		const covered = /* @__PURE__ */ new Set();
+		const whole = /* @__PURE__ */ new Map();
+		const calc = (n) => {
+			let any = false, all = true;
+			for (const f of n.files) {
+				if (f.ghost) continue;
+				any = true;
+				if (!hit.has(f.id)) all = false;
+			}
+			for (const k of n.kids) {
+				const w = calc(k);
+				if (k.nFiles) {
+					any = true;
+					if (!w) all = false;
+				}
+			}
+			const r = all && any;
+			whole.set(n, r);
+			return r;
+		};
+		const top = (n) => {
+			if (n.depth >= 1 && whole.get(n)) {
+				out.push({
+					type,
+					node: n,
+					file: null,
+					z,
+					waived: !!z.waived,
+					label
+				});
+				for (const m of allNodes(n)) for (const f of m.files) covered.add(f.id);
+				return;
+			}
+			for (const k of n.kids) top(k);
+		};
+		for (const r of regions) if (r.kind === "pile") {
+			if (r.files.length && r.files.every((f) => hit.has(f.id))) {
+				out.push({
+					type,
+					node: r,
+					file: null,
+					z,
+					waived: !!z.waived,
+					label
+				});
+				for (const f of r.files) covered.add(f.id);
+			}
+		} else {
+			calc(r);
+			top(r);
+		}
+		let n = 0;
+		for (const id of hit) {
+			if (covered.has(id)) continue;
+			if (++n > FILE_ZONE_CAP) break;
+			out.push({
+				type,
+				node: null,
+				file: id,
+				z,
+				waived: !!z.waived,
+				label
+			});
+		}
+	}
+	return out;
+}
+function zoneOfFile(f, zones) {
+	const live = zones.filter((z) => !z.waived);
+	if (!live.length) return null;
+	const anc = /* @__PURE__ */ new Set();
+	for (let n = f.node; n; n = n.parent) anc.add(n);
+	const inZone = (z) => z.file === f.id || !!z.node && anc.has(z.node);
+	for (const z of live) if (z.type === "keep" && inZone(z)) return {
+		type: "keep",
+		z
+	};
+	const only = live.filter((z) => z.type === "only");
+	if (only.length && !only.some(inZone)) return {
+		type: "only",
+		z: only[0]
+	};
+	return null;
+}
+function patternFor(M, target) {
+	if (target.file) return {
+		pattern: anchoredZonePath(target.file.path),
+		label: target.file.path
+	};
+	const n = target.node;
+	if (!n) return { error: "Click a folder name, a branch or a leaf." };
+	if (n.depth === 0 && n.kind !== "pile") return { error: "Paint a branch, not the trunk — the whole repo cannot be fenced." };
+	if (n.kind === "crown") return {
+		pattern: anchoredZonePath(n.path),
+		label: n.path
+	};
+	const files = allNodes(n).flatMap((m) => m.files);
+	if (!files.length) return { error: "Nothing to fence here." };
+	const dirs = files.map((f) => f.path.split("/").slice(0, -1));
+	let common = dirs[0];
+	for (const d of dirs) {
+		let k = 0;
+		while (k < common.length && k < d.length && common[k] === d[k]) k++;
+		common = common.slice(0, k);
+	}
+	const dir = common.join("/");
+	if (!dir) return { error: `${n.label || n.name} lies in the repo root — fence its files one by one (zoom in and click a leaf).` };
+	const mine = new Set(files.map((f) => f.id));
+	if (M.files.some((f) => !mine.has(f.id) && f.path.startsWith(dir + "/"))) return { error: `${n.label || n.name} share ${dir}/ with other files — fence that folder from search, or single files.` };
+	return {
+		pattern: anchoredZonePath(dir),
+		label: dir
+	};
+}
+//#endregion
+//#region src/lib/flock.ts
+var SPECIES = [
+	{
+		d: "#7d56f4",
+		l: "#422d8a"
+	},
+	{
+		d: "#3d8bfd",
+		l: "#144791"
+	},
+	{
+		d: "#18b3dd",
+		l: "#095c73"
+	},
+	{
+		d: "#2ec2b3",
+		l: "#09635b"
+	},
+	{
+		d: "#44b556",
+		l: "#1a5825"
+	},
+	{
+		d: "#e8b71e",
+		l: "#675007"
+	},
+	{
+		d: "#a8c332",
+		l: "#48560c"
+	},
+	{
+		d: "#f07b3c",
+		l: "#8a3d0d"
+	},
+	{
+		d: "#d444f1",
+		l: "#70148a"
+	},
+	{
+		d: "#e5484d",
+		l: "#841419"
+	},
+	{
+		d: "#ee5d8f",
+		l: "#8c1e47"
+	},
+	{
+		d: "#97a1b5",
+		l: "#3d4554"
+	}
+];
+var SPRITE_URL = "/bird.png";
+var SPRITE_W = 216;
+var SPRITE_H = 160;
+var HINGE = .56;
+var sprite = null;
+var tints = /* @__PURE__ */ new Map();
+function birdSprite() {
+	if (typeof Image === "undefined") return null;
+	if (!sprite) {
+		sprite = new Image();
+		sprite.src = SPRITE_URL;
+	}
+	return sprite;
+}
+function tinted(color) {
+	const img = birdSprite();
+	if (!img || !img.complete || !img.naturalWidth) return null;
+	const cached = tints.get(color);
+	if (cached) return cached;
+	const c = document.createElement("canvas");
+	c.width = SPRITE_W;
+	c.height = SPRITE_H;
+	const g = c.getContext("2d");
+	if (!g) return null;
+	g.drawImage(img, 0, 0, SPRITE_W, SPRITE_H);
+	g.globalCompositeOperation = "source-in";
+	g.fillStyle = color;
+	g.fillRect(0, 0, SPRITE_W, SPRITE_H);
+	tints.set(color, c);
+	return c;
+}
+var GATHER_MS = 820;
+var HATCH_FLIGHT_MS = 4e3;
+function startFlock(canvas, opts = {}) {
+	const ctx = canvas.getContext("2d");
+	if (!ctx) return {
+		stop: () => {},
+		gather: () => 0
+	};
+	const areaPerBird = opts.areaPerBird ?? 14e3;
+	const minBirds = opts.min ?? 45;
+	const maxBirds = opts.max ?? 160;
+	const alpha = opts.alpha ?? .95;
+	const boids = [];
+	let W = 0;
+	let H = 0;
+	let frame = 0;
+	let raf = 0;
+	let stopped = false;
+	let light = document.documentElement.classList.contains("light");
+	let transit = null;
+	let hatchFrom = null;
+	let hatchEnd = 0;
+	const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+	function pickTarget(b) {
+		b.tx = Math.random() * W;
+		b.ty = Math.random() * H;
+		b.tt = 200 + Math.random() * 400;
+	}
+	function resize() {
+		const dpr = Math.min(window.devicePixelRatio || 1, 2);
+		const w = canvas.clientWidth;
+		const h = canvas.clientHeight;
+		if (!w || !h) return;
+		W = w;
+		H = h;
+		canvas.width = Math.round(W * dpr);
+		canvas.height = Math.round(H * dpr);
+		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+		if (transit || hatchFrom) return;
+		const n = Math.min(maxBirds, Math.max(minBirds, Math.round(W * H / areaPerBird)));
+		for (const b of boids) pickTarget(b);
+		while (boids.length < n) {
+			const b = {
+				x: Math.random() * W,
+				y: Math.random() * H,
+				vx: (Math.random() - .5) * 2,
+				vy: (Math.random() - .5) * 2,
+				sp: SPECIES[Math.floor(Math.random() * SPECIES.length)],
+				size: 1.35 + Math.random() * .95,
+				phase: Math.random() * Math.PI * 2,
+				freq: .07 + Math.random() * .05,
+				tx: 0,
+				ty: 0,
+				tt: 0,
+				gx: 0,
+				gy: 0,
+				curve: (Math.random() - .5) * 2,
+				delay: 0,
+				shrink: 1,
+				fade: 1,
+				s0: 1,
+				f0: 1,
+				hatchAt: 0
+			};
+			pickTarget(b);
+			boids.push(b);
+		}
+		boids.length = n;
+		if (reduced) {
+			for (const b of boids) {
+				b.x = (b.x % W + W) % W;
+				b.y = (b.y % H + H) % H;
+			}
+			for (let k = 0; k < 60; k++) step();
+			draw();
+		}
+	}
+	function step() {
+		const R2 = 1225;
+		const SEP = 225;
+		for (let i = 0; i < boids.length; i++) {
+			const b = boids[i];
+			if (b.hatchAt) continue;
+			let cx = 0;
+			let cy = 0;
+			let ax = 0;
+			let ay = 0;
+			let sx = 0;
+			let sy = 0;
+			let n = 0;
+			for (let j = 0; j < boids.length; j++) {
+				if (i === j) continue;
+				const o = boids[j];
+				if (o.hatchAt) continue;
+				const dx = o.x - b.x;
+				const dy = o.y - b.y;
+				const d2 = dx * dx + dy * dy;
+				if (d2 < R2) {
+					cx += o.x;
+					cy += o.y;
+					ax += o.vx;
+					ay += o.vy;
+					n++;
+					if (d2 < SEP && d2 > 0) {
+						sx -= dx / d2;
+						sy -= dy / d2;
+					}
+				}
+			}
+			if (n) {
+				b.vx += (cx / n - b.x) * .0012 + (ax / n - b.vx) * .035 + sx * 3.2;
+				b.vy += (cy / n - b.y) * .0012 + (ay / n - b.vy) * .035 + sy * 3.2;
+			}
+			let tdx = b.tx - b.x;
+			if (tdx > W / 2) tdx -= W;
+			else if (tdx < -W / 2) tdx += W;
+			let tdy = b.ty - b.y;
+			if (tdy > H / 2) tdy -= H;
+			else if (tdy < -H / 2) tdy += H;
+			if ((b.tt -= 1) <= 0 || tdx * tdx + tdy * tdy < 625) pickTarget(b);
+			b.vx += tdx * 4e-4;
+			b.vy += tdy * 4e-4;
+			const sp = Math.sqrt(b.vx * b.vx + b.vy * b.vy) || 1;
+			const max = 1.1;
+			const min = .4;
+			if (sp > max) {
+				b.vx = b.vx / sp * max;
+				b.vy = b.vy / sp * max;
+			}
+			if (sp < min) {
+				b.vx = b.vx / sp * min;
+				b.vy = b.vy / sp * min;
+			}
+			b.x += b.vx;
+			b.y += b.vy;
+			if (b.x < -20) b.x = W + 20;
+			if (b.x > W + 20) b.x = -20;
+			if (b.y < -20) b.y = H + 20;
+			if (b.y > H + 20) b.y = -20;
+		}
+	}
+	function smoothstep(t) {
+		const c = Math.min(1, Math.max(0, t));
+		return c * c * (3 - 2 * c);
+	}
+	function beginGather(x, y) {
+		hatchFrom = null;
+		for (const b of boids) {
+			b.hatchAt = 0;
+			b.gx = b.x;
+			b.gy = b.y;
+			b.delay = Math.random() * .25;
+			b.s0 = b.shrink;
+			b.f0 = b.fade;
+		}
+		transit = {
+			x,
+			y,
+			t0: performance.now()
+		};
+	}
+	function gatherStep(now) {
+		const h = transit;
+		const raw = Math.min(1, (now - h.t0) / GATHER_MS);
+		for (const b of boids) {
+			const t = smoothstep((raw - b.delay) / (1 - b.delay));
+			const dx = h.x - b.gx;
+			const dy = h.y - b.gy;
+			const len = Math.hypot(dx, dy) || 1;
+			const arc = Math.sin(t * Math.PI) * b.curve * Math.min(120, len * .3);
+			const px = b.x;
+			const py = b.y;
+			b.x = b.gx + dx * t + -dy / len * arc;
+			b.y = b.gy + dy * t + dx / len * arc;
+			const mx = b.x - px;
+			const my = b.y - py;
+			if (mx * mx + my * my > 1e-4) {
+				b.vx = mx;
+				b.vy = my;
+			}
+			b.shrink = b.s0 * (1 - t * .82);
+			b.fade = b.f0 * (1 - smoothstep((t - .72) / .28));
+		}
+		return raw < 1;
+	}
+	function beginHatch(x, y) {
+		transit = null;
+		const t0 = performance.now();
+		const launchWindow = Math.max(0, 16e3);
+		for (let i = 0; i < boids.length; i++) {
+			const b = boids[i];
+			b.gx = b.x;
+			b.gy = b.y;
+			b.x = x;
+			b.y = y;
+			b.shrink = .16;
+			b.fade = 0;
+			b.hatchAt = t0 + launchWindow * (i + Math.random()) / Math.max(1, boids.length);
+		}
+		hatchFrom = {
+			x,
+			y
+		};
+		hatchEnd = t0 + launchWindow + HATCH_FLIGHT_MS;
+	}
+	function land(b) {
+		b.x = b.gx;
+		b.y = b.gy;
+		b.shrink = 1;
+		b.fade = 1;
+		const a = Math.hypot(b.vx, b.vy) > .001 ? Math.atan2(b.vy, b.vx) : Math.random() * Math.PI * 2;
+		b.vx = Math.cos(a) * .8;
+		b.vy = Math.sin(a) * .8;
+		b.hatchAt = 0;
+		pickTarget(b);
+	}
+	function hatchStep(now) {
+		const h = hatchFrom;
+		for (const b of boids) {
+			if (!b.hatchAt) continue;
+			const raw = (now - b.hatchAt) / HATCH_FLIGHT_MS;
+			if (raw <= 0) {
+				b.x = h.x;
+				b.y = h.y;
+				b.fade = 0;
+				continue;
+			}
+			if (raw >= 1) {
+				land(b);
+				continue;
+			}
+			const t = smoothstep(raw);
+			const dx = b.gx - h.x;
+			const dy = b.gy - h.y;
+			const len = Math.hypot(dx, dy) || 1;
+			const arc = Math.sin(t * Math.PI) * b.curve * Math.min(120, len * .3);
+			const px = b.x;
+			const py = b.y;
+			b.x = h.x + dx * t + -dy / len * arc;
+			b.y = h.y + dy * t + dx / len * arc;
+			const mx = b.x - px;
+			const my = b.y - py;
+			if (mx * mx + my * my > 1e-4) {
+				b.vx = mx;
+				b.vy = my;
+			}
+			b.shrink = .16 + .84 * t;
+			b.fade = smoothstep(raw / .18);
+		}
+		if (now < hatchEnd) return;
+		for (const b of boids) if (b.hatchAt) land(b);
+		hatchFrom = null;
+		resize();
+	}
+	function vectorBird(g, w, flap) {
+		g.beginPath();
+		g.ellipse(0, 0, w * .42, w * .13, 0, 0, Math.PI * 2);
+		g.fill();
+		g.beginPath();
+		g.moveTo(-w * .12, 0);
+		g.lineTo(w * .1, -w * .5 * flap);
+		g.lineTo(w * .28, 0);
+		g.closePath();
+		g.fill();
+	}
+	function draw() {
+		const g = ctx;
+		frame++;
+		g.clearRect(0, 0, W, H);
+		for (const b of boids) {
+			const flapRate = transit || b.hatchAt ? 2.4 : 1;
+			const a = Math.atan2(b.vy, b.vx);
+			const color = light ? b.sp.l : b.sp.d;
+			const img = tinted(color);
+			const bw = 15 * b.size * b.shrink;
+			const bh = bw * SPRITE_H / SPRITE_W;
+			const hy = Math.round(SPRITE_H * HINGE);
+			const hp = bh * HINGE;
+			const f = .65 + .4 * Math.sin(frame * b.freq * flapRate + b.phase);
+			g.globalAlpha = alpha * b.fade;
+			g.save();
+			g.translate(b.x, b.y);
+			g.rotate(a);
+			if (b.vx < 0) g.scale(1, -1);
+			if (img) {
+				g.drawImage(img, 0, hy, SPRITE_W, 70, -bw / 2, hp - bh / 2, bw, bh - hp);
+				g.translate(0, hp - bh / 2);
+				g.scale(1, Math.max(.2, f));
+				g.drawImage(img, 0, 0, SPRITE_W, hy, -bw / 2, -hp, bw, hp);
+			} else {
+				g.fillStyle = color;
+				vectorBird(g, bw, Math.max(.2, f));
+			}
+			g.restore();
+		}
+		g.globalAlpha = 1;
+	}
+	function loop() {
+		if (stopped) return;
+		if (!document.hidden) {
+			const now = performance.now();
+			if (transit) gatherStep(now);
+			else {
+				if (hatchFrom) hatchStep(now);
+				step();
+			}
+			draw();
+		}
+		raf = requestAnimationFrame(loop);
+	}
+	const themeWatch = new MutationObserver(() => {
+		const next = document.documentElement.classList.contains("light");
+		if (next === light) return;
+		light = next;
+		if (reduced) draw();
+	});
+	themeWatch.observe(document.documentElement, {
+		attributes: true,
+		attributeFilter: ["class"]
+	});
+	const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => resize()) : null;
+	if (ro) ro.observe(canvas);
+	window.addEventListener("resize", resize);
+	const spriteImg = birdSprite();
+	const onSpriteReady = () => {
+		if (!stopped && reduced) draw();
+	};
+	const spritePending = !!spriteImg && !(spriteImg.complete && spriteImg.naturalWidth);
+	if (spritePending) spriteImg.addEventListener("load", onSpriteReady);
+	resize();
+	if (reduced) {
+		for (let k = 0; k < 900; k++) step();
+		draw();
+	} else {
+		if (opts.emergeFrom && boids.length) beginHatch(opts.emergeFrom.x, opts.emergeFrom.y);
+		raf = requestAnimationFrame(loop);
+	}
+	return {
+		stop() {
+			if (stopped) return;
+			stopped = true;
+			cancelAnimationFrame(raf);
+			themeWatch.disconnect();
+			if (ro) ro.disconnect();
+			window.removeEventListener("resize", resize);
+			if (spritePending) spriteImg.removeEventListener("load", onSpriteReady);
+		},
+		gather(x, y) {
+			if (reduced || stopped) return 0;
+			if (transit) return Math.max(0, GATHER_MS - (performance.now() - transit.t0));
+			beginGather(x, y);
+			return GATHER_MS;
+		}
+	};
+}
+//#endregion
+//#region src/lib/codetree/blast.ts
+function blastOf(M, fid) {
+	const h1 = new Set(M.files[fid].usedBy);
+	h1.delete(fid);
+	return { h1 };
+}
+function agentBlast(M, A, cache) {
+	const ids = /* @__PURE__ */ new Set();
+	const by = /* @__PURE__ */ new Map();
+	for (const [fid] of A.edits) {
+		let b = cache.get(fid);
+		if (!b) {
+			b = blastOf(M, fid);
+			cache.set(fid, b);
+		}
+		for (const id of b.h1) {
+			ids.add(id);
+			by.set(id, fid);
+		}
+	}
+	return {
+		ids,
+		by
+	};
+}
+function addBadgeSets(v, ids, by, owner, alpha, shown = () => true) {
+	const M = v.M;
+	const lp = v.cam.z * S0;
+	const deep = lp > 24 ? 3 : lp > 11 ? 2 : 1;
+	const who = owner.ag ? "a" + owner.ag.id : owner.hover ? "h" : "p";
+	const sets = v.badgeSets || (v.badgeSets = /* @__PURE__ */ new Map());
+	for (const id of ids) {
+		const ff = M.files[id];
+		if (!ff || !ff.leaf || !shown(id)) continue;
+		let n = ff.node;
+		if (!n) continue;
+		if (n.kind !== "pile") {
+			while (n && n.depth > deep) n = n.parent;
+			while (n && n.vHidden) n = n.parent;
+		}
+		if (!n) continue;
+		const key = n.id + "|" + who;
+		let e = sets.get(key);
+		if (!e) sets.set(key, e = {
+			n,
+			ids: /* @__PURE__ */ new Set(),
+			files: /* @__PURE__ */ new Set(),
+			alpha: 0,
+			ag: owner.ag,
+			pin: !owner.ag,
+			hover: owner.hover,
+			who
+		});
+		e.ids.add(id);
+		e.files.add(by ? by.get(id) : owner.fid);
+		e.alpha = Math.max(e.alpha, alpha * (owner.hover ? .9 : 1));
+	}
+}
+function collectBadges(v) {
+	const M = v.M;
+	const CAP = 12;
+	const lp = v.cam.z * S0;
+	const sets = [...(v.badgeSets || /* @__PURE__ */ new Map()).values()].filter((e) => e.ids.size);
+	const byWho = /* @__PURE__ */ new Map();
+	for (const e of sets) {
+		let a = byWho.get(e.who);
+		if (!a) byWho.set(e.who, a = []);
+		a.push(e);
+	}
+	const mergeUp = (list, victim) => {
+		let p = victim.n;
+		while (p && p.depth > 1) p = p.parent;
+		const top = p || victim.n;
+		let host = list.find((e) => e.n === top);
+		if (!host) {
+			host = {
+				n: top,
+				ids: /* @__PURE__ */ new Set(),
+				files: /* @__PURE__ */ new Set(),
+				alpha: victim.alpha,
+				ag: victim.ag,
+				pin: victim.pin,
+				hover: victim.hover,
+				who: victim.who
+			};
+			list.push(host);
+		}
+		for (const id of victim.ids) host.ids.add(id);
+		for (const f of victim.files) host.files.add(f);
+		host.alpha = Math.max(host.alpha, victim.alpha);
+		return list.filter((e) => e !== victim);
+	};
+	const out = [];
+	for (const [, arr] of byWho) {
+		let list = arr;
+		if (lp < 14) {
+			for (const e of list.slice()) if (e.ids.size < 3 && e.n.depth > 1 && e.n.kind !== "pile" && list.includes(e)) list = mergeUp(list, e);
+		}
+		while (list.length > CAP) {
+			list.sort((a, b) => a.ids.size - b.ids.size);
+			const victim = list.find((e) => e.n.depth > 1 && e.n.kind !== "pile");
+			if (!victim) break;
+			list = mergeUp(list, victim);
+		}
+		out.push(...list);
+	}
+	const live = out.filter((e) => e.ag);
+	const dedup = out.filter((e) => e.ag || !live.some((L) => L.n === e.n && [...e.ids].every((id) => L.ids.has(id))));
+	const badges = [];
+	for (const e of dedup) {
+		const n = e.n, c = e.ids.size;
+		let P;
+		if (n.kind === "pile") P = [n.cx, M.groundY - (n.h || 0) * .8];
+		else if (n.depth === 0) P = n === M.roots ? [0, M.groundY + S0 * 2] : [0, -S0 * 1.5];
+		else if (n.depth === 1) P = n.F || [n.cx, n.cy];
+		else P = n.branch ? [n.branch.pts[7][0], n.branch.pts[7][1]] : n.F || [n.cx, n.cy];
+		const one = e.files.size === 1 ? M.files[[...e.files][0]] : null;
+		const what = one ? one.name : e.ag ? `${e.ag.short || e.ag.name}'s edits` : "it";
+		const where = n.kind === "pile" ? n.label : n.depth === 0 ? n === M.roots ? "tests" : "root files" : n.kind === "root" ? n.label : n.disp || shortName(n.name);
+		const text = n.kind === "root" || n === M.roots ? `${where} · ${c} ${c === 1 ? "test depends" : "tests depend"} on ${what}` : `${where} · ${c} ${c === 1 ? "depends" : "depend"} on ${what}`;
+		badges.push({
+			x: P[0],
+			y: P[1],
+			text,
+			short: `${where} · ${c}`,
+			alpha: e.alpha,
+			n: c,
+			ag: e.ag,
+			pin: e.pin,
+			node: n,
+			files: e.files,
+			ids: e.ids,
+			what
+		});
+	}
+	badges.sort((a, b) => b.n - a.n);
+	v.badges = badges;
+	return badges;
+}
+//#endregion
+//#region src/lib/codetree/draw.ts
+var EMPTY_HINT = "Nothing here — scroll out, or press ⌂ Whole tree";
+var tg = (t) => t;
+var mg = (M) => M;
+function blockedTxt(n) {
+	return `${n} edit${n === 1 ? "" : "s"} blocked`;
+}
+function tailPath(p) {
+	const segs = p.replace(/^\/+/, "").replace(/\/(\*\*)?$/, "").split("/").filter(Boolean);
+	if (!segs.length) return p;
+	const last = segs[segs.length - 1];
+	return last.length <= 6 && segs.length > 1 ? segs[segs.length - 2] + "/" + last : last;
+}
+function clip$2(s, n = 22) {
+	return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+function trunkPath(M, T) {
+	const G = M.groundY;
+	const tr = new Path2D();
+	tr.moveTo(-T * 1.25, G + S0 * .6);
+	tr.bezierCurveTo(-T * .62, G - T * .25, -T * .52, G * .55, -T * .5, 0);
+	tr.lineTo(T * .5, 0);
+	tr.bezierCurveTo(T * .52, G * .55, T * .62, G - T * .25, T * 1.25, G + S0 * .6);
+	tr.closePath();
+	return tr;
+}
+function prepGeometry(M) {
+	const MG = mg(M);
+	if (MG.geomReady) return;
+	for (const l of M.leaves) {
+		const ca = Math.cos(l.ang), sa = Math.sin(l.ang);
+		const flat = l.region === "ground", root = l.region === "root";
+		const len = l.len, w = len * (root ? .5 : flat ? .3 : .37);
+		const bx = l.x - ca * len * .5, by = l.y - sa * len * .5, tx = l.x + ca * len * .5, ty = l.y + sa * len * .5;
+		const mx = l.x + ca * len * .04, my = l.y + sa * len * .04;
+		l.g = [
+			bx,
+			by,
+			mx - sa * w,
+			my + ca * w,
+			tx,
+			ty,
+			mx + sa * w,
+			my - ca * w
+		];
+	}
+	for (const t0 of M.terms) {
+		const t = tg(t0);
+		const p = new Path2D(), q = new Path2D();
+		const r = t.s * (t.region === "root" ? .6 : .66), r2 = t.s * .44;
+		for (const l of t.leaves) {
+			p.moveTo(l.x + r, l.y);
+			p.arc(l.x, l.y, r, 0, TAU);
+		}
+		for (const l of t.leaves) {
+			q.moveTo(l.x - t.s * .1 + r2, l.y - t.s * .14);
+			q.arc(l.x - t.s * .1, l.y - t.s * .14, r2, 0, TAU);
+		}
+		const f = new Path2D(), rf = t.s * 1.02;
+		for (const l of t.leaves) {
+			f.moveTo(l.x + rf, l.y);
+			f.arc(l.x, l.y, rf, 0, TAU);
+		}
+		t.blob = p;
+		t.blobHi = q;
+		t.blobFold = f;
+	}
+	MG.canopy = /* @__PURE__ */ new Map();
+	for (const t0 of M.terms) {
+		const t = tg(t0);
+		if (!t.leaves.length) continue;
+		const s = t.s, rnd = rng(hashStr(t.node.path + (t.own ? "#" : "") + "~cv"));
+		t.tone = hashStr(t.node.path + (t.own ? "#" : "")) % 3;
+		const cv = {
+			sh: new Path2D(),
+			body: new Path2D(),
+			hi: new Path2D()
+		};
+		const cr = t.R * .8 + s * .45, ccx = t.cx, ccy = t.cy;
+		cv.sh.moveTo(ccx + s * .07 + cr + s * .12, ccy + s * .1);
+		cv.sh.arc(ccx + s * .07, ccy + s * .1, cr + s * .12, 0, TAU);
+		cv.body.moveTo(ccx + cr, ccy);
+		cv.body.arc(ccx, ccy, cr, 0, TAU);
+		if (t.leaves.length > 2) {
+			const hr = cr * .55;
+			cv.hi.moveTo(ccx - cr * .3 + hr, ccy - cr * .34);
+			cv.hi.ellipse(ccx - cr * .3, ccy - cr * .34, hr, hr * .8, -.5, 0, TAU);
+		}
+		for (const l of t.leaves) {
+			const a = l.ang + (rnd() - .5) * .6, k = .9 + rnd() * .2;
+			cv.sh.moveTo(l.x + s * .06 + s * .6, l.y + s * .08);
+			cv.sh.ellipse(l.x + s * .06, l.y + s * .08, s * .6, s * .52, a, 0, TAU);
+			cv.body.moveTo(l.x + s * .6 * k, l.y);
+			cv.body.ellipse(l.x, l.y, s * .6 * k, s * .44 * k, a, 0, TAU);
+			if (rnd() < .62) {
+				const hx = l.x - s * .13, hy = l.y - s * .16;
+				cv.hi.moveTo(hx + s * .32, hy);
+				cv.hi.ellipse(hx, hy, s * .32, s * .22, a, 0, TAU);
+			}
+		}
+		t.cv = cv;
+		const cc = {
+			sh: new Path2D(),
+			body: new Path2D(),
+			hi: new Path2D()
+		}, rr = t.R + s * .52;
+		const nl = Math.max(5, Math.min(9, Math.round(4 + rr / s))), a0 = rnd() * TAU;
+		const lobes = (path, dx, dy, k) => {
+			path.moveTo(ccx + dx + rr * .66 * k, ccy + dy);
+			path.arc(ccx + dx, ccy + dy, rr * .66 * k, 0, TAU);
+			for (let i = 0; i < nl; i++) {
+				const a = a0 + i / nl * TAU + (rnd() - .5) * .5, lr = rr * (.32 + rnd() * .08) * k, d = (rr - lr) * k;
+				const x = ccx + dx + Math.cos(a) * d, y = ccy + dy + Math.sin(a) * d;
+				path.moveTo(x + lr, y);
+				path.arc(x, y, lr, 0, TAU);
+			}
+		};
+		cc.sh.moveTo(ccx + s * .05 + rr * .97, ccy + s * .08);
+		cc.sh.arc(ccx + s * .05, ccy + s * .08, rr * .97, 0, TAU);
+		lobes(cc.body, 0, 0, .96);
+		for (let i = 0; i < 2; i++) {
+			const hr = rr * (.3 - i * .08), hx = ccx - rr * (.28 - i * .22), hy = ccy - rr * (.36 - i * .12);
+			cc.hi.moveTo(hx + hr, hy);
+			cc.hi.arc(hx, hy, hr, 0, TAU);
+		}
+		t.cvc = cc;
+		const limb = t.region === "root" ? -1 : t.node.limb;
+		const key = limb + ":" + t.tone;
+		let B = MG.canopy.get(key);
+		if (!B) MG.canopy.set(key, B = {
+			limb,
+			tone: t.tone,
+			fine: {
+				sh: new Path2D(),
+				body: new Path2D(),
+				hi: new Path2D()
+			},
+			coarse: {
+				sh: new Path2D(),
+				body: new Path2D(),
+				hi: new Path2D()
+			}
+		});
+		for (const L of [
+			"sh",
+			"body",
+			"hi"
+		]) {
+			B.fine[L].addPath(cv[L]);
+			B.coarse[L].addPath(cc[L]);
+		}
+	}
+	MG.mass = buildCrownMass(M);
+	for (const t of M.terms) buildClumpTwig(tg(t));
+	const T = M.trunkW, G = M.groundY;
+	MG.trunkPath = trunkPath(M, T);
+	const rt = new Path2D();
+	rt.moveTo(-T * 1.25, G + S0 * .4);
+	rt.quadraticCurveTo(0, G + T * .7, T * 1.25, G + S0 * .4);
+	rt.closePath();
+	MG.rootFlare = rt;
+	MG.geomReady = true;
+}
+var MASS = {
+	growPx: 13,
+	woodPx: 2.2,
+	cellPx: 3,
+	a: 1
+};
+function buildCrownMass(M) {
+	const B = M.bounds, zf = Math.min(1300 / (B.x1 - B.x0), 800 / (B.y1 - B.y0));
+	const g = Math.max(S0 * .9, MASS.cellPx / zf), grow = MASS.growPx / zf, wclr = Math.max(S0 * .6, MASS.woodPx / zf), CS = Math.max(S0 * 6, grow * 1.5);
+	const cells = /* @__PURE__ */ new Map(), key = (i, j) => i * 65536 + j;
+	const put = (x0, y0, x1, y1, it) => {
+		for (let i = Math.floor(x0 / CS); i <= Math.floor(x1 / CS); i++) for (let j = Math.floor(y0 / CS); j <= Math.floor(y1 / CS); j++) {
+			const k = key(i, j);
+			let a = cells.get(k);
+			if (!a) cells.set(k, a = []);
+			a.push(it);
+		}
+	};
+	const R = grow + g;
+	for (const t of M.terms) if (t.region === "crown" && t.leaves.length) put(t.cx - t.rad - R, t.cy - t.rad - R, t.cx + t.rad + R, t.cy + t.rad + R, { t });
+	for (const b of M.branches) if (b.region === "crown") for (let i = 0; i < b.pts.length - 1; i++) {
+		const p = b.pts[i], q = b.pts[i + 1], hw = taperHW(b.wb, b.we, i / (b.pts.length - 1)), m = hw + wclr + g;
+		put(Math.min(p[0], q[0]) - m, Math.min(p[1], q[1]) - m, Math.max(p[0], q[0]) + m, Math.max(p[1], q[1]) + m, {
+			p,
+			q,
+			hw
+		});
+	}
+	const T = M.trunkW;
+	const path = new Path2D();
+	let n = 0;
+	const rnd = rng(hashStr(M.name + "~mass"));
+	const cb = M.crownBounds, dy = g * .866;
+	for (let row = 0, y = cb.y0 - grow; y <= Math.min(cb.y1 + grow, M.groundY - S0); row++, y += dy) for (let x = cb.x0 - grow + (row & 1 ? g / 2 : 0); x <= cb.x1 + grow; x += g) {
+		const a = cells.get(key(Math.floor(x / CS), Math.floor(y / CS)));
+		if (!a) continue;
+		const jx = x + (rnd() - .5) * g * .5, jy = y + (rnd() - .5) * g * .5;
+		let dT = 1e9, inside = false;
+		for (const it of a) if ("t" in it) {
+			const d = Math.hypot(jx - it.t.cx, jy - it.t.cy) - it.t.rad;
+			if (d < dT) dT = d;
+			if (d < -it.t.s * .8) {
+				inside = true;
+				break;
+			}
+		}
+		if (inside || dT > grow) continue;
+		const r = g * (.62 + .3 * rnd()) * (1 - .35 * Math.max(0, dT) / grow);
+		let clear = true;
+		for (const it of a) if (!("t" in it) && dPS(jx, jy, it.p[0], it.p[1], it.q[0], it.q[1]) - it.hw < wclr + r) {
+			clear = false;
+			break;
+		}
+		if (!clear || jy > -S0 && Math.abs(jx) < T * .75 + wclr + r) continue;
+		path.moveTo(jx + r, jy);
+		path.arc(jx, jy, r, 0, TAU);
+		n++;
+	}
+	const pad = g * .95 + S0;
+	return {
+		path,
+		n,
+		x0: cb.x0 - grow - pad,
+		y0: cb.y0 - grow - pad,
+		x1: cb.x1 + grow + pad,
+		y1: Math.min(cb.y1 + grow, M.groundY) + pad,
+		zf,
+		imgs: /* @__PURE__ */ new Map()
+	};
+}
+function drawMass(g, M, col) {
+	const ms = mg(M).mass;
+	let im = ms.imgs.get(col);
+	if (!im) {
+		const sc = Math.min(ms.zf * 2.4, 2048 / (ms.x1 - ms.x0), 2048 / (ms.y1 - ms.y0));
+		const cv = document.createElement("canvas");
+		cv.width = Math.max(1, Math.ceil((ms.x1 - ms.x0) * sc));
+		cv.height = Math.max(1, Math.ceil((ms.y1 - ms.y0) * sc));
+		const c = cv.getContext("2d");
+		if (c) {
+			c.setTransform(sc, 0, 0, sc, -ms.x0 * sc, -ms.y0 * sc);
+			c.fillStyle = col;
+			c.fill(ms.path);
+		}
+		im = {
+			cv,
+			sc
+		};
+		ms.imgs.set(col, im);
+	}
+	g.drawImage(im.cv, ms.x0, ms.y0, im.cv.width / im.sc, im.cv.height / im.sc);
+}
+function buildClumpTwig(t) {
+	const L = t.leaves;
+	if (!L.length) return;
+	const b = t.branch, R = Math.max(t.R, t.s * .5), cx = t.cx, cy = t.cy;
+	const px = b ? b.x1 : cx, py = b ? b.y1 : cy + R * .6;
+	let hx = 0, hy = -1;
+	if (b) {
+		hx = b.cp[6] - b.cp[4];
+		hy = b.cp[7] - b.cp[5];
+		const hl = Math.hypot(hx, hy) || 1;
+		hx /= hl;
+		hy /= hl;
+	}
+	let ux = cx - px, uy = cy - py;
+	const d0 = Math.hypot(ux, uy);
+	if (d0 < t.s * .3) {
+		ux = hx;
+		uy = hy;
+	} else {
+		ux /= d0;
+		uy /= d0;
+	}
+	const ex = cx + ux * R * .5, ey = cy + uy * R * .5;
+	const kx = px + hx * Math.max(d0, R * .4) * .55, ky = py + hy * Math.max(d0, R * .4) * .55;
+	const qpt = (k) => {
+		const m = 1 - k;
+		return [m * m * px + 2 * m * k * kx + k * k * ex, m * m * py + 2 * m * k * ky + k * k * ey];
+	};
+	const main = new Path2D();
+	main.moveTo(px, py);
+	main.quadraticCurveTo(kx, ky, ex, ey);
+	const skel = [];
+	for (let i = 0; i <= 8; i++) skel.push(qpt(i / 8));
+	const side = new Path2D(), ns = L.length < 4 ? 0 : L.length < 12 ? 2 : L.length < 40 ? 3 : 4;
+	const rnd = rng(hashStr(t.node.path + (t.own ? "#" : "") + "~twig"));
+	for (let i = 0; i < ns; i++) {
+		const k = .38 + .5 * i / Math.max(1, ns - 1) * (ns > 1 ? 1 : 0), [sx, sy] = qpt(k), [sx2, sy2] = qpt(Math.min(1, k + .05));
+		let tx = sx2 - sx, ty = sy2 - sy;
+		const tl = Math.hypot(tx, ty) || 1;
+		tx /= tl;
+		ty /= tl;
+		const a = (i % 2 ? 1 : -1) * (.75 + rnd() * .35), ca = Math.cos(a), sa = Math.sin(a);
+		const dx = tx * ca - ty * sa, dy = tx * sa + ty * ca;
+		let len = R * (.45 + rnd() * .2);
+		for (let it = 0; it < 6 && Math.hypot(sx + dx * len - cx, sy + dy * len - cy) > R * .85; it++) len *= .8;
+		const ox = sx + dx * len, oy = sy + dy * len, mx = sx + dx * len * .5 + tx * len * .18, my = sy + dy * len * .5 + ty * len * .18;
+		side.moveTo(sx, sy);
+		side.quadraticCurveTo(mx, my, ox, oy);
+		for (let j = 1; j <= 4; j++) {
+			const kk = j / 4, m = 1 - kk;
+			skel.push([m * m * sx + 2 * m * kk * mx + kk * kk * ox, m * m * sy + 2 * m * kk * my + kk * kk * oy]);
+		}
+	}
+	const stalk = new Path2D();
+	for (const l of L) {
+		const bx = l.g[0], by = l.g[1];
+		let best = null, bd = 0xde0b6b3a7640000;
+		for (const q of skel) {
+			const dd = (q[0] - bx) * (q[0] - bx) + (q[1] - by) * (q[1] - by);
+			if (dd < bd) {
+				bd = dd;
+				best = q;
+			}
+		}
+		if (best && bd > (t.s * .08) ** 2) {
+			stalk.moveTo(best[0], best[1]);
+			stalk.lineTo(bx, by);
+		}
+	}
+	t.twig = {
+		main,
+		side,
+		stalk,
+		w: b ? Math.max(b.we * .5, .35) : .5
+	};
+}
+var enforced = (zs) => zs.filter((z) => !z.waived);
+function onlyBinds(v, A) {
+	if (!v.hasOnly) return false;
+	if (A.ag.primary) return true;
+	const prim = v.agents.find((a) => a.ag.primary);
+	if (prim && A.ag.parent === prim.ag.key) return true;
+	return v.zones.some((z) => !z.waived && z.type === "only" && z.z.scope !== "worktree");
+}
+function computeFlags(v) {
+	const M = v.M, z = v.cam.z, zones = enforced(v.zones);
+	const keepN = /* @__PURE__ */ new Set(), onlyN = /* @__PURE__ */ new Set();
+	for (const zz of zones) if (zz.node) (zz.type === "keep" ? keepN : onlyN).add(zz.node);
+	for (const zz of zones) if (zz.type === "only" && zz.file != null) {
+		const l = M.files[zz.file] && M.files[zz.file].leaf;
+		if (l && l.term) onlyN.add(l.term.node);
+		else if (l && l.pile) onlyN.add(l.pile);
+	}
+	v.hasOnly = zones.some((zz) => zz.type === "only");
+	const litAnc = /* @__PURE__ */ new Set();
+	for (const n of onlyN) {
+		let q = n;
+		while (q) {
+			litAnc.add(q);
+			q = q.parent;
+		}
+	}
+	v.litAnc = litAnc;
+	for (const n of M.nodes) {
+		const p = n.parent;
+		n.vHidden = p ? !!(p.vHidden || p.vColl) : false;
+		n.vFold = v.folded.has(n);
+		n.vColl = n.vFold || n.depth >= 2 && n.rad * z < 26 || n.depth === 1 && n.kind !== "pile" && n.rad * z < 12;
+		n.fAnc = n.vFold ? n : p ? p.fAnc || null : null;
+		n.keep = keepN.has(n) || (p ? !!p.keep : false);
+		n.lit = !v.hasOnly || onlyN.has(n) || !!(p && p.lit);
+	}
+	v.keepFiles = /* @__PURE__ */ new Set();
+	v.onlyFiles = /* @__PURE__ */ new Set();
+	for (const zz of zones) if (zz.file !== void 0 && zz.file !== null) (zz.type === "keep" ? v.keepFiles : v.onlyFiles).add(zz.file);
+}
+function palFor(P, node, region) {
+	if (region === "root") return P.ROOTPAL;
+	if (region === "ground") return P.PILEPAL;
+	return P.PAL[node.limb % P.PAL.length];
+}
+function staticKey(v) {
+	let k = v.P.key + "|" + v.zones.map((z) => z.type + (z.node ? z.node.id : "f" + z.file) + (z.waived ? "~" : "")).join(",") + "|" + [...v.folded].map((n) => n.id).join(",");
+	for (const A of v.agents) k += "|" + [...A.created].join(",");
+	return k;
+}
+function invalidateStatic(v) {
+	if (v.sc) v.sc.key = "";
+}
+var SC_DPR_CAP = 1.5;
+function render(v, now) {
+	const { g } = v;
+	const cam = v.cam;
+	const W = v.W, H = v.H, dpr = v.dpr, z = cam.z;
+	computeFlags(v);
+	if (!v.sc) {
+		const cv = document.createElement("canvas");
+		v.sc = {
+			cv,
+			g: cv.getContext("2d"),
+			cam: null,
+			key: "",
+			n: 0
+		};
+	}
+	const sc = v.sc;
+	if (!sc.g) return;
+	const pc = v.prevCam;
+	if (!pc || pc.x !== cam.x || pc.y !== cam.y || pc.z !== cam.z) v.lastMove = now;
+	v.prevCam = {
+		x: cam.x,
+		y: cam.y,
+		z: cam.z
+	};
+	const sw = Math.round(W * 1.24), sh = Math.round(H * 1.24);
+	const sdpr = Math.min(dpr, SC_DPR_CAP);
+	const key = staticKey(v);
+	let need = !!v.noCache || !sc.cam || sc.key !== key || sc.w !== sw || sc.h !== sh || sc.dpr !== sdpr;
+	if (!need && sc.cam) {
+		const r = z / sc.cam.z;
+		const hw = W / 2 / z, hh = H / 2 / z, chw = sw / 2 / sc.cam.z, chh = sh / 2 / sc.cam.z;
+		if (r < .72 || r > 1.42) need = true;
+		else if (cam.x - hw < sc.cam.x - chw || cam.x + hw > sc.cam.x + chw || cam.y - hh < sc.cam.y - chh || cam.y + hh > sc.cam.y + chh) need = true;
+		else if (now - (v.lastMove || 0) > 140 && (r !== 1 || cam.x !== sc.cam.x || cam.y !== sc.cam.y || sc.fast)) need = true;
+	}
+	if (need) {
+		if (sc.w !== sw || sc.h !== sh || sc.dpr !== sdpr) {
+			sc.cv.width = Math.max(1, Math.round(sw * sdpr));
+			sc.cv.height = Math.max(1, Math.round(sh * sdpr));
+			sc.w = sw;
+			sc.h = sh;
+			sc.dpr = sdpr;
+		}
+		const t0 = performance.now();
+		const fast = now - (v.lastMove || 0) < 140 && !v.noCache;
+		renderStatic(v, sc.g, sw, sh, {
+			x: cam.x,
+			y: cam.y,
+			z: cam.z
+		}, sdpr, fast);
+		sc.cam = {
+			x: cam.x,
+			y: cam.y,
+			z: cam.z
+		};
+		sc.key = key;
+		sc.n++;
+		sc.lastMs = performance.now() - t0;
+		sc.fast = fast;
+	}
+	{
+		const scam = sc.cam;
+		const r = z / scam.z;
+		const cx = W / 2 + (scam.x - cam.x) * z, cy = H / 2 + (scam.y - cam.y) * z;
+		g.setTransform(1, 0, 0, 1, 0, 0);
+		g.globalAlpha = 1;
+		g.fillStyle = v.P.bg;
+		g.fillRect(0, 0, W * dpr, H * dpr);
+		g.drawImage(sc.cv, (cx - sw / 2 * r) * dpr, (cy - sh / 2 * r) * dpr, sw * r * dpr, sh * r * dpr);
+	}
+	renderOverlay(v, now);
+}
+var STRIPS = /* @__PURE__ */ new Map();
+function strip(c0, c1) {
+	let s = STRIPS.get(c0 + c1);
+	if (s) return s;
+	s = document.createElement("canvas");
+	s.width = 1;
+	s.height = 256;
+	const g = s.getContext("2d");
+	if (g) {
+		const gr = g.createLinearGradient(0, 0, 0, 256);
+		gr.addColorStop(0, c0);
+		gr.addColorStop(1, c1);
+		g.fillStyle = gr;
+		g.fillRect(0, 0, 1, 256);
+	}
+	STRIPS.set(c0 + c1, s);
+	return s;
+}
+function renderStatic(v, g, W, H, cam, dpr, fast) {
+	const M = v.M, MG = mg(M), P = v.P, z = cam.z;
+	const ox = W / 2 - cam.x * z, oy = H / 2 - cam.y * z;
+	const vx0 = cam.x - W / 2 / z, vx1 = cam.x + W / 2 / z, vy0 = cam.y - H / 2 / z, vy1 = cam.y + H / 2 / z;
+	const inView = (x0, y0, x1, y1) => x1 >= vx0 && x0 <= vx1 && y1 >= vy0 && y0 <= vy1;
+	const leafPx = S0 * z;
+	const fade = (a, b, x) => Math.max(0, Math.min(1, (x - a) / (b - a)));
+	const hasOnly = !!v.hasOnly;
+	g.setTransform(dpr, 0, 0, dpr, 0, 0);
+	g.globalAlpha = 1;
+	g.imageSmoothingEnabled = true;
+	g.clearRect(0, 0, W, H);
+	const gy = M.groundY * z + oy;
+	const skyH = Math.max(0, Math.min(H, gy));
+	if (skyH > 0) g.drawImage(strip(P.sky[0], P.sky[1]), 0, 0, 1, 256, 0, 0, W, Math.max(1, gy));
+	if (gy < H) g.drawImage(strip(P.soil[0], P.soil[1]), 0, 0, 1, 256, 0, Math.max(0, gy), W, H - Math.max(0, gy));
+	{
+		const cx = ox, cy = M.crownBounds.y0 * .45 * z + oy, r = Math.max(1, M.Rtyp * 1.25 * z);
+		const rg = g.createRadialGradient(cx, cy, 0, cx, cy, r);
+		rg.addColorStop(0, P.glow);
+		rg.addColorStop(1, P.glow0);
+		g.fillStyle = rg;
+		g.fillRect(Math.max(0, cx - r), Math.max(0, cy - r), Math.min(W, 2 * r), Math.min(skyH, 2 * r));
+	}
+	g.setTransform(dpr * z, 0, 0, dpr * z, dpr * ox, dpr * oy);
+	g.strokeStyle = P.groundLine;
+	g.lineWidth = 1.5 / z;
+	g.beginPath();
+	g.moveTo(vx0, M.groundY);
+	g.lineTo(vx1, M.groundY);
+	g.stroke();
+	const createdGhost = /* @__PURE__ */ new Set();
+	for (const A of v.agents) for (const id of A.created) createdGhost.add(id);
+	const limbPal = (t) => t.region === "root" ? P.ROOTPAL : (hasOnly && t.node.lit ? P.PALV : P.PAL)[t.node.limb % P.PAL.length];
+	const termStyle = (t) => {
+		const n = t.node;
+		if (hasOnly && !n.lit) return P.DUSK;
+		if (n.keep) return P.KEEP;
+		if (n.fAnc) return null;
+		return limbPal(t);
+	};
+	const canopyA = 1 - fade(11, 19, leafPx);
+	const drawCanopy = (pal, layer, path, tone) => {
+		g.fillStyle = layer === "sh" ? pal.cvSh : layer === "hi" ? pal.cvHi : pal.cv[tone];
+		g.globalAlpha = canopyA * (layer === "sh" ? .75 : layer === "hi" ? .5 : 1);
+		g.fill(path);
+	};
+	if (canopyA > .02) {
+		const coarse = leafPx < 9 || fast, layers = fast ? ["body"] : [
+			"sh",
+			"body",
+			"hi"
+		];
+		if (MG.mass && MG.mass.n) {
+			g.globalAlpha = canopyA * MASS.a;
+			drawMass(g, M, hasOnly ? P.DUSK.blob : P.mass);
+			g.globalAlpha = 1;
+		}
+		if (coarse) for (const layer of layers) for (const B of MG.canopy.values()) drawCanopy(hasOnly ? P.DUSK : B.limb < 0 ? P.ROOTPAL : P.PAL[B.limb % P.PAL.length], layer, B.coarse[layer], B.tone);
+		const vis = [];
+		for (const t0 of M.terms) {
+			const t = tg(t0);
+			if (!t.cv || t.node.fAnc || !inView(t.cx - t.rad, t.cy - t.rad, t.cx + t.rad, t.cy + t.rad)) continue;
+			const base = limbPal(t);
+			const st = hasOnly ? t.node.lit ? t.node.keep ? P.KEEP : base : coarse ? null : P.DUSK : t.node.keep ? P.KEEP : coarse ? null : base;
+			if (st) vis.push([t, st]);
+		}
+		for (const layer of layers) for (const [t, st] of vis) drawCanopy(st, layer, (coarse ? t.cvc : t.cv)[layer], t.tone);
+		g.globalAlpha = 1;
+	}
+	const blobA = (t) => (1 - canopyA) * (t.region === "root" ? 1 - .6 * fade(8, 30, leafPx) : 1 - .6 * fade(6, 16, leafPx) - .4 * fade(18, 40, leafPx));
+	const keepTerms = [];
+	v.termsInView = 0;
+	for (const t0 of M.terms) {
+		const t = tg(t0);
+		if (!t.leaves.length) continue;
+		if (!inView(t.cx - t.rad, t.cy - t.rad, t.cx + t.rad, t.cy + t.rad)) continue;
+		v.termsInView++;
+		let st = termStyle(t);
+		const folded = !!t.node.fAnc;
+		if (t.node.keep) keepTerms.push(t);
+		if (folded) st = hasOnly && !t.node.lit ? P.DUSK : t.node.keep ? P.KEEP : limbPal(t);
+		if (folded && st) {
+			g.globalAlpha = 1;
+			g.fillStyle = st.fold;
+			g.fill(t.blobFold);
+			g.fillStyle = st.blobHi;
+			g.globalAlpha = .55;
+			g.fill(t.blob);
+			continue;
+		}
+		if (!st) continue;
+		const a = blobA(t);
+		if (a <= .02) continue;
+		g.globalAlpha = a;
+		g.fillStyle = st.blob;
+		g.fill(t.blob);
+		if (t.region !== "root" && a > .7) {
+			g.fillStyle = st.blobHi;
+			g.fill(t.blobHi);
+		}
+	}
+	g.globalAlpha = 1;
+	{
+		const cap = 110 / z;
+		if (M.trunkW > cap) {
+			if (!MG.trunkCapPath || MG.trunkCapW !== cap) {
+				MG.trunkCapPath = trunkPath(M, cap);
+				MG.trunkCapW = cap;
+			}
+			g.fillStyle = P.BARK.crown;
+			g.fill(MG.trunkCapPath);
+		} else {
+			g.fillStyle = P.BARK.crown;
+			g.fill(MG.trunkPath);
+		}
+	}
+	g.fillStyle = P.BARK.root;
+	g.fill(MG.rootFlare);
+	const thin = /* @__PURE__ */ new Map(), thick = /* @__PURE__ */ new Map();
+	const push = (m, k, b) => {
+		let a = m.get(k);
+		if (!a) m.set(k, a = []);
+		a.push(b);
+	};
+	v.visBranches = [];
+	const litAnc = v.litAnc || /* @__PURE__ */ new Set();
+	for (const b of M.branches) {
+		const so = b.subOf;
+		if (so && (so.vHidden || so.vColl)) continue;
+		if (b.node && b.node.vHidden) continue;
+		if (!inView(b.bx0, b.by0, b.bx1, b.by1)) continue;
+		let col;
+		const n = b.node || b.owner;
+		const lit = !hasOnly || !!(n && (n.lit || b.node && litAnc.has(b.node) || b.virtual && n.lit));
+		const litPath = hasOnly && !!b.node && litAnc.has(b.node);
+		if (b.region === "root") col = lit || litPath ? P.BARK.root : P.BARK.rootDusk;
+		else col = hasOnly && n && n.lit ? P.BARK.crownHi : lit || litPath ? P.BARK.crown : P.DUSK.bark;
+		v.visBranches.push(b);
+		if (b.wb * z < 1.3) push(thin, col, b);
+		else push(thick, col, b);
+	}
+	for (const [col, arr] of thick) {
+		g.fillStyle = col;
+		for (let i0 = 0; i0 < arr.length; i0 += 40) {
+			g.beginPath();
+			for (let i = i0; i < Math.min(arr.length, i0 + 40); i++) {
+				const p = arr[i].poly, n = p.length;
+				g.moveTo(p[0], p[1]);
+				for (let j = 2; j < n; j += 2) g.lineTo(p[j], p[j + 1]);
+				g.closePath();
+			}
+			g.fill();
+		}
+		g.beginPath();
+		for (const b of arr) if (!b.own) {
+			g.moveTo(b.x1 + b.we * .5, b.y1);
+			g.arc(b.x1, b.y1, b.we * .5, 0, TAU);
+		}
+		g.fill();
+	}
+	for (const [col, arr] of thin) {
+		g.strokeStyle = col;
+		g.lineWidth = Math.max(.9 / z, 0);
+		g.beginPath();
+		for (const b of arr) {
+			const c = b.c;
+			g.moveTo(c[0], c[1]);
+			g.bezierCurveTo(c[2], c[3], c[4], c[5], c[6], c[7]);
+		}
+		g.stroke();
+	}
+	const twigA = fade(9, 15, leafPx);
+	if (twigA > .02) {
+		g.lineCap = "round";
+		const batch = /* @__PURE__ */ new Map(), stalks = /* @__PURE__ */ new Map();
+		const put = (col, lw, p) => {
+			const k = col + "|" + lw;
+			let e = batch.get(k);
+			if (!e) batch.set(k, e = {
+				col,
+				lw,
+				p: new Path2D()
+			});
+			e.p.addPath(p);
+		};
+		for (const t0 of M.terms) {
+			const t = tg(t0);
+			if (!t.twig || t.node.fAnc || !inView(t.cx - t.rad, t.cy - t.rad, t.cx + t.rad, t.cy + t.rad)) continue;
+			const lit = !hasOnly || t.node.lit;
+			const col = t.region === "root" ? lit ? P.BARK.root : P.BARK.rootDusk : lit ? P.BARK.crown : P.DUSK.bark;
+			put(col, Math.max(1.1, Math.round(t.twig.w * 1.6 * z * 2) / 2), t.twig.main);
+			put(col, Math.max(.8, Math.round(t.twig.w * .9 * z * 2) / 2), t.twig.side);
+			let e = stalks.get(col);
+			if (!e) stalks.set(col, e = new Path2D());
+			e.addPath(t.twig.stalk);
+		}
+		g.globalAlpha = twigA;
+		for (const e of batch.values()) {
+			g.strokeStyle = e.col;
+			g.lineWidth = e.lw / z;
+			g.stroke(e.p);
+		}
+		g.lineWidth = .75 / z;
+		g.globalAlpha = twigA * .55;
+		for (const [col, p] of stalks) {
+			g.strokeStyle = col;
+			g.stroke(p);
+		}
+		g.globalAlpha = 1;
+		g.lineCap = "butt";
+	}
+	const leafAlpha = fade(10, 16, leafPx);
+	v.leavesShown = leafAlpha > 0;
+	const groups = /* @__PURE__ */ new Map();
+	const addL = (col, l) => {
+		let a = groups.get(col);
+		if (!a) groups.set(col, a = []);
+		a.push(l);
+	};
+	const drawGroups = (alpha) => {
+		g.globalAlpha = alpha;
+		for (const [col, arr] of groups) {
+			g.fillStyle = col;
+			g.beginPath();
+			for (const l of arr) {
+				const q = l.g;
+				g.moveTo(q[0], q[1]);
+				g.quadraticCurveTo(q[2], q[3], q[4], q[5]);
+				g.quadraticCurveTo(q[6], q[7], q[0], q[1]);
+			}
+			g.fill();
+		}
+		g.globalAlpha = 1;
+		groups.clear();
+	};
+	const keepFiles = v.keepFiles || /* @__PURE__ */ new Set();
+	if (leafAlpha > 0) {
+		for (const t of M.terms) {
+			if (!t.leaves.length || t.node.fAnc) continue;
+			if (!inView(t.cx - t.rad, t.cy - t.rad, t.cx + t.rad, t.cy + t.rad)) continue;
+			const st = termStyle(t);
+			if (!st) continue;
+			for (const l of t.leaves) {
+				if (l.file.ghost && !createdGhost.has(l.file.id)) continue;
+				if (keepFiles.has(l.file.id)) {
+					addL(P.KEEP.leafA, l);
+					continue;
+				}
+				addL(l.file.kind === "c" ? l.shade ? st.leafB : st.leafA : st.doc, l);
+			}
+		}
+		drawGroups(leafAlpha);
+	}
+	for (const p of M.piles) {
+		const pw = p.pw || 0, ph = p.h || 0;
+		if (!inView(p.cx - pw, M.groundY - ph * 2, p.cx + pw, M.groundY + 1)) continue;
+		v.termsInView++;
+		const lit = !hasOnly || p.lit;
+		const keep = p.keep;
+		for (const l of p.leaves || []) addL(!lit ? P.DUSK.leafA : keep ? P.KEEP.leafA : l.shade ? P.PILEPAL.leafB : l.id % 3 ? P.PILEPAL.leafA : P.PILEPAL.leafB, l);
+	}
+	drawGroups(1);
+	const hatch = (clip, x0, y0, x1, y1, dim) => {
+		g.save();
+		g.clip(clip);
+		g.strokeStyle = dim ? P.hatchDim : P.hatch;
+		g.lineWidth = Math.max(1.1 / z, .6);
+		const gap = Math.max(7 / z, S0 * .45);
+		g.beginPath();
+		for (let d = x0 - y1; d < x1 - y0; d += gap) {
+			g.moveTo(x0, x0 - d);
+			g.lineTo(x1, x1 - d);
+		}
+		g.stroke();
+		g.restore();
+	};
+	for (const t of keepTerms) hatch(t.blobFold, t.cx - t.rad - S0, t.cy - t.rad - S0, t.cx + t.rad + S0, t.cy + t.rad + S0, hasOnly && !t.node.lit);
+	for (const p of M.piles) {
+		const pw = p.pw || 0, ph = p.h || 0;
+		if (p.keep && inView(p.cx - pw, M.groundY - ph * 2, p.cx + pw, M.groundY + 1)) {
+			const clipP = new Path2D();
+			clipP.ellipse(p.cx, M.groundY - ph * .45, pw * .62, ph * .9, 0, 0, TAU);
+			hatch(clipP, p.cx - pw, M.groundY - ph * 2, p.cx + pw, M.groundY);
+		}
+	}
+	for (const id of keepFiles) {
+		const l = M.files[id] && M.files[id].leaf;
+		if (!l || !inView(l.x - 10, l.y - 10, l.x + 10, l.y + 10)) continue;
+		const clipL = new Path2D();
+		const r = Math.max(l.len * .8, 6 / z);
+		clipL.arc(l.x, l.y, r, 0, TAU);
+		hatch(clipL, l.x - r, l.y - r, l.x + r, l.y + r);
+	}
+}
+function leafPath(g, l) {
+	const q = l.g;
+	g.moveTo(q[0], q[1]);
+	g.quadraticCurveTo(q[2], q[3], q[4], q[5]);
+	g.quadraticCurveTo(q[6], q[7], q[0], q[1]);
+}
+function ghostBudPoint(M, node, i) {
+	const t = node.term;
+	if (t && t.leaves && t.leaves.length) {
+		const a = -Math.PI / 2 + (i % 7 - 3) * .42;
+		return [t.cx + Math.cos(a) * (t.rad + S0 * .4), t.cy + Math.sin(a) * (t.rad + S0 * .4)];
+	}
+	const P = nestPoint(M, node);
+	return [P[0] + (i % 5 - 2) * S0 * .8, P[1] - S0 * .8];
+}
+function renderOverlay(v, now) {
+	const { g, M, cam } = v;
+	const P = v.P;
+	const W = v.W, H = v.H, dpr = v.dpr, z = cam.z;
+	const ox = W / 2 - cam.x * z, oy = H / 2 - cam.y * z;
+	const vx0 = cam.x - W / 2 / z, vx1 = cam.x + W / 2 / z, vy0 = cam.y - H / 2 / z, vy1 = cam.y + H / 2 / z;
+	const inView = (x0, y0, x1, y1) => x1 >= vx0 && x0 <= vx1 && y1 >= vy0 && y0 <= vy1;
+	const leafPx = S0 * z;
+	const t = v.t;
+	const hasOnly = !!v.hasOnly;
+	const createdGhost = /* @__PURE__ */ new Set();
+	for (const A of v.agents) for (const id of A.created) createdGhost.add(id);
+	g.setTransform(dpr * z, 0, 0, dpr * z, dpr * ox, dpr * oy);
+	g.globalAlpha = 1;
+	const hv = v.hover;
+	const hoverNode = hv && (hv.node || hv.branch && branchNode(hv.branch) || hv.clump || null);
+	if (hv && (hv.branch || hv.node)) {
+		const b = hv.branch || hv.node && hv.node.branch;
+		if (b) {
+			g.fillStyle = b.region === "root" ? P.BARK.rootHi : P.BARK.crownHi;
+			if (b.wb * z < 1.3) {
+				g.strokeStyle = g.fillStyle;
+				g.lineWidth = 1.6 / z;
+				const c = b.c;
+				g.beginPath();
+				g.moveTo(c[0], c[1]);
+				g.bezierCurveTo(c[2], c[3], c[4], c[5], c[6], c[7]);
+				g.stroke();
+			} else {
+				const p = b.poly;
+				g.beginPath();
+				g.moveTo(p[0], p[1]);
+				for (let i = 2; i < p.length; i += 2) g.lineTo(p[i], p[i + 1]);
+				g.closePath();
+				g.fill();
+			}
+		}
+	}
+	if (hoverNode && hoverNode.cnt && v.tool !== "explore") {
+		g.strokeStyle = v.tool === "keep" ? P.red : P.green;
+		g.lineWidth = 1.5 / z;
+		g.setLineDash([6 / z, 4 / z]);
+		g.beginPath();
+		g.arc(hoverNode.cx, hoverNode.cy, hoverNode.rad + S0 * .6, 0, TAU);
+		g.stroke();
+		g.setLineDash([]);
+	}
+	const px = 1 / z;
+	drawTerritories(v, ox, oy);
+	g.setTransform(dpr * z, 0, 0, dpr * z, dpr * ox, dpr * oy);
+	for (const zz of v.zones) {
+		const col = zz.type === "keep" ? P.red : P.green;
+		g.globalAlpha = zz.waived ? .45 : 1;
+		if (zz.node && zz.node.branch) {
+			g.globalAlpha = 1;
+			continue;
+		} else if (zz.node && zz.node.kind === "pile") {
+			g.strokeStyle = col;
+			g.lineWidth = 2 * px;
+			g.setLineDash([5 * px, 4 * px]);
+			g.beginPath();
+			g.ellipse(zz.node.cx, M.groundY - (zz.node.h || 0) * .45, (zz.node.pw || 0) * .62, (zz.node.h || 0) * .9, 0, Math.PI, TAU);
+			g.stroke();
+			g.setLineDash([]);
+		} else if (zz.file !== void 0 && zz.file !== null) {
+			const l = M.files[zz.file] && M.files[zz.file].leaf;
+			if (!l) {
+				g.globalAlpha = 1;
+				continue;
+			}
+			g.strokeStyle = col;
+			g.lineWidth = 2 * px;
+			g.beginPath();
+			g.arc(l.x, l.y, Math.max(l.len * .75, 6 * px), 0, TAU);
+			g.stroke();
+		}
+		g.globalAlpha = 1;
+	}
+	v.litInfo = litMap(v);
+	drawVeins(v, px, inView);
+	v.budHits = [];
+	for (const A of v.agents) {
+		const col = A.ag.color;
+		g.fillStyle = col;
+		g.beginPath();
+		for (const [id] of A.reads) {
+			const l = M.files[id] && M.files[id].leaf;
+			if (!l || !inView(l.x - 5, l.y - 5, l.x + 5, l.y + 5)) continue;
+			const r = Math.max(3 * px, l.len * .17);
+			const dx = l.x - Math.cos(l.ang) * l.len * .18, dy = l.y - Math.sin(l.ang) * l.len * .18;
+			g.moveTo(dx + r, dy);
+			g.arc(dx, dy, r, 0, TAU);
+		}
+		g.fill();
+		for (const id of A.plan) {
+			const l = M.files[id] && M.files[id].leaf;
+			if (!l || A.edits.has(id)) continue;
+			drawBud(g, P, l.x, l.y, l.len, col, px, !!M.files[id].ghost);
+		}
+		A.planNew.forEach((pn, i) => {
+			const [bx, by] = ghostBudPoint(M, pn.node, i);
+			if (!inView(bx - 20, by - 20, bx + 20, by + 20)) return;
+			drawBud(g, P, bx, by, S0 * .6, col, px, true);
+			const [sx, sy] = [bx * z + ox, by * z + oy];
+			const r = Math.max(6, S0 * .6 * .45 * z + 4);
+			v.budHits.push({
+				r: [
+					sx - r,
+					sy - r,
+					sx + r,
+					sy + r
+				],
+				A,
+				path: pn.path
+			});
+		});
+	}
+	const fresh = freshness(v);
+	for (const A of v.agents) for (const [id] of A.edits) {
+		const l = M.files[id] && M.files[id].leaf;
+		if (!l) continue;
+		const own = l.term ? l.term.node : l.pile;
+		if (hasOnly && own && !own.lit && onlyBinds(v, A)) continue;
+		const R = Math.max(l.len * 1.6, 26 * px);
+		if (!inView(l.x - R, l.y - R, l.x + R, l.y + R)) continue;
+		const gr = g.createRadialGradient(l.x, l.y, 0, l.x, l.y, R);
+		gr.addColorStop(0, withAlpha(A.ag.color, (P.light ? .42 : .5) * (.3 + .7 * (fresh.get(id) ?? 1))));
+		gr.addColorStop(1, withAlpha(A.ag.color, 0));
+		g.fillStyle = gr;
+		g.fillRect(l.x - R, l.y - R, 2 * R, 2 * R);
+	}
+	v.badges = [];
+	v.badgeSets = /* @__PURE__ */ new Map();
+	const blasts = [];
+	if (v.pinBlast != null) blasts.push({
+		fid: v.pinBlast,
+		live: false,
+		hover: false,
+		ag: null,
+		A: null
+	});
+	const selF = v.sel && v.sel.leaf ? v.sel.leaf.file.id : null;
+	if (selF != null && selF !== v.pinBlast && selF !== v.hoverBlast && v.agents.some((A) => A.edits.has(selF))) blasts.push({
+		fid: selF,
+		live: false,
+		hover: false,
+		ag: null,
+		A: null,
+		quiet: true
+	});
+	if (v.hoverBlast != null && v.hoverBlast !== v.pinBlast) blasts.push({
+		fid: v.hoverBlast,
+		live: false,
+		hover: true,
+		ag: null,
+		A: null,
+		quiet: true
+	});
+	for (const B of blasts) drawBlast(v, B, px, inView);
+	collectBadges(v);
+	drawRisk(v, px);
+	if (v.pulse && now >= v.pulse.t0 && now - v.pulse.t0 < 2600) {
+		const k = (now - v.pulse.t0) / 2600;
+		const p = v.pulse;
+		g.strokeStyle = P.text;
+		g.globalAlpha = 1 - k;
+		g.lineWidth = 2 * px;
+		g.beginPath();
+		g.arc(p.x, p.y, (p.r || 8 * px) + k * 30 * px, 0, TAU);
+		g.stroke();
+		g.globalAlpha = 1;
+	}
+	const selLeaf = v.sel && v.sel.leaf ? v.sel.leaf : null;
+	if (selLeaf) {
+		const l = selLeaf;
+		const own = l.term ? l.term.node : l.pile;
+		const painted = v.agents.some((A) => A.edits.has(l.file.id));
+		if (hasOnly && own && !own.lit && !painted) {
+			const st = palFor(P, own, l.region);
+			g.fillStyle = l.file.kind === "c" ? st.leafA : st.doc;
+			g.beginPath();
+			leafPath(g, l);
+			g.fill();
+		}
+		const r = Math.max(l.len * .8, 8 * px);
+		g.strokeStyle = P.selHalo;
+		g.lineWidth = 5 * px;
+		g.beginPath();
+		g.arc(l.x, l.y, r, 0, TAU);
+		g.stroke();
+		g.strokeStyle = P.sel;
+		g.lineWidth = 2 * px;
+		g.beginPath();
+		g.arc(l.x, l.y, r, 0, TAU);
+		g.stroke();
+	}
+	const markLeaf = v.markLeaf && v.markLeaf !== selLeaf ? v.markLeaf : null;
+	if (markLeaf) {
+		const l = markLeaf;
+		const r = Math.max(l.len * .8, 8 * px);
+		g.strokeStyle = P.mark;
+		g.lineWidth = 1.4 * px;
+		g.setLineDash([2.5 * px, 2.5 * px]);
+		g.beginPath();
+		g.arc(l.x, l.y, r, 0, TAU);
+		g.stroke();
+		g.setLineDash([]);
+	}
+	if (v.sel && v.sel.node && v.sel.node.cnt && v.sel.node.depth >= 1 && v.infoNode === v.sel.node) {
+		const n = v.sel.node;
+		g.strokeStyle = P.mark;
+		g.lineWidth = 1.6 * px;
+		g.setLineDash([5 * px, 4 * px]);
+		g.beginPath();
+		g.arc(n.cx, n.cy, n.rad + S0 * .6, 0, TAU);
+		g.stroke();
+		g.setLineDash([]);
+	}
+	if (hv && hv.leaf && hv.leaf !== selLeaf) {
+		const l = hv.leaf;
+		g.strokeStyle = P.hover;
+		g.lineWidth = 1.1 * px;
+		g.setLineDash([2 * px, 2 * px]);
+		g.beginPath();
+		g.arc(l.x, l.y, Math.max(l.len * .72, 6 * px), 0, TAU);
+		g.stroke();
+		g.setLineDash([]);
+	}
+	g.setTransform(dpr, 0, 0, dpr, 0, 0);
+	const toS = (x, y) => [x * z + ox, y * z + oy];
+	v.toS = toS;
+	const occ = [];
+	const fits = (x0, y0, x1, y1) => {
+		for (const o of occ) if (x1 > o[0] && x0 < o[2] && y1 > o[1] && y0 < o[3]) return false;
+		return true;
+	};
+	const reserve = (x0, y0, x1, y1) => {
+		occ.push([
+			x0,
+			y0,
+			x1,
+			y1
+		]);
+	};
+	for (const r of v.hudRects || []) reserve(r[0], r[1], r[2], r[3]);
+	const hud = v.hudRects || [];
+	const underHud = (x, y) => {
+		for (const r of hud) if (x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]) return true;
+		return false;
+	};
+	const free = v.free || {
+		x0: 0,
+		y0: 0,
+		x1: W,
+		y1: H
+	};
+	v.labelHits = [];
+	v.tagHits = [];
+	v.birdHits = [];
+	v.nestHits = [];
+	v.badgeHits = [];
+	v.nestLabelled = /* @__PURE__ */ new Set();
+	v.emptyHint = "";
+	const fol = buildFoliageField(v, toS, hoverNode);
+	v.fol = fol;
+	for (const T of v.terrPolys || []) fol.addTerr(T.n, T.polys);
+	const nestPx = Math.max(18, Math.min(40, 12 + leafPx * 1.1));
+	const birdPx = Math.max(26, Math.min(48, 16 + leafPx * 1.3));
+	const raw = v.agents.map((A) => birdPose(v, A, t));
+	v.birdWorld = {};
+	v.agents.forEach((A, i) => {
+		const p = raw[i];
+		if (p) v.birdWorld[A.ag.key] = [p.x, p.y];
+	});
+	const alphas = v.agents.map((A) => birdAlpha(v, A, t));
+	const poses = raw.map((p, i) => alphas[i] > 0 ? p : null);
+	const pxOf = (A) => A.ag.parent ? Math.round(birdPx * SUB_SCALE) : birdPx;
+	const birdS = [];
+	v.agents.forEach((A, i) => {
+		const pose = poses[i];
+		if (!pose) {
+			birdS.push(null);
+			return;
+		}
+		let [sx, sy] = toS(pose.x, pose.y);
+		if (pose.leaf) sy -= Math.max(4, pose.leaf.len * z * .45);
+		const bp = pxOf(A);
+		if (A.ag.parent && !pose.fly) {
+			const pi = v.agents.findIndex((P) => P.ag.key === A.ag.parent);
+			const pp = pi >= 0 ? poses[pi] : null;
+			if (pose.nest || pp && !pp.fly && pp.leaf && pp.leaf === pose.leaf) sx += ((A.ag.sub || 1) % 2 ? 1 : -1) * birdPx * (.5 + .22 * Math.floor(((A.ag.sub || 1) - 1) / 2));
+		}
+		const body = [
+			sx - bp * .65,
+			sy - bp * .95,
+			sx + bp * .65,
+			sy + bp * .12
+		];
+		const visible = sx > free.x0 + 6 && sx < free.x1 - 6 && sy > free.y0 + 6 && sy < free.y1 - 6 && !underHud(sx, sy - birdPx * .4);
+		birdS.push({
+			A,
+			sx,
+			sy,
+			pose,
+			body,
+			visible
+		});
+		if (visible) reserve(body[0], body[1], body[2], body[3]);
+	});
+	for (const A of v.agents) {
+		if (!A.nest || !A.cur || A.ag.parent) continue;
+		const Pn = nestPoint(M, A.nest);
+		const [sx, sy] = toS(Pn[0], Pn[1]);
+		reserve(sx - nestPx * .7, sy - nestPx * .3, sx + nestPx * .7, sy + nestPx * .5);
+		if (A.nest.depth >= 1) fol.addNest(sx - nestPx * .7, sy - nestPx * .3, sx + nestPx * .7, sy + nestPx * .5, A.nest);
+	}
+	if (v.sel && v.sel.leaf) {
+		const l = v.sel.leaf;
+		const [lx, ly] = toS(l.x, l.y);
+		const r = Math.max(l.len * .8 * z, 8) + 8;
+		reserve(lx - r, ly - r, lx + r, ly + r);
+	} else if (v.sel && v.sel.node && v.sel.node.cnt && v.sel.node.depth >= 1 && v.sel.node.rad * z < 140) {
+		const n = v.sel.node;
+		const [nx, ny] = toS(n.cx, n.cy);
+		const r = n.rad * z + 6;
+		reserve(nx - r, ny - r, nx + r, ny + r);
+	}
+	drawBreadcrumb(v, g, free, fits, reserve);
+	const edge = { ...free };
+	for (const r of hud) {
+		if (r[3] - r[1] < (free.y1 - free.y0) * .5) continue;
+		if ((r[0] + r[2]) / 2 > (free.x0 + free.x1) / 2) edge.x1 = Math.max(edge.x0 + 80, Math.min(edge.x1, r[0]));
+		else edge.x0 = Math.min(edge.x1 - 80, Math.max(edge.x0, r[2]));
+	}
+	for (const B of birdS) {
+		if (!B || B.visible || B.A.ag.parent && B.A.done) continue;
+		const { A, sx, sy } = B;
+		const M2 = 14;
+		const ex = Math.max(edge.x0 + M2, Math.min(edge.x1 - M2, sx)), ey = Math.max(edge.y0 + M2, Math.min(edge.y1 - M2, sy));
+		const dx = sx - ex, dy = sy - ey;
+		const arrow = Math.abs(dx) > Math.abs(dy) * 2.2 ? dx < 0 ? "←" : "→" : Math.abs(dy) > Math.abs(dx) * 2.2 ? dy < 0 ? "↑" : "↓" : dy < 0 ? dx < 0 ? "↖" : "↗" : dx < 0 ? "↙" : "↘";
+		const t2 = `${A.ag.glyph} ${arrow}`;
+		g.font = `600 10.5px ${P.font}`;
+		const tw = g.measureText(t2).width + 14, th = 18;
+		const horiz = Math.abs(dx) >= Math.abs(dy);
+		const clampX = (x) => Math.max(edge.x0 + 4, Math.min(edge.x1 - tw - 4, x)), clampY = (y) => Math.max(edge.y0 + 4, Math.min(edge.y1 - th - 4, y));
+		const ax = clampX(ex - tw / 2), ay = clampY(ey - th / 2);
+		const inX = dx > 0 ? -1 : dx < 0 ? 1 : 0, inY = dy > 0 ? -1 : dy < 0 ? 1 : 0;
+		let bx = null, by = 0;
+		search: for (let inward = 0; inward <= 2; inward++) for (let k = 0; k <= 14; k++) for (const sgn of k ? [1, -1] : [1]) {
+			const x0 = clampX(horiz ? ax + inX * inward * (tw + 6) : ax + sgn * k * (tw * .6 + 6)), y0 = clampY(horiz ? ay + sgn * k * 22 : ay + inY * inward * 24);
+			if (fits(x0, y0, x0 + tw, y0 + th)) {
+				bx = x0;
+				by = y0;
+				break search;
+			}
+		}
+		if (bx === null) {
+			bx = ax;
+			by = ay;
+		}
+		reserve(bx, by, bx + tw, by + th);
+		B.ptr = {
+			bx,
+			by,
+			tw,
+			th,
+			t2
+		};
+	}
+	for (const A of v.agents) {
+		if (!A.nest || !A.cur || A.ag.parent) continue;
+		const Pn = nestPoint(M, A.nest);
+		const [sx, sy] = toS(Pn[0], Pn[1]);
+		if (sx < -60 || sx > W + 60 || sy < -60 || sy > H + 60) continue;
+		const age = t - A.nestSince;
+		drawNest(g, P, sx, sy, nestPx, A.ag, v.playing ? Math.min(1, Math.max(.05, age / 1)) : 1);
+		const r = [
+			sx - nestPx * .7,
+			sy - nestPx * .3,
+			sx + nestPx * .7,
+			sy + nestPx * .5
+		];
+		reserve(r[0], r[1], r[2], r[3]);
+		v.nestHits.push({
+			r,
+			A
+		});
+		if (nestPx < 18 || W < 700) continue;
+		const n = A.nest;
+		const li = n.depth >= 1 && v.litInfo ? v.litInfo.get(n) : void 0;
+		const folder = n === M.crown ? "trunk" : li ? folderPath(n) : n.kind === "root" ? n.label || n.name : n.disp || shortName(n.name);
+		const segs = li ? li.segs.map((q) => ({
+			col: q.col,
+			t: " " + q.glyph + q.n
+		})) : [];
+		const t1 = folder, t2 = li ? "" : " · nest";
+		g.font = `600 11px ${P.font}`;
+		const w1 = g.measureText(t1).width;
+		g.font = `700 11px ${P.font}`;
+		const ws = segs.reduce((a, q) => a + g.measureText(q.t).width, 0);
+		g.font = `500 10.5px ${P.font}`;
+		const w2 = g.measureText(t2).width;
+		const tw = w1 + ws + w2 + 14, th = 18;
+		let bx = null, by = 0;
+		for (const [ax, ay] of [
+			[-tw / 2, nestPx * .55 + 3],
+			[-tw / 2, -nestPx * .5 - th - 3],
+			[nestPx * .75 + 4, -9],
+			[-nestPx * .75 - 4 - tw, -9],
+			[-tw / 2, nestPx * .55 + 24],
+			[-tw / 2, -nestPx * .5 - th - 24]
+		]) {
+			const x0 = sx + ax, y0 = sy + ay;
+			if (x0 > -10 && x0 + tw < W + 10 && y0 > -10 && y0 + th < H + 10 && fits(x0, y0, x0 + tw, y0 + th) && fol.belongs(x0, y0, x0 + tw, y0 + th, n)) {
+				bx = x0;
+				by = y0;
+				break;
+			}
+		}
+		if (bx === null) continue;
+		const duskN = hasOnly && !n.lit && onlyBinds(v, A);
+		if (duskN) g.globalAlpha = .5;
+		quietPill(g, P, bx, by, tw, th);
+		g.textBaseline = "middle";
+		g.font = `600 11px ${P.font}`;
+		g.fillStyle = duskN ? P.duskLabel : P.pillText;
+		g.fillText(t1, bx + 7, by + th / 2 + .5);
+		g.font = `700 11px ${P.font}`;
+		let sx2 = bx + 7 + w1;
+		for (const q of segs) {
+			g.fillStyle = q.col;
+			g.fillText(q.t, sx2, by + th / 2 + .5);
+			sx2 += g.measureText(q.t).width;
+		}
+		g.font = `500 10.5px ${P.font}`;
+		g.fillStyle = P.muted;
+		if (t2) g.fillText(t2, sx2, by + th / 2 + .5);
+		g.globalAlpha = 1;
+		reserve(bx, by, bx + tw, by + th);
+		if (n.depth >= 1) {
+			v.labelHits.push({
+				r: [
+					bx,
+					by,
+					bx + tw,
+					by + th
+				],
+				n
+			});
+			v.nestLabelled.add(n);
+		} else v.nestHits.push({
+			r: [
+				bx,
+				by,
+				bx + tw,
+				by + th
+			],
+			A
+		});
+	}
+	for (const zz of v.zones) {
+		let Pt = null;
+		if (zz.node && zz.node.branch && zz.node.cnt) Pt = [zz.node.cx, zz.node.cy - zz.node.rad - S0 * .6];
+		else if (zz.node && zz.node.branch) Pt = [zz.node.branch.pts[4][0], zz.node.branch.pts[4][1]];
+		else if (zz.node && zz.node.kind === "pile") Pt = [zz.node.cx, M.groundY - (zz.node.h || 0) * 1.3];
+		else if (zz.node && zz.node.cnt) Pt = [zz.node.cx, zz.node.cy];
+		else if (zz.file != null && M.files[zz.file] && M.files[zz.file].leaf) {
+			const l = M.files[zz.file].leaf;
+			Pt = [l.x, l.y];
+		}
+		if (!Pt) continue;
+		const [sx, sy] = toS(Pt[0], Pt[1]);
+		if (sx < -200 || sx > W + 200 || sy < -100 || sy > H + 100) continue;
+		const sign = zz.type === "keep" ? "⛔" : "✓";
+		const leafName = tailPath(zz.label);
+		let nb = 0;
+		for (const A of v.agents) for (const bk of A.blocked) if (bk.z && bk.z.z.id === zz.z.id) nb++;
+		const bt = nb ? ` · ${blockedTxt(nb)}` : "";
+		const texts = [
+			(zz.type === "keep" ? "⛔ Keep out · " : "✓ Only here · ") + zz.label + (zz.waived ? " · allowed here" : bt),
+			`${sign} ${leafName}${zz.waived ? " · allowed" : bt}`,
+			...nb && !zz.waived ? [`${sign} ${blockedTxt(nb)}`] : [],
+			sign
+		];
+		g.font = `700 11px ${P.font}`;
+		const th = 19;
+		const own = zz.node || (zz.file != null && M.files[zz.file] ? M.files[zz.file].node : null) || null;
+		const rr = zz.node && zz.node.cnt ? Math.min(60, zz.node.rad * z * .5) : 0;
+		const anchor = [[
+			sx,
+			sy,
+			2
+		]];
+		const whole = (x0, w, y0) => x0 >= 2 && x0 + w <= v.W - 2 && y0 >= 2 && y0 + th <= v.H - 2;
+		let txt = texts[0], tw = 0, bx = 0, by = 0, found = false;
+		const terr = (v.terrPolys || []).find((T) => T.n === zz.node);
+		let tb = null;
+		if (terr) {
+			tb = [
+				Infinity,
+				Infinity,
+				-Infinity,
+				-Infinity
+			];
+			for (const poly of terr.polys) for (let i = 0; i < poly.length; i += 2) {
+				tb[0] = Math.min(tb[0], poly[i]);
+				tb[1] = Math.min(tb[1], poly[i + 1]);
+				tb[2] = Math.max(tb[2], poly[i]);
+				tb[3] = Math.max(tb[3], poly[i + 1]);
+			}
+		}
+		const textsHere = W < 700 || leafPx < 16 ? texts.slice(1) : texts;
+		search: for (const clear of [24, 4]) for (const t0 of textsHere) {
+			const w = g.measureText(t0).width + 16;
+			const spots = [
+				[sx - w / 2, sy - th - 2],
+				[sx - w / 2, sy + 2],
+				[sx + 10, sy - th / 2],
+				[sx - w - 10, sy - th / 2],
+				[sx - w / 2, sy - th - 18],
+				[sx - w / 2, sy + rr],
+				[sx - w / 2, sy + rr + 18]
+			];
+			if (tb) {
+				const mx = (tb[0] + tb[2]) / 2, my = (tb[1] + tb[3]) / 2;
+				spots.push([mx - w / 2, my - th / 2], [mx - w / 2, tb[3] - th - 4], [mx - w / 2, tb[3] + 2], [tb[0] - w - 4, my - th / 2], [tb[2] + 4, my - th / 2]);
+			}
+			for (const clean of [true, false]) for (const [x0, y0] of spots) if (fits(x0, y0, x0 + w, y0 + th) && whole(x0, w, y0) && (!clean || !fol.hit(x0, y0, x0 + w, y0 + th, own, true)) && fol.belongs(x0, y0, x0 + w, y0 + th, own, anchor, 220, clear)) {
+				bx = x0;
+				by = y0;
+				found = true;
+				txt = t0;
+				tw = w;
+				break search;
+			}
+		}
+		if (!found) {
+			txt = sign;
+			tw = g.measureText(sign).width + 16;
+			bx = sx - tw / 2;
+			by = sy - th / 2;
+		}
+		if (sx >= 0 && sx <= v.W) bx = Math.max(2, Math.min(v.W - tw - 2, bx));
+		g.globalAlpha = zz.waived ? .6 : 1;
+		const zc = zz.type === "keep" ? P.red : P.green;
+		if (!(Math.abs(by + th / 2 - sy) < 23 && sx >= bx - 4 && sx <= bx + tw + 4 || !!terr && terr.polys.some((poly) => rectPolyDist(bx, by, bx + tw, by + th, poly) === 0))) {
+			g.strokeStyle = zc;
+			g.lineWidth = 1.5;
+			g.beginPath();
+			g.moveTo(sx, sy);
+			g.lineTo(Math.max(bx + 4, Math.min(bx + tw - 4, sx)), by < sy ? by + th : by);
+			g.stroke();
+		}
+		roundRect(g, bx, by, tw, th, 6);
+		g.fillStyle = zz.waived ? zz.type === "keep" ? P.keepBg : P.onlyBg : zc;
+		g.fill();
+		g.strokeStyle = zc;
+		g.lineWidth = 1;
+		if (zz.waived) g.setLineDash([4, 3]);
+		g.stroke();
+		g.setLineDash([]);
+		g.fillStyle = zz.waived ? zz.type === "keep" ? P.keepText : P.onlyText : zz.type === "keep" ? P.signKeepText : P.signOnlyText;
+		g.textBaseline = "middle";
+		g.fillText(txt, bx + 8, by + th / 2 + .5);
+		g.globalAlpha = 1;
+		reserve(bx, by, bx + tw, by + th);
+		v.tagHits.push({
+			r: [
+				bx,
+				by,
+				bx + tw,
+				by + th
+			],
+			z: zz
+		});
+		if (own) fol.addTag(bx, by, bx + tw, by + th, own);
+	}
+	drawEdits(v, now, ox, oy, reserve);
+	drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, "limbs");
+	drawPriorityLeafLabels(v, g, toS, fits, reserve, leafPx, birdS);
+	drawRiskChips(v, g, toS, fits, reserve);
+	for (const bd of v.badges || []) {
+		const [sx, sy] = toS(bd.x, bd.y);
+		if (sx < -300 || sx > W + 300 || sy < -100 || sy > H + 100) continue;
+		g.font = `600 11px ${P.font}`;
+		const dotW = bd.ag ? 12 : 0;
+		const tw = g.measureText(bd.text).width + 16 + dotW, th = 19;
+		let ok = false, bx = 0, by = 0;
+		const inScreen = (x0, y0, x1, y1) => x0 >= 2 && x1 <= W - 2 && y0 >= 2 && y1 <= H - 2;
+		for (const [ax, ay] of [
+			[8, -23],
+			[-tw - 8, -23],
+			[8, 6],
+			[-tw - 8, 6],
+			[-tw / 2, -33],
+			[-tw / 2, 12],
+			[8, -45],
+			[-tw - 8, -45],
+			[-tw / 2, -55],
+			[-tw / 2, 30]
+		]) {
+			bx = sx + ax;
+			by = sy + ay;
+			if (inScreen(bx, by, bx + tw, by + th) && fits(bx, by, bx + tw, by + th)) {
+				ok = true;
+				break;
+			}
+		}
+		let txt = bd.text, w = tw;
+		if (!ok) {
+			txt = bd.short;
+			w = g.measureText(txt).width + 14 + dotW;
+			let ok2 = false;
+			for (const [ax, ay] of [
+				[-w / 2, -19 / 2],
+				[8, -21],
+				[-w - 8, -21],
+				[8, 4],
+				[-w - 8, 4],
+				[-w / 2, -31],
+				[-w / 2, 10]
+			]) {
+				bx = sx + ax;
+				by = sy + ay;
+				if (inScreen(bx, by, bx + w, by + th) && fits(bx, by, bx + w, by + th)) {
+					ok2 = true;
+					break;
+				}
+			}
+			if (!ok2) {
+				txt = String(bd.n);
+				w = g.measureText(txt).width + 14 + dotW;
+				bx = Math.max(2, Math.min(W - w - 2, sx - w / 2));
+				by = Math.max(2, Math.min(H - th - 2, sy - th / 2));
+				search: for (let rr = 12; rr <= 96; rr += 12) for (let k = 0; k < 12; k++) {
+					const a = k / 12 * TAU, x0 = sx + Math.cos(a) * rr - w / 2, y0 = sy + Math.sin(a) * rr - th / 2;
+					if (inScreen(x0, y0, x0 + w, y0 + th) && fits(x0, y0, x0 + w, y0 + th)) {
+						bx = x0;
+						by = y0;
+						break search;
+					}
+				}
+			}
+		}
+		g.globalAlpha = bd.alpha;
+		roundRect(g, bx, by, w, th, 9);
+		g.fillStyle = P.badgeBg;
+		g.fill();
+		g.strokeStyle = bd.ag ? bd.ag.color : P.gold;
+		g.lineWidth = bd.ag ? 1.6 : 1;
+		if (bd.pin) g.setLineDash([3, 2]);
+		g.stroke();
+		g.setLineDash([]);
+		let tx = bx + 8;
+		if (bd.ag) {
+			g.fillStyle = bd.ag.color;
+			g.beginPath();
+			g.arc(tx + 3.5, by + th / 2, 3.5, 0, TAU);
+			g.fill();
+			tx += dotW;
+		}
+		g.fillStyle = P.gold;
+		g.textBaseline = "middle";
+		g.fillText(txt, tx, by + th / 2 + .5);
+		g.globalAlpha = 1;
+		reserve(bx, by, bx + w, by + th);
+		v.badgeHits.push({
+			r: [
+				bx,
+				by,
+				bx + w,
+				by + th
+			],
+			bd
+		});
+	}
+	v.birdScreen = [];
+	const pointers = [];
+	const namedN = /* @__PURE__ */ new Set();
+	for (const h of v.labelHits || []) if (h.n) namedN.add(h.n);
+	const terrs = v.terrPolys || [];
+	for (const [bi, B] of birdS.entries()) {
+		if (!B) continue;
+		const { A, sx, sy, pose, body } = B;
+		const birdPx = pxOf(A), alpha = alphas[bi];
+		v.birdScreen.push({
+			A,
+			sx,
+			sy,
+			pose
+		});
+		const fname = A.file ? leafPx < 14 && A.file.node && A.file.node.depth >= 1 && A.file.node.kind !== "pile" && !namedN.has(A.file.node) ? folderPath(A.file.node).replace(" › ", "/") + "/" + A.file.name : A.file.name : "";
+		const doing = pose.fly ? A.file && !pose.nest ? ` → ${fname}` : " → nest" : pose.blocked ? ` ✕ ${fname}` : A.file && !pose.nest ? ` · ${fname}` : "";
+		if (!B.visible) {
+			pointers.push(B);
+			continue;
+		}
+		g.globalAlpha = alpha;
+		drawBird(g, sx, sy, birdPx, A.ag.color, pose, now, !v.reducedMotion);
+		const tag0 = W < 700 && !(A.ag.parent && A.done) && A.file ? `${A.ag.glyph} ${pose.fly ? "→ " : pose.blocked ? "✕ " : ""}${A.file.name}` : `${A.ag.glyph} ${clip$2(A.ag.short || A.ag.name)}${A.ag.parent && A.done ? pose.fly ? " → home" : " · done" : doing}`;
+		g.font = `600 10.5px ${P.font}`;
+		const th = 16;
+		let tag = tag0, tw = 0, bx = 0, by = 0, far = false, placedTag = false;
+		const zd = terrs.filter((T) => !(A.file && isUnder(A.file.node, T.n)));
+		const offZones = (x0, y0, x1, y1) => zd.every((T) => T.polys.every((poly) => rectPolyDist(x0, y0, x1, y1, poly) > 0));
+		const bare = A.ag.parent ? `${A.ag.glyph} ${clip$2(A.ag.short || A.ag.name, 14)}` : A.ag.glyph;
+		const tries = tag0 === bare ? [
+			[
+				tag0,
+				true,
+				true
+			],
+			[
+				tag0,
+				true,
+				false
+			],
+			[
+				tag0,
+				false,
+				false
+			]
+		] : [
+			[
+				tag0,
+				true,
+				true
+			],
+			[
+				bare,
+				true,
+				true
+			],
+			[
+				tag0,
+				true,
+				false
+			],
+			[
+				bare,
+				true,
+				false
+			],
+			[
+				tag0,
+				false,
+				false
+			]
+		];
+		for (const [t0, strict, clean] of tries) {
+			if (A.ag.parent && !clean) continue;
+			const w = g.measureText(t0).width + 12;
+			const above = [-w / 2, -birdPx * .95 - th - 3], below = [-w / 2, 6], right = [birdPx * .65 + 6, -birdPx * .45 - th / 2], left = [-birdPx * .65 - 6 - w, -birdPx * .45 - th / 2];
+			const order = pose.fly ? [
+				below,
+				above,
+				right,
+				left,
+				[-w / 2, 28],
+				[-w / 2, -birdPx * .95 - th - 26]
+			] : [
+				above,
+				right,
+				left,
+				below,
+				[-w / 2, -birdPx * .95 - th - 26],
+				[-w / 2, 28]
+			];
+			const wholeT = (x0, y0) => x0 >= 2 && x0 + w <= v.W - 2 && y0 >= 2 && y0 + th <= v.H - 2;
+			for (const [ax, ay] of order) {
+				const x0 = sx + ax, y0 = sy + ay;
+				if (fits(x0, y0, x0 + w, y0 + th) && (!strict || wholeT(x0, y0)) && (!clean || offZones(x0, y0, x0 + w, y0 + th))) {
+					bx = x0;
+					by = y0;
+					far = Math.abs(ay) > birdPx * .95 + th + 12 || Math.abs(ax) > birdPx;
+					placedTag = true;
+					break;
+				}
+			}
+			if (placedTag) {
+				tag = t0;
+				tw = w;
+				break;
+			}
+		}
+		if (!placedTag && A.ag.parent) {
+			g.globalAlpha = 1;
+			v.birdHits.push({
+				r: body,
+				A
+			});
+			continue;
+		}
+		if (!placedTag) {
+			tag = bare;
+			tw = g.measureText(tag).width + 12;
+			bx = sx - tw / 2;
+			by = Math.max(2, Math.min(v.H - th - 2, sy - birdPx * .95 - th - 3));
+		}
+		bx = Math.max(2, Math.min(v.W - tw - 2, bx));
+		by = Math.max(2, Math.min(v.H - th - 2, by));
+		if (far) {
+			g.strokeStyle = A.ag.color;
+			g.lineWidth = 1;
+			g.beginPath();
+			g.moveTo(sx, sy - birdPx * .4);
+			g.lineTo(Math.max(bx + 4, Math.min(bx + tw - 4, sx)), by + th / 2 < sy ? by + th : by);
+			g.stroke();
+		}
+		const fileN = A.file ? A.file.node : null;
+		if (hasOnly && fileN && !fileN.lit && onlyBinds(v, A)) g.globalAlpha = alpha * .55;
+		quietPill(g, P, bx, by, tw, th);
+		g.fillStyle = A.ag.color;
+		g.textBaseline = "middle";
+		g.fillText(tag, bx + 6, by + th / 2 + .5);
+		g.globalAlpha = 1;
+		reserve(bx, by, bx + tw, by + th);
+		v.birdHits.push({
+			r: body,
+			A
+		});
+		v.birdHits.push({
+			r: [
+				bx,
+				by,
+				bx + tw,
+				by + th
+			],
+			A
+		});
+	}
+	for (const A of v.agents) for (const bk of A.blocked) {
+		const age = v.playing ? t - bk.t : 2;
+		if (age < .55 || age > 7) continue;
+		const p = bonkPoint(v, bk);
+		if (!p) continue;
+		const [sx, sy] = toS(p[0], p[1]);
+		const a = age < 4 ? 1 : Math.max(0, 1 - (age - 4) / 3);
+		if (age < 1.7) {
+			g.strokeStyle = P.red;
+			g.lineWidth = 2;
+			g.globalAlpha = a * (1 - (age - .55) / 1.15);
+			g.beginPath();
+			g.arc(sx, sy, 8 + (age - .55) * 26, 0, TAU);
+			g.stroke();
+		}
+		g.globalAlpha = a;
+		let cx = sx - 14, cy = sy - 16;
+		const r = 6;
+		for (const [ax, ay] of [
+			[-14, -16],
+			[14, -16],
+			[-14, 16],
+			[14, 16],
+			[-26, 0],
+			[26, 0]
+		]) if (fits(sx + ax - r - 4, sy + ay - r - 4, sx + ax + r + 4, sy + ay + r + 4)) {
+			cx = sx + ax;
+			cy = sy + ay;
+			break;
+		}
+		g.fillStyle = P.bonkBg;
+		g.beginPath();
+		g.arc(cx, cy, 10, 0, TAU);
+		g.fill();
+		g.strokeStyle = P.red;
+		g.lineWidth = 1.2;
+		g.stroke();
+		g.strokeStyle = P.bonkX;
+		g.lineWidth = 2.4;
+		g.lineCap = "round";
+		g.beginPath();
+		g.moveTo(cx - r * .6, cy - r * .6);
+		g.lineTo(cx + r * .6, cy + r * .6);
+		g.moveTo(cx + r * .6, cy - r * .6);
+		g.lineTo(cx - r * .6, cy + r * .6);
+		g.stroke();
+		g.lineCap = "butt";
+		g.globalAlpha = 1;
+		reserve(cx - r - 4, cy - r - 4, cx + r + 4, cy + r + 4);
+	}
+	drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, "rest");
+	for (const B of pointers) {
+		const { A } = B, Pp = B.ptr;
+		if (!Pp) continue;
+		roundRect(g, Pp.bx, Pp.by, Pp.tw, Pp.th, 9);
+		g.fillStyle = P.pill;
+		g.fill();
+		g.strokeStyle = A.ag.color;
+		g.lineWidth = 1.2;
+		g.stroke();
+		g.fillStyle = A.ag.color;
+		g.textBaseline = "middle";
+		g.font = `600 10.5px ${P.font}`;
+		g.fillText(Pp.t2, Pp.bx + 7, Pp.by + Pp.th / 2 + .5);
+		v.birdHits.push({
+			r: [
+				Pp.bx,
+				Pp.by,
+				Pp.bx + Pp.tw,
+				Pp.by + Pp.th
+			],
+			A,
+			pointer: true
+		});
+	}
+	if (!(v.visBranches && v.visBranches.length) && !v.termsInView && !birdS.some((b) => b && b.visible)) {
+		const cx = (free.x0 + free.x1) / 2, cy = (free.y0 + free.y1) / 2;
+		g.font = `500 13px ${P.font}`;
+		g.textAlign = "center";
+		g.textBaseline = "middle";
+		g.fillStyle = P.muted;
+		g.fillText(EMPTY_HINT, cx, cy);
+		g.textAlign = "left";
+		v.emptyHint = EMPTY_HINT;
+	}
+	v.anim = poses.some((p) => p && p.fly) || !!(v.pulse && now - v.pulse.t0 < 2600) || v.agents.some((A) => A.blocked.some((bk) => {
+		const a = t - bk.t;
+		return a >= 0 && a < 7;
+	})) || v.agents.some((A) => !!A.lastEdit && t - A.lastEdit.t < 1.6);
+}
+function folderPath(n) {
+	const nm = (x) => x.kind === "root" || x.kind === "pile" ? x.label || x.name : x.disp || shortName(x.name);
+	if (n.depth < 2) return nm(n);
+	let top = n;
+	while (top.parent && top.depth > 1) top = top.parent;
+	const t = nm(top);
+	let s = nm(n);
+	if (s.startsWith(t + "/")) s = s.slice(t.length + 1);
+	return `${t} › ${s}`;
+}
+function freshness(v) {
+	const ts = /* @__PURE__ */ new Map();
+	for (const A of v.agents) for (const [id, t] of A.edits) ts.set(id, Math.max(ts.get(id) || 0, t || 0));
+	const timed = [...ts.entries()].filter((e) => e[1] > 0).sort((a, b) => a[1] - b[1]);
+	const out = /* @__PURE__ */ new Map();
+	for (const [id, t] of ts) if (!(t > 0)) out.set(id, .35);
+	timed.forEach(([id], i) => out.set(id, timed.length < 2 ? 1 : .45 + .55 * i / (timed.length - 1)));
+	return out;
+}
+function litMap(v) {
+	const out = /* @__PURE__ */ new Map();
+	const M = v.M;
+	const glyphOf = (A) => {
+		const par = A.ag.parent ? v.agents.find((P) => P.ag.key === A.ag.parent) : null;
+		return glyphShape(par ? par.ag.glyph : A.ag.glyph);
+	};
+	const seen = /* @__PURE__ */ new Set();
+	const order = [...v.agents].sort((a, b) => Number(b.ag.primary) - Number(a.ag.primary));
+	for (const A of order) for (const [id] of A.edits) {
+		if (seen.has(id)) continue;
+		const f = M.files[id];
+		if (!f || !f.leaf) continue;
+		seen.add(id);
+		const col = A.ag.color, glyph = glyphOf(A), bindsA = onlyBinds(v, A);
+		let n = f.node;
+		while (n) {
+			let e = out.get(n);
+			if (!e) out.set(n, e = {
+				n: 0,
+				segs: [],
+				col,
+				own: 0,
+				bound: 0
+			});
+			e.n++;
+			if (bindsA) e.bound++;
+			if (n === f.node) e.own++;
+			let sg = e.segs.find((q) => q.col === col);
+			if (!sg) e.segs.push(sg = {
+				col,
+				glyph,
+				n: 0
+			});
+			sg.n++;
+			e.col = e.segs.length === 1 ? col : null;
+			n = n.parent;
+		}
+	}
+	return out;
+}
+function drawEdits(v, now, ox, oy, reserve) {
+	const { g, M } = v;
+	const P = v.P, z = v.cam.z, dpr = v.dpr, t = v.t, px = 1 / z, hasOnly = !!v.hasOnly;
+	const vx0 = -ox / z, vy0 = -oy / z, vx1 = (v.W - ox) / z, vy1 = (v.H - oy) / z;
+	const inView = (x0, y0, x1, y1) => x1 >= vx0 && x0 <= vx1 && y1 >= vy0 && y0 <= vy1;
+	g.setTransform(dpr * z, 0, 0, dpr * z, dpr * ox, dpr * oy);
+	const fresh = freshness(v);
+	const off = /* @__PURE__ */ new Map();
+	{
+		const pts = [];
+		const seen = /* @__PURE__ */ new Set();
+		for (const A of v.agents) for (const [id] of A.edits) {
+			const l = M.files[id] && M.files[id].leaf;
+			if (!l || seen.has(id)) continue;
+			seen.add(id);
+			if (!inView(l.x - 40 * px, l.y - 40 * px, l.x + 40 * px, l.y + 40 * px)) continue;
+			const x = l.x * z + ox, y = l.y * z + oy;
+			pts.push({
+				k: String(id),
+				x,
+				y,
+				x0: x,
+				y0: y
+			});
+		}
+		spreadApart(pts, 15);
+		for (const q of pts) if (q.x !== q.x0 || q.y !== q.y0) off.set(q.k, [(q.x - q.x0) / z, (q.y - q.y0) / z]);
+		if (reserve) for (const q of pts) reserve(q.x - 7, q.y - 7, q.x + 7, q.y + 7);
+	}
+	for (const A of v.agents) {
+		const col = A.ag.color;
+		const nowF = !A.done && (A.status === "editing" || A.status === "creating") && A.file ? A.file.id : -1;
+		for (const [id] of A.edits) {
+			const l0 = M.files[id] && M.files[id].leaf;
+			if (!l0) continue;
+			if (!inView(l0.x - 40 * px, l0.y - 40 * px, l0.x + 40 * px, l0.y + 40 * px)) continue;
+			const o = off.get(String(id));
+			g.save();
+			if (o) g.translate(o[0], o[1]);
+			const l = l0;
+			const created = A.created.has(id) && A.lastEdit && A.lastEdit.f.id === id;
+			const age = created ? t - A.lastEdit.t : 99, grow = M.files[id].ghost || created ? v.playing ? Math.min(1, Math.max(.05, age / 1.2)) : 1 : 1;
+			const own = l.term ? l.term.node : l.pile;
+			const outside = hasOnly && !!own && !own.lit && onlyBinds(v, A);
+			const sc = Math.max(1, 10.5 * px / (l.len * .5)) * grow;
+			const rr = l.len * .5 * sc;
+			if (id === nowF) {
+				const k = v.playing ? now / 1600 % 1 : .35;
+				g.strokeStyle = col;
+				g.lineWidth = 2 * px;
+				g.globalAlpha = .75 * (1 - k);
+				g.beginPath();
+				g.arc(l.x, l.y, rr + (4 + k * 16) * px, 0, TAU);
+				g.stroke();
+				g.globalAlpha = 1;
+			}
+			g.save();
+			g.translate(l.x, l.y);
+			g.scale(sc, sc);
+			g.translate(-l.x, -l.y);
+			if (!outside) {
+				g.shadowColor = col;
+				g.shadowBlur = (4 + 10 * (fresh.get(id) ?? 1)) * dpr;
+			}
+			g.fillStyle = col;
+			g.globalAlpha = outside ? .75 : 1;
+			g.beginPath();
+			leafPath(g, l);
+			g.fill();
+			g.shadowBlur = 0;
+			g.shadowColor = "transparent";
+			g.globalAlpha = 1;
+			g.strokeStyle = P.editStroke;
+			g.lineWidth = 1.1 * px / sc;
+			if (outside) g.setLineDash([2 * px / sc, 2 * px / sc]);
+			g.stroke();
+			g.setLineDash([]);
+			g.restore();
+			g.restore();
+		}
+	}
+	g.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+function spreadApart(pts, D, iters = 12) {
+	if (pts.length < 2 || pts.length >= 400) return;
+	for (let it = 0; it < iters; it++) {
+		let moved = false;
+		for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) {
+			const a = pts[i], b = pts[j];
+			let dx = b.x - a.x, dy = b.y - a.y;
+			const d = Math.hypot(dx, dy);
+			if (d >= D) continue;
+			if (d < .01) {
+				dx = Math.cos(i + j);
+				dy = Math.sin(i + j);
+			} else {
+				dx /= d;
+				dy /= d;
+			}
+			const push = (D - d) / 2 + .01;
+			a.x -= dx * push;
+			a.y -= dy * push;
+			b.x += dx * push;
+			b.y += dy * push;
+			moved = true;
+		}
+		if (!moved) break;
+	}
+}
+function withAlpha(c, a) {
+	const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c.trim());
+	if (m) {
+		let h = m[1];
+		if (h.length === 3) h = h.replace(/./g, (x) => x + x);
+		const x = parseInt(h, 16);
+		return `rgba(${x >> 16},${x >> 8 & 255},${x & 255},${a})`;
+	}
+	if (/^(rgb|hsl)\(/i.test(c)) return c.replace(/^(rgb|hsl)\((.*)\)$/i, (_q, f, body) => `${f}a(${body.replace(/\s*\/.*$/, "")},${a})`);
+	return c;
+}
+function branchVisible(b) {
+	const so = b.subOf;
+	if (so && (so.vHidden || so.vColl)) return false;
+	return !(b.node && b.node.vHidden);
+}
+var BPAR = /* @__PURE__ */ new WeakMap();
+function branchParents(M) {
+	let m = BPAR.get(M);
+	if (m) return m;
+	m = /* @__PURE__ */ new Map();
+	const ends = /* @__PURE__ */ new Map();
+	const key = (x, y) => Math.round(x) + "," + Math.round(y);
+	for (const b of M.branches) {
+		const k = key(b.x1, b.y1);
+		let a = ends.get(k);
+		if (!a) ends.set(k, a = []);
+		a.push(b);
+	}
+	for (const b of M.branches) {
+		let best = null, bd = .75;
+		const ix = Math.round(b.x0), iy = Math.round(b.y0);
+		for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (const q of ends.get(ix + dx + "," + (iy + dy)) || []) {
+			if (q === b || q.region !== b.region) continue;
+			const d = Math.hypot(q.x1 - b.x0, q.y1 - b.y0);
+			if (d < bd) {
+				bd = d;
+				best = q;
+			}
+		}
+		m.set(b, best);
+	}
+	BPAR.set(M, m);
+	return m;
+}
+function drawVeins(v, px, inView) {
+	const { g, M } = v;
+	const P = v.P, z = v.cam.z, dpr = v.dpr;
+	const par = branchParents(M);
+	const cols = /* @__PURE__ */ new Map();
+	const tops = /* @__PURE__ */ new Map();
+	const seen = /* @__PURE__ */ new Set();
+	for (const A of v.agents) for (const [id] of A.edits) {
+		const f = M.files[id];
+		const l = f && f.leaf;
+		if (!l || seen.has(id * 64 + A.ag.id % 64)) continue;
+		seen.add(id * 64 + A.ag.id % 64);
+		let b = l.term && l.term.branch || f.node && f.node.branch || null;
+		let guard = 0;
+		while (b && guard++ < 200) {
+			let c = cols.get(b);
+			if (!c) cols.set(b, c = /* @__PURE__ */ new Set());
+			if (c.has(A.ag.color) && guard > 1) break;
+			c.add(A.ag.color);
+			const pb = par.get(b) || null;
+			if (!pb) {
+				let tc = tops.get(b);
+				if (!tc) tops.set(b, tc = /* @__PURE__ */ new Set());
+				tc.add(A.ag.color);
+			}
+			b = pb;
+		}
+	}
+	if (!cols.size) return;
+	const colOf = (c) => c.size === 1 ? [...c][0] : P.text;
+	const vis = [];
+	for (const [b, c] of cols) if (branchVisible(b) && inView(b.bx0, b.by0, b.bx1, b.by1)) vis.push([b, colOf(c)]);
+	const inside = /* @__PURE__ */ new Set();
+	if (v.hasOnly) for (const A of v.agents) for (const [id] of A.edits) {
+		const f = M.files[id];
+		const l = f && f.leaf;
+		const own = l ? l.term ? l.term.node : l.pile : null;
+		if (!l || !own || !own.lit) continue;
+		let b = l.term && l.term.branch || f.node && f.node.branch || null;
+		let guard = 0;
+		while (b && !inside.has(b) && guard++ < 200) {
+			inside.add(b);
+			b = par.get(b) || null;
+		}
+	}
+	const outside = (b) => !!v.hasOnly && !inside.has(b);
+	g.lineCap = "round";
+	g.lineJoin = "round";
+	g.fillStyle = P.litBark;
+	g.strokeStyle = P.litBark;
+	for (const [b] of vis) {
+		g.globalAlpha = outside(b) ? .25 : .85;
+		if (b.wb * z < 1.3) {
+			g.lineWidth = 2 * px;
+			const c = b.c;
+			g.beginPath();
+			g.moveTo(c[0], c[1]);
+			g.bezierCurveTo(c[2], c[3], c[4], c[5], c[6], c[7]);
+			g.stroke();
+		} else {
+			const p = b.poly;
+			g.beginPath();
+			g.moveTo(p[0], p[1]);
+			for (let i = 2; i < p.length; i += 2) g.lineTo(p[i], p[i + 1]);
+			g.closePath();
+			g.fill();
+		}
+	}
+	g.globalAlpha = 1;
+	const core = (b) => Math.max(2, Math.min(4.5, Math.min(b.wb, b.we) * z * .34)) * px;
+	g.shadowBlur = 7 * dpr;
+	for (const [b, c] of tops) {
+		const col = colOf(c);
+		const out = outside(b);
+		g.globalAlpha = out ? .3 : 1;
+		g.shadowBlur = out ? 0 : 7 * dpr;
+		g.strokeStyle = col;
+		g.shadowColor = col;
+		g.lineWidth = 3 * px;
+		g.beginPath();
+		g.moveTo(0, M.groundY);
+		g.lineTo(b.c[0], b.c[1]);
+		g.stroke();
+	}
+	for (const [b, col] of vis) {
+		const out = outside(b);
+		g.globalAlpha = out ? .35 : 1;
+		g.shadowBlur = out ? 0 : 7 * dpr;
+		g.strokeStyle = col;
+		g.shadowColor = col;
+		g.lineWidth = core(b);
+		const c = b.c;
+		g.beginPath();
+		g.moveTo(c[0], c[1]);
+		g.bezierCurveTo(c[2], c[3], c[4], c[5], c[6], c[7]);
+		g.stroke();
+	}
+	g.globalAlpha = 1;
+	g.shadowBlur = 0;
+	g.shadowColor = "transparent";
+	g.lineCap = "butt";
+}
+var HULLS = /* @__PURE__ */ new WeakMap();
+function hullOf(M, n) {
+	let m = HULLS.get(M);
+	if (!m) HULLS.set(M, m = /* @__PURE__ */ new Map());
+	let h = m.get(n);
+	if (h) return h;
+	h = {
+		terms: [],
+		wood: /* @__PURE__ */ new Map()
+	};
+	for (const t of M.terms) if (isUnder(t.node, n)) h.terms.push(t);
+	for (const b of M.branches) {
+		const o = b.node || b.owner;
+		if (!o || !isUnder(o, n)) continue;
+		const w = Math.max(1, Math.round(Math.max(b.wb, b.we)));
+		let a = h.wood.get(w);
+		if (!a) h.wood.set(w, a = []);
+		a.push(b);
+	}
+	m.set(n, h);
+	return h;
+}
+function foreignLit(v, list) {
+	const M = v.M;
+	const par = branchParents(M);
+	const out = /* @__PURE__ */ new Set();
+	for (const A of v.agents) for (const [id] of A.edits) {
+		const f = M.files[id];
+		const l = f && f.leaf;
+		if (!l || list.some((zz) => zz.node && isUnder(f.node, zz.node))) continue;
+		let b = l.term && l.term.branch || f.node && f.node.branch || null;
+		let guard = 0;
+		while (b && !out.has(b) && guard++ < 200) {
+			const o = b.node || b.owner;
+			if (!(o && list.some((zz) => zz.node && isUnder(o, zz.node)))) out.add(b);
+			b = par.get(b) || null;
+		}
+	}
+	return [...out];
+}
+function convexHull(p) {
+	const n = p.length >> 1;
+	if (n < 3) return p.slice();
+	const idx = Array.from({ length: n }, (_, i) => i).sort((a, b) => p[2 * a] - p[2 * b] || p[2 * a + 1] - p[2 * b + 1]);
+	const cross = (o, a, b) => (p[2 * a] - p[2 * o]) * (p[2 * b + 1] - p[2 * o + 1]) - (p[2 * a + 1] - p[2 * o + 1]) * (p[2 * b] - p[2 * o]);
+	const lo = [], up = [];
+	for (const i of idx) {
+		while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], i) <= 0) lo.pop();
+		lo.push(i);
+	}
+	for (let k = idx.length - 1; k >= 0; k--) {
+		const i = idx[k];
+		while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], i) <= 0) up.pop();
+		up.push(i);
+	}
+	lo.pop();
+	up.pop();
+	const out = [];
+	for (const i of lo.concat(up)) out.push(p[2 * i], p[2 * i + 1]);
+	return out;
+}
+function ringPts(out, x, y, r, k) {
+	const R = r / Math.cos(Math.PI / k);
+	for (let i = 0; i < k; i++) {
+		const a = i / k * TAU;
+		out.push(x + Math.cos(a) * R, y + Math.sin(a) * R);
+	}
+}
+var LOBES = /* @__PURE__ */ new WeakMap();
+function zoneLobes(M, n, pad) {
+	let m = LOBES.get(M);
+	if (!m) LOBES.set(M, m = /* @__PURE__ */ new Map());
+	let L = m.get(n);
+	if (!L) {
+		const h = hullOf(M, n);
+		const byBranch = /* @__PURE__ */ new Map();
+		const loose = [];
+		const inWood = /* @__PURE__ */ new Set();
+		for (const arr of h.wood.values()) for (const b of arr) inWood.add(b);
+		for (const t of h.terms) {
+			if (!t.leaves.length) continue;
+			const b = t.branch || null;
+			if (b && inWood.has(b)) {
+				let a = byBranch.get(b);
+				if (!a) byBranch.set(b, a = []);
+				a.push(t);
+			} else loose.push(t);
+		}
+		const lobes = [];
+		for (const b of inWood) {
+			const pts = [];
+			const k = b.pts.length;
+			for (let i = 0; i < k; i++) ringPts(pts, b.pts[i][0], b.pts[i][1], Math.max(.5, taperHW(b.wb, b.we, i / Math.max(1, k - 1))), 8);
+			for (const t of byBranch.get(b) || []) ringPts(pts, t.cx, t.cy, t.rad, 20);
+			if (pts.length >= 6) lobes.push(convexHull(pts));
+		}
+		for (const t of loose) {
+			const pts = [];
+			ringPts(pts, t.cx, t.cy, t.rad, 20);
+			lobes.push(convexHull(pts));
+		}
+		L = {
+			lobes,
+			padded: /* @__PURE__ */ new Map()
+		};
+		m.set(n, L);
+	}
+	const key = Math.round(pad * 100) / 100;
+	let out = L.padded.get(key);
+	if (!out) {
+		out = L.lobes.map((poly) => {
+			const pts = [];
+			for (let i = 0; i < poly.length; i += 2) ringPts(pts, poly[i], poly[i + 1], key, 12);
+			return convexHull(pts);
+		});
+		if (L.padded.size > 6) L.padded.clear();
+		L.padded.set(key, out);
+	}
+	return out;
+}
+function rectPolyDist(x0, y0, x1, y1, poly) {
+	const n = poly.length >> 1;
+	if (!n) return Infinity;
+	for (let i = 0; i < n; i++) {
+		const x = poly[2 * i], y = poly[2 * i + 1];
+		if (x >= x0 && x <= x1 && y >= y0 && y <= y1) return 0;
+	}
+	let sgn = 0, inside = true;
+	const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+	for (let i = 0; i < n && inside; i++) {
+		const ax = poly[2 * i], ay = poly[2 * i + 1], bx = poly[(2 * i + 2) % (2 * n)], by = poly[(2 * i + 3) % (2 * n)];
+		const c = Math.sign((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
+		if (c && sgn && c !== sgn) inside = false;
+		if (c) sgn = c;
+	}
+	if (inside) return 0;
+	const segRect = (ax, ay, bx, by) => {
+		let best = Infinity;
+		const steps = 6;
+		for (let s = 0; s <= steps; s++) {
+			const x = ax + (bx - ax) * s / steps, y = ay + (by - ay) * s / steps;
+			const dx = Math.max(x0 - x, 0, x - x1), dy = Math.max(y0 - y, 0, y - y1);
+			best = Math.min(best, Math.hypot(dx, dy));
+		}
+		return best;
+	};
+	let d = Infinity;
+	for (let i = 0; i < n; i++) d = Math.min(d, segRect(poly[2 * i], poly[2 * i + 1], poly[(2 * i + 2) % (2 * n)], poly[(2 * i + 3) % (2 * n)]));
+	return d;
+}
+var terrPad = (z) => S0 * .22 + 16 / z;
+var TERR = /* @__PURE__ */ new WeakMap();
+function drawTerritories(v, ox, oy) {
+	v.terrPolys = [];
+	const zs = v.zones.filter((zz) => !zz.waived && zz.node && zz.node.kind !== "pile" && zz.node.depth >= 1);
+	if (!zs.length) return;
+	const { g, M } = v;
+	const P = v.P, z = v.cam.z, dpr = v.dpr;
+	let c = TERR.get(v);
+	if (!c) {
+		c = document.createElement("canvas");
+		TERR.set(v, c);
+	}
+	const cw = Math.max(1, Math.round(v.W * dpr)), ch = Math.max(1, Math.round(v.H * dpr));
+	if (c.width !== cw || c.height !== ch) {
+		c.width = cw;
+		c.height = ch;
+	}
+	const t = c.getContext("2d");
+	if (!t) return;
+	const vx0 = -ox / z, vy0 = -oy / z, vx1 = (v.W - ox) / z, vy1 = (v.H - oy) / z;
+	const pad = terrPad(z);
+	for (const type of ["only", "keep"]) {
+		const list = zs.filter((zz) => zz.type === type);
+		if (!list.length) continue;
+		const col = type === "keep" ? P.red : P.green;
+		const ow = (type === "keep" ? 3 : 2.5) / z;
+		const polys0 = [], polysB = [];
+		let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+		for (const zz of list) {
+			const own = zoneLobes(M, zz.node, pad);
+			const scr = [];
+			for (const poly of own) {
+				let px0 = Infinity, py0 = Infinity, px1 = -Infinity, py1 = -Infinity;
+				for (let i = 0; i < poly.length; i += 2) {
+					px0 = Math.min(px0, poly[i]);
+					px1 = Math.max(px1, poly[i]);
+					py0 = Math.min(py0, poly[i + 1]);
+					py1 = Math.max(py1, poly[i + 1]);
+				}
+				if (px1 < vx0 - ow || px0 > vx1 + ow || py1 < vy0 - ow || py0 > vy1 + ow) continue;
+				bx0 = Math.min(bx0, px0);
+				by0 = Math.min(by0, py0);
+				bx1 = Math.max(bx1, px1);
+				by1 = Math.max(by1, py1);
+				polys0.push(poly);
+				const sp = [];
+				for (let i = 0; i < poly.length; i += 2) sp.push(poly[i] * z + ox, poly[i + 1] * z + oy);
+				scr.push(sp);
+			}
+			for (const poly of zoneLobes(M, zz.node, pad + ow)) polysB.push(poly);
+			if (scr.length) v.terrPolys.push({
+				n: zz.node,
+				keep: type === "keep",
+				polys: scr
+			});
+		}
+		if (!polys0.length) continue;
+		const path = (polys) => {
+			t.beginPath();
+			for (const poly of polys) {
+				t.moveTo(poly[0], poly[1]);
+				for (let i = 2; i < poly.length; i += 2) t.lineTo(poly[i], poly[i + 1]);
+				t.closePath();
+			}
+		};
+		const gap = 3 / z;
+		const ownT = [];
+		for (const zz of list) for (const tt of hullOf(M, zz.node).terms) if (tt.leaves.length) ownT.push(tt);
+		const holes = [];
+		for (const tt of M.terms) {
+			if (!tt.leaves.length || tt.node.vHidden) continue;
+			if (list.some((zz) => isUnder(tt.node, zz.node))) continue;
+			let r = tt.rad + (tt.node.fAnc ? tt.s * .5 : 0) + gap;
+			if (tt.cx + r < bx0 || tt.cx - r > bx1 || tt.cy + r < by0 || tt.cy - r > by1) continue;
+			for (const o of ownT) r = Math.min(r, Math.max(tt.rad * .45, Math.hypot(tt.cx - o.cx, tt.cy - o.cy) - o.rad));
+			holes.push([
+				tt.cx,
+				tt.cy,
+				r
+			]);
+		}
+		const bpx = Math.max(26, Math.min(48, 16 + S0 * z * 1.3));
+		const birds = [];
+		for (const A of v.agents) {
+			const at = birdWorldAt(v, A, v.t);
+			if (!at) continue;
+			if (list.some((zz) => A.file ? isUnder(A.file.node, zz.node) : false)) continue;
+			birds.push([
+				at[0],
+				at[1] - bpx * .45 / z,
+				bpx * .75 / z
+			]);
+		}
+		const lit = foreignLit(v, list).filter((b) => !(b.bx1 < bx0 || b.bx0 > bx1 || b.by1 < by0 || b.by0 > by1));
+		const woodPath = (b) => {
+			const q = b.c;
+			t.beginPath();
+			t.moveTo(q[0], q[1]);
+			t.bezierCurveTo(q[2], q[3], q[4], q[5], q[6], q[7]);
+		};
+		const litW = (b) => b.wb + 7 / z;
+		t.setTransform(1, 0, 0, 1, 0, 0);
+		t.globalCompositeOperation = "source-over";
+		t.globalAlpha = 1;
+		t.clearRect(0, 0, cw, ch);
+		t.setTransform(dpr * z, 0, 0, dpr * z, dpr * ox, dpr * oy);
+		t.lineCap = "round";
+		t.lineJoin = "round";
+		t.fillStyle = col;
+		t.strokeStyle = col;
+		path(polysB);
+		t.fill("nonzero");
+		t.globalCompositeOperation = "destination-out";
+		path(polys0);
+		t.fill("nonzero");
+		t.globalCompositeOperation = "source-over";
+		t.save();
+		path(polys0);
+		t.clip("nonzero");
+		t.globalAlpha = type === "keep" ? P.light ? .22 : .28 : P.light ? .16 : .14;
+		t.fillRect(bx0 - ow, by0 - ow, bx1 - bx0 + 2 * ow, by1 - by0 + 2 * ow);
+		if (type === "keep") {
+			t.setTransform(1, 0, 0, 1, 0, 0);
+			t.globalAlpha = P.light ? .42 : .5;
+			t.lineWidth = 1.4 * dpr;
+			const gp = 8 * dpr;
+			t.beginPath();
+			for (let d = -ch; d < cw; d += gp) {
+				t.moveTo(d, ch);
+				t.lineTo(d + ch, 0);
+			}
+			t.stroke();
+			t.setTransform(dpr * z, 0, 0, dpr * z, dpr * ox, dpr * oy);
+		}
+		t.globalAlpha = 1;
+		t.lineWidth = ow;
+		t.beginPath();
+		for (const [x, y, r] of holes) {
+			t.moveTo(x + r + ow / 2, y);
+			t.arc(x, y, r + ow / 2, 0, TAU);
+		}
+		t.stroke();
+		t.restore();
+		t.globalCompositeOperation = "destination-out";
+		t.beginPath();
+		for (const [x, y, r] of holes) {
+			t.moveTo(x + r, y);
+			t.arc(x, y, r, 0, TAU);
+		}
+		for (const [x, y, r] of birds) {
+			t.moveTo(x + r, y);
+			t.arc(x, y, r, 0, TAU);
+		}
+		t.fill();
+		for (const b of lit) {
+			t.lineWidth = litW(b);
+			woodPath(b);
+			t.stroke();
+		}
+		t.globalCompositeOperation = "source-over";
+		g.setTransform(1, 0, 0, 1, 0, 0);
+		g.globalAlpha = 1;
+		g.drawImage(c, 0, 0);
+	}
+}
+function buildFoliageField(v, toS, hoverNode) {
+	const M = v.M, z = v.cam.z, W = v.W, H = v.H, CELL = 48;
+	const cells = /* @__PURE__ */ new Map(), key = (i, j) => (i + 64) * 4096 + (j + 64);
+	const discs = [];
+	const add = (d) => {
+		discs.push(d);
+		for (let i = Math.floor((d.x - d.r) / CELL); i <= Math.floor((d.x + d.r) / CELL); i++) for (let j = Math.floor((d.y - d.r) / CELL); j <= Math.floor((d.y + d.r) / CELL); j++) {
+			const k = key(i, j);
+			let a = cells.get(k);
+			if (!a) cells.set(k, a = []);
+			a.push(d);
+		}
+	};
+	for (const t of M.terms) {
+		if (!t.leaves.length) continue;
+		const [x, y] = toS(t.cx, t.cy), r = (t.rad + (t.node.fAnc ? t.s * .5 : 0)) * z + 1;
+		if (r < 1.5 || x + r < -200 || x - r > W + 200 || y + r < -100 || y - r > H + 100) continue;
+		const li = v.litInfo && v.litInfo.get(t.node);
+		add({
+			x,
+			y,
+			r,
+			n: t.node,
+			hot: !!(li && li.own > 0)
+		});
+	}
+	const rings = [];
+	if (hoverNode && hoverNode.cnt && v.tool !== "explore") rings.push(hoverNode);
+	if (v.sel && v.sel.node && v.sel.node.cnt && v.sel.node.depth >= 1 && v.infoNode === v.sel.node) rings.push(v.sel.node);
+	for (const n of rings) {
+		const [x, y] = toS(n.cx, n.cy);
+		add({
+			x,
+			y,
+			r: (n.rad + S0 * .6) * z + 2,
+			n,
+			ring: true
+		});
+	}
+	const seen = [];
+	const topOf = (n) => {
+		let q = n;
+		while (q.parent && q.depth > 1) q = q.parent;
+		return q;
+	};
+	const tops = /* @__PURE__ */ new Map();
+	const extras = [];
+	const api = {
+		discs,
+		sideOk(x0, y0, x1, y1, n, range = 150) {
+			if (!n || n.depth < 1 || n.kind === "pile") return true;
+			const T = topOf(n);
+			let dOwn = Infinity, dFor = Infinity;
+			for (let i = Math.floor((x0 - range) / CELL); i <= Math.floor((x1 + range) / CELL); i++) for (let j = Math.floor((y0 - range) / CELL); j <= Math.floor((y1 + range) / CELL); j++) {
+				const a = cells.get(key(i, j));
+				if (!a) continue;
+				for (const d of a) {
+					if (d.ring) continue;
+					const dx = Math.max(x0 - d.x, 0, d.x - x1), dy = Math.max(y0 - d.y, 0, d.y - y1);
+					const e = Math.max(0, Math.hypot(dx, dy) - d.r);
+					if (e > range) continue;
+					let t = tops.get(d);
+					if (!t) tops.set(d, t = topOf(d.n));
+					if (t === T) dOwn = Math.min(dOwn, e);
+					else dFor = Math.min(dFor, e);
+				}
+			}
+			return dFor === Infinity || dOwn <= dFor + 3;
+		},
+		addNest(x0, y0, x1, y1, n) {
+			extras.push({
+				n,
+				poly: null,
+				x0,
+				y0,
+				x1,
+				y1
+			});
+		},
+		addTag(x0, y0, x1, y1, n) {
+			extras.push({
+				n,
+				poly: null,
+				x0,
+				y0,
+				x1,
+				y1,
+				zone: true
+			});
+		},
+		addTerr(n, polys) {
+			for (const poly of polys) {
+				let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+				for (let i = 0; i < poly.length; i += 2) {
+					x0 = Math.min(x0, poly[i]);
+					x1 = Math.max(x1, poly[i]);
+					y0 = Math.min(y0, poly[i + 1]);
+					y1 = Math.max(y1, poly[i + 1]);
+				}
+				extras.push({
+					n,
+					poly,
+					x0,
+					y0,
+					x1,
+					y1,
+					zone: true
+				});
+			}
+		},
+		near(x0, y0, x1, y1, n, anchors, range = 220) {
+			let own = Infinity, loud = Infinity, ownC = Infinity, calmC = Infinity, by = null;
+			if (!n) return {
+				own,
+				loud,
+				ownC,
+				calmC,
+				by
+			};
+			const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+			const mine = (m) => isUnder(m, n);
+			const edge = (x, y, r) => Math.max(0, Math.hypot(Math.max(x0 - x, 0, x - x1), Math.max(y0 - y, 0, y - y1)) - r);
+			const cen = (x, y, r) => Math.max(0, Math.hypot(x - cx, y - cy) - r);
+			let byD = Infinity;
+			for (let i = Math.floor((x0 - range) / CELL); i <= Math.floor((x1 + range) / CELL); i++) for (let j = Math.floor((y0 - range) / CELL); j <= Math.floor((y1 + range) / CELL); j++) {
+				const a = cells.get(key(i, j));
+				if (!a) continue;
+				for (const d of a) {
+					if (d.ring) continue;
+					const e = edge(d.x, d.y, d.r);
+					if (e > range) continue;
+					const c = cen(d.x, d.y, d.r);
+					if (mine(d.n)) {
+						own = Math.min(own, e);
+						ownC = Math.min(ownC, c);
+					} else if (d.hot) {
+						loud = Math.min(loud, e);
+						if (e < byD) byD = e, by = d.n;
+					} else {
+						calmC = Math.min(calmC, c);
+						if (c < byD) byD = c, by = d.n;
+					}
+				}
+			}
+			for (const [x, y, r] of anchors || []) {
+				own = Math.min(own, edge(x, y, r));
+				ownC = Math.min(ownC, cen(x, y, r));
+			}
+			for (const X of extras) {
+				if (X.x0 > x1 + range || X.x1 < x0 - range || X.y0 > y1 + range || X.y1 < y0 - range) continue;
+				const e = X.poly ? rectPolyDist(x0, y0, x1, y1, X.poly) : Math.hypot(Math.max(X.x0 - x1, 0, x0 - X.x1), Math.max(X.y0 - y1, 0, y0 - X.y1));
+				if (X.zone ? mine(X.n) || isUnder(n, X.n) : mine(X.n)) {
+					own = Math.min(own, e);
+					ownC = Math.min(ownC, X.poly ? rectPolyDist(cx, cy, cx, cy, X.poly) : Math.hypot(Math.max(X.x0 - cx, 0, cx - X.x1), Math.max(X.y0 - cy, 0, cy - X.y1)));
+				} else {
+					loud = Math.min(loud, e);
+					if (e < byD) byD = e, by = X.n;
+				}
+			}
+			return {
+				own,
+				loud,
+				ownC,
+				calmC,
+				by
+			};
+		},
+		belongs(x0, y0, x1, y1, n, anchors, range = 220, clear = 4) {
+			if (!n || n.depth < 1 || n.kind === "pile") return true;
+			const q = api.near(x0, y0, x1, y1, n, anchors, range);
+			if (q.loud !== Infinity && !(q.loud >= clear && q.own <= q.loud)) return false;
+			return q.calmC === Infinity || q.own <= 10 || q.ownC <= q.calmC;
+		},
+		hit(x0, y0, x1, y1, own, subtree) {
+			seen.length = 0;
+			for (let i = Math.floor(x0 / CELL); i <= Math.floor(x1 / CELL); i++) for (let j = Math.floor(y0 / CELL); j <= Math.floor(y1 / CELL); j++) {
+				const a = cells.get(key(i, j));
+				if (!a) continue;
+				for (const d of a) {
+					if (seen.includes(d)) continue;
+					seen.push(d);
+					const dx = Math.max(x0 - d.x, 0, d.x - x1), dy = Math.max(y0 - d.y, 0, d.y - y1);
+					if (dx * dx + dy * dy >= (d.r - 1) * (d.r - 1)) continue;
+					if (own && (d.ring ? isUnder(own, d.n) : d.n === own || subtree && isUnder(d.n, own))) continue;
+					return true;
+				}
+			}
+			return false;
+		}
+	};
+	return api;
+}
+function drawBreadcrumb(v, g, free, fits, reserve) {
+	const M = v.M, P = v.P, cam = v.cam, z = cam.z;
+	v.crumbAnc = null;
+	v.crumbNode = null;
+	if (!v.fitZv || z < v.fitZv * 1.45) return;
+	let cx, cy;
+	const fb = v.follow != null && v.birdWorld && v.birdWorld[v.follow];
+	if (fb) {
+		cx = fb[0];
+		cy = fb[1];
+	} else {
+		const sx = (free.x0 + free.x1) / 2, sy = (free.y0 + free.y1) / 2;
+		cx = (sx - v.W / 2) / z + cam.x;
+		cy = (sy - v.H / 2) / z + cam.y;
+	}
+	const m = S0 * 2, minPx = 60;
+	let best = null, bestArea = 0xde0b6b3a7640000;
+	for (const n of M.nodes) {
+		if (n.kind === "pile" || n.depth < 1 || !n.cnt) continue;
+		if (cx < n.bx0 - m || cx > n.bx1 + m || cy < n.by0 - m || cy > n.by1 + m) continue;
+		const area = (n.bx1 - n.bx0 + 1) * (n.by1 - n.by0 + 1);
+		if (!best || n.depth > best.depth || n.depth === best.depth && area < bestArea) {
+			best = n;
+			bestArea = area;
+		}
+	}
+	if (!best) {
+		let bd = 0xde0b6b3a7640000;
+		for (const n of M.nodes) {
+			if (n.kind === "pile" || n.depth < 1 || !n.cnt || n.quiet) continue;
+			const d = Math.hypot(n.cx - cx, n.cy - cy);
+			if (d < n.rad + S0 * 6 && d < bd) {
+				bd = d;
+				best = n;
+			}
+		}
+		if (!best) return;
+	}
+	while (best.depth > 1 && best.rad * z < minPx && best.parent) best = best.parent;
+	const vx0 = (free.x0 - v.W / 2) / z + cam.x, vy0 = (free.y0 - v.H / 2) / z + cam.y, vx1 = (free.x1 - v.W / 2) / z + cam.x, vy1 = (free.y1 - v.H / 2) / z + cam.y;
+	const vArea = Math.max(1, (vx1 - vx0) * (vy1 - vy0));
+	const share = (n) => {
+		const w = Math.min(vx1, n.bx1) - Math.max(vx0, n.bx0), h = Math.min(vy1, n.by1) - Math.max(vy0, n.by0);
+		return w > 0 && h > 0 ? w * h / vArea : 0;
+	};
+	const rival = (q) => M.nodes.some((o) => o !== q && o.depth === q.depth && o.kind === q.kind && o.kind !== "pile" && o.cnt && !isUnder(o, q) && !isUnder(q, o) && share(o) > .15);
+	let at = best;
+	while (at && at.depth >= 1 && rival(at)) at = at.parent;
+	if (!at || at.depth < 1) return;
+	best = at;
+	const chain = [];
+	for (let q = best; q && q.depth >= 1; q = q.parent) if (!q.quiet || q === best) chain.unshift(q);
+	const repo = M.name.split("/").filter(Boolean).pop() || M.name;
+	const segs = [{
+		txt: best.kind === "root" ? "tests" : repo,
+		n: best.kind === "root" ? M.roots : M.crown
+	}];
+	for (const q of chain) segs.push({
+		txt: q.kind === "root" ? (q.label || q.name).replace(/^tests for /, "") : q.depth === 1 ? q.name : q.core || baseOf(q.name),
+		n: q
+	});
+	g.font = `600 11.5px ${P.font}`;
+	g.textBaseline = "middle";
+	const sep = "  ›  ", sw = g.measureText(sep).width;
+	const widths = segs.map((s) => g.measureText(s.txt).width);
+	const tw = widths.reduce((a, b) => a + b, 0) + sw * (segs.length - 1) + 18, th = 22;
+	const bx = free.x0 + 10, by = free.y0 + 8;
+	if (bx + tw > free.x1 - 4 || !fits(bx, by, bx + tw, by + th)) return;
+	v.crumbNode = best;
+	v.crumbAnc = /* @__PURE__ */ new Set();
+	for (let q = best.parent; q && q.depth >= 1; q = q.parent) v.crumbAnc.add(q);
+	roundRect(g, bx, by, tw, th, 8);
+	g.fillStyle = P.pill;
+	g.fill();
+	g.strokeStyle = P.border;
+	g.lineWidth = 1;
+	g.stroke();
+	let x = bx + 9;
+	segs.forEach((s, i) => {
+		const last = i === segs.length - 1;
+		g.fillStyle = last ? P.text : P.muted;
+		g.fillText(s.txt, x, by + th / 2 + .5);
+		v.labelHits.push({
+			r: [
+				x - 3,
+				by,
+				x + widths[i] + 3,
+				by + th
+			],
+			n: s.n,
+			crumb: true
+		});
+		x += widths[i];
+		if (!last) {
+			g.fillStyle = P.sep;
+			g.fillText(sep, x, by + th / 2 + .5);
+			x += sw;
+		}
+	});
+	reserve(bx, by, bx + tw, by + th);
+}
+function quietPill(g, P, x, y, w, h) {
+	roundRect(g, x, y, w, h, h / 2);
+	g.fillStyle = P.pill;
+	g.fill();
+	g.strokeStyle = P.pillEdge;
+	g.lineWidth = 1;
+	g.stroke();
+}
+function roundRect(g, x, y, w, h, r) {
+	g.beginPath();
+	g.moveTo(x + r, y);
+	g.lineTo(x + w - r, y);
+	g.arcTo(x + w, y, x + w, y + r, r);
+	g.lineTo(x + w, y + h - r);
+	g.arcTo(x + w, y + h, x + w - r, y + h, r);
+	g.lineTo(x + r, y + h);
+	g.arcTo(x, y + h, x, y + h - r, r);
+	g.lineTo(x, y + r);
+	g.arcTo(x, y, x + r, y, r);
+	g.closePath();
+}
+function drawBud(g, P, cx, cy, len, col, px, ghost) {
+	const r = Math.max(4 * px, len * .3);
+	g.fillStyle = ghost ? P.budGhost : P.bud;
+	g.beginPath();
+	for (let k = 0; k < 5; k++) {
+		const a = k / 5 * TAU - Math.PI / 2;
+		const x = cx + Math.cos(a) * r * .62, y = cy + Math.sin(a) * r * .62;
+		g.moveTo(x + r * .48, y);
+		g.arc(x, y, r * .48, 0, TAU);
+	}
+	g.fill();
+	g.fillStyle = col;
+	g.beginPath();
+	g.arc(cx, cy, r * .36, 0, TAU);
+	g.fill();
+	if (ghost) {
+		g.strokeStyle = col;
+		g.setLineDash([2.5 * px, 2 * px]);
+		g.lineWidth = 1.2 * px;
+		g.beginPath();
+		g.arc(cx, cy, r * 1.45, 0, TAU);
+		g.stroke();
+		g.setLineDash([]);
+	}
+}
+function riskGroups(v) {
+	const M = v.M;
+	if (!v.riskAll && v.riskFile == null) return [];
+	const by = /* @__PURE__ */ new Map();
+	const add = (fid) => {
+		let b = v.blastCache.get(fid);
+		if (!b) {
+			b = blastOf(M, fid);
+			v.blastCache.set(fid, b);
+		}
+		for (const id of b.h1) {
+			let s = by.get(id);
+			if (!s) by.set(id, s = /* @__PURE__ */ new Set());
+			s.add(fid);
+		}
+	};
+	if (v.riskFile != null && M.files[v.riskFile]) add(v.riskFile);
+	else for (const A of v.agents) for (const fid of A.edits.keys()) if (M.files[fid]) add(fid);
+	const lp = v.cam.z * S0;
+	const D = lp < 11 ? 2 : lp < 24 ? 3 : 99;
+	const groups = /* @__PURE__ */ new Map();
+	for (const [id, files] of by) {
+		const f = M.files[id];
+		if (!f || !f.node || !f.leaf) continue;
+		let n = f.node;
+		if (n.kind !== "pile") while (n.parent && n.depth > D) n = n.parent;
+		let e = groups.get(n);
+		if (!e) groups.set(n, e = {
+			n,
+			x: 0,
+			y: 0,
+			r: 0,
+			ids: /* @__PURE__ */ new Set(),
+			files: /* @__PURE__ */ new Set()
+		});
+		e.ids.add(id);
+		for (const x of files) e.files.add(x);
+	}
+	let list = [...groups.values()];
+	for (const e of list) if (list.some((h) => h !== e && h.n !== e.n && isUnder(h.n, e.n))) e.rest = true;
+	const CAP = lp < 11 ? 8 : 12;
+	if (list.length > CAP) {
+		list.sort((a, b) => b.ids.size - a.ids.size);
+		const keep = list.slice(0, CAP - 2), rest = list.slice(CAP - 2);
+		const other = /* @__PURE__ */ new Map();
+		for (const e of rest) {
+			let top = e.n;
+			while (top.parent && top.depth > 1) top = top.parent;
+			let o = other.get(top) || keep.find((k) => k.n === top && k.rest);
+			if (!o) other.set(top, o = {
+				n: top,
+				x: 0,
+				y: 0,
+				r: 0,
+				ids: /* @__PURE__ */ new Set(),
+				files: /* @__PURE__ */ new Set(),
+				rest: true
+			});
+			for (const id of e.ids) o.ids.add(id);
+			for (const f of e.files) o.files.add(f);
+		}
+		list = [...keep, ...other.values()];
+	}
+	for (const e of list) {
+		let x0 = 0xde0b6b3a7640000, y0 = 0xde0b6b3a7640000, x1 = -0xde0b6b3a7640000;
+		for (const id of e.ids) {
+			const l = M.files[id].leaf;
+			const c = l.term ? [
+				l.term.cx,
+				l.term.cy,
+				l.term.rad
+			] : l.pile ? [
+				l.pile.cx,
+				M.groundY - (l.pile.h || 10) * .5,
+				l.pile.pw || 20
+			] : [
+				l.x,
+				l.y,
+				S0
+			];
+			x0 = Math.min(x0, c[0] - c[2]);
+			x1 = Math.max(x1, c[0] + c[2]);
+			y0 = Math.min(y0, c[1] - c[2]);
+		}
+		e.x = (x0 + x1) / 2;
+		e.y = y0;
+		e.r = (x1 - x0) / 2;
+		if (e.rest && e.n.kind === "crown" && e.n.F) {
+			e.x = e.n.F[0];
+			e.y = e.n.F[1];
+			e.r = S0;
+		}
+	}
+	return list.sort((a, b) => b.ids.size - a.ids.size);
+}
+function drawRisk(v, px) {
+	const { g, M, P } = v;
+	const groups = riskGroups(v);
+	v.riskGroups = groups;
+	if (!groups.length) return;
+	const clumps = /* @__PURE__ */ new Map();
+	for (const e of groups) for (const id of e.ids) {
+		const l = M.files[id].leaf;
+		if (!l) continue;
+		const key = l.term || l.pile || l;
+		let c = clumps.get(key);
+		if (!c) {
+			c = l.term ? {
+				x: l.term.cx,
+				y: l.term.cy,
+				r: l.term.rad,
+				n: 0,
+				of: Math.max(1, l.term.files.length)
+			} : l.pile ? {
+				x: l.pile.cx,
+				y: M.groundY - (l.pile.h || 10) * .5,
+				r: l.pile.pw || 20,
+				n: 0,
+				of: Math.max(1, l.pile.files.length)
+			} : {
+				x: l.x,
+				y: l.y,
+				r: S0,
+				n: 0,
+				of: 1
+			};
+			clumps.set(key, c);
+		}
+		c.n++;
+	}
+	for (const c of clumps.values()) {
+		const k = Math.min(1, .35 + .65 * c.n / c.of);
+		const R = Math.max(c.r * 1.15, 7 * px);
+		const gr = g.createRadialGradient(c.x, c.y, 0, c.x, c.y, R);
+		gr.addColorStop(0, withAlpha(P.gold, (P.light ? .42 : .42) * k));
+		gr.addColorStop(.7, withAlpha(P.gold, (P.light ? .26 : .26) * k));
+		gr.addColorStop(1, withAlpha(P.gold, 0));
+		g.fillStyle = gr;
+		g.beginPath();
+		g.arc(c.x, c.y, R, 0, TAU);
+		g.fill();
+	}
+	const f = v.riskFile != null ? M.files[v.riskFile] : null;
+	const l = f && f.leaf;
+	if (l) {
+		g.strokeStyle = P.gold;
+		g.lineWidth = 2.5 * px;
+		g.beginPath();
+		g.arc(l.x, l.y, Math.max(l.len * .9, 9 * px), 0, TAU);
+		g.stroke();
+	}
+}
+function drawRiskChips(v, g, toS, fits, reserve) {
+	const { M, P } = v;
+	const groups = v.riskGroups || [];
+	if (!groups.length) return;
+	const z = v.cam.z;
+	const f = v.riskFile != null ? M.files[v.riskFile] : null;
+	g.font = `650 11px ${P.font}`;
+	g.textBaseline = "middle";
+	for (const e of groups) {
+		const [sx, sy] = toS(e.x, e.y);
+		const hw = e.r * z;
+		if (sx + hw < 0 || sx - hw > v.W || sy < -40 || sy > v.H + 40) continue;
+		const c = e.ids.size;
+		const n = e.n;
+		const name = n.kind === "pile" ? n.label || n.name : n.kind === "root" ? (n.label || n.name).replace(/^tests for /, "tests/") : n.depth >= 1 ? n.disp || shortName(n.name) : "root files";
+		const txt = `⚠ ${e.rest ? name + " · other" : name} ${c}`;
+		const tw = g.measureText(txt).width + 14, th = 18;
+		let bx = 0, by = 0, ok = false;
+		for (const [ax, ay] of [
+			[-tw / 2, -21],
+			[-tw / 2, -38],
+			[hw * .5 - tw / 2, -21],
+			[-hw * .5 - tw / 2, -21],
+			[-tw / 2, 6],
+			[-tw / 2, 24]
+		]) {
+			const x0 = sx + ax, y0 = sy + ay;
+			if (x0 >= 2 && x0 + tw <= v.W - 2 && y0 >= 2 && y0 + th <= v.H - 2 && fits(x0, y0, x0 + tw, y0 + th)) {
+				bx = x0;
+				by = y0;
+				ok = true;
+				break;
+			}
+		}
+		if (!ok) {
+			bx = Math.max(2, Math.min(v.W - tw - 2, sx - tw / 2));
+			by = Math.max(2, Math.min(v.H - th - 2, sy - th - 3));
+			search: for (let rr = 14; rr <= 120; rr += 14) for (let k = 0; k < 16; k++) {
+				const a = k / 16 * TAU - Math.PI / 2, x0 = sx + Math.cos(a) * rr - tw / 2, y0 = sy + Math.sin(a) * rr - th / 2;
+				if (x0 >= 2 && x0 + tw <= v.W - 2 && y0 >= 2 && y0 + th <= v.H - 2 && fits(x0, y0, x0 + tw, y0 + th)) {
+					bx = x0;
+					by = y0;
+					break search;
+				}
+			}
+		}
+		roundRect(g, bx, by, tw, th, 9);
+		g.fillStyle = P.badgeBg;
+		g.fill();
+		g.strokeStyle = P.gold;
+		g.lineWidth = 1.2;
+		g.stroke();
+		g.fillStyle = P.gold;
+		g.fillText(txt, bx + 7, by + th / 2 + .5);
+		reserve(bx, by, bx + tw, by + th);
+		const where = (n.kind === "pile" || n.kind === "root" ? n.label || n.name : n.depth >= 1 ? folderPath(n) : "root files") + (e.rest ? " (smaller folders)" : "");
+		const one = e.files.size === 1 ? M.files[[...e.files][0]] : null;
+		const what = f ? f.name : one ? one.name : `${e.files.size} changed files`;
+		const bd = {
+			x: e.x,
+			y: e.y,
+			text: `${where} · ${c} ${c === 1 ? "file imports" : "files import"} ${what}`,
+			short: `${where} · ${c}`,
+			alpha: 1,
+			n: c,
+			ag: null,
+			pin: true,
+			node: n,
+			files: e.files,
+			ids: e.ids,
+			what
+		};
+		v.badgeHits.push({
+			r: [
+				bx,
+				by,
+				bx + tw,
+				by + th
+			],
+			bd
+		});
+	}
+}
+function drawBlast(v, B, px, inView) {
+	const { g, M } = v;
+	const P = v.P;
+	let ids, by, src = null, latest = null, age = 99;
+	if (B.live && B.A) {
+		const ab = agentBlast(M, B.A, v.blastCache);
+		ids = ab.ids;
+		by = ab.by;
+		latest = B.A.lastEdit ? B.A.lastEdit.f.id : null;
+		if (B.A.lastEdit) {
+			src = B.A.lastEdit.f.leaf;
+			age = v.t - B.A.lastEdit.t;
+		}
+	} else {
+		const f = M.files[B.fid];
+		if (!f) return;
+		src = f.leaf;
+		if (!src) return;
+		let b = v.blastCache.get(B.fid);
+		if (!b) {
+			b = blastOf(M, B.fid);
+			v.blastCache.set(B.fid, b);
+		}
+		ids = b.h1;
+		by = null;
+		latest = B.fid;
+	}
+	if (!ids.size) return;
+	const speed = M.Rtyp * .9;
+	const ripple = v.playing ? age * speed : 0xe8d4a51000;
+	const alphaAll = B.hover ? .85 : 1;
+	if (B.live && src && v.playing && age >= 0 && age < 1.2) {
+		g.strokeStyle = P.gold;
+		g.lineWidth = 1.5 * px;
+		g.globalAlpha = Math.max(0, 1 - age / 1.2) * .7;
+		g.beginPath();
+		g.arc(src.x, src.y, ripple * .6 + 6 * px, 0, TAU);
+		g.stroke();
+		g.globalAlpha = 1;
+	}
+	const outside = (id) => {
+		if (!(B.live && src && by && by.get(id) === latest)) return false;
+		const l = M.files[id].leaf;
+		return !!l && Math.hypot(l.x - src.x, l.y - src.y) > ripple;
+	};
+	const leafShown = v.leavesShown;
+	const outline = B.live && B.ag ? B.ag.color : P.mark;
+	const dimmed = (l) => {
+		if (!v.hasOnly) return false;
+		const own = l.term ? l.term.node : l.pile;
+		return !!(own && !own.lit);
+	};
+	const draw = (pred, a, rDot, dimPass) => {
+		g.beginPath();
+		let any = false;
+		for (const id of ids) {
+			if (!pred(id)) continue;
+			const l = M.files[id] && M.files[id].leaf;
+			if (!l) continue;
+			if (dimmed(l) !== dimPass) continue;
+			if (l.term && l.term.node.fAnc) continue;
+			if (outside(id)) continue;
+			if (!inView(l.x - 20, l.y - 20, l.x + 20, l.y + 20)) continue;
+			any = true;
+			if (leafShown) leafPath(g, l);
+			else {
+				const r = rDot * px;
+				g.moveTo(l.x + r, l.y);
+				g.arc(l.x, l.y, r, 0, TAU);
+			}
+		}
+		if (!any) return;
+		g.globalAlpha = a * .22 * alphaAll;
+		g.lineWidth = (leafShown ? 5 : 4) * px;
+		g.strokeStyle = P.gold;
+		g.stroke();
+		g.globalAlpha = a * alphaAll;
+		g.fillStyle = P.gold;
+		g.fill();
+		g.globalAlpha = Math.min(1, a * 1.15) * alphaAll;
+		g.lineWidth = (leafShown ? 2.2 : 2.4) * px;
+		g.strokeStyle = outline;
+		g.stroke();
+		g.globalAlpha = 1;
+		const lp = v.cam.z * S0;
+		if (B.live && B.ag && lp >= 7 && lp < 40) {
+			g.fillStyle = outline;
+			g.strokeStyle = P.glyphStroke;
+			g.lineWidth = 1 * px;
+			const gr = 3.2 * px;
+			for (const id of ids) {
+				if (!pred(id)) continue;
+				const l = M.files[id] && M.files[id].leaf;
+				if (!l || l.term && l.term.node.fAnc || dimmed(l) !== dimPass) continue;
+				if (outside(id)) continue;
+				if (!inView(l.x - 20, l.y - 20, l.x + 20, l.y + 20)) continue;
+				const gx = l.x + Math.max(l.len * .45, 4 * px), gy = l.y - Math.max(l.len * .45, 4 * px);
+				g.beginPath();
+				glyphPath(g, B.ag.glyph, gx, gy, gr);
+				g.fill();
+				g.stroke();
+			}
+		}
+	};
+	for (const dimPass of v.hasOnly ? [false, true] : [false]) {
+		const k = dimPass ? .45 : 1;
+		if (B.live && by) {
+			draw((id) => by.get(id) !== latest, .6 * k, 2.4, dimPass);
+			draw((id) => by.get(id) === latest, .95 * k, 2.8, dimPass);
+		} else draw(() => true, .95 * k, 2.8, dimPass);
+	}
+	if (B.hover && src && ids.size <= 24) {
+		g.strokeStyle = P.vine;
+		g.lineWidth = 1 * px;
+		g.beginPath();
+		for (const id of ids) {
+			const l = M.files[id] && M.files[id].leaf;
+			if (!l) continue;
+			const mx = (l.x + src.x) / 2, my = Math.min(l.y, src.y) - Math.hypot(l.x - src.x, l.y - src.y) * .25;
+			g.moveTo(src.x, src.y);
+			g.quadraticCurveTo(mx, my, l.x, l.y);
+		}
+		g.stroke();
+	}
+	if (B.quiet) return;
+	const age2 = B.live && v.playing ? Math.min(1, Math.max(0, (age - .4) / .6)) : 1;
+	addBadgeSets(v, ids, by, {
+		ag: B.live ? B.ag : null,
+		hover: B.hover,
+		fid: B.fid
+	}, age2, (id) => !outside(id));
+}
+function glyphPath(g, glyph, gx, gy, gr) {
+	glyph = glyphShape(glyph);
+	if (glyph === "▲") {
+		g.moveTo(gx, gy - gr);
+		g.lineTo(gx + gr * .95, gy + gr * .7);
+		g.lineTo(gx - gr * .95, gy + gr * .7);
+		g.closePath();
+	} else if (glyph === "■") g.rect(gx - gr * .75, gy - gr * .75, gr * 1.5, gr * 1.5);
+	else if (glyph === "◆") {
+		g.moveTo(gx, gy - gr);
+		g.lineTo(gx + gr, gy);
+		g.lineTo(gx, gy + gr);
+		g.lineTo(gx - gr, gy);
+		g.closePath();
+	} else g.arc(gx, gy, gr * .85, 0, TAU);
+}
+function nestPoint(M, n) {
+	if (!n || n === M.crown) return [0, -S0 * .5];
+	return n.F || [n.cx, n.cy];
+}
+function bonkPoint(v, bk) {
+	const M = v.M;
+	const zn = bk.z && bk.z.node;
+	if (bk.kind === "keep" && zn && zn.branch) {
+		const p = zn.branch.pts[4];
+		return [p[0], p[1]];
+	}
+	if (bk.kind === "keep" && zn && zn.kind === "pile") return [zn.cx, M.groundY - (zn.h || 0)];
+	const l = bk.f && bk.f.leaf;
+	return l ? [l.x, l.y] : null;
+}
+function targetOf(v, r) {
+	const M = v.M;
+	if (r.type === "nest" || r.type === "plan") return nestPoint(M, r.nestNode);
+	if (r.blocked) {
+		const p = bonkPoint(v, {
+			f: r.f,
+			z: r.blocked,
+			kind: r.blocked.type
+		});
+		if (p) return p;
+	}
+	const l = r.f && r.f.leaf;
+	return l ? [l.x, l.y] : nestPoint(M, r.nestNode);
+}
+function birdPose(v, A, t) {
+	const M = v.M;
+	const evs = A.evs;
+	if (!evs.length) return null;
+	const n = evs.length;
+	const cur = evs[n - 1];
+	const sky = [A.ag.id % 2 === 0 ? -M.Rtyp * 1.4 : M.Rtyp * 1.4, M.crownBounds.y0 - M.Rtyp * .4];
+	const restOf = (i) => {
+		const r = evs[i];
+		const tgt = targetOf(v, r);
+		if (r.blocked) {
+			const pv = i > 0 ? restOf(i - 1) : sky;
+			return [tgt[0] + (pv[0] - tgt[0]) * .28, tgt[1] + (pv[1] - tgt[1]) * .28 - S0 * .6];
+		}
+		return tgt;
+	};
+	const prev = n > 1 ? restOf(n - 2) : sky;
+	const tgt = targetOf(v, cur);
+	const dist = Math.hypot(tgt[0] - prev[0], tgt[1] - prev[1]);
+	const dur = Math.max(.7, Math.min(2.2, .6 + dist / Math.max(1, M.Rtyp) * 1.3));
+	const u = v.playing ? (t - cur.t) / dur : Math.max((t - cur.t) / dur, 1.3);
+	const ease = (x) => x < .5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
+	if (cur.blocked) {
+		const rest = restOf(n - 1);
+		if (u < .55) {
+			const k = ease(Math.max(0, u) / .55);
+			return {
+				x: prev[0] + (tgt[0] - prev[0]) * k,
+				y: prev[1] + (tgt[1] - prev[1]) * k - Math.sin(k * Math.PI) * dist * .15,
+				fly: true,
+				dx: tgt[0] - prev[0],
+				dy: tgt[1] - prev[1]
+			};
+		}
+		const k = Math.min(1, (u - .55) / .6);
+		const kk = 1 - Math.pow(1 - k, 3);
+		return {
+			x: tgt[0] + (rest[0] - tgt[0]) * kk,
+			y: tgt[1] + (rest[1] - tgt[1]) * kk,
+			fly: k < 1,
+			hover: k >= 1,
+			dx: prev[0] - tgt[0],
+			dy: 0,
+			bonk: u < 1.2,
+			blocked: true
+		};
+	}
+	if (u < 1) {
+		const k = ease(Math.max(0, u));
+		const cx = (prev[0] + tgt[0]) / 2, cy = (prev[1] + tgt[1]) / 2 - dist * .28;
+		const mt = 1 - k;
+		return {
+			x: mt * mt * prev[0] + 2 * mt * k * cx + k * k * tgt[0],
+			y: mt * mt * prev[1] + 2 * mt * k * cy + k * k * tgt[1],
+			fly: true,
+			dx: 2 * mt * (cx - prev[0]) + 2 * k * (tgt[0] - cx),
+			dy: 2 * mt * (cy - prev[1]) + 2 * k * (tgt[1] - cy)
+		};
+	}
+	const onLeaf = !!(cur.f && cur.f.leaf) && !(cur.type === "nest" || cur.type === "plan");
+	return {
+		x: tgt[0],
+		y: tgt[1],
+		fly: false,
+		dx: tgt[0] - prev[0],
+		dy: 0,
+		editing: cur.type === "edit" || cur.type === "create",
+		nest: !onLeaf,
+		leaf: onLeaf ? cur.f.leaf : null
+	};
+}
+var SUB_SCALE = .68;
+var SUB_HOME_S = 1.9;
+var SUB_FADE_S = 1.1;
+function birdAlpha(v, A, t) {
+	if (!A.ag.parent || !A.done) return 1;
+	if (!v.playing || !A.cur) return 0;
+	const age = t - A.cur.t;
+	return age < SUB_HOME_S ? 1 : Math.max(0, 1 - (age - SUB_HOME_S) / SUB_FADE_S);
+}
+function birdWorldAt(v, A, t) {
+	const p = birdPose(v, A, t);
+	return p ? [p.x, p.y] : null;
+}
+function drawBird(g, sx, sy, size, color, pose, now, motion) {
+	const img = tinted(color);
+	const bw = size, bh = bw * 160 / 216, HINGE = .56, hy = Math.round(160 * HINGE), hp = bh * HINGE;
+	g.save();
+	if (pose.fly || pose.hover) {
+		const a = Math.atan2(pose.dy, pose.dx);
+		const left = pose.dx < 0;
+		g.translate(sx, sy - bh * .25);
+		g.rotate(left ? a + Math.PI : a);
+		g.rotate(left ? .35 : -.35);
+		if (left) g.scale(-1, 1);
+		const f = !motion ? .8 : pose.hover ? .6 + .4 * Math.sin(now / 70) : .62 + .42 * Math.sin(now / 95);
+		if (img) {
+			g.drawImage(img, 0, hy, 216, 70, -bw / 2, hp - bh / 2, bw, bh - hp);
+			g.translate(0, hp - bh / 2);
+			g.scale(1, Math.max(.2, f));
+			g.drawImage(img, 0, 0, 216, hy, -bw / 2, -hp, bw, hp);
+		}
+	} else {
+		const left = pose.dx < 0;
+		const bob = !motion ? 0 : pose.editing ? Math.max(0, Math.sin(now / 180)) * 2.2 : Math.sin(now / 600) * .6;
+		g.translate(sx, sy - bh * .42 + bob);
+		g.rotate(pose.editing ? .25 : .12);
+		if (left) g.scale(-1, 1);
+		if (img) {
+			g.drawImage(img, 0, hy, 216, 70, -bw / 2, hp - bh / 2, bw, bh - hp);
+			g.translate(0, hp - bh / 2);
+			g.scale(1, .32);
+			g.drawImage(img, 0, 0, 216, hy, -bw / 2, -hp, bw, hp);
+		}
+	}
+	g.restore();
+}
+function drawNest(g, P, sx, sy, s, ag, grow) {
+	g.save();
+	g.translate(sx, sy);
+	g.scale(grow, grow);
+	g.fillStyle = P.nestBowl;
+	g.beginPath();
+	g.moveTo(-s * .62, -s * .06);
+	g.quadraticCurveTo(0, s * .62, s * .62, -s * .06);
+	g.quadraticCurveTo(0, s * .12, -s * .62, -s * .06);
+	g.fill();
+	g.fillStyle = ag.color;
+	g.beginPath();
+	g.ellipse(-s * .13, -s * .07, s * .12, s * .15, -.2, 0, TAU);
+	g.fill();
+	g.beginPath();
+	g.ellipse(s * .13, -s * .06, s * .12, s * .15, .25, 0, TAU);
+	g.fill();
+	g.strokeStyle = P.nestTwig;
+	g.lineWidth = Math.max(1, s * .055);
+	g.lineCap = "round";
+	g.beginPath();
+	for (let k = 0; k < 5; k++) {
+		const y = -s * .02 + k * s * .07;
+		const w = s * (.62 - k * .09);
+		g.moveTo(-w, y + (k % 2 ? s * .03 : -s * .02));
+		g.quadraticCurveTo(0, y + s * .16, w, y + (k % 2 ? -s * .02 : s * .03));
+	}
+	g.stroke();
+	g.strokeStyle = P.nestRim;
+	g.lineWidth = Math.max(1, s * .05);
+	g.beginPath();
+	g.moveTo(-s * .66, -s * .05);
+	g.quadraticCurveTo(0, s * .1, s * .66, -s * .07);
+	g.stroke();
+	g.restore();
+}
+function labelFont(P, n) {
+	const nf = Math.max(1, n.nFiles || 1);
+	const sz = Math.max(10.5, Math.min(15, 9.5 + 2.1 * Math.log10(nf + 1)));
+	return `${n.depth === 1 || nf >= 40 ? 600 : 500} ${sz.toFixed(1)}px ${P.font}`;
+}
+function drawPriorityLeafLabels(v, g, toS, fits, reserve, leafPx, birdS) {
+	if (leafPx < 9) return;
+	const P = v.P;
+	const z = v.cam.z;
+	const selLeaf = v.sel && v.sel.leaf ? v.sel.leaf : null;
+	const want = [];
+	if (selLeaf) want.push({
+		l: selLeaf,
+		col: P.sel,
+		weight: 600
+	});
+	if (v.markLeaf && v.markLeaf !== selLeaf) want.push({
+		l: v.markLeaf,
+		col: P.mark,
+		weight: 500
+	});
+	for (const B of birdS || []) if (B && B.visible && B.pose.leaf) want.push({
+		l: B.pose.leaf,
+		col: B.A.ag.color,
+		weight: 600
+	});
+	g.strokeStyle = P.halo;
+	g.lineWidth = 3;
+	g.textBaseline = "middle";
+	g.lineJoin = "round";
+	if (selLeaf) {
+		const [sx, sy] = toS(selLeaf.x, selLeaf.y), r = Math.max(selLeaf.len * .8 * z, 8) + 3;
+		reserve(sx - r, sy - r, sx + r, sy + r);
+	}
+	const seen = /* @__PURE__ */ new Set();
+	for (const { l, col, weight } of want) {
+		if (seen.has(l)) continue;
+		seen.add(l);
+		if (l.file.ghost && !v.agents.some((A) => A.created.has(l.file.id))) continue;
+		const [sx, sy] = toS(l.x, l.y);
+		if (sx < 0 || sx > v.W || sy < 0 || sy > v.H) continue;
+		g.font = `${weight} 10.5px ${P.font}`;
+		const txt = l.file.name, tw = g.measureText(txt).width;
+		const off = Math.max(l.len * z * .5 + 4, l === selLeaf ? Math.max(l.len * .8 * z, 8) + 5 : 0);
+		let placedAt = null, far = false;
+		const cands = [
+			[off, 0],
+			[-off - tw, 0],
+			[-tw / 2, -off - 9],
+			[-tw / 2, off + 9],
+			[off + 10, -16],
+			[off + 10, 16],
+			[-off - tw - 10, -16],
+			[-off - tw - 10, 16],
+			[-tw / 2, -off - 28],
+			[-tw / 2, off + 28]
+		];
+		for (let i = 0; i < cands.length; i++) {
+			const [ax, ay] = cands[i];
+			const x0 = sx + ax, y0 = sy + ay - 7;
+			if (fits(x0 - 3, y0, x0 + tw + 3, y0 + 14)) {
+				placedAt = [x0, sy + ay];
+				far = i >= 4;
+				break;
+			}
+		}
+		if (!placedAt) {
+			const x0 = sx + off, y0 = sy - 7;
+			let under = false;
+			for (const r of v.hudRects || []) if (x0 + tw > r[0] && x0 < r[2] && y0 + 14 > r[1] && y0 < r[3]) {
+				under = true;
+				break;
+			}
+			if (under) continue;
+			placedAt = [sx + off, sy];
+		}
+		reserve(placedAt[0] - 3, placedAt[1] - 7, placedAt[0] + tw + 3, placedAt[1] + 7);
+		if (far) {
+			g.save();
+			g.strokeStyle = col;
+			g.lineWidth = 1;
+			g.globalAlpha = .8;
+			g.beginPath();
+			const lx = Math.max(placedAt[0], Math.min(placedAt[0] + tw, sx));
+			g.moveTo(sx, sy);
+			g.lineTo(lx, placedAt[1] + (placedAt[1] < sy ? 7 : -7));
+			g.stroke();
+			g.restore();
+		}
+		g.strokeText(txt, placedAt[0], placedAt[1]);
+		g.fillStyle = col;
+		g.fillText(txt, placedAt[0], placedAt[1]);
+		v.labelHits.push({
+			r: [
+				placedAt[0],
+				placedAt[1] - 7,
+				placedAt[0] + tw,
+				placedAt[1] + 7
+			],
+			leaf: l
+		});
+	}
+}
+function drawLabels(v, g, toS, fits, reserve, leafPx, inView, createdGhost, phase) {
+	const M = v.M, P = v.P;
+	const z = v.cam.z;
+	const halo = (txt, x, y) => {
+		g.strokeText(txt, x, y);
+		g.fillText(txt, x, y);
+	};
+	g.lineJoin = "round";
+	g.textBaseline = "middle";
+	const W = v.W, H = v.H;
+	const onScreen = (x, y, m) => x > -m && x < W + m && y > -m && y < H + m;
+	const armed = v.tool !== "explore";
+	const cand = [];
+	const nestSet = /* @__PURE__ */ new Set();
+	for (const A of v.agents) if (A.nest && A.nest.depth >= 1 && A.cur && !A.ag.parent) nestSet.add(A.nest);
+	const ruleSet = /* @__PURE__ */ new Set();
+	for (const zz of v.zones) if (zz.node) ruleSet.add(zz.node);
+	const selNode = v.infoNode && v.infoNode.depth >= 1 ? v.infoNode : null;
+	const fol = v.fol;
+	const tagged = /* @__PURE__ */ new Set();
+	for (const h of v.tagHits || []) if (h.z.node) tagged.add(h.z.node);
+	const hovN = hitNode(v.hover);
+	const mustOf = (n) => nestSet.has(n) || ruleSet.has(n) && !tagged.has(n) || n === selNode || hovN === n;
+	const zr = v.fitZv ? z / v.fitZv : 2;
+	const base0 = M.files.length > 1500 ? 25 : 45;
+	const areaK = Math.max(.35, Math.min(1, Math.sqrt(W * H / 1296e3)));
+	const budget = Math.round(Math.min(90, base0 * areaK * Math.pow(Math.max(1, zr), 1.25))) + (armed ? 20 : 0);
+	if (phase === "limbs") v.labelBudget = budget;
+	const minFiles = zr < 1.6 ? 8 : zr < 3 ? 4 : 1;
+	const groundS = M.groundY * z + (H / 2 - v.cam.y * z);
+	const crumbAnc = v.crumbAnc;
+	const litI = v.litInfo || /* @__PURE__ */ new Map();
+	const quietZoom = zr < 2.4 && !armed;
+	for (const n of M.nodes) {
+		if (n.depth < 1 || n.vHidden) continue;
+		const nest = nestSet.has(n), sel = n === selNode, rule = ruleSet.has(n), lit = litI.has(n);
+		const must = nest || sel || rule;
+		if (lit && !must && n.depth >= 2 && n.kids) {
+			const lk = n.kids.filter((k) => litI.has(k));
+			if (lk.length === 1 && litI.get(lk[0]).n === litI.get(n).n && hovN !== n) continue;
+		}
+		const early = n.depth === 1 || must || lit;
+		if (phase === "limbs" !== early) continue;
+		if (nest && v.nestLabelled && v.nestLabelled.has(n)) continue;
+		if (rule && tagged.has(n) && !nest && !sel && !lit && hovN !== n) continue;
+		if (n.quiet && !must && hovN !== n) continue;
+		if (crumbAnc && crumbAnc.has(n) && !must && hovN !== n) continue;
+		if (n.kind === "pile") {
+			const [sx, sy] = toS(n.cx, M.groundY + S0 * .2);
+			if (onScreen(sx, sy, 60)) cand.push({
+				type: "pile",
+				n,
+				sx,
+				sy,
+				pri: 5e5 + n.nFiles
+			});
+			continue;
+		}
+		const big = n.depth === 1;
+		const srad = n.rad * z;
+		if (quietZoom && !lit && !must && !big && hovN !== n && !n.vFold) continue;
+		if (quietZoom && lit && !must && !big && hovN !== n && !n.vColl && !litI.get(n).own) continue;
+		if (!must && !big && !lit && (n.nFiles < minFiles || srad < 7)) continue;
+		const pri = (sel ? 4e6 : 0) + (nest ? 3e6 : 0) + (lit ? 25e5 : 0) + (rule ? 2e6 : 0) + (big ? 1e6 : 0) + n.nFiles * 10 + srad + (n.vFold ? 1e7 : 0);
+		if (n.vColl) {
+			if (!big && !must && !lit && !n.vFold && (srad < (armed ? 10 : 15) || n.nFiles < 2)) continue;
+			const [sx, sy] = toS(n.cx, n.cy);
+			if (onScreen(sx, sy, 80)) cand.push({
+				type: "clump",
+				n,
+				sx,
+				sy,
+				pri
+			});
+		} else if (n.branch) {
+			if (!big && !must && !lit && srad < (armed ? 18 : 24) && n.nFiles < 8) continue;
+			cand.push({
+				type: "branch",
+				n,
+				pri
+			});
+		}
+	}
+	cand.sort((a, b) => b.pri - a.pri);
+	const LEAD_A = [
+		-Math.PI / 2,
+		-Math.PI / 4,
+		-3 * Math.PI / 4,
+		0,
+		Math.PI,
+		Math.PI / 4,
+		3 * Math.PI / 4,
+		Math.PI / 2
+	];
+	const place = (tries, w, h, n, subtree, ring, okY, anchors) => {
+		const rectOf = (x, y, ang) => {
+			const ca = Math.abs(Math.cos(ang)), sa = Math.abs(Math.sin(ang));
+			const hw = (w * ca + h * sa) / 2, hh = (w * sa + h * ca) / 2;
+			return [
+				x - hw,
+				y - hh,
+				x + hw,
+				y + hh
+			];
+		};
+		const ok = (R, clean, sub) => R[0] >= 2 && R[2] <= W - 2 && R[1] >= 2 && R[3] <= H - 2 && okY(R[1]) && fits(R[0], R[1], R[2], R[3]) && (!clean || !fol || !fol.hit(R[0] + 1, R[1] + 1, R[2] - 1, R[3] - 1, n, !!sub)) && (!fol || fol.belongs(R[0], R[1], R[2], R[3], n, anchors, 220, clr));
+		let clr = 14;
+		const ringSpot = (sub, clean, ds) => {
+			if (!ring) return null;
+			for (const d of ds) for (const a of LEAD_A) {
+				const ux = Math.cos(a), uy = Math.sin(a), ext = Math.abs(ux) * w / 2 + Math.abs(uy) * h / 2;
+				const x = ring.x + ux * (ring.r + d + ext), y = ring.y + uy * (ring.r + d + ext), R = rectOf(x, y, 0);
+				if (ok(R, clean, sub)) return {
+					x,
+					y,
+					ang: 0,
+					R,
+					lead: [ring.x + ux * ring.r, ring.y + uy * ring.r]
+				};
+			}
+			return null;
+		};
+		for (const c of [14, 4]) {
+			clr = c;
+			for (const sub of subtree ? [true] : [false, true]) {
+				for (const [x, y, ang] of tries) {
+					const R = rectOf(x, y, ang);
+					if (ok(R, true, sub)) return {
+						x,
+						y,
+						ang,
+						R
+					};
+				}
+				const r = ringSpot(sub, true, [8, 20]);
+				if (r) return r;
+			}
+			if (mustOf(n)) {
+				for (const [x, y, ang] of tries) {
+					const R = rectOf(x, y, ang);
+					if (ok(R, false, false)) return {
+						x,
+						y,
+						ang,
+						R
+					};
+				}
+				const r = ringSpot(false, false, [8]);
+				if (r) return r;
+			}
+		}
+		return null;
+	};
+	const leader = (Pl, col) => {
+		if (!Pl.lead) return;
+		const [lx, ly] = Pl.lead, R = Pl.R, qx = Math.max(R[0] + 2, Math.min(R[2] - 2, lx)), qy = Math.max(R[1] + 3, Math.min(R[3] - 3, ly));
+		g.save();
+		g.strokeStyle = col;
+		g.globalAlpha = .55;
+		g.lineWidth = 1;
+		g.beginPath();
+		g.moveTo(lx, ly);
+		g.lineTo(qx, qy);
+		g.stroke();
+		g.restore();
+	};
+	const hasOnly = !!v.hasOnly;
+	const segTxt = (q, first = false) => (first ? "" : " ") + q.glyph + q.n;
+	const segsW = (info, bare = false) => {
+		if (!info) return 0;
+		const f0 = g.font;
+		g.font = `700 11px ${P.font}`;
+		let w = 0;
+		info.segs.forEach((q, i) => w += g.measureText(segTxt(q, bare && i === 0)).width);
+		g.font = f0;
+		return w + (bare ? 0 : 2);
+	};
+	const PILL_FONT = `650 11.5px ${P.font}`;
+	const drawNamed = (name, info, cx, cy, col, pill = false) => {
+		const bare = !name;
+		const w1 = bare ? 0 : g.measureText(name).width, tw = w1 + segsW(info, bare);
+		let x = cx - tw / 2;
+		g.textAlign = "left";
+		if (pill) {
+			quietPill(g, P, x - 7, cy - 10, tw + 14, 20);
+			g.fillStyle = col;
+			if (!bare) g.fillText(name, x, cy + .5);
+			if (!info) return;
+			if (!bare) x += w1 + 2;
+			const f1 = g.font;
+			g.font = `700 11px ${P.font}`;
+			info.segs.forEach((q, i) => {
+				const t2 = segTxt(q, bare && i === 0);
+				g.fillStyle = q.col;
+				g.fillText(t2, x, cy + .5);
+				x += g.measureText(t2).width;
+			});
+			g.font = f1;
+			g.strokeStyle = P.halo;
+			return;
+		}
+		g.fillStyle = col;
+		if (!bare) halo(name, x, cy);
+		if (!info) return;
+		if (!bare) x += w1 + 2;
+		const f0 = g.font;
+		g.font = `700 11px ${P.font}`;
+		info.segs.forEach((q, i) => {
+			const t2 = segTxt(q, bare && i === 0);
+			g.fillStyle = q.col;
+			halo(t2, x, cy);
+			x += g.measureText(t2).width;
+		});
+		g.font = f0;
+	};
+	for (const c of cand) {
+		if ((v.labelBudget || 0) <= 0 && c.pri < 2e6) break;
+		const n = c.n;
+		const info = litI.get(n);
+		const pill = !!info && (info.own > 0 || !!n.vColl);
+		const plain = n.kind === "root" ? n.label || n.name : n.disp || shortName(n.name);
+		const name = (pill || info) && n.depth >= 2 ? folderPath(n) : plain;
+		const names = [name];
+		if (plain !== name) names.push(plain);
+		if (pill && info && info.segs.length) names.push("");
+		const dusk = hasOnly && !n.lit && !(info && info.n > 0 && info.bound === 0);
+		g.globalAlpha = dusk ? .5 : 1;
+		const col = pill ? P.pillText : n.keep ? P.keepText : dusk ? P.duskLabel : info || nestSet.has(n) || n === selNode || hovN === n ? P.text : hasOnly && n.lit ? P.onlyText : P.calmLabel;
+		const underground = n.kind === "root";
+		const okY = (y) => !underground || y > groundS + 9;
+		if (c.type === "pile") {
+			g.font = `600 11px ${P.font}`;
+			const t1 = n.label || n.name, t2 = `${n.nFiles} file${n.nFiles === 1 ? "" : "s"}`;
+			const w = Math.max(g.measureText(t1).width, 40) + 8;
+			const x0 = c.sx - w / 2, y0 = c.sy + 4;
+			if (!fits(x0, y0, x0 + w, y0 + 28)) continue;
+			reserve(x0, y0, x0 + w, y0 + 28);
+			v.labelHits.push({
+				r: [
+					x0,
+					y0,
+					x0 + w,
+					y0 + 28
+				],
+				n
+			});
+			g.textAlign = "center";
+			g.strokeStyle = P.halo;
+			g.lineWidth = 3.5;
+			g.fillStyle = dusk ? P.duskLabel : P.pileLabel;
+			halo(t1, c.sx, y0 + 7);
+			g.font = `10px ${P.font}`;
+			g.fillStyle = P.muted;
+			halo(t2, c.sx, y0 + 20);
+			g.textAlign = "left";
+			v.labelBudget = (v.labelBudget || 0) - 1;
+			continue;
+		}
+		if (c.type === "clump") {
+			g.font = pill ? PILL_FONT : labelFont(P, n);
+			const t2 = n.vFold ? `folded · ${n.nFiles} files` : "";
+			const rr = n.rad * z;
+			const sx = c.sx, sy = c.sy;
+			let Pl = null, nm = name;
+			for (const cand1 of names) {
+				const bare = !cand1;
+				const w1 = (bare ? 0 : g.measureText(cand1).width) + segsW(info, bare) + (pill ? 14 : 0);
+				const w = Math.max(w1, t2 ? 80 : 0) + 8, h = t2 ? 30 : pill ? 22 : 16;
+				Pl = place([
+					[
+						sx,
+						sy,
+						0
+					],
+					[
+						sx,
+						sy - rr - h / 2 - 3,
+						0
+					],
+					[
+						sx,
+						sy + rr + h / 2 + 3,
+						0
+					],
+					[
+						sx + rr + w / 2 + 3,
+						sy,
+						0
+					],
+					[
+						sx - rr - w / 2 - 3,
+						sy,
+						0
+					]
+				], w, h, n, true, {
+					x: sx,
+					y: sy,
+					r: rr
+				}, okY, [[
+					sx,
+					sy,
+					rr
+				]]);
+				if (Pl) {
+					nm = cand1;
+					break;
+				}
+			}
+			if (!Pl) continue;
+			reserve(Pl.R[0], Pl.R[1], Pl.R[2], Pl.R[3]);
+			v.labelHits.push({
+				r: Pl.R,
+				n
+			});
+			leader(Pl, col);
+			g.strokeStyle = P.halo;
+			g.lineWidth = 3.5;
+			drawNamed(nm, info, Pl.x, t2 ? Pl.y - 6 : Pl.y, col, pill);
+			g.textAlign = "center";
+			if (t2) {
+				g.font = `10.5px ${P.font}`;
+				g.fillStyle = dusk ? P.duskLabel : P.text;
+				halo(t2, Pl.x, Pl.y + 8);
+			}
+			g.textAlign = "left";
+			v.labelBudget = (v.labelBudget || 0) - 1;
+			continue;
+		}
+		const b = n.branch;
+		if (!b) continue;
+		const big = n.depth === 1;
+		g.font = pill ? PILL_FONT : labelFont(P, n);
+		const [ex, ey] = toS(b.x1, b.y1);
+		const side = b.x1 >= b.x0 ? 1 : -1, we = b.we * z / 2;
+		const clumpT = n.term || null;
+		const anchors = [];
+		for (let k = 0; k < b.pts.length; k++) {
+			const [px, py] = toS(b.pts[k][0], b.pts[k][1]);
+			anchors.push([
+				px,
+				py,
+				taperHW(b.wb, b.we, k / Math.max(1, b.pts.length - 1)) * z
+			]);
+		}
+		let Pl = null, nm = name;
+		for (const cand1 of names) {
+			const bare = !cand1;
+			const tw = (bare ? 0 : g.measureText(cand1).width) + segsW(info, bare) + (pill ? 14 : 0);
+			const tries = [];
+			const stemSpots = () => {
+				for (const k of [
+					5,
+					3,
+					7,
+					2,
+					8
+				]) {
+					const p = b.pts[k];
+					const [sx, sy] = toS(p[0], p[1]);
+					const off = taperHW(b.wb, b.we, k / 10) * z + 5;
+					let nx = -p[3], ny = p[2];
+					if (nx * side < 0) {
+						nx = -nx;
+						ny = -ny;
+					}
+					const d = off + Math.abs(nx) * (tw / 2 + 4) + Math.abs(ny) * 10;
+					tries.push([
+						sx + nx * d,
+						sy + ny * d,
+						0
+					], [
+						sx - nx * d,
+						sy - ny * d,
+						0
+					]);
+				}
+			};
+			let ring;
+			let anc = anchors;
+			if (clumpT && clumpT.leaves && clumpT.leaves.length) {
+				const [cx, cy] = toS(clumpT.cx, clumpT.cy), r = clumpT.rad * z;
+				tries.push([
+					cx,
+					cy - r - 8,
+					0
+				], [
+					cx,
+					cy + r + 9,
+					0
+				], [
+					cx + r + tw / 2 + 6,
+					cy,
+					0
+				], [
+					cx - r - tw / 2 - 6,
+					cy,
+					0
+				], [
+					cx,
+					cy,
+					0
+				]);
+				stemSpots();
+				ring = {
+					x: cx,
+					y: cy,
+					r
+				};
+				anc = [[
+					cx,
+					cy,
+					r
+				]];
+			} else {
+				if (big && !pill && cand1 === name) {
+					const p = b.pts[8];
+					const [sx, sy] = toS(p[0], p[1]);
+					let ang = Math.atan2(p[3], p[2]);
+					if (ang > Math.PI / 2) ang -= Math.PI;
+					if (ang < -Math.PI / 2) ang += Math.PI;
+					if (b.len * z > tw * .8 && Math.abs(ang) < .9) {
+						const off = b.w * z / 2 + 8;
+						let nx = -Math.sin(ang), ny = Math.cos(ang);
+						if (ny > 0) {
+							nx = -nx;
+							ny = -ny;
+						}
+						tries.push([
+							sx + nx * off,
+							sy + ny * off,
+							ang
+						]);
+					}
+				}
+				tries.push([
+					ex + side * (we + tw / 2 + 6),
+					ey - 4,
+					0
+				], [
+					ex - side * (we + tw / 2 + 6),
+					ey - 4,
+					0
+				], [
+					ex,
+					ey - we - 12,
+					0
+				], [
+					ex,
+					ey + we + 12,
+					0
+				]);
+				stemSpots();
+				ring = {
+					x: ex,
+					y: ey,
+					r: we + 3
+				};
+			}
+			Pl = place(tries, tw + 8, pill ? 24 : 20, n, false, ring, okY, anc);
+			if (Pl) {
+				nm = cand1;
+				break;
+			}
+		}
+		if (!Pl) continue;
+		reserve(Pl.R[0], Pl.R[1], Pl.R[2], Pl.R[3]);
+		v.labelHits.push({
+			r: Pl.R,
+			n
+		});
+		leader(Pl, col);
+		g.save();
+		g.translate(Pl.x, Pl.y);
+		g.rotate(Pl.ang);
+		g.strokeStyle = P.halo;
+		g.lineWidth = 3.5;
+		drawNamed(nm, info, 0, 0, col, pill);
+		g.restore();
+		g.textAlign = "left";
+		v.labelBudget = (v.labelBudget || 0) - 1;
+	}
+	g.globalAlpha = 1;
+	if (phase === "rest" && leafPx >= 20) {
+		const L = [];
+		for (const t of M.terms) {
+			if (t.node.fAnc) continue;
+			if (!inView(t.cx - t.rad, t.cy - t.rad, t.cx + t.rad, t.cy + t.rad)) continue;
+			for (const l of t.leaves) {
+				if (l.file.ghost && !createdGhost.has(l.file.id)) continue;
+				L.push(l);
+			}
+		}
+		for (const p of M.piles) for (const l of p.leaves || []) if (inView(l.x - 5, l.y - 5, l.x + 5, l.y + 5)) L.push(l);
+		if (L.length < 1400) {
+			const touched = /* @__PURE__ */ new Set();
+			for (const A of v.agents) {
+				for (const k of A.reads.keys()) touched.add(k);
+				for (const k of A.edits.keys()) touched.add(k);
+				for (const k of A.plan) touched.add(k);
+			}
+			const gold = /* @__PURE__ */ new Set();
+			for (const bd of v.badges || []) for (const id of bd.ids) gold.add(id);
+			const pri = (l) => (touched.has(l.file.id) ? 2 : 0) + (gold.has(l.file.id) ? 1 : 0);
+			const sparse = leafPx < 64;
+			const selN = v.sel && v.sel.node && !v.sel.leaf ? v.sel.node : null;
+			const hovL = v.hover && v.hover.leaf ? v.hover.leaf : null;
+			let focusT = null;
+			if (sparse) {
+				const f = v.free || {
+					x0: 0,
+					y0: 0,
+					x1: W,
+					y1: H
+				}, fx = ((f.x0 + f.x1) / 2 - W / 2) / z + v.cam.x, fy = ((f.y0 + f.y1) / 2 - H / 2) / z + v.cam.y;
+				let bd = 1e9;
+				for (const t of M.terms) {
+					if (!t.leaves.length) continue;
+					const d = Math.hypot(t.cx - fx, t.cy - fy) / Math.max(t.rad, S0);
+					if (d < 1.6 && d < bd) {
+						bd = d;
+						focusT = t;
+					}
+				}
+				if (v.sel && v.sel.leaf && v.sel.leaf.term) focusT = v.sel.leaf.term;
+				if (selN) focusT = null;
+			}
+			if (sparse) for (let i = L.length - 1; i >= 0; i--) {
+				const l = L[i];
+				if (!(pri(l) || l === hovL || focusT && l.term === focusT || selN && l.term && isUnder(l.term.node, selN))) L.splice(i, 1);
+			}
+			L.sort((a, b) => Number(b === hovL) - Number(a === hovL) || pri(b) - pri(a) || b.file.lines - a.file.lines);
+			g.font = `10.5px ${P.font}`;
+			g.strokeStyle = P.halo;
+			g.lineWidth = 3;
+			const named = /* @__PURE__ */ new Set();
+			for (const h of v.labelHits || []) if (h.leaf) named.add(h.leaf);
+			let cnt = 0;
+			for (const l of L) {
+				if (cnt > (sparse ? 30 : 70)) break;
+				if (named.has(l)) continue;
+				const [sx, sy] = toS(l.x, l.y);
+				if (!onScreen(sx, sy, 0)) continue;
+				const txt = l.file.name, tw = g.measureText(txt).width;
+				const off = l.len * z * .5 + 3;
+				let x0 = sx + off, y0 = sy - 7, ok = false;
+				const own = l.term ? l.term.node : null;
+				for (const [ax, ay] of [
+					[off, 0],
+					[-off - tw, 0],
+					[off, -13],
+					[off, 13]
+				]) {
+					x0 = sx + ax;
+					y0 = sy + ay - 7;
+					if (fits(x0 - 3, y0, x0 + tw + 3, y0 + 14) && !(own && fol && fol.hit(x0, y0 + 1, x0 + tw, y0 + 13, own, false))) {
+						ok = true;
+						break;
+					}
+				}
+				if (!ok) continue;
+				reserve(x0 - 3, y0, x0 + tw + 3, y0 + 14);
+				v.labelHits.push({
+					r: [
+						x0,
+						y0,
+						x0 + tw,
+						y0 + 14
+					],
+					leaf: l
+				});
+				g.fillStyle = hasOnly && !(l.term ? l.term.node.lit : l.pile && l.pile.lit) ? P.duskLeafLabel : l.file.kind === "c" ? P.leafLabel : P.muted;
+				halo(txt, x0, y0 + 7);
+				cnt++;
+			}
+		}
+	}
+}
+function branchNode(b) {
+	return b.node || (b.owner && b.owner.depth >= 1 ? b.owner : null);
+}
+function hitNode(hit) {
+	if (!hit) return null;
+	return hit.node || hit.branch && branchNode(hit.branch) || hit.clump || hit.pile || null;
+}
+var inRect = (r, x, y) => x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3];
+function pick(v, sx, sy) {
+	const M = v.M, z = v.cam.z;
+	const wx = (sx - v.W / 2) / z + v.cam.x, wy = (sy - v.H / 2) / z + v.cam.y;
+	for (const h of v.tagHits || []) if (inRect(h.r, sx, sy)) return { tag: h.z };
+	for (const h of v.birdHits || []) if (inRect(h.r, sx, sy)) return {
+		bird: h.A,
+		pointer: !!h.pointer
+	};
+	for (const h of v.badgeHits || []) if (inRect(h.r, sx, sy)) return { badge: h.bd };
+	for (const h of v.labelHits || []) if (inRect(h.r, sx, sy)) return h.leaf ? {
+		leaf: h.leaf,
+		label: true
+	} : h.n ? {
+		node: h.n,
+		label: true
+	} : null;
+	for (const h of v.nestHits || []) if (inRect(h.r, sx, sy)) return { nest: h.A };
+	for (const h of v.budHits || []) if (inRect(h.r, sx, sy)) return { bud: {
+		A: h.A,
+		path: h.path
+	} };
+	const r = 12 / z;
+	const near = M.grid.near(wx, wy, Math.max(r, S0 * 1.2));
+	let best = null, bd = 1e9;
+	const leafPx = S0 * z;
+	const created = /* @__PURE__ */ new Set(), planned = /* @__PURE__ */ new Set(), hot = /* @__PURE__ */ new Set();
+	for (const A of v.agents) {
+		for (const id of A.created) created.add(id);
+		for (const id of A.plan) planned.add(id);
+		for (const id of A.edits.keys()) hot.add(id);
+		if (A.file) hot.add(A.file.id);
+	}
+	const pileWhole = leafPx < 12 || v.tool !== "explore";
+	for (const it of near) {
+		if (!it.leaf) continue;
+		const l = it.leaf, f = l.file;
+		if (f.ghost && !created.has(f.id) && !planned.has(f.id)) continue;
+		const own = l.term ? l.term.node : l.pile;
+		if (own && own.fAnc) continue;
+		if (l.region === "ground" && pileWhole && l.pile) return { pile: l.pile };
+		if (l.region !== "ground" && leafPx < 4.2 && !planned.has(f.id) && !hot.has(f.id)) continue;
+		let d = Math.hypot(l.x - wx, l.y - wy);
+		const lim = hot.has(f.id) ? Math.max(l.len * .9, 11 / z) : Math.max(l.len * .65, 7 / z);
+		if (d >= lim) continue;
+		if (hot.has(f.id)) d *= .5;
+		else if (planned.has(f.id)) d *= 1.3;
+		if (d < bd) {
+			bd = d;
+			best = { leaf: l };
+		}
+	}
+	if (best) {
+		if (v.tool !== "explore" && leafPx < 24 && best.leaf) {
+			const l = best.leaf;
+			const own = l.term ? l.term.node : l.pile;
+			if (own && own.depth >= 1) return {
+				node: own,
+				viaLeaf: l
+			};
+		}
+		return best;
+	}
+	for (const b of v.visBranches || []) {
+		if (wx < b.bx0 - r || wx > b.bx1 + r || wy < b.by0 - r || wy > b.by1 + r) continue;
+		for (const p of b.pts) {
+			const d = Math.hypot(p[0] - wx, p[1] - wy);
+			if (d < Math.max(b.w * .6, 7 / z) && d < bd) {
+				bd = d;
+				best = { branch: b };
+			}
+		}
+	}
+	if (best) return best;
+	{
+		const tw = Math.min(M.trunkW, 110 / z);
+		if (wy > -S0 && wy < M.groundY + S0 && Math.abs(wx) < Math.max(tw * .75 + 6 / z, 10 / z) * (1 + .5 * Math.max(0, wy) / Math.max(1, M.groundY))) return { trunk: true };
+	}
+	let tbest = null;
+	let td = 1e9;
+	for (const t of M.terms) {
+		const d = Math.hypot(t.cx - wx, t.cy - wy);
+		if (d < t.rad && d < td) {
+			td = d;
+			tbest = t;
+		}
+	}
+	if (tbest) {
+		const n = tbest.node;
+		if (n.fAnc) return { clump: n.fAnc };
+		let q = n, top = null;
+		while (q && q.depth >= 1) {
+			if (q.vColl && !q.vHidden) top = q;
+			q = q.parent;
+		}
+		return {
+			clump: top || n,
+			open: !top
+		};
+	}
+	for (const p of M.piles) if (Math.abs(wx - p.cx) < (p.pw || 0) * .6 && wy < M.groundY + S0 && wy > M.groundY - (p.h || 0) * 2) return { pile: p };
+	return null;
+}
+var MINI = /* @__PURE__ */ new WeakMap();
+function buildMini(v, canvas) {
+	const M = v.M, P = v.P;
+	const r = canvas.getBoundingClientRect();
+	const W = Math.max(1, r.width), H = Math.max(1, r.height), d = 2;
+	if (W < 4 || H < 4) {
+		MINI.delete(canvas);
+		return false;
+	}
+	const cur = MINI.get(canvas);
+	if (cur && cur.W === W && cur.H === H && cur.M === M && cur.pkey === P.key) return true;
+	canvas.width = Math.round(W * d);
+	canvas.height = Math.round(H * d);
+	const B = M.bounds;
+	const z = Math.min(W / (B.x1 - B.x0), H / (B.y1 - B.y0)) * .92;
+	const st = {
+		W,
+		H,
+		z,
+		ox: W / 2 - (B.x0 + B.x1) / 2 * z,
+		oy: H / 2 - (B.y0 + B.y1) / 2 * z,
+		d,
+		M,
+		pkey: P.key,
+		base: document.createElement("canvas")
+	};
+	const off = st.base;
+	off.width = Math.round(W * d);
+	off.height = Math.round(H * d);
+	const g = off.getContext("2d");
+	if (!g) return false;
+	g.fillStyle = P.miniBg;
+	g.fillRect(0, 0, W * d, H * d);
+	g.setTransform(z * d, 0, 0, z * d, st.ox * d, st.oy * d);
+	g.fillStyle = P.miniSoil;
+	g.fillRect(B.x0 - 999, M.groundY, B.x1 - B.x0 + 2e3, 9999);
+	for (const t0 of M.terms) {
+		const t = tg(t0);
+		if (!t.blobFold) continue;
+		g.fillStyle = t.region === "root" ? P.miniRoot : P.PAL[t.node.limb % P.PAL.length].leafB;
+		g.globalAlpha = .95;
+		g.fill(t.blobFold);
+	}
+	g.globalAlpha = 1;
+	const MG = mg(M);
+	if (MG.trunkPath) {
+		g.fillStyle = P.BARK.crown;
+		g.fill(MG.trunkPath);
+	}
+	g.lineWidth = Math.max(.6 / z, .3);
+	g.lineCap = "round";
+	for (const b of M.branches) if (b.w * z > .25) {
+		g.beginPath();
+		const p = b.poly;
+		g.moveTo(p[0], p[1]);
+		for (let i = 2; i < p.length; i += 2) g.lineTo(p[i], p[i + 1]);
+		g.closePath();
+		g.fillStyle = b.region === "root" ? P.BARK.root : P.BARK.crown;
+		g.fill();
+	} else if (b.depth <= 2) {
+		g.strokeStyle = b.region === "root" ? P.BARK.root : P.BARK.crown;
+		g.beginPath();
+		g.moveTo(b.x0, b.y0);
+		g.lineTo(b.x1, b.y1);
+		g.stroke();
+	}
+	for (const p of M.piles) for (const l of p.leaves || []) {
+		g.fillStyle = P.PILEPAL.leafA;
+		const s = Math.max(4, 2.5 / z);
+		g.fillRect(l.x - s, l.y - s * .6, s * 2, s * 1.2);
+	}
+	MINI.set(canvas, st);
+	return true;
+}
+function drawMini(v, canvas, screenToWorld) {
+	if (!canvas.offsetParent) return;
+	let m = MINI.get(canvas);
+	if (!m || m.M !== v.M || m.pkey !== v.P.key) {
+		if (!buildMini(v, canvas)) return;
+		m = MINI.get(canvas);
+	}
+	if (!m) return;
+	const P = v.P;
+	const g = canvas.getContext("2d");
+	if (!g) return;
+	const d = m.d;
+	g.setTransform(1, 0, 0, 1, 0, 0);
+	g.drawImage(m.base, 0, 0);
+	g.setTransform(d, 0, 0, d, 0, 0);
+	const zoneNode = (z) => z.node || (z.file != null && v.M.files[z.file] ? v.M.files[z.file].node : null);
+	if (v.hasOnly) {
+		g.fillStyle = P.miniDim;
+		g.fillRect(0, 0, m.W, m.H);
+		for (const z of v.zones) {
+			if (z.type !== "only" || z.waived) continue;
+			const n = zoneNode(z);
+			if (!n || !n.cnt) continue;
+			g.save();
+			g.beginPath();
+			g.arc(n.cx * m.z + m.ox, n.cy * m.z + m.oy, Math.max(4, n.rad * m.z), 0, TAU);
+			g.clip();
+			g.setTransform(1, 0, 0, 1, 0, 0);
+			g.drawImage(m.base, 0, 0);
+			g.restore();
+		}
+	}
+	const [x0, y0] = screenToWorld(0, 0), [x1, y1] = screenToWorld(v.W, v.H);
+	g.strokeStyle = P.miniView;
+	g.lineWidth = 1;
+	g.strokeRect(x0 * m.z + m.ox, y0 * m.z + m.oy, (x1 - x0) * m.z, (y1 - y0) * m.z);
+	for (const z of v.zones) {
+		const n = zoneNode(z);
+		if (!n || !n.cnt) continue;
+		g.strokeStyle = z.type === "keep" ? P.red : P.green;
+		g.globalAlpha = z.waived ? .45 : 1;
+		g.lineWidth = 1.5;
+		g.beginPath();
+		g.arc(n.cx * m.z + m.ox, n.cy * m.z + m.oy, Math.max(3, n.rad * m.z), 0, TAU);
+		g.stroke();
+		g.globalAlpha = 1;
+	}
+	if (v.sel && v.sel.leaf) {
+		const l = v.sel.leaf;
+		g.fillStyle = P.sel;
+		g.beginPath();
+		g.arc(l.x * m.z + m.ox, l.y * m.z + m.oy, 2.2, 0, TAU);
+		g.fill();
+	}
+	if (v.birdWorld) for (const A of v.agents) {
+		const p = v.birdWorld[A.ag.key];
+		if (!p || A.ag.parent && A.done) continue;
+		g.fillStyle = A.ag.color;
+		g.beginPath();
+		g.arc(p[0] * m.z + m.ox, p[1] * m.z + m.oy, A.ag.parent ? 2 : 3, 0, TAU);
+		g.fill();
+	}
+}
+//#endregion
+//#region src/components/grid/codemap/AddZoneRow.tsx
+function newAdd(kind, pattern, name = "") {
+	return {
+		kind,
+		pattern,
+		name,
+		scope: kind === "green" ? "worktree" : "repo",
+		tell: kind === "green",
+		busy: false,
+		err: "",
+		done: null
+	};
+}
+function ExemptPrompt(p) {
+	const n = p.paths.length;
+	if (n === 0 || p.state === "kept") return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		" ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "cm-warn-text",
+			title: p.paths.join("\n"),
+			children: [
+				n,
+				" file",
+				n === 1 ? "" : "s",
+				" already changed outside this scope",
+				p.committed ? ` (${p.committed} committed)` : "",
+				" —"
+			]
+		}),
+		" ",
+		p.state === "breaches" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "muted",
+			children: "treated as breaches."
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "cm-linkbtn",
+				disabled: p.state === "busy",
+				onClick: p.onKeep,
+				children: "Keep exempt"
+			}),
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "cm-linkbtn warn",
+				disabled: p.state === "busy",
+				onClick: p.onTreatAsBreaches,
+				children: "Treat as breaches"
+			})
+		] })
+	] });
+}
+function AddZoneRow(p) {
+	const { add, setAdd, preview } = p;
+	const green = add.kind === "green";
+	const changedOutside = preview ? Array.isArray(preview.changed_outside) ? preview.changed_outside.length : Number(preview.changed_outside) || 0 : 0;
+	const status = (() => {
+		if (add.err) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "cm-err",
+			children: add.err
+		});
+		if (add.done) {
+			const d = add.done;
+			if (d.kind === "green") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: d.pattern }),
+				" is now a green zone — agents may only change files inside the green zones.",
+				d.told ? " " + d.told : "",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExemptPrompt, {
+					paths: d.exempt,
+					committed: d.committedOutside,
+					state: d.exemptState,
+					onKeep: () => setAdd({
+						...add,
+						done: {
+							...d,
+							exemptState: "kept"
+						}
+					}),
+					onTreatAsBreaches: p.onTreatAsBreaches
+				})
+			] });
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: d.pattern }),
+				" is now a keep-out zone.",
+				d.told ? " " + d.told : "",
+				d.already.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "cm-warn-text",
+						children: [
+							d.already.length,
+							" file",
+							d.already.length === 1 ? " here is" : "s here are",
+							" already changed —"
+						]
+					}),
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "cm-linkbtn",
+						disabled: p.clarify || add.busy,
+						title: p.clarify ? "Answer the prompt in the terminal first" : d.already.join("\n"),
+						onClick: () => p.onSubmit(true),
+						children: "ask the agent to revert?"
+					})
+				] })
+			] });
+		}
+		if (p.previewErr) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "cm-err",
+			children: p.previewErr
+		});
+		if (!preview || !add.pattern.trim()) return null;
+		if (green) {
+			const w = preview.writable_files ?? preview.count;
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "muted",
+				children: [
+					w,
+					" file",
+					w === 1 ? "" : "s",
+					" writable",
+					preview.roots && preview.roots.length ? " under " + preview.roots.slice(0, 3).join(", ") + (preview.roots.length > 3 ? "…" : "") : "",
+					changedOutside ? ` · ${changedOutside} already changed outside` : "",
+					preview.committed_outside ? ` (${preview.committed_outside} committed)` : "",
+					w === 0 ? " — nothing exists here yet; the agent may only create new files under it" : "",
+					preview.unanchored && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						" · ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cm-warn-text",
+							children: "matches at any depth"
+						}),
+						preview.anchored && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							className: "cm-linkbtn",
+							onClick: () => setAdd({
+								...add,
+								pattern: preview.anchored,
+								done: null
+							}),
+							children: ["anchor to ", preview.anchored]
+						})] })
+					] }),
+					(preview.warnings || []).map((w2) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "cm-warn-text",
+						children: " · " + w2
+					}, w2))
+				]
+			});
+		}
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "muted",
+			children: [
+				"matches ",
+				preview.count,
+				" file",
+				preview.count === 1 ? "" : "s",
+				preview.ignored_count ? `, ${preview.ignored_count} git-ignored` : "",
+				preview.changed && preview.changed.length ? ` · ${preview.changed.length} already changed` : "",
+				preview.count === 0 ? " — kept anyway, it guards files created later" : ""
+			]
+		});
+	})();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "cm-add" + (green ? " green" : ""),
+		onSubmit: (ev) => {
+			ev.preventDefault();
+			p.onSubmit();
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "cm-seg cm-kind",
+				role: "radiogroup",
+				"aria-label": "Zone kind",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					role: "radio",
+					"aria-checked": !green,
+					className: !green ? "on red" : "",
+					title: "Keep out: agents may read these paths but not change them",
+					onClick: () => setAdd({
+						...add,
+						kind: "red",
+						scope: add.kind === "green" ? "repo" : add.scope,
+						done: null
+					}),
+					children: "⛔ Keep out"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					role: "radio",
+					"aria-checked": green,
+					className: green ? "on green" : "",
+					title: "Only here: agents may change ONLY these paths (and other green zones); everything else is read-only",
+					onClick: () => setAdd({
+						...add,
+						kind: "green",
+						scope: "worktree",
+						tell: true,
+						done: null
+					}),
+					children: "✓ Only here"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				ref: p.inputRef,
+				className: "cm-add-pattern",
+				type: "text",
+				spellCheck: false,
+				autoComplete: "off",
+				placeholder: green ? "the scope — backend/providers, /src/api" : "path, folder or glob — config.toml, backend/athena, *.pem",
+				"aria-label": "Pattern",
+				value: add.pattern,
+				onChange: (ev) => setAdd({
+					...add,
+					pattern: ev.target.value,
+					err: "",
+					done: null
+				}),
+				onKeyDown: (ev) => {
+					if (ev.key === "Escape") {
+						ev.preventDefault();
+						setAdd(null);
+					}
+				}
+			}),
+			p.quick.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "cm-add-quick",
+				children: p.quick.map((q) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-chip" + (add.pattern === q.pattern ? " on" : ""),
+					title: q.title,
+					onClick: () => setAdd({
+						...add,
+						pattern: q.pattern,
+						done: null
+					}),
+					children: q.label
+				}, q.label))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				className: "cm-add-name",
+				type: "text",
+				spellCheck: false,
+				autoComplete: "off",
+				placeholder: "name (optional)",
+				"aria-label": "Zone name",
+				value: add.name,
+				onChange: (ev) => setAdd({
+					...add,
+					name: ev.target.value
+				})
+			}),
+			green ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "cm-add-scope-note",
+				title: "A green zone scopes a task, so it is set per worktree — and every session in the worktree shares it.",
+				children: p.sessionsHere <= 1 ? "This worktree (1 session)" : `This worktree — applies to all ${p.sessionsHere} sessions in it`
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+				className: "cm-add-scope",
+				"aria-label": "Scope",
+				value: add.scope,
+				onChange: (ev) => setAdd({
+					...add,
+					scope: ev.target.value
+				}),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("option", {
+					value: "repo",
+					children: ["Whole repo", p.repoLabel ? ` (${p.repoLabel})` : ""]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "worktree",
+					children: "This worktree"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "cm-add-tell" + (p.clarify ? " disabled" : ""),
+				title: p.clarify ? "Answer the prompt in the terminal first" : "Also tell the agent right away",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					checked: add.tell && !p.clarify,
+					disabled: p.clarify,
+					onChange: (ev) => setAdd({
+						...add,
+						tell: ev.target.checked
+					})
+				}), "Tell the agent"]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "submit",
+				className: "cm-add-go",
+				disabled: add.busy || !add.pattern.trim(),
+				children: add.busy ? "Adding…" : "Add"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "cm-add-status",
+				children: status
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/grid/codemap/TreeCards.tsx
+var plural$3 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
+var linesTxt = (f) => f.kind === "a" ? "asset" : `~${(f.lines || 1).toLocaleString()} lines`;
+var nodeName = (M, n) => n.kind === "root" || n.kind === "pile" ? n.label || n.name : n.depth === 0 ? M.name : n.disp || shortName(n.name);
+function dispName(M, f) {
+	if (!f) return "";
+	if ((M.nameCount.get(f.name) || 0) > 1 && f.path.includes("/")) return baseOf(dirOf(f.path)) + "/" + f.name;
+	return f.name;
+}
+var clip$1 = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+function BirdIcon({ color }) {
+	const ref = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const c = ref.current;
+		if (!c) return;
+		const draw = () => {
+			const g = c.getContext("2d");
+			const img = tinted(color);
+			if (!g) return;
+			g.clearRect(0, 0, c.width, c.height);
+			if (img) g.drawImage(img, 1, 1, c.width - 2, c.height - 2);
+			else {
+				g.fillStyle = color;
+				g.beginPath();
+				g.ellipse(c.width / 2, c.height / 2, c.width / 3, c.height / 4, 0, 0, Math.PI * 2);
+				g.fill();
+			}
+		};
+		draw();
+		const s = birdSprite();
+		if (s && !(s.complete && s.naturalWidth)) {
+			s.addEventListener("load", draw);
+			return () => s.removeEventListener("load", draw);
+		}
+	}, [color]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("canvas", {
+		ref,
+		width: 44,
+		height: 32,
+		className: "ct-bird-ic",
+		"aria-hidden": "true"
+	});
+}
+function subLine(M, S) {
+	const bk = S.blocked[S.blocked.length - 1];
+	const name = S.status === "blocked" && bk ? bk.f ? dispName(M, bk.f) : bk.path : S.file ? dispName(M, S.file) : "";
+	return helperLine(S.status, name);
+}
+function LegendCard({ open, onToggle, primary }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ct-card ct-legend" + (open ? "" : " collapsed"),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			type: "button",
+			className: "ct-tog",
+			"aria-expanded": open,
+			onClick: onToggle,
+			children: ["Legend ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				"aria-hidden": "true",
+				children: open ? "▾" : "▸"
+			})]
+		}) }), open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+				className: "sw",
+				viewBox: "0 0 12 12",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+					d: "M1 11 Q2 2 11 1 Q10 10 1 11Z",
+					fill: "var(--ct-legend-leaf)",
+					opacity: ".55"
+				})
+			}), "grey tree = the repo, unchanged · leaf = file · branch = folder · roots = tests"] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				className: "sw",
+				viewBox: "0 0 12 12",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+					cx: "6",
+					cy: "6",
+					r: "5.5",
+					fill: primary,
+					opacity: ".35"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+					d: "M2 10 Q3 3 10 2 Q9 9 2 10Z",
+					fill: primary,
+					stroke: "var(--text)",
+					strokeWidth: ".8"
+				})]
+			}), "bright leaf = a changed file, in the colour of the bird that changed it · a ring breathing = being edited now"] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+				className: "sw",
+				viewBox: "0 0 12 12",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+					d: "M6 12 Q6 6 10 1",
+					stroke: primary,
+					strokeWidth: "2.2",
+					fill: "none"
+				})
+			}), "lit branch = the path from the trunk to a change · \"core ●4\" = 4 changed in there"] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+				className: "sw",
+				viewBox: "0 0 12 12",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+					d: "M2 7 Q6 1 11 4 Q8 6 7 9 Q4 9 2 7Z",
+					fill: primary
+				})
+			}), "bird = an agent · small bird = its helper · nest = where it mostly works"] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+				className: "sw",
+				viewBox: "0 0 12 12",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+					cx: "6",
+					cy: "6",
+					r: "3",
+					fill: primary
+				})
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["dot = read · bud = planned ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: "(zoom in to see)" })] })] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+				className: "sw",
+				viewBox: "0 0 12 12",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+					cx: "6",
+					cy: "6",
+					r: "4",
+					fill: "var(--gold)"
+				})
+			}), "what could break: hover or click a bright leaf — the files that import it light up gold"] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+				className: "sw",
+				viewBox: "0 0 12 12",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+					cx: "6",
+					cy: "6",
+					r: "5",
+					fill: "color-mix(in srgb, var(--red) 25%, transparent)",
+					stroke: "var(--red)",
+					strokeWidth: "1.6"
+				})
+			}), "red area = keep out (agents may read, never edit) · ✕ = an edit was blocked"] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				className: "sw",
+				viewBox: "0 0 12 12",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+					x: "0",
+					y: "0",
+					width: "12",
+					height: "12",
+					fill: "var(--ct-dusk)"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+					cx: "6",
+					cy: "6",
+					r: "4",
+					fill: "color-mix(in srgb, var(--green) 20%, transparent)",
+					stroke: "var(--green)",
+					strokeWidth: "1.4"
+				})]
+			}), "green area = only here: agents may edit only inside it; the rest fogs"] })
+		] })]
+	});
+}
+function activityRows(M, agents, feed, zones, primaryKey) {
+	const out = [];
+	const prim0 = agents.find((a) => a.ag.key === primaryKey) || null;
+	const subOf = /* @__PURE__ */ new Map();
+	for (const A of agents) if (A.subInfo) subOf.set(A.subInfo.id, A);
+	const seen = /* @__PURE__ */ new Set();
+	for (let i = feed.length - 1; i >= 0 && out.length < 40; i--) {
+		const r = feed[i];
+		if (r.id) {
+			if (seen.has(r.id)) continue;
+			seen.add(r.id);
+		}
+		const ts = r.ts || 0;
+		const prim = r.agent && subOf.get(String(r.agent)) || prim0;
+		if (r.deny && r.deny.path) {
+			const f = M.byPath.get(r.deny.path);
+			const what = r.deny.push ? "a push" : f ? dispName(M, f) : r.deny.path;
+			out.push({
+				key: "d" + i,
+				ts,
+				A: prim,
+				path: r.deny.push ? "" : r.deny.path,
+				bad: true,
+				text: `⛔ blocked at ${what} — ${r.deny.kind === "green" ? "outside only-here" : "keep out" + (r.deny.name ? ": " + r.deny.name : "")}`
+			});
+			continue;
+		}
+		const w = r.writes && r.writes[0];
+		const rd = r.reads && r.reads[0];
+		if (w && r.ev !== "pre") {
+			const f = M.byPath.get(w);
+			const d = f ? f.usedBy.length : 0;
+			out.push({
+				key: "w" + i,
+				ts,
+				A: prim,
+				path: w,
+				bad: false,
+				text: `${r.tool === "Write" && !f ? "created" : "edited"} ${f ? dispName(M, f) : w}${d ? ` — ${d} depend on it` : ""}`
+			});
+		} else if (rd && (r.ev === "pre" || r.kind !== "read")) {
+			const f = M.byPath.get(rd);
+			out.push({
+				key: "r" + i,
+				ts,
+				A: prim,
+				path: rd,
+				bad: false,
+				text: `read ${f ? dispName(M, f) : rd}${r.reads.length > 1 ? ` +${r.reads.length - 1}` : ""}`
+			});
+		} else if (r.kind === "plan" && r.ev !== "pre") out.push({
+			key: "p" + i,
+			ts,
+			A: prim,
+			path: "",
+			bad: false,
+			text: "declared a plan (buds)"
+		});
+		else if (r.kind === "agent" && !r.agent) {
+			const what = [r.atype, r.desc].filter(Boolean).join(" · ");
+			const back = r.ev !== "pre";
+			out.push({
+				key: "h" + i,
+				ts,
+				A: prim,
+				path: "",
+				bad: false,
+				text: `${back ? "a helper finished" : "sent out a helper"}${what ? ": " + what : ""}`
+			});
+		}
+	}
+	for (const A of agents) {
+		if (A.ag.primary || A.ag.parent) continue;
+		for (const [id, ts] of A.edits) {
+			const f = M.files[id];
+			out.push({
+				key: "o" + A.ag.key + id,
+				ts,
+				A,
+				path: f.path,
+				bad: false,
+				text: `edited ${dispName(M, f)}${f.usedBy.length ? ` — ${f.usedBy.length} depend on it` : ""}`
+			});
+		}
+	}
+	for (const z of zones) if (z.created) out.push({
+		key: "z" + z.id,
+		ts: z.created,
+		A: null,
+		path: "",
+		bad: false,
+		rule: isGreen(z) ? "only" : "keep",
+		text: `${isGreen(z) ? "✓ only here" : "⛔ keep out"} set on ${z.name || z.pattern}`
+	});
+	out.sort((a, b) => b.ts - a.ts);
+	return out.slice(0, 48);
+}
+function ActivityCard(p) {
+	const tick = !!p.ticker && !p.open;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ct-card ct-activity" + (p.open ? "" : " collapsed") + (tick ? " ticker" : ""),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: [!tick && "Activity", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "ct-tog",
+			"aria-expanded": p.open,
+			"aria-label": p.open ? "Collapse activity" : "Expand activity",
+			onClick: p.onToggle,
+			children: p.open ? "–" : "+"
+		})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+			className: "ct-act-list",
+			children: [!p.rows.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+				className: "ct-muted",
+				children: "Nothing yet — the agent hasn't touched a file since the map armed."
+			}), (p.open ? p.rows : p.rows.slice(0, 1)).map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "ct-act-row" + (r.bad ? " bad" : "") + (r.rule ? " rule " + r.rule : ""),
+				disabled: !r.path && !r.rule,
+				onClick: () => {
+					if (r.rule) {
+						const z = p.zoneOf(r);
+						if (z) p.onZone(z);
+					} else p.onRow(r);
+				},
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "tm",
+						children: r.ts ? relTime(r.ts - p.skew) : ""
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "dot",
+						style: { background: r.A ? r.A.ag.color : r.rule === "only" ? "var(--green)" : "var(--red)" },
+						"aria-hidden": "true"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "tx",
+						children: [r.A && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "who",
+							style: { color: r.A.ag.color },
+							children: [clip$1(r.A.ag.short || r.A.ag.name, 18), " "]
+						}), r.text]
+					})
+				]
+			}) }, r.key))]
+		})]
+	});
+}
+function depOf(M, A, id) {
+	for (const [fid] of A.edits) if (M.files[fid].usedBy.includes(id)) return M.files[fid];
+	return null;
+}
+var CLASSY = /* @__PURE__ */ new Set([
+	"class",
+	"interface",
+	"type",
+	"struct",
+	"enum",
+	"trait",
+	"record",
+	"table",
+	"model"
+]);
+function outline(fv) {
+	const cls = [], fns = [];
+	const walk = (s) => {
+		for (const x of s) {
+			if (CLASSY.has(x.kind)) cls.push(x.name);
+			else if (x.kind !== "route" && x.kind !== "var" && x.kind !== "const" && x.kind !== "import") fns.push(x.name);
+			if (x.children && x.children.length && CLASSY.has(x.kind)) walk(x.children);
+		}
+	};
+	if (fv) walk(fv.symbols);
+	const pub = (a) => a.slice().sort((p, q) => Number(/^_/.test(p)) - Number(/^_/.test(q)));
+	const routes = fv ? fv.entry.filter((e) => e.kind === "http").map((e) => (e.method + " " + e.route).trim()) : [];
+	return {
+		cls: pub(cls),
+		fns: pub(fns),
+		routes
+	};
+}
+function Chips({ items, max = 12, onPick }) {
+	if (!items.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ct-chips",
+		children: [items.slice(0, max).map((x, i) => onPick ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "ct-chip",
+			onClick: () => onPick(x),
+			title: x,
+			children: x
+		}, x + i) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+			className: "ct-chip",
+			children: x
+		}, x + i)), items.length > max && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("code", {
+			className: "ct-chip more",
+			children: [
+				"+",
+				items.length - max,
+				" more"
+			]
+		})]
+	});
+}
+function FileCard(p) {
+	const { M, f } = p;
+	const used = f.usedBy.length, imp = f.imports.length;
+	const kind = f.test ? "test" : f.kind === "c" ? "code" : f.kind === "a" ? "asset" : "doc / config";
+	const who = [];
+	for (const A of p.agents) {
+		const bits = [];
+		if (A.edits.has(f.id)) bits.push(A.created.has(f.id) ? "created it" : "edited it");
+		if (A.reads.has(f.id)) bits.push("read it");
+		if (A.plan.has(f.id)) bits.push("plans to touch it (bud)");
+		for (const bk of A.blocked) if (bk.f === f) bits.push("was blocked here (" + (bk.kind === "keep" ? "keep out" : "outside only-here") + ")");
+		const dep = depOf(M, A, f.id);
+		if (dep) bits.push(`imports ${dep.name} — ${A.ag.name}'s edit could break it`);
+		if (bits.length) who.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-who",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					style: { color: A.ag.color },
+					children: [
+						A.ag.glyph,
+						" ",
+						clip$1(A.ag.name)
+					]
+				}),
+				" ",
+				bits.join(" · ")
+			]
+		}, A.ag.key));
+	}
+	const zf = zoneOfFile(f, p.zones);
+	const hasOnly = p.zones.some((z) => z.type === "only" && !z.waived);
+	const { cls, fns, routes } = outline(p.fv);
+	const lines = p.fv && p.fv.loc ? `${p.fv.loc.toLocaleString()} lines` : linesTxt(f);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "ct-close",
+			"aria-label": "Close (Esc)",
+			title: "Close (Esc)",
+			onClick: p.onClose,
+			children: "×"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: f.name }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ct-path",
+			children: f.path
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-facts",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: lines }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: kind }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: used ? "gold" : "",
+					children: ["used by ", plural$3(used, "file")]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["imports ", imp] })
+			]
+		}),
+		who,
+		zf ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-who block",
+			children: [
+				"⛔ ",
+				zf.type === "keep" ? "inside keep out" : "outside the only-here zone",
+				" (",
+				zf.z.label,
+				") — ",
+				zf.type === "keep" ? "reads allowed, edits blocked" : "edits blocked here"
+			]
+		}) : hasOnly ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ct-who only",
+			children: "✓ inside the only-here zone — edits allowed"
+		}) : null,
+		p.fvErr && !p.fv ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "ct-muted",
+			children: ["Couldn't read its outline: ", p.fvErr]
+		}) : !p.fv ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "ct-muted",
+			children: "Reading its outline…"
+		}) : null,
+		cls.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", { children: "Classes" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, { items: cls })] }),
+		fns.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h5", { children: ["Functions ", fns.some((x) => !/^_/.test(x)) && fns.some((x) => /^_/.test(x)) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ct-h5-note",
+			children: "· public first"
+		}) : null] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, { items: fns })] }),
+		routes.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", { children: "Routes" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, {
+			items: routes,
+			max: 10
+		})] }),
+		f.test && f.tests && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", { children: "Tests" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, { items: [f.tests.path] })] }),
+		p.fv && p.fv.tested_by && p.fv.tested_by.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", { children: "Tested by" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, {
+			items: p.fv.tested_by,
+			max: 6,
+			onPick: p.onFile
+		})] }),
+		p.fv && !cls.length && !fns.length && !routes.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "ct-muted",
+			children: "No classes or functions found."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-actions",
+			children: [
+				used > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "cm-btn gold",
+					onClick: p.onBlast,
+					children: [
+						p.pinned ? "Hide" : "Show",
+						" the ",
+						used,
+						" that depend on it"
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn",
+					onClick: p.onCentre,
+					children: "Centre on it"
+				}),
+				f.node && f.node.depth >= 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "cm-btn",
+					onClick: p.onFolder,
+					children: ["Folder: ", clip$1(f.node.kind === "crown" ? baseOf(f.node.name) : f.node.label || f.node.name, 18)]
+				}),
+				p.changed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn",
+					onClick: p.onDiff,
+					children: "Open diff"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn red",
+					onClick: p.onKeep,
+					title: "Keep agents out of this file (reads stay allowed)",
+					children: "⛔ Keep out"
+				}),
+				p.outside ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn green",
+					onClick: p.onAllow,
+					disabled: p.allowState === "busy" || p.allowState === "done",
+					title: "Add this file to the green zones (this worktree) and tell the agent",
+					children: p.allowState === "busy" ? "Allowing…" : p.allowState === "done" ? "Allowed ✓" : "Allow this file"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn green",
+					onClick: p.onOnly,
+					title: "Agents may edit only this file; everything else dims",
+					children: "✓ Only here"
+				})
+			]
+		})
+	] });
+}
+function NodeCard(p) {
+	const { M, n } = p;
+	const isRoot = n.kind === "root", isPile = n.kind === "pile", isTrunk = n.depth === 0 && !isPile;
+	const title = nodeName(M, n);
+	const path = isTrunk ? n === M.roots ? "all tests" : "repo root" : isRoot ? "tests · " + (n.crownTwin ? n.crownTwin.path : n.name) : isPile ? "on the ground (docs, CI, config)" : n.path;
+	const who = [];
+	if (!isTrunk) for (const A of p.agents) {
+		const bits = [];
+		if (A.nest === n) bits.push("nests here");
+		let e = 0, r = 0, pl = 0;
+		for (const [id] of A.edits) if (isUnder(M.files[id].node, n)) e++;
+		for (const [id] of A.reads) if (isUnder(M.files[id].node, n)) r++;
+		for (const id of A.plan) if (isUnder(M.files[id].node, n)) pl++;
+		if (e) bits.push(`edited ${e}`);
+		if (r) bits.push(`read ${r}`);
+		if (pl) bits.push(`${pl} planned`);
+		if (bits.length) who.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-who",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					style: { color: A.ag.color },
+					children: [
+						A.ag.glyph,
+						" ",
+						clip$1(A.ag.name)
+					]
+				}),
+				" ",
+				bits.join(" · ")
+			]
+		}, A.ag.key));
+	}
+	const here = p.zones.filter((z) => z.node === n);
+	const keepZ = here.find((z) => z.type === "keep"), onlyZ = here.find((z) => z.type === "only");
+	let inherited = null;
+	for (let q = n.parent; q && !inherited; q = q.parent) {
+		const z = p.zones.find((zz) => zz.type === "keep" && zz.node === q && !zz.waived);
+		if (z) inherited = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-who block",
+			children: ["⛔ inside keep out · ", z.label]
+		});
+	}
+	const hasOnly = p.zones.some((z) => z.type === "only" && !z.waived);
+	if (!keepZ && !onlyZ && !inherited && hasOnly && !isTrunk) inherited = n.lit ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "ct-who only",
+		children: "✓ inside the only-here zone — edits allowed"
+	}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "ct-who block",
+		children: "⛔ outside the only-here zone — edits blocked here"
+	});
+	const kids = (n.kids || []).filter((k) => k.nFiles).slice().sort((a, b) => b.nFiles - a.nFiles);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "ct-close",
+			"aria-label": "Close (Esc)",
+			title: "Close (Esc)",
+			onClick: p.onClose,
+			children: "×"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: title }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ct-path",
+			children: path
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-facts",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: isRoot ? "tests" : isPile ? "ground pile" : isTrunk ? n === M.roots ? "all tests" : "repo (the trunk)" : "folder" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: plural$3(n.nFiles, isTrunk && n === M.crown ? "code file" : "file") }),
+				n.lines > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+					"~",
+					n.lines.toLocaleString(),
+					" lines"
+				] }),
+				n.kids.length > 0 && !isTrunk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: plural$3(n.kids.length, "sub-folder") })
+			]
+		}),
+		isTrunk && n === M.crown && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ct-facts",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [plural$3(M.roots.nFiles, "test"), " (roots)"] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [M.piles.reduce((a, q) => a + q.nFiles, 0), " docs / config (ground)"] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: plural$3(M.crown.kids.length, "top-level folder") })
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", { children: "Agents" }),
+			p.agents.map((A) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ct-who",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "ct-link",
+						style: { color: A.ag.color },
+						onClick: () => p.onAgent(A),
+						children: [
+							A.ag.glyph,
+							" ",
+							clip$1(A.ag.name)
+						]
+					}),
+					" ",
+					STATUS_TXT[A.status],
+					A.file ? " · " + dispName(M, A.file) : "",
+					" · edited ",
+					A.edits.size,
+					", read ",
+					A.reads.size,
+					A.nest && A.nest !== M.crown ? " · nest " + A.nest.path : ""
+				]
+			}, A.ag.key)),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", { children: "Rules" }),
+			p.serverZones.length ? p.serverZones.map((z) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ct-who " + (isGreen(z) ? "only" : "keep"),
+				children: [
+					isGreen(z) ? "✓ only here" : "⛔ keep out",
+					" · ",
+					z.name || z.pattern
+				]
+			}, z.id)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "ct-muted",
+				children: "no rules yet — ⛔ Keep out / ✓ Only here paint one on a branch"
+			})
+		] }),
+		who,
+		keepZ && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-who keep",
+			children: ["⛔ keep out · ", keepZ.waived ? "allowed in this worktree" : keepZ.z.scope === "worktree" ? "this worktree" : "whole repo"]
+		}),
+		onlyZ && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ct-who only",
+			children: "✓ only here · this worktree"
+		}),
+		inherited,
+		kids.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", { children: "Sub-folders" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-chips",
+			children: [kids.slice(0, 12).map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "ct-chip",
+				title: "Open " + k.path,
+				onClick: () => p.onKid(k),
+				children: [
+					k.depth === 1 ? k.name : k.core || baseOf(k.name),
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "n",
+						children: k.nFiles
+					})
+				]
+			}, k.id)), kids.length > 12 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("code", {
+				className: "ct-chip more",
+				children: [
+					"+",
+					kids.length - 12,
+					" more"
+				]
+			})]
+		})] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-actions",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn",
+					onClick: p.onZoom,
+					children: isTrunk ? "Whole tree" : "Zoom to it"
+				}),
+				!isTrunk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn",
+					onClick: p.onFold,
+					children: p.folded ? "Unfold" : "Fold"
+				}),
+				!isTrunk && (keepZ ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn red",
+					onClick: () => p.onRemove(keepZ.z),
+					children: "Remove ⛔ keep out"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn red",
+					onClick: p.onKeep,
+					title: "Agents may read here; every edit is blocked",
+					children: "⛔ Keep agents out"
+				})),
+				!isTrunk && (onlyZ ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn green",
+					onClick: () => p.onRemove(onlyZ.z),
+					children: "Remove ✓ only here"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn green",
+					onClick: p.onOnly,
+					title: "The one place agents may edit; everything else dims",
+					children: "✓ Only here"
+				}))
+			]
+		})
+	] });
+}
+function BlastCard(p) {
+	const { M, bd } = p;
+	const n = bd.node;
+	const where = n.kind === "pile" ? n.label : n.depth === 0 ? n === M.roots ? "tests" : "repo root files" : n.kind === "root" ? n.label : n.disp || n.name;
+	const srcs = [...bd.files].map((id) => M.files[id]).filter(Boolean);
+	const groups = /* @__PURE__ */ new Map();
+	for (const id of bd.ids) {
+		const f = M.files[id];
+		const k = f.node ? f.node.kind === "pile" || f.node.kind === "root" ? f.node.label || f.node.name : f.node.path || M.name : "?";
+		const g = groups.get(k);
+		if (g) g.push(f);
+		else groups.set(k, [f]);
+	}
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "ct-close",
+			"aria-label": "Close (Esc)",
+			title: "Close (Esc)",
+			onClick: p.onClose,
+			children: "×"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+			className: "ct-gold",
+			children: [plural$3(bd.n, "file"), " could break"]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-path",
+			children: [
+				"in ",
+				where,
+				" · they import ",
+				srcs.map((f) => f.name).join(", ")
+			]
+		}),
+		bd.ag && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-who",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					style: { color: bd.ag.color },
+					children: [
+						bd.ag.glyph,
+						" ",
+						clip$1(bd.ag.name)
+					]
+				}),
+				" ",
+				"edited ",
+				srcs.map((f) => f.name).join(", ")
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "ct-muted",
+			children: "Gold leaves on the tree. Nothing has broken yet — these are the files whose imports changed: the ones to check or test."
+		}),
+		[...groups.entries()].sort((a, b) => b[1].length - a[1].length).map(([k, fs]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h5", { children: [
+			k,
+			" · ",
+			fs.length
+		] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ct-chips",
+			children: fs.sort((a, b) => b.usedBy.length - a.usedBy.length).map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "ct-chip gold",
+				title: f.path + " — open",
+				onClick: () => p.onFile(f),
+				children: f.name
+			}, f.id))
+		})] }, k)),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-actions",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-btn",
+					onClick: p.onFrame,
+					children: "Frame them"
+				}),
+				n.cnt > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "cm-btn",
+					onClick: p.onFolder,
+					children: ["Folder: ", clip$1(where || "", 18)]
+				}),
+				srcs.length === 1 && srcs[0].leaf && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "cm-btn",
+					onClick: () => p.onFile(srcs[0]),
+					children: ["Go to ", clip$1(srcs[0].name, 18)]
+				})
+			]
+		})
+	] });
+}
+function TipBody({ M, hit, agents, zones, tool, folded }) {
+	const act = (n) => tool === "keep" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "act keep",
+		children: [
+			"click to paint ⛔ keep out on ",
+			shortName(n.path || n.name),
+			" · ",
+			plural$3(n.nFiles, "file")
+		]
+	}) : tool === "only" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "act only",
+		children: [
+			"click to paint ✓ only here on ",
+			shortName(n.path || n.name),
+			" · ",
+			plural$3(n.nFiles, "file")
+		]
+	}) : folded ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "folded — click to unfold" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "click for details · double-click to zoom in" });
+	if (hit.leaf) {
+		const f = hit.leaf.file;
+		const rows = [];
+		for (const A of agents) {
+			if (A.edits.has(f.id)) rows.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					style: { color: A.ag.color },
+					children: [
+						A.created.has(f.id) ? "created" : "edited",
+						" by ",
+						clip$1(A.ag.name)
+					]
+				}),
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: ["— ", f.usedBy.length ? `${f.usedBy.length} file${f.usedBy.length === 1 ? "" : "s"} depend on it (lit gold)` : "nothing depends on it"] })
+			] }, "e" + A.ag.id));
+			else if (A.plan.has(f.id)) rows.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				style: { color: A.ag.color },
+				children: [
+					"bud: ",
+					clip$1(A.ag.name),
+					" plans to touch it"
+				]
+			}, "p" + A.ag.id));
+			else if (A.reads.has(f.id)) rows.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				style: { color: A.ag.color },
+				children: ["read by ", clip$1(A.ag.name)]
+			}, "r" + A.ag.id));
+			const dep = depOf(M, A, f.id);
+			if (dep) rows.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "ct-gold",
+					children: ["imports ", dep.name]
+				}),
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: [
+					"(",
+					clip$1(A.ag.name),
+					"'s edit — could break)"
+				] })
+			] }, "g" + A.ag.id));
+		}
+		const zf = zoneOfFile(f, zones);
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: f.name }),
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: [
+				linesTxt(f),
+				" · used by ",
+				f.usedBy.length
+			] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: f.path }) }),
+			rows,
+			zf && zf.type === "keep" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "keep",
+				children: [
+					"⛔ inside keep out (",
+					zf.z.label,
+					") — reads allowed, edits blocked"
+				]
+			}),
+			zf && zf.type === "only" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "keep",
+				children: [
+					"⛔ outside the only-here zone (",
+					zf.z.label,
+					") — edits here are blocked"
+				]
+			}),
+			!zf && zones.some((z) => z.type === "only" && !z.waived) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "only",
+				children: "✓ inside the only-here zone — edits allowed"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: tool !== "explore" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "act " + tool,
+				children: [
+					"click to paint ",
+					tool === "keep" ? "⛔ keep out" : "✓ only here",
+					" on this file"
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "click for details" }) })
+		] });
+	}
+	const n = hit.node || (hit.branch ? hit.branch.node || (hit.branch.owner && hit.branch.owner.depth >= 1 ? hit.branch.owner : null) : null) || hit.clump || hit.pile || null;
+	if (n && hit.viaLeaf) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: nodeName(M, n) }),
+		" ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: ["folder · ", plural$3(n.nFiles, "file")] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: act(n) }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "zoom in to pick a single file" }) })
+	] });
+	if (n) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: nodeName(M, n) }),
+		" ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: [
+			n.kind === "root" ? "tests" : n.kind === "pile" ? "on the ground (docs, CI, config)" : "folder",
+			" · ",
+			plural$3(n.nFiles, "file"),
+			n.lines ? ` · ~${n.lines.toLocaleString()} lines` : ""
+		] }),
+		n.kind === "crown" && n.depth > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: n.path }) }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: act(n) })
+	] });
+	if (hit.trunk || hit.branch) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: M.name }),
+		" ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: [
+			"the trunk = the whole repo · ",
+			plural$3(M.files.length, "file"),
+			" (",
+			M.crown.nFiles,
+			" code)"
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: tool === "explore" ? "click for the repo card" : "paint a branch, not the trunk" }) })
+	] });
+	if (hit.tag) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: [
+			hit.tag.type === "keep" ? "⛔ keep out" : "✓ only here",
+			" · ",
+			hit.tag.label
+		] }),
+		" ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: hit.tag.waived ? "allowed in this worktree" : hit.tag.z.scope === "worktree" ? "this worktree" : "whole repo" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: hit.tag.type === "keep" ? "agents may read here but every edit is blocked" : "agents may edit only inside this; the rest is dusk" }) }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "act",
+			children: tool === "explore" ? "click for the folder · remove it from its card or Rules" : "click to remove this rule"
+		}) })
+	] });
+	if (hit.bird) {
+		const A = hit.bird;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", {
+				style: { color: A.ag.color },
+				children: [
+					A.ag.glyph,
+					" ",
+					A.ag.name
+				]
+			}),
+			" ",
+			"· ",
+			STATUS_TXT[A.status],
+			A.file ? " " + dispName(M, A.file) : "",
+			hit.pointer && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "off-screen, in that direction" }) }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "click to follow this bird" }) })
+		] });
+	}
+	if (hit.nest) {
+		const A = hit.nest;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", {
+				style: { color: A.ag.color },
+				children: [clip$1(A.ag.name), "'s nest"]
+			}),
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: A.nest === M.crown ? "trunk" : A.nest ? A.nest.path : "" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "the folder it mostly works in · click for the folder's details" }) })
+		] });
+	}
+	if (hit.badge) {
+		const bd = hit.badge;
+		const files = [...bd.files].map((id) => M.files[id].name).join(", ");
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", {
+				className: "ct-gold",
+				children: [
+					plural$3(bd.n, "file"),
+					" in ",
+					nodeName(M, bd.node)
+				]
+			}),
+			" ",
+			"import ",
+			files,
+			bd.ag ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: [
+				" (",
+				clip$1(bd.ag.name),
+				"'s edit",
+				bd.files.size > 1 ? "s" : "",
+				")"
+			] }) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "they could break · click to list them" }) })
+		] });
+	}
+	if (hit.bud) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", {
+		style: { color: hit.bud.A.ag.color },
+		children: "bud: a new file is planned"
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: hit.bud.path }) })] });
+	return null;
+}
+function affectsOf(M, A, cache) {
+	return A.edits.size ? agentBlast(M, A, cache).ids.size : 0;
+}
+//#endregion
+//#region src/components/grid/codemap/BirdIndex.tsx
+var clip = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+var plural$2 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
+var EXPANDED = /* @__PURE__ */ new Map();
+function changeSummary(M, agents) {
+	const primary = agents.find((A) => A.ag.primary) || null;
+	const mineA = (A) => A.ag.primary || !!primary && A.ag.parent === primary.ag.key;
+	const order = [...agents].sort((a, b) => Number(mineA(b)) - Number(mineA(a)));
+	const owner = /* @__PURE__ */ new Map();
+	for (const A of order) for (const id of A.edits.keys()) if (!owner.has(id) && M.files[id]) owner.set(id, A);
+	const tops = /* @__PURE__ */ new Map();
+	const byNode = /* @__PURE__ */ new Map();
+	let mine = 0;
+	for (const [id, A] of owner) {
+		const f = M.files[id];
+		if (mineA(A)) mine++;
+		const n = f.node;
+		let top = n;
+		while (top && top.depth > 1) top = top.parent;
+		const tk = !top || top.depth < 1 ? n && n.kind === "pile" ? nodeName(M, n) : "root files" : nodeName(M, top);
+		tops.set(tk, (tops.get(tk) || 0) + 1);
+		if (!n) continue;
+		let e = byNode.get(n);
+		if (!e) byNode.set(n, e = {
+			n,
+			label: n.depth >= 1 ? folderPath(n) : nodeName(M, n),
+			files: [],
+			cols: [],
+			mine: 0,
+			others: 0
+		});
+		e.files.push(f);
+		if (mineA(A)) e.mine++;
+		else e.others++;
+		if (!e.cols.includes(A.ag.color)) e.cols.push(A.ag.color);
+	}
+	const byDeps = (a, b) => b.usedBy.length - a.usedBy.length || a.path.localeCompare(b.path);
+	for (const e of byNode.values()) e.files.sort(byDeps);
+	return {
+		total: owner.size,
+		mine,
+		others: owner.size - mine,
+		tops: [...tops.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
+		folders: [...byNode.values()].sort((a, b) => b.files.length - a.files.length || a.label.localeCompare(b.label)),
+		ranked: [...owner.keys()].map((id) => M.files[id]).sort(byDeps)
+	};
+}
+function nBlocked(agents, z) {
+	let n = 0;
+	for (const A of agents) for (const bk of A.blocked) if (bk.z && bk.z.z.id === z.id) n++;
+	return n;
+}
+function helperWhere(M, S) {
+	const bk = S.blocked[S.blocked.length - 1];
+	const f = S.status === "blocked" && bk ? bk.f : S.file;
+	const n = f ? f.node : S.nest;
+	if (!n) return "";
+	if (n.depth < 1) return n.kind === "pile" ? nodeName(M, n) : "repo root";
+	return folderPath(n).replace(" › ", "/");
+}
+function BirdIndex(p) {
+	const [legend, setLegend] = (0, import_react.useState)(false);
+	const [railOpen, setRailOpen] = (0, import_react.useState)(false);
+	const [, bump] = (0, import_react.useState)(0);
+	const tops = p.agents.filter((A) => !A.ag.parent);
+	const subsOf = (A) => p.agents.filter((S) => S.ag.parent === A.ag.key);
+	const primary = p.agents.find((A) => A.ag.primary) || null;
+	const exKey = primary ? primary.ag.key : "";
+	const ex = EXPANDED.get(exKey) || /* @__PURE__ */ new Set();
+	const toggle = (k) => {
+		const s = new Set(ex);
+		if (s.has(k)) s.delete(k);
+		else s.add(k);
+		EXPANDED.set(exKey, s);
+		bump((x) => x + 1);
+	};
+	const riskOpen = !!p.riskOpen;
+	const setRisk = (b) => p.onRisk && p.onRisk(b);
+	const sum = changeSummary(p.M, p.agents);
+	const legendCard = legend && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "ct-bix-legend",
+		"data-hud": "pop",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LegendCard, {
+			open: true,
+			onToggle: () => setLegend(false),
+			primary: primary ? primary.ag.color : "var(--accent)"
+		})
+	});
+	const column = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-bix-head",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { children: "Agents" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "ct-bix-q",
+					"aria-expanded": legend,
+					"aria-label": "Legend: how to read the map",
+					title: "How to read the map",
+					onClick: () => setLegend(!legend),
+					children: "?"
+				}),
+				p.size !== "wide" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "ct-bix-q",
+					"aria-label": "Collapse the agents column",
+					title: "Collapse to the rail",
+					onClick: () => setRailOpen(false),
+					children: "«"
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+			className: "ct-bix-list",
+			role: "list",
+			children: tops.map((A) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentRow, {
+				p,
+				A,
+				subs: subsOf(A),
+				open: ex.has(A.ag.key),
+				onToggle: () => toggle(A.ag.key)
+			}, A.ag.key))
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Changes, {
+			p,
+			sum,
+			riskOpen,
+			onRisk: () => setRisk(!riskOpen)
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Rules, { p })
+	] });
+	if (p.size === "wide") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "ct-left ct-bix",
+		"data-hud": "left",
+		role: "region",
+		"aria-label": "Agents on this map",
+		children: column
+	}), legendCard] });
+	const rules = p.zones.filter((z) => !z.waived);
+	const nKeep = rules.filter((z) => !isGreen(z)).length, nOnly = rules.length - nKeep;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ct-left ct-bix-rail" + (p.size === "tiny" ? " tiny" : ""),
+			"data-hud": "left",
+			role: "region",
+			"aria-label": "Agents on this map",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ct-rail-head",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "ct-bix-q",
+						"aria-expanded": railOpen,
+						"aria-label": "Expand the agents column",
+						title: "Expand: details, changes, rules",
+						onClick: () => setRailOpen(!railOpen),
+						children: "»"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "ct-bix-q",
+						"aria-expanded": legend,
+						"aria-label": "Legend: how to read the map",
+						title: "How to read the map",
+						onClick: () => setLegend(!legend),
+						children: "?"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "ct-bix-list",
+					role: "list",
+					children: tops.map((A) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RailRow, {
+						A,
+						following: p.followKey === A.ag.key,
+						n: p.size === "tiny" ? 7 : 10,
+						onFollow: () => p.onFollow(A.ag.key)
+					}), subsOf(A).map((S) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RailRow, {
+						A: S,
+						sub: true,
+						following: p.followKey === S.ag.key,
+						n: p.size === "tiny" ? 6 : 9,
+						onFollow: () => p.onFollow(S.ag.key)
+					}, S.ag.key))] }, A.ag.key))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ct-rail-tiles",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "ct-rail-tile",
+						title: sum.total ? `${plural$2(sum.total, "file")} changed, all sessions — ${sum.tops.map(([k, n]) => `${k} ${n}`).join(", ")}\nthis session ${sum.mine} · other sessions ${sum.others}` : "No changes yet.",
+						onClick: () => setRailOpen(true),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: ["✎", sum.total] }), " changed"]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "ct-rail-tile" + (nKeep ? " keep" : nOnly ? " only" : ""),
+						title: rules.length ? rules.map((z) => (isGreen(z) ? "✓ only here " : "⛔ keep out ") + (z.name || z.pattern) + (nBlocked(p.agents, z) ? " · " + blockedTxt(nBlocked(p.agents, z)) : "")).join("\n") : "No rules — ⛔ Keep out / ✓ Only here",
+						onClick: () => setRailOpen(true),
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: [nOnly ? "✓" : "⛔", rules.length] }),
+							" ",
+							rules.length === 1 ? "rule" : "rules"
+						]
+					})]
+				})
+			]
+		}),
+		railOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "ct-bix ct-bix-pop",
+			"data-hud": "pop",
+			role: "region",
+			"aria-label": "Agents (expanded)",
+			children: column
+		}),
+		legendCard
+	] });
+}
+function RailRow({ A, sub, following, n, onFollow }) {
+	const st = A.status;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
+		className: "ct-rail-row" + (sub ? " sub" : "") + (A.done ? " done" : "") + (following ? " following" : ""),
+		style: { borderLeftColor: A.ag.color },
+		"aria-pressed": following,
+		onClick: onFollow,
+		"data-agent": A.ag.key,
+		title: `${following ? "Following" : "Follow"} ${A.ag.name} — ${STATUS_TXT[st]}${A.file ? " " + A.file.name : ""} · ${A.edits.size} changed`,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "g",
+				style: { color: A.ag.color },
+				children: A.ag.glyph
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "nm",
+				children: clip(A.ag.short || A.ag.name, n)
+			}),
+			A.edits.size > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "n",
+				style: { color: A.ag.color },
+				children: A.edits.size
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "dot " + st,
+				"aria-hidden": "true"
+			})
+		]
+	});
+}
+function AgentRow({ p, A, subs, open, onToggle }) {
+	const M = p.M;
+	const st = A.status;
+	const f = A.file;
+	const following = p.followKey === A.ag.key;
+	const bk = A.blocked[A.blocked.length - 1];
+	const working = subs.filter((S) => !S.done).length;
+	const now = st === "blocked" && bk ? `⛔ tried ${bk.f ? dispName(M, bk.f) : bk.path}` : st === "done" ? "finished — back in the nest" : st === "planning" ? "planning (buds on the files it will touch)" : st === "thinking" ? working ? `in the nest — ${plural$2(working, "helper")} out working` : "in the nest, thinking" : A.ag.primary ? A.activity === "clarify" ? "waiting for your answer" : "waiting" : "editing on its own branch";
+	const binding = A.ag.primary ? p.tzones : p.tzones.filter((z) => z.type === "keep" && z.z.scope !== "worktree");
+	const zf = f && st !== "blocked" && st !== "done" ? zoneOfFile(f, binding) : null;
+	const changed = open ? [...A.edits.keys()].map((id) => M.files[id]).filter(Boolean).sort((a, b) => b.usedBy.length - a.usedBy.length || a.path.localeCompare(b.path)) : [];
+	const allEdits = new Set(A.edits.keys());
+	for (const S of subs) for (const id of S.edits.keys()) allEdits.add(id);
+	const byHelpers = allEdits.size - A.edits.size;
+	const area = (() => {
+		const by = /* @__PURE__ */ new Map();
+		for (const id of allEdits) {
+			const ff = M.files[id];
+			if (!ff || !ff.node) continue;
+			const k = ff.node.depth >= 1 ? ff.node.disp || ff.node.name : "root";
+			by.set(k, (by.get(k) || 0) + 1);
+		}
+		return [...by.entries()].sort((a, b) => b[1] - a[1]);
+	})();
+	const task = A.ag.primary ? p.primaryTask : "another session on this repo";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "ct-bix-row" + (following ? " following" : "") + (A.done ? " done" : ""),
+		style: { borderLeftColor: A.ag.color },
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ct-bix-main",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "ct-bix-follow",
+					"aria-pressed": following,
+					onClick: () => p.onFollow(A.ag.key),
+					"data-agent": A.ag.key,
+					title: following ? "Following — click again, pan, zoom or press Esc to stop" : "Click to follow this bird",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdIcon, { color: A.ag.color }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "nm",
+							style: { color: A.ag.color },
+							children: [
+								A.ag.glyph,
+								" ",
+								clip(A.ag.name, 18)
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ct-st " + st,
+							style: st === "editing" || st === "creating" ? { color: A.ag.color } : void 0,
+							children: following ? "following" : STATUS_TXT[st]
+						})
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "ct-bix-more",
+					"aria-expanded": open,
+					"aria-label": (open ? "Hide" : "Show") + " details for " + A.ag.name,
+					title: open ? "Less" : "Details · changed files ranked by what depends on them",
+					onClick: onToggle,
+					children: open ? "▾" : "▸"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ct-bix-now" + (zf ? " warn" : ""),
+				title: zf ? `${st === "reading" ? "Reading" : "Working"} ${zf.type === "keep" ? "inside ⛔ keep out" : "outside ✓ only here"} (${zf.z.label}) — ${st === "reading" ? "reads are fine, an edit here is blocked" : "the next edit here is blocked"}` : void 0,
+				children: f && st !== "blocked" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					zf ? "⚠ " : "",
+					st === "reading" ? "reading" : st === "creating" ? "creating" : "editing",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "ct-link",
+						onClick: () => p.onFile(f),
+						children: dispName(M, f)
+					}),
+					zf && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "zw",
+						children: zf.type === "keep" ? " · in ⛔ keep out" : " · outside ✓ only here"
+					})
+				] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: st === "blocked" ? "bad" : "",
+					children: now
+				})
+			}),
+			allEdits.size > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ct-bix-chg",
+				title: area.map(([k, n]) => `${k}: ${n}`).join("\n") + (byHelpers ? `\n${A.edits.size} by ${A.ag.name}, ${byHelpers} by its helpers` : ""),
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", {
+						style: { color: A.ag.color },
+						children: [allEdits.size, " changed"]
+					}),
+					byHelpers > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "hlp",
+						children: [
+							" (",
+							byHelpers,
+							" by helpers)"
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+						" ",
+						"· ",
+						area.slice(0, 2).map(([k, n]) => `${clip(k, 16)} ${n}`).join(", "),
+						area.length > 2 ? "…" : ""
+					] })
+				]
+			}),
+			subs.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "ct-bix-subs",
+				role: "list",
+				"aria-label": "Helpers of " + A.ag.name,
+				children: subs.map((S) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "ct-bix-sub" + (S.done ? " done" : "") + (p.followKey === S.ag.key ? " following" : ""),
+					"aria-pressed": p.followKey === S.ag.key,
+					onClick: () => p.onFollow(S.ag.key),
+					"data-agent": S.ag.key,
+					title: (p.followKey === S.ag.key ? "Following " : "Follow ") + S.ag.name,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "g",
+							style: { color: S.ag.color },
+							children: S.ag.glyph
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "nm",
+							children: clip(S.ag.short || S.ag.name, 20)
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "st " + S.status,
+							children: subLine(M, S)
+						}),
+						(helperWhere(M, S) || S.edits.size > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "wh",
+							children: [
+								helperWhere(M, S) && !S.done ? "in " + helperWhere(M, S) : "",
+								helperWhere(M, S) && !S.done && S.edits.size ? " · " : "",
+								S.edits.size ? `${S.edits.size} changed` : ""
+							]
+						})
+					]
+				}) }, S.ag.key))
+			}),
+			A.ag.primary && p.primaryExtra,
+			open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ct-bix-detail",
+				children: [
+					task && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "ct-agent-task",
+						children: task
+					}),
+					A.nest && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ct-agent-nest",
+						children: [
+							"nest:",
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "ct-link",
+								onClick: () => p.onNest(A),
+								children: A.nest === M.crown ? "trunk" : A.nest.path
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ct-agent-nums",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["read ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: A.reads.size })] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["planned ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: A.plan.size + A.planNew.length })] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "aff",
+								title: "files that import something this agent changed — click a changed file to light them",
+								children: ["could break ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: p.affects(A) })]
+							})
+						]
+					}),
+					changed.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", { children: "Changed · most depended-on first" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+						className: "ct-bix-files",
+						role: "list",
+						children: [changed.slice(0, 8).map((ff) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							onClick: () => p.onFile(ff),
+							title: `${ff.path}\n${ff.usedBy.length} files import it — click to light them`,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fn",
+								children: dispName(M, ff)
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "dep",
+								children: ff.usedBy.length ? ff.usedBy.length + " depend" : "—"
+							})]
+						}) }, ff.id)), changed.length > 8 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+							className: "ct-muted",
+							children: [
+								"+",
+								changed.length - 8,
+								" more in the Session panel"
+							]
+						})]
+					})] })
+				]
+			})
+		]
+	});
+}
+function Rules({ p }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ct-bix-rules",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { children: "Rules" }), !p.zones.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "ct-muted",
+			children: "none — ⛔ / ✓ on a changed folder below, or the toolbar's ⛔ Keep out / ✓ Only here"
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: p.zones.map((z) => {
+			const g = isGreen(z);
+			const drawn = p.tzones.some((t) => t.z.id === z.id);
+			const full = z.name || z.pattern.replace(/^\/+/, "").replace(/\/(\*\*)?$/, "");
+			const nb = z.waived ? 0 : nBlocked(p.agents, z);
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+				className: "ct-rule " + (g ? "only" : "keep") + (z.waived ? " waived" : ""),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "ct-rule-go",
+					onClick: () => p.onGoZone(z),
+					disabled: !drawn,
+					title: (drawn ? "Zoom there — " : "Matches no file on the tree yet — ") + z.pattern + (z.note ? "\n" + z.note : ""),
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sw",
+							"aria-hidden": "true",
+							children: g ? "✓" : "⛔"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "tx",
+							title: full,
+							children: z.name || tailPath(full)
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: z.waived ? "allowed here" : z.scope === "worktree" ? "this worktree" : "whole repo" }),
+						nb > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", {
+							className: "nb",
+							children: blockedTxt(nb)
+						})
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "ct-x",
+					"aria-label": "Remove rule " + (z.name || z.pattern),
+					title: "Remove this rule",
+					disabled: p.zoneBusy === z.id,
+					onClick: () => p.onRemoveZone(z),
+					children: "×"
+				})]
+			}, z.id);
+		}) })]
+	});
+}
+function Changes({ p, sum, riskOpen, onRisk }) {
+	const M = p.M;
+	if (!sum.total) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ct-bix-changes",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { children: "Changes" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "ct-muted",
+			children: "No changes yet."
+		})]
+	});
+	const risk = sum.ranked[0];
+	const maxDep = Math.max(1, risk ? risk.usedBy.length : 1);
+	const live = p.tzones.filter((t) => !t.waived && t.node);
+	const hasOnly = live.some((t) => t.type === "only");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ct-bix-changes",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ct-bix-chead",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: [
+					"Changes",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "ct-bix-total",
+						title: "Changed files on this repo, all sessions (each file counted once)",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: sum.total }), " in all"]
+					})
+				] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "ct-bix-risk-tog" + (riskOpen ? " on" : ""),
+					"aria-pressed": riskOpen,
+					title: riskOpen ? "Showing on the map: the folders whose files import a changed file (gold, counted) — click to hide" : "What could break: show on the map which folders import the changed files, and rank the changed files",
+					onClick: onRisk,
+					children: "⚠ Could break"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ct-bix-sum ct-bix-split",
+				title: "This session = the pane header's file count (its branch, helpers included)",
+				children: [
+					"this session ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: sum.mine }),
+					" + other sessions ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: sum.others })
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ct-bix-sum",
+				children: sum.tops.map(([k, n], i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+					i ? " · " : "",
+					clip(k, 18),
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: n })
+				] }, k))
+			}),
+			risk && risk.usedBy.length > 0 && !riskOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "ct-bix-atrisk" + (p.riskFile === risk.id ? " on" : ""),
+				"aria-pressed": p.riskFile === risk.id,
+				onClick: () => p.onRiskFile ? p.onRiskFile(risk) : p.onFile(risk),
+				title: p.riskFile === risk.id ? `${risk.path}\nOn the map: the folders holding the ${risk.usedBy.length} files that import it — click to clear` : `${risk.path}\nclick to show on the map which folders hold the ${risk.usedBy.length} files that import it`,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "k",
+					children: [
+						"Most at risk · ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: risk.usedBy.length }),
+						" import it"
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "v fn",
+					children: dispName(M, risk)
+				})]
+			}),
+			riskOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
+				className: "ct-bix-ranked",
+				"aria-label": "Changed files by how many files import them",
+				children: [sum.ranked.slice(0, 10).map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: p.riskFile === f.id ? "on" : "",
+					"aria-pressed": p.riskFile === f.id,
+					onClick: () => p.onRiskFile ? p.onRiskFile(f) : p.onFile(f),
+					title: `${f.path}\n${f.usedBy.length} files import it — ${p.riskFile === f.id ? "click to show every changed file's again" : "click to show only its dependents on the map"}`,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fn",
+							children: dispName(M, f)
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "bar",
+							"aria-hidden": "true",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { width: Math.max(2, Math.round(100 * f.usedBy.length / maxDep)) + "%" } })
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "dep",
+							children: f.usedBy.length
+						})
+					]
+				}) }, f.id)), sum.ranked.length > 10 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "ct-muted",
+					children: [
+						"+",
+						sum.ranked.length - 10,
+						" more"
+					]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ct-bix-fcap",
+				"aria-hidden": "true",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "folders" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "k",
+						children: "⛔ keep out"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "o",
+						children: "✓ only here"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "ct-bix-folders",
+				role: "list",
+				"aria-label": "Changed folders",
+				children: sum.folders.map((cf) => {
+					const n = cf.n;
+					const keep = live.find((t) => t.type === "keep" && isUnder(n, t.node)) || null;
+					const only = live.find((t) => t.type === "only" && isUnder(n, t.node)) || null;
+					const otherWt = hasOnly && !only && cf.mine === 0;
+					const exempt = hasOnly && !only && !otherWt;
+					const canPaint = n.depth >= 1;
+					const zoneBtn = (kind, t) => {
+						const sign = kind === "keep" ? "⛔" : "✓";
+						const what = kind === "keep" ? "Keep out" : "Only here";
+						const exact = !!t && t.node === n;
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "ct-bix-zb " + kind + (t ? " on" : ""),
+							"aria-pressed": !!t,
+							"aria-label": (exact ? "Remove " + what + " on " : t ? what + " already covers " : what + " on ") + cf.label,
+							title: exact ? `${sign} ${what} is on here — click to remove it` : t ? `${sign} inside ${what.toLowerCase()} · ${t.label}` : kind === "keep" ? `⛔ Keep agents out of ${cf.label}` : `✓ Agents may edit only in ${cf.label}`,
+							disabled: !canPaint || !!t && !exact || exact && p.zoneBusy === t.z.id,
+							onClick: () => exact ? p.onRemoveZone(t.z) : p.onPaint(kind, n),
+							children: sign
+						});
+					};
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: "ct-bix-folder" + (keep ? " keep" : "") + (only ? " only" : "") + (exempt ? " exempt" : "") + (otherWt ? " other" : ""),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "ct-bix-fl1",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									className: "ct-bix-fname",
+									onClick: () => p.onFolder(n),
+									title: `${n.path || cf.label} — show it on the tree`,
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "dots",
+											"aria-hidden": "true",
+											children: cf.cols.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { style: { background: c } }, c))
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "nm",
+											children: cf.label
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "cnt",
+											children: ["✎", cf.files.length]
+										})
+									]
+								}),
+								zoneBtn("keep", keep),
+								zoneBtn("only", only)
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "ct-bix-fl2",
+							children: keep ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "keep",
+								children: "⛔ kept out · agents may only read"
+							}) : otherWt ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "other",
+								title: "✓ Only here binds this session's worktree; the other session edits in its own worktree",
+								children: "other worktree · not affected"
+							}) : exempt ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "exempt",
+								title: "Outside ✓ only here, but changed before it was set: kept exempt, so these files may still be edited",
+								children: "already changed · exempt from ✓"
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [cf.files.slice(0, 2).map((f) => dispName(M, f)).join(", "), cf.files.length > 2 ? ` +${cf.files.length - 2}` : ""] })
+						})]
+					}, n.id + ":" + cf.label);
+				})
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/grid/codemap/treeCtl.ts
+var FOLLOW_Z = 2.6;
+var MEMORY = /* @__PURE__ */ new Map();
+var TreeCtl = class {
+	host;
+	title;
+	cb;
+	cv;
+	mini = null;
+	v = null;
+	M = null;
+	camT = {
+		x: 0,
+		y: 0,
+		z: 1
+	};
+	fly = null;
+	hist = [];
+	info = null;
+	tip = null;
+	insets = {
+		top: 8,
+		bot: 8,
+		left: 8,
+		right: 8
+	};
+	cardInset = 0;
+	zoomedIn = false;
+	active = false;
+	dirty = true;
+	raf = 0;
+	lastNow = 0;
+	lastBob = 0;
+	needPick = false;
+	mouse = null;
+	clickAt = null;
+	drag = null;
+	lastTap = 0;
+	lastWheel = 0;
+	P = null;
+	ro = null;
+	mo = null;
+	off = [];
+	agents = [];
+	zones = [];
+	reducedMotion = false;
+	followFrom = null;
+	constructor(cv, host, title, cb) {
+		this.host = host;
+		this.title = title;
+		this.cb = cb;
+		this.cv = cv;
+		const on = (el, ev, fn, opt) => {
+			el.addEventListener(ev, fn, opt);
+			this.off.push(() => el.removeEventListener(ev, fn, opt));
+		};
+		on(cv, "pointerdown", (e) => this.onDown(e));
+		on(cv, "pointermove", (e) => this.onMove(e));
+		on(cv, "pointerup", (e) => this.onUp(e));
+		on(cv, "pointercancel", () => {
+			this.drag = null;
+			cv.classList.remove("dragging");
+		});
+		on(cv, "pointerleave", () => {
+			this.mouse = null;
+			if (this.v) {
+				this.v.hover = null;
+				this.v.hoverBlast = null;
+			}
+			this.setTip(null);
+			this.dirty = true;
+		});
+		on(cv, "dblclick", (e) => this.onDbl(e));
+		on(cv, "wheel", (e) => this.onWheel(e), { passive: false });
+		this.ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => this.resize()) : null;
+		this.ro?.observe(host);
+		this.mo = new MutationObserver(() => this.retheme());
+		this.mo.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: [
+				"class",
+				"data-accent",
+				"data-surface",
+				"style"
+			]
+		});
+		const vis = () => {
+			if (!document.hidden) this.kick();
+		};
+		document.addEventListener("visibilitychange", vis);
+		this.off.push(() => document.removeEventListener("visibilitychange", vis));
+	}
+	destroy() {
+		this.active = false;
+		cancelAnimationFrame(this.raf);
+		this.ro?.disconnect();
+		this.mo?.disconnect();
+		for (const f of this.off) f();
+		this.remember();
+	}
+	remember() {
+		if (!this.M || !this.v) return;
+		MEMORY.set(this.title, {
+			cam: { ...this.camT },
+			hist: this.hist.slice(),
+			folded: [...this.v.folded].map((n) => n.path),
+			model: this.M
+		});
+		while (MEMORY.size > 16) MEMORY.delete(MEMORY.keys().next().value);
+	}
+	setModel(M) {
+		if (this.M === M) return;
+		const first = !this.M;
+		const prevCam = this.v ? { ...this.camT } : null;
+		if (!M.geom) {
+			prepGeometry(M);
+			M.geom = true;
+		}
+		this.M = M;
+		const g = this.cv.getContext("2d");
+		this.P = this.P || readPalette(this.host);
+		const mem = MEMORY.get(this.title);
+		const folded = /* @__PURE__ */ new Set();
+		for (const p of (this.v ? [...this.v.folded].map((n) => n.path) : mem?.folded) || []) {
+			const n = M.nodeOf.get(p);
+			if (n) folded.add(n);
+		}
+		this.v = {
+			g,
+			M,
+			P: this.P,
+			agents: this.agents,
+			W: this.v?.W || 1,
+			H: this.v?.H || 1,
+			dpr: this.v?.dpr || 1,
+			cam: {
+				x: 0,
+				y: 0,
+				z: 1
+			},
+			zones: this.zones,
+			folded,
+			tool: this.v?.tool || "explore",
+			t: performance.now() / 1e3,
+			playing: !this.reducedMotion,
+			reducedMotion: this.reducedMotion,
+			hover: null,
+			sel: null,
+			infoNode: null,
+			infoFile: null,
+			pinBlast: null,
+			hoverBlast: null,
+			pulse: null,
+			follow: this.v?.follow ?? null,
+			markLeaf: null,
+			blastCache: /* @__PURE__ */ new Map(),
+			hudRects: this.v?.hudRects || [],
+			free: this.v?.free || {
+				x0: 0,
+				y0: 0,
+				x1: 1,
+				y1: 1
+			},
+			fitZv: 0,
+			riskAll: this.v?.riskAll || false,
+			riskFile: null
+		};
+		this.resize();
+		if (prevCam) this.setCam(prevCam);
+		else if (mem && mem.model === M) {
+			this.setCam(mem.cam);
+			this.hist = mem.hist;
+		} else if (mem) this.setCam(mem.cam);
+		else this.fitAll(true);
+		if (this.info) {
+			const i = this.info;
+			if (i.kind === "file") {
+				const f = M.byPath.get(i.f.path);
+				this.info = f ? {
+					kind: "file",
+					f
+				} : null;
+			} else if (i.kind === "node") {
+				const n = i.n.kind === "pile" ? M.piles.find((p) => p.path === i.n.path) : (i.n.kind === "root" ? M.rootNodeOf : M.nodeOf).get(i.n.path);
+				this.info = n ? {
+					kind: "node",
+					n
+				} : null;
+			} else this.info = null;
+			this.syncSel();
+		}
+		if (first) this.kick();
+		this.dirty = true;
+		this.cb.changed();
+	}
+	setLive(agents, zones) {
+		this.agents = agents;
+		this.zones = zones;
+		if (this.v) {
+			this.v.agents = agents;
+			this.v.zones = zones;
+			if (this.v.follow != null && !agents.some((A) => A.ag.key === this.v.follow)) this.stopFollow();
+		}
+		this.dirty = true;
+		this.kick();
+	}
+	setActive(a) {
+		this.active = a;
+		if (a) {
+			this.retheme();
+			this.kick();
+		} else this.remember();
+	}
+	setReducedMotion(r) {
+		this.reducedMotion = r;
+		if (this.v) {
+			this.v.reducedMotion = r;
+			this.v.playing = !r;
+		}
+		this.dirty = true;
+	}
+	retheme() {
+		const P = readPalette(this.host);
+		if (this.P && P.key === this.P.key) return;
+		this.P = P;
+		if (this.v) {
+			this.v.P = P;
+			invalidateStatic(this.v);
+			if (this.mini) buildMini(this.v, this.mini);
+		}
+		this.dirty = true;
+		this.kick();
+	}
+	setHud(rects, insets) {
+		this.insets = insets;
+		if (!this.v) return;
+		this.v.hudRects = rects;
+		this.v.free = {
+			x0: insets.left,
+			y0: insets.top,
+			x1: this.v.W - insets.right,
+			y1: this.v.H - insets.bot
+		};
+		this.v.fitZv = this.fitZ();
+		this.dirty = true;
+		this.kick();
+	}
+	setMini(c) {
+		this.mini = c;
+		if (c && this.v) buildMini(this.v, c);
+		this.dirty = true;
+	}
+	resize() {
+		const v = this.v;
+		const r = this.host.getBoundingClientRect();
+		const W = Math.max(1, Math.round(r.width)), H = Math.max(1, Math.round(r.height));
+		const dpr = Math.min(2, window.devicePixelRatio || 1);
+		if (this.cv.width !== Math.round(W * dpr) || this.cv.height !== Math.round(H * dpr)) {
+			this.cv.width = Math.round(W * dpr);
+			this.cv.height = Math.round(H * dpr);
+		}
+		if (v) {
+			const was = v.W;
+			v.W = W;
+			v.H = H;
+			v.dpr = dpr;
+			v.free = {
+				x0: this.insets.left,
+				y0: this.insets.top,
+				x1: W - this.insets.right,
+				y1: H - this.insets.bot
+			};
+			v.fitZv = this.fitZ();
+			if (was <= 1 && this.M) this.fitAll(true);
+			if (this.mini) buildMini(v, this.mini);
+		}
+		this.dirty = true;
+		this.kick();
+	}
+	screenToWorld(sx, sy, cam) {
+		const v = this.v;
+		const c = cam || v.cam;
+		return [(sx - v.W / 2) / c.z + c.x, (sy - v.H / 2) / c.z + c.y];
+	}
+	setCam(c) {
+		if (!this.v) return;
+		this.v.cam = { ...c };
+		this.camT = { ...c };
+		this.fly = null;
+	}
+	fitBox(x0, y0, x1, y1, pad = .86, ignoreCard = false) {
+		const v = this.v;
+		const I = { ...this.insets };
+		if (!ignoreCard) I.right += this.cardInset;
+		const w = Math.max(40, v.W - I.left - I.right), h = Math.max(40, v.H - I.top - I.bot);
+		const z = Math.min(w * pad / Math.max(1, x1 - x0), h * pad / Math.max(1, y1 - y0));
+		return {
+			x: (x0 + x1) / 2 - (I.left - I.right) / 2 / z,
+			y: (y0 + y1) / 2 - (I.top - I.bot) / 2 / z,
+			z
+		};
+	}
+	fitZ() {
+		const B = this.M.bounds;
+		return this.fitBox(B.x0, B.y0, B.x1, B.y1, .94, true).z;
+	}
+	fitAll(instant = false) {
+		if (!this.M || !this.v) return;
+		const B = this.M.bounds;
+		const c = this.fitBox(B.x0, B.y0, B.x1, B.y1, .94, true);
+		this.v.fitZv = c.z;
+		if (instant) this.setCam(c);
+		else this.flyTo(c);
+	}
+	wholeTree() {
+		this.pushHist();
+		this.stopFollow(true);
+		this.closeInfo();
+		this.fitAll(false);
+	}
+	pushHist() {
+		if (!this.v) return;
+		const c = this.fly ? this.v.cam : this.camT, L = this.hist[this.hist.length - 1];
+		if (L && Math.abs(Math.log(L.z / c.z)) < .02 && Math.hypot(L.x - c.x, L.y - c.y) * c.z < 4) return;
+		this.hist.push({ ...c });
+		if (this.hist.length > 30) this.hist.shift();
+		this.cb.changed();
+	}
+	goBack() {
+		const c = this.hist.pop();
+		this.cb.changed();
+		if (!c) return;
+		this.stopFollow(true);
+		this.flyTo(c, 600);
+	}
+	flyTo(c, dur = 850) {
+		if (!this.v) return;
+		if (this.reducedMotion) {
+			this.setCam(c);
+			this.dirty = true;
+			this.kick();
+			return;
+		}
+		this.fly = {
+			a: { ...this.v.cam },
+			b: c,
+			t0: performance.now(),
+			dur
+		};
+		this.camT = { ...c };
+		this.dirty = true;
+		this.kick();
+	}
+	navTo(c, dur) {
+		this.pushHist();
+		this.stopFollow(true);
+		this.flyTo(c, dur);
+	}
+	nodeInView(n) {
+		const v = this.v;
+		if (!v || !n.cnt) return false;
+		const f = v.free;
+		const toS = (x, y) => [(x - v.cam.x) * v.cam.z + v.W / 2, (y - v.cam.y) * v.cam.z + v.H / 2];
+		const [x0, y0] = toS(n.bx0, n.by0), [x1, y1] = toS(n.bx1, n.by1);
+		return x0 > f.x0 && x1 < f.x1 && y0 > f.y0 && y1 < f.y1;
+	}
+	flyToNode(n, pad) {
+		const v = this.v, M = this.M;
+		if (!v || !M) return;
+		if (n.kind === "pile") {
+			const c = this.fitBox(n.cx - (n.pw || 30), M.groundY - (n.h || 10) * 3, n.cx + (n.pw || 30), M.groundY + (n.h || 10), .7);
+			this.navTo(c);
+			v.pulse = {
+				x: n.cx,
+				y: M.groundY - (n.h || 10) * .5,
+				r: (n.pw || 30) * .6,
+				t0: performance.now()
+			};
+			return;
+		}
+		if (n.depth === 0) {
+			this.pushHist();
+			this.stopFollow(true);
+			this.fitAll(false);
+			return;
+		}
+		const c = this.fitBox(n.bx0 - S0 * 2, n.by0 - S0 * 2, n.bx1 + S0 * 2, n.by1 + S0 * 2, pad || .7);
+		c.z = Math.min(c.z, 4.2);
+		this.navTo(c);
+		v.pulse = {
+			x: n.cx,
+			y: n.cy,
+			r: n.rad,
+			t0: performance.now() + 500
+		};
+	}
+	flyToLeaf(l, z) {
+		const v = this.v;
+		if (!v) return;
+		const zz = z || Math.max(v.cam.z, 2.6);
+		const I = {
+			...this.insets,
+			right: this.insets.right + this.cardInset
+		};
+		this.navTo({
+			x: l.x - (I.left - I.right) / 2 / zz,
+			y: l.y - (I.top - I.bot) / 2 / zz,
+			z: zz
+		});
+		v.pulse = {
+			x: l.x,
+			y: l.y,
+			r: l.len,
+			t0: performance.now() + 600
+		};
+	}
+	clampZ(z) {
+		return Math.max(this.fitZ() * .85, Math.min(7, z));
+	}
+	zoomAt(sx, sy, factor) {
+		const v = this.v;
+		if (!v) return;
+		const base = this.fly ? v.cam : this.camT;
+		this.fly = null;
+		this.stopFollow(true);
+		const [wx, wy] = this.screenToWorld(sx, sy, base);
+		const z = this.clampZ(base.z * factor);
+		this.camT = {
+			x: wx - (sx - v.W / 2) / z,
+			y: wy - (sy - v.H / 2) / z,
+			z
+		};
+		if (this.reducedMotion) v.cam = { ...this.camT };
+		this.dirty = true;
+		this.needPick = true;
+		this.kick();
+	}
+	panBy(dx, dy) {
+		const v = this.v;
+		if (!v) return;
+		const base = this.fly ? v.cam : this.camT;
+		this.fly = null;
+		this.camT = {
+			x: base.x + dx / base.z,
+			y: base.y + dy / base.z,
+			z: base.z
+		};
+		if (this.reducedMotion) v.cam = { ...this.camT };
+		this.stopFollow(true);
+		this.dirty = true;
+		this.needPick = true;
+		this.kick();
+	}
+	stepCamera(now, dt) {
+		const v = this.v;
+		const fp = v.follow != null ? this.birdAt(v.follow) : null;
+		if (this.fly && fp) {
+			const b = this.followCam(fp, this.fly.b.z);
+			this.fly.b.x = b.x;
+			this.fly.b.y = b.y;
+		}
+		if (this.fly) {
+			const k = Math.min(1, (now - this.fly.t0) / this.fly.dur), e = k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+			const a = this.fly.a, b = this.fly.b;
+			const lz = Math.log(a.z) + (Math.log(b.z) - Math.log(a.z)) * e;
+			const d = Math.hypot(b.x - a.x, b.y - a.y) * Math.min(a.z, b.z) / Math.max(v.W, 1);
+			const dip = Math.min(.9, d * .5) * Math.sin(Math.PI * e);
+			v.cam = {
+				x: a.x + (b.x - a.x) * e,
+				y: a.y + (b.y - a.y) * e,
+				z: Math.exp(lz - dip)
+			};
+			if (k >= 1) {
+				this.fly = null;
+				v.cam = { ...b };
+				this.camT = { ...b };
+			}
+			this.dirty = true;
+			this.needPick = true;
+			return;
+		}
+		if (fp) {
+			const b = this.followCam(fp, this.camT.z);
+			this.camT.x = b.x;
+			this.camT.y = b.y;
+			if (this.reducedMotion) v.cam = { ...this.camT };
+		}
+		const c = v.cam, T = this.camT, k = 1 - Math.exp(-dt * .016);
+		const dz = Math.log(T.z) - Math.log(c.z);
+		if (Math.abs(dz) > 1e-4 || Math.abs(T.x - c.x) * c.z > .05 || Math.abs(T.y - c.y) * c.z > .05) {
+			c.z = Math.exp(Math.log(c.z) + dz * k);
+			c.x += (T.x - c.x) * k;
+			c.y += (T.y - c.y) * k;
+			this.dirty = true;
+			this.needPick = true;
+		} else if (c.x !== T.x || c.y !== T.y || c.z !== T.z) {
+			c.x = T.x;
+			c.y = T.y;
+			c.z = T.z;
+			this.dirty = true;
+			this.needPick = true;
+		}
+	}
+	local(e) {
+		const r = this.cv.getBoundingClientRect();
+		return [e.clientX - r.left, e.clientY - r.top];
+	}
+	onDown(e) {
+		if (!this.v) return;
+		try {
+			this.cv.setPointerCapture(e.pointerId);
+		} catch {}
+		const [x, y] = this.local(e);
+		this.drag = {
+			x,
+			y,
+			cx: this.v.cam.x,
+			cy: this.v.cam.y,
+			moved: false,
+			id: e.pointerId
+		};
+	}
+	onMove(e) {
+		const v = this.v;
+		if (!v) return;
+		const [x, y] = this.local(e);
+		const d = this.drag;
+		if (d && d.id === e.pointerId) {
+			const dx = x - d.x, dy = y - d.y;
+			if (!d.moved && Math.hypot(dx, dy) > 4) {
+				this.pushHist();
+				d.moved = true;
+				this.cv.classList.add("dragging");
+				this.fly = null;
+				this.stopFollow(true);
+				this.setTip(null);
+			}
+			if (d.moved) {
+				v.cam.x = d.cx - dx / v.cam.z;
+				v.cam.y = d.cy - dy / v.cam.z;
+				this.camT = { ...v.cam };
+				this.dirty = true;
+				this.kick();
+			}
+			return;
+		}
+		if (this.clickAt && Math.hypot(x - this.clickAt[0], y - this.clickAt[1]) < 6) return;
+		this.clickAt = null;
+		this.mouse = [x, y];
+		this.needPick = true;
+		this.dirty = true;
+		this.kick();
+	}
+	onUp(e) {
+		const d = this.drag;
+		if (!d) return;
+		this.drag = null;
+		this.cv.classList.remove("dragging");
+		const [x, y] = this.local(e);
+		if (d.moved) {
+			this.mouse = [x, y];
+			this.needPick = true;
+			return;
+		}
+		const now = performance.now();
+		if (e.pointerType !== "mouse" && now - this.lastTap < 300) {
+			this.zoomAt(x, y, 2.2);
+			this.lastTap = 0;
+			return;
+		}
+		this.lastTap = now;
+		this.onClick(x, y, e.shiftKey);
+		this.clickAt = [x, y];
+		this.setTip(null);
+		if (this.v) {
+			this.v.hover = null;
+			this.v.hoverBlast = null;
+		}
+		this.dirty = true;
+		this.kick();
+	}
+	onDbl(e) {
+		const v = this.v;
+		if (!v) return;
+		const [x, y] = this.local(e);
+		const hit = pick(v, x, y);
+		if (v.tool !== "explore") return;
+		const n = hit && (hitNode(hit) || (hit.nest ? hit.nest.nest : null));
+		if (n && n.cnt) {
+			if (v.folded.has(n)) this.toggleFold(n);
+			this.flyToNode(n, .8);
+			return;
+		}
+		if (hit && hit.leaf) {
+			this.flyToLeaf(hit.leaf, Math.min(7, Math.max(v.cam.z * 2, 3.2)));
+			return;
+		}
+		this.pushHist();
+		this.zoomAt(x, y, 2.2);
+	}
+	onWheel(e) {
+		if (!this.v) return;
+		e.preventDefault();
+		const [x, y] = this.local(e);
+		const dy = e.deltaMode === 1 ? e.deltaY * 18 : e.deltaY, dx = e.deltaMode === 1 ? e.deltaX * 18 : e.deltaX;
+		if (e.shiftKey || !e.ctrlKey && Math.abs(dx) > Math.abs(dy)) {
+			this.panBy(e.shiftKey ? dy || dx : dx, e.shiftKey ? 0 : dy);
+			return;
+		}
+		const f = Math.max(1 / 1.35, Math.min(1.35, Math.exp(-dy * .0014)));
+		const tw = performance.now();
+		if (tw - this.lastWheel > 700) this.pushHist();
+		this.lastWheel = tw;
+		this.zoomAt(x, y, f);
+	}
+	key(e) {
+		const v = this.v;
+		if (!v) return false;
+		const k = e.key;
+		if (k === "Escape") {
+			this.setTip(null);
+			v.hover = null;
+			if (v.tool !== "explore") this.setTool("explore");
+			else if (v.follow != null) this.stopFollow(true, true);
+			else if (this.info || v.sel) this.closeInfo();
+			else if (v.riskFile != null) this.focusRisk(null);
+			else if (v.markLeaf) v.markLeaf = null;
+			else return false;
+		} else if (k === "+" || k === "=") this.zoomAt(v.W / 2, v.H / 2, 1.5);
+		else if (k === "-") this.zoomAt(v.W / 2, v.H / 2, 1 / 1.5);
+		else if (k === "0" || k === "Home") this.wholeTree();
+		else if (k === "Backspace" && this.hist.length) this.goBack();
+		else if (k === "ArrowLeft") this.panBy(-60, 0);
+		else if (k === "ArrowRight") this.panBy(60, 0);
+		else if (k === "ArrowUp") this.panBy(0, -60);
+		else if (k === "ArrowDown") this.panBy(0, 60);
+		else return false;
+		this.dirty = true;
+		this.kick();
+		return true;
+	}
+	onClick(sx, sy, shift) {
+		const v = this.v, M = this.M;
+		if (!v || !M) return;
+		const hit = pick(v, sx, sy);
+		if (v.tool !== "explore") {
+			if (!hit) return;
+			const tool = v.tool;
+			if (hit.tag) {
+				this.cb.removeZone(hit.tag);
+				if (!shift) this.setTool("explore");
+				return;
+			}
+			let target = null;
+			if (hit.leaf) target = { file: hit.leaf.file };
+			else if (hit.nest) target = hit.nest.nest ? { node: hit.nest.nest } : null;
+			else if (hit.bird) {
+				const f = hit.bird.file;
+				target = f ? S0 * v.cam.z >= 24 ? { file: f } : { node: f.node } : null;
+			} else if (hit.badge) target = { node: hit.badge.node };
+			else if (hit.trunk) {
+				this.cb.note("Paint a branch, not the trunk — the whole repo cannot be fenced");
+				return;
+			} else {
+				const n = hitNode(hit);
+				target = n ? { node: n } : null;
+			}
+			if (!target) {
+				this.cb.note("Click a folder name, a branch or a leaf");
+				return;
+			}
+			this.cb.paint(tool, target);
+			if (!shift) this.setTool("explore");
+			return;
+		}
+		if (!hit) {
+			if (v.sel || this.info) this.closeInfo();
+			return;
+		}
+		if (hit.tag) {
+			if (hit.tag.node) this.selectNode(hit.tag.node);
+			else if (hit.tag.file != null && M.files[hit.tag.file].leaf) this.selectLeaf(M.files[hit.tag.file].leaf);
+			return;
+		}
+		if (hit.bird) {
+			this.toggleFollow(hit.bird.ag.key);
+			return;
+		}
+		if (hit.nest) {
+			if (hit.nest.nest) this.selectNode(hit.nest.nest);
+			return;
+		}
+		if (hit.badge) {
+			this.openBlast(hit.badge);
+			return;
+		}
+		if (hit.leaf) {
+			this.selectLeaf(hit.leaf);
+			return;
+		}
+		if (hit.trunk) {
+			this.selectNode(M.crown);
+			return;
+		}
+		const n = hitNode(hit);
+		if (!n) {
+			if (hit.branch) this.selectNode(M.crown);
+			return;
+		}
+		if (hit.clump) {
+			if (v.folded.has(n)) {
+				this.toggleFold(n);
+				return;
+			}
+			this.selectNode(n);
+			this.flyToNode(n);
+			return;
+		}
+		if (hit.pile) {
+			this.selectNode(n);
+			this.flyToNode(n);
+			return;
+		}
+		this.selectNode(n);
+	}
+	syncSel() {
+		const v = this.v;
+		if (!v) return;
+		const i = this.info;
+		v.infoFile = i && i.kind === "file" ? i.f : null;
+		v.infoNode = i && i.kind === "node" ? i.n : null;
+		if (i && i.kind === "file" && i.f.leaf) {
+			v.sel = {
+				leaf: i.f.leaf,
+				fid: i.f.id
+			};
+			v.markLeaf = i.f.leaf;
+		} else if (i && i.kind === "node") v.sel = { node: i.n };
+		else v.sel = null;
+	}
+	selectLeaf(l, fly = false) {
+		if (!this.v) return;
+		if (!(this.info && this.info.kind === "file" && this.info.f === l.file)) this.v.pinBlast = null;
+		this.info = {
+			kind: "file",
+			f: l.file
+		};
+		this.syncSel();
+		if (fly) this.flyToLeaf(l);
+		this.dirty = true;
+		this.cb.changed();
+	}
+	selectFile(path, fly = true, zoom) {
+		const f = this.M?.byPath.get(path);
+		if (!f || !f.leaf || !this.v) return false;
+		for (let n = f.node; n; n = n.parent) this.v.folded.delete(n);
+		this.selectLeaf(f.leaf, false);
+		if (fly) this.flyToLeaf(f.leaf, zoom || Math.max(3.2, Math.min(5, this.v.cam.z)));
+		return true;
+	}
+	selectNode(n) {
+		if (!this.v) return;
+		this.v.pinBlast = null;
+		this.info = {
+			kind: "node",
+			n
+		};
+		this.syncSel();
+		this.dirty = true;
+		this.cb.changed();
+	}
+	selectFolder(path) {
+		const M = this.M;
+		if (!M || !this.v) return false;
+		let n = M.nodeOf.get(path) || null;
+		if (!n) {
+			let d = path;
+			while (d && !M.nodeOf.has(d)) d = d.includes("/") ? d.slice(0, d.lastIndexOf("/")) : "";
+			n = d ? M.nodeOf.get(d) : null;
+		}
+		if (!n) return false;
+		for (let q = n; q; q = q.parent) this.v.folded.delete(q);
+		this.selectNode(n);
+		this.flyToNode(n, .8);
+		return true;
+	}
+	openBlast(bd) {
+		const v = this.v, M = this.M;
+		if (!v || !M) return;
+		this.info = {
+			kind: "blast",
+			bd
+		};
+		this.syncSel();
+		v.pinBlast = null;
+		this.frameIds([...bd.ids]);
+		this.dirty = true;
+		this.cb.changed();
+	}
+	frameIds(ids) {
+		const M = this.M;
+		if (!M) return;
+		let x0 = 0xde0b6b3a7640000, y0 = 0xde0b6b3a7640000, x1 = -0xde0b6b3a7640000, y1 = -0xde0b6b3a7640000;
+		for (const id of ids) {
+			const l = M.files[id]?.leaf;
+			if (!l) continue;
+			x0 = Math.min(x0, l.x);
+			y0 = Math.min(y0, l.y);
+			x1 = Math.max(x1, l.x);
+			y1 = Math.max(y1, l.y);
+		}
+		if (x0 > x1) return;
+		const c = this.fitBox(x0 - S0 * 3, y0 - S0 * 3, x1 + S0 * 3, y1 + S0 * 3, .85);
+		c.z = Math.min(c.z, 4.5);
+		this.navTo(c);
+	}
+	togglePinBlast(f) {
+		const v = this.v, M = this.M;
+		if (!v || !M) return;
+		v.pinBlast = v.pinBlast === f.id ? null : f.id;
+		if (v.pinBlast != null && f.leaf) this.frameIds([f.id, ...blastOf(M, f.id).h1]);
+		this.dirty = true;
+		this.cb.changed();
+	}
+	setRiskAll(on) {
+		const v = this.v;
+		if (!v || !!v.riskAll === on) return;
+		v.riskAll = on;
+		if (!on) v.riskFile = null;
+		this.dirty = true;
+		this.kick();
+		this.cb.changed();
+	}
+	focusRisk(fid) {
+		const v = this.v;
+		if (!v) return;
+		v.riskFile = v.riskFile === fid ? null : fid;
+		this.dirty = true;
+		this.kick();
+		this.cb.changed();
+	}
+	closeInfo() {
+		const v = this.v;
+		this.info = null;
+		if (v) {
+			v.sel = null;
+			v.infoFile = null;
+			v.infoNode = null;
+			v.pinBlast = null;
+		}
+		this.dirty = true;
+		this.cb.changed();
+	}
+	toggleFold(n) {
+		const v = this.v;
+		if (!v) return;
+		if (v.folded.has(n)) v.folded.delete(n);
+		else v.folded.add(n);
+		this.dirty = true;
+		this.cb.changed();
+	}
+	setTool(t) {
+		const v = this.v;
+		if (!v) return;
+		v.tool = v.tool === t && t !== "explore" ? "explore" : t;
+		this.cv.classList.toggle("tool-keep", v.tool === "keep");
+		this.cv.classList.toggle("tool-only", v.tool === "only");
+		this.needPick = true;
+		this.dirty = true;
+		this.cb.changed();
+		this.kick();
+	}
+	birdAt(key) {
+		const v = this.v;
+		if (!v) return null;
+		const p = v.birdWorld && v.birdWorld[key];
+		if (p) return p;
+		const A = v.agents.find((a) => a.ag.key === key);
+		return A ? birdWorldAt(v, A, performance.now() / 1e3) : null;
+	}
+	followCam(p, z) {
+		const I = {
+			...this.insets,
+			right: this.insets.right + (this.info ? this.cardInset : 0)
+		};
+		return {
+			x: p[0] - (I.left - I.right) / 2 / z,
+			y: p[1] - (I.top - I.bot) / 2 / z,
+			z
+		};
+	}
+	toggleFollow(key) {
+		const v = this.v;
+		if (!v) return;
+		if (v.follow === key) {
+			this.stopFollow(false, true);
+			return;
+		}
+		this.pushHist();
+		if (this.info && this.info.kind !== "node") this.closeInfo();
+		if (v.follow == null) this.followFrom = { ...this.fly ? v.cam : this.camT };
+		v.follow = key;
+		const from = this.fly ? v.cam : this.camT;
+		const z = Math.min(7, Math.max(from.z, FOLLOW_Z));
+		const p = this.birdAt(key);
+		const c = p ? this.followCam(p, z) : {
+			x: from.x,
+			y: from.y,
+			z
+		};
+		const hop = Math.hypot(c.x - v.cam.x, c.y - v.cam.y) * Math.min(v.cam.z, z) / Math.max(1, v.W);
+		this.flyTo(c, Math.round(650 + Math.min(650, hop * 420)));
+		this.cb.changed();
+	}
+	stopFollow(nav = false, restore = false) {
+		const v = this.v;
+		if (!v || v.follow == null) return;
+		const key = v.follow;
+		v.follow = null;
+		const back = this.followFrom;
+		this.followFrom = null;
+		if (restore && back) this.flyTo(back, 650);
+		this.cb.changed();
+		if (nav) {
+			const A = v.agents.find((a) => a.ag.key === key);
+			if (A) this.cb.note(`Stopped following ${A.ag.name}`);
+		}
+	}
+	revealPath(path) {
+		if (this.selectFile(path)) return true;
+		return this.selectFolder(path);
+	}
+	showRule(n, f) {
+		const v = this.v, M = this.M;
+		if (!v || !M) return;
+		const node = n || (f ? f.node : null);
+		if (!node || !node.cnt) return;
+		if (this.nodeInView(node)) v.pulse = {
+			x: node.cx,
+			y: node.cy,
+			r: node.rad + S0,
+			t0: performance.now()
+		};
+		else if (node.depth >= 1) {
+			const c = node.kind === "pile" ? this.fitBox(node.cx - (node.pw || 30) * 2, M.groundY - (node.h || 10) * 4, node.cx + (node.pw || 30) * 2, M.groundY + (node.h || 10), .7) : this.fitBox(node.bx0 - S0 * 4, node.by0 - S0 * 4, node.bx1 + S0 * 4, node.by1 + S0 * 4, .55);
+			c.z = Math.min(c.z, 3.5);
+			this.navTo(c);
+			v.pulse = {
+				x: node.cx,
+				y: node.cy,
+				r: node.rad + S0,
+				t0: performance.now() + 500
+			};
+		}
+		this.dirty = true;
+		this.kick();
+	}
+	setTip(t) {
+		const was = this.tip;
+		if (!t && !was) return;
+		this.tip = t;
+		this.cv.style.cursor = t ? "pointer" : "";
+		this.cb.changed();
+	}
+	updateHover() {
+		const v = this.v;
+		if (!v || !this.needPick || !this.mouse || this.drag) return;
+		this.needPick = false;
+		if (this.clickAt) {
+			if (v.hover) {
+				v.hover = null;
+				v.hoverBlast = null;
+				this.setTip(null);
+				this.dirty = true;
+			}
+			return;
+		}
+		const hit = pick(v, this.mouse[0], this.mouse[1]);
+		const before = v.hover;
+		v.hover = hit;
+		v.hoverBlast = null;
+		if (hit && hit.leaf) {
+			const f = hit.leaf.file;
+			if (v.agents.some((A) => A.edits.has(f.id))) v.hoverBlast = f.id;
+			if (this.info && this.info.kind === "file" && this.info.f === f) {
+				this.setTip(null);
+				this.cv.style.cursor = "pointer";
+				return;
+			}
+		}
+		if (!sameHit(before, hit)) this.dirty = true;
+		this.setTip(hit ? {
+			x: this.mouse[0],
+			y: this.mouse[1],
+			hit
+		} : null);
+	}
+	kick() {
+		if (!this.raf && this.active) this.raf = requestAnimationFrame((t) => this.frame(t));
+	}
+	frame(now) {
+		this.raf = 0;
+		const v = this.v;
+		if (!v || !this.active || document.hidden) return;
+		const dt = Math.min(100, now - (this.lastNow || now));
+		this.lastNow = now;
+		v.t = now / 1e3;
+		this.stepCamera(now, dt);
+		const zi = v.fitZv > 0 && v.cam.z > v.fitZv * 1.35;
+		if (zi !== this.zoomedIn) {
+			this.zoomedIn = zi;
+			this.cb.changed();
+		}
+		if (v.anim && !this.reducedMotion) this.dirty = true;
+		else if (!this.reducedMotion && v.agents.length && now - this.lastBob > 83) {
+			this.lastBob = now;
+			this.dirty = true;
+		}
+		if (this.dirty) {
+			try {
+				render(v, now);
+			} catch (err) {
+				console.error(err);
+			}
+			if (this.mini) try {
+				drawMini(v, this.mini, (x, y) => this.screenToWorld(x, y));
+			} catch {}
+			this.dirty = false;
+		}
+		try {
+			this.updateHover();
+		} catch (err) {
+			console.error(err);
+		}
+		if (!!this.fly || this.dirty || this.camMoving() || v.anim && !this.reducedMotion || !this.reducedMotion && v.agents.length > 0) this.kick();
+	}
+	camMoving() {
+		const v = this.v;
+		if (!v) return false;
+		const c = v.cam, T = this.camT;
+		return c.x !== T.x || c.y !== T.y || c.z !== T.z || v.follow != null;
+	}
+	under(n, anc) {
+		return isUnder(n, anc);
+	}
+};
+function sameHit(a, b) {
+	if (!a || !b) return a === b;
+	return a.leaf === b.leaf && a.node === b.node && a.branch === b.branch && a.clump === b.clump && a.pile === b.pile && a.tag === b.tag && a.bird === b.bird && a.badge === b.badge && a.trunk === b.trunk && a.nest === b.nest;
+}
+//#endregion
+//#region src/components/grid/codemap/CodeTree.tsx
+var HUD = /* @__PURE__ */ new Map();
+var FILES_SEEN = /* @__PURE__ */ new Map();
+function CodeTree(p) {
+	const stageRef = (0, import_react.useRef)(null);
+	const cvRef = (0, import_react.useRef)(null);
+	const miniRef = (0, import_react.useRef)(null);
+	const [, setTick] = (0, import_react.useState)(0);
+	const bump = () => setTick((t) => t + 1 & 65535);
+	const [activity, setActivity] = (0, import_react.useState)(HUD.get(p.title)?.activity ?? false);
+	const [risk, setRisk] = (0, import_react.useState)(HUD.get(p.title)?.risk ?? false);
+	const [size, setSize] = (0, import_react.useState)("wide");
+	const narrow = size !== "wide";
+	const [actNarrow, setActNarrow] = (0, import_react.useState)(false);
+	const [fv, setFv] = (0, import_react.useState)(null);
+	const [fvErr, setFvErr] = (0, import_react.useState)("");
+	const blastCache = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const pref = (0, import_react.useRef)(p);
+	pref.current = p;
+	(0, import_react.useEffect)(() => {
+		const cv = cvRef.current, st = stageRef.current;
+		if (!cv || !st) return;
+		const ctl = new TreeCtl(cv, st, p.title, {
+			paint: (tool, target) => pref.current.onPaint(tool, target),
+			removeZone: (z) => pref.current.onRemoveZone(z.z),
+			note: (m) => pref.current.onNote(m),
+			changed: () => {
+				bump();
+				pref.current.onChange?.();
+			}
+		});
+		p.ctlRef.current = ctl;
+		bump();
+		pref.current.onChange?.();
+		return () => {
+			ctl.destroy();
+			if (p.ctlRef.current === ctl) p.ctlRef.current = null;
+		};
+	}, [p.title]);
+	const ctl = p.ctlRef.current;
+	(0, import_react.useEffect)(() => {
+		if (ctl && p.model) ctl.setModel(p.model);
+	}, [ctl, p.model]);
+	(0, import_react.useEffect)(() => {
+		if (ctl) ctl.setLive(p.agents, p.tzones);
+	}, [
+		ctl,
+		p.agents,
+		p.tzones
+	]);
+	(0, import_react.useEffect)(() => {
+		if (ctl) ctl.setActive(p.active);
+	}, [ctl, p.active]);
+	(0, import_react.useEffect)(() => {
+		if (ctl) ctl.setReducedMotion(p.reducedMotion);
+	}, [ctl, p.reducedMotion]);
+	(0, import_react.useEffect)(() => {
+		HUD.set(p.title, {
+			activity,
+			risk
+		});
+	}, [
+		p.title,
+		activity,
+		risk
+	]);
+	(0, import_react.useEffect)(() => {
+		if (ctl) ctl.setRiskAll(risk);
+	}, [
+		ctl,
+		risk,
+		p.model
+	]);
+	const measure = () => {
+		const st = stageRef.current, c = p.ctlRef.current;
+		if (!st || !c) return;
+		const r0 = st.getBoundingClientRect();
+		const sz = r0.width < 480 || r0.height < 330 ? "tiny" : r0.width < 760 || r0.height < 560 ? "narrow" : "wide";
+		if (sz !== size) setSize(sz);
+		const isNarrow = sz !== "wide";
+		const rects = [];
+		let left = 8, top = 8, bot = 8, card = 0;
+		for (const el of Array.from(st.querySelectorAll("[data-hud]"))) {
+			const r = el.getBoundingClientRect();
+			if (r.width < 2 || r.height < 2) continue;
+			const x0 = r.left - r0.left, y0 = r.top - r0.top, x1 = r.right - r0.left, y1 = r.bottom - r0.top;
+			rects.push([
+				x0 - 4,
+				y0 - 4,
+				x1 + 4,
+				y1 + 4
+			]);
+			const kind = el.dataset.hud;
+			if (kind === "left") left = Math.max(left, x1 + 8);
+			if (kind === "info" && !isNarrow) card = Math.max(card, r.width + 16);
+			if (kind === "info" && isNarrow) bot = Math.max(bot, r0.height - y0 + 6);
+			if (kind === "activity" && isNarrow) bot = Math.max(bot, r0.height - y0 + 6);
+		}
+		const insets = {
+			top,
+			bot,
+			left,
+			right: 8
+		};
+		c.cardInset = card;
+		c.setHud(rects, insets);
+	};
+	(0, import_react.useLayoutEffect)(measure);
+	(0, import_react.useEffect)(() => {
+		const st = stageRef.current;
+		if (!st || typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(() => measure());
+		ro.observe(st);
+		for (const el of Array.from(st.querySelectorAll("[data-hud]"))) ro.observe(el);
+		return () => ro.disconnect();
+	});
+	const showMini = !narrow && !!ctl && ctl.zoomedIn;
+	(0, import_react.useEffect)(() => {
+		if (ctl) ctl.setMini(miniRef.current);
+	}, [
+		ctl,
+		p.model,
+		showMini
+	]);
+	const info = ctl ? ctl.info : null;
+	const infoPath = info && info.kind === "file" ? info.f.path : "";
+	(0, import_react.useEffect)(() => {
+		if (!infoPath || !p.active) return;
+		const hit = FILES_SEEN.get(p.title + "\0" + infoPath);
+		setFv(hit || null);
+		setFvErr("");
+		let dead = false;
+		p.fileView(infoPath).then((d) => {
+			if (dead) return;
+			FILES_SEEN.set(p.title + "\0" + infoPath, d);
+			if (FILES_SEEN.size > 60) FILES_SEEN.delete(FILES_SEEN.keys().next().value);
+			setFv(d);
+		}).catch((x) => !dead && setFvErr(String(x?.message || x)));
+		return () => {
+			dead = true;
+		};
+	}, [
+		infoPath,
+		p.title,
+		p.active
+	]);
+	const M = p.model;
+	const v = ctl ? ctl.v : null;
+	const rows = (0, import_react.useMemo)(() => M ? activityRows(M, p.agents, p.feed, p.zones, p.title) : [], [
+		M,
+		p.agents,
+		p.feed,
+		p.zones,
+		p.title
+	]);
+	const onCanvasKey = (e) => {
+		if (ctl && ctl.key(e.nativeEvent)) e.preventDefault();
+	};
+	const tip = ctl && ctl.tip && M && v ? ctl.tip : null;
+	const tool = v ? v.tool : "explore";
+	let card = null;
+	if (M && ctl && info) {
+		if (info.kind === "file") {
+			const f = info.f;
+			card = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FileCard, {
+				M,
+				f,
+				agents: p.agents,
+				zones: p.tzones,
+				fv: fv && fv.path === f.path ? fv : null,
+				fvErr,
+				pinned: !!v && v.pinBlast === f.id,
+				changed: p.changed.has(f.path),
+				outside: p.classify(f.path) === "outside",
+				allowState: p.reqBusy[f.path] || "",
+				onClose: () => ctl.closeInfo(),
+				onBlast: () => ctl.togglePinBlast(f),
+				onCentre: () => f.leaf && ctl.flyToLeaf(f.leaf, Math.max(v ? v.cam.z : 3, 3)),
+				onFolder: () => {
+					if (f.node) {
+						ctl.selectNode(f.node);
+						ctl.flyToNode(f.node, .8);
+					}
+				},
+				onDiff: p.onOpenDiff,
+				onKeep: () => p.onPaint("keep", { file: f }),
+				onOnly: () => p.onPaint("only", { file: f }),
+				onAllow: () => p.onAllow(f.path),
+				onFile: (path) => ctl.revealPath(path)
+			});
+		} else if (info.kind === "node") {
+			const n = info.n;
+			card = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NodeCard, {
+				M,
+				n,
+				agents: p.agents,
+				zones: p.tzones,
+				serverZones: p.zones,
+				folded: !!v && v.folded.has(n),
+				onClose: () => ctl.closeInfo(),
+				onZoom: () => n.depth === 0 && n.kind !== "pile" ? ctl.wholeTree() : ctl.flyToNode(n, .8),
+				onFold: () => ctl.toggleFold(n),
+				onKeep: () => p.onPaint("keep", { node: n }),
+				onOnly: () => p.onPaint("only", { node: n }),
+				onRemove: p.onRemoveZone,
+				onKid: (k) => {
+					ctl.selectNode(k);
+					ctl.flyToNode(k, .8);
+				},
+				onAgent: (A) => ctl.toggleFollow(A.ag.key)
+			});
+		} else {
+			const bd = info.bd;
+			card = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlastCard, {
+				M,
+				bd,
+				onClose: () => ctl.closeInfo(),
+				onFrame: () => ctl.frameIds([...bd.ids]),
+				onFolder: () => {
+					ctl.selectNode(bd.node);
+					ctl.flyToNode(bd.node, .8);
+				},
+				onFile: (f) => f.leaf && ctl.selectLeaf(f.leaf, true)
+			});
+		}
+	}
+	const growing = p.growing !== null && !M;
+	const regrowing = p.growing !== null && !!M;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ct-stage" + (narrow ? " narrow" : "") + (size === "tiny" ? " tiny" : "") + (showMini ? " mini-on" : ""),
+		ref: stageRef,
+		onKeyDown: (e) => {
+			if (e.key === "Escape" && !e.defaultPrevented && ctl && ctl.v && ctl.v.follow != null) {
+				ctl.stopFollow(true, true);
+				e.preventDefault();
+			}
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("canvas", {
+				ref: cvRef,
+				className: "ct-canvas",
+				tabIndex: 0,
+				role: "application",
+				"aria-label": M ? `Code tree of ${M.name}: ${M.files.length} files. Scroll to zoom, drag or arrow keys to move, click a folder, leaf or bird for details. The Session panel lists the same information.` : "Code tree",
+				"aria-describedby": "ct-sum-" + cssId(p.title),
+				onKeyDown: onCanvasKey
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "cm-sr",
+				id: "ct-sum-" + cssId(p.title),
+				children: M ? summary(M, p.agents, p.zones) : ""
+			}),
+			growing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ct-growing",
+				role: "status",
+				"aria-live": "polite",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ct-sprout",
+						"aria-hidden": "true"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Growing the tree…" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "ct-muted",
+						children: [p.files ? `${p.files.toLocaleString()} files` : "reading the worktree", p.growing ? ` · ${Math.round(p.growing * 100)}%` : ""]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ct-bar",
+						"aria-hidden": "true",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { width: Math.round((p.growing || 0) * 100) + "%" } })
+					})
+				]
+			}),
+			p.growErr && !M && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "cm-note cm-note-err",
+				role: "alert",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Couldn't grow the tree." }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "muted",
+					children: p.growErr
+				})]
+			}),
+			regrowing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ct-regrow",
+				role: "status",
+				title: "The worktree changed: the tree is being re-laid out",
+				children: "growing…"
+			}),
+			M && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				tool !== "explore" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ct-modehint " + tool,
+					"data-hud": "hint",
+					role: "status",
+					"aria-live": "polite",
+					children: tool === "keep" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⛔ Keep out" }),
+						" — click a folder name, branch or leaf to fence it off · ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Shift" }),
+						"+click for several · ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Esc" }),
+						" cancels"
+					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "✓ Only here" }),
+						" — click the one folder agents may edit in; the rest dims · ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Esc" }),
+						" cancels"
+					] })
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdIndex, {
+					M,
+					agents: p.agents,
+					tzones: p.tzones,
+					zones: p.zones,
+					zoneBusy: p.zoneBusy,
+					size,
+					followKey: v ? v.follow : null,
+					primaryTask: p.primaryTask,
+					primaryExtra: p.primaryExtra,
+					affects: (A) => affectsOf(M, A, blastCache.current),
+					riskOpen: risk,
+					onRisk: setRisk,
+					riskFile: v ? v.riskFile ?? null : null,
+					onRiskFile: (f) => ctl && ctl.focusRisk(f.id),
+					onFollow: (k) => ctl && ctl.toggleFollow(k),
+					onNest: (A) => {
+						if (ctl && A.nest) {
+							ctl.selectNode(A.nest);
+							ctl.flyToNode(A.nest, .8);
+						}
+					},
+					onFile: (f) => ctl && f.leaf && ctl.selectLeaf(f.leaf, true),
+					onFolder: (n) => {
+						if (ctl) {
+							ctl.selectNode(n);
+							ctl.flyToNode(n, .8);
+						}
+					},
+					onPaint: (tool, n) => p.onPaint(tool, { node: n }),
+					onRemoveZone: p.onRemoveZone,
+					onGoZone: (z) => {
+						const t = p.tzones.find((x) => x.z.id === z.id);
+						if (!ctl || !t) return;
+						if (t.node) {
+							if (t.node.depth >= 1) ctl.selectNode(t.node);
+							ctl.flyToNode(t.node, .8);
+						} else if (t.file != null && M.files[t.file].leaf) ctl.selectLeaf(M.files[t.file].leaf, true);
+					}
+				}),
+				showMini && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ct-card ct-mini",
+					"data-hud": "mini",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("canvas", {
+						ref: miniRef,
+						"aria-label": "Minimap: click or drag to move the view",
+						onPointerDown: (e) => {
+							e.target.setPointerCapture(e.pointerId);
+							ctl?.pushHist();
+							miniJump(ctl, e);
+						},
+						onPointerMove: (e) => {
+							if (e.buttons) miniJump(ctl, e);
+						}
+					})
+				}),
+				size !== "tiny" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ct-activity-wrap",
+					"data-hud": "activity",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ActivityCard, {
+						rows,
+						skew: p.skew,
+						open: narrow ? actNarrow : activity && !card,
+						ticker: narrow,
+						onToggle: () => narrow ? setActNarrow(!actNarrow) : setActivity(!activity),
+						onRow: (r) => ctl && ctl.revealPath(r.path),
+						zoneOf: (r) => p.zones.find((z) => "z" + z.id === r.key) || null,
+						onZone: (z) => {
+							const t = p.tzones.find((x) => x.z.id === z.id);
+							if (ctl && t && t.node) ctl.flyToNode(t.node, .8);
+						}
+					})
+				}),
+				card && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ct-card ct-info",
+					"data-hud": "info",
+					role: "region",
+					"aria-label": "Details",
+					children: card
+				}),
+				tip && v && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ct-tip",
+					role: "tooltip",
+					style: tipPos(tip.x, tip.y, v.W, v.H),
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TipBody, {
+						M,
+						hit: tip.hit,
+						agents: p.agents,
+						zones: p.tzones,
+						tool,
+						folded: !!(tip.hit.clump && v.folded.has(tip.hit.clump))
+					})
+				})
+			] }),
+			p.toast
+		]
+	});
+}
+function miniJump(ctl, e) {
+	if (!ctl || !ctl.v || !ctl.M) return;
+	const r = e.currentTarget.getBoundingClientRect();
+	const B = ctl.M.bounds;
+	const W = r.width, H = r.height;
+	const z = Math.min(W / (B.x1 - B.x0), H / (B.y1 - B.y0)) * .92;
+	const ox = W / 2 - (B.x0 + B.x1) / 2 * z, oy = H / 2 - (B.y0 + B.y1) / 2 * z;
+	const wx = (e.clientX - r.left - ox) / z, wy = (e.clientY - r.top - oy) / z;
+	ctl.stopFollow();
+	ctl.camT = {
+		x: wx,
+		y: wy,
+		z: ctl.camT.z
+	};
+	if (ctl.reducedMotion) ctl.v.cam = { ...ctl.camT };
+	ctl.fly = null;
+	ctl.dirty = true;
+	ctl.kick();
+}
+function tipPos(x, y, W, H) {
+	const left = Math.min(x + 14, W - 300);
+	const top = y + 16 > H - 120 ? Math.max(4, y - 120) : y + 16;
+	return {
+		left: Math.max(4, left),
+		top
+	};
+}
+var cssId = (s) => s.replace(/[^A-Za-z0-9_-]/g, "_");
+function summary(M, agents, zones) {
+	const bits = [`${M.files.length} files: ${M.crown.nFiles} code files on ${M.crown.kids.length} top-level branches, ${M.roots.nFiles} tests as roots, ${M.piles.reduce((a, q) => a + q.nFiles, 0)} docs and config files on the ground.`];
+	for (const A of agents) bits.push(`${A.ag.name}: ${A.status}${A.file ? " " + A.file.path : ""}, edited ${A.edits.size}, read ${A.reads.size}.`);
+	if (zones.length) bits.push(`${zones.length} rule${zones.length === 1 ? "" : "s"}: ` + zones.map((z) => (z.kind === "green" ? "only here " : "keep out ") + (z.name || z.pattern)).join("; ") + ".");
+	return bits.join(" ");
+}
+//#endregion
+//#region src/lib/codemapSearch.ts
+function searchController(fetch, apply, delayMs = 160) {
+	let seq = 0;
+	let timer = null;
+	const stop = () => {
+		if (timer !== null) clearTimeout(timer);
+		timer = null;
+	};
+	return {
+		set(raw) {
+			const q = raw.trim();
+			const my = ++seq;
+			stop();
+			if (!q) {
+				apply({
+					q: "",
+					items: [],
+					err: ""
+				});
+				return;
+			}
+			timer = setTimeout(async () => {
+				timer = null;
+				try {
+					const items = await fetch(q);
+					if (my === seq) apply({
+						q,
+						items,
+						err: ""
+					});
+				} catch (x) {
+					if (my === seq) apply({
+						q,
+						items: [],
+						err: errMsg(x)
+					});
+				}
+			}, delayMs);
+		},
+		dispose() {
+			seq++;
+			stop();
+		}
+	};
+}
+//#endregion
+//#region src/components/grid/codemap/SearchBox.tsx
+function Glyph({ kind }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", {
+		className: "cm-g k-" + kind,
+		"aria-hidden": "true",
+		children: KIND_GLYPH[kind] || "?"
+	});
+}
+var SearchBox = (0, import_react.forwardRef)(function SearchBox({ title, onPick }, ref) {
+	const [q, setQ] = (0, import_react.useState)("");
+	const [items, setItems] = (0, import_react.useState)([]);
+	const [err, setErr] = (0, import_react.useState)("");
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const [cur, setCur] = (0, import_react.useState)(0);
+	const ctl = (0, import_react.useMemo)(() => searchController((t) => searchCode(title, t), (r) => {
+		setItems(r.items);
+		setErr(r.err);
+		setCur(0);
+	}), [title]);
+	(0, import_react.useEffect)(() => () => ctl.dispose(), [ctl]);
+	(0, import_react.useEffect)(() => ctl.set(q), [q, ctl]);
+	const pick = (it) => {
+		if (!it) return;
+		onPick(it);
+		setOpen(false);
+		setQ("");
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "cm-search",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				ref,
+				type: "search",
+				placeholder: "Find file or symbol",
+				"aria-label": "Find file or symbol",
+				"aria-expanded": open && items.length > 0,
+				"aria-controls": "cm-search-list",
+				role: "combobox",
+				spellCheck: false,
+				autoComplete: "off",
+				value: q,
+				onFocus: () => setOpen(true),
+				onBlur: () => setTimeout(() => setOpen(false), 150),
+				onChange: (e) => {
+					setQ(e.target.value);
+					setOpen(true);
+				},
+				onKeyDown: (e) => {
+					if (e.key === "ArrowDown") {
+						e.preventDefault();
+						setCur((c) => Math.min(items.length - 1, c + 1));
+					} else if (e.key === "ArrowUp") {
+						e.preventDefault();
+						setCur((c) => Math.max(0, c - 1));
+					} else if (e.key === "Enter") {
+						e.preventDefault();
+						pick(items[cur]);
+					} else if (e.key === "Escape") {
+						e.preventDefault();
+						e.stopPropagation();
+						setQ("");
+						e.target.blur();
+					}
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", {
+				"aria-hidden": "true",
+				children: "/"
+			}),
+			open && q.trim() && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+				className: "cm-search-list",
+				id: "cm-search-list",
+				role: "listbox",
+				children: [
+					err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						className: "cm-err",
+						children: err
+					}),
+					!err && !items.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						className: "muted",
+						children: "No matches."
+					}),
+					items.map((it, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						role: "option",
+						"aria-selected": i === cur,
+						className: i === cur ? "cur" : "",
+						onMouseDown: (e) => {
+							e.preventDefault();
+							pick(it);
+						},
+						onMouseEnter: () => setCur(i),
+						children: [
+							it.kind === "file" || it.kind === "dir" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "cm-search-k",
+								children: it.kind === "dir" ? "dir" : "file"
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Glyph, { kind: it.kind }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "cm-search-n",
+								children: it.kind === "file" || it.kind === "dir" ? it.path : it.name
+							}),
+							it.kind !== "file" && it.kind !== "dir" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "cm-search-p",
+								children: [it.path, it.line ? ":" + it.line : ""]
+							})
+						]
+					}, it.path + ":" + it.name + ":" + it.line))
+				]
+			})
+		]
+	});
+});
+//#endregion
+//#region src/components/grid/codemap/SessionPanel.tsx
+function recordTarget(r) {
+	if (r.deny?.push) return r.cmd || "push";
+	if (r.deny?.path) return r.deny.path;
+	if (r.breach && r.breach.length) return r.breach.map((b) => b.path).join(", ");
+	if (r.writes && r.writes.length) return r.writes[0] + (r.writes.length > 1 ? ` +${r.writes.length - 1}` : "");
+	if (r.kind === "bash" && r.cmd) return r.cmd;
+	if (r.reads && r.reads.length) return r.reads[0] + (r.reads.length > 1 ? ` +${r.reads.length - 1}` : "");
+	if (r.kind === "plan") return "plan";
+	return "";
+}
+function recKey(r) {
+	return (r.id || "") + "|" + r.ev + "|" + r.ts;
+}
+function AllowBtn({ path, busy, onAllow }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "cm-row-act cm-allow",
+		disabled: busy === "busy" || busy === "done",
+		title: `Add ${anchoredZonePath(path)} to the green zones (this worktree) and tell the agent`,
+		onClick: () => onAllow(path),
+		children: busy === "busy" ? "Allowing…" : busy === "done" ? "Allowed ✓" : "Allow this file"
+	});
+}
+function SessionPanel({ m, a }) {
+	const { plan } = m;
+	const breachSec = m.breaches.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "cm-sec cm-sec-breach",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: ["Breaches ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "cm-count",
+				children: m.breaches.length
+			})] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "cm-hint",
+				children: [
+					m.breaches.every((b) => b.kind === "green") ? "Changed outside the green zone(s)." : m.breaches.some((b) => b.kind === "green") ? "Changed inside a keep-out zone or outside the green zone(s)." : "Changed inside a red zone.",
+					" ",
+					"Pushing, PRs and merges are blocked until these are reverted",
+					m.green ? " or allowed" : "",
+					"."
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cm-list",
+				children: m.breaches.slice(0, 30).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "cm-row bad",
+						onClick: () => a.selectPath(b.path),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cm-row-main",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "cm-target",
+								children: b.path
+							})
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "cm-row-sub",
+							children: [b.kind === "green" ? "outside scope" : b.pattern || "red zone", b.committed ? " · committed" : ""]
+						})]
+					}),
+					b.kind === "green" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AllowBtn, {
+						path: b.path,
+						busy: m.reqBusy[b.path] || "",
+						onAllow: a.allow
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "cm-row-act",
+						onClick: a.openDiff,
+						children: "Open diff"
+					})
+				] }, b.path))
+			})
+		]
+	}, "breach") : null;
+	const reqSec = m.requests.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "cm-sec cm-sec-req",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: ["Scope requests ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "cm-count",
+				children: m.requests.length
+			})] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "cm-hint",
+				children: "The agent tried to change these outside its scope and was stopped."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cm-list",
+				children: m.requests.slice(0, 20).map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "cm-row",
+					onClick: () => a.selectPath(r.path),
+					title: r.reason || r.path,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "cm-row-main",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cm-target",
+							children: r.path
+						})
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "cm-row-time",
+						children: relTime(r.ts - m.skew)
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AllowBtn, {
+					path: r.path,
+					busy: m.reqBusy[r.path] || "",
+					onAllow: a.allow
+				})] }, r.path))
+			})
+		]
+	}, "req") : null;
+	const activitySec = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "cm-sec",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { children: "Activity" }),
+			m.recent.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "cm-empty-line",
+				children: m.guard.cls.includes("g-detect") ? `Detect-only for ${m.provider || "this agent"} — MindFlock sees its edits on disk, not its tool calls.` : "Agent hasn't used any tools since MindFlock armed the map."
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cm-list",
+				children: m.recent.map((r) => {
+					const target = recordTarget(r);
+					const path = r.deny?.path || r.writes?.[0] || r.reads?.[0] || "";
+					const greenDeny = isGreenDeny(r);
+					const peeks = m.green ? peeksOf(r, (p) => m.classify(p) === "outside") : [];
+					const bad = !!(r.deny || r.breach && r.breach.length);
+					const stillOut = greenDeny && m.classify(r.deny.path) === "outside";
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "cm-row" + (bad ? " bad" : "") + (r.ev === "fail" ? " failed" : "") + (peeks.length ? " peek" : ""),
+						disabled: !path,
+						onClick: () => path && a.selectPath(path),
+						title: r.deny?.reason || r.err || r.cmd || target,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "cm-row-main",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-tool",
+									children: r.tool
+								}),
+								r.deny ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-badge " + (greenDeny ? "soft-bad" : "bad"),
+									children: r.deny.push ? "blocked push" : greenDeny ? "outside scope" : "blocked"
+								}) : null,
+								r.breach && r.breach.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-badge bad",
+									children: "breach"
+								}) : null,
+								peeks.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-badge soft-warn",
+									title: "Read outside the green zone(s) (allowed): " + peeks.join(", "),
+									children: "peeked outside scope"
+								}) : null,
+								r.ev === "fail" && !r.deny ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-badge",
+									children: "failed"
+								}) : null,
+								r.agent ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-badge agent",
+									title: "subagent " + r.agent,
+									children: "sub"
+								}) : null,
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-target",
+									children: target
+								})
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cm-row-time",
+							children: relTime((r.ts || 0) - m.skew)
+						})]
+					}), stillOut && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AllowBtn, {
+						path: r.deny.path,
+						busy: m.reqBusy[r.deny.path] || "",
+						onAllow: a.allow
+					})] }, recKey(r));
+				})
+			}),
+			m.fs.running.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "cm-running",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "cm-running-dot",
+						"aria-hidden": "true"
+					}),
+					" running: ",
+					m.fs.running[m.fs.running.length - 1].cmd || "a command"
+				]
+			})
+		]
+	}, "act");
+	const scope = plan ? planScope(plan.items) : [];
+	const goExemptRow = m.goExempt && m.goExempt.paths.length > 0 && m.goExempt.state !== "kept" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "cm-hint cm-go-exempt",
+		children: ["The plan is now the scope.", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExemptPrompt, {
+			paths: m.goExempt.paths,
+			state: m.goExempt.state,
+			onKeep: a.keepGoExempt,
+			onTreatAsBreaches: a.goExemptAsBreaches
+		})]
+	}) : null;
+	const planSec = m.planSupported ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "cm-sec",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: [
+				"Plan",
+				" ",
+				plan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "cm-count",
+					title: plan.source === "exitplan" ? "From plan mode" : "Declared by the agent",
+					children: plan.items.length
+				})
+			] }),
+			plan ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+				className: "cm-list",
+				children: [plan.items.slice(0, 60).map((it) => {
+					const st = m.progress.get(it.path);
+					const cls = m.classify(it.path);
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "cm-row plan-" + (st || "untouched"),
+						onClick: () => a.selectPath(it.path),
+						title: it.intent,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "cm-row-main",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-plan-mark",
+									"aria-hidden": "true",
+									children: st === "done" ? "✓" : it.new ? "+" : "○"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-target",
+									children: it.path
+								}),
+								cls === "blocked" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-badge bad",
+									children: "keep-out zone"
+								}),
+								(it.outside || cls === "outside") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-badge soft-warn",
+									children: "outside scope"
+								})
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cm-row-sub",
+							children: it.intent
+						})]
+					}) }, it.path);
+				}), m.offPlan.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-row plan-off",
+					onClick: () => a.selectPath(p),
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "cm-row-main",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "cm-plan-mark",
+								"aria-hidden": "true",
+								children: "!"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "cm-target",
+								children: p
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "cm-badge warn",
+								children: "off-plan"
+							})
+						]
+					})
+				}) }, "off:" + p))]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "cm-empty-line",
+				children: m.midFlight ? "No plan declared. Ask what's left to see where it's headed." : "No plan yet. Ask for one to see every file it means to touch — before it touches them."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "cm-actions",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						disabled: m.clarify || m.busy === "ask",
+						onClick: a.askPlan,
+						children: m.busy === "ask" ? "Asking…" : m.midFlight ? "Ask what's left" : "Ask for plan"
+					}),
+					plan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "cm-primary",
+						disabled: m.clarify || !!m.busy,
+						title: m.goZones.length ? "Tell the agent to go ahead, and which zones are new: " + m.goZones.map((z) => z.pattern).join(", ") : "Tell the agent to go ahead with its plan",
+						onClick: () => a.go(false),
+						children: m.busy === "go" ? "Sending…" : m.goZones.length ? `Go — with ${m.goZones.length} zone${m.goZones.length === 1 ? "" : "s"}` : "Go"
+					}),
+					plan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "cm-primary green",
+						disabled: m.clarify || !!m.busy || !scope.length,
+						title: "Go, and make the plan the scope: only these may change (green zones, this worktree) — " + scope.slice(0, 12).join(", ") + (scope.length > 12 ? ` +${scope.length - 12} more` : ""),
+						onClick: () => a.go(true),
+						children: m.busy === "go-scope" ? "Sending…" : "Go — only the planned files"
+					})
+				]
+			}),
+			m.clarify && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "cm-hint",
+				children: "The agent is asking something — answer the prompt in the terminal first."
+			}),
+			m.actionMsg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: m.actionMsg.bad ? "cm-err" : "cm-ok",
+				children: m.actionMsg.text
+			}),
+			goExemptRow
+		]
+	}, "plan") : m.actionMsg || goExemptRow ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "cm-sec",
+		children: [m.actionMsg && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: m.actionMsg.bad ? "cm-err" : "cm-ok",
+			children: m.actionMsg.text
+		}), goExemptRow]
+	}, "plan") : null;
+	const blastSec = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "cm-sec",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: [
+				"Blast radius",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "cm-count",
+					title: "Import hops followed",
+					children: [
+						m.depth,
+						" hop",
+						m.depth === 1 ? "" : "s"
+					]
+				})
+			] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "cm-hint",
+				children: [
+					"Code that imports ",
+					m.mode === "plan" ? "what the plan touches" : "what changed",
+					" (",
+					m.depth,
+					" hop",
+					m.depth === 1 ? "" : "s",
+					")."
+				]
+			}),
+			!m.blast.some((b) => b.count > 0) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "cm-empty-line",
+				children: !m.seeds ? m.mode === "plan" ? "Nothing in the plan exists yet to depend on." : "No changes yet." : m.graphPartial ? "Still indexing imports…" : "Nothing imports what changed."
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cm-list",
+				children: m.blast.filter((b) => b.count > 0).slice(0, 20).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "cm-row",
+					onClick: () => a.selectPath(b.path),
+					title: `${b.count} file${b.count === 1 ? "" : "s"}` + (b.tests ? ` + ${b.tests} test${b.tests === 1 ? "" : "s"}` : "") + ` import it (${b.hops} hop${b.hops === 1 ? "" : "s"} out)` + (b.paths.length ? "\n" + b.paths.slice(0, 12).join("\n") : ""),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "cm-row-main",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "cm-blast-dot",
+								"aria-hidden": "true"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "cm-target",
+								children: b.outside ? b.path : m.levelName(b.path)
+							}),
+							b.outside && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "cm-badge",
+								children: "elsewhere"
+							})
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "cm-row-time",
+						children: [b.count > 0 ? b.count : "", b.tests ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cm-tests",
+							children: (b.count > 0 ? " +" : "+") + b.tests + " tests"
+						}) : null]
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "cm-row-act quiet",
+					title: `Keep agents out of ${b.path || "this"}`,
+					onClick: () => a.openAdd("red", anchoredZonePath(b.path)),
+					children: "⛔"
+				})] }, b.path))
+			}),
+			m.blastTests > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "cm-hint",
+				children: [
+					"+",
+					m.blastTests,
+					" test",
+					m.blastTests === 1 ? "" : "s",
+					" depend on these."
+				]
+			})
+		]
+	}, "blast");
+	const zonesSec = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "cm-sec",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: ["Zones ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "cm-count",
+				children: m.zones.length
+			})] }),
+			m.green && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "cm-hint",
+				children: [
+					"Edits outside the green zone",
+					m.greenZones.length === 1 ? "" : "s",
+					" are blocked and the agent is told why. Reads are allowed (shown as “peeked”)."
+				]
+			}),
+			!m.zones.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "cm-empty-line",
+				children: "None yet. Click a folder on the tree, then “⛔ Keep agents out” or “✓ Only here” — or use + Zone."
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cm-list",
+				children: m.zones.map((z) => {
+					const n = m.zoneCounts.get(z.id) ?? 0;
+					const g = isGreen(z);
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: z.waived ? "is-waived" : "",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								className: "cm-row",
+								onClick: () => a.previewZone(z),
+								title: z.note || z.pattern,
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "cm-row-main",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "cm-zone-mark " + (g ? "green" : "red"),
+											"aria-hidden": "true",
+											children: g ? "✓" : "⛔"
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "cm-target",
+											children: z.name || z.pattern
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "cm-row-kind " + (g ? "green" : "red"),
+											children: g ? "only here" : "keep out"
+										})
+									]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "cm-row-sub" + (n === 0 ? " cm-warn-text" : ""),
+									children: [
+										z.name ? z.pattern + " · " : "",
+										z.scope === "worktree" ? "this worktree" : "whole repo",
+										z.waived ? " · allowed here" : "",
+										" ·",
+										" ",
+										n === 0 ? g ? "matches no files yet — the agent may only create new files under it" : "matches no files yet" : `${n} file${n === 1 ? "" : "s"}${g ? " writable" : ""}`
+									]
+								})]
+							}),
+							z.scope !== "worktree" && !g && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "cm-row-act quiet",
+								disabled: m.zoneBusy === z.id,
+								title: z.waived ? "Protect it here again" : "Allow edits in this worktree only (the zone stays for the repo)",
+								onClick: () => a.waiveZone(z, !z.waived),
+								children: z.waived ? "Re-protect" : "Allow here"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "cm-row-act cm-x quiet",
+								"aria-label": "Remove zone " + (z.name || z.pattern),
+								title: "Remove this zone",
+								disabled: m.zoneBusy === z.id,
+								onClick: () => a.removeZone(z),
+								children: "×"
+							})
+						]
+					}, z.id);
+				})
+			})
+		]
+	}, "zones");
+	const changedSec = m.changed.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "cm-sec",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: ["Changed ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "cm-count",
+				children: m.changed.length
+			})] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cm-list",
+				children: m.changed.slice(0, 40).map((c) => {
+					const cls = m.green ? m.classify(c.path) : "ok";
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "cm-row" + (m.offPlan.includes(c.path) ? " off" : ""),
+						onClick: () => a.selectPath(c.path),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "cm-row-main",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-status",
+									children: (c.status || "M")[0]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-target",
+									children: c.path
+								}),
+								m.offPlan.includes(c.path) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-badge warn",
+									children: "off-plan"
+								}),
+								cls === "companion" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-badge soft-warn",
+									title: "Outside the green zone(s) but allowed: a companion (lockfile, snapshot, test, derived output)",
+									children: "companion"
+								}),
+								cls === "outside" && m.exempt.has(c.path) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "cm-badge",
+									title: "Changed before the green zone was added — exempt while unchanged",
+									children: "exempt"
+								})
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "cm-row-time",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "add",
+									children: ["+", c.added || 0]
+								}),
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "del",
+									children: ["−", c.removed || 0]
+								})
+							]
+						})]
+					}) }, c.path);
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "cm-actions",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					onClick: a.openDiff,
+					children: "Open diff"
+				})
+			})
+		]
+	}, "changed") : null;
+	const othersSec = m.others.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "cm-sec",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", { children: ["Other agents here ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "cm-count",
+			children: m.others.length
+		})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+			className: "cm-list",
+			children: m.others.slice(0, 12).map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "cm-row",
+				onClick: () => a.selectPath(o.path),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "cm-row-main",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "cm-other-dot",
+						"aria-hidden": "true"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "cm-target",
+						children: o.path
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "cm-row-sub",
+					children: [
+						o.session,
+						" · ",
+						relTime(o.ts - m.skew)
+					]
+				})]
+			}) }, o.session + o.path + o.ts))
+		})]
+	}, "others") : null;
+	let order;
+	if (m.green) order = [
+		zonesSec,
+		activitySec,
+		planSec,
+		blastSec
+	];
+	else if (m.mode === "plan") order = [
+		planSec,
+		blastSec,
+		zonesSec,
+		activitySec
+	];
+	else order = [
+		activitySec,
+		planSec,
+		blastSec,
+		zonesSec
+	];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		breachSec,
+		reqSec,
+		order,
+		changedSec,
+		othersSec,
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "cm-hint cm-sel-hint",
+			children: "Click a leaf or a folder on the tree for its card."
+		})
+	] });
+}
+//#endregion
+//#region src/components/grid/CodeMapTab.tsx
+var ENTRIES = /* @__PURE__ */ new Map();
+var ENTRY_MAX = 12;
+var POLL_MS = 2e3;
+var NULL_FP_REFRESH_MS = 2e4;
+var PARTIAL_REFRESH_MS = 3e3;
+function entryFor(title) {
+	let e = ENTRIES.get(title);
+	if (e) {
+		ENTRIES.delete(title);
+		ENTRIES.set(title, e);
+		return e;
+	}
+	e = {
+		snap: null,
+		live: null,
+		feed: [],
+		since: 0,
+		skew: 0,
+		err: "",
+		snapAt: 0
+	};
+	ENTRIES.set(title, e);
+	while (ENTRIES.size > ENTRY_MAX) ENTRIES.delete(ENTRIES.keys().next().value);
+	return e;
+}
+var MODEL_OF = /* @__PURE__ */ new Map();
+var BIRDS = /* @__PURE__ */ new Map();
+var RAW = /* @__PURE__ */ new WeakMap();
+var GRAPHS = /* @__PURE__ */ new WeakMap();
+function birdsFor(title) {
+	let b = BIRDS.get(title);
+	if (!b) {
+		b = new LiveBirds();
+		BIRDS.set(title, b);
+		if (BIRDS.size > ENTRY_MAX) BIRDS.delete(BIRDS.keys().next().value);
+	}
+	return b;
+}
+function share(prev, next) {
+	if (prev === void 0) return next;
+	try {
+		return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+	} catch {
+		return next;
+	}
+}
+function tellText(told, reason) {
+	if (told === "sent") return {
+		text: "Sent to the agent.",
+		bad: false
+	};
+	if (told === "queued") return {
+		text: "Queued — it goes to the agent when this turn ends.",
+		bad: false
+	};
+	return {
+		text: "Couldn't reach the agent" + (reason ? ": " + reason : "."),
+		bad: true
+	};
+}
+function birdAccent() {
+	if (typeof document === "undefined") return "#a08cff";
+	const acc = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#7d56f4";
+	const light = document.documentElement.classList.contains("light");
+	const m = /^#([0-9a-f]{6})$/i.exec(acc);
+	if (!m) return acc;
+	const x = parseInt(m[1], 16);
+	const mix = (c, t, k) => Math.round(c + (t - c) * k);
+	const k = light ? .12 : .3, t = light ? 0 : 255;
+	const r = mix(x >> 16, t, k), g = mix(x >> 8 & 255, t, k), b = mix(x & 255, t, k);
+	return "#" + (r << 16 | g << 8 | b).toString(16).padStart(6, "0");
+}
+function useThemeKey() {
+	const [k, setK] = (0, import_react.useState)(0);
+	(0, import_react.useEffect)(() => {
+		const mo = new MutationObserver(() => setK((x) => x + 1));
+		mo.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: [
+				"class",
+				"data-accent",
+				"data-surface"
+			]
+		});
+		return () => mo.disconnect();
+	}, []);
+	return k;
+}
+function CodeMapTab({ title, active }) {
+	const [ever, setEver] = (0, import_react.useState)(active);
+	(0, import_react.useEffect)(() => {
+		if (active) setEver(true);
+	}, [active]);
+	if (!ever) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CodeMap, {
+		title,
+		active
+	});
+}
+function CodeMap({ title, active }) {
+	const e0 = entryFor(title);
+	const [snap, setSnap] = (0, import_react.useState)(e0.snap);
+	const [live, setLive] = (0, import_react.useState)(e0.live);
+	const [feed, setFeed] = (0, import_react.useState)(e0.feed);
+	const [err, setErr] = (0, import_react.useState)(e0.err);
+	const [model, setModel] = (0, import_react.useState)(MODEL_OF.get(title) || null);
+	const [growing, setGrowing] = (0, import_react.useState)(null);
+	const [growErr, setGrowErr] = (0, import_react.useState)("");
+	const [drawer, setDrawer] = (0, import_react.useState)(false);
+	const [hiZone, setHiZone] = (0, import_react.useState)(null);
+	const [preview, setPreview] = (0, import_react.useState)(null);
+	const [previewErr, setPreviewErr] = (0, import_react.useState)("");
+	const [add, setAdd] = (0, import_react.useState)(null);
+	const [announce, setAnnounce] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [actionMsg, setActionMsg] = (0, import_react.useState)(null);
+	const [zoneBusy, setZoneBusy] = (0, import_react.useState)("");
+	const [reqBusy, setReqBusy] = (0, import_react.useState)({});
+	const [goExempt, setGoExempt] = (0, import_react.useState)(null);
+	const [toast, setToast] = (0, import_react.useState)(null);
+	const themeKey = useThemeKey();
+	const reducedMotion = useUi((s) => s.reduceMotion) || prefersReducedMotion();
+	const searchRef = (0, import_react.useRef)(null);
+	const addInputRef = (0, import_react.useRef)(null);
+	const ctlRef = (0, import_react.useRef)(null);
+	const polling = (0, import_react.useRef)(false);
+	const snapLoading = (0, import_react.useRef)(false);
+	const [, setTick] = (0, import_react.useState)(0);
+	const toolbarSig = (0, import_react.useRef)("");
+	const loadSnap = (0, import_react.useCallback)(async () => {
+		if (snapLoading.current) return;
+		snapLoading.current = true;
+		const en = entryFor(title);
+		try {
+			const d = await fetchSnapshot(title, en.snap?.fingerprint);
+			en.snapAt = Date.now();
+			if (d && !("unchanged" in d && d.unchanged)) {
+				en.snap = d;
+				setSnap(en.snap);
+			}
+			en.err = "";
+			setErr("");
+		} catch (x) {
+			en.snapAt = Date.now();
+			if (!en.snap) {
+				en.err = errMsg(x);
+				setErr(en.err);
+			}
+		} finally {
+			snapLoading.current = false;
+		}
+	}, [title]);
+	const poll = (0, import_react.useCallback)(async () => {
+		if (polling.current) return;
+		polling.current = true;
+		const en = entryFor(title);
+		try {
+			const first = en.since === 0 && !en.feed.length;
+			const d = await fetchLive(title, en.since);
+			const prev = en.live;
+			const next = {
+				...d,
+				changed: share(prev?.changed, d.changed || []),
+				zones: share(prev?.zones, d.zones || []),
+				plan: share(prev?.plan ?? void 0, d.plan ?? null),
+				off_plan: share(prev?.off_plan, d.off_plan || []),
+				breaches: share(prev?.breaches, d.breaches || []),
+				others: share(prev?.others, d.others || []),
+				guard: share(prev?.guard ?? void 0, d.guard ?? null),
+				repo: share(prev?.repo ?? void 0, d.repo ?? null),
+				exempt: share(prev?.exempt ?? void 0, d.exempt ?? null),
+				companions: share(prev?.companions ?? void 0, d.companions ?? null),
+				companion_files: share(prev?.companion_files ?? void 0, d.companion_files ?? null),
+				feed: []
+			};
+			en.skew = (d.now || Date.now() / 1e3) - Date.now() / 1e3;
+			const incoming = d.feed || [];
+			if (incoming.length) {
+				const seen = new Set(en.feed.map(recKey));
+				const fresh = incoming.filter((r) => !seen.has(recKey(r)));
+				if (fresh.length) {
+					en.feed = en.feed.concat(fresh).sort((a, b) => a.ts - b.ts).slice(-400);
+					en.since = Math.max(en.since, ...fresh.map((r) => r.ts || 0));
+					if (!first) {
+						const green = fresh.filter(isGreenDeny);
+						const deny = fresh.filter((r) => r.deny && !r.deny.push && !isGreenDeny(r));
+						const pushDeny = fresh.filter((r) => r.deny?.push);
+						const br = fresh.filter((r) => r.breach && r.breach.length);
+						if (br.length) setAnnounce("Zone breached: " + br.flatMap((r) => (r.breach || []).map((b) => b.path)).slice(0, 3).join(", "));
+						else if (green.length) setAnnounce("Scope guard stopped an edit outside the green zone: " + green.map((r) => r.deny.path).slice(0, 3).join(", "));
+						else if (deny.length) setAnnounce(`Red zone blocked ${deny.length === 1 ? "an edit" : deny.length + " edits"} to ` + deny.map((r) => r.deny.path).slice(0, 3).join(", "));
+						else if (pushDeny.length) setAnnounce("A zone blocked a push: this branch changes a protected file.");
+					}
+					setFeed(en.feed);
+				}
+			}
+			en.live = next;
+			en.err = "";
+			setLive(next);
+			setErr("");
+			markCodemapSeen(title, serverNow(en.skew));
+			if (snapStale({
+				snap: en.snap,
+				liveFp: next.fingerprint,
+				sinceSnapMs: Date.now() - en.snapAt,
+				nullFpMs: NULL_FP_REFRESH_MS,
+				partialMs: PARTIAL_REFRESH_MS
+			})) loadSnap();
+		} catch (x) {
+			if (!en.live) {
+				en.err = errMsg(x);
+				setErr(en.err);
+			}
+			if (x instanceof ApiError && (x.status === 404 || x.status === 409)) {
+				en.err = errMsg(x);
+				setErr(en.err);
+			}
+		} finally {
+			polling.current = false;
+		}
+	}, [title, loadSnap]);
+	(0, import_react.useEffect)(() => {
+		if (!active) return;
+		const en0 = entryFor(title);
+		if (en0.live) markCodemapSeen(title, serverNow(en0.skew));
+		poll();
+		if (!entryFor(title).snap) loadSnap();
+		const t = setInterval(() => {
+			if (!document.hidden) poll();
+		}, POLL_MS);
+		const onVis = () => {
+			if (!document.hidden) poll();
+		};
+		document.addEventListener("visibilitychange", onVis);
+		return () => {
+			clearInterval(t);
+			document.removeEventListener("visibilitychange", onVis);
+		};
+	}, [
+		active,
+		title,
+		poll,
+		loadSnap
+	]);
+	const repoLabel = live?.repo?.label || snap?.repo?.label || "";
+	const repoKey = snap?.repo?.id || live?.repo?.id || "title:" + title;
+	const raw = (0, import_react.useMemo)(() => {
+		if (!snap) return null;
+		let r = RAW.get(snap);
+		if (!r) {
+			r = rawFromSnapshot(snap, repoLabel || title);
+			RAW.set(snap, r);
+		}
+		return r;
+	}, [
+		snap,
+		repoLabel,
+		title
+	]);
+	(0, import_react.useEffect)(() => {
+		if (!raw || !active) return;
+		const hit = cachedModel(repoKey, raw);
+		if (hit) {
+			MODEL_OF.set(title, hit);
+			setModel(hit);
+			setGrowing(null);
+			return;
+		}
+		let dead = false;
+		setGrowing(0);
+		setGrowErr("");
+		layoutModel(repoKey, raw, (k) => !dead && setGrowing(k)).then((M) => {
+			if (dead) return;
+			MODEL_OF.set(title, M);
+			setModel(M);
+			setGrowing(null);
+		}).catch((x) => {
+			if (dead) return;
+			setGrowing(null);
+			setGrowErr(errMsg(x));
+		});
+		return () => {
+			dead = true;
+		};
+	}, [
+		raw,
+		repoKey,
+		title,
+		active
+	]);
+	const now = live?.now || Date.now() / 1e3;
+	const activity = live?.activity || "";
+	const fs = (0, import_react.useMemo)(() => feedState(feed, now, activity), [
+		feed,
+		now,
+		activity
+	]);
+	const changed = live?.changed || EMPTY_CHANGED;
+	const zones = live?.zones || EMPTY_ZONES;
+	const ci = !!live?.ci;
+	const zdoc = (0, import_react.useMemo)(() => zoneDoc(zones, live?.companions, live?.companion_files, ci), [
+		zones,
+		live?.companions,
+		live?.companion_files,
+		ci
+	]);
+	const classify = (0, import_react.useCallback)((p) => classifyPath(p, zdoc), [zdoc]);
+	const greenZones = zdoc.greenZones;
+	const green = greenZones.length > 0;
+	const greenNames = (0, import_react.useMemo)(() => Array.from(new Set(greenZones.map((z) => {
+		if (z.name) return z.name;
+		const p = z.pattern.replace(/^\/+/, "").replace(/\/(\*\*)?$/, "");
+		return /[*?[\]]/.test(p) ? p : tailPath(p);
+	}))), [greenZones]);
+	const exempt = (0, import_react.useMemo)(() => exemptSet(live?.exempt), [live?.exempt]);
+	const plan = live?.plan && live.plan.items && live.plan.items.length ? live.plan : null;
+	const planSupported = live ? live.plan_supported !== false : true;
+	const clarify = activity === "clarify";
+	const mode = autoMode(plan, fs.lastEditTs);
+	const skew = entryFor(title).skew;
+	const tzones = (0, import_react.useMemo)(() => model ? treeZones(model, zones, ci) : EMPTY_TZ, [
+		model,
+		zones,
+		ci
+	]);
+	const agents = (0, import_react.useMemo)(() => model ? birdsFor(title).update(model, {
+		feed,
+		live,
+		title,
+		accent: birdAccent(),
+		serverNow: now,
+		viewNow: performance.now() / 1e3,
+		zones: tzones,
+		light: typeof document !== "undefined" && document.documentElement.classList.contains("light")
+	}) : [], [
+		model,
+		feed,
+		live,
+		title,
+		tzones,
+		themeKey
+	]);
+	const graph = (0, import_react.useMemo)(() => {
+		if (!snap) return null;
+		let g = GRAPHS.get(snap);
+		if (!g) {
+			const files = snap.files || [];
+			const index = /* @__PURE__ */ new Map();
+			files.forEach((f, i) => index.set(String(f[0] || ""), i));
+			g = {
+				index,
+				rev: reverseIndex(snap.edges || [], files.length),
+				tests: effectiveTests(snap)
+			};
+			GRAPHS.set(snap, g);
+		}
+		return g;
+	}, [snap]);
+	const isTest = (0, import_react.useCallback)((p) => {
+		const i = graph?.index.get(p);
+		if (i !== void 0 && graph) return graph.tests.has(i);
+		return isTestPath(p);
+	}, [graph]);
+	const planItems = plan?.items || EMPTY_PLAN;
+	const offPlan = live?.off_plan || EMPTY_STR;
+	const othersList = live?.others || EMPTY_OTHERS;
+	const breachList = live?.breaches || EMPTY_BREACHES;
+	const breachS = (0, import_react.useMemo)(() => currentBreaches(breachList), [breachList]);
+	const changedSet = (0, import_react.useMemo)(() => new Set(changed.map((c) => c.path)), [changed]);
+	const seeds = (0, import_react.useMemo)(() => {
+		if (!graph) return [];
+		const s = /* @__PURE__ */ new Set();
+		if (mode === "plan" && plan) for (const i of plan.items) s.add(i.path);
+		else {
+			for (const c of changed) s.add(c.path);
+			for (const [p, f] of fs.files) if (f.kind === "edit" && f.lastTs) s.add(p);
+		}
+		return Array.from(s).filter((p) => graph.index.has(p)).sort();
+	}, [
+		graph,
+		mode,
+		plan,
+		changed,
+		fs
+	]);
+	const dependents = (0, import_react.useMemo)(() => {
+		const out = /* @__PURE__ */ new Map();
+		if (!graph || !snap || !seeds.length) return out;
+		const idx = seeds.map((p) => graph.index.get(p));
+		const files = snap.files;
+		for (const [i, hops] of blastFrom(idx, graph.rev, 1)) {
+			const f = files[i];
+			if (f) out.set(f[0], hops);
+		}
+		return out;
+	}, [
+		graph,
+		snap,
+		seeds
+	]);
+	const blast = (0, import_react.useMemo)(() => blastRows(dependents, null, isTest), [dependents, isTest]);
+	const blastTests = blast.reduce((s, b) => s + b.tests, 0);
+	const previewPattern = add ? add.pattern.trim() : hiZone ? findPattern(hiZone.pattern, hiZone) : "";
+	const previewKind = add ? add.kind : isGreen(hiZone) ? "green" : "red";
+	(0, import_react.useEffect)(() => {
+		if (!active) return;
+		if (!previewPattern) {
+			setPreview(null);
+			setPreviewErr("");
+			return;
+		}
+		let dead = false;
+		const t = setTimeout(async () => {
+			try {
+				const d = await previewZone(title, previewPattern, previewKind);
+				if (!dead) {
+					setPreview(d);
+					setPreviewErr("");
+				}
+			} catch (x) {
+				if (!dead) {
+					setPreview(null);
+					setPreviewErr(errMsg(x));
+				}
+			}
+		}, 250);
+		return () => {
+			dead = true;
+			clearTimeout(t);
+		};
+	}, [
+		previewPattern,
+		previewKind,
+		title,
+		active
+	]);
+	const zoneCounts = (0, import_react.useMemo)(() => {
+		const counts = /* @__PURE__ */ new Map();
+		if (!snap) return counts;
+		const ms = [];
+		for (const z of zones) {
+			if (!z.re) continue;
+			try {
+				ms.push([z.id, new RegExp(z.re, ci ? "i" : "")]);
+				counts.set(z.id, 0);
+			} catch {}
+		}
+		for (const f of snap.files || []) for (const [id, r] of ms) if (r.test(f[0])) counts.set(id, (counts.get(id) || 0) + 1);
+		return counts;
+	}, [
+		snap,
+		zones,
+		ci
+	]);
+	const requests = (0, import_react.useMemo)(() => green ? scopeRequests(feed, (p) => classify(p) === "outside") : [], [
+		green,
+		feed,
+		classify
+	]);
+	const shownReqBusy = (0, import_react.useMemo)(() => liveAllowState(reqBusy, (p) => classify(p) === "outside"), [reqBusy, classify]);
+	const recent = (0, import_react.useMemo)(() => {
+		const out = [];
+		const seenIds = /* @__PURE__ */ new Set();
+		for (let i = feed.length - 1; i >= 0 && out.length < 12; i--) {
+			const r = feed[i];
+			if (r.id) {
+				if (seenIds.has(r.id)) continue;
+				seenIds.add(r.id);
+			}
+			out.push(r);
+		}
+		return out;
+	}, [feed]);
+	const planTs = plan?.ts || 0;
+	const goZones = zones.filter((z) => !z.waived && (z.created || 0) > planTs);
+	const midFlight = changed.length > 0 || fs.lastEditTs > 0;
+	const progress = (0, import_react.useMemo)(() => {
+		const ch = new Set(changed.map((c) => c.path));
+		const ed = /* @__PURE__ */ new Set();
+		for (const [p, f] of fs.files) if (f.kind === "edit" && f.lastTs > planTs) ed.add(p);
+		return planProgress(planItems, ch, ed);
+	}, [
+		changed,
+		fs,
+		planItems,
+		planTs
+	]);
+	const inst = instances$1().find((i) => i.title === title);
+	const provider = inst?.program || inst?.provider || "";
+	const sessionsHere = sessionsOnWorktree(instances$1(), title);
+	const zonesEnforced = zones.filter((z) => !z.waived).length;
+	const guard = guardPill(live?.guard, zonesEnforced, provider.split(/\s+/)[0] || "", greenNames);
+	const showToast = (0, import_react.useCallback)((t) => setToast(t), []);
+	(0, import_react.useEffect)(() => {
+		if (!toast) return;
+		const t = setTimeout(() => setToast(null), toast.ms || (toast.undo ? 1e4 : 4200));
+		return () => clearTimeout(t);
+	}, [toast]);
+	const applyZones = (zs) => {
+		if (!zs) return;
+		const en = entryFor(title);
+		if (en.live) {
+			en.live = {
+				...en.live,
+				zones: zs
+			};
+			setLive(en.live);
+		}
+		refreshInstances();
+	};
+	const openAdd = (kind, pattern, name = "") => {
+		setHiZone(null);
+		setAdd(newAdd(kind, pattern, name));
+		setTimeout(() => addInputRef.current?.focus(), 0);
+	};
+	const submitAdd = async (tellOverride) => {
+		if (!add) return;
+		const pattern = (add.done && tellOverride ? add.done.pattern : add.pattern).trim();
+		if (!pattern) {
+			setAdd({
+				...add,
+				err: "Enter a path or pattern."
+			});
+			return;
+		}
+		const kind = add.done && tellOverride ? add.done.kind : add.kind;
+		setAdd({
+			...add,
+			busy: true,
+			err: ""
+		});
+		const tell = zoneAddTell(add.tell, tellOverride, clarify);
+		try {
+			const r = await addZone(title, {
+				pattern,
+				name: add.name.trim(),
+				note: "",
+				scope: kind === "green" ? "worktree" : add.scope,
+				tell_agent: tell,
+				kind
+			});
+			applyZones(r.zones);
+			setAdd({
+				...add,
+				pattern: "",
+				name: "",
+				busy: false,
+				err: "",
+				done: {
+					kind,
+					pattern: r.zone?.pattern || pattern,
+					already: r.already_changed || [],
+					told: tell ? tellText(r.told, r.reason).text : "",
+					exempt: r.exempt || [],
+					committedOutside: r.committed_outside || 0,
+					exemptState: ""
+				}
+			});
+		} catch (x) {
+			setAdd({
+				...add,
+				busy: false,
+				err: errMsg(x)
+			});
+		}
+	};
+	const treatAsBreaches = async () => {
+		if (!add?.done) return;
+		const d = add.done;
+		setAdd({
+			...add,
+			done: {
+				...d,
+				exemptState: "busy"
+			}
+		});
+		try {
+			const r = await setExempt(title, d.exempt, false);
+			applyZones(r.zones);
+			setAdd({
+				...add,
+				done: {
+					...d,
+					exemptState: "breaches"
+				}
+			});
+		} catch (x) {
+			setAdd({
+				...add,
+				err: errMsg(x),
+				done: {
+					...d,
+					exemptState: ""
+				}
+			});
+		}
+	};
+	const readd = async (z) => {
+		try {
+			const r = await addZone(title, {
+				pattern: z.pattern,
+				name: z.name || "",
+				note: z.note || "",
+				scope: isGreen(z) ? "worktree" : z.scope === "worktree" ? "worktree" : "repo",
+				tell_agent: false,
+				kind: isGreen(z) ? "green" : "red"
+			});
+			applyZones(r.zones);
+			showToast({
+				text: "Undone",
+				ms: 1800
+			});
+		} catch (x) {
+			showToast({
+				text: "Couldn't undo: " + errMsg(x),
+				bad: true
+			});
+		}
+	};
+	const removeZone$1 = async (z, undoable = true) => {
+		setZoneBusy(z.id);
+		try {
+			const r = await removeZone(title, z.id);
+			applyZones(r.zones);
+			if (undoable) showToast({
+				text: `Removed ${isGreen(z) ? "✓ only here" : "⛔ keep out"} · ${z.name || z.pattern}`,
+				undo: () => void readd(z)
+			});
+		} catch (x) {
+			showToast({
+				text: "Couldn't remove that zone: " + errMsg(x),
+				bad: true
+			});
+		} finally {
+			setZoneBusy("");
+		}
+	};
+	const waiveZone$1 = async (z, waived) => {
+		setZoneBusy(z.id);
+		try {
+			const r = await waiveZone(title, z.id, waived);
+			applyZones(r.zones);
+		} catch (x) {
+			setActionMsg({
+				text: "Couldn't change that zone: " + errMsg(x),
+				bad: true
+			});
+		} finally {
+			setZoneBusy("");
+		}
+	};
+	const paint = async (tool, target) => {
+		const M = model;
+		if (!M) return;
+		const node = target.file ? null : target.node || null;
+		const file = target.file || null;
+		const same = tzones.find((t) => t.type === tool && !t.waived && (node ? t.node === node : file ? t.file === file.id : false));
+		if (same) {
+			removeZone$1(same.z);
+			return;
+		}
+		if (tool === "keep") {
+			const inside = tzones.find((t) => t.type === "keep" && !t.waived && t.node && (node ? node !== t.node && isUnder(node, t.node) : file ? isUnder(file.node, t.node) : false));
+			if (inside) {
+				showToast({ text: `${node ? node.disp || node.label || node.name : file?.name} is already inside ⛔ keep out · ${inside.label}` });
+				return;
+			}
+		}
+		const pat = patternFor(M, {
+			node,
+			file
+		});
+		if ("error" in pat) {
+			showToast({
+				text: pat.error,
+				bad: true
+			});
+			return;
+		}
+		const kind = tool === "only" ? "green" : "red";
+		const tell = zoneAddTell(kind === "green", void 0, clarify);
+		try {
+			const r = await addZone(title, {
+				pattern: pat.pattern,
+				name: "",
+				note: "",
+				scope: kind === "green" ? "worktree" : "repo",
+				tell_agent: tell,
+				kind
+			});
+			applyZones(r.zones);
+			const what = node ? `${node.nFiles} file${node.nFiles === 1 ? "" : "s"}` : "this file";
+			const hit = [];
+			const primary = agents.find((A) => A.ag.primary);
+			for (const A of agents) {
+				if (A.done || !A.cur) continue;
+				if (tool === "only" && !A.ag.primary && !(primary && A.ag.parent === primary.ag.key)) continue;
+				const inZ = (n) => !!n && !!node && isUnder(n, node);
+				const at = A.file ? A.file.node : A.nest;
+				if (tool === "keep" && (inZ(at) || file && A.file === file)) hit.push(`${A.ag.name} is working in there — its next edit there is blocked`);
+				if (tool === "only" && !(inZ(at) || file && A.file === file)) hit.push(`${A.ag.name} is outside — its next edit there is blocked`);
+			}
+			const told = tell ? " · " + tellText(r.told, r.reason).text : "";
+			const nEx = r.exempt ? r.exempt.length : 0;
+			const ex = nEx ? ` · ${nEx} already-changed file${nEx === 1 ? "" : "s"} kept exempt` : "";
+			const zid = r.zone?.id;
+			const short = `${tool === "keep" ? "⛔ Keep out" : "✓ Only here"}: ${pat.label}` + (hit.length ? ` · ${hit.length} agent${hit.length === 1 ? "" : "s"} ${tool === "keep" ? "in there" : "outside"} — next edit there blocked` : "") + (nEx ? ` · ${nEx} exempt` : "");
+			showToast({
+				text: short,
+				detail: `${tool === "keep" ? "⛔ Keep out" : "✓ Only here"} set on ${pat.label} (${what})${hit.length ? " · " + hit.slice(0, 2).join("; ") : ""}${ex}${told}`,
+				undo: zid ? () => void removeZone$1({ ...r.zone }, false).then(() => showToast({
+					text: "Undone",
+					ms: 1800
+				})) : void 0,
+				ms: 12e3
+			});
+			ctlRef.current?.showRule(node, file);
+		} catch (x) {
+			showToast({
+				text: "Couldn't set that rule: " + errMsg(x),
+				bad: true
+			});
+		}
+	};
+	const allow = async (path) => {
+		setReqBusy((s) => ({
+			...s,
+			[path]: "busy"
+		}));
+		try {
+			const r = await allowPath(title, path);
+			applyZones(r.zones);
+			setReqBusy((s) => ({
+				...s,
+				[path]: "done"
+			}));
+		} catch (x) {
+			setReqBusy((s) => ({
+				...s,
+				[path]: ""
+			}));
+			setActionMsg({
+				text: "Couldn't allow " + path + ": " + errMsg(x),
+				bad: true
+			});
+		}
+	};
+	const goExemptAsBreaches = async () => {
+		if (!goExempt) return;
+		const paths = goExempt.paths;
+		setGoExempt({
+			paths,
+			state: "busy"
+		});
+		try {
+			const r = await setExempt(title, paths, false);
+			applyZones(r.zones);
+			setGoExempt({
+				paths,
+				state: "breaches"
+			});
+		} catch (x) {
+			setGoExempt({
+				paths,
+				state: ""
+			});
+			setActionMsg({
+				text: "Couldn't treat those as breaches: " + errMsg(x),
+				bad: true
+			});
+		}
+	};
+	const askPlan$1 = async () => {
+		setBusy("ask");
+		setActionMsg(null);
+		try {
+			const r = await askPlan(title, midFlight ? "remaining" : "plan");
+			setActionMsg(tellText(r.told, r.reason));
+		} catch (x) {
+			setActionMsg({
+				text: errMsg(x),
+				bad: true
+			});
+		} finally {
+			setBusy("");
+		}
+	};
+	const go = async (scopeToPlan) => {
+		setBusy(scopeToPlan ? "go-scope" : "go");
+		setActionMsg(null);
+		setGoExempt(null);
+		try {
+			const r = await goPlan(title, goZones.map((z) => z.id), scopeToPlan);
+			if (scopeToPlan) {
+				poll();
+				refreshInstances();
+				if (r.exempt && r.exempt.length) setGoExempt({
+					paths: r.exempt,
+					state: ""
+				});
+			}
+			setActionMsg(tellText(r.told, r.reason));
+		} catch (x) {
+			setActionMsg({
+				text: errMsg(x),
+				bad: true
+			});
+		} finally {
+			setBusy("");
+		}
+	};
+	const openDiff = () => useUi.getState().setLastTab(title, "diff");
+	const selectPath = (p) => {
+		if (!ctlRef.current?.revealPath(p)) showToast({ text: `${p} isn't on the tree (yet) — it appears once the map re-reads the worktree.` });
+	};
+	const onPick = (it) => {
+		const c = ctlRef.current;
+		if (!c) return;
+		const tool = c.v?.tool || "explore";
+		if (it.kind === "dir") {
+			if (tool !== "explore" && model) {
+				const n = model.nodeOf.get(it.path);
+				if (n) {
+					paint(tool, { node: n });
+					c.setTool("explore");
+					return;
+				}
+			}
+			c.selectFolder(it.path);
+			return;
+		}
+		if (tool !== "explore" && model) {
+			const f = model.byPath.get(it.path);
+			if (f) {
+				paint(tool, { file: f });
+				c.setTool("explore");
+				return;
+			}
+		}
+		if (c.selectFile(it.path) && it.kind !== "file") showToast({
+			text: `Flew to ${it.path.split("/").pop()} — it holds the ${it.kind} ${it.name}`,
+			ms: 3500
+		});
+		else if (!c.v || !model?.byPath.has(it.path)) selectPath(it.path);
+	};
+	const onRootKey = (ev) => {
+		if (ev.defaultPrevented) return;
+		const t = ev.target;
+		const typing = t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT";
+		if (ev.key === "/" && !typing) {
+			ev.preventDefault();
+			searchRef.current?.focus();
+		} else if (ev.key === "Escape" && !typing) {
+			if (add) {
+				setAdd(null);
+				ev.preventDefault();
+			} else if (drawer) {
+				setDrawer(false);
+				ev.preventDefault();
+			} else if (ctlRef.current?.key(ev.nativeEvent)) ev.preventDefault();
+		}
+	};
+	const failed = !!err && !snap && !live && !model;
+	const ctl = ctlRef.current;
+	const tool = ctl?.v?.tool || "explore";
+	const histN = ctl ? ctl.hist.length : 0;
+	const sessionCount = requests.length + breachList.length;
+	const primaryExtra = plan || requests.length || breachList.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ct-agent-extra",
+		children: [
+			plan && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "ct-link",
+				onClick: () => setDrawer(true),
+				title: "Open the plan: Go, or Go — only the planned files",
+				children: [
+					"Plan · ",
+					plan.items.length,
+					" file",
+					plan.items.length === 1 ? "" : "s",
+					" — review"
+				]
+			}),
+			requests.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "ct-link warn",
+				onClick: () => setDrawer(true),
+				children: [
+					requests.length,
+					" ask",
+					requests.length === 1 ? "s" : "",
+					" to edit outside scope — review"
+				]
+			}),
+			breachList.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "ct-link bad",
+				onClick: () => setDrawer(true),
+				children: [
+					breachList.length,
+					" breach",
+					breachList.length === 1 ? "" : "es",
+					" — pushing is blocked"
+				]
+			})
+		]
+	}) : null;
+	const info = LAST_INFO.get(repoKey);
+	const growNote = model && info && info.how !== "memory" ? `${info.how === "replay" ? "cached" : info.how} layout · ${info.ms} ms` : "";
+	const toastNode = toast ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ct-toast" + (toast.bad ? " bad" : ""),
+		role: "status",
+		"aria-live": "polite",
+		title: toast.detail || toast.text,
+		onPointerEnter: () => setToast({
+			...toast,
+			ms: 6e4
+		}),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "tx",
+				children: toast.text
+			}),
+			toast.detail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "cm-sr",
+				children: toast.detail
+			}),
+			toast.undo && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "cm-btn on",
+				onClick: () => {
+					const u = toast.undo;
+					setToast(null);
+					u();
+				},
+				children: "Undo"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "ct-x",
+				"aria-label": "Dismiss",
+				onClick: () => setToast(null),
+				children: "×"
+			})
+		]
+	}) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "cm-root ct-root",
+		onKeyDown: onRootKey,
+		children: [
+			!failed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "cm-toolbar ct-toolbar",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "cm-btn",
+						disabled: !histN,
+						title: "Back to where you were (Backspace)",
+						onClick: () => ctl?.goBack(),
+						children: ["←", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "lbl",
+							children: " Back"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "cm-btn",
+						disabled: !model,
+						title: "Show the whole tree (0 or Home)",
+						onClick: () => ctl?.wholeTree(),
+						children: ["⌂", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "lbl",
+							children: " Whole tree"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "cm-seg ct-tools",
+						role: "group",
+						"aria-label": "Paint a rule",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							className: "red" + (tool === "keep" ? " on" : ""),
+							"aria-pressed": tool === "keep",
+							disabled: !model,
+							title: "Keep out: fence a folder or file off — agents may read there, every edit is blocked",
+							onClick: () => {
+								ctl?.setTool("keep");
+								setTick((x) => x + 1);
+							},
+							children: ["⛔", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "lbl",
+								children: " Keep out"
+							})]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							className: "green" + (tool === "only" ? " on" : ""),
+							"aria-pressed": tool === "only",
+							disabled: !model,
+							title: "Only here: the one folder agents may edit in; everything else dims",
+							onClick: () => {
+								ctl?.setTool("only");
+								setTick((x) => x + 1);
+							},
+							children: ["✓", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "lbl",
+								children: " Only here"
+							})]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "cm-grow" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SearchBox, {
+						ref: searchRef,
+						title,
+						onPick
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "cm-guard " + guard.cls,
+						title: guard.title,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cm-guard-dot",
+							"aria-hidden": "true"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "lbl",
+							children: guard.label
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "cm-btn",
+						title: "Keep agents out of a path — or scope them to only some paths — by typing a pattern",
+						onClick: () => add ? setAdd(null) : openAdd("red", ""),
+						children: add ? "Close" : "+ Zone"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "cm-btn" + (drawer ? " on" : ""),
+						"aria-pressed": drawer,
+						"aria-controls": "ct-session-" + title,
+						title: "The session as lists: plan (Go), scope requests, breaches, blast radius, zones, changes",
+						onClick: () => setDrawer(!drawer),
+						children: ["Session", sessionCount ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cm-count bad",
+							children: sessionCount
+						}) : plan ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cm-count",
+							children: "plan"
+						}) : null]
+					})
+				]
+			}),
+			add && !failed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddZoneRow, {
+				add,
+				setAdd,
+				inputRef: addInputRef,
+				preview,
+				previewErr,
+				clarify,
+				repoLabel,
+				sessionsHere,
+				quick: [],
+				onSubmit: (t) => void submitAdd(t),
+				onTreatAsBreaches: () => void treatAsBreaches()
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "cm-body ct-body",
+				children: [failed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "cm-note cm-note-err",
+					role: "alert",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Code map unavailable." }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: err
+					})]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CodeTree, {
+					title,
+					active,
+					model,
+					growing: growing ?? (snap ? null : 0),
+					growErr,
+					files: raw ? raw.files.length : snap?.files?.length || 0,
+					agents,
+					tzones,
+					zones,
+					feed,
+					skew,
+					changed: changedSet,
+					classify,
+					reqBusy: shownReqBusy,
+					zoneBusy,
+					reducedMotion,
+					ctlRef,
+					primaryExtra,
+					primaryTask: inst?.branch ? "branch " + inst.branch : void 0,
+					toast: toastNode,
+					fileView: (p) => fetchFileView(title, p),
+					onPaint: (t, target) => void paint(t, target),
+					onRemoveZone: (z) => void removeZone$1(z),
+					onAllow: (p) => void allow(p),
+					onOpenDiff: openDiff,
+					onNote: (m) => showToast({ text: m }),
+					onChange: () => {
+						const c = ctlRef.current;
+						const sig = (c?.v?.tool || "") + "|" + (c ? c.hist.length > 0 : false);
+						if (sig !== toolbarSig.current) {
+							toolbarSig.current = sig;
+							setTick((x) => x + 1 & 65535);
+						}
+					}
+				}), drawer && !failed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
+					className: "cm-side ct-drawer",
+					id: "ct-session-" + title,
+					"aria-label": "Session details",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "ct-drawer-head",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "Session" }),
+								growNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "ct-muted",
+									title: "How the tree's layout was obtained",
+									children: growNote
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "ct-x",
+									"aria-label": "Close the Session panel",
+									onClick: () => setDrawer(false),
+									children: "×"
+								})
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionPanel, {
+							m: {
+								live,
+								mode,
+								green,
+								greenZones,
+								zones,
+								zoneCounts,
+								breaches: breachList,
+								requests,
+								recent,
+								fs,
+								guard,
+								provider,
+								skew,
+								plan,
+								planSupported,
+								progress,
+								offPlan,
+								goZones,
+								midFlight,
+								clarify,
+								busy,
+								actionMsg,
+								goExempt,
+								blast,
+								blastTests,
+								depth: 1,
+								seeds: seeds.length,
+								graphPartial: !!snap?.graph_partial,
+								changed,
+								exempt,
+								others: othersList,
+								zoneBusy,
+								reqBusy: shownReqBusy,
+								levelName: (p) => p || repoLabel || "repo root",
+								classify
+							},
+							a: {
+								selectPath,
+								openDiff,
+								askPlan: () => void askPlan$1(),
+								go: (s) => void go(s),
+								removeZone: (z) => void removeZone$1(z),
+								waiveZone: (z, w) => void waiveZone$1(z, w),
+								previewZone: (z) => setHiZone(hiZone?.id === z.id ? null : z),
+								openAdd,
+								allow: (p) => void allow(p),
+								keepGoExempt: () => setGoExempt(goExempt ? {
+									...goExempt,
+									state: "kept"
+								} : null),
+								goExemptAsBreaches: () => void goExemptAsBreaches()
+							}
+						}),
+						breachS.size > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "cm-hint",
+							children: [breachS.size, " breached now."]
+						})
+					]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "cm-sr",
+				"aria-live": "polite",
+				role: "status",
+				children: announce
+			})
+		]
+	});
+}
+function prefersReducedMotion() {
+	try {
+		return !!window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+	} catch {
+		return false;
+	}
+}
+var EMPTY_CHANGED = [];
+var EMPTY_ZONES = [];
+var EMPTY_PLAN = [];
+var EMPTY_STR = [];
+var EMPTY_OTHERS = [];
+var EMPTY_BREACHES = [];
+var EMPTY_TZ = [];
+//#endregion
 //#region src/components/usage/SessionUsageChip.tsx
 function SessionUsageChip({ inst }) {
 	const chipRef = (0, import_react.useRef)(null);
@@ -33848,6 +49439,7 @@ function AccountChip({ inst }) {
 }
 //#endregion
 //#region src/components/grid/Pane.tsx
+var GIT_TABS = /* @__PURE__ */ new Set(["diff", "map"]);
 function queueRelTime(ms) {
 	const m = Math.ceil(ms / 6e4);
 	if (m < 60) return m + "m";
@@ -33871,11 +49463,30 @@ function Pane({ inst, drag, dragging }) {
 	const missing = !!inst.workspace_missing;
 	const loading = inst.status === "loading";
 	const savedTab = lastTab || "agent";
-	const [tab, setTab] = (0, import_react.useState)(savedTab === "diff" && !caps.git ? "agent" : savedTab);
+	const [tab, setTab] = (0, import_react.useState)(GIT_TABS.has(savedTab) && !caps.git ? "agent" : savedTab);
 	const [booted, setBooted] = (0, import_react.useState)(false);
 	const [wsState, setWsState] = (0, import_react.useState)("connecting");
 	const [shellStarted, setShellStarted] = (0, import_react.useState)(savedTab === "shell");
 	const [histPane, setHistPane] = (0, import_react.useState)(null);
+	const [paneFind, setPaneFind] = (0, import_react.useState)(null);
+	(0, import_react.useEffect)(() => {
+		const ev = window.mindflock?.events;
+		if (!ev) return;
+		let thaw = null;
+		const off = ev.subscribe("pane.find_index", (env) => {
+			if (env.session !== title || ev.isReplay(env)) return;
+			if (env.data?.active) {
+				if (!thaw) thaw = freezeTerm(title, "agent");
+			} else if (thaw) {
+				thaw();
+				thaw = null;
+			}
+		});
+		return () => {
+			off();
+			thaw?.();
+		};
+	}, [title]);
 	const bodyRef = (0, import_react.useRef)(null);
 	const fitTimer = (0, import_react.useRef)(void 0);
 	const displayName = alias || title;
@@ -33980,8 +49591,48 @@ function Pane({ inst, drag, dragging }) {
 		histPane,
 		tab
 	]);
+	(0, import_react.useEffect)(() => {
+		if (!focused || missing || loading || histPane || paneFind) return;
+		if (tab !== "agent" && tab !== "shell") return;
+		const onKey = (e) => {
+			if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+			if (e.key !== "f" && e.key !== "F") return;
+			const a = document.activeElement;
+			if (a && a !== document.body && !paneRef.current?.contains(a)) return;
+			if (a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.tagName === "SELECT" || a.isContentEditable === true) && !a.closest(".xterm")) return;
+			e.preventDefault();
+			e.stopPropagation();
+			const kind = tab === "shell" ? "shell" : "agent";
+			const sel = peekTerm(title, kind)?.term.getSelection().trim() ?? "";
+			const query = sel && !sel.includes("\n") && sel.length <= 200 ? sel : "";
+			instApi(title, `/find?pane=${kind}`).then((r) => r.mode).catch(() => "overlay").then((mode) => {
+				if (mode === "overlay") setHistPane({
+					kind,
+					dragSel: null,
+					pos: "bottom",
+					find: query
+				});
+				else setPaneFind({
+					kind,
+					query,
+					mode
+				});
+			});
+		};
+		document.addEventListener("keydown", onKey, true);
+		return () => document.removeEventListener("keydown", onKey, true);
+	}, [
+		focused,
+		missing,
+		loading,
+		histPane,
+		paneFind,
+		tab,
+		title
+	]);
 	const showTab = (t) => {
 		setHistPane(null);
+		setPaneFind(null);
 		setTab(t);
 		setLastTab(title, t);
 		if (t === "shell") setShellStarted(true);
@@ -33990,9 +49641,10 @@ function Pane({ inst, drag, dragging }) {
 	(0, import_react.useEffect)(() => {
 		if (!lastTab) return;
 		let t = lastTab;
-		if (t === "diff" && !caps.git) t = "agent";
+		if (GIT_TABS.has(t) && !caps.git) t = "agent";
 		if (t === tab) return;
 		setHistPane(null);
+		setPaneFind(null);
 		setTab(t);
 		if (t === "shell") setShellStarted(true);
 		setTimeout(() => peekTerm(title, t === "shell" ? "shell" : "agent")?.doFit(), 0);
@@ -34208,6 +49860,16 @@ function Pane({ inst, drag, dragging }) {
 								showTab("diff");
 							},
 							children: "Diff"
+						}),
+						caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							"data-tab": "map",
+							className: tab === "map" ? "active" : "",
+							title: "Code map — the worktree as a tree: agents, zones, plan, blast radius",
+							onClick: (e) => {
+								e.stopPropagation();
+								showTab("map");
+							},
+							children: "Map"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							"data-tab": "queue",
@@ -34434,12 +50096,30 @@ function Pane({ inst, drag, dragging }) {
 						active: tab === "diff"
 					})
 				}),
+				caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "pane-map" + (tab !== "map" ? " hidden" : ""),
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CodeMapTab, {
+						title,
+						active: tab === "map"
+					})
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "pane-queue" + (tab !== "queue" ? " hidden" : ""),
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QueueTab$1, {
 						title,
 						active: tab === "queue"
 					})
+				}),
+				paneFind && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneFindBar, {
+					title,
+					pane: paneFind.kind,
+					mode: paneFind.mode,
+					initialQuery: paneFind.query,
+					onClose: () => {
+						const kind = paneFind.kind;
+						setPaneFind(null);
+						setTimeout(() => focusTerm(title, kind), 0);
+					}
 				}),
 				histPane && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HistoryOverlay, {
 					title,
@@ -34449,6 +50129,7 @@ function Pane({ inst, drag, dragging }) {
 					dragCtx: histPane.ctx ?? null,
 					dragGhost: histPane.ghostSel ?? null,
 					initialPos: histPane.pos ?? "bottom",
+					initialFind: histPane.find,
 					onClose: () => {
 						const kind = histPane.kind;
 						setHistPane(null);
@@ -35381,6 +51062,14 @@ function CommandPalette({ host }) {
 				run: () => hideSession(t)
 			});
 			if (caps.git) acts.push({
+				label: `Code map — ${t}`,
+				hint: "Ctrl+K M",
+				run: () => {
+					selectSession(t);
+					ui.setLastTab(t, "map");
+				}
+			});
+			if (caps.git) acts.push({
 				label: `Merge PR to staging — ${t}`,
 				hint: prHint ? prHint.replace(" · ", "") : void 0,
 				run: () => mergeSession(t)
@@ -35417,6 +51106,11 @@ function CommandPalette({ host }) {
 			label: "Verify — what's waiting on you",
 			hint: "Alt+V",
 			run: () => ui.openDialogFor("verify")
+		});
+		if (caps.git) acts.push({
+			label: "Zones…",
+			hint: "keep-out paths per repo, and derived outputs",
+			run: () => ui.openDialogFor("red-zones")
 		});
 		acts.push({
 			label: "Open Settings",
@@ -36513,7 +52207,7 @@ function newFolderGate(where) {
 }
 function newFolderBlockReason(where) {
 	if (!where.gate || where.confirmed) return "";
-	return "There is no folder at " + where.gate + " yet — tick “Yes, create " + where.gate + "” under “Describe it” to have Create make it, or put a folder that already exists in Folder.";
+	return "There is no folder at " + where.gate + " yet — tick “Yes, create " + where.gate + "” under Folder to have Create make it, or put a folder that already exists in Folder.";
 }
 function NewSessionDialog() {
 	const open = useUi((s) => s.openDialog === "new-session");
@@ -36532,6 +52226,7 @@ function NewSessionDialog() {
 	const [strategy, setStrategy] = (0, import_react.useState)("worktree");
 	const [inPlace, setInPlace] = (0, import_react.useState)(true);
 	const [initRepo, setInitRepo] = (0, import_react.useState)(false);
+	const [planFirst, setPlanFirst] = (0, import_react.useState)(false);
 	const [error, setError] = (0, import_react.useState)("");
 	const [advancedOpen, setAdvancedOpen] = (0, import_react.useState)(true);
 	const [launchOpen, setLaunchOpen] = (0, import_react.useState)(false);
@@ -36607,6 +52302,7 @@ function NewSessionDialog() {
 		setProvision(false);
 		setInPlace(true);
 		setInitRepo(false);
+		setPlanFirst(false);
 		setAdvancedOpen(true);
 		setLaunchOpen(false);
 		setPromptOpen(false);
@@ -36748,6 +52444,15 @@ function NewSessionDialog() {
 		const m = providers.find((p) => p.name.toLowerCase() === base || (p.aliases || []).some((a) => String(a).toLowerCase() === base) || String(p.command || "").toLowerCase() === base);
 		return m ? m.name : base;
 	}, [providers]);
+	const planOk = (0, import_react.useMemo)(() => {
+		const name = canonAgent(program);
+		const prov = providers.find((p) => p.name === name);
+		return !prov || prov.plan_supported !== false;
+	}, [
+		canonAgent,
+		program,
+		providers
+	]);
 	const setAccount = (id) => {
 		setProfileId(id);
 		setProfileModel("");
@@ -36942,6 +52647,38 @@ function NewSessionDialog() {
 		gate: newFolderAsk,
 		confirmed: newFolderOk
 	});
+	const newFolderRow = newFolderAsk ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "nf-newfolder",
+		role: "group",
+		"aria-labelledby": "new-describe-newfolder-q",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			id: "new-describe-newfolder-q",
+			className: "nf-newfolder-q",
+			"aria-live": "polite",
+			children: [
+				"There is no folder at ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: newFolderAsk }),
+				" yet. Make it?"
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "check",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "new-describe-newfolder",
+					checked: newFolderOk,
+					onChange: (e) => setNewFolderOk(e.target.checked)
+				}),
+				"Yes, create ",
+				newFolderAsk,
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "muted",
+					children: "— a new directory, made when you press Create. Not the same as “Create a git repo in this folder” under Git & workspace, which runs git init inside it; a new project usually wants both."
+				})
+			]
+		})]
+	}) : null;
 	const planNoteShown = planNoteFor({
 		note: planNote,
 		planPath: planFolder.path,
@@ -36970,6 +52707,7 @@ function NewSessionDialog() {
 		};
 		const promptVal = p.prompt.trim();
 		if (promptVal) body.prompt = promptVal;
+		if (planFirst && planOk) body.plan_first = true;
 		body.launch_args = tokenize(launchArgs);
 		if (profileId) body.profile_id = profileId;
 		if (profileId && profileModel.trim()) body.profile_model = profileModel.trim();
@@ -37159,38 +52897,7 @@ function NewSessionDialog() {
 								"aria-live": "polite",
 								children: planError
 							}),
-							newFolderAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "nf-newfolder",
-								role: "group",
-								"aria-labelledby": "new-describe-newfolder-q",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-									id: "new-describe-newfolder-q",
-									className: "nf-newfolder-q",
-									"aria-live": "polite",
-									children: [
-										"There is no folder at ",
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: newFolderAsk }),
-										" yet. Make it?"
-									]
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "check",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-											type: "checkbox",
-											id: "new-describe-newfolder",
-											checked: newFolderOk,
-											onChange: (e) => setNewFolderOk(e.target.checked)
-										}),
-										"Yes, create ",
-										newFolderAsk,
-										" ",
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "muted",
-											children: "— a new directory, made when you press Create. Not the same as “Create a git repo in this folder” under Git & workspace, which runs git init inside it; a new project usually wants both."
-										})
-									]
-								})]
-							})
+							newFolderRow
 						]
 					}) }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 						templates.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -37463,6 +53170,7 @@ function NewSessionDialog() {
 								})
 							]
 						}),
+						newFolderRow,
 						plainFolder && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 							className: "nf-git-nudge",
 							children: initRepo ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: "A git repo will be created here — diff, commit and PR will work." }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -37686,9 +53394,9 @@ function NewSessionDialog() {
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: ["Prompt ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "muted",
 								children: "— sent to the agent at launch"
-							})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "nf-advanced-body",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 									className: "preset-row",
 									children: [
 										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
@@ -37753,7 +53461,26 @@ function NewSessionDialog() {
 									placeholder: "What should the agent do first? Leave blank if you don’t want to kick anything off just yet.",
 									value: prompt,
 									onChange: (e) => setPrompt(e.target.value)
-								})] })
+								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+									className: "check" + (planOk ? "" : " disabled"),
+									id: "new-plan-first-row",
+									title: planOk ? "The agent first lists every file it intends to create, modify or delete, with a one-line intent for each, then waits for your go-ahead. Open the session's Map tab to see that plan and its blast radius, red-zone anything it shouldn't touch, and press Go." : "Only a CLI that can declare a plan gets the Map's plan review and Go button — pick Claude for Plan first.",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+											type: "checkbox",
+											id: "new-plan-first",
+											checked: planFirst && planOk,
+											disabled: !planOk,
+											onChange: (e) => setPlanFirst(e.target.checked)
+										}),
+										"Plan first",
+										" ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "muted",
+											children: !planOk ? "(needs a CLI with plan support — Claude)" : prompt.trim() ? "(list files + intent, then wait for Go on the Map tab)" : "(takes effect with a prompt)"
+										})
+									]
+								})]
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -39004,8 +54731,9 @@ function TicketsTab(_) {
 		className: "set-hint",
 		children: "Loading…"
 	});
-	const uniqueId = (base) => {
-		const taken = new Set(sources.map((s) => s.id));
+	const prefixFor = (provider) => catalog.find((p) => p.id === provider)?.slug_prefix || provider;
+	const uniqueId = (base, list = sources, except = "") => {
+		const taken = new Set(list.map((s) => s.id).filter((x) => x !== except));
 		let cand = base, n = 1;
 		while (taken.has(cand)) {
 			n += 1;
@@ -39013,12 +54741,22 @@ function TicketsTab(_) {
 		}
 		return cand;
 	};
+	const isSeededId = (id, provider) => {
+		const base = prefixFor(provider);
+		return id === base || new RegExp(`^${base.replace(/[^\w]/g, "\\$&")}-\\d+$`).test(id);
+	};
 	const update = (id, patch) => {
 		setSources((prev) => {
-			const next = (prev || []).map((s) => s.id === id ? {
-				...s,
-				...patch
-			} : s);
+			const list = prev || [];
+			const next = list.map((s) => {
+				if (s.id !== id) return s;
+				const merged = {
+					...s,
+					...patch
+				};
+				if (patch.provider && patch.provider !== s.provider && isSeededId(s.id, s.provider)) merged.id = uniqueId(prefixFor(patch.provider), list, s.id);
+				return merged;
+			});
 			persist(next);
 			return next;
 		});
@@ -39032,7 +54770,7 @@ function TicketsTab(_) {
 	};
 	const add = () => {
 		const provider = catalog[0]?.id || "shortcut";
-		const id = uniqueId(provider);
+		const id = uniqueId(prefixFor(provider));
 		setSources((prev) => [...prev || [], {
 			id,
 			provider
@@ -39106,7 +54844,8 @@ function StatePicker({ field, source, states, loadStates, onChange }) {
 	};
 	const remaining = states.filter((s) => !selected.includes(String(s.id)));
 	const commit = (list) => onChange({ [field.key]: list.join(",") });
-	const needsState = source.assignee_scope === "anyone" && !selected.length;
+	const hasLabels = !!(source.ingest_labels || "").trim();
+	const needsState = source.assignee_scope === "anyone" && !selected.length && !hasLabels;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-row",
 		children: [
@@ -39118,7 +54857,7 @@ function StatePicker({ field, source, states, loadStates, onChange }) {
 				className: "repo-list",
 				children: !selected.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "repo-empty",
-					children: needsState ? "Pick at least one state — Anyone's has nothing to go on without it, so this source is still only taking tickets assigned to you." : "Any state — every ticket assigned to you is auto-ingested."
+					children: needsState ? "Pick at least one state — Anyone's has nothing to go on without it, so this source is still only taking tickets assigned to you." : hasLabels ? "Any state — every ticket carrying an ingest label is auto-ingested." : "Any state — every ticket assigned to you is auto-ingested."
 				}) : selected.map((id) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "repo-chip",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -39745,20 +55484,27 @@ function TicketSourceCard({ source, catalog, agents, collapsed, onToggle, onChan
 					onChange
 				}, f.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "set-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: f.label
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: f.secret ? "password" : "text",
-						autoComplete: "off",
-						"data-tk-field": f.key,
-						placeholder: f.secret && source[f.key] === "•••set" ? "•••set (saved)" : f.placeholder || "",
-						defaultValue: f.secret ? "" : source[f.key] || "",
-						onBlur: (e) => {
-							if (f.secret && e.target.value === "") return;
-							if (e.target.value !== (source[f.key] || "")) onChange({ [f.key]: e.target.value });
-						}
-					})]
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: f.label
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: f.secret ? "password" : "text",
+							autoComplete: "off",
+							"data-tk-field": f.key,
+							placeholder: f.secret && source[f.key] === "•••set" ? "•••set (saved)" : f.placeholder || "",
+							defaultValue: f.secret ? "" : source[f.key] || "",
+							onBlur: (e) => {
+								if (f.secret && e.target.value === "") return;
+								if (e.target.value !== (source[f.key] || "")) onChange({ [f.key]: e.target.value });
+							}
+						}),
+						f.hint ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: f.hint
+						}) : null
+					]
 				}, f.key))
 			})
 		]
@@ -43731,6 +59477,7 @@ function Ide(_) {
 	const [value, setValue] = (0, import_react.useState)(CUSTOM_IDE);
 	const [customVisible, setCustomVisible] = (0, import_react.useState)(false);
 	const [autoAdopt, setAutoAdopt] = (0, import_react.useState)(false);
+	const [openOnTicket, setOpenOnTicket] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
 		(async () => {
 			try {
@@ -43752,6 +59499,10 @@ function Ide(_) {
 			try {
 				const a = await api("/api/cursor/autoadopt");
 				setAutoAdopt(!!a?.enabled);
+			} catch {}
+			try {
+				const o = await api("/api/ide/open-on-ticket");
+				setOpenOnTicket(!!o?.enabled);
 			} catch {}
 		})();
 	}, []);
@@ -43839,6 +59590,34 @@ function Ide(_) {
 						} catch {
 							setAutoAdopt(!want);
 							toast("Auto-adopt toggle failed");
+						}
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			id: "ide-ticket-row",
+			title: "Open each new ticket, issue or PR workspace in your IDE as soon as it is provisioned",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Open IDE when a ticket starts"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "ide-open-on-ticket",
+					checked: openOnTicket,
+					onChange: async (e) => {
+						const want = e.target.checked;
+						setOpenOnTicket(want);
+						try {
+							const r = await api("/api/ide/open-on-ticket", { json: { enabled: want } });
+							setOpenOnTicket(!!r?.enabled);
+							toast(r?.enabled ? "New tickets open in the IDE" : "New tickets no longer open an IDE window");
+						} catch {
+							setOpenOnTicket(!want);
+							toast("IDE toggle failed");
 						}
 					}
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
@@ -49610,6 +65389,439 @@ function AssistantAgentDialog() {
 	});
 }
 //#endregion
+//#region src/components/dialogs/RedZonesDialog.tsx
+var SESSION_LOOKUP_CAP = 24;
+function RedZonesDialog() {
+	const open = useUi((s) => s.openDialog === "red-zones");
+	const closeDialog = useUi((s) => s.closeDialog);
+	const [repos, setRepos] = (0, import_react.useState)({});
+	const [sessionRepos, setSessionRepos] = (0, import_react.useState)({});
+	const [loading, setLoading] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	const seq = (0, import_react.useRef)(0);
+	const load = (0, import_react.useCallback)(async () => {
+		const my = ++seq.current;
+		setLoading(true);
+		setError("");
+		const live = instances$1().filter((i) => i.started !== false && !i.pending && !i.workspace_missing && i.status !== "loading" && !i.device).slice(0, SESSION_LOOKUP_CAP);
+		const [doc, perSession] = await Promise.all([api("/api/red-zones").catch((x) => {
+			if (my === seq.current) setError(errMsg(x));
+			return null;
+		}), Promise.allSettled(live.map((i) => instApi(i.title, "/red-zones").then((r) => [i.title, r])))]);
+		if (my !== seq.current) return;
+		if (doc) setRepos(doc.repos || {});
+		const sr = {};
+		for (const p of perSession) {
+			if (p.status !== "fulfilled") continue;
+			const [title, r] = p.value;
+			if (!r || !r.repo || !r.repo.id) continue;
+			const cur = sr[r.repo.id] || {
+				label: r.repo.label,
+				sessions: []
+			};
+			cur.sessions.push(title);
+			sr[r.repo.id] = cur;
+		}
+		setSessionRepos(sr);
+		setLoading(false);
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (open) load();
+	}, [open, load]);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const onKey = (e) => {
+			if (e.key === "Escape") closeDialog();
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [open, closeDialog]);
+	const panelRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const t = setTimeout(() => {
+			const panel = panelRef.current;
+			const ae = document.activeElement;
+			if (!panel || ae && ae !== panel && panel.contains(ae)) return;
+			(panel.querySelector(".rzd-add-pattern") || panel).focus({ preventScroll: true });
+		}, 0);
+		return () => clearTimeout(t);
+	}, [open, loading]);
+	const rows = (0, import_react.useMemo)(() => {
+		const ids = /* @__PURE__ */ new Set([...Object.keys(repos), ...Object.keys(sessionRepos)]);
+		const out = [];
+		for (const id of ids) {
+			const d = repos[id];
+			const s = sessionRepos[id];
+			out.push({
+				id,
+				label: d?.label || s?.label || id,
+				zones: d?.zones || [],
+				plan_first: !!d?.plan_first,
+				sessions: s?.sessions || []
+			});
+		}
+		out.sort((a, b) => Number(b.zones.length > 0) - Number(a.zones.length > 0) || Number(b.sessions.length > 0) - Number(a.sessions.length > 0) || a.label.localeCompare(b.label));
+		return out;
+	}, [repos, sessionRepos]);
+	if (!open) return null;
+	const zoneCount = rows.reduce((n, r) => n + r.zones.length, 0);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		id: "red-zones-dialog",
+		className: "modal",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) closeDialog();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "red-zones-panel",
+			ref: panelRef,
+			tabIndex: -1,
+			role: "dialog",
+			"aria-modal": "true",
+			"aria-labelledby": "rzd-title",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ws-head",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+							id: "rzd-title",
+							children: "Zones"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "muted rzd-total",
+							children: [
+								zoneCount,
+								" zone",
+								zoneCount === 1 ? "" : "s",
+								" across ",
+								rows.filter((r) => r.zones.length).length,
+								" repo",
+								rows.filter((r) => r.zones.length).length === 1 ? "" : "s"
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							onClick: () => void load(),
+							disabled: loading,
+							children: loading ? "Loading…" : "Refresh"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							onClick: closeDialog,
+							children: "Close"
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "rzd-intro muted",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⛔ Keep out" }),
+						" — paths the agent may read but not change. These apply to every session on the repo: Claude Code is stopped before the edit; other agents are detected, flagged and blocked at push. ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "✓ Only here" }),
+						" ",
+						"(scope a task to some paths), worktree-only zones and “allow here” are set from a session's ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Map" }),
+						" tab."
+					]
+				}),
+				error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "error",
+					children: error
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rzd-list",
+					children: [!rows.length && !loading && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "muted rzd-empty",
+						children: "No repos yet. Open a session on a git repo and it shows up here — or add a zone from its Map tab."
+					}), rows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoCard, {
+						row: r,
+						onRepos: (next) => {
+							setRepos(next);
+							refreshInstances();
+						}
+					}, r.id))]
+				})
+			]
+		})
+	});
+}
+function RepoCard({ row, onRepos }) {
+	const [pattern, setPattern] = (0, import_react.useState)("");
+	const [name, setName] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [err, setErr] = (0, import_react.useState)("");
+	const aliases = useUi((s) => s.aliases);
+	const call = async (what, fn) => {
+		setBusy(what);
+		setErr("");
+		try {
+			const r = await fn();
+			if (r && r.repos) onRepos(r.repos);
+			return true;
+		} catch (x) {
+			setErr(errMsg(x));
+			return false;
+		} finally {
+			setBusy("");
+		}
+	};
+	const add = async () => {
+		const p = pattern.trim();
+		if (!p) return;
+		if (await call("add", () => api("/api/red-zones", { json: {
+			repo_id: row.id,
+			pattern: p,
+			name: name.trim(),
+			note: "",
+			label: row.label
+		} }))) {
+			setPattern("");
+			setName("");
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "rzd-repo",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rzd-repo-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rzd-repo-label",
+						title: row.id,
+						children: row.label
+					}),
+					row.sessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "rzd-sessions",
+						title: row.sessions.map((t) => aliases[t] || displayName(t)).join("\n"),
+						children: [
+							row.sessions.length,
+							" session",
+							row.sessions.length === 1 ? "" : "s"
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "rzd-planfirst",
+						title: "Plan first: new sessions on this repo started from a ticket, issue or PR review are asked to list every file they intend to touch (with intent) and wait for your go-ahead — the Map shows the plan and its blast radius so you can red-zone arms before any edit.",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							checked: row.plan_first,
+							disabled: busy === "plan",
+							onChange: (e) => void call("plan", () => api("/api/red-zones/plan-first", { json: {
+								repo_id: row.id,
+								on: e.target.checked,
+								label: row.label
+							} }))
+						}), "Plan first"]
+					})
+				]
+			}),
+			row.zones.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "rzd-zones",
+				children: row.zones.map((z) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rzd-kind " + (z.kind === "green" ? "green" : "red"),
+						title: z.kind === "green" ? "Only here" : "Keep out",
+						children: z.kind === "green" ? "✓" : "⛔"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "rzd-zone-main",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "rzd-zone-pattern",
+								children: z.pattern
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "rzd-zone-name",
+								children: z.kind === "green" ? "only here" : "keep out"
+							}),
+							z.name && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "rzd-zone-name",
+								children: z.name
+							}),
+							z.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "rzd-zone-note muted",
+								children: z.note
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "rzd-x",
+						"aria-label": "Remove red zone " + (z.name || z.pattern),
+						title: "Remove this red zone",
+						disabled: busy === "del:" + z.id,
+						onClick: () => void call("del:" + z.id, () => api("/api/red-zones/" + encodeURIComponent(z.id), { method: "DELETE" })),
+						children: "×"
+					})
+				] }, z.id))
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "muted rzd-none",
+				children: "No zones."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+				className: "rzd-add",
+				onSubmit: (e) => {
+					e.preventDefault();
+					add();
+				},
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "text",
+						className: "rzd-add-pattern",
+						placeholder: "config.toml, backend/athena, *.pem",
+						"aria-label": "New red zone for " + row.label,
+						spellCheck: false,
+						autoComplete: "off",
+						value: pattern,
+						onChange: (e) => {
+							setPattern(e.target.value);
+							setErr("");
+						}
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "text",
+						className: "rzd-add-name",
+						placeholder: "name (optional)",
+						"aria-label": "Zone name",
+						spellCheck: false,
+						autoComplete: "off",
+						value: name,
+						onChange: (e) => setName(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						disabled: !pattern.trim() || busy === "add",
+						children: busy === "add" ? "Adding…" : "Add keep-out zone"
+					})
+				]
+			}),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error rzd-err",
+				children: err
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Companions, {
+				repoId: row.id,
+				label: row.label
+			})
+		]
+	});
+}
+function Companions({ repoId, label }) {
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const [doc, setDoc] = (0, import_react.useState)(null);
+	const [val, setVal] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [err, setErr] = (0, import_react.useState)("");
+	(0, import_react.useEffect)(() => {
+		if (!open || doc) return;
+		let dead = false;
+		fetchCompanions(repoId).then((d) => {
+			if (!dead) setDoc(d);
+		}).catch((x) => {
+			if (!dead) setErr(errMsg(x));
+		});
+		return () => {
+			dead = true;
+		};
+	}, [
+		open,
+		doc,
+		repoId
+	]);
+	const save = async (next) => {
+		setBusy(true);
+		setErr("");
+		try {
+			setDoc(await saveCompanions(repoId, next, label));
+			return true;
+		} catch (x) {
+			setErr(errMsg(x));
+			return false;
+		} finally {
+			setBusy(false);
+		}
+	};
+	const mine = doc?.companions || [];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "rzd-comp",
+		open,
+		onToggle: (e) => setOpen(e.target.open),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: ["Derived outputs ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				children: "— files a scoped (✓ only here) agent may still write"
+			})] }),
+			!doc && !err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "muted rzd-none",
+				children: "Loading…"
+			}),
+			doc && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				doc.defaults.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rzd-comp-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted rzd-comp-lab",
+						children: "Built in"
+					}), doc.defaults.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rzd-comp-chip builtin",
+						children: c
+					}, c))]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rzd-comp-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted rzd-comp-lab",
+							children: "This repo"
+						}),
+						mine.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: "none"
+						}),
+						mine.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "rzd-comp-chip",
+							children: [c, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "rzd-x",
+								"aria-label": "Remove derived output " + c,
+								disabled: busy,
+								onClick: () => void save(mine.filter((x) => x !== c)),
+								children: "×"
+							})]
+						}, c))
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+					className: "rzd-add",
+					onSubmit: (e) => {
+						e.preventDefault();
+						const v = val.trim();
+						if (!v || mine.includes(v)) return;
+						save(mine.concat([v])).then((ok) => ok && setVal(""));
+					},
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "text",
+						className: "rzd-comp-input",
+						placeholder: "backend/web/static/app.js, docs/api/*.json",
+						"aria-label": "New derived output",
+						spellCheck: false,
+						autoComplete: "off",
+						value: val,
+						onChange: (e) => setVal(e.target.value)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						disabled: !val.trim() || busy,
+						children: "Add"
+					})]
+				})
+			] }),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error rzd-err",
+				children: err
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/onboarding/WelcomeTour.tsx
 var SLIDES = [
 	{
@@ -49929,444 +66141,6 @@ function WelcomeTour() {
 			]
 		})
 	});
-}
-//#endregion
-//#region src/lib/flock.ts
-var SPECIES = [
-	{
-		d: "#7d56f4",
-		l: "#422d8a"
-	},
-	{
-		d: "#3d8bfd",
-		l: "#144791"
-	},
-	{
-		d: "#18b3dd",
-		l: "#095c73"
-	},
-	{
-		d: "#2ec2b3",
-		l: "#09635b"
-	},
-	{
-		d: "#44b556",
-		l: "#1a5825"
-	},
-	{
-		d: "#e8b71e",
-		l: "#675007"
-	},
-	{
-		d: "#a8c332",
-		l: "#48560c"
-	},
-	{
-		d: "#f07b3c",
-		l: "#8a3d0d"
-	},
-	{
-		d: "#d444f1",
-		l: "#70148a"
-	},
-	{
-		d: "#e5484d",
-		l: "#841419"
-	},
-	{
-		d: "#ee5d8f",
-		l: "#8c1e47"
-	},
-	{
-		d: "#97a1b5",
-		l: "#3d4554"
-	}
-];
-var SPRITE_URL = "/bird.png";
-var SPRITE_W = 216;
-var SPRITE_H = 160;
-var HINGE = .56;
-var sprite = null;
-var tints = /* @__PURE__ */ new Map();
-function birdSprite() {
-	if (typeof Image === "undefined") return null;
-	if (!sprite) {
-		sprite = new Image();
-		sprite.src = SPRITE_URL;
-	}
-	return sprite;
-}
-function tinted(color) {
-	const img = birdSprite();
-	if (!img || !img.complete || !img.naturalWidth) return null;
-	const cached = tints.get(color);
-	if (cached) return cached;
-	const c = document.createElement("canvas");
-	c.width = SPRITE_W;
-	c.height = SPRITE_H;
-	const g = c.getContext("2d");
-	if (!g) return null;
-	g.drawImage(img, 0, 0, SPRITE_W, SPRITE_H);
-	g.globalCompositeOperation = "source-in";
-	g.fillStyle = color;
-	g.fillRect(0, 0, SPRITE_W, SPRITE_H);
-	tints.set(color, c);
-	return c;
-}
-var GATHER_MS = 820;
-var HATCH_FLIGHT_MS = 4e3;
-function startFlock(canvas, opts = {}) {
-	const ctx = canvas.getContext("2d");
-	if (!ctx) return {
-		stop: () => {},
-		gather: () => 0
-	};
-	const areaPerBird = opts.areaPerBird ?? 14e3;
-	const minBirds = opts.min ?? 45;
-	const maxBirds = opts.max ?? 160;
-	const alpha = opts.alpha ?? .95;
-	const boids = [];
-	let W = 0;
-	let H = 0;
-	let frame = 0;
-	let raf = 0;
-	let stopped = false;
-	let light = document.documentElement.classList.contains("light");
-	let transit = null;
-	let hatchFrom = null;
-	let hatchEnd = 0;
-	const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-	function pickTarget(b) {
-		b.tx = Math.random() * W;
-		b.ty = Math.random() * H;
-		b.tt = 200 + Math.random() * 400;
-	}
-	function resize() {
-		const dpr = Math.min(window.devicePixelRatio || 1, 2);
-		const w = canvas.clientWidth;
-		const h = canvas.clientHeight;
-		if (!w || !h) return;
-		W = w;
-		H = h;
-		canvas.width = Math.round(W * dpr);
-		canvas.height = Math.round(H * dpr);
-		ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-		if (transit || hatchFrom) return;
-		const n = Math.min(maxBirds, Math.max(minBirds, Math.round(W * H / areaPerBird)));
-		for (const b of boids) pickTarget(b);
-		while (boids.length < n) {
-			const b = {
-				x: Math.random() * W,
-				y: Math.random() * H,
-				vx: (Math.random() - .5) * 2,
-				vy: (Math.random() - .5) * 2,
-				sp: SPECIES[Math.floor(Math.random() * SPECIES.length)],
-				size: 1.35 + Math.random() * .95,
-				phase: Math.random() * Math.PI * 2,
-				freq: .07 + Math.random() * .05,
-				tx: 0,
-				ty: 0,
-				tt: 0,
-				gx: 0,
-				gy: 0,
-				curve: (Math.random() - .5) * 2,
-				delay: 0,
-				shrink: 1,
-				fade: 1,
-				s0: 1,
-				f0: 1,
-				hatchAt: 0
-			};
-			pickTarget(b);
-			boids.push(b);
-		}
-		boids.length = n;
-		if (reduced) {
-			for (const b of boids) {
-				b.x = (b.x % W + W) % W;
-				b.y = (b.y % H + H) % H;
-			}
-			for (let k = 0; k < 60; k++) step();
-			draw();
-		}
-	}
-	function step() {
-		const R2 = 1225;
-		const SEP = 225;
-		for (let i = 0; i < boids.length; i++) {
-			const b = boids[i];
-			if (b.hatchAt) continue;
-			let cx = 0;
-			let cy = 0;
-			let ax = 0;
-			let ay = 0;
-			let sx = 0;
-			let sy = 0;
-			let n = 0;
-			for (let j = 0; j < boids.length; j++) {
-				if (i === j) continue;
-				const o = boids[j];
-				if (o.hatchAt) continue;
-				const dx = o.x - b.x;
-				const dy = o.y - b.y;
-				const d2 = dx * dx + dy * dy;
-				if (d2 < R2) {
-					cx += o.x;
-					cy += o.y;
-					ax += o.vx;
-					ay += o.vy;
-					n++;
-					if (d2 < SEP && d2 > 0) {
-						sx -= dx / d2;
-						sy -= dy / d2;
-					}
-				}
-			}
-			if (n) {
-				b.vx += (cx / n - b.x) * .0012 + (ax / n - b.vx) * .035 + sx * 3.2;
-				b.vy += (cy / n - b.y) * .0012 + (ay / n - b.vy) * .035 + sy * 3.2;
-			}
-			let tdx = b.tx - b.x;
-			if (tdx > W / 2) tdx -= W;
-			else if (tdx < -W / 2) tdx += W;
-			let tdy = b.ty - b.y;
-			if (tdy > H / 2) tdy -= H;
-			else if (tdy < -H / 2) tdy += H;
-			if ((b.tt -= 1) <= 0 || tdx * tdx + tdy * tdy < 625) pickTarget(b);
-			b.vx += tdx * 4e-4;
-			b.vy += tdy * 4e-4;
-			const sp = Math.sqrt(b.vx * b.vx + b.vy * b.vy) || 1;
-			const max = 1.1;
-			const min = .4;
-			if (sp > max) {
-				b.vx = b.vx / sp * max;
-				b.vy = b.vy / sp * max;
-			}
-			if (sp < min) {
-				b.vx = b.vx / sp * min;
-				b.vy = b.vy / sp * min;
-			}
-			b.x += b.vx;
-			b.y += b.vy;
-			if (b.x < -20) b.x = W + 20;
-			if (b.x > W + 20) b.x = -20;
-			if (b.y < -20) b.y = H + 20;
-			if (b.y > H + 20) b.y = -20;
-		}
-	}
-	function smoothstep(t) {
-		const c = Math.min(1, Math.max(0, t));
-		return c * c * (3 - 2 * c);
-	}
-	function beginGather(x, y) {
-		hatchFrom = null;
-		for (const b of boids) {
-			b.hatchAt = 0;
-			b.gx = b.x;
-			b.gy = b.y;
-			b.delay = Math.random() * .25;
-			b.s0 = b.shrink;
-			b.f0 = b.fade;
-		}
-		transit = {
-			x,
-			y,
-			t0: performance.now()
-		};
-	}
-	function gatherStep(now) {
-		const h = transit;
-		const raw = Math.min(1, (now - h.t0) / GATHER_MS);
-		for (const b of boids) {
-			const t = smoothstep((raw - b.delay) / (1 - b.delay));
-			const dx = h.x - b.gx;
-			const dy = h.y - b.gy;
-			const len = Math.hypot(dx, dy) || 1;
-			const arc = Math.sin(t * Math.PI) * b.curve * Math.min(120, len * .3);
-			const px = b.x;
-			const py = b.y;
-			b.x = b.gx + dx * t + -dy / len * arc;
-			b.y = b.gy + dy * t + dx / len * arc;
-			const mx = b.x - px;
-			const my = b.y - py;
-			if (mx * mx + my * my > 1e-4) {
-				b.vx = mx;
-				b.vy = my;
-			}
-			b.shrink = b.s0 * (1 - t * .82);
-			b.fade = b.f0 * (1 - smoothstep((t - .72) / .28));
-		}
-		return raw < 1;
-	}
-	function beginHatch(x, y) {
-		transit = null;
-		const t0 = performance.now();
-		const launchWindow = Math.max(0, 16e3);
-		for (let i = 0; i < boids.length; i++) {
-			const b = boids[i];
-			b.gx = b.x;
-			b.gy = b.y;
-			b.x = x;
-			b.y = y;
-			b.shrink = .16;
-			b.fade = 0;
-			b.hatchAt = t0 + launchWindow * (i + Math.random()) / Math.max(1, boids.length);
-		}
-		hatchFrom = {
-			x,
-			y
-		};
-		hatchEnd = t0 + launchWindow + HATCH_FLIGHT_MS;
-	}
-	function land(b) {
-		b.x = b.gx;
-		b.y = b.gy;
-		b.shrink = 1;
-		b.fade = 1;
-		const a = Math.hypot(b.vx, b.vy) > .001 ? Math.atan2(b.vy, b.vx) : Math.random() * Math.PI * 2;
-		b.vx = Math.cos(a) * .8;
-		b.vy = Math.sin(a) * .8;
-		b.hatchAt = 0;
-		pickTarget(b);
-	}
-	function hatchStep(now) {
-		const h = hatchFrom;
-		for (const b of boids) {
-			if (!b.hatchAt) continue;
-			const raw = (now - b.hatchAt) / HATCH_FLIGHT_MS;
-			if (raw <= 0) {
-				b.x = h.x;
-				b.y = h.y;
-				b.fade = 0;
-				continue;
-			}
-			if (raw >= 1) {
-				land(b);
-				continue;
-			}
-			const t = smoothstep(raw);
-			const dx = b.gx - h.x;
-			const dy = b.gy - h.y;
-			const len = Math.hypot(dx, dy) || 1;
-			const arc = Math.sin(t * Math.PI) * b.curve * Math.min(120, len * .3);
-			const px = b.x;
-			const py = b.y;
-			b.x = h.x + dx * t + -dy / len * arc;
-			b.y = h.y + dy * t + dx / len * arc;
-			const mx = b.x - px;
-			const my = b.y - py;
-			if (mx * mx + my * my > 1e-4) {
-				b.vx = mx;
-				b.vy = my;
-			}
-			b.shrink = .16 + .84 * t;
-			b.fade = smoothstep(raw / .18);
-		}
-		if (now < hatchEnd) return;
-		for (const b of boids) if (b.hatchAt) land(b);
-		hatchFrom = null;
-		resize();
-	}
-	function vectorBird(g, w, flap) {
-		g.beginPath();
-		g.ellipse(0, 0, w * .42, w * .13, 0, 0, Math.PI * 2);
-		g.fill();
-		g.beginPath();
-		g.moveTo(-w * .12, 0);
-		g.lineTo(w * .1, -w * .5 * flap);
-		g.lineTo(w * .28, 0);
-		g.closePath();
-		g.fill();
-	}
-	function draw() {
-		const g = ctx;
-		frame++;
-		g.clearRect(0, 0, W, H);
-		for (const b of boids) {
-			const flapRate = transit || b.hatchAt ? 2.4 : 1;
-			const a = Math.atan2(b.vy, b.vx);
-			const color = light ? b.sp.l : b.sp.d;
-			const img = tinted(color);
-			const bw = 15 * b.size * b.shrink;
-			const bh = bw * SPRITE_H / SPRITE_W;
-			const hy = Math.round(SPRITE_H * HINGE);
-			const hp = bh * HINGE;
-			const f = .65 + .4 * Math.sin(frame * b.freq * flapRate + b.phase);
-			g.globalAlpha = alpha * b.fade;
-			g.save();
-			g.translate(b.x, b.y);
-			g.rotate(a);
-			if (b.vx < 0) g.scale(1, -1);
-			if (img) {
-				g.drawImage(img, 0, hy, SPRITE_W, 70, -bw / 2, hp - bh / 2, bw, bh - hp);
-				g.translate(0, hp - bh / 2);
-				g.scale(1, Math.max(.2, f));
-				g.drawImage(img, 0, 0, SPRITE_W, hy, -bw / 2, -hp, bw, hp);
-			} else {
-				g.fillStyle = color;
-				vectorBird(g, bw, Math.max(.2, f));
-			}
-			g.restore();
-		}
-		g.globalAlpha = 1;
-	}
-	function loop() {
-		if (stopped) return;
-		if (!document.hidden) {
-			const now = performance.now();
-			if (transit) gatherStep(now);
-			else {
-				if (hatchFrom) hatchStep(now);
-				step();
-			}
-			draw();
-		}
-		raf = requestAnimationFrame(loop);
-	}
-	const themeWatch = new MutationObserver(() => {
-		const next = document.documentElement.classList.contains("light");
-		if (next === light) return;
-		light = next;
-		if (reduced) draw();
-	});
-	themeWatch.observe(document.documentElement, {
-		attributes: true,
-		attributeFilter: ["class"]
-	});
-	const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => resize()) : null;
-	if (ro) ro.observe(canvas);
-	window.addEventListener("resize", resize);
-	const spriteImg = birdSprite();
-	const onSpriteReady = () => {
-		if (!stopped && reduced) draw();
-	};
-	const spritePending = !!spriteImg && !(spriteImg.complete && spriteImg.naturalWidth);
-	if (spritePending) spriteImg.addEventListener("load", onSpriteReady);
-	resize();
-	if (reduced) {
-		for (let k = 0; k < 900; k++) step();
-		draw();
-	} else {
-		if (opts.emergeFrom && boids.length) beginHatch(opts.emergeFrom.x, opts.emergeFrom.y);
-		raf = requestAnimationFrame(loop);
-	}
-	return {
-		stop() {
-			if (stopped) return;
-			stopped = true;
-			cancelAnimationFrame(raf);
-			themeWatch.disconnect();
-			if (ro) ro.disconnect();
-			window.removeEventListener("resize", resize);
-			if (spritePending) spriteImg.removeEventListener("load", onSpriteReady);
-		},
-		gather(x, y) {
-			if (reduced || stopped) return 0;
-			if (transit) return Math.max(0, GATHER_MS - (performance.now() - transit.t0));
-			beginGather(x, y);
-			return GATHER_MS;
-		}
-	};
 }
 //#endregion
 //#region src/components/breaks/Flock.tsx
@@ -50776,6 +66550,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TodoDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssistantAgentDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RedZonesDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtensionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandPalette, { host }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutsSheet, {}),

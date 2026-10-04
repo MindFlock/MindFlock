@@ -176,6 +176,17 @@ class ProviderConfig:
     #: hook event records ``state`` (``working``/``idle``/``clarify``) when it
     #: fires. Empty = install nothing even if a file is named.
     activity_hook_events: Tuple[Tuple[str, str], ...] = ()
+    # --- red-zone guard integration ---------------------------------------- #
+    #: Whether MindFlock manages a HARD red-zone guard for this CLI (PreToolUse
+    #: deny it installs and heals). Only Claude sets it today; a config-driven CLI
+    #: opts in with ``[activity] red_zone_guard = true`` — but note MindFlock does
+    #: not manage Codex's repo-local hook trust, so Codex stays detect-only.
+    red_zone_guard: bool = False
+    #: ``(event, tool_hook_phase)`` pairs — which activity events also carry the
+    #: red-zone guard + tool feed, and in which phase (``pre``/``post``/``fail``).
+    #: These events must also appear in :attr:`activity_hook_events`. Set from
+    #: ``[activity] tool_hook_events = {PreToolUse = "pre", PostToolUse = "post"}``.
+    tool_hook_events: Tuple[Tuple[str, str], ...] = ()
     # --- connection: install + login detection (Settings → Providers) ------ #
     #: Candidate credential file paths whose existence is evidence the CLI is
     #: logged in. ``~`` and ``$VAR`` are expanded; the first that exists wins.
@@ -400,6 +411,15 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             ("PreToolUse", "working"),
             ("PostToolUse", "working"),
             ("PermissionRequest", "clarify"),
+        ),
+        # The tool-feed guard rides Codex's Pre/Post events so the map lights up
+        # and breaches register, but red_zone_guard stays False: MindFlock does
+        # not manage Codex's repo-local hook-trust hash, so the deny is not
+        # guaranteed to fire — Codex is detect-only.
+        red_zone_guard=False,
+        tool_hook_events=(
+            ("PreToolUse", "pre"),
+            ("PostToolUse", "post"),
         ),
         # ChatGPT-plan Codex limits: a rolling window plus a weekly/monthly cap.
         # Live window %/reset is implemented in providers/codex_usage_api.py and
@@ -708,6 +728,13 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
             (str(e["event"]), str(e.get("state", "working")))
             for e in (activity.get("events", []) or [])
             if isinstance(e, dict) and e.get("event")
+        ),
+        # [activity] red_zone_guard = bool + tool_hook_events = {Event = "phase"}
+        red_zone_guard=bool(activity.get("red_zone_guard", False)),
+        tool_hook_events=tuple(
+            (str(k), str(v))
+            for k, v in (activity.get("tool_hook_events", {}) or {}).items()
+            if str(v) in ("pre", "post", "fail")
         ),
         # [connect] install + login-detection hints (all optional).
         auth_files=tuple(str(x) for x in (connect.get("auth_files", ()) or ())),

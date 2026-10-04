@@ -143,6 +143,37 @@ EVENT_NAMES = (
     # profile id). Emitted by the hot-swap route, which restarts the agent, so
     # a hook can re-key whatever it tracks per identity.
     "session.profile_changed",
+    # Red zones (core.red_zone_monitor). All three are SEEDED rather than
+    # boot-gated: the loop's first sight of a session/worktree records what is
+    # already there without emitting, so a restart never re-announces.
+    #
+    # The guard denied the agent an edit inside a red zone — or, in green
+    # mode, outside every green zone (``kind: "green"``: one scope request
+    # per work cycle whatever the file) — or a push/PR while zone breaches
+    # are committed on the branch (``push: true``, keyed apart from zone
+    # blocks). Once per (session, zone | green | push) per work cycle — a
+    # denied agent retries a few ways; the cycle resets when the session goes
+    # idle (data: {"count": int, "zone_ids": [str], "patterns": [str],
+    # "paths": [str ≤5], "tool": str, "push": bool, "kind": "red"|"green",
+    # "detail": str}).
+    "session.red_zone_blocked",
+    # A file inside a red zone — or outside the green scope, not a companion
+    # and not exempt — actually changed (git-visible change, a git-ignored
+    # red-zoned file's content, a nested-sandbox change; a Bash backstop
+    # record is only evidence, confirmed against git/the content baseline
+    # first). Once per (worktree, path), attributed to the first session on
+    # that worktree (data: {"paths": [new ≤5], "patterns": [str — a red
+    # pattern or "outside green"], "total": int, "blocks_push": bool — a new
+    # path is already committed, "kind": "red"|"green", "detail": str — ends
+    # with what the breach blocks}).
+    "session.red_zone_breached",
+    # The protection itself was interfered with: the guard file rewritten or
+    # deleted, the hook removed/disabled (re-armed immediately), or the zone
+    # store changed outside MindFlock (reported, never reverted). Only on a
+    # transition away from armed; ``session`` may be "" for a store change no
+    # live session is on (data: {"what": "guard"|"hooks"|"store",
+    # "detail": str}).
+    "session.red_zone_tampered",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay
