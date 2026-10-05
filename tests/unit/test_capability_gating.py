@@ -28,8 +28,11 @@ client = TestClient(server.app)
 # --------------------------------------------------------------------------- #
 def test_config_exposes_caps_booleans():
     caps = client.get("/api/config").json()["caps"]
-    assert set(caps) == {"git", "tailscale", "ticketing", "github"}
-    assert all(isinstance(v, bool) for v in caps.values())
+    assert set(caps) == {"git", "tailscale", "ticketing", "github", "agent_mcp"}
+    # agent_mcp is the one structured cap (see test_mcp_attach.py); the
+    # integration caps stay plain booleans.
+    assert all(isinstance(v, bool) for k, v in caps.items() if k != "agent_mcp")
+    assert set(caps["agent_mcp"]) == {"enabled", "providers"}
 
 
 def test_caps_github_follows_the_pr_probe(monkeypatch):

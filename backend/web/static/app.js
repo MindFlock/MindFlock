@@ -25668,6 +25668,11 @@ function save(key, value, stringify = true) {
 function windowKey(kind, ref = "") {
 	return kind === "logs" ? "\0mindflock-logs" : kind === "syslogs" ? "\0system-logs" : kind === "verify" ? "\0verify:" + ref : kind === "ext" ? "\0ext:" + ref : "\0assistant-chat";
 }
+var _selectSession = null;
+function setSessionSelector(fn) {
+	_selectSession = fn;
+}
+var _threadSeq = 0;
 var useUi = create((set, get) => ({
 	focused: null,
 	viewMode: load$1("cs_viewmode", "auto", false),
@@ -25700,6 +25705,9 @@ var useUi = create((set, get) => ({
 	openDialog: null,
 	dialogTarget: null,
 	prBaseByRepo: load$1("mf_prbase", {}),
+	threadComposeTarget: null,
+	threadLastSeen: load$1("mf_thread_seen", {}),
+	playbookMenu: null,
 	setFocused: (title) => set({ focused: title }),
 	touchMru: (title) => {
 		const mru = [title, ...get().mru.filter((t) => t !== title)].slice(0, 50);
@@ -25892,7 +25900,35 @@ var useUi = create((set, get) => ({
 		else delete next[repo];
 		save("mf_prbase", next);
 		set({ prBaseByRepo: next });
-	}
+	},
+	threadOpen: (title, opts) => {
+		if (!title) return;
+		if (_selectSession) _selectSession(title, { noKeyboard: true });
+		else {
+			get().setHidden(title, false);
+			get().touchMru(title);
+			get().setFocused(title);
+		}
+		get().setLastTab(title, "thread");
+		set({
+			playbookMenu: null,
+			threadComposeTarget: {
+				title,
+				to: opts?.composeTo || title,
+				seq: ++_threadSeq
+			}
+		});
+	},
+	setThreadLastSeen: (title, ts) => {
+		if (!title) return;
+		const threadLastSeen = {
+			...get().threadLastSeen,
+			[title]: ts ?? Date.now()
+		};
+		save("mf_thread_seen", threadLastSeen);
+		set({ threadLastSeen });
+	},
+	setPlaybookMenu: (menu) => set({ playbookMenu: menu })
 }));
 function displayName(title) {
 	return useUi.getState().aliases[title] || title;
@@ -26504,6 +26540,7 @@ function selectSession(title, opts) {
 	ui.setFocused(title);
 	if (!opts?.noKeyboard) focusTerm(title);
 }
+setSessionSelector(selectSession);
 function selectWindow(sent) {
 	useUi.getState().touchMru(sent);
 	requestAnimationFrame(() => {
@@ -27390,6 +27427,76 @@ function orderWithAfter(order, title, after) {
 	next.splice(at + 1, 0, title);
 	return next;
 }
+var NEST_MAX = 3;
+function railNesting(rows) {
+	const out = rows.map(() => ({
+		depth: 0,
+		more: false,
+		guides: [],
+		stem: false
+	}));
+	let chain = [];
+	rows.forEach((r, i) => {
+		const p = r.parent || "";
+		const at = p ? chain.findIndex((j) => rows[j].key === p) : -1;
+		if (at >= 0 && at + 1 <= NEST_MAX) {
+			chain = chain.slice(0, at + 1);
+			out[i].depth = at + 1;
+			chain.push(i);
+		} else chain = [i];
+	});
+	for (let i = 0; i < rows.length; i++) {
+		const d = out[i].depth;
+		if (i + 1 < rows.length && out[i + 1].depth === d + 1) out[i].stem = true;
+		if (!d) continue;
+		for (let j = i + 1; j < rows.length && out[j].depth >= d; j++) if (out[j].depth === d) {
+			out[i].more = rows[j].parent === rows[i].parent;
+			break;
+		}
+	}
+	const open = [];
+	for (let i = 0; i < rows.length; i++) {
+		const d = out[i].depth;
+		open.length = Math.max(d, 0);
+		out[i].guides = [];
+		for (let k = 1; k < d; k++) out[i].guides[k] = !!open[k];
+		if (d) open[d] = out[i].more;
+	}
+	return out;
+}
+function sameNest(a, b) {
+	if (a.depth !== b.depth || a.more !== b.more || a.stem !== b.stem) return false;
+	for (let k = 1; k < a.depth; k++) if (!!a.guides[k] !== !!b.guides[k]) return false;
+	return true;
+}
+function placeNewWorkers(saved, live) {
+	const parentOf = new Map(live.map((r) => [r.title, r.parent || ""]));
+	const seen = new Set(saved);
+	const depthOf = (t) => {
+		let d = 0;
+		for (let p = parentOf.get(t); p && d <= live.length; p = parentOf.get(p)) d++;
+		return d;
+	};
+	const fresh = live.filter((r) => r.parent && r.parent !== r.title && parentOf.has(r.parent) && !seen.has(r.title)).map((r) => r.title).sort((a, b) => depthOf(a) - depthOf(b));
+	if (!fresh.length) return saved;
+	const isUnder = (t, anc) => {
+		let hops = 0;
+		for (let p = parentOf.get(t); p && hops <= live.length; p = parentOf.get(p), hops++) if (p === anc) return true;
+		return false;
+	};
+	let order = saved.concat(live.map((r) => r.title).filter((t) => !seen.has(t)));
+	const pending = new Set(fresh);
+	for (const t of fresh) {
+		pending.delete(t);
+		const p = parentOf.get(t);
+		const rest = order.filter((x) => x !== t);
+		let at = rest.indexOf(p);
+		if (at < 0) continue;
+		while (at + 1 < rest.length && !pending.has(rest[at + 1]) && isUnder(rest[at + 1], p)) at++;
+		order = orderWithAfter(order, t, rest[at]);
+	}
+	return order;
+}
 var SEARCH_MIN = 6;
 function matchesFilter(inst, filter, aliases) {
 	if (!filter) return true;
@@ -27846,12 +27953,475 @@ function Appearance(_) {
 	] });
 }
 //#endregion
+//#region src/lib/agentMessages.ts
+var MESSAGE_SNIPPET = 80;
+function snippet(text, max = MESSAGE_SNIPPET) {
+	const s = String(text ?? "").replace(/\s+/g, " ").trim();
+	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
+}
+function senderName(from, nameOf) {
+	return from ? nameOf(from) : "external";
+}
+function resultStatus(d) {
+	return String(d.status || "").trim().toLowerCase();
+}
+function resultMark(status) {
+	return status === "blocked" || status === "failed" ? "⚠" : "✓";
+}
+function messageToastText(recipient, data, nameOf) {
+	const d = data || {};
+	const from = senderName(String(d.from || ""), nameOf);
+	const body = snippet(d.text);
+	if (d.kind === "result") {
+		const status = resultStatus(d);
+		const head = resultMark(status) + " worker " + from + " reported";
+		if (status) return head + ": " + status + (body ? " — " + body : "");
+		return head + (body ? ": " + body : "");
+	}
+	return "✉ " + from + " → " + nameOf(recipient) + (body ? ": " + body : "");
+}
+function messageNotif(data, nameOf) {
+	const d = data || {};
+	if (d.kind !== "result") return null;
+	const status = resultStatus(d);
+	const from = senderName(String(d.from || ""), nameOf);
+	const body = snippet(d.text);
+	const warn = status === "blocked" || status === "failed";
+	return {
+		text: "worker " + from + " reported" + (status ? " " + status : "") + (body ? " — " + body : ""),
+		cls: warn ? "n-warn" : "n-done"
+	};
+}
+function lineageMark(parent, spawned, nameOf) {
+	const p = String(parent || "");
+	const s = !!spawned;
+	if (!p && !s) return null;
+	if (p) {
+		const name = nameOf(p);
+		return {
+			text: "↳ " + name,
+			title: s ? "Spawned by the agent in “" + name + "”" : "Child of “" + name + "” (adopted)",
+			spawned: s
+		};
+	}
+	return {
+		text: "↳ agent",
+		title: "Spawned by an agent — its parent session is gone, or it was an external MCP client",
+		spawned: true
+	};
+}
+function isChildOf(row, title) {
+	return !!title && row.title !== title && String(row.parent || "") === title && !row.pending && !row.device;
+}
+function childrenOf(title, rows) {
+	return rows.filter((r) => isChildOf(r, title));
+}
+var rawActivity = (r) => String(r.activity || "idle");
+function currentReport(row, act) {
+	const r = row.last_report;
+	if (!r || !String(r.status || "").trim()) return null;
+	if ((act === "working" || act === "clarify" || act === "limit") && Number(row.activity_since) > Number(r.ts)) return null;
+	return r;
+}
+function workerState(row, act) {
+	if (act === "clarify") return "ask";
+	const r = currentReport(row, act);
+	if (r) {
+		const s = String(r.status).trim().toLowerCase();
+		return s === "blocked" || s === "failed" ? s : "done";
+	}
+	if (act === "limit") return "limit";
+	if (act === "working") return "working";
+	return "idle";
+}
+var isReported$1 = (s) => s === "done" || s === "blocked" || s === "failed";
+function since$1(ts, now) {
+	const secs = Math.max(0, Math.floor(now - ts));
+	if (secs < 60) return secs + "s";
+	if (secs < 3600) return Math.floor(secs / 60) + "m";
+	if (secs < 86400) return Math.floor(secs / 3600) + "h";
+	return Math.floor(secs / 86400) + "d";
+}
+function workerLine(row, opts) {
+	const act = opts.act ?? rawActivity(row);
+	const now = opts.now ?? Date.now() / 1e3;
+	const state = workerState(row, act);
+	const r = currentReport(row, act);
+	let text;
+	let cls;
+	if (state === "ask") {
+		text = "? needs your answer";
+		cls = "rep-ask";
+	} else if (state === "blocked" || state === "failed") {
+		text = "✗ " + state;
+		cls = "rep-blocked";
+	} else if (state === "done") {
+		text = "✓ reported";
+		cls = "rep-done";
+	} else if (state === "limit") {
+		text = "usage limit — waiting";
+		cls = "rep-blocked";
+	} else if (state === "working") {
+		const t = Number(row.activity_since) || 0;
+		text = t > 0 ? "working · " + since$1(t, now) : "working";
+		cls = "rep-work";
+	} else {
+		text = "idle — no report";
+		cls = "rep-idle";
+	}
+	const parent = opts.parentName;
+	let detail;
+	if (state === "ask") detail = "it is waiting on a prompt — answer it here or in its pane";
+	else if (r) detail = "reported " + String(r.status).trim().toLowerCase() + " " + since$1(Number(r.ts), now) + " ago" + (r.summary ? ": " + snippet(r.summary, 140) : "");
+	else if (state === "working") detail = "still working, no report yet";
+	else if (state === "limit") detail = "hit the usage limit; its queue resumes when the window resets";
+	else detail = "stopped without reporting back";
+	return {
+		text: opts.nested || !parent ? text : "↳ " + parent + " · " + text,
+		cls,
+		title: (parent ? "Worker of “" + parent + "” — " : "") + detail,
+		state
+	};
+}
+var plural$5 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
+	const n = children.length;
+	if (!n) return null;
+	const states = children.map((c) => workerState(c, actOf(c)));
+	const count = (s) => states.filter((x) => x === s).length;
+	const ask = count("ask");
+	const failed = count("failed");
+	const blocked = count("blocked");
+	const reported = states.filter(isReported$1).length;
+	const working = count("working");
+	const parts = [];
+	if (ask) parts.push({
+		text: ask + " needs you",
+		cls: "needs"
+	});
+	if (failed) parts.push({
+		text: failed + " failed",
+		cls: "bad"
+	});
+	if (blocked) parts.push({
+		text: blocked + " blocked",
+		cls: "bad"
+	});
+	if (ask) parts.push({
+		text: plural$5(n, "worker"),
+		cls: ""
+	});
+	else if (reported === n) parts.push({
+		text: n === 1 ? "worker reported" : "all " + n + " reported",
+		cls: "ok"
+	});
+	else if (reported) parts.push({
+		text: reported + " of " + n + " reported",
+		cls: ""
+	});
+	else if (working === n) parts.push({
+		text: n + " working",
+		cls: ""
+	});
+	else if (working) parts.push({
+		text: working + " of " + n + " working",
+		cls: ""
+	});
+	else parts.push({
+		text: plural$5(n, "worker") + " · no reports",
+		cls: ""
+	});
+	return {
+		parts,
+		title: children.map((c) => nameOf(c.title) + " — " + workerLine(c, {
+			nested: true,
+			parentName: "",
+			act: actOf(c),
+			now
+		}).text).join("\n") + "\nClick to open the Thread"
+	};
+}
+function parentChip(parent, children, nameOf, actOf = rawActivity, blocked = "") {
+	const n = children.length;
+	if (!n || actOf(parent) !== "idle") return null;
+	if (parent.status && parent.status !== "running") return null;
+	const name = nameOf(parent.title);
+	const reported = children.filter((c) => isReported$1(workerState(c, actOf(c)))).length;
+	if (reported === n && blocked) return {
+		kind: "blocked",
+		label: "wrap up",
+		cls: "s-waiting",
+		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — " + blocked
+	};
+	if (reported === n) return {
+		kind: "wrap",
+		label: "wrap up",
+		cls: "wrapchip",
+		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — paste the Wrap up prompt into " + name + " (you press Enter; it merges, runs the tests, and asks before deleting)"
+	};
+	return {
+		kind: "waiting",
+		label: "waiting",
+		cls: "s-waiting",
+		title: name + " is idle — " + (n - reported) + " of " + n + " workers haven't reported yet"
+	};
+}
+function childrenByParent(rows) {
+	const live = new Set(rows.filter((r) => !r.device).map((r) => r.title));
+	const out = /* @__PURE__ */ new Map();
+	for (const r of rows) {
+		const p = String(r.parent || "");
+		if (!live.has(p) || !isChildOf(r, p)) continue;
+		if (!out.has(p)) out.set(p, []);
+		out.get(p).push(r);
+	}
+	return out;
+}
+function inFamily(row, isWorker, kids) {
+	return isWorker || kids > 0 || !!row.playbook;
+}
+function workerOf(parent, nameOf) {
+	return parent ? "· worker of " + nameOf(parent) : "";
+}
+//#endregion
+//#region src/lib/playbooks.ts
+var NO_TOOLS_REASON = "This CLI doesn't get the MindFlock tools";
+var RESTART_REASON = "Restart this agent to give it the MindFlock tools";
+var ANSWER_FIRST_REASON = "Answer its prompt first — pasting now would answer the dialog";
+function mcpCapable(caps, inst) {
+	if (isRemote(inst)) return false;
+	const m = caps?.agent_mcp;
+	if (!m || !m.enabled) return false;
+	const provider = inst.provider || inst.program || "";
+	return !!provider && (m.providers || []).includes(provider);
+}
+function isRemote(inst) {
+	return !!inst.device || String(inst.title || "").includes("::");
+}
+function forkBlockReason(inst) {
+	if (inst.mcp_attached === false) return RESTART_REASON;
+	if (inst.activity === "clarify" || inst.activity === "limit") return ANSWER_FIRST_REASON;
+	return "";
+}
+function splitGate(caps, provider) {
+	const m = caps?.agent_mcp;
+	if (!m) return {
+		ok: true,
+		reason: ""
+	};
+	if (!m.enabled) return {
+		ok: false,
+		reason: "MindFlock tools are switched off for new sessions — Settings → General"
+	};
+	if (!(m.providers || []).includes(provider)) {
+		const names = (m.providers || []).map((p) => p.charAt(0).toUpperCase() + p.slice(1));
+		return {
+			ok: false,
+			reason: names.length ? `Needs a CLI that gets the MindFlock tools — ${names.join(" or ")}` : NO_TOOLS_REASON
+		};
+	}
+	return {
+		ok: true,
+		reason: ""
+	};
+}
+function liveChildren(title, rows) {
+	return childrenOf(title, rows);
+}
+function reportedLabel(children) {
+	return `${children.filter((c) => !!c.last_report).length} of ${children.length} reported`;
+}
+var WORKER_PLAYBOOKS = /* @__PURE__ */ new Set(["workers", "wrapup"]);
+function isWorkerPlaybook(p) {
+	return p.when === "has_children" || WORKER_PLAYBOOKS.has(p.id);
+}
+function menuModel(playbooks, children) {
+	const general = playbooks.filter((p) => !isWorkerPlaybook(p));
+	const items = playbooks.filter((p) => isWorkerPlaybook(p));
+	return {
+		general,
+		workers: children.length || items.length ? {
+			count: children.length,
+			reported: reportedLabel(children),
+			items
+		} : null
+	};
+}
+function letterOf(p) {
+	return String(p.letter || "").slice(0, 1).toUpperCase();
+}
+function askTargets(self, rows, railOrder, nameOf) {
+	const me = rows.find((r) => r.title === self);
+	const candidates = rows.filter((r) => r.title !== self && !r.device && !r.pending);
+	const rank = (t) => {
+		const i = railOrder.indexOf(t);
+		return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+	};
+	const relOf = (r) => {
+		if (r.parent === self) return "worker";
+		if (me?.parent && r.title === me.parent) return "parent";
+		if (me?.parent && r.parent === me.parent) return "sibling";
+		return "";
+	};
+	const famRank = (rel) => rel === "parent" ? 0 : rel === "worker" ? 1 : rel === "sibling" ? 2 : 3;
+	return candidates.map((r) => {
+		const i = rank(r.title);
+		return {
+			title: r.title,
+			name: nameOf(r.title),
+			slot: i < 9 ? String(i + 1) : "",
+			rel: relOf(r),
+			activity: String(r.activity || ""),
+			_i: i
+		};
+	}).sort((a, b) => famRank(a.rel) - famRank(b.rel) || a._i - b._i).map(({ _i: _unused, ...t }) => t);
+}
+var LIST_RE = /\b([a-z][\w-]*)((?:\s*,\s*(?:the\s+)?[a-z][\w-]*)+),?\s+(?:and|&)\s+(?:the\s+|an?\s+)?([a-z][\w-]*)/i;
+var CUE_RE = /\b(?:in parallel|split (?:it |this |the work )?(?:across|into|between)|fan(?:ning)? (?:it )?out|one (?:worker|session|agent) (?:per|for each)|across (?:\w+ )?workers)\b/i;
+var NOT_A_PIECE = /* @__PURE__ */ new Set([
+	"it",
+	"them",
+	"then",
+	"also",
+	"this",
+	"that"
+]);
+function splitSuggestion(text) {
+	const s = String(text || "");
+	const m = LIST_RE.exec(s);
+	if (m) {
+		const middle = m[2].split(",").map((x) => x.trim().replace(/^the\s+/i, "")).filter(Boolean);
+		const all = [
+			m[1],
+			...middle,
+			m[3]
+		].map((x) => x.toLowerCase());
+		const pieces = all.filter((x, i) => !NOT_A_PIECE.has(x) && all.indexOf(x) === i);
+		if (pieces.length >= 3) return { pieces: pieces.slice(0, 5) };
+	}
+	if (CUE_RE.test(s)) return { pieces: [] };
+	return null;
+}
+function suggestionPill(sug) {
+	return ["suggested", ...sug.pieces].join(" · ");
+}
+function withSplit(body, on) {
+	if (!on) return body;
+	const next = {
+		...body,
+		playbook: "split"
+	};
+	if ("in_place" in next) next.in_place = false;
+	return next;
+}
+async function fetchPlaybooks(title) {
+	return (await api("/api/playbooks" + (title ? "?title=" + encodeURIComponent(title) : "")))?.playbooks || [];
+}
+var pasting = /* @__PURE__ */ new Set();
+async function pastePlaybook(title, pb, args = {}) {
+	if (pasting.has(title)) return false;
+	pasting.add(title);
+	try {
+		return await pasteNow(title, pb, args);
+	} finally {
+		pasting.delete(title);
+	}
+}
+async function pasteNow(title, pb, args) {
+	const name = displayName(title);
+	try {
+		const { text } = await api("/api/playbooks/" + encodeURIComponent(pb.id) + "/render", { json: {
+			title,
+			args
+		} });
+		if (!text) throw new Error("the server rendered an empty prompt");
+		await api("/api/instances/" + encodeURIComponent(title) + "/send", { json: {
+			text,
+			submit: false,
+			dialog_safe: true
+		} });
+		const ui = useUi.getState();
+		if (ui.lastTab[title] !== "agent") ui.setLastTab(title, "agent");
+		selectSession(title);
+		setTimeout(() => focusTerm(title), 60);
+		const label = pb.label.replace(/…$/, "");
+		toast(/:\s*$/.test(text) ? `Typed “${label}” into ${name} — add the task, then press Enter` : `Typed “${label}” into ${name} — press Enter to run it`, { duration: 4e3 });
+		return true;
+	} catch (err) {
+		toast(`Couldn't type “${pb.label}” into ${name}: ${errMsg(err)}`, { duration: 6e3 });
+		return false;
+	}
+}
+async function runPlaybook(title, id, args = {}, label) {
+	let list;
+	try {
+		list = await fetchPlaybooks(title);
+	} catch (err) {
+		toast("Couldn't load the playbooks: " + errMsg(err), { duration: 6e3 });
+		return false;
+	}
+	const pb = list.find((p) => p.id === id);
+	if (!pb) {
+		toast(`That isn't available for ${displayName(title)} right now`);
+		return false;
+	}
+	if (!pb.available) {
+		toast(pb.disabled_reason || `That isn't available for ${displayName(title)} right now`, { duration: 5e3 });
+		return false;
+	}
+	return pastePlaybook(title, label ? {
+		id: pb.id,
+		label
+	} : pb, args);
+}
+function openPlaybookMenu(title, sub = null) {
+	const inst = instances$1().find((r) => r.title === title);
+	if (!inst || !mcpCapable(configCaps(), inst)) {
+		toast(NO_TOOLS_REASON);
+		return;
+	}
+	const why = forkBlockReason(inst);
+	if (why) {
+		toast(why, { duration: 5e3 });
+		return;
+	}
+	selectSession(title, { noKeyboard: true });
+	requestAnimationFrame(() => useUi.getState().setPlaybookMenu({
+		title,
+		sub
+	}));
+}
+function focusQueueInput(title) {
+	selectSession(title, { noKeyboard: true });
+	useUi.getState().setLastTab(title, "queue");
+	let tries = 0;
+	const tick = () => {
+		const box = document.querySelector(`.pane[data-title="${CSS.escape(title)}"]`)?.querySelector(".pane-queue .queue-input");
+		if (box) {
+			box.focus();
+			return;
+		}
+		if (++tries < 40) setTimeout(tick, 50);
+	};
+	setTimeout(tick, 0);
+}
+function configCaps() {
+	return queryClient.getQueryData(["config"])?.caps;
+}
+//#endregion
 //#region src/lib/keymap.ts
 var _host = null;
 function isEditingTarget(el) {
 	if (!el) return false;
 	const tag = el.tagName;
 	return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable === true;
+}
+function threadComposerFocused() {
+	const el = document.activeElement;
+	return !!el && isEditingTarget(el) && !!el.closest?.(".thread-compose");
+}
+function threadTabFocused() {
+	return !!document.activeElement?.closest?.(".thread-root");
 }
 function terminalFocused() {
 	const el = document.activeElement;
@@ -27877,7 +28447,8 @@ var MODAL_DOM_IDS = [
 	"intake-dialog",
 	"verify-dialog",
 	"red-zones-dialog",
-	"break-screen"
+	"break-screen",
+	"playbook-menu"
 ];
 function modalOpen() {
 	const open = useUi.getState().openDialog;
@@ -27994,10 +28565,31 @@ var CHORDS = {
 			selectSession(t, { noKeyboard: true });
 			useUi.getState().setLastTab(t, "map");
 		}
+	},
+	s: {
+		desc: "Message…",
+		run: (t) => useUi.getState().threadOpen(t, { composeTo: t })
+	},
+	f: {
+		desc: "Work with other sessions…",
+		run: (t) => openPlaybookMenu(t)
+	},
+	t: {
+		desc: "Thread — workers and messages",
+		run: (t) => useUi.getState().threadOpen(t)
 	}
 };
 function chordKeyFor(id) {
 	return String(_keyOv.chords[id] || id).toLowerCase();
+}
+function chordShadowedBy(id) {
+	if (_keyOv.chords[id]) return null;
+	const key = chordKeyFor(id);
+	return Object.keys(CHORDS).find((c) => c !== id && !!_keyOv.chords[c] && chordKeyFor(c) === key) ?? null;
+}
+function chordForKey(pressed) {
+	const ids = Object.keys(CHORDS);
+	return ids.find((k) => !!_keyOv.chords[k] && chordKeyFor(k) === pressed) ?? ids.find((k) => !_keyOv.chords[k] && chordKeyFor(k) === pressed);
 }
 var _chordPending = false;
 var _chordTimer;
@@ -28021,8 +28613,7 @@ function _handleChordKey(e) {
 	e.preventDefault();
 	e.stopPropagation();
 	if (key === "Escape") return;
-	const pressed = key.toLowerCase();
-	const cid = Object.keys(CHORDS).find((k) => chordKeyFor(k) === pressed);
+	const cid = chordForKey(key.toLowerCase());
 	const chord = cid ? CHORDS[cid] : void 0;
 	if (!chord) {
 		toast("Ctrl+K " + key.toUpperCase() + " isn’t bound — press ? for shortcuts");
@@ -28188,7 +28779,7 @@ var KEYMAP = [
 			"Ctrl+W / Delete",
 			"End the focused session (undo: Ctrl+Shift+T)"
 		],
-		when: () => !!useUi.getState().focused && !modalOpen(),
+		when: () => !!useUi.getState().focused && !modalOpen() && !threadComposerFocused() && !threadTabFocused(),
 		run: () => {
 			const f = useUi.getState().focused;
 			if (f) killSession(f);
@@ -28198,7 +28789,7 @@ var KEYMAP = [
 		key: "Delete",
 		shift: "any",
 		aliasOf: "close",
-		when: () => !!useUi.getState().focused && !modalOpen() && !isEditingTarget(document.activeElement) && !document.activeElement?.closest?.(".cm-root"),
+		when: () => !!useUi.getState().focused && !modalOpen() && !isEditingTarget(document.activeElement) && !document.activeElement?.closest?.(".cm-root") && !threadTabFocused(),
 		run: () => {
 			const f = useUi.getState().focused;
 			if (f) killSession(f);
@@ -29046,8 +29637,430 @@ function ExtensionDialog() {
 	});
 }
 //#endregion
-//#region src/components/NotificationsBell.tsx
+//#region src/lib/flockActions.ts
 var import_react_dom = require_react_dom();
+var obj$2 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
+var str$2 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
+function normOption(v) {
+	const o = obj$2(v);
+	const key = str$2(o.key).trim();
+	if (!/^[1-9]$/.test(key)) return null;
+	return {
+		key,
+		label: str$2(o.label).trim() || key,
+		kind: str$2(o.kind, "other")
+	};
+}
+function normDialog(v) {
+	const o = obj$2(v);
+	const parsed = o.parsed === true;
+	const command = o.command == null ? null : str$2(o.command).trim() || null;
+	const options = parsed && Array.isArray(o.options) ? o.options.map(normOption).filter((x) => !!x) : [];
+	return {
+		id: str$2(o.id),
+		parsed: parsed && options.length > 0,
+		question: str$2(o.question).trim(),
+		command,
+		options
+	};
+}
+async function fetchDialog(title, signal) {
+	try {
+		const body = await instApi(title, "/dialog?quiet=1", { signal });
+		return body == null ? null : normDialog(body);
+	} catch (err) {
+		if (err.status === 409) return null;
+		throw err;
+	}
+}
+var DIALOG_FRESH_MS = 3e3;
+var LABEL_PREFIX = 24;
+var squash = (s) => (s ?? "").replace(/\s+/g, "");
+var labelKey = (label) => squash(label.split("…")[0]).slice(0, LABEL_PREFIX);
+function sameDialogShape(a, b) {
+	if (!a.parsed || !b.parsed || a.options.length !== b.options.length) return false;
+	if (squash(a.command) !== squash(b.command)) return false;
+	return a.options.every((o, i) => {
+		const p = b.options[i];
+		if (o.key !== p.key) return false;
+		const x = labelKey(o.label);
+		const y = labelKey(p.label);
+		return !!x && !!y && (x.startsWith(y) || y.startsWith(x));
+	});
+}
+async function answerFresh(title, key, shown, fetchedAt, now = Date.now()) {
+	let target = shown;
+	if (now - fetchedAt > DIALOG_FRESH_MS) {
+		let fresh;
+		try {
+			fresh = await fetchDialog(title);
+		} catch {
+			fresh = void 0;
+		}
+		if (fresh === null) return {
+			kind: "changed",
+			dialog: null
+		};
+		if (fresh && fresh.id !== shown.id) {
+			if (!sameDialogShape(shown, fresh)) return {
+				kind: "changed",
+				dialog: fresh
+			};
+			target = fresh;
+		}
+	}
+	for (let attempt = 0;; attempt++) try {
+		await answerDialog(title, key, target.id);
+		return {
+			kind: "answered",
+			dialog: target
+		};
+	} catch (err) {
+		if (isDialogAnswered(err)) return { kind: "already" };
+		if (!isDialogChanged(err)) return {
+			kind: "failed",
+			error: err
+		};
+		const fresh = await fetchDialog(title).catch(() => null);
+		if (attempt > 0 || !fresh || !sameDialogShape(shown, fresh)) return {
+			kind: "changed",
+			dialog: fresh
+		};
+		target = fresh;
+	}
+}
+function answerDialog(title, key, dialogId) {
+	return instApi(title, "/answer", { json: {
+		keys: [key],
+		dialog_id: dialogId,
+		by: "user"
+	} });
+}
+function isDialogAnswered(err) {
+	const e = err;
+	return e?.status === 409 && obj$2(e.body).dialog_answered === true;
+}
+function isDialogChanged(err) {
+	const e = err;
+	return e?.status === 409 && obj$2(e.body).dialog_changed === true;
+}
+var wrapping = /* @__PURE__ */ new Set();
+async function pasteWrapup(title) {
+	if (!title || wrapping.has(title)) return false;
+	wrapping.add(title);
+	try {
+		return await pastePlaybook(title, {
+			id: "wrapup",
+			label: "Wrap up workers"
+		});
+	} finally {
+		wrapping.delete(title);
+	}
+}
+function openThread(title, composeTo) {
+	useUi.getState().threadOpen(title, composeTo ? { composeTo } : void 0);
+}
+//#endregion
+//#region src/components/AnswerStrip.tsx
+var ANSWER_RECHECK_MS = 3e3;
+var ANSWERED_HOLD_MS = 4e3;
+var RESIZE_SETTLE_MS = 600;
+var STRIP_INITIAL = {
+	dialog: null,
+	phase: "idle",
+	picked: "",
+	note: "",
+	answeredAt: 0,
+	loadedAt: 0
+};
+function stripReducer(s, a) {
+	switch (a.type) {
+		case "reset": return STRIP_INITIAL;
+		case "loading": return {
+			...s,
+			phase: s.dialog ? s.phase : "loading"
+		};
+		case "loaded":
+			if (s.phase === "answered" && a.dialog && s.dialog && a.dialog.id === s.dialog.id) {
+				const now = a.now ?? Date.now();
+				if (!s.answeredAt || now - s.answeredAt < ANSWERED_HOLD_MS) return s;
+				return {
+					...STRIP_INITIAL,
+					dialog: a.dialog,
+					phase: "ready",
+					note: "It's asking again",
+					loadedAt: now
+				};
+			}
+			if (s.phase === "answered" && !a.dialog) return s;
+			return {
+				...STRIP_INITIAL,
+				dialog: a.dialog,
+				phase: a.dialog ? "ready" : "idle",
+				note: a.note || "",
+				loadedAt: a.dialog ? a.now ?? Date.now() : 0
+			};
+		case "refreshed":
+			if (s.phase !== "ready") return s;
+			if (!a.dialog) return STRIP_INITIAL;
+			return {
+				...s,
+				dialog: a.dialog,
+				note: s.dialog && a.dialog.id === s.dialog.id ? s.note : "",
+				loadedAt: a.now ?? Date.now()
+			};
+		case "sending": return s.phase === "ready" ? {
+			...s,
+			phase: "sending",
+			picked: a.key,
+			note: ""
+		} : s;
+		case "answered": return s.phase === "sending" ? {
+			...s,
+			dialog: a.dialog ?? s.dialog,
+			phase: "answered",
+			answeredAt: a.now ?? Date.now()
+		} : s;
+		case "failed": return {
+			...s,
+			phase: s.dialog ? "ready" : "idle",
+			picked: "",
+			note: a.note
+		};
+		default: return s;
+	}
+}
+function primaryIndex(options) {
+	return options.length && options[0].kind !== "always" ? 0 : -1;
+}
+function optionLabel(o, variant) {
+	if (o.kind === "yes") return "Yes";
+	if (o.kind === "always") return variant === "thread" ? "Yes, don't ask again" : "Always";
+	if (o.kind === "no") return "No…";
+	const words = o.label.replace(/\s*\(esc\)\s*$/i, "").trim();
+	const max = variant === "thread" ? 28 : 10;
+	return words.length > max ? words.slice(0, max - 1).trimEnd() + "…" : words;
+}
+function questionText(d, variant) {
+	const q = d.question.trim();
+	if (variant !== "rail") return q;
+	return q.replace(/^(do you want to|would you like to)\s+/i, "") || q;
+}
+function AnswerStripView({ state, rootRef, variant, hint, onPick, onOpen, children }) {
+	const d = state.dialog;
+	if (!d) return null;
+	const q = questionText(d, variant);
+	const busy = state.phase === "sending" || state.phase === "answered";
+	const prim = primaryIndex(d.options);
+	const shown = state.phase === "answered" ? d.options.filter((o) => o.key === state.picked) : d.options;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		ref: rootRef,
+		className: "flock-answer fa-" + variant + (busy ? " is-busy" : "") + (d.parsed ? "" : " is-unparsed"),
+		"data-dialog": d.id,
+		onClick: (e) => e.stopPropagation(),
+		onDoubleClick: (e) => e.stopPropagation(),
+		children: [(q || d.command) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "fa-q",
+			title: [
+				d.command,
+				d.question,
+				d.source ? "Asked by the " + d.source : ""
+			].filter(Boolean).join("\n"),
+			children: [
+				d.command && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: d.command }),
+				d.command && q ? " — " : "",
+				q
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "fa-box",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "fa-btns",
+					children: [
+						d.parsed && shown.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							className: "fa-opt" + (d.options.indexOf(o) === prim ? " primary" : "") + (state.picked === o.key ? " picked" : ""),
+							"data-key": o.key,
+							"data-kind": o.kind,
+							disabled: busy,
+							title: "Press " + o.key + ": " + o.label,
+							onClick: () => onPick(o.key),
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "k",
+								children: o.key
+							}), optionLabel(o, variant)]
+						}, o.key)),
+						state.phase === "answered" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fa-state",
+							children: "answered"
+						}),
+						state.phase === "sending" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fa-state",
+							children: "sending…"
+						}),
+						variant === "thread" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "fa-sp" }),
+						children,
+						onOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "fa-open ghost",
+							title: "Open its pane",
+							onClick: () => onOpen(),
+							children: variant === "thread" ? "Open ↗" : "↗"
+						})
+					]
+				}),
+				hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "fa-hint",
+					children: hint
+				}),
+				state.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "fa-note",
+					children: state.note
+				})
+			]
+		})]
+	});
+}
+var mounted = /* @__PURE__ */ new Map();
+function AnswerStrip({ title, activity, variant, onOpen, onRedirect, children, ref }) {
+	const [state, dispatch] = (0, import_react.useReducer)(stripReducer, STRIP_INITIAL);
+	const live = (0, import_react.useRef)(state);
+	live.current = state;
+	const redirect = (0, import_react.useRef)(onRedirect);
+	redirect.current = onRedirect;
+	const { data: instances } = useInstances();
+	const waiting = activity === "clarify";
+	(0, import_react.useEffect)(() => {
+		dispatch({ type: "reset" });
+		if (!waiting) return;
+		const ctl = new AbortController();
+		dispatch({ type: "loading" });
+		fetchDialog(title, ctl.signal).then((dialog) => !ctl.signal.aborted && dispatch({
+			type: "loaded",
+			dialog
+		}), () => !ctl.signal.aborted && dispatch({
+			type: "loaded",
+			dialog: null
+		}));
+		return () => ctl.abort();
+	}, [
+		title,
+		waiting,
+		activity
+	]);
+	const answered = state.phase === "answered";
+	(0, import_react.useEffect)(() => {
+		if (!answered || !waiting) return;
+		const ctl = new AbortController();
+		const timer = window.setInterval(() => {
+			fetchDialog(title, ctl.signal).then((dialog) => !ctl.signal.aborted && dispatch({
+				type: "loaded",
+				dialog
+			}), () => {});
+		}, ANSWER_RECHECK_MS);
+		return () => {
+			ctl.abort();
+			clearInterval(timer);
+		};
+	}, [
+		answered,
+		waiting,
+		title
+	]);
+	const root = (0, import_react.useRef)(null);
+	const shown = !!state.dialog;
+	(0, import_react.useEffect)(() => {
+		if (!waiting || !shown) return;
+		const ctl = new AbortController();
+		let timer = 0;
+		let first = true;
+		const settle = () => {
+			clearTimeout(timer);
+			timer = window.setTimeout(() => {
+				if (live.current.phase !== "ready") return;
+				fetchDialog(title, ctl.signal).then((dialog) => !ctl.signal.aborted && dispatch({
+					type: "refreshed",
+					dialog
+				}), () => {});
+			}, RESIZE_SETTLE_MS);
+		};
+		window.addEventListener("resize", settle);
+		const ro = typeof ResizeObserver !== "undefined" && root.current ? new ResizeObserver(() => {
+			if (first) first = false;
+			else settle();
+		}) : null;
+		if (ro && root.current) ro.observe(root.current);
+		return () => {
+			ctl.abort();
+			clearTimeout(timer);
+			window.removeEventListener("resize", settle);
+			ro?.disconnect();
+		};
+	}, [
+		waiting,
+		shown,
+		title
+	]);
+	const pick = (key) => {
+		const s = live.current;
+		const d = s.dialog;
+		const opt = d?.parsed ? d.options.find((o) => o.key === key) : void 0;
+		if (!d || !opt || s.phase !== "ready") return false;
+		dispatch({
+			type: "sending",
+			key
+		});
+		answerFresh(title, key, d, s.loadedAt).then((out) => {
+			if (out.kind === "answered") {
+				dispatch({
+					type: "answered",
+					dialog: out.dialog
+				});
+				if (opt.kind === "no") redirect.current?.();
+			} else if (out.kind === "already") dispatch({ type: "answered" });
+			else if (out.kind === "changed") dispatch({
+				type: "loaded",
+				dialog: out.dialog,
+				note: out.dialog ? "The prompt changed — this is the new one" : ""
+			});
+			else dispatch({
+				type: "failed",
+				note: "Couldn't answer: " + errMsg(out.error)
+			});
+		});
+		return true;
+	};
+	(0, import_react.useImperativeHandle)(ref, () => ({ answerKey: pick }));
+	const pickNow = (0, import_react.useRef)(pick);
+	pickNow.current = pick;
+	(0, import_react.useEffect)(() => {
+		const h = { answerKey: (k) => pickNow.current(k) };
+		let set = mounted.get(title);
+		if (!set) mounted.set(title, set = /* @__PURE__ */ new Set());
+		set.add(h);
+		return () => {
+			set.delete(h);
+			if (!set.size && mounted.get(title) === set) mounted.delete(title);
+		};
+	}, [title]);
+	if (!waiting) return null;
+	let hint;
+	if (variant === "bell") {
+		const parent = instances?.find((i) => i.title === title)?.parent;
+		if (parent) hint = displayName(parent) + " is waiting on this worker too";
+	}
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStripView, {
+		state,
+		rootRef: root,
+		variant,
+		hint,
+		onPick: pick,
+		onOpen,
+		children
+	});
+}
+//#endregion
+//#region src/components/NotificationsBell.tsx
 var NOTIF_CAP = 100;
 var NOTIF_SEEN_KEY = "mf_notif_seen_ts";
 function BellGlyph({ size = 15 }) {
@@ -29127,6 +30140,7 @@ function notifFromEvent(env) {
 			text: "red-zone guard tampered (" + String(d.what || "guard") + ")",
 			cls: "n-warn"
 		};
+		case "session.message": return messageNotif(d, displayName);
 		default: return null;
 	}
 }
@@ -29193,6 +30207,13 @@ function NotificationsBell() {
 		};
 	}, [open]);
 	const attn = attentionItems(instances);
+	const families = childrenByParent(instances);
+	const familyOf = (title) => {
+		const inst = instances.find((x) => x.title === title);
+		if (!inst || inst.device) return null;
+		const parent = inst.parent && families.get(inst.parent)?.includes(inst) ? inst.parent : "";
+		return inFamily(inst, !!parent, families.get(title)?.length ?? 0) ? { parent } : null;
+	};
 	const unread = notifs.filter((n) => n.ts > seenTs).length;
 	const aliases = useUi((s) => s.aliases);
 	const openPanel = () => {
@@ -29270,30 +30291,46 @@ function NotificationsBell() {
 						className: "notif-attn-head",
 						children: "Needs attention"
 					}),
-					shownAttn.map((it) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "attn-item p" + it.p,
-						"data-attn": it.title,
-						onClick: () => jump(it.title),
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "attn-dot" }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "attn-title",
-								children: aliases[it.title] || it.title
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "attn-reason",
-								children: it.reason
-							}),
-							!!it.snippet && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "attn-snippet",
-								children: [
-									"“",
-									typeof it.snippet === "string" ? it.snippet : JSON.stringify(it.snippet),
-									"”"
-								]
-							})
-						]
-					}, it.title + it.reason)),
+					shownAttn.map((it) => {
+						const fam = it.p === 0 ? familyOf(it.title) : null;
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "attn-item p" + it.p,
+							"data-attn": it.title,
+							onClick: () => jump(it.title),
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "attn-dot" }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "attn-title",
+									children: aliases[it.title] || it.title
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "attn-reason",
+									children: it.reason
+								}),
+								fam?.parent && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "attn-lineage",
+									children: workerOf(fam.parent, displayName)
+								}),
+								fam ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
+									title: it.title,
+									activity: "clarify",
+									variant: "bell",
+									onOpen: () => jump(it.title),
+									onRedirect: () => {
+										setOpen(false);
+										openThread(fam.parent || it.title, it.title);
+									}
+								}) : !!it.snippet && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "attn-snippet",
+									children: [
+										"“",
+										typeof it.snippet === "string" ? it.snippet : JSON.stringify(it.snippet),
+										"”"
+									]
+								})
+							]
+						}, it.title + it.reason);
+					}),
 					attn.length > shownAttn.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "attn-more muted",
 						children: [
@@ -29577,6 +30614,18 @@ function EventToasts() {
 			notifyOnce(env.session || "*", name, msg, {
 				onClick: () => openMap(env.session),
 				duration: name === "session.red_zone_blocked" ? 6e3 : 9e3
+			});
+		}));
+		unsubs.push(ev.subscribe("session.message", (env) => {
+			if (isReplay(env) || !env.session) return;
+			const d = env.data || {};
+			const from = String(d.from || "");
+			const isResult = d.kind === "result";
+			notifyOnce(isResult ? env.session : from || "*external", isResult ? "result:" + from : "message", messageToastText(env.session, d, displayName), {
+				onClick: () => {
+					if (instByTitle(env.session)) selectSession(env.session);
+				},
+				duration: isResult ? 8e3 : 5e3
 			});
 		}));
 		unsubs.push(ev.subscribe("session.deleted", (env) => {
@@ -30242,13 +31291,156 @@ function redZoneChip(rz, seenAt) {
 	return null;
 }
 //#endregion
+//#region src/components/sidebar/PlaybookRowItems.tsx
+function PlaybookRowItems({ inst }) {
+	const title = inst.title;
+	const { data: config } = useConfig();
+	const { data: rows } = useInstances();
+	const railOrder = useUi((s) => s.railOrder);
+	const capable = mcpCapable(config?.caps, inst);
+	const [list, setList] = (0, import_react.useState)(null);
+	const [askOpen, setAskOpen] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (!capable) return;
+		let live = true;
+		fetchPlaybooks(title).then((l) => live && setList(l)).catch(() => live && setList([]));
+		return () => {
+			live = false;
+		};
+	}, [capable, title]);
+	const children = (0, import_react.useMemo)(() => liveChildren(title, rows || []), [title, rows]);
+	const model = (0, import_react.useMemo)(() => menuModel(list || [], children), [list, children]);
+	const targets = (0, import_react.useMemo)(() => askOpen ? askTargets(title, rows || [], railOrder, displayName) : [], [
+		askOpen,
+		title,
+		rows,
+		railOrder
+	]);
+	if (!capable) return null;
+	const blocked = forkBlockReason(inst);
+	const askPb = (list || []).find((p) => p.args.some((a) => a.kind === "session" && a.required));
+	const button = (pb) => {
+		const why = blocked || (pb.available ? "" : pb.disabled_reason || "Not available right now");
+		const isAsk = pb === askPb;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			className: why ? "pb-row-off" : void 0,
+			"aria-disabled": why ? true : void 0,
+			"aria-expanded": isAsk ? askOpen : void 0,
+			title: why || pb.desc,
+			"data-playbook": pb.id,
+			onClick: (e) => {
+				e.stopPropagation();
+				if (why) {
+					toast(why, { duration: 5e3 });
+					return;
+				}
+				if (isAsk) {
+					setAskOpen((v) => !v);
+					return;
+				}
+				pastePlaybook(title, pb);
+			},
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [pb.label, pb.id === "wrapup" && model.workers ? ` (${model.workers.reported})` : ""] }), isAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "kbd",
+				children: askOpen ? "▾" : "›"
+			})]
+		}, pb.id);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		list === null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			className: "pb-row-off",
+			"aria-disabled": true,
+			disabled: true,
+			children: "Work with other sessions…"
+		}),
+		model.general.map((pb) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Fragment, { children: [button(pb), pb === askPb && askOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "pb-row-sub",
+			role: "group",
+			"aria-label": "Ask which session",
+			children: [targets.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted pb-row-none",
+				children: "No other sessions"
+			}), targets.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				onClick: (e) => {
+					e.stopPropagation();
+					setAskOpen(false);
+					pastePlaybook(title, pb, { session: t.title });
+				},
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t.name }), t.rel && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rel",
+					children: t.rel
+				})]
+			}, t.title))]
+		})] }, pb.id)),
+		model.workers?.items.map(button),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			onClick: (e) => {
+				e.stopPropagation();
+				useUi.getState().threadOpen(title, { composeTo: title });
+			},
+			children: ["Message…", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "kbd",
+				children: "Ctrl+K S"
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })
+	] });
+}
+//#endregion
 //#region src/components/sidebar/SidebarRow.tsx
 var DBLCLICK_MS = 300;
 function displayTitle(inst) {
 	return inst.display_title || inst.title || "";
 }
-var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScreen, dropCue, onDragState, onDropCue, onDropRow }) {
+var NEST_STEP = 14;
+var NEST_X0 = 32;
+var nestX = (depth) => NEST_X0 + NEST_STEP * (depth - 1);
+function NestLines({ nest, part }) {
+	const lines = [];
+	for (let k = 1; k < nest.depth; k++) if (nest.guides[k]) lines.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "nl nl-v",
+		style: { left: nestX(k) }
+	}, "g" + k));
+	if (part === "row") {
+		if (nest.depth) {
+			lines.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "nl nl-elbow",
+				style: {
+					left: nestX(nest.depth),
+					width: 9
+				}
+			}, "elbow"));
+			if (nest.more) lines.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "nl nl-down",
+				style: { left: nestX(nest.depth) }
+			}, "more"));
+		}
+		if (nest.stem) lines.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "nl nl-stem",
+			style: { left: nestX(nest.depth + 1) }
+		}, "stem"));
+	} else {
+		if (nest.depth && nest.more) lines.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "nl nl-v",
+			style: { left: nestX(nest.depth) }
+		}, "more"));
+		if (nest.stem) lines.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "nl nl-v",
+			style: { left: nestX(nest.depth + 1) }
+		}, "stem"));
+	}
+	return lines.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: lines }) : null;
+}
+var FLAT = {
+	depth: 0,
+	more: false,
+	guides: [],
+	stem: false
+};
+var NO_KIDS = [];
+var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScreen, dropCue, onDragState, onDropCue, onDropRow, nest = FLAT, kids = NO_KIDS, parentLive = false }) {
 	const [expanded, setExpanded] = (0, import_react.useState)(false);
+	const strip = (0, import_react.useRef)(null);
 	const [editing, setEditing] = (0, import_react.useState)(false);
 	const cancelled = (0, import_react.useRef)(false);
 	const renameTimer = (0, import_react.useRef)(null);
@@ -30256,7 +31448,8 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	const { data: config } = useConfig();
 	const focused = useUi((s) => s.focused);
 	const hidden = useUi((s) => s.hidden.has(inst.title));
-	const alias = useUi((s) => s.aliases[inst.title]);
+	const aliases = useUi((s) => s.aliases);
+	const alias = aliases[inst.title];
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const setAlias = useUi((s) => s.setAlias);
 	const title = inst.title;
@@ -30276,6 +31469,31 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	const num = idx < 9 ? String(idx + 1) : "";
 	const label = sessionLabel(displayTitle(inst), inst.branch || "");
 	const shown = alias || label.text;
+	const nameOf = (t) => {
+		if (aliases[t]) return aliases[t];
+		const p = queryClient.getQueryData(["instances"])?.find((x) => x.title === t);
+		return p ? sessionLabel(displayTitle(p), p.branch || "").text : t;
+	};
+	const lineage = lineageMark(inst.parent, inst.spawned, nameOf);
+	const activity = effectiveActivity(inst);
+	const isWorker = !!inst.parent && parentLive && !pending;
+	const nested = nest.depth > 0;
+	const wline = isWorker ? workerLine(inst, {
+		nested,
+		parentName: nameOf(inst.parent),
+		act: activity
+	}) : null;
+	const roll = kids.length && !pending ? rollup(kids, nameOf, effectiveActivity) : null;
+	const pchip = kids.length && !pending && !missing ? parentChip(inst, kids, nameOf, effectiveActivity, forkBlockReason(inst)) : null;
+	const answering = inFamily(inst, isWorker, kids.length) && activity === "clarify" && !missing && !paused;
+	const subline = !editing && (wline || roll || lineage);
+	const [, tick] = (0, import_react.useReducer)((n) => n + 1, 0);
+	const counting = wline?.state === "working";
+	(0, import_react.useEffect)(() => {
+		if (!counting) return;
+		const t = window.setInterval(tick, 3e4);
+		return () => clearInterval(t);
+	}, [counting]);
 	const folder = inst.folder || inst.path || "";
 	const agentWs = (0, import_react.useSyncExternalStore)(subscribeTermStates, (0, import_react.useCallback)(() => peekTerm(title, "agent")?.state, [title]));
 	const disconnected = inst.status === "running" && onScreen && agentWs === "disconnected";
@@ -30313,10 +31531,19 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 		setAlias(title, nextAlias);
 		toast(nextAlias ? `Renamed to “${nextAlias}”` : "Reset to real title");
 	};
-	const rowCls = "inst" + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (dropCue ? ` drop-${dropCue}` : "");
+	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (dropCue ? ` drop-${dropCue}` : "");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: rowCls,
 		"data-title": title,
+		tabIndex: answering ? 0 : void 0,
+		onKeyDown: (e) => {
+			if (!answering || e.ctrlKey || e.metaKey || e.altKey || !/^[1-9]$/.test(e.key)) return;
+			if (isEditingTarget(e.target)) return;
+			if (strip.current?.answerKey(e.key)) {
+				e.preventDefault();
+				e.stopPropagation();
+			}
+		},
 		...rowDndProps(title, {
 			onDragState,
 			onDropCue,
@@ -30337,6 +31564,10 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 				if (!missing && !pending) ideSession(title, true);
 			},
 			children: [
+				(nested || nest.stem) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NestLines, {
+					nest,
+					part: "row"
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "grip",
 					title: "Drag to reorder",
@@ -30354,43 +31585,87 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 					onClick: (e) => act(() => setExpanded((v) => !v), e),
 					children: "›"
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "meta",
-					children: editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						className: "title title-edit",
-						type: "text",
-						defaultValue: shown,
-						autoFocus: true,
-						autoComplete: "off",
-						spellCheck: false,
-						onFocus: (e) => e.currentTarget.select(),
-						onMouseDown: (e) => e.stopPropagation(),
-						onClick: (e) => e.stopPropagation(),
-						onDoubleClick: (e) => e.stopPropagation(),
-						onBlur: (e) => commitRename(e.currentTarget.value),
-						onKeyDown: (e) => {
-							if (e.key === "Enter") {
-								e.preventDefault();
-								commitRename(e.currentTarget.value);
-							} else if (e.key === "Escape") {
-								e.preventDefault();
-								cancelled.current = true;
-								editEndedAt.current = Date.now();
-								setEditing(false);
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "meta" + (subline ? " has-lineage" : ""),
+					children: [
+						editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							className: "title title-edit",
+							type: "text",
+							defaultValue: shown,
+							autoFocus: true,
+							autoComplete: "off",
+							spellCheck: false,
+							onFocus: (e) => e.currentTarget.select(),
+							onMouseDown: (e) => e.stopPropagation(),
+							onClick: (e) => e.stopPropagation(),
+							onDoubleClick: (e) => e.stopPropagation(),
+							onBlur: (e) => commitRename(e.currentTarget.value),
+							onKeyDown: (e) => {
+								if (e.key === "Enter") {
+									e.preventDefault();
+									commitRename(e.currentTarget.value);
+								} else if (e.key === "Escape") {
+									e.preventDefault();
+									cancelled.current = true;
+									editEndedAt.current = Date.now();
+									setEditing(false);
+								}
 							}
-						}
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "title",
-						title: [
-							alias ? `${alias}  ·  ${label.text}` : label.text,
-							label.kind ? `session: ${displayTitle(inst)}` : "",
-							inst.branch ? `branch: ${inst.branch}` : "",
-							focused === title ? "Click again to rename" : ""
-						].filter(Boolean).join("\n"),
-						children: shown
-					})
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "title",
+							title: [
+								alias ? `${alias}  ·  ${label.text}` : label.text,
+								label.kind ? `session: ${displayTitle(inst)}` : "",
+								inst.branch ? `branch: ${inst.branch}` : "",
+								wline ? wline.title : lineage ? lineage.title : "",
+								focused === title ? "Click again to rename" : ""
+							].filter(Boolean).join("\n"),
+							children: shown
+						}),
+						!editing && wline && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "lineage " + wline.cls,
+							title: wline.title,
+							children: wline.text
+						}),
+						!editing && !wline && lineage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "lineage" + (lineage.spawned ? " spawned" : ""),
+							title: lineage.title,
+							children: lineage.text
+						}),
+						!editing && roll && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "lineage workers",
+							title: roll.title,
+							role: "button",
+							tabIndex: 0,
+							"aria-label": roll.parts.map((p) => p.text).join(" · ") + " — open the Thread",
+							onClick: (e) => act(() => openThread(title), e),
+							onDoubleClick: (e) => e.stopPropagation(),
+							onKeyDown: (e) => {
+								if (e.key !== "Enter" && e.key !== " ") return;
+								e.preventDefault();
+								e.stopPropagation();
+								openThread(title);
+							},
+							children: roll.parts.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [i > 0 && " · ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: p.cls || void 0,
+								children: p.text
+							})] }, i))
+						})
+					]
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				pchip?.kind === "wrap" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "stagechip " + pchip.cls,
+					title: pchip.title,
+					"aria-label": pchip.title,
+					onClick: (e) => act(() => void pasteWrapup(title), e),
+					onDoubleClick: (e) => e.stopPropagation(),
+					children: pchip.label
+				}) : pchip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "stagechip " + pchip.cls,
+					title: pchip.title,
+					children: pchip.label
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "stagechip " + chip.cls,
 					title: chip.title,
 					children: chip.label
@@ -30418,148 +31693,166 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 					children: missing ? "Clean up" : "✕"
 				})
 			]
-		}), expanded && !pending && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "inst-actions",
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "inst-tail",
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "folder-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "folder-path",
-						title: folder,
-						children: inst.folder_label || folder || "—"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						className: "folder-copy",
-						title: "Copy full folder path",
-						onClick: (e) => act(async () => {
-							if (!folder) return;
-							if (await copyText(folder)) toast("Copied path");
-						}, e),
-						children: "Copy path"
-					})]
+				(nested || nest.stem) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NestLines, {
+					nest,
+					part: "tail"
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" }),
-				missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "danger",
-					onClick: () => cleanupMissing(title),
-					children: "Clean up — remove session"
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: () => commitSession(title),
-							children: ["Commit…", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "kbd",
-								children: "Ctrl+K C"
+				answering && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
+					ref: strip,
+					title,
+					activity,
+					variant: "rail",
+					onOpen: () => selectSession(title),
+					onRedirect: () => openThread(isWorker ? inst.parent : title, title)
+				}),
+				expanded && !pending && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "inst-actions",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "folder-row",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "folder-path",
+								title: folder,
+								children: inst.folder_label || folder || "—"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "folder-copy",
+								title: "Copy full folder path",
+								onClick: (e) => act(async () => {
+									if (!folder) return;
+									if (await copyText(folder)) toast("Copied path");
+								}, e),
+								children: "Copy path"
 							})]
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: () => pushSession(title),
-							children: ["Push", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "kbd",
-								children: "Ctrl+K P"
-							})]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: () => makePrSession(title),
-							title: prSupport ? void 0 : PR_FALLBACK_HINT,
-							children: [
-								"Make PR",
-								prSupport ? "" : " ↗",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" }),
+						missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							className: "danger",
+							onClick: () => cleanupMissing(title),
+							children: "Clean up — remove session"
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									onClick: () => commitSession(title),
+									children: ["Commit…", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "kbd",
+										children: "Ctrl+K C"
+									})]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									onClick: () => pushSession(title),
+									children: ["Push", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "kbd",
+										children: "Ctrl+K P"
+									})]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									onClick: () => makePrSession(title),
+									title: prSupport ? void 0 : PR_FALLBACK_HINT,
+									children: [
+										"Make PR",
+										prSupport ? "" : " ↗",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "kbd",
+											children: "Ctrl+K R"
+										})
+									]
+								}),
+								inst.stage === "pr" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									onClick: () => act(() => mergeSession(title)),
+									title: prSupport ? void 0 : PR_FALLBACK_HINT,
+									children: ["Merge to staging", prSupport ? "" : " ↗"]
+								}),
+								inst.pr_url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									onClick: () => window.open(inst.pr_url, "_blank"),
+									children: "Open PR ↗"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })
+							] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlaybookRowItems, { inst }),
+							inst.setup?.state === "failed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								onClick: (e) => act(async () => {
+									try {
+										await instApi(title, "/setup/rerun", { method: "POST" });
+										toast("Worktree setup re-running — watch the setup chip");
+									} catch (err) {
+										toast("Setup re-run failed: " + errMsg(err), { duration: 6e3 });
+									}
+									await refreshInstances();
+								}, e),
+								children: "Re-run worktree setup"
+							}),
+							inst.check && inst.check.state !== "running" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								onClick: (e) => act(async () => {
+									try {
+										await instApi(title, "/check", { method: "POST" });
+										toast("Checks running…");
+									} catch (err) {
+										toast("Check run failed: " + errMsg(err), { duration: 6e3 });
+									}
+									await refreshInstances();
+								}, e),
+								children: "Run checks now"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								onClick: () => openDialogFor("rename", title),
+								children: "Rename…"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								onClick: () => copySession(title),
+								children: ["Duplicate session", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "kbd",
-									children: "Ctrl+K R"
-								})
-							]
-						}),
-						inst.stage === "pr" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							onClick: () => act(() => mergeSession(title)),
-							title: prSupport ? void 0 : PR_FALLBACK_HINT,
-							children: ["Merge to staging", prSupport ? "" : " ↗"]
-						}),
-						inst.pr_url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							onClick: () => window.open(inst.pr_url, "_blank"),
-							children: "Open PR ↗"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })
-					] }),
-					inst.setup?.state === "failed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						onClick: (e) => act(async () => {
-							try {
-								await instApi(title, "/setup/rerun", { method: "POST" });
-								toast("Worktree setup re-running — watch the setup chip");
-							} catch (err) {
-								toast("Setup re-run failed: " + errMsg(err), { duration: 6e3 });
-							}
-							await refreshInstances();
-						}, e),
-						children: "Re-run worktree setup"
-					}),
-					inst.check && inst.check.state !== "running" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						onClick: (e) => act(async () => {
-							try {
-								await instApi(title, "/check", { method: "POST" });
-								toast("Checks running…");
-							} catch (err) {
-								toast("Check run failed: " + errMsg(err), { duration: 6e3 });
-							}
-							await refreshInstances();
-						}, e),
-						children: "Run checks now"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						onClick: () => openDialogFor("rename", title),
-						children: "Rename…"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						onClick: () => copySession(title),
-						children: ["Duplicate session", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "kbd",
-							children: "Ctrl+K D"
-						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						onClick: () => ideSession(title),
-						children: [
-							"Open / focus ",
-							ideName,
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "kbd",
-								children: "Ctrl+K O"
+									children: "Ctrl+K D"
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								onClick: () => ideSession(title),
+								children: [
+									"Open / focus ",
+									ideName,
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "kbd",
+										children: "Ctrl+K O"
+									})
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								onClick: () => hideSession(title),
+								children: [hidden ? "Show window" : "Hide window", !hidden && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "kbd",
+									children: "Ctrl+K H"
+								})]
+							}),
+							inst.ports?.base ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								onClick: (e) => act(() => void window.open(`http://${location.hostname}:${inst.ports.base}/`, "_blank"), e),
+								children: ["Open preview ↗", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "kbd",
+									children: [":", inst.ports.base]
+								})]
+							}) : null,
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								onClick: () => paused ? resumeSession(title) : pauseSession(title),
+								children: paused ? "Resume session" : "Pause session"
+							}),
+							caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "danger",
+								onClick: () => act(async () => {
+									if (!confirm(`Delete '${title}' and PERMANENTLY remove its worktree directory?\nThis also closes its ${ideName} window. This cannot be undone.`)) return;
+									try {
+										await instApi(title, "/cleanup", { method: "POST" });
+									} catch (err) {
+										alert("Cleanup failed: " + errMsg(err));
+									}
+									useUi.getState().setHidden(title, false);
+									await refreshInstances();
+								}),
+								children: "Delete + wipe worktree"
 							})
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						onClick: () => hideSession(title),
-						children: [hidden ? "Show window" : "Hide window", !hidden && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "kbd",
-							children: "Ctrl+K H"
-						})]
-					}),
-					inst.ports?.base ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						onClick: (e) => act(() => void window.open(`http://${location.hostname}:${inst.ports.base}/`, "_blank"), e),
-						children: ["Open preview ↗", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "kbd",
-							children: [":", inst.ports.base]
-						})]
-					}) : null,
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						onClick: () => paused ? resumeSession(title) : pauseSession(title),
-						children: paused ? "Resume session" : "Pause session"
-					}),
-					caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						className: "danger",
-						onClick: () => act(async () => {
-							if (!confirm(`Delete '${title}' and PERMANENTLY remove its worktree directory?\nThis also closes its ${ideName} window. This cannot be undone.`)) return;
-							try {
-								await instApi(title, "/cleanup", { method: "POST" });
-							} catch (err) {
-								alert("Cleanup failed: " + errMsg(err));
-							}
-							useUi.getState().setHidden(title, false);
-							await refreshInstances();
-						}),
-						children: "Delete + wipe worktree"
-					})
-				] })
+						] })
+					]
+				})
 			]
 		})]
 	});
@@ -32173,7 +33466,12 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	const extBars = useExtensionBarDefs();
 	const extKeys = (0, import_react.useMemo)(() => extBars.map((b) => b.key), [extBars]);
 	const listed = (0, import_react.useMemo)(() => instances.filter((i) => !isVerifySession(i.title)), [instances]);
-	const { rows: allRows } = (0, import_react.useMemo)(() => orderedInstances(listed, ui.order), [listed, ui.order]);
+	const families = (0, import_react.useMemo)(() => childrenByParent(listed), [listed]);
+	const order = (0, import_react.useMemo)(() => placeNewWorkers(ui.order, listed.filter((i) => !i.device)), [ui.order, listed]);
+	(0, import_react.useEffect)(() => {
+		if (order !== ui.order) ui.setOrder(order);
+	}, [order]);
+	const { rows: allRows } = (0, import_react.useMemo)(() => orderedInstances(listed, order), [listed, order]);
 	const filtered = (0, import_react.useMemo)(() => allRows.filter((i) => matchesFilter(i, ui.filter, ui.aliases)), [
 		allRows,
 		ui.filter,
@@ -32189,10 +33487,10 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		ui.extPanes
 	]);
 	const winFiltered = (0, import_react.useMemo)(() => windows.filter((w) => !ui.filter || w.title.toLowerCase().includes(ui.filter)), [windows, ui.filter]);
-	const railKeys = (0, import_react.useMemo)(() => orderedKeys([...allRows.map((i) => i.title), ...windows.map((w) => w.key)], ui.order), [
+	const railKeys = (0, import_react.useMemo)(() => orderedKeys([...allRows.map((i) => i.title), ...windows.map((w) => w.key)], order), [
 		allRows,
 		windows,
-		ui.order
+		order
 	]);
 	const onScreen = (0, import_react.useMemo)(() => new Set(computeVisible(instances, {
 		hidden: ui.hidden,
@@ -32229,7 +33527,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	const moveInOrder = (dragKey, targetKey, before) => {
 		if (!dragKey || dragKey === targetKey) return;
 		ui.setOrder(movedRailOrder({
-			saved: ui.order,
+			saved: order,
 			live: railKeys,
 			drag: dragKey,
 			target: targetKey,
@@ -32305,23 +33603,40 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	(0, import_react.useEffect)(() => {
 		useUi.getState().setRailOrder(displayedKeys);
 	}, [railSig]);
+	const nestSeen = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const stableNest = (key, n) => {
+		const prev = nestSeen.current.get(key);
+		if (prev && sameNest(prev, n)) return prev;
+		nestSeen.current.set(key, n);
+		return n;
+	};
 	let rowIdx = -1;
-	const renderRail = (list) => list.map((r) => {
-		rowIdx += 1;
-		return r.inst ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarRow, {
-			inst: r.inst,
-			idx: rowIdx,
-			onScreen: onScreen.has(r.key),
-			dropCue: cueFor(r.key),
-			...rowProps
-		}, r.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WindowRowItem, {
-			row: r.win,
-			idx: rowIdx,
-			onScreen: winOnScreen.has(r.key),
-			dropCue: cueFor(r.key),
-			...rowProps
-		}, r.key);
-	});
+	const renderRail = (list) => {
+		const nest = railNesting(list.map((r) => ({
+			key: r.key,
+			parent: r.inst?.parent
+		})));
+		return list.map((r, i) => {
+			rowIdx += 1;
+			const parent = r.inst?.parent;
+			return r.inst ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarRow, {
+				inst: r.inst,
+				idx: rowIdx,
+				onScreen: onScreen.has(r.key),
+				dropCue: cueFor(r.key),
+				nest: stableNest(r.key, nest[i]),
+				kids: r.inst.device ? void 0 : families.get(r.key),
+				parentLive: !r.inst.device && !!parent && families.get(parent)?.includes(r.inst) === true,
+				...rowProps
+			}, r.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WindowRowItem, {
+				row: r.win,
+				idx: rowIdx,
+				onScreen: winOnScreen.has(r.key),
+				dropCue: cueFor(r.key),
+				...rowProps
+			}, r.key);
+		});
+	};
 	const cap = viewCap(ui.viewMode);
 	const shownCount = listed.filter((i) => !ui.hidden.has(i.title)).length;
 	const countHead = isFinite(cap) && shownCount > cap ? `${cap} of ${shownCount} shown` : `${listed.length} session${listed.length === 1 ? "" : "s"}`;
@@ -34549,6 +35864,965 @@ function InsertComposer({ value, onChange, onSave, onCancel }) {
 				})]
 			})]
 		})]
+	});
+}
+//#endregion
+//#region src/lib/thread.ts
+var obj$1 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
+var str$1 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
+var num$2 = (v) => {
+	const n = Number(v);
+	return Number.isFinite(n) ? n : 0;
+};
+var strOrNull = (v) => {
+	const s = typeof v === "string" ? v.trim() : "";
+	return s ? s : null;
+};
+function normReport(v) {
+	const o = obj$1(v);
+	if (!Object.keys(o).length) return null;
+	return {
+		id: str$1(o.id),
+		status: str$1(o.status),
+		summary: str$1(o.summary),
+		ts: num$2(o.ts)
+	};
+}
+function normDiffStat(v) {
+	if (!v || typeof v !== "object") return null;
+	return v;
+}
+function normMember(v) {
+	const o = obj$1(v);
+	const title = str$1(o.title).trim();
+	if (!title) return null;
+	return {
+		title,
+		role: str$1(o.role, "child"),
+		status: str$1(o.status),
+		activity: str$1(o.activity, "idle"),
+		activity_since: num$2(o.activity_since),
+		branch: str$1(o.branch),
+		diff_stat: normDiffStat(o.diff_stat),
+		created_at: num$2(o.created_at),
+		last_report: normReport(o.last_report),
+		base_sha: strOrNull(o.base_sha)
+	};
+}
+function normItem(v) {
+	const o = obj$1(v);
+	const id = str$1(o.id);
+	const type = str$1(o.type);
+	if (!id || !type) return null;
+	return {
+		type,
+		id,
+		ts: num$2(o.ts),
+		from: str$1(o.from),
+		to: str$1(o.to),
+		text: str$1(o.text),
+		status: strOrNull(o.status),
+		state: strOrNull(o.state),
+		base_sha: strOrNull(o.base_sha)
+	};
+}
+function normThread(v, title = "") {
+	const o = obj$1(v);
+	const members = Array.isArray(o.members) ? o.members.map(normMember).filter((m) => !!m) : [];
+	const items = Array.isArray(o.items) ? o.items.map(normItem).filter((i) => !!i) : [];
+	return {
+		title: str$1(o.title, title) || title,
+		parent: str$1(o.parent),
+		members,
+		items,
+		more: o.more === true
+	};
+}
+function mergeOlder(older, current) {
+	const seen = new Set(current.map((i) => i.id));
+	return older.filter((i) => !seen.has(i.id)).concat(current);
+}
+function familyOf(title, rows) {
+	const me = rows.find((r) => r.title === title && !r.device);
+	const live = new Set(rows.filter((r) => !r.device).map((r) => r.title));
+	const p = String(me?.parent || "");
+	return {
+		parent: p && p !== title && live.has(p) ? p : "",
+		children: childrenOf(title, rows)
+	};
+}
+function threadTabShown(hasFamily, opened) {
+	return hasFamily || opened;
+}
+function threadBadge(children, lastSeenMs, actOf) {
+	let needs = 0;
+	let fresh = 0;
+	for (const c of children) {
+		if (actOf(c) === "clarify") needs++;
+		const r = c.last_report;
+		if (r && String(r.status || "").trim() && Number(r.ts) * 1e3 > (lastSeenMs || 0)) fresh++;
+	}
+	return {
+		count: needs + fresh,
+		needs,
+		fresh
+	};
+}
+function newestReportTs(children) {
+	let best = 0;
+	for (const c of children) best = Math.max(best, Number(c.last_report?.ts) || 0);
+	return best;
+}
+var RANK = {
+	ask: 0,
+	failed: 1,
+	blocked: 1,
+	done: 2,
+	limit: 3,
+	working: 4,
+	idle: 5
+};
+function workerRows(children, members, actOf) {
+	const byTitle = new Map(members.map((m) => [m.title, m]));
+	return children.map((c) => {
+		const m = byTitle.get(c.title);
+		const act = actOf(c);
+		const merged = {
+			...c,
+			last_report: c.last_report !== void 0 ? c.last_report : m?.last_report ?? null,
+			activity_since: c.activity_since ?? m?.activity_since
+		};
+		return {
+			title: c.title,
+			state: workerState(merged, act),
+			activity: act,
+			activitySince: Number(merged.activity_since) || 0,
+			report: merged.last_report ?? null,
+			diff: c.diff_stat ?? m?.diff_stat ?? null,
+			baseSha: m?.base_sha ?? null
+		};
+	}).map((r, i) => ({
+		r,
+		i
+	})).sort((a, b) => RANK[a.r.state] - RANK[b.r.state] || a.i - b.i).map((x) => x.r);
+}
+var isReported = (s) => s === "done" || s === "blocked" || s === "failed";
+function reportedCount(rows) {
+	return rows.filter((r) => isReported(r.state)).length;
+}
+function forkPoint(rows) {
+	const shas = new Set(rows.map((r) => r.baseSha).filter((s) => !!s));
+	if (shas.size !== 1) return "";
+	return [...shas][0].slice(0, 7);
+}
+var plural$4 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+function headerSummary(rows) {
+	if (!rows.length) return [];
+	const n = (s) => rows.filter((r) => r.state === s).length;
+	const sha = forkPoint(rows);
+	const parts = [{
+		text: plural$4(rows.length, "worker") + (sha ? " forked from " : ""),
+		cls: ""
+	}];
+	if (sha) parts.push({
+		text: sha,
+		cls: "sha"
+	});
+	const ask = n("ask");
+	if (ask) parts.push({
+		text: ask + (ask === 1 ? " needs" : " need") + " your answer",
+		cls: "needs"
+	});
+	const bad = n("failed") + n("blocked");
+	if (n("failed")) parts.push({
+		text: n("failed") + " failed",
+		cls: "bad"
+	});
+	if (n("blocked")) parts.push({
+		text: n("blocked") + " blocked",
+		cls: "bad"
+	});
+	const done = n("done");
+	if (done) parts.push({
+		text: done + " reported",
+		cls: bad ? "" : "ok"
+	});
+	if (n("limit")) parts.push({
+		text: n("limit") + " at the usage limit",
+		cls: ""
+	});
+	if (n("working")) parts.push({
+		text: n("working") + " working",
+		cls: ""
+	});
+	if (n("idle")) parts.push({
+		text: n("idle") + " idle without a report",
+		cls: ""
+	});
+	return parts;
+}
+function since(ts, now = Date.now() / 1e3) {
+	const secs = Math.max(0, Math.floor(now - ts));
+	if (secs < 60) return secs + "s";
+	if (secs < 3600) return Math.floor(secs / 60) + "m";
+	if (secs < 86400) return Math.floor(secs / 3600) + "h";
+	return Math.floor(secs / 86400) + "d";
+}
+function workerStatus(row, parentName, now = Date.now() / 1e3) {
+	const t = row.activitySince;
+	switch (row.state) {
+		case "ask": return {
+			word: "needs your answer",
+			cls: "needs",
+			detail: [t ? "asking for " + since(t, now) : "", parentName ? parentName + " is waiting on it" : ""].filter(Boolean).join(" · ")
+		};
+		case "done":
+		case "blocked":
+		case "failed": return {
+			word: "reported " + row.state,
+			cls: row.state === "done" ? "ok" : "bad",
+			detail: row.report?.ts ? since(row.report.ts, now) + " ago" : ""
+		};
+		case "limit": return {
+			word: "usage limit",
+			cls: "bad",
+			detail: "its queue resumes when the window resets"
+		};
+		case "working": return {
+			word: "working",
+			cls: "work",
+			detail: [t ? since(t, now) : "", "no report yet"].filter(Boolean).join(" · ")
+		};
+		default: return {
+			word: "idle",
+			cls: "idle",
+			detail: "stopped without a report"
+		};
+	}
+}
+function diffText(ds) {
+	if (!ds) return "";
+	const f = ds.files || 0;
+	const a = ds.additions || 0;
+	const d = ds.deletions || 0;
+	if (!f && !a && !d) return "";
+	return `+${a} −${d} · ${f} file${f === 1 ? "" : "s"}`;
+}
+var SPAWN_GROUP_S = 120;
+function logEntries(items, filter) {
+	const out = [];
+	for (const it of items) {
+		if (filter === "reports" && it.type !== "result") continue;
+		const kind = it.type === "spawn" ? "spawn" : it.type === "result" ? "result" : "message";
+		const last = out[out.length - 1];
+		if (kind === "spawn" && last && last.kind === "spawn" && last.from === it.from && it.ts - last.items[last.items.length - 1].ts <= SPAWN_GROUP_S) {
+			last.items.push(it);
+			last.to.push(it.to);
+			continue;
+		}
+		out.push({
+			key: it.id,
+			kind,
+			ts: it.ts,
+			from: it.from,
+			to: [it.to],
+			items: [it]
+		});
+	}
+	return out;
+}
+function deliveryText(state, to) {
+	switch (state) {
+		case "read": return "read by " + to;
+		case "delivered": return "delivered to " + to;
+		case "pending": return "waiting for " + to;
+		case "held": return "held for " + to + " — it reads it when it checks its messages";
+		default: return "";
+	}
+}
+function clockTime(ts, now = /* @__PURE__ */ new Date()) {
+	if (!ts) return "";
+	const d = /* @__PURE__ */ new Date(ts * 1e3);
+	const hm = String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+	if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) return hm;
+	return d.toLocaleString("en-US", { month: "short" }) + " " + d.getDate() + " " + hm;
+}
+function codeSpans(text) {
+	const out = [];
+	const re = /`([^`\n]+)`/g;
+	let at = 0;
+	let m;
+	while (m = re.exec(text)) {
+		if (m.index > at) out.push({
+			code: false,
+			text: text.slice(at, m.index)
+		});
+		out.push({
+			code: true,
+			text: m[1]
+		});
+		at = m.index + m[0].length;
+	}
+	if (at < text.length) out.push({
+		code: false,
+		text: text.slice(at)
+	});
+	return out;
+}
+var ALL_WORKERS = "*workers";
+function composeChips(title, parent, workers, nameOf) {
+	const chips = [{
+		key: title,
+		label: nameOf(title),
+		titles: [title]
+	}];
+	if (parent) chips.push({
+		key: parent,
+		label: nameOf(parent),
+		titles: [parent]
+	});
+	for (const w of workers) chips.push({
+		key: w,
+		label: nameOf(w),
+		titles: [w]
+	});
+	if (workers.length > 1) chips.push({
+		key: ALL_WORKERS,
+		label: "all workers",
+		titles: [...workers]
+	});
+	return chips;
+}
+function chipFor(chips, to) {
+	return chips.find((c) => c.key === to) || chips[0];
+}
+var NOT_FREE = /* @__PURE__ */ new Set(["clarify", "limit"]);
+function sendPlan(titles, actOf) {
+	const now = [];
+	const later = [];
+	for (const t of titles) (NOT_FREE.has(actOf(t)) ? later : now).push(t);
+	return {
+		now,
+		later,
+		label: now.length ? "Send now" : "When it's free"
+	};
+}
+var composeHandled = /* @__PURE__ */ new Map();
+function claimComposeRequest(title, seq) {
+	if (!seq || (composeHandled.get(title) ?? 0) >= seq) return false;
+	composeHandled.set(title, seq);
+	return true;
+}
+function composePlaceholder(chip) {
+	if (chip.key === ALL_WORKERS) return `Message all ${chip.titles.length} workers — typed into each prompt as you`;
+	return `Message ${chip.label} — typed into its prompt as you`;
+}
+function toolName(tool, provider) {
+	return (provider || "").trim().toLowerCase() === "claude" ? "mcp__mindflock__" + tool : tool;
+}
+function oneLine(text, max) {
+	const s = String(text || "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
+}
+function quoteTitle(title) {
+	let t = String(title || "").replace(/[\t\n]/g, " ").replace(/[\u0000-\u001f\u007f-\u009f]/g, "").replace(/"/g, "'");
+	if (t.length > 120) t = t.slice(0, 119).trimEnd() + "…";
+	return "\"" + t + "\"";
+}
+function decidePrompt(worker, dialog, provider) {
+	const q = dialog ? oneLine([dialog.command, dialog.question].filter(Boolean).join(" — "), 160) : "";
+	return `Your MindFlock worker ${quoteTitle(worker)} is waiting on a prompt` + (q ? `: “${q}”.` : ".") + ` Look at it with ${toolName("read_output", provider)} (view screen) and answer it with ${toolName("answer_prompt", provider)} if you are sure that is safe for this task; otherwise leave it and tell me why.`;
+}
+//#endregion
+//#region src/components/grid/ThreadTab.tsx
+var THREAD_POLL_MS = 8e3;
+var threadCache = /* @__PURE__ */ new Map();
+var drafts = /* @__PURE__ */ new Map();
+var toKeys = /* @__PURE__ */ new Map();
+var nameOf = (t) => displayName(t);
+function Spans({ text }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: codeSpans(text).map((s, i) => s.code ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: s.text }, i) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: s.text }, i)) });
+}
+function ThreadTab({ title, active }) {
+	const { data: rowsData } = useInstances();
+	const rows = (0, import_react.useMemo)(() => rowsData ?? [], [rowsData]);
+	const me = rows.find((r) => r.title === title && !r.device);
+	const { parent, children } = (0, import_react.useMemo)(() => familyOf(title, rows), [title, rows]);
+	const [data, setData] = (0, import_react.useState)(threadCache.get(title) ?? null);
+	const [filter, setFilter] = (0, import_react.useState)("all");
+	const [loadErr, setLoadErr] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const live = (0, import_react.useRef)(true);
+	(0, import_react.useEffect)(() => {
+		live.current = true;
+		return () => {
+			live.current = false;
+		};
+	}, []);
+	const reload = (0, import_react.useCallback)(async () => {
+		try {
+			const body = normThread(await instApi(title, "/thread?limit=50"), title);
+			if (!live.current) return;
+			const prev = threadCache.get(title);
+			const firstId = body.items[0]?.id;
+			const idx = prev && firstId ? prev.items.findIndex((i) => i.id === firstId) : -1;
+			const next = idx > 0 ? {
+				...body,
+				items: prev.items.slice(0, idx).concat(body.items),
+				more: prev.more
+			} : body;
+			threadCache.set(title, next);
+			setData((cur) => JSON.stringify(cur) === JSON.stringify(next) ? cur : next);
+			setLoadErr("");
+		} catch (err) {
+			if (live.current) setLoadErr(errMsg(err));
+		}
+	}, [title]);
+	const older = async () => {
+		const first = data?.items[0];
+		if (!first) return;
+		try {
+			const body = normThread(await instApi(title, "/thread?limit=50&before=" + encodeURIComponent(first.id)), title);
+			const cur = threadCache.get(title) ?? data;
+			const next = {
+				...cur,
+				items: mergeOlder(body.items, cur.items),
+				more: body.more
+			};
+			threadCache.set(title, next);
+			setData(next);
+		} catch (err) {
+			toast("Couldn't load older messages: " + errMsg(err));
+		}
+	};
+	const familyKey = [
+		title,
+		parent,
+		...children.map((c) => c.title)
+	].join("\n");
+	(0, import_react.useEffect)(() => {
+		if (!active) return;
+		reload();
+		const tick = () => {
+			if (document.visibilityState === "visible") reload();
+		};
+		const timer = window.setInterval(tick, THREAD_POLL_MS);
+		const ev = window.mindflock?.events;
+		const fam = new Set(familyKey.split("\n").filter(Boolean));
+		let soon;
+		const off = ev?.subscribe("session.message", (env) => {
+			const from = String(env.data?.from || "");
+			if (!fam.has(env.session) && !fam.has(from)) return;
+			clearTimeout(soon);
+			soon = window.setTimeout(() => void reload(), 300);
+		});
+		return () => {
+			clearInterval(timer);
+			clearTimeout(soon);
+			off?.();
+		};
+	}, [
+		active,
+		reload,
+		familyKey
+	]);
+	const actOfRow = (0, import_react.useCallback)((r) => effectiveActivity(r), []);
+	const actOf = (0, import_react.useCallback)((t) => {
+		const r = rows.find((x) => x.title === t && !x.device);
+		if (r) return effectiveActivity(r);
+		return data?.members.find((m) => m.title === t)?.activity || "idle";
+	}, [rows, data]);
+	const workers = (0, import_react.useMemo)(() => workerRows(children, data?.members ?? [], actOfRow), [
+		children,
+		data,
+		actOfRow
+	]);
+	const reported = reportedCount(workers);
+	const myName = nameOf(title);
+	const pasteBlocked = me ? forkBlockReason(me) : "";
+	const paste = async (key, id, args = {}, label) => {
+		if (busy) return;
+		setBusy(key);
+		try {
+			await runPlaybook(title, id, args, label);
+		} finally {
+			if (live.current) setBusy("");
+		}
+	};
+	const target = useUi((s) => s.threadComposeTarget?.title === title ? s.threadComposeTarget : null);
+	const [toKey, setToKeyState] = (0, import_react.useState)(() => toKeys.get(title) || title);
+	const setToKey = (to) => {
+		toKeys.set(title, to);
+		setToKeyState(to);
+	};
+	const [draft, setDraftState] = (0, import_react.useState)(drafts.get(title) ?? "");
+	const setDraft = (v) => {
+		drafts.set(title, v);
+		setDraftState(v);
+	};
+	const [sending, setSending] = (0, import_react.useState)(false);
+	const box = (0, import_react.useRef)(null);
+	const chips = composeChips(title, parent, children.map((c) => c.title), nameOf);
+	const chip = chipFor(chips, toKey);
+	const plan = sendPlan(chip.titles, actOf);
+	const seq = target?.seq ?? 0;
+	(0, import_react.useEffect)(() => {
+		if (!seq || !active || !target || !claimComposeRequest(title, seq)) return;
+		setToKey(target.to || title);
+		let tries = 0;
+		let timer;
+		const focus = () => {
+			const el = box.current;
+			if (el && el.offsetParent !== null) {
+				el.focus();
+				const n = el.value.length;
+				el.setSelectionRange(n, n);
+				return;
+			}
+			if (++tries < 20) timer = window.setTimeout(focus, 30);
+		};
+		timer = window.setTimeout(focus, 0);
+		return () => clearTimeout(timer);
+	}, [seq, active]);
+	const address = (to) => {
+		setToKey(to);
+		setTimeout(() => box.current?.focus(), 0);
+	};
+	const send = async (mode) => {
+		const text = draft.trim();
+		if (!text || sending) return;
+		const plannedNow = mode === "now" ? plan.now : [];
+		const plannedLater = mode === "now" ? plan.later : chip.titles;
+		setSending(true);
+		const results = await Promise.allSettled([...plannedNow.map((t) => instApi(t, "/send", { json: {
+			text,
+			dialog_safe: true
+		} })), ...plannedLater.map((t) => instApi(t, "/queue", { json: { text } }))]);
+		if (!live.current) return;
+		setSending(false);
+		setTimeout(() => box.current?.focus(), 0);
+		const who = [...plannedNow, ...plannedLater];
+		const failed = results.map((r, i) => r.status === "rejected" ? nameOf(who[i]) + ": " + errMsg(r.reason) : "").filter(Boolean);
+		if (failed.length === results.length) {
+			toast("Couldn't send: " + failed.join("; "), { duration: 6e3 });
+			return;
+		}
+		const now = [];
+		const later = [];
+		results.forEach((r, i) => {
+			if (r.status !== "fulfilled") return;
+			const queuedByServer = i < plannedNow.length && !!r.value?.queued;
+			(i < plannedNow.length && !queuedByServer ? now : later).push(who[i]);
+		});
+		setDraft("");
+		const names = (ts) => ts.length > 2 ? ts.length + " sessions" : ts.map(nameOf).join(" and ");
+		const said = [];
+		if (now.length) said.push("Sent to " + names(now));
+		if (later.length) said.push((now.length ? "queued for " : "Queued for ") + names(later) + (mode === "now" ? " — it gets it when it's free" : " — it runs when idle"));
+		toast(said.join("; ") + (failed.length ? ". Failed: " + failed.join("; ") : ""), { duration: failed.length ? 6e3 : 3e3 });
+	};
+	const decide = async (worker) => {
+		if (busy) return;
+		setBusy("decide:" + worker);
+		try {
+			await instApi(title, "/queue", { json: { text: decidePrompt(worker, await fetchDialog(worker).catch(() => null), me?.provider) } });
+			toast(`Asked ${myName} to decide — queued, it runs when ${myName} is free`, { duration: 4e3 });
+		} catch (err) {
+			toast(`Couldn't queue it for ${myName}: ` + errMsg(err), { duration: 6e3 });
+		} finally {
+			if (live.current) setBusy("");
+		}
+	};
+	const summary = headerSummary(workers);
+	const entries = logEntries(data?.items ?? [], filter);
+	const hasWorkers = workers.length > 0;
+	const selfMember = data?.members.find((m) => m.role === "self");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "thread-root",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "thread-scroll",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", {
+					className: "thread-head",
+					children: hasWorkers ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", {
+						className: "thread-title",
+						children: [myName, "'s workers"]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "thread-sub",
+						children: [
+							summary.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [i > 0 && p.cls !== "sha" ? " · " : "", p.cls === "sha" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", {
+								className: "th-sha",
+								children: p.text
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: p.cls ? "th-" + p.cls : void 0,
+								children: p.text
+							})] }, i)),
+							". Buttons below either answer directly or paste a prompt into ",
+							myName,
+							" — nothing is typed without you."
+						]
+					})] }) : parent ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+							className: "thread-title",
+							children: myName
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "thread-sub",
+							children: [
+								"Worker of ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: nameOf(parent) }),
+								selfMember?.base_sha ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+									" ",
+									"· forked from ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", {
+										className: "th-sha",
+										children: selfMember.base_sha.slice(0, 7)
+									})
+								] }) : null,
+								". Its reports and messages are below; ",
+								nameOf(parent),
+								"'s Thread has the whole family."
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "th-self-answer",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
+								title,
+								activity: actOf(title),
+								variant: "thread",
+								onRedirect: () => address(title)
+							})
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "thread-head-btns",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								className: "th-btn",
+								onClick: () => useUi.getState().threadOpen(parent),
+								children: [
+									"Open ",
+									nameOf(parent),
+									"'s Thread"
+								]
+							})
+						})
+					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						className: "thread-title",
+						children: myName
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "thread-sub",
+						children: [
+							"No workers yet. Split a task across workers from the fork button, or write to ",
+							myName,
+							" below — it is typed into its prompt as you."
+						]
+					})] })
+				}),
+				hasWorkers && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+					className: "thread-sec",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "thread-sec-head",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "thread-label",
+								children: "Workers"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "th-btn",
+								disabled: !!busy || !!pasteBlocked,
+								title: pasteBlocked || `Paste “Check on workers” into ${myName} — one line per worker; you press Enter`,
+								onClick: () => paste("workers", "workers"),
+								children: "Check on workers"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								className: "th-btn",
+								disabled: !!busy || !!pasteBlocked || !reported,
+								title: pasteBlocked || (reported ? `Paste “Wrap up workers” into ${myName} — it merges each reported worker and runs the tests; you press Enter` : "No worker has reported yet"),
+								onClick: () => paste("wrapup", "wrapup"),
+								children: [
+									"Wrap up (",
+									reported,
+									" reported)"
+								]
+							})
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "thread-workers",
+						children: workers.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkerItem, {
+							row: w,
+							parentName: myName,
+							busy,
+							pasteBlocked,
+							onDecide: () => decide(w.title),
+							onMerge: () => paste("merge:" + w.title, "wrapup", { only: w.title }, `Merge ${nameOf(w.title)} into ${myName}`),
+							onRedirect: () => address(w.title)
+						}, w.title))
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+					className: "thread-sec",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "thread-sec-head",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "thread-label",
+									children: "Between sessions"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "th-seg",
+									role: "tablist",
+									"aria-label": "Show",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										role: "tab",
+										"aria-selected": filter === "all",
+										className: filter === "all" ? "on" : "",
+										onClick: () => setFilter("all"),
+										children: "All"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										role: "tab",
+										"aria-selected": filter === "reports",
+										className: filter === "reports" ? "on" : "",
+										onClick: () => setFilter("reports"),
+										children: "Reports"
+									})]
+								})
+							]
+						}),
+						data?.more && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-older",
+							onClick: older,
+							children: "Show older"
+						}),
+						entries.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "thread-log",
+							children: entries.map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LogCard, { entry: e }, e.key))
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "thread-empty",
+							children: loadErr ? "Couldn't load the thread: " + loadErr : !data ? "Loading…" : filter === "reports" ? "No reports yet." : "Nothing between sessions yet — spawns, messages and reports show up here."
+						})
+					]
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "thread-compose",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "th-to",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "th-to-label",
+						children: "To"
+					}), chips.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "th-chip" + (c.key === chip.key ? " on" : "") + (c.key === ALL_WORKERS ? " all" : ""),
+						"aria-pressed": c.key === chip.key,
+						onClick: () => address(c.key),
+						children: c.label
+					}, c.key))]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					ref: box,
+					className: "thread-input",
+					rows: 3,
+					placeholder: composePlaceholder(chip),
+					value: draft,
+					onChange: (e) => setDraft(e.target.value),
+					onKeyDown: (e) => {
+						if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+							e.preventDefault();
+							send("now");
+						}
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "th-compose-foot",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "th-hint",
+							children: plan.later.length ? (plan.later.length === 1 ? nameOf(plan.later[0]) + " is on a prompt" : plan.later.length + " are on a prompt") + " — queued for when it's free · Ctrl+Enter" : "Typed in as you, like the Queue tab · Ctrl+Enter sends now"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn th-idle",
+							disabled: sending || !draft.trim(),
+							title: "Queue it — it runs when the session is next idle (the Queue tab's queue)",
+							onClick: () => void send("idle"),
+							children: "When idle"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn primary th-send",
+							disabled: sending || !draft.trim(),
+							title: plan.now.length ? "Type it into the prompt and press Enter, as you (Ctrl+Enter)" : "It is on a prompt — queue it for when it's free instead of typing into the dialog (Ctrl+Enter)",
+							onClick: () => void send("now"),
+							children: plan.label
+						})
+					]
+				})
+			]
+		})]
+	});
+}
+function WorkerItem({ row, parentName, busy, pasteBlocked, onDecide, onMerge, onRedirect }) {
+	const st = workerStatus(row, parentName);
+	const name = nameOf(row.title);
+	const ds = diffText(row.diff);
+	const reported = row.state === "done" || row.state === "blocked" || row.state === "failed";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "th-worker is-" + row.state,
+		"data-title": row.title,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "th-w-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "th-dot " + st.cls,
+						"aria-hidden": "true"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "th-w-name",
+						title: `Open ${name}`,
+						onClick: () => selectSession(row.title),
+						children: name
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "th-w-word " + st.cls,
+						children: st.word
+					}),
+					st.detail && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "th-w-detail",
+						children: ["· ", st.detail]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+					ds && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "th-w-diff",
+						children: ds
+					})
+				]
+			}),
+			row.state === "ask" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "th-w-body",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
+					title: row.title,
+					activity: row.activity,
+					variant: "thread",
+					onOpen: () => selectSession(row.title),
+					onRedirect,
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "fa-decide",
+						disabled: !!busy,
+						title: `Queue a prompt asking ${parentName} to look at this dialog and answer it if it is safe`,
+						onClick: onDecide,
+						children: [
+							"Let ",
+							parentName,
+							" decide"
+						]
+					})
+				})
+			}),
+			reported && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "th-w-body",
+				children: [row.report?.summary && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "th-w-summary",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Spans, { text: row.report.summary })
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "th-w-acts",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "th-btn",
+						title: `${name}'s Diff tab — its change since it forked`,
+						onClick: () => {
+							selectSession(row.title, { noKeyboard: true });
+							useUi.getState().setLastTab(row.title, "diff");
+						},
+						children: "Review diff"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "th-btn",
+						disabled: !!busy || !!pasteBlocked,
+						title: pasteBlocked || `Paste “Wrap up ${name}” into ${parentName}: merge its branch, run the tests — you press Enter`,
+						onClick: onMerge,
+						children: ["Merge into ", parentName]
+					})]
+				})]
+			})
+		]
+	});
+}
+function LogCard({ entry }) {
+	const [all, setAll] = (0, import_react.useState)(false);
+	const first = entry.items[0];
+	const n = entry.items.length;
+	const chipText = entry.kind === "spawn" ? "spawned" : entry.kind === "result" ? "result · " + (first.status || "sent") : "message";
+	const chipCls = entry.kind === "result" ? first.status === "blocked" || first.status === "failed" ? " bad" : " ok" : entry.kind === "spawn" ? " spawn" : "";
+	const foot = entry.kind === "spawn" ? first.base_sha ? "forked from " + first.base_sha.slice(0, 7) : "" : deliveryText(first.state, nameOf(first.to));
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "th-card k-" + entry.kind,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "th-card-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: nameOf(entry.from) }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "th-arrow",
+						children: "→"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", {
+						className: "th-card-to",
+						children: entry.to.map(nameOf).join(", ")
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "th-kind" + chipCls,
+						children: chipText
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "th-time",
+						title: (/* @__PURE__ */ new Date(entry.ts * 1e3)).toLocaleString(),
+						children: clockTime(entry.ts)
+					})
+				]
+			}),
+			all && n > 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "th-card-many",
+				children: entry.items.map((it) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "th-card-one",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: nameOf(it.to) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "th-card-text",
+						children: it.text ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Spans, { text: it.text }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "no prompt recorded" })
+					})]
+				}, it.id))
+			}) : first.text ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "th-card-text",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Spans, { text: first.text })
+			}) : entry.kind === "spawn" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "th-card-text",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "(empty)" })
+			}),
+			(foot || n > 1) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "th-card-foot",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: foot }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+					n > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "th-btn",
+						onClick: () => setAll((v) => !v),
+						children: all ? "Show less" : "Show all " + n
+					})
+				]
+			})
+		]
 	});
 }
 //#endregion
@@ -49438,8 +51712,406 @@ function AccountChip({ inst }) {
 	})] });
 }
 //#endregion
+//#region src/components/grid/PlaybookMenu.tsx
+var lastList = /* @__PURE__ */ new Map();
+function PlaybookMenu({ title, anchor, initialSub, onClose }) {
+	const { data: rows } = useInstances();
+	const railOrder = useUi((s) => s.railOrder);
+	const name = useUi((s) => s.aliases[title]) || title;
+	const [list, setList] = (0, import_react.useState)(lastList.get(title) ?? null);
+	const [err, setErr] = (0, import_react.useState)("");
+	const [sel, setSel] = (0, import_react.useState)(0);
+	const [askOpen, setAskOpen] = (0, import_react.useState)(false);
+	const [askSel, setAskSel] = (0, import_react.useState)(0);
+	const menuRef = (0, import_react.useRef)(null);
+	const subRef = (0, import_react.useRef)(null);
+	const askItemRef = (0, import_react.useRef)(null);
+	const onCloseRef = (0, import_react.useRef)(onClose);
+	onCloseRef.current = onClose;
+	const uid = (0, import_react.useId)();
+	const itemId = (i) => uid + "-item-" + i;
+	const sessId = (i) => uid + "-sess-" + i;
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		fetchPlaybooks(title).then((l) => {
+			if (!live) return;
+			lastList.set(title, l);
+			setList(l);
+			setErr("");
+		}).catch((e) => {
+			if (live) setErr(errMsg(e));
+		});
+		return () => {
+			live = false;
+		};
+	}, [title]);
+	const children = (0, import_react.useMemo)(() => liveChildren(title, rows || []), [title, rows]);
+	const model = (0, import_react.useMemo)(() => menuModel(list || [], children), [list, children]);
+	const entries = (0, import_react.useMemo)(() => [
+		...model.general.map((pb) => ({
+			kind: "playbook",
+			pb
+		})),
+		...(model.workers?.items || []).map((pb) => ({
+			kind: "playbook",
+			pb
+		})),
+		{ kind: "message" }
+	], [model]);
+	const askPb = (list || []).find((p) => p.args.some((a) => a.kind === "session" && a.required));
+	const targets = (0, import_react.useMemo)(() => askTargets(title, rows || [], railOrder, displayName), [
+		title,
+		rows,
+		railOrder
+	]);
+	(0, import_react.useEffect)(() => {
+		if (initialSub !== "ask" || !askPb || !askPb.available) return;
+		const i = entries.findIndex((e) => e.kind === "playbook" && e.pb.id === askPb.id);
+		if (i >= 0) setSel(i);
+		setAskOpen(true);
+	}, [initialSub, !!askPb]);
+	(0, import_react.useEffect)(() => {
+		menuRef.current?.focus({ preventScroll: true });
+	}, []);
+	(0, import_react.useLayoutEffect)(() => {
+		const m = menuRef.current;
+		if (!m) return;
+		const r = anchor.getBoundingClientRect();
+		const top = Math.round(r.bottom + 6);
+		m.style.top = top + "px";
+		m.style.maxHeight = Math.max(160, window.innerHeight - top - 12) + "px";
+		let left = r.right - m.offsetWidth + 10;
+		left = Math.min(left, window.innerWidth - m.offsetWidth - 8);
+		m.style.left = Math.max(8, left) + "px";
+		const s = subRef.current;
+		const item = askItemRef.current;
+		if (s && item) {
+			const mr = m.getBoundingClientRect();
+			const ir = item.getBoundingClientRect();
+			let sl = mr.right + 4;
+			if (sl + s.offsetWidth > window.innerWidth - 8) sl = mr.left - s.offsetWidth - 4;
+			s.style.left = Math.max(8, sl) + "px";
+			const st = Math.min(ir.top - 6, window.innerHeight - s.offsetHeight - 8);
+			s.style.top = Math.max(8, st) + "px";
+		}
+	});
+	(0, import_react.useEffect)(() => {
+		const inside = (t) => t instanceof Node && (!!menuRef.current?.contains(t) || !!subRef.current?.contains(t) || anchor.contains(t));
+		const onDown = (e) => {
+			if (!inside(e.target)) onCloseRef.current(false);
+		};
+		const onScroll = (e) => {
+			if (!inside(e.target)) onCloseRef.current(false);
+		};
+		const onResize = () => onCloseRef.current(false);
+		document.addEventListener("mousedown", onDown, true);
+		window.addEventListener("scroll", onScroll, true);
+		window.addEventListener("resize", onResize);
+		return () => {
+			document.removeEventListener("mousedown", onDown, true);
+			window.removeEventListener("scroll", onScroll, true);
+			window.removeEventListener("resize", onResize);
+		};
+	}, [anchor]);
+	const close = (refocus = false) => onCloseRef.current(refocus);
+	const activate = (e) => {
+		if (!e) return;
+		if (e.kind === "message") {
+			useUi.getState().threadOpen(title, { composeTo: title });
+			close();
+			return;
+		}
+		const pb = e.pb;
+		if (!pb.available) {
+			toast(pb.disabled_reason || "Not available right now", { duration: 5e3 });
+			return;
+		}
+		if (pb === askPb) {
+			setAskOpen(true);
+			setAskSel(0);
+			return;
+		}
+		close();
+		pastePlaybook(title, pb);
+	};
+	const ask = (t) => {
+		if (!t || !askPb) return;
+		close();
+		pastePlaybook(title, askPb, { session: t.title });
+	};
+	const onKeyDown = (e) => {
+		if (e.ctrlKey || e.metaKey || e.altKey) return;
+		const k = e.key;
+		const handled = () => {
+			e.preventDefault();
+			e.stopPropagation();
+		};
+		if (askOpen) {
+			if (k === "ArrowDown") {
+				handled();
+				setAskSel((i) => Math.min(targets.length - 1, i + 1));
+			} else if (k === "ArrowUp") {
+				handled();
+				setAskSel((i) => Math.max(0, i - 1));
+			} else if (k === "Enter" || k === "ArrowRight") {
+				handled();
+				ask(targets[askSel]);
+			} else if (k === "Escape" || k === "ArrowLeft") {
+				handled();
+				setAskOpen(false);
+			} else if (/^[1-9]$/.test(k)) {
+				const t = targets.find((x) => x.slot === k);
+				if (t) {
+					handled();
+					ask(t);
+				}
+			}
+			return;
+		}
+		if (k === "ArrowDown") {
+			handled();
+			setSel((i) => (i + 1) % entries.length);
+		} else if (k === "ArrowUp") {
+			handled();
+			setSel((i) => (i - 1 + entries.length) % entries.length);
+		} else if (k === "Enter") {
+			handled();
+			activate(entries[sel]);
+		} else if (k === "ArrowRight") {
+			const e0 = entries[sel];
+			if (e0?.kind === "playbook" && e0.pb === askPb) {
+				handled();
+				activate(e0);
+			}
+		} else if (k === "Escape") {
+			handled();
+			close(true);
+		} else if (k.length === 1 && /[a-z]/i.test(k)) {
+			const i = entries.findIndex((x) => x.kind === "playbook" && letterOf(x.pb) === k.toUpperCase());
+			if (i >= 0) {
+				handled();
+				setSel(i);
+				activate(entries[i]);
+			}
+		}
+	};
+	const item = (e, i) => {
+		const cls = "pb-item" + (i === sel ? " sel" : "");
+		if (e.kind === "message") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: itemId(i),
+			className: cls,
+			role: "menuitem",
+			tabIndex: -1,
+			onMouseMove: () => setSel(i),
+			onClick: () => activate(e),
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pb-name",
+					children: "Message…"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pb-key",
+					children: "Ctrl+K S"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pb-desc",
+					children: "Write to a session yourself, in the Thread tab"
+				})
+			]
+		}, "message");
+		const pb = e.pb;
+		const isAsk = pb === askPb;
+		const off = !pb.available;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			ref: isAsk ? askItemRef : void 0,
+			id: itemId(i),
+			className: cls + (off ? " off" : "") + (isAsk && askOpen ? " sub-open" : ""),
+			role: "menuitem",
+			tabIndex: -1,
+			"aria-disabled": off || void 0,
+			"aria-haspopup": isAsk || void 0,
+			title: off ? pb.disabled_reason || void 0 : void 0,
+			"data-playbook": pb.id,
+			onMouseMove: () => {
+				setSel(i);
+				if (askOpen && !isAsk) setAskOpen(false);
+			},
+			onClick: () => activate(e),
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "pb-name",
+					children: [pb.label, pb.id === "wrapup" && model.workers && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pb-cnt",
+						children: model.workers.reported
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pb-key",
+					children: letterOf(pb)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pb-desc" + (off ? " pb-why" : ""),
+					children: off ? pb.disabled_reason || "Not available right now" : pb.desc
+				}),
+				isAsk && !off && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pb-caret",
+					"aria-hidden": "true",
+					children: "›"
+				})
+			]
+		}, pb.id);
+	};
+	const nGeneral = model.general.length;
+	const nWorkers = model.workers?.items.length || 0;
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "playbook-menu",
+		className: "pb-menu",
+		role: "menu",
+		"aria-label": `Work with other sessions — ${name}`,
+		tabIndex: -1,
+		ref: menuRef,
+		"aria-activedescendant": askOpen && askPb ? targets.length ? sessId(askSel) : void 0 : itemId(sel),
+		style: {
+			top: 0,
+			left: 0
+		},
+		onKeyDown,
+		onMouseDown: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pb-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Work with other sessions" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "muted",
+					children: ["→ ", name]
+				})]
+			}),
+			!list && !err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pb-note muted",
+				children: "Loading…"
+			}),
+			err && !list && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pb-note pb-err",
+				children: ["Couldn't load the playbooks: ", err]
+			}),
+			entries.slice(0, nGeneral).map((e, i) => item(e, i)),
+			model.workers && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pb-sec",
+				children: [
+					name,
+					"'s workers · ",
+					model.workers.count
+				]
+			}),
+			entries.slice(nGeneral, nGeneral + nWorkers).map((e, i) => item(e, nGeneral + i)),
+			!model.workers && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "pb-sep" }),
+			item(entries[entries.length - 1], entries.length - 1),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pb-foot",
+				children: [
+					"Pastes the prompt into ",
+					name,
+					"'s input. Add the task, press Enter — nothing runs until you do. Also in the row ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "›" }),
+					" menu and the palette."
+				]
+			})
+		]
+	}), askOpen && askPb && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pb-sub",
+		role: "menu",
+		"aria-label": "Ask which session",
+		ref: subRef,
+		style: {
+			top: 0,
+			left: 0
+		},
+		onMouseDown: (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pb-sub-head muted",
+				children: [name, " asks…"]
+			}),
+			targets.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pb-note muted",
+				children: "No other sessions to ask"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pb-sub-list",
+				children: targets.map((t, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					id: sessId(i),
+					className: "pb-sess" + (i === askSel ? " hot" : ""),
+					role: "menuitem",
+					tabIndex: -1,
+					onMouseMove: () => setAskSel(i),
+					onClick: () => ask(t),
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "slot",
+							children: t.slot
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "pb-dot " + (t.activity || "offline") }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "nm",
+							children: t.name
+						}),
+						t.rel && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rel",
+							children: t.rel
+						})
+					]
+				}, t.title))
+			})
+		]
+	})] }), document.body);
+}
+//#endregion
 //#region src/components/grid/Pane.tsx
 var GIT_TABS = /* @__PURE__ */ new Set(["diff", "map"]);
+var BODY_TABS = /* @__PURE__ */ new Set([
+	"agent",
+	"shell",
+	"diff",
+	"queue",
+	"map",
+	"thread"
+]);
+function paneTab(t, git) {
+	if (!BODY_TABS.has(t)) return "agent";
+	if (GIT_TABS.has(t) && !git) return "agent";
+	return t;
+}
+var FORK_ICON = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+	width: "12",
+	height: "12",
+	viewBox: "0 0 16 16",
+	fill: "none",
+	stroke: "currentColor",
+	strokeWidth: "1.6",
+	strokeLinecap: "round",
+	strokeLinejoin: "round",
+	"aria-hidden": "true",
+	children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "4",
+			cy: "3.2",
+			r: "1.7"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "12",
+			cy: "3.2",
+			r: "1.7"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+			cx: "8",
+			cy: "12.8",
+			r: "1.7"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M4 5v1.2c0 1.6 1.2 2.6 2.8 2.6h2.4C10.8 8.8 12 7.8 12 6.2V5M8 8.8v2.3" })
+	]
+});
 function queueRelTime(ms) {
 	const m = Math.ceil(ms / 6e4);
 	if (m < 60) return m + "m";
@@ -49454,6 +52126,15 @@ function Pane({ inst, drag, dragging }) {
 	const lastTab = useUi((s) => s.lastTab[title]);
 	const setLastTab = useUi((s) => s.setLastTab);
 	const reduceMotion = useUi((s) => s.reduceMotion);
+	const { data: allRows } = useInstances();
+	const family = familyOf(title, allRows ?? []);
+	const threadOpened = useUi((s) => s.threadComposeTarget?.title === title);
+	const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
+	const threadShown = threadTabShown(!!family.parent || family.children.length > 0, threadOpened || lastTab === "thread");
+	const badge = threadBadge(family.children, threadSeen, effectiveActivity);
+	const newestReport = newestReportTs(family.children);
+	const playbookMenu = useUi((s) => s.playbookMenu?.title === title ? s.playbookMenu : null);
+	const [forkEl, setForkEl] = (0, import_react.useState)(null);
 	const caps = config?.caps ?? {
 		git: true,
 		tailscale: true,
@@ -49463,7 +52144,7 @@ function Pane({ inst, drag, dragging }) {
 	const missing = !!inst.workspace_missing;
 	const loading = inst.status === "loading";
 	const savedTab = lastTab || "agent";
-	const [tab, setTab] = (0, import_react.useState)(GIT_TABS.has(savedTab) && !caps.git ? "agent" : savedTab);
+	const [tab, setTab] = (0, import_react.useState)(paneTab(savedTab, caps.git));
 	const [booted, setBooted] = (0, import_react.useState)(false);
 	const [wsState, setWsState] = (0, import_react.useState)("connecting");
 	const [shellStarted, setShellStarted] = (0, import_react.useState)(savedTab === "shell");
@@ -49640,8 +52321,7 @@ function Pane({ inst, drag, dragging }) {
 	};
 	(0, import_react.useEffect)(() => {
 		if (!lastTab) return;
-		let t = lastTab;
-		if (GIT_TABS.has(t) && !caps.git) t = "agent";
+		const t = paneTab(lastTab, caps.git);
 		if (t === tab) return;
 		setHistPane(null);
 		setPaneFind(null);
@@ -49649,6 +52329,13 @@ function Pane({ inst, drag, dragging }) {
 		if (t === "shell") setShellStarted(true);
 		setTimeout(() => peekTerm(title, t === "shell" ? "shell" : "agent")?.doFit(), 0);
 	}, [lastTab]);
+	(0, import_react.useEffect)(() => {
+		if (tab === "thread") useUi.getState().setThreadLastSeen(title);
+	}, [
+		tab,
+		title,
+		newestReport
+	]);
 	const paneRef = (0, import_react.useRef)(null);
 	const headDrag = {
 		draggable: true,
@@ -49677,6 +52364,10 @@ function Pane({ inst, drag, dragging }) {
 			drag.commit();
 		}
 	};
+	const forkGone = missing || loading || !mcpCapable(caps, inst) || !!forkBlockReason(inst);
+	(0, import_react.useEffect)(() => {
+		if (playbookMenu && forkGone) useUi.getState().setPlaybookMenu(null);
+	}, [playbookMenu, forkGone]);
 	if (missing) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		ref: paneRef,
 		className: "pane missing-pane" + (focused ? " focused" : ""),
@@ -49810,340 +52501,393 @@ function Pane({ inst, drag, dragging }) {
 	const budget = inst.budget;
 	const ds = inst.workspace_missing ? null : inst.diff_stat;
 	const hasDiffStat = !!(ds && (ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0);
+	const forkShown = mcpCapable(caps, inst);
+	const forkBlocked = forkShown ? forkBlockReason(inst) : "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		ref: paneRef,
 		className: "pane" + (focused ? " focused" : "") + (dragging ? " dragging" : ""),
 		"data-title": title,
 		onMouseDown: () => selectSession(title, { noKeyboard: true }),
 		...paneDrag,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "pane-head",
-			...headDrag,
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "grip",
-					title: "Drag to move this window",
-					children: "⠿"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "title",
-					title: (alias ? title + "  ·  " : "") + (inst.branch || title),
-					children: displayName
-				}),
-				hasDiffStat && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CtxLine, { inst }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "tabs",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							"data-tab": "agent",
-							className: tab === "agent" ? "active" : "",
-							onClick: (e) => {
-								e.stopPropagation();
-								showTab("agent");
-							},
-							children: "Agent"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							"data-tab": "shell",
-							className: tab === "shell" ? "active" : "",
-							onClick: (e) => {
-								e.stopPropagation();
-								showTab("shell");
-							},
-							children: "Terminal"
-						}),
-						caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							"data-tab": "diff",
-							className: tab === "diff" ? "active" : "",
-							onClick: (e) => {
-								e.stopPropagation();
-								showTab("diff");
-							},
-							children: "Diff"
-						}),
-						caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							"data-tab": "map",
-							className: tab === "map" ? "active" : "",
-							title: "Code map — the worktree as a tree: agents, zones, plan, blast radius",
-							onClick: (e) => {
-								e.stopPropagation();
-								showTab("map");
-							},
-							children: "Map"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							"data-tab": "queue",
-							className: "queue-tab" + (tab === "queue" ? " active" : "") + (pending > 0 && q?.enabled === false ? " q-paused" : "") + (q?.loop ? " q-loop" : "") + (holding ? " q-limited" : ""),
-							title: holding ? q?.wait_for_limit !== false ? `Usage limit reached · auto-resumes in ${queueRelTime(limitedMs)} (${pending} queued)` : `Usage limit reached · queue stopped (${pending} queued)` : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits",
-							onClick: (e) => {
-								e.stopPropagation();
-								showTab("queue");
-							},
-							children: ["Queue", (pending > 0 || holding) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "queue-tab-badge",
-								children: holding ? "⏳" : pending > 99 ? "99+" : String(pending)
-							})]
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "actions",
-					children: [
-						ns ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							className: "nextstep" + (ns.hint ? " nextstep-hint" : "") + (ns.disabled ? " nextstep-blocked" : ""),
-							type: "button",
-							disabled: !!ns.disabled,
-							title: ns.title || "Do the next step",
-							onClick: (ev) => {
-								ev.stopPropagation();
-								if (!ns.disabled) ns.run();
-							},
-							children: ns.label
-						}) : null,
-						step && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "stepnow is-" + step.tone + (step.href ? " is-link" : ""),
-							title: step.title,
-							onClick: step.href ? (ev) => {
-								ev.stopPropagation();
-								window.open(step.href, "_blank");
-							} : void 0,
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "stepnow-dot",
-									"aria-hidden": "true"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "stepnow-text",
-									children: step.label
-								}),
-								step.target && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "stepnow-target",
-									children: step.target
-								})
-							]
-						}),
-						ft && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							className: "nextstep nextstep-fast" + (ft.active ? " is-on" : "") + (ft.hint ? " nextstep-fast-halted" : ""),
-							type: "button",
-							"aria-pressed": !!ft.active,
-							title: ft.title,
-							onClick: (ev) => {
-								ev.stopPropagation();
-								ft.run();
-							},
-							children: ft.label
-						}),
-						rs && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							className: "nextstep nextstep-reset",
-							type: "button",
-							title: rs.title,
-							"aria-label": "Back to idle",
-							onClick: (ev) => {
-								ev.stopPropagation();
-								rs.run();
-							},
-							children: rs.label
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "stagechip " + chip.cls,
-							title: inst.pr_url ? "Open PR" : chip.title,
-							style: inst.pr_url ? { cursor: "pointer" } : void 0,
-							onClick: inst.pr_url ? (ev) => {
-								ev.stopPropagation();
-								window.open(inst.pr_url, "_blank");
-							} : void 0,
-							children: chip.label
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AccountChip, { inst }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionUsageChip, { inst }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "state" + (wsState !== "connected" ? " state-bad" : ""),
-					children: wsState
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "head-tail",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							className: "act copyhist",
-							type: "button",
-							title: "Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)",
-							onClick: (e) => {
-								e.stopPropagation();
-								setHistPane({
-									kind: tab === "shell" ? "shell" : "agent",
-									dragSel: null
-								});
-							},
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-								width: "12",
-								height: "12",
-								viewBox: "0 0 24 24",
-								fill: "none",
-								stroke: "currentColor",
-								strokeWidth: "2",
-								strokeLinecap: "round",
-								strokeLinejoin: "round",
-								"aria-hidden": "true",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 8v4l2 2" }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 22v-6h6" })
-								]
-							})
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							className: "act copyhist",
-							type: "button",
-							title: "Copy this pane's whole history to the clipboard",
-							onClick: (e) => {
-								e.stopPropagation();
-								const which = tab === "shell" ? "shell" : "agent";
-								fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${which}`).then((r) => {
-									if (!r.ok) return r.text().then((t) => {
-										throw new Error(t || "HTTP " + r.status);
-									});
-									return r.text();
-								}).then((text) => {
-									if (!text.trim()) {
-										toast("No history to copy");
-										return;
-									}
-									copyText(text).then((ok) => toast(ok ? `Copied full ${which} history (${text.length} chars)` : "Copy failed"));
-								}).catch((err) => toast("History copy failed: " + err.message));
-							},
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-								width: "12",
-								height: "12",
-								viewBox: "0 0 24 24",
-								fill: "none",
-								stroke: "currentColor",
-								strokeWidth: "2",
-								strokeLinecap: "round",
-								strokeLinejoin: "round",
-								"aria-hidden": "true",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-									x: "8",
-									y: "2",
-									width: "8",
-									height: "4",
-									rx: "1"
-								})]
-							})
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							className: "act pane-close",
-							type: "button",
-							"aria-label": "Hide window",
-							title: "Hide this window — the session keeps running (show it again from its sidebar row)",
-							onClick: (e) => {
-								e.stopPropagation();
-								useUi.getState().setHidden(title, true);
-							},
-							children: "✕"
-						})
-					]
-				})
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "pane-body",
-			ref: bodyRef,
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "pane-term agent-term" + (tab !== "agent" ? " hidden" : ""),
-					ref: adopt("agent"),
-					children: [pinLine ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "prompt-pin" + (pinOpen ? " pin-open" : ""),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pane-head",
+				...headDrag,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "grip",
+						title: "Drag to move this window",
+						children: "⠿"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "title",
+						title: (alias ? title + "  ·  " : "") + (inst.branch || title),
+						children: displayName
+					}),
+					hasDiffStat && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CtxLine, { inst }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "tabs",
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "prompt-pin-mark",
-								"aria-expanded": pinOpen,
-								title: pinOpen ? "Collapse to one line" : "Show the whole prompt",
+								"data-tab": "agent",
+								className: tab === "agent" ? "active" : "",
 								onClick: (e) => {
 									e.stopPropagation();
-									setPinOpen((v) => !v);
+									showTab("agent");
 								},
-								children: "❯"
+								children: "Agent"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								"data-tab": "shell",
+								className: tab === "shell" ? "active" : "",
+								onClick: (e) => {
+									e.stopPropagation();
+									showTab("shell");
+								},
+								children: "Terminal"
+							}),
+							caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								"data-tab": "diff",
+								className: tab === "diff" ? "active" : "",
+								onClick: (e) => {
+									e.stopPropagation();
+									showTab("diff");
+								},
+								children: "Diff"
+							}),
+							caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								"data-tab": "map",
+								className: tab === "map" ? "active" : "",
+								title: "Code map — the worktree as a tree: agents, zones, plan, blast radius",
+								onClick: (e) => {
+									e.stopPropagation();
+									showTab("map");
+								},
+								children: "Map"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								"data-tab": "queue",
+								className: "queue-tab" + (tab === "queue" ? " active" : "") + (pending > 0 && q?.enabled === false ? " q-paused" : "") + (q?.loop ? " q-loop" : "") + (holding ? " q-limited" : ""),
+								title: holding ? q?.wait_for_limit !== false ? `Usage limit reached · auto-resumes in ${queueRelTime(limitedMs)} (${pending} queued)` : `Usage limit reached · queue stopped (${pending} queued)` : "Send a message now or queue prompts to auto-run — keeps the session going across usage limits",
+								onClick: (e) => {
+									e.stopPropagation();
+									showTab("queue");
+								},
+								children: ["Queue", (pending > 0 || holding) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "queue-tab-badge",
+									children: holding ? "⏳" : pending > 99 ? "99+" : String(pending)
+								})]
+							}),
+							threadShown && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								"data-tab": "thread",
+								className: "thread-tab" + (tab === "thread" ? " active" : ""),
+								title: "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" + (badge.needs ? `\n${badge.needs} waiting on your answer` : "") + (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : ""),
+								onClick: (e) => {
+									e.stopPropagation();
+									showTab("thread");
+								},
+								children: ["Thread", badge.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "queue-tab-badge thread-badge" + (badge.needs ? " needs" : ""),
+									children: badge.count > 99 ? "99+" : String(badge.count)
+								})]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "actions",
+						children: [
+							ns ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "nextstep" + (ns.hint ? " nextstep-hint" : "") + (ns.disabled ? " nextstep-blocked" : ""),
+								type: "button",
+								disabled: !!ns.disabled,
+								title: ns.title || "Do the next step",
+								onClick: (ev) => {
+									ev.stopPropagation();
+									if (!ns.disabled) ns.run();
+								},
+								children: ns.label
+							}) : null,
+							step && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "stepnow is-" + step.tone + (step.href ? " is-link" : ""),
+								title: step.title,
+								onClick: step.href ? (ev) => {
+									ev.stopPropagation();
+									window.open(step.href, "_blank");
+								} : void 0,
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "stepnow-dot",
+										"aria-hidden": "true"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "stepnow-text",
+										children: step.label
+									}),
+									step.target && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "stepnow-target",
+										children: step.target
+									})
+								]
+							}),
+							ft && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "nextstep nextstep-fast" + (ft.active ? " is-on" : "") + (ft.hint ? " nextstep-fast-halted" : ""),
+								type: "button",
+								"aria-pressed": !!ft.active,
+								title: ft.title,
+								onClick: (ev) => {
+									ev.stopPropagation();
+									ft.run();
+								},
+								children: ft.label
+							}),
+							rs && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "nextstep nextstep-reset",
+								type: "button",
+								title: rs.title,
+								"aria-label": "Back to idle",
+								onClick: (ev) => {
+									ev.stopPropagation();
+									rs.run();
+								},
+								children: rs.label
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "prompt-pin-text",
-								children: pinLine
-							}),
-							pinOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "prompt-pin-body",
-								children: pinBody
-							}) : null,
-							ghost ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "ghost-row-mask",
-								"aria-hidden": "true"
-							}) : null
+								className: "stagechip " + chip.cls,
+								title: inst.pr_url ? "Open PR" : chip.title,
+								style: inst.pr_url ? { cursor: "pointer" } : void 0,
+								onClick: inst.pr_url ? (ev) => {
+									ev.stopPropagation();
+									window.open(inst.pr_url, "_blank");
+								} : void 0,
+								children: chip.label
+							})
 						]
-					}) : null, !booted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "term-loading",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "spinner" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Loading session…" })]
-					})]
-				}),
-				shellStarted ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "pane-term shell-term" + (tab !== "shell" ? " hidden" : ""),
-					ref: adopt("shell")
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "pane-term shell-term" + (tab !== "shell" ? " hidden" : "") }),
-				caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "pane-diff" + (tab !== "diff" ? " hidden" : ""),
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DiffTab, {
-						title,
-						active: tab === "diff"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AccountChip, { inst }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionUsageChip, { inst }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "state" + (wsState !== "connected" ? " state-bad" : ""),
+						children: wsState
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "head-tail",
+						children: [
+							forkShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								ref: setForkEl,
+								className: "act playbooks" + (playbookMenu ? " open" : "") + (forkBlocked ? " is-blocked" : ""),
+								type: "button",
+								"aria-haspopup": "menu",
+								"aria-expanded": !!playbookMenu,
+								"aria-disabled": forkBlocked ? true : void 0,
+								title: forkBlocked || "Work with other sessions — split across workers, ask, review, hand off (Ctrl+K F)",
+								onClick: (e) => {
+									e.stopPropagation();
+									if (forkBlocked) {
+										toast(forkBlocked, { duration: 5e3 });
+										return;
+									}
+									useUi.getState().setPlaybookMenu(playbookMenu ? null : { title });
+								},
+								children: FORK_ICON
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "act copyhist",
+								type: "button",
+								title: "Browse the full history — scroll & select like a page (or drag a selection past the top of the terminal)",
+								onClick: (e) => {
+									e.stopPropagation();
+									setHistPane({
+										kind: tab === "shell" ? "shell" : "agent",
+										dragSel: null
+									});
+								},
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+									width: "12",
+									height: "12",
+									viewBox: "0 0 24 24",
+									fill: "none",
+									stroke: "currentColor",
+									strokeWidth: "2",
+									strokeLinecap: "round",
+									strokeLinejoin: "round",
+									"aria-hidden": "true",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 8v4l2 2" }),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 22v-6h6" })
+									]
+								})
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "act copyhist",
+								type: "button",
+								title: "Copy this pane's whole history to the clipboard",
+								onClick: (e) => {
+									e.stopPropagation();
+									const which = tab === "shell" ? "shell" : "agent";
+									fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${which}`).then((r) => {
+										if (!r.ok) return r.text().then((t) => {
+											throw new Error(t || "HTTP " + r.status);
+										});
+										return r.text();
+									}).then((text) => {
+										if (!text.trim()) {
+											toast("No history to copy");
+											return;
+										}
+										copyText(text).then((ok) => toast(ok ? `Copied full ${which} history (${text.length} chars)` : "Copy failed"));
+									}).catch((err) => toast("History copy failed: " + err.message));
+								},
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+									width: "12",
+									height: "12",
+									viewBox: "0 0 24 24",
+									fill: "none",
+									stroke: "currentColor",
+									strokeWidth: "2",
+									strokeLinecap: "round",
+									strokeLinejoin: "round",
+									"aria-hidden": "true",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+										x: "8",
+										y: "2",
+										width: "8",
+										height: "4",
+										rx: "1"
+									})]
+								})
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "act pane-close",
+								type: "button",
+								"aria-label": "Hide window",
+								title: "Hide this window — the session keeps running (show it again from its sidebar row)",
+								onClick: (e) => {
+									e.stopPropagation();
+									useUi.getState().setHidden(title, true);
+								},
+								children: "✕"
+							})
+						]
 					})
-				}),
-				caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "pane-map" + (tab !== "map" ? " hidden" : ""),
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CodeMapTab, {
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pane-body",
+				ref: bodyRef,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "pane-term agent-term" + (tab !== "agent" ? " hidden" : ""),
+						ref: adopt("agent"),
+						children: [pinLine ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "prompt-pin" + (pinOpen ? " pin-open" : ""),
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "prompt-pin-mark",
+									"aria-expanded": pinOpen,
+									title: pinOpen ? "Collapse to one line" : "Show the whole prompt",
+									onClick: (e) => {
+										e.stopPropagation();
+										setPinOpen((v) => !v);
+									},
+									children: "❯"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "prompt-pin-text",
+									children: pinLine
+								}),
+								pinOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "prompt-pin-body",
+									children: pinBody
+								}) : null,
+								ghost ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "ghost-row-mask",
+									"aria-hidden": "true"
+								}) : null
+							]
+						}) : null, !booted && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "term-loading",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "spinner" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Loading session…" })]
+						})]
+					}),
+					shellStarted ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "pane-term shell-term" + (tab !== "shell" ? " hidden" : ""),
+						ref: adopt("shell")
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "pane-term shell-term" + (tab !== "shell" ? " hidden" : "") }),
+					caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "pane-diff" + (tab !== "diff" ? " hidden" : ""),
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DiffTab, {
+							title,
+							active: tab === "diff"
+						})
+					}),
+					caps.git && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "pane-map" + (tab !== "map" ? " hidden" : ""),
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CodeMapTab, {
+							title,
+							active: tab === "map"
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "pane-queue" + (tab !== "queue" ? " hidden" : ""),
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QueueTab$1, {
+							title,
+							active: tab === "queue"
+						})
+					}),
+					threadShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "pane-thread" + (tab !== "thread" ? " hidden" : ""),
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ThreadTab, {
+							title,
+							active: tab === "thread"
+						})
+					}),
+					paneFind && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneFindBar, {
 						title,
-						active: tab === "map"
-					})
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "pane-queue" + (tab !== "queue" ? " hidden" : ""),
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QueueTab$1, {
+						pane: paneFind.kind,
+						mode: paneFind.mode,
+						initialQuery: paneFind.query,
+						onClose: () => {
+							const kind = paneFind.kind;
+							setPaneFind(null);
+							setTimeout(() => focusTerm(title, kind), 0);
+						}
+					}),
+					histPane && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HistoryOverlay, {
 						title,
-						active: tab === "queue"
+						pane: histPane.kind,
+						dragSelection: histPane.dragSel,
+						dragEdge: histPane.edge ?? "top",
+						dragCtx: histPane.ctx ?? null,
+						dragGhost: histPane.ghostSel ?? null,
+						initialPos: histPane.pos ?? "bottom",
+						initialFind: histPane.find,
+						onClose: () => {
+							const kind = histPane.kind;
+							setHistPane(null);
+							selectSession(title, { noKeyboard: true });
+							setTimeout(() => focusTerm(title, kind), 0);
+						}
+					}),
+					reduceMotion && chip.cls === "s-running" && tab === "agent" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunningCover, { paneRef }),
+					budget?.locked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BudgetLock, {
+						title,
+						budget
 					})
-				}),
-				paneFind && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneFindBar, {
-					title,
-					pane: paneFind.kind,
-					mode: paneFind.mode,
-					initialQuery: paneFind.query,
-					onClose: () => {
-						const kind = paneFind.kind;
-						setPaneFind(null);
-						setTimeout(() => focusTerm(title, kind), 0);
-					}
-				}),
-				histPane && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HistoryOverlay, {
-					title,
-					pane: histPane.kind,
-					dragSelection: histPane.dragSel,
-					dragEdge: histPane.edge ?? "top",
-					dragCtx: histPane.ctx ?? null,
-					dragGhost: histPane.ghostSel ?? null,
-					initialPos: histPane.pos ?? "bottom",
-					initialFind: histPane.find,
-					onClose: () => {
-						const kind = histPane.kind;
-						setHistPane(null);
-						selectSession(title, { noKeyboard: true });
-						setTimeout(() => focusTerm(title, kind), 0);
-					}
-				}),
-				reduceMotion && chip.cls === "s-running" && tab === "agent" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunningCover, { paneRef }),
-				budget?.locked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BudgetLock, {
-					title,
-					budget
-				})
-			]
-		})]
+				]
+			}),
+			playbookMenu && forkShown && !forkBlocked && forkEl && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlaybookMenu, {
+				title,
+				anchor: forkEl,
+				initialSub: playbookMenu.sub ?? null,
+				onClose: (refocus) => {
+					const ui = useUi.getState();
+					if (ui.playbookMenu?.title === title) ui.setPlaybookMenu(null);
+					if (refocus) setTimeout(() => focusTerm(title), 0);
+				}
+			})
+		]
 	});
 }
 function RunningCover({ paneRef }) {
@@ -50936,26 +53680,6 @@ function sentinel(kind, ref = "") {
 }
 //#endregion
 //#region src/components/palette/CommandPalette.tsx
-async function sendMessagePrompt(title) {
-	const text = window.prompt("Send a message to " + displayName(title) + ":");
-	if (!text || !text.trim()) return;
-	try {
-		await instApi(title, "/send", { json: { text: text.trim() } });
-		toast("Sent to " + displayName(title));
-	} catch (err) {
-		toast("Send failed: " + (err.message || ""));
-	}
-}
-async function queuePromptPrompt(title) {
-	const text = window.prompt("Queue a prompt for " + displayName(title) + " (auto-runs when idle):");
-	if (!text || !text.trim()) return;
-	try {
-		await instApi(title, "/queue", { json: { text: text.trim() } });
-		toast("Queued for " + displayName(title));
-	} catch (err) {
-		toast("Queue failed: " + (err.message || ""));
-	}
-}
 function fuzzyScore(query, text) {
 	query = String(query || "").toLowerCase();
 	text = String(text || "").toLowerCase();
@@ -51021,13 +53745,48 @@ function CommandPalette({ host }) {
 			});
 			acts.push({
 				label: `Send message… — ${t}`,
-				hint: "agent",
-				run: () => sendMessagePrompt(t)
+				hint: "Ctrl+K S",
+				run: () => ui.threadOpen(t, { composeTo: t })
 			});
 			acts.push({
 				label: `Queue prompt… — ${t}`,
 				hint: "auto-run",
-				run: () => queuePromptPrompt(t)
+				run: () => focusQueueInput(t)
+			});
+			const inst = rows.find((r) => r.title === t);
+			if (inst && mcpCapable(caps, inst)) {
+				acts.push({
+					label: `Split across workers… — ${t}`,
+					hint: "pastes the prompt",
+					run: () => void runPlaybook(t, "split")
+				});
+				acts.push({
+					label: `Ask a session… — ${t}`,
+					hint: "pastes the prompt",
+					run: () => openPlaybookMenu(t, "ask")
+				});
+				if (liveChildren(t, rows).length) {
+					acts.push({
+						label: `Check on workers — ${t}`,
+						hint: "pastes the prompt",
+						run: () => void runPlaybook(t, "workers")
+					});
+					acts.push({
+						label: `Wrap up workers — ${t}`,
+						hint: "pastes the prompt",
+						run: () => void runPlaybook(t, "wrapup")
+					});
+				}
+				acts.push({
+					label: `Work with other sessions… — ${t}`,
+					hint: "Ctrl+K F",
+					run: () => openPlaybookMenu(t)
+				});
+			}
+			acts.push({
+				label: `Thread — ${t}`,
+				hint: "Ctrl+K T",
+				run: () => ui.threadOpen(t)
 			});
 			if (caps.git) {
 				acts.push({
@@ -51299,13 +54058,14 @@ function buildSheet() {
 	}
 	for (const k of Object.keys(CHORDS)) {
 		const suf = chordKeyFor(k);
+		const by = chordShadowedBy(k);
 		rows["Focused session"].push([
-			"Ctrl+K " + suf.toUpperCase(),
-			CHORDS[k].desc,
+			by ? "Ctrl+K " + suf.toUpperCase() + " (taken)" : "Ctrl+K " + suf.toUpperCase(),
+			by ? CHORDS[k].desc + " — your Ctrl+K " + suf.toUpperCase() + " runs “" + CHORDS[by].desc + "”; click to pick a key" : CHORDS[k].desc,
 			{
 				kind: "chord",
 				id: k,
-				custom: suf !== k
+				custom: suf !== k || !!by
 			}
 		]);
 	}
@@ -51344,7 +54104,7 @@ function ShortcutsSheet() {
 					toast("Chords take one plain second key — press a single letter or digit");
 					return;
 				}
-				const clash = Object.keys(CHORDS).find((c) => c !== meta.id && chordKeyFor(c) === norm);
+				const clash = Object.keys(CHORDS).find((c) => c !== meta.id && chordKeyFor(c) === norm && !chordShadowedBy(c));
 				if (clash) {
 					toast("Ctrl+K " + norm.toUpperCase() + " is already “" + CHORDS[clash].desc + "”");
 					return;
@@ -51983,6 +54743,45 @@ function NewTicketPane() {
 	});
 }
 //#endregion
+//#region src/components/dialogs/SplitCheck.tsx
+function SplitCheck({ id, split, onSplit, gate, text }) {
+	const on = split && gate.ok;
+	const sug = gate.ok ? splitSuggestion(text) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "nf-split" + (gate.ok ? "" : " disabled"),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "check" + (gate.ok ? "" : " disabled"),
+			title: gate.ok ? "The agent forks one worker session per independent piece of the task, waits for their reports, then merges them. Works with the CLIs that get the MindFlock tools." : gate.reason,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id,
+					checked: on,
+					disabled: !gate.ok,
+					onChange: (e) => onSplit(e.target.checked)
+				}),
+				"Split across workers",
+				sug && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "nf-split-pill",
+					title: "Your sentence lists separate pieces. Nothing is ticked for you.",
+					children: suggestionPill(sug)
+				}),
+				!gate.ok && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "muted",
+					children: [
+						" (",
+						gate.reason,
+						")"
+					]
+				})
+			]
+		}), on && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "nf-git-nudge nf-split-nudge",
+			children: "The agent commits shared groundwork, starts one worker session per independent piece, waits for their reports, then merges. Workers appear under it in the rail. Runs in a new worktree. Each spawn asks your permission unless this agent skips permissions — answer from the rail."
+		})]
+	});
+}
+//#endregion
 //#region src/components/dialogs/NewSessionDialog.tsx
 var NEW_TABS = [{
 	key: "session",
@@ -52227,6 +55026,8 @@ function NewSessionDialog() {
 	const [inPlace, setInPlace] = (0, import_react.useState)(true);
 	const [initRepo, setInitRepo] = (0, import_react.useState)(false);
 	const [planFirst, setPlanFirst] = (0, import_react.useState)(false);
+	const [split, setSplit] = (0, import_react.useState)(false);
+	const splitMovedMode = (0, import_react.useRef)(false);
 	const [error, setError] = (0, import_react.useState)("");
 	const [advancedOpen, setAdvancedOpen] = (0, import_react.useState)(true);
 	const [launchOpen, setLaunchOpen] = (0, import_react.useState)(false);
@@ -52303,6 +55104,8 @@ function NewSessionDialog() {
 		setInPlace(true);
 		setInitRepo(false);
 		setPlanFirst(false);
+		setSplit(false);
+		splitMovedMode.current = false;
 		setAdvancedOpen(true);
 		setLaunchOpen(false);
 		setPromptOpen(false);
@@ -52453,6 +55256,23 @@ function NewSessionDialog() {
 		program,
 		providers
 	]);
+	const { data: config } = useConfig();
+	const mcpOk = (0, import_react.useMemo)(() => splitGate(config?.caps, canonAgent(program)), [
+		config?.caps,
+		canonAgent,
+		program
+	]);
+	const splitOn = split && mcpOk.ok;
+	const toggleSplit = (on) => {
+		setSplit(on);
+		if (on && inPlace && !provision) {
+			setInPlace(false);
+			splitMovedMode.current = true;
+		} else if (!on && splitMovedMode.current) {
+			splitMovedMode.current = false;
+			if (!inPlace && !provision) setInPlace(true);
+		}
+	};
 	const setAccount = (id) => {
 		setProfileId(id);
 		setProfileModel("");
@@ -52506,7 +55326,7 @@ function NewSessionDialog() {
 		});
 		if (a.title) setTitle(a.title);
 		setPrompt(a.prompt || "");
-		setInPlace(planInPlace(a));
+		setInPlace(planInPlace(a) && !splitOn);
 		setInitRepo(!!a.init_repo);
 		planFolderDo({
 			t: "answer",
@@ -52719,7 +55539,7 @@ function NewSessionDialog() {
 			body.init_repo = p.initRepo;
 			body.in_place = p.inPlace;
 		}
-		return body;
+		return withSplit(body, splitOn);
 	};
 	const postCreate = async (body) => {
 		setError("Creating…");
@@ -52867,6 +55687,13 @@ function NewSessionDialog() {
 									onClick: cancelDescribe,
 									children: "Cancel"
 								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
+								id: "new-split",
+								split,
+								onSplit: toggleSplit,
+								gate: mcpOk,
+								text: describe
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 								className: "nf-describe-help",
@@ -53279,6 +56106,10 @@ function NewSessionDialog() {
 													onChange: () => {
 														setInPlace(true);
 														setProvision(false);
+														if (split) {
+															setSplit(false);
+															splitMovedMode.current = false;
+														}
 													}
 												}),
 												"Work directly in this folder",
@@ -53396,91 +56227,101 @@ function NewSessionDialog() {
 								children: "— sent to the agent at launch"
 							})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "nf-advanced-body",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-									className: "preset-row",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-											id: "new-preset",
-											title: "Prompt presets — pick one to fill the prompt below (editable after)",
-											value: presetValue,
-											onChange: (e) => {
-												setPresetValue(e.target.value);
-												const p = findPreset(e.target.value);
-												if (p) setPrompt(p.prompt);
-											},
-											children: [
-												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-													value: "",
-													children: "Preset…"
-												}),
-												BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
-													label: "Built-in",
-													children: BUILTIN_PRESETS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-														value: "b:" + p.name,
-														title: p.prompt,
-														children: p.name
-													}, "b:" + p.name))
-												}),
-												savedPresets.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
-													label: "Saved",
-													children: savedPresets.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-														value: "u:" + p.name,
-														title: p.prompt,
-														children: p.name
-													}, "u:" + p.name))
-												})
-											]
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											type: "button",
-											id: "preset-save",
-											title: "Save current prompt as preset…",
-											onClick: savePreset,
-											children: "Save…"
-										}),
-										presetValue.startsWith("u:") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-											type: "button",
-											id: "preset-del",
-											title: "Delete the selected saved preset",
-											onClick: () => {
-												const p = findPreset(presetValue);
-												if (!p) return;
-												const list = loadUserPresets().filter((q) => q.name !== p.name);
-												saveUserPresets(list);
-												setSavedPresets(list);
-												setPresetValue("");
-											},
-											children: "✕"
-										})
-									]
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-									id: "new-prompt",
-									rows: 2,
-									autoComplete: "off",
-									spellCheck: false,
-									placeholder: "What should the agent do first? Leave blank if you don’t want to kick anything off just yet.",
-									value: prompt,
-									onChange: (e) => setPrompt(e.target.value)
-								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-									className: "check" + (planOk ? "" : " disabled"),
-									id: "new-plan-first-row",
-									title: planOk ? "The agent first lists every file it intends to create, modify or delete, with a one-line intent for each, then waits for your go-ahead. Open the session's Map tab to see that plan and its blast radius, red-zone anything it shouldn't touch, and press Go." : "Only a CLI that can declare a plan gets the Map's plan review and Go button — pick Claude for Plan first.",
-									children: [
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-											type: "checkbox",
-											id: "new-plan-first",
-											checked: planFirst && planOk,
-											disabled: !planOk,
-											onChange: (e) => setPlanFirst(e.target.checked)
-										}),
-										"Plan first",
-										" ",
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "muted",
-											children: !planOk ? "(needs a CLI with plan support — Claude)" : prompt.trim() ? "(list files + intent, then wait for Go on the Map tab)" : "(takes effect with a prompt)"
-										})
-									]
-								})]
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "preset-row",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+												id: "new-preset",
+												title: "Prompt presets — pick one to fill the prompt below (editable after)",
+												value: presetValue,
+												onChange: (e) => {
+													setPresetValue(e.target.value);
+													const p = findPreset(e.target.value);
+													if (p) setPrompt(p.prompt);
+												},
+												children: [
+													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+														value: "",
+														children: "Preset…"
+													}),
+													BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+														label: "Built-in",
+														children: BUILTIN_PRESETS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+															value: "b:" + p.name,
+															title: p.prompt,
+															children: p.name
+														}, "b:" + p.name))
+													}),
+													savedPresets.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+														label: "Saved",
+														children: savedPresets.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+															value: "u:" + p.name,
+															title: p.prompt,
+															children: p.name
+														}, "u:" + p.name))
+													})
+												]
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												id: "preset-save",
+												title: "Save current prompt as preset…",
+												onClick: savePreset,
+												children: "Save…"
+											}),
+											presetValue.startsWith("u:") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+												type: "button",
+												id: "preset-del",
+												title: "Delete the selected saved preset",
+												onClick: () => {
+													const p = findPreset(presetValue);
+													if (!p) return;
+													const list = loadUserPresets().filter((q) => q.name !== p.name);
+													saveUserPresets(list);
+													setSavedPresets(list);
+													setPresetValue("");
+												},
+												children: "✕"
+											})
+										]
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+										id: "new-prompt",
+										rows: 2,
+										autoComplete: "off",
+										spellCheck: false,
+										placeholder: "What should the agent do first? Leave blank if you don’t want to kick anything off just yet.",
+										value: prompt,
+										onChange: (e) => setPrompt(e.target.value)
+									})] }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+										className: "check" + (planOk ? "" : " disabled"),
+										id: "new-plan-first-row",
+										title: planOk ? "The agent first lists every file it intends to create, modify or delete, with a one-line intent for each, then waits for your go-ahead. Open the session's Map tab to see that plan and its blast radius, red-zone anything it shouldn't touch, and press Go." : "Only a CLI that can declare a plan gets the Map's plan review and Go button — pick Claude for Plan first.",
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+												type: "checkbox",
+												id: "new-plan-first",
+												checked: planFirst && planOk,
+												disabled: !planOk,
+												onChange: (e) => setPlanFirst(e.target.checked)
+											}),
+											"Plan first",
+											" ",
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "muted",
+												children: !planOk ? "(needs a CLI with plan support — Claude)" : prompt.trim() ? "(list files + intent, then wait for Go on the Map tab)" : "(takes effect with a prompt)"
+											})
+										]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
+										id: "new-split-prompt",
+										split,
+										onSplit: toggleSplit,
+										gate: mcpOk,
+										text: prompt || describe
+									})
+								]
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -57331,6 +60172,7 @@ function General(_) {
 			]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ResumeOnUsageResetRow, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentMcpRows, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReduceMotionRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeABreakRow, {}),
@@ -57364,6 +60206,85 @@ function ResumeOnUsageResetRow() {
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
 	});
+}
+var AGENT_MCP_SCOPE_OPTIONS = [
+	{
+		value: "",
+		label: "Default (children)"
+	},
+	{
+		value: "children",
+		label: "Children — manage only sessions it spawned"
+	},
+	{
+		value: "readonly",
+		label: "Read-only — look and check its inbox, no messaging"
+	},
+	{
+		value: "all",
+		label: "All — manage any session"
+	}
+];
+function AgentMcpRows() {
+	const s = useSettings();
+	const { data: config } = useConfig();
+	const stored = s.get("general", "agent_mcp");
+	const on = stored !== false && stored !== "false" && stored !== "0";
+	const envOff = on && config?.caps?.agent_mcp?.enabled === false;
+	const providers = config?.caps?.agent_mcp?.providers;
+	const clis = providers && providers.length ? providers.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" and ") : "Claude and Codex";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row agent-mcp-row",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Give agents the MindFlock MCP (agent-to-agent messaging and orchestration)"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint notif-rule-desc",
+					children: [
+						"Launches each ",
+						clis,
+						" session with MindFlock's MCP server attached, so its agent can see the other sessions, message them, and spawn and steer worker sessions of its own. Applies on each session's next launch — running agents keep what they started with."
+					]
+				}),
+				envOff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint notif-rule-desc agent-mcp-env-off",
+					children: "Off for now: the server was started with MINDFLOCK_AGENT_MCP=0, which overrides this switch."
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				checked: on,
+				onChange: (e) => {
+					s.saveField("general", "agent_mcp", e.target.checked);
+					toast(e.target.checked ? "Agent MCP on — from each session's next launch" : "Agent MCP off — from each session's next launch");
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		title: "How far an agent may MANAGE other sessions through the MCP (answer their prompts, kill them, re-parent them). Reading the flock and messaging are allowed in every scope except read-only.",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Agent MCP scope"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+				group: "general",
+				field: "agent_mcp_scope",
+				options: AGENT_MCP_SCOPE_OPTIONS
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "Applies on each session's next launch. A guard-rail, not a security boundary."
+			})
+		]
+	})] });
 }
 function GettingStarted() {
 	const enabled = useUi((s) => s.hintsEnabled);

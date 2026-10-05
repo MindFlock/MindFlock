@@ -790,6 +790,53 @@ def worktree_holding_branch(base_repo: str, branch_name: str) -> str:
     return ""
 
 
+def provisioned_branch_taken_error(
+    strategy: str,
+    branch_name: str,
+    provision_repo: str = "",
+    repo_url_override: Optional[str] = None,
+) -> Optional[str]:
+    """Why a NEW provisioned session on ``branch_name`` cannot start, or None.
+
+    Asked synchronously at create time, so the caller hears a 409 instead of
+    a 202 whose background Start then fails (worktree strategy: the branch is
+    still checked out by a closed session's kept worktree) — or, worse,
+    silently ADOPTS a closed session's clone, old commits and all (clone
+    strategy: the clone path is deterministic and Setup is idempotent). Both
+    messages say "already exists", the wording callers retry on. Blocking;
+    a probe that cannot run says nothing (Start's own guard is the backstop).
+    """
+    try:
+        settings = (
+            local_settings_for(provision_repo)
+            if provision_repo
+            else load_provision_settings(repo_url_override=repo_url_override)
+        )
+        if settings is None or not branch_name:
+            return None
+        branch = sanitize_branch_name(branch_name) or branch_name
+        if strategy == "clone":
+            path = settings.workspace_dir / branch.replace("/", "-")
+            if path.exists():
+                return (
+                    "a workspace for branch %s already exists at %s (a closed "
+                    "session keeps it) — pick another session title" % (branch, path)
+                )
+            return None
+        base = resolve_base_repo_dir(settings)
+        if not base.is_dir():
+            return None
+        held_at = worktree_holding_branch(str(base), branch)
+        if held_at:
+            return (
+                "a worktree for branch %s already exists at %s (a closed or paused "
+                "session keeps it) — pick another session title" % (branch, held_at)
+            )
+    except Exception:  # noqa: BLE001 — never block a create on the probe
+        return None
+    return None
+
+
 def _check_branch_not_checked_out(base_repo: str, branch_name: str) -> None:
     """Raise a clear error if ``branch_name`` is already checked out in base_repo.
 

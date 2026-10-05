@@ -7,8 +7,11 @@
  *
  * Adding a component rule that needs a light-mode counterpart? Put the
  * counterpart here rather than raising specificity at the call site. */
+/* Not the ACTIVE tab: this layer beats the component layer whatever the
+   specificity, so a hover here used to wash the accent off the tab you had
+   just clicked (it is still under the pointer). */
 .light .inst-actions button:hover,
-.light .pane-head .tabs button:hover {
+.light .pane-head .tabs button:not(.active):hover {
   background: rgba(0, 0, 0, 0.06);
 }
 
@@ -107,6 +110,12 @@
 
 .light #conn-banner {
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+
+/* The fork-icon menu and its Ask › picker (PlaybookMenu.css). */
+.light .pb-menu,
+.light .pb-sub {
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
 }
 
 /* Doctor warning chip (failures while sessions exist). */

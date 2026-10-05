@@ -370,9 +370,17 @@ a feature race; those two change what your day looks like:
   usage returns — queued prompt or not — then tells you that too.
 - 🌳 **Isolated workspaces** — every session gets its own git worktree, so
   agents never step on each other (or on you).
+- 🤝 **Agents that work together** — every Claude Code and Codex session gets
+  the MindFlock MCP. An agent can read another session's reply or diff and
+  message it, and an orchestrator can split a task across worker sessions
+  forked from its own commit, wait for their reports, merge their branches
+  and clean up. Messages are typed in only when the recipient is idle, never
+  into a permission prompt, and always marked as coming from another agent.
+  Use it from your own Claude Code too: `mindflock mcp --print-config`. See
+  [docs/mcp.md](docs/mcp.md).
 - ⚡ **Terminal-first, too** — the `mindflock` CLI drives the same sessions as
-  the app (`new`, `ls`, `attach`, `rm`, `open`, `events`), so terminal and UI
-  stay one system.
+  the app (`new`, `ls`, `attach`, `rm`, `open`, `events`, `msg`, `inbox`), so
+  terminal and UI stay one system.
 - 🧩 **Extensible** — shell hooks on every session event, a `WS /api/events`
   stream, in-process Python + ES-module addons, and **extensions**: an addon
   that declares a sidebar bar, palette commands and dialog/grid windows in a
@@ -665,6 +673,8 @@ mindflock attach webapp          # tmux attach to the agent's terminal (prefix o
 mindflock rm webapp --yes        # end a session, keep its worktree (prompts without --yes)
 mindflock open webapp            # open the workspace in the configured IDE
 mindflock events --follow        # live event stream (great for hook debugging)
+mindflock msg webapp "also update the changelog"   # message the agent (typed in when idle)
+mindflock inbox webapp           # its unread messages, without marking them read
 ```
 
 See [docs/cli.md](docs/cli.md) for the full command reference.
@@ -810,7 +820,8 @@ On macOS the desktop app additionally leaves `/Applications/MindFlock.app`,
 | [docs/extensions.md](docs/extensions.md) | Extension guide: shell hooks, `/api/events` WebSocket, in-process addons, extensions (Addon API v3: manifest, `ExtensionApi`, surfaces, discovery, the Database Client), `window.mindflock` client API |
 | [docs/configuration.md](docs/configuration.md) | `config.toml` reference, `~/.mindflock/` + `~/.mindflock-assistant/`, environment variables |
 | [docs/session-engine.md](docs/session-engine.md) | Instance lifecycle, git worktrees, tmux/PTY, provisioned mode |
-| [docs/cli.md](docs/cli.md) | `mindflock` CLI: serve, doctor, uninstall, and terminal session control (new/ls/attach/rm/open/events) |
+| [docs/cli.md](docs/cli.md) | `mindflock` CLI: serve, doctor, uninstall, mcp, and terminal session control (new/ls/attach/rm/open/events/msg/inbox) |
+| [docs/mcp.md](docs/mcp.md) | The MindFlock MCP: agent-to-agent messaging and orchestration — auto-attach, the 14 tools, message delivery, lineage and spawn limits, scopes, a worked orchestrator example |
 | [docs/web-api.md](docs/web-api.md) | Complete HTTP + WebSocket API reference |
 | [docs/web-ui.md](docs/web-ui.md) | Frontend guide: grid, tabs, stages, shortcuts, mobile, addons |
 | [docs/providers.md](docs/providers.md) | Provider framework, adding a CLI via TOML, pricing & usage tracking |

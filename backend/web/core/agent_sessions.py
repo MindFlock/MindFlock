@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
+import threading
 import time
+import uuid
+from typing import Dict
 
 from backend import providers
 from backend.session import provisioned as provisioning
@@ -162,6 +166,23 @@ def _ensure_agent_session(inst, title: str):
         # exports survive the launcher's `exec bash -ilc` chain, so every link
         # of its resume loop runs under the profile.
         cmd = launcher
+        # Its MCP attach args were baked in when it was written. When they no
+        # longer match this launch (reopened under a de-duplicated title — the
+        # old one names ANOTHER live session's identity; attach toggled off;
+        # scope changed) rewrite the launcher first. Then keep the run file(s)
+        # it names current (port / interpreter / scope), and present.
+        try:
+            with open(launcher, encoding="utf-8", errors="replace") as fh:
+                script = fh.read()
+            if providers.mcp_attach.launcher_attach_stale(
+                provider, title=title, tmux_name=name, workdir=wt, script=script
+            ):
+                srv._rewrite_provisioned_launcher(inst, wt, title=title)
+        except Exception:  # noqa: BLE001 — never block a relaunch over this
+            pass
+        mcp_attached = providers.mcp_attach.refresh_launcher_config(
+            provider, title=title, tmux_name=name, workdir=wt, launcher=launcher
+        )
     else:
         # Plain / in-place session. The provider builds the launch command
         # (claude: resume via --resume <id>/--continue with a retried fallback;
@@ -180,6 +201,12 @@ def _ensure_agent_session(inst, title: str):
             )
         except Exception:  # noqa: BLE001 — never block a relaunch over settings
             pass
+        # MindFlock MCP auto-attach, re-derived per launch like the overlays
+        # above (never persisted in inst.LaunchArgs). () when off/unsupported.
+        mcp_args = providers.mcp_attach.attach_args(
+            provider, title=title, tmux_name=name, workdir=wt
+        )
+        mcp_attached = bool(mcp_args)
         cmd = provider.build_launch_command(
             providers.LaunchContext(
                 program=inst.Program or "",
@@ -187,13 +214,15 @@ def _ensure_agent_session(inst, title: str):
                 skip_permissions=False,
                 in_place=bool(getattr(inst, "InPlace", False)),
                 session_name=name,
-                launch_args=tuple(local_args)
+                launch_args=tuple(mcp_args)
+                + tuple(local_args)
                 + tuple(prof_args)
                 + tuple(getattr(inst, "LaunchArgs", ()) or ()),
             )
         )
         if cmd is None:
             cmd = inst.Program
+            mcp_attached = False  # the bare program takes no launch args
         # Export the env in FRONT of the command: this runs under `sh -c`, and
         # the `||` fallback chains mean a `K=V cmd` prefix would only cover the
         # first link of the chain.
@@ -245,6 +274,10 @@ def _ensure_agent_session(inst, title: str):
         ):
             return name, None
         return name, created.stderr.decode("utf-8", "replace").strip()
+    # A new agent process: record whether it got the MindFlock tools (the
+    # row's mcp_attached) — a relaunch with the feature off, or of a provider
+    # that can't attach, has none, whatever the previous launch had.
+    providers.mcp_attach.note_launch(name, mcp_attached)
     # alternate-screen off: don't honor the TUI's alt-screen request, so its
     # output scrolls into tmux history — that's what makes "Copy all" (and
     # wheel-scroll through real history) work for EVERY cli tool, not just ones
@@ -282,6 +315,72 @@ def _send_to_shell(name: str, command: str) -> None:
     )
 
 
+#: One lock per tmux session name, held across a typer's text, its pause and
+#: its Enter. The prompt queue, the mailbox lane, ``delivery: "now"``, the
+#: limit auto-resume and ``/send`` all type through here from different
+#: threads; without it one typer's text could land inside another's 150 ms
+#: window and the CLI would submit "<prompt><message>" as a single turn.
+_TYPING_LOCKS: Dict[str, threading.Lock] = {}
+_TYPING_LOCKS_GUARD = threading.Lock()
+
+
+def _typing_lock(name: str) -> threading.Lock:
+    with _TYPING_LOCKS_GUARD:
+        lock = _TYPING_LOCKS.get(name)
+        if lock is None:
+            lock = _TYPING_LOCKS[name] = threading.Lock()
+        return lock
+
+
+def _paste_into(name: str, text: str) -> bool:
+    """Put ``text`` into tmux session ``name`` as ONE bracketed paste.
+
+    A multi-line text typed with ``send-keys -l`` reaches the pane as raw LF
+    bytes, and a prompt_toolkit CLI (aider, …) reads every LF as Enter — each
+    line went in as its own turn, the red-zone note arriving apart from the
+    task. ``paste-buffer -p`` wraps the text in bracketed-paste markers when
+    the app asked for them, so the newlines land IN the input box; ``-r``
+    keeps them as LF (the bytes ``send-keys -l`` sent) and ``-d`` drops the
+    one-shot buffer. The same method the provisioned seeder uses
+    (:func:`backend.providers.launch_script.seed_by_keys_function`)."""
+    srv = _server()
+    buf = "mindflock-send-" + uuid.uuid4().hex[:12]
+    fd, path = tempfile.mkstemp(prefix="mindflock-paste-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        loaded = srv._run_capped(
+            ["tmux", "load-buffer", "-b", buf, path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        if loaded.returncode != 0:
+            return False
+        pasted = srv._run_capped(
+            ["tmux", "paste-buffer", "-b", buf, "-p", "-r", "-d", "-t", name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        if pasted.returncode != 0:
+            srv._run_capped(
+                ["tmux", "delete-buffer", "-b", buf],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            return False
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def _send_to_agent(name: str, text: str, submit: bool = True) -> bool:
     """Type ``text`` into the agent tmux session; press Enter when ``submit``.
 
@@ -289,8 +388,10 @@ def _send_to_agent(name: str, text: str, submit: bool = True) -> bool:
     is a SEPARATE ``send-keys Enter`` a beat later — an agent TUI (claude) treats
     a text+newline burst as a paste and turns the ``\\r`` into a literal newline
     in its input box instead of submitting (the same subtlety the mobile compose
-    box handles). Returns False if the session doesn't exist or tmux errored, so
-    callers (the single-send endpoint, the queue drain) can report/retry."""
+    box handles). A MULTI-LINE text goes in as one bracketed paste instead
+    (:func:`_paste_into`): typed as keys, a CLI that submits on LF fired it one
+    line at a time. Returns False if the session doesn't exist or tmux errored,
+    so callers (the single-send endpoint, the queue drain) can report/retry."""
     srv = _server()
     if not name:
         return False
@@ -305,22 +406,29 @@ def _send_to_agent(name: str, text: str, submit: bool = True) -> bool:
     )
     if not exists:
         return False
-    typed = srv._run_capped(
-        ["tmux", "send-keys", "-t", name, "-l", text],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        timeout=10,
-    )
-    if typed.returncode != 0:
-        return False
-    if submit:
-        time.sleep(0.15)  # end the paste burst so Enter submits, not newlines
-        srv._run_capped(
-            ["tmux", "send-keys", "-t", name, "Enter"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-        )
+    with _typing_lock(name):
+        settle = 0.15
+        if "\n" in text or "\r" in text:
+            if not _paste_into(name, text):
+                return False
+            settle = 0.4  # a long paste takes the TUI a moment to absorb
+        else:
+            typed = srv._run_capped(
+                ["tmux", "send-keys", "-t", name, "-l", "--", text],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            if typed.returncode != 0:
+                return False
+        if submit:
+            time.sleep(settle)  # end the paste burst so Enter submits, not newlines
+            srv._run_capped(
+                ["tmux", "send-keys", "-t", name, "Enter"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
     return True
 
 

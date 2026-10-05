@@ -7,6 +7,8 @@ the free function ``CleanupWorktrees``.
 
 Command argv, error strings, HEAD-detection substrings and the
 ``branch -D ... not found`` skip behavior match the Go source byte-for-byte.
+The one Python-side extension is ``baseRef``: a new branch cut from a given
+commit-ish instead of HEAD (see :meth:`GitWorktreeOpsMixin.setup_new_worktree`).
 """
 
 from __future__ import annotations
@@ -85,7 +87,8 @@ class GitWorktreeOpsMixin:
         Ensures the worktrees directory exists, then either sets up from an
         existing branch (if ``isExistingBranch`` is set, or a local
         ``refs/heads/<branch>`` exists) or creates a brand-new worktree from
-        HEAD.
+        HEAD (or from ``baseRef``). A ``baseRef`` whose branch already exists is
+        refused rather than silently reusing a branch cut from somewhere else.
         """
         from backend.session.git.worktree import get_worktree_directory
 
@@ -119,6 +122,17 @@ class GitWorktreeOpsMixin:
             branch_exists = False
 
         if branch_exists:
+            base_ref = getattr(self, "baseRef", "") or ""
+            if base_ref:
+                # The branch is NOT ours: mark it pre-existing before refusing,
+                # so the failed Start's cleanup (``Cleanup`` -> ``branch -D``)
+                # can never delete the very branch it refused to reuse — with
+                # whatever commits a closed/paused namesake left on it.
+                self.isExistingBranch = True
+                raise RuntimeError(
+                    "branch {} already exists, so it cannot be cut from {} — pick "
+                    "another session title".format(self.branchName, base_ref)
+                )
             self.setup_from_existing_branch()
         else:
             self.setup_new_worktree()
@@ -238,7 +252,8 @@ class GitWorktreeOpsMixin:
 
     # --- setupNewWorktree -------------------------------------------------
     def setup_new_worktree(self) -> None:
-        """Create a new worktree from the current HEAD commit."""
+        """Create a new worktree from the current HEAD commit, or from
+        ``baseRef`` when one is set (consumed once the worktree exists)."""
         # Clean up any existing worktree first (ignore error if absent).
         try:
             self.run_git_command(
@@ -254,6 +269,24 @@ class GitWorktreeOpsMixin:
             self.run_git_command(self.repoPath, "branch", "-D", self.branchName)
         except Exception:  # noqa: BLE001
             pass
+
+        base_ref = getattr(self, "baseRef", "") or ""
+        if base_ref:
+            # Resolve to the commit NOW so the branch, the worktree and the
+            # recorded diff base all agree even if the ref moves later. A ref
+            # that looks like an option is refused before git can parse it.
+            if base_ref.startswith("-"):
+                raise RuntimeError("invalid base ref: {}".format(base_ref))
+            try:
+                output = self.run_git_command(
+                    self.repoPath, "rev-parse", "--verify", base_ref + "^{commit}"
+                )
+            except Exception as err:  # noqa: BLE001
+                raise RuntimeError(
+                    "failed to resolve base ref {}: {}".format(base_ref, err)
+                ) from err
+            self._add_new_worktree(output.strip())
+            return
 
         try:
             output = self.run_git_command(self.repoPath, "rev-parse", "HEAD")
@@ -272,7 +305,11 @@ class GitWorktreeOpsMixin:
                 "failed to get HEAD commit hash: {}".format(err)
             ) from err
 
-        head_commit = output.strip()
+        self._add_new_worktree(output.strip())
+
+    def _add_new_worktree(self, head_commit: str) -> None:
+        """``git worktree add -b <branch> <path> <head_commit>`` with rollback,
+        recording ``head_commit`` as the base (shared by HEAD and ``baseRef``)."""
         self.baseCommitSHA = head_commit
 
         # Create a new worktree from the HEAD commit so we start clean (no
@@ -299,6 +336,8 @@ class GitWorktreeOpsMixin:
                     )
                 ) from err
             raise  # KeyboardInterrupt/SystemExit: rolled back, re-raise as-is
+        # One-shot: the fork point only applies to creating the branch.
+        self.baseRef = ""
 
     # --- Cleanup ----------------------------------------------------------
     def Cleanup(self) -> None:

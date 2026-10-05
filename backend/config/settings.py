@@ -1011,6 +1011,18 @@ class GeneralSettings:
     otherwise sit on the limit screen until a human comes back. ``None``
     (never set) reads as ON — the whole point of the limit gate is that running
     out is temporary. ``False`` turns it off.
+
+    ``agent_mcp``: whether every session's agent CLI is launched with the
+    MindFlock MCP server attached (:mod:`backend.providers.mcp_attach`), so
+    agents can list, message, spawn and steer each other. ``None`` (never set)
+    reads as ON; ``False`` turns it off for new launches (live sessions keep
+    what they started with). The ``MINDFLOCK_AGENT_MCP=0`` env var wins.
+
+    ``agent_mcp_scope``: how far an attached agent may MANAGE other sessions —
+    ``"readonly"``, ``"children"`` (the default, also for ``""``: only the
+    sessions it spawned and their descendants) or ``"all"``. Reading the flock
+    and messaging are not gated by it beyond ``readonly``. Unknown values read
+    as ``""``.
     """
 
     session_budget_usd: Optional[float] = None
@@ -1023,6 +1035,8 @@ class GeneralSettings:
     serve_mode: str = ""  # "" / "local" | "tailscale"
     ingestion_autostart: Optional[bool] = None
     resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
+    agent_mcp: Optional[bool] = None  # None = on (see docstring)
+    agent_mcp_scope: str = ""  # "" (= children) | "readonly" | "children" | "all"
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -1046,6 +1060,10 @@ class GeneralSettings:
             d["ingestion_autostart"] = self.ingestion_autostart
         if self.resume_on_usage_reset is not None:
             d["resume_on_usage_reset"] = self.resume_on_usage_reset
+        if self.agent_mcp is not None:
+            d["agent_mcp"] = self.agent_mcp
+        if self.agent_mcp_scope:
+            d["agent_mcp_scope"] = self.agent_mcp_scope
         return d
 
     @classmethod
@@ -1061,6 +1079,8 @@ class GeneralSettings:
             serve_mode=str(d.get("serve_mode", "") or "").strip().lower(),
             ingestion_autostart=_opt_bool(d.get("ingestion_autostart")),
             resume_on_usage_reset=_opt_bool(d.get("resume_on_usage_reset")),
+            agent_mcp=_opt_bool(d.get("agent_mcp")),
+            agent_mcp_scope=_agent_mcp_scope(d.get("agent_mcp_scope")),
         )
 
 
@@ -1301,6 +1321,16 @@ def _opt_float(v: Any) -> Optional[float]:
         return float(s) if s else None
     except (TypeError, ValueError):
         return None
+
+
+#: Values ``general.agent_mcp_scope`` accepts (``""`` = the default, children).
+AGENT_MCP_SCOPES = ("readonly", "children", "all")
+
+
+def _agent_mcp_scope(v: Any) -> str:
+    """A known ``agent_mcp_scope`` value, lower-cased, else ``""`` (default)."""
+    s = str(v or "").strip().lower()
+    return s if s in AGENT_MCP_SCOPES else ""
 
 
 def _opt_bool(v: Any) -> Optional[bool]:

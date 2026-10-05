@@ -265,6 +265,78 @@ def test_send_endpoint_delivers_to_agent(client):
     assert client._sent == [("agent_t1", "go build it", True)]
 
 
+# /send dialog_safe (review 2026-10-05): the UI's Send now and every paste.
+# The browser's view of the agent lags; a digit or an Enter typed into a
+# permission prompt approves it, so the SERVER re-checks before typing.
+@pytest.mark.parametrize("activity", ["clarify", "limit"])
+def test_dialog_safe_send_queues_instead_of_typing_into_a_prompt(
+    client, monkeypatch, activity
+):
+    from backend.web import server
+
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: activity)
+    monkeypatch.setattr(server, "_agent_activity_cached", lambda i, t: "idle")
+    r = client.post(
+        "/api/instances/t1/send",
+        json={"text": "rerun on port 3000", "dialog_safe": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"sent": False, "queued": True, "submitted": False}
+    assert client._sent == []
+    assert [i["text"] for i in pq.list_queue("t1")] == ["rerun on port 3000"]
+
+
+@pytest.mark.parametrize("activity", ["clarify", "limit"])
+def test_dialog_safe_paste_into_a_prompt_is_409_and_types_nothing(
+    client, monkeypatch, activity
+):
+    """An unsubmitted paste can't be queued (the drain would submit it)."""
+    from backend.web import server
+
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: activity)
+    r = client.post(
+        "/api/instances/t1/send",
+        json={
+            "text": "Wrap up worker api-billing-2",
+            "submit": False,
+            "dialog_safe": True,
+        },
+    )
+    assert r.status_code == 409
+    assert r.json()["in_dialog"] is True
+    assert client._sent == [] and pq.list_queue("t1") == []
+
+
+@pytest.mark.parametrize("activity", ["idle", "working"])
+def test_dialog_safe_send_types_when_free(client, monkeypatch, activity):
+    """Working is fine: the CLI takes typed input mid-turn."""
+    from backend.web import server
+
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: activity)
+    r = client.post("/api/instances/t1/send", json={"text": "go", "dialog_safe": True})
+    assert r.json() == {"sent": True, "submitted": True}
+    assert client._sent == [("agent_t1", "go", True)]
+
+
+def test_dialog_safe_unknown_activity_does_not_type_blind(client, monkeypatch):
+    from backend.web import server
+
+    def boom(i, t):
+        raise RuntimeError("probe")
+
+    monkeypatch.setattr(server, "_agent_activity", boom)
+    r = client.post("/api/instances/t1/send", json={"text": "go", "dialog_safe": True})
+    assert r.json()["queued"] is True and client._sent == []
+
+
+def test_plain_send_still_types_unconditionally(client, monkeypatch):
+    from backend.web import server
+
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: "clarify")
+    r = client.post("/api/instances/t1/send", json={"text": "1"})
+    assert r.json()["sent"] is True and client._sent == [("agent_t1", "1", True)]
+
+
 def test_send_rejects_empty(client):
     assert client.post("/api/instances/t1/send", json={"text": "  "}).status_code == 400
 
@@ -438,6 +510,10 @@ def drain(qfile, tmp_path, monkeypatch):
         "_send_to_agent",
         lambda name, text, submit=True: (sent.append(text) or True),
     )
+    # The pane holds the agent unless a test says otherwise (never real tmux).
+    monkeypatch.setattr(
+        server, "_pane_meta", lambda n: ("claude", 1.0, "4242", "80x24")
+    )
     yield server, sent
     server.ENGINE.instances.pop("d1", None)
     server._QUEUE_STATE.pop("d1", None)
@@ -451,6 +527,25 @@ def test_drain_sends_when_idle(drain, monkeypatch):
     assert sent == ["task one"]
     # Consumed (no loop) — queue now empty.
     assert pq.list_queue("d1") == []
+
+
+def test_drain_never_types_into_a_bare_shell(drain, monkeypatch):
+    """A shell program (or a launcher that dropped to ``bash -i``) reads idle
+    under the bare-shell rule; the drain typed the queued prompt into it, plus
+    Enter, and the shell ran it. Held until an agent holds the pane."""
+    server, sent = drain
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: "idle")
+    monkeypatch.setattr(server, "_pane_meta", lambda n: ("bash", 1.0, "4242", "80x24"))
+    monkeypatch.setattr(server, "_pane_has_agent_process", lambda pid: False)
+    pq.enqueue("d1", "echo `id`")
+    server._drain_one_queue("d1")
+    assert sent == []
+    assert [i["text"] for i in pq.list_queue("d1")] == ["echo `id`"]
+    # The agent under a bare-shell wrapper (a provisioned launcher) is fine.
+    monkeypatch.setattr(server, "_pane_has_agent_process", lambda pid: True)
+    server._QUEUE_STATE["d1"]["idle_since"] = 1.0
+    server._drain_one_queue("d1")
+    assert sent == ["echo `id`"]
 
 
 def test_drain_sends_sooner_on_an_authoritative_idle(drain, monkeypatch):

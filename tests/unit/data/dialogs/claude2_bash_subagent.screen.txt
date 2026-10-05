@@ -1,0 +1,25 @@
+───────────────────────────────────────────────────────────────────────────────
+ Bash command · from the general-purpose agent
+ Set up mindflock call
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ cat > /tmp/list_sessions.py << 'EOF'
+ │ import json
+ │ import subprocess
+ │
+ │ # For this prototype, we'll simulate the MindFlock API call
+ │ # In a real environment, this would use the MindFlock client
+ │ print("Attempting to call mcp__mindflock__list_sessions...")
+ │ EOF
+ │ python3 /tmp/list_sessions.py
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ This command requires approval
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for cat and python3 /tmp/list_sessions.py
+      commands in
+      /home/emandel2630/mindflock-prototypes/mcp-ux/e2e-live/sandbox/home/.mind
+      flock/worktrees/emandel2630/add-hello-and-bye-files_18dba6a4a6310976
+   3. No
+
+ Esc to cancel · Tab to amend

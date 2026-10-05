@@ -203,6 +203,17 @@ interface UiState {
   dialogTarget: string | null;
   /** Last PR base branch chosen per repo (Make-PR dialog pre-fill). */
   prBaseByRepo: Record<string, string>;
+  /** Who the Thread composer should be addressed to, set by `threadOpen`:
+   * `title` is the session whose Thread tab was opened, `to` the member the
+   * message goes to. `seq` bumps on every open, so a second Ctrl+K S at the
+   * same target still moves the caret into the composer. Transient. */
+  threadComposeTarget: ThreadComposeTarget | null;
+  /** When this browser last looked at each session's Thread tab (epoch ms) —
+   * the tab's badge counts results newer than this. Persisted. */
+  threadLastSeen: Record<string, number>;
+  /** The pane whose "Work with other sessions" (fork-icon) menu is open, and
+   * whether it opened straight into a submenu. Transient. */
+  playbookMenu: PlaybookMenuState | null;
 
   setFocused(title: string | null): void;
   touchMru(title: string): void;
@@ -258,7 +269,38 @@ interface UiState {
   openDialogFor(name: DialogName, target?: string | null): void;
   closeDialog(): void;
   setPrBase(repo: string, base: string): void;
+  /** Bring a session's pane forward on its Thread tab, with the composer
+   * addressed to `composeTo` (default: the session itself). */
+  threadOpen(title: string, opts?: { composeTo?: string }): void;
+  /** Record that the Thread tab of `title` was looked at (now, by default). */
+  setThreadLastSeen(title: string, ts?: number): void;
+  /** Open the fork-icon menu on a session's pane, or close it (null). */
+  setPlaybookMenu(menu: PlaybookMenuState | null): void;
 }
+
+export interface ThreadComposeTarget {
+  title: string;
+  to: string;
+  seq: number;
+}
+
+export interface PlaybookMenuState {
+  title: string;
+  /** Open with this submenu already showing ("ask" = the session picker). */
+  sub?: "ask" | null;
+}
+
+/** How the store brings a session forward. The real one is
+ * lib/sessionActions' selectSession — the one selection authority, with the
+ * capped-view demotion — which registers itself on import. The store cannot
+ * import it directly (sessionActions imports the store), and the fallback is
+ * only what a store-only caller (a unit test) needs. */
+type SessionSelector = (title: string, opts?: { noKeyboard?: boolean }) => void;
+let _selectSession: SessionSelector | null = null;
+export function setSessionSelector(fn: SessionSelector | null): void {
+  _selectSession = fn;
+}
+let _threadSeq = 0;
 
 export const useUi = create<UiState>((set, get) => ({
   focused: null,
@@ -297,6 +339,9 @@ export const useUi = create<UiState>((set, get) => ({
   openDialog: null,
   dialogTarget: null,
   prBaseByRepo: load<Record<string, string>>("mf_prbase", {}),
+  threadComposeTarget: null,
+  threadLastSeen: load<Record<string, number>>("mf_thread_seen", {}),
+  playbookMenu: null,
 
   setFocused: (title) => set({ focused: title }),
   touchMru: (title) => {
@@ -483,6 +528,30 @@ export const useUi = create<UiState>((set, get) => ({
     save("mf_prbase", next);
     set({ prBaseByRepo: next });
   },
+  threadOpen: (title, opts) => {
+    if (!title) return;
+    // Keyboard-less: the Thread tab's composer takes the caret, not the
+    // terminal — selecting with the keyboard would hand it to the agent pane
+    // and a message typed next would land in the agent's input box.
+    if (_selectSession) _selectSession(title, { noKeyboard: true });
+    else {
+      get().setHidden(title, false);
+      get().touchMru(title);
+      get().setFocused(title);
+    }
+    get().setLastTab(title, "thread");
+    set({
+      playbookMenu: null,
+      threadComposeTarget: { title, to: opts?.composeTo || title, seq: ++_threadSeq },
+    });
+  },
+  setThreadLastSeen: (title, ts) => {
+    if (!title) return;
+    const threadLastSeen = { ...get().threadLastSeen, [title]: ts ?? Date.now() };
+    save("mf_thread_seen", threadLastSeen);
+    set({ threadLastSeen });
+  },
+  setPlaybookMenu: (menu) => set({ playbookMenu: menu }),
 }));
 
 /** Display name helper: alias if set, else the raw title. */

@@ -134,7 +134,7 @@ def _session_find_prompt(inst, prefix: str) -> Optional[str]:
 # * **layer-wide provenance**, written by :func:`_verdict` on EVERY return path
 #   of :func:`_agent_activity` — ``created`` / ``reported`` / ``state_since`` /
 #   ``worked_at`` / ``source`` (which layer produced the current reading —
-#   "marker" / "exit" / "proc" / "trust" / "pane") / ``worked_evidence`` (what
+#   "marker" / "exit" / "proc" / "trust" / "screen" / "pane") / ``worked_evidence`` (what
 #   corroborated the armed work — "marker" / "status" / "cpu"). Before these existed only the pane path wrote anything, so a
 #   session reporting through its CLI's hooks (the common Claude case) left no
 #   trail at all: ``activity_since`` was dead for exactly those sessions, and
@@ -301,7 +301,8 @@ def _verdict(
     own hook marker / live query, including the idle/limit reclassifications
     built on it), ``"exit"`` (the launch wrapper's exit marker), ``"proc"``
     (bare shell, no agent process), ``"trust"`` (the startup trust-gate
-    auto-answer), ``"pane"`` (live-pane inspection). It is recorded with the
+    auto-answer), ``"screen"`` (a dialog the provider parsed on the visible
+    screen — clarify only), ``"pane"`` (live-pane inspection). It is recorded with the
     value so downstream consumers can weigh the reading by where it came from:
     the announce path's settle skip and the queue drain's fast tier both key on
     :func:`reading_is_authoritative`, and the turn-end dwell tiers key on
@@ -663,6 +664,138 @@ def _pane_has_agent_process(pane_pid) -> bool:
     return result
 
 
+# Runtimes that run an agent CLI as a SCRIPT argument (``node …/claude``,
+# ``python3 …/aider``): the agent's name is in the token after them, not in
+# argv[0]. Shells are here too — a wrapper script (``bash ~/bin/ccc``) is named
+# by its path.
+_SCRIPT_RUNNERS = (
+    frozenset(
+        {"node", "nodejs", "bun", "deno", "env", "ruby", "perl", "uv", "uvx", "npx"}
+    )
+    | _BARE_SHELLS
+)
+_SCRIPT_SUFFIXES = (".js", ".mjs", ".cjs", ".py", ".exe", ".sh")
+
+
+def _norm_exe(token: str) -> str:
+    """``/usr/lib/node_modules/x/cli.js`` -> ``cli``; lower-cased basename with
+    a script/binary suffix dropped."""
+    base = os.path.basename(token or "").lower()
+    for suf in _SCRIPT_SUFFIXES:
+        if base.endswith(suf):
+            return base[: -len(suf)]
+    return base
+
+
+def _is_script_runner(exe: str) -> bool:
+    return exe in _SCRIPT_RUNNERS or re.match(r"^python[0-9.]*$", exe) is not None
+
+
+def agent_process_names(program: str) -> frozenset:
+    """The executable names that mean "an agent CLI is running": every
+    registered provider's name, aliases and binary, plus the session's own
+    program (a custom script / wrapper). Shells and script runners never count
+    — they are exactly what a quit agent leaves behind."""
+    names: set = set()
+
+    def add(token: str) -> None:
+        tok = (token or "").strip()
+        if not tok:
+            return
+        try:
+            first = tok.split()[0]
+        except IndexError:
+            return
+        exe = _norm_exe(first)
+        if exe and not _is_script_runner(exe):
+            names.add(exe)
+
+    try:
+        for p in providers.all_providers():
+            if p.name == "generic":
+                continue
+            add(p.name)
+            for alias in getattr(p, "program_aliases", ()) or ():
+                add(alias)
+            cfg = getattr(p, "cfg", None)
+            if cfg is not None:
+                add(getattr(cfg, "command", "") or "")
+                add(getattr(cfg, "binary_path", "") or "")
+    except Exception:  # noqa: BLE001 — the session's own program still counts
+        pass
+    add(program or "")
+    return frozenset(names)
+
+
+def _argv_names_agent(args: str, names: frozenset) -> bool:
+    """Whether one process's command line is an agent CLI: its executable is in
+    ``names`` — or, for a script runner (``node``, ``python3``, ``bash``), the
+    script it runs is (by basename, or a path component such as
+    ``claude-code``). Only the executable/script tokens are looked at: an
+    argument (``ssh claude``) never makes a process an agent."""
+    tokens = (args or "").split()
+    if not tokens:
+        return False
+    exe = _norm_exe(tokens[0])
+    if exe in names:
+        return True
+    if not _is_script_runner(exe):
+        return False
+    # The script: the first non-flag token after the runner(s).
+    for tok in tokens[1:4]:
+        if tok.startswith("-"):
+            continue
+        cand = _norm_exe(tok)
+        if _is_script_runner(cand):
+            continue  # ``env node …`` / ``uv run python …``
+        if cand in names:
+            return True
+        parts = [p.lower() for p in tok.replace("\\", "/").split("/") if p]
+        return any(p == n or p.startswith(n + "-") for p in parts[:-1] for n in names)
+    return False
+
+
+def _pane_runs_agent(pane_pid, names: frozenset) -> Optional[bool]:
+    """Whether the pane's process tree (the pane process itself included) holds
+    an agent CLI — POSITIVE evidence, unlike :func:`_pane_has_agent_process`'s
+    "anything but a shell": after a deliberate quit, ``vim``/``ssh``/``psql``
+    in the launcher's ``bash -i`` are not the agent. ``None`` when the process
+    table cannot be read (callers then refuse to type blind)."""
+    if not pane_pid or not names:
+        return None
+    try:
+        cp = _server()._run_capped(
+            ["ps", "-e", "-o", "pid=,ppid=,args="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except OSError:
+        return None
+    if cp.returncode != 0:
+        return None
+    children: Dict[str, list] = {}
+    argv: Dict[str, str] = {}
+    for line in cp.stdout.decode("utf-8", "replace").splitlines():
+        fields = line.split(None, 2)
+        if len(fields) < 2:
+            continue
+        pid, ppid = fields[0], fields[1]
+        children.setdefault(ppid, []).append(pid)
+        argv[pid] = fields[2].strip() if len(fields) > 2 else ""
+    stack = [str(pane_pid)]
+    seen: set = set()
+    while stack:
+        pid = stack.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        if _argv_names_agent(argv.get(pid, ""), names):
+            return True
+        stack.extend(children.get(pid, []))
+    return False
+
+
 # CPU-based activity (robust idle detection): an agent parked at its prompt is
 # blocked reading stdin and burns ~0 CPU, no matter how its idle screen redraws
 # (spinner / status line / cursor). A working/streaming agent burns CPU. We
@@ -924,7 +1057,7 @@ def _maybe_record_thread(provider, inst, name: str, created) -> None:
         pass
 
 
-def _limit_on_pane(srv, name: str, provider) -> bool:
+def _limit_on_pane(srv, name: str, provider, screen: Optional[str] = None) -> bool:
     """True when the agent pane currently shows a usage-limit banner/menu.
 
     A standalone capture used to see *past* a fresh clarify marker: a CLI that
@@ -934,7 +1067,14 @@ def _limit_on_pane(srv, name: str, provider) -> bool:
     overrides). Reporting it as its own 'limit' state instead lets the drain
     hold + auto-resume (escape the menu, then send). The common pane-inspection
     path reuses its own capture (see :func:`_pane_hash_activity`); this helper
-    only covers the marker short-circuit. Never raises."""
+    only covers the marker short-circuit. ``screen``: a capture this probe
+    already took (the screen-evidence layer's), read instead of capturing
+    again. Never raises."""
+    if screen is not None:
+        try:
+            return is_limit_screen(screen)
+        except Exception:  # noqa: BLE001
+            return False
     try:
         cp = srv._run_capped(
             ["tmux", "capture-pane", "-p", "-t", name],
@@ -950,6 +1090,53 @@ def _limit_on_pane(srv, name: str, provider) -> bool:
         # but the pane can still carry stray "rate limited" text we must ignore.
         return is_limit_screen(text)
     except Exception:  # noqa: BLE001 — detection must never break the poll
+        return False
+
+
+def _capture_visible(srv, name: str) -> Optional[str]:
+    """The pane's visible screen, or None when the capture fails."""
+    try:
+        cp = srv._run_capped(
+            ["tmux", "capture-pane", "-p", "-t", name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except Exception:  # noqa: BLE001 — a failed capture is no evidence
+        return None
+    if cp.returncode != 0:
+        return None
+    return cp.stdout.decode("utf-8", "replace")
+
+
+def _reads_dialogs(provider) -> bool:
+    """Whether ``provider`` has a dialog parser (getattr-safe: test stubs and
+    third-party providers may predate the capability)."""
+    probe = getattr(provider, "parses_dialogs", None)
+    try:
+        return bool(probe()) if callable(probe) else False
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _dialog_parsed(provider, text: str) -> bool:
+    """Whether the provider PARSES a live dialog (with options) on ``text`` —
+    the conservative evidence: a numbered menu with the CLI's own cursor as
+    the last thing on screen under a dialog's top rule."""
+    try:
+        parsed = provider.parse_dialog(text)
+    except Exception:  # noqa: BLE001 — a parser bug is no evidence
+        return False
+    return isinstance(parsed, dict) and bool(parsed.get("options"))
+
+
+def _dialog_at_bottom(provider, text: str) -> bool:
+    """The looser screen evidence (a parse, or the waiting/trust phrases in
+    the bottom lines — ``BaseProvider.dialog_on_screen``). getattr-safe."""
+    probe = getattr(provider, "dialog_on_screen", None)
+    try:
+        return bool(probe(text)) if callable(probe) else False
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -996,7 +1183,14 @@ def _marker_is_current(provider, name: str, created) -> bool:
         return True
 
 
-def _idle_or_limit(srv, title: str, name: str, provider, force: bool = False) -> str:
+def _idle_or_limit(
+    srv,
+    title: str,
+    name: str,
+    provider,
+    force: bool = False,
+    screen: Optional[str] = None,
+) -> str:
     """``"limit"`` when a session that LOOKS idle is really parked on a
     usage-limit screen, else ``"idle"``.
 
@@ -1025,12 +1219,16 @@ def _idle_or_limit(srv, title: str, name: str, provider, force: bool = False) ->
     re-force, but the uncached drain/autopilot probes and any memo-missing
     poller landing inside the first capture's window each force their own
     (bounded by caller count, a handful at worst).
+
+    ``screen``: a capture this probe already took, used in place of the
+    probe's own when one is due (the throttle and its forced/miss rules are
+    unchanged — only the capture is shared).
     Never raises."""
     now = time.time()
     rec = _LIMIT_PROBE.get(title)
     stale = rec is None or now - float(rec.get("at") or 0.0) >= _LIMIT_RECHECK_S
     if force or stale:
-        if _limit_on_pane(srv, name, provider):
+        if _limit_on_pane(srv, name, provider, screen):
             # "Banner seen" always wins and always caches — the safe direction.
             _LIMIT_PROBE[title] = {"at": now, "limit": True}
             return "limit"
@@ -1055,7 +1253,7 @@ def _idle_or_limit(srv, title: str, name: str, provider, force: bool = False) ->
 
 
 def _pane_hash_activity(
-    srv, inst, title: str, name: str, provider, pane_pid, pane_size
+    srv, inst, title: str, name: str, provider, pane_pid, pane_size, text=None
 ) -> str:
     """Layers 3-4 of :func:`_agent_activity`: classify from the live pane.
 
@@ -1082,18 +1280,21 @@ def _pane_hash_activity(
       seconds -> 'idle'.
 
     A visible trust/MCP gate seen here is auto-answered (F2) and reported
-    'clarify'. Returns 'offline' when the pane capture fails.
+    'clarify'. Returns 'offline' when the pane capture fails. ``text``: the
+    capture the screen-evidence layer already took this probe (no second
+    capture).
     """
     # Layer 3: hardened pane-hash fallback.
-    cp = srv._run_capped(
-        ["tmux", "capture-pane", "-p", "-t", name],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        timeout=10,
-    )
-    if cp.returncode != 0:
-        return "offline"
-    text = cp.stdout.decode("utf-8", "replace")
+    if text is None:
+        cp = srv._run_capped(
+            ["tmux", "capture-pane", "-p", "-t", name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        if cp.returncode != 0:
+            return "offline"
+        text = cp.stdout.decode("utf-8", "replace")
     # F2 safety net: a visible trust/MCP gate is auto-answered and shown
     # as clarify (pre-trust normally prevents it from appearing at all).
     if srv._dismiss_trust_prompt(inst, title, name, text):
@@ -1288,6 +1489,7 @@ def _pane_hash_activity(
         if pats and any(re.search(p, text) for p in pats):
             rec["streak"] = 0
             return "clarify"
+
     # The status line is the stronger positive signal where it exists — a
     # live interrupt hint / climbing token counter means working immediately,
     # even on a visually static pane (the extended-thinking case CPU can't
@@ -1328,6 +1530,12 @@ def _agent_activity(inst, title: str) -> str:
 
     0. exit marker — the launch wrapper recorded the agent command ending
        inside the current tmux session -> idle (session gone -> offline);
+    0.5 screen evidence — for a CLI with a dialog parser, the visible screen
+       is captured once per probe; a dialog it parses there (a numbered menu
+       with the CLI's own cursor, last thing on screen, under the dialog's
+       top rule) reads ``clarify`` whatever the hooks said — background
+       sub-agents overwrite the marker while their prompt is still up. The
+       capture is reused by the limit checks and the pane layer;
     1. provider activity marker — the CLI's own hook-reported state (Claude
        Code Stop/UserPromptSubmit/Notification hooks, A2) -> returned as-is
        (above the shell heuristic on purpose: the CLI's own report outvotes
@@ -1413,6 +1621,25 @@ def _agent_activity(inst, title: str) -> str:
         # one; see :func:`_marker_is_current`.)
         if marked and not _marker_is_current(provider, name, created):
             marked = None
+        # Layer 0.5: SCREEN EVIDENCE outranks the CLI's report. A dialog the
+        # provider parses on the visible screen means the agent is blocked on
+        # a human, whatever the hooks last wrote: Claude Code runs background
+        # sub-agents in the same process, and their tool events overwrite a
+        # sub-agent's clarify marker with "working" (or the main turn's Stop
+        # with "idle") while its permission prompt is still up — the strip,
+        # the bell and every typing gate then read a waiting session as busy
+        # or free (E2E defects A/F). One capture per probe for a CLI with a
+        # parser, shared with the limit checks and the pane layer below.
+        # A usage-limit screen is left to those (its menu parses too, and
+        # 'limit' outranks 'clarify'). Not authoritative for the announce
+        # path (source "screen"): a frame is a frame.
+        screen = _capture_visible(srv, name) if _reads_dialogs(provider) else None
+        if (
+            screen is not None
+            and not is_limit_screen(screen)
+            and _dialog_parsed(provider, screen)
+        ):
+            return _verdict(rec, "clarify", now, source="screen")
         if marked == "idle":
             # Stop hook fired -> the turn definitively ended; trust at any age
             # WITHIN THIS INCARNATION (see :func:`_marker_is_current`).
@@ -1436,7 +1663,9 @@ def _agent_activity(inst, title: str) -> str:
             )
             return _verdict(
                 rec,
-                _idle_or_limit(srv, title, name, provider, force=ended_a_turn),
+                _idle_or_limit(
+                    srv, title, name, provider, force=ended_a_turn, screen=screen
+                ),
                 now,
                 source="marker",
             )
@@ -1457,13 +1686,32 @@ def _agent_activity(inst, title: str) -> str:
                 # the limit claims its own 'limit' state — otherwise the drain
                 # treats it as a human gate and the queue stalls behind a menu
                 # that never clears on its own, even after the window reopens.
-                if marked == "clarify" and _limit_on_pane(srv, name, provider):
+                if marked == "clarify" and _limit_on_pane(srv, name, provider, screen):
                     return _verdict(rec, "limit", now, source="marker")
                 # The CLI said so itself, so this is the one reading allowed to
                 # arm a turn-end announcement — at any duration. A hook fires
                 # because a prompt was submitted or a tool ran; there is no
                 # cosmetic redraw or background CPU burst behind it.
                 return _verdict(rec, marked, now, arms=True, source="marker")
+            if marked == "clarify":
+                # A STALE clarify marker — the CLI said it raised a prompt, and
+                # nothing it has said since — whose dialog is still at the
+                # bottom of the screen (parsed or not: a redraw glitch, a layout
+                # the parser does not know) is still waiting. Handing it to the
+                # pane layer made every such dialog read idle on its first poll
+                # past the trust window, and again on every frame that caught
+                # Claude's blinking tool bullet (the "stable pane" rule): the
+                # 4-6 s idle flicker of E2E defect D. The CLI's own word plus
+                # bottom-of-screen evidence is enough; the pane layer still
+                # decides once the dialog is gone.
+                if screen is None:
+                    screen = _capture_visible(srv, name)
+                if (
+                    screen is not None
+                    and not is_limit_screen(screen)
+                    and _dialog_at_bottom(provider, screen)
+                ):
+                    return _verdict(rec, "clarify", now, source="screen")
         # Layer 2: a bare shell holds the pane AND nothing but shells lives
         # under it -> the agent isn't running, whatever the pane looks like.
         if (
@@ -1477,7 +1725,7 @@ def _agent_activity(inst, title: str) -> str:
         # unavailable). Kept in its own helper so the layered dispatch above
         # reads as a sequence of authoritative-first probes.
         pane_state = _pane_hash_activity(
-            srv, inst, title, name, provider, pane_pid, pane_size
+            srv, inst, title, name, provider, pane_pid, pane_size, text=screen
         )
         # What the pane looks like is enough to paint the chip. Whether it may
         # also announce that a TURN ENDED depends on what proved it busy:

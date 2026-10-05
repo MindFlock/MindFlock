@@ -5,11 +5,14 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useInstances, type EventEnvelope } from "../state/queries";
-import { useUi } from "../state/store";
+import { displayName, useUi } from "../state/store";
 import { relTime } from "../lib/format";
 import { selectSession } from "../lib/sessionActions";
 import { attentionItems } from "./sidebar/ordering";
 import { slotNumber } from "../lib/windowName";
+import { childrenByParent, inFamily, messageNotif, workerOf, type MessageEventData } from "../lib/agentMessages";
+import { openThread } from "../lib/flockActions";
+import { AnswerStrip } from "./AnswerStrip";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -96,6 +99,12 @@ export function notifFromEvent(env: EventEnvelope): { text: string; cls: string 
       const what = String((d as { what?: string }).what || "guard");
       return { text: "red-zone guard tampered (" + what + ")", cls: "n-warn" };
     }
+    // Agent-to-agent traffic (MindFlock MCP): only a worker's REPORT is news
+    // (done / blocked / failed, filed under the parent it reported to). Plain
+    // messages between agents are toasted but stay out of the feed — the bell
+    // has no dedupe, and an orchestrator's chatter would bury every row here.
+    case "session.message":
+      return messageNotif(d as MessageEventData, displayName);
     default:
       return null;
   }
@@ -179,6 +188,16 @@ export function NotificationsBell() {
   }, [open]);
 
   const attn = attentionItems(instances);
+  // MindFlock MCP families: a worker's (or an orchestrator's) "needs your
+  // answer" item names whose worker it is and carries the same answer strip
+  // as its rail row — answerable from any screen, two clicks.
+  const families = childrenByParent(instances);
+  const familyOf = (title: string) => {
+    const inst = instances.find((x) => x.title === title);
+    if (!inst || inst.device) return null;
+    const parent = inst.parent && families.get(inst.parent)?.includes(inst) ? inst.parent : "";
+    return inFamily(inst, !!parent, families.get(title)?.length ?? 0) ? { parent } : null;
+  };
   const unread = notifs.filter((n) => n.ts > seenTs).length;
   const aliases = useUi((s) => s.aliases);
 
@@ -255,23 +274,44 @@ export function NotificationsBell() {
             {shownAttn.length > 0 && (
               <div className="notif-attn">
                 <div className="notif-attn-head">Needs attention</div>
-                {shownAttn.map((it) => (
-                  <div
-                    key={it.title + it.reason}
-                    className={"attn-item p" + it.p}
-                    data-attn={it.title}
-                    onClick={() => jump(it.title)}
-                  >
-                    <span className="attn-dot" />
-                    <span className="attn-title">{aliases[it.title] || it.title}</span>
-                    <span className="attn-reason">{it.reason}</span>
-                    {!!it.snippet && (
-                      <div className="attn-snippet">
-                        “{typeof it.snippet === "string" ? it.snippet : JSON.stringify(it.snippet)}”
-                      </div>
-                    )}
-                  </div>
-                ))}
+                {shownAttn.map((it) => {
+                  // Only a prompt (p0) is answerable; the strip then stands in
+                  // for the snippet with the dialog's own question.
+                  const fam = it.p === 0 ? familyOf(it.title) : null;
+                  return (
+                    <div
+                      key={it.title + it.reason}
+                      className={"attn-item p" + it.p}
+                      data-attn={it.title}
+                      onClick={() => jump(it.title)}
+                    >
+                      <span className="attn-dot" />
+                      <span className="attn-title">{aliases[it.title] || it.title}</span>
+                      <span className="attn-reason">{it.reason}</span>
+                      {fam?.parent && (
+                        <span className="attn-lineage">{workerOf(fam.parent, displayName)}</span>
+                      )}
+                      {fam ? (
+                        <AnswerStrip
+                          title={it.title}
+                          activity="clarify"
+                          variant="bell"
+                          onOpen={() => jump(it.title)}
+                          onRedirect={() => {
+                            setOpen(false);
+                            openThread(fam.parent || it.title, it.title);
+                          }}
+                        />
+                      ) : (
+                        !!it.snippet && (
+                          <div className="attn-snippet">
+                            “{typeof it.snippet === "string" ? it.snippet : JSON.stringify(it.snippet)}”
+                          </div>
+                        )
+                      )}
+                    </div>
+                  );
+                })}
                 {attn.length > shownAttn.length && (
                   <div className="attn-more muted">+{attn.length - shownAttn.length} more</div>
                 )}

@@ -1,11 +1,12 @@
 # The `mindflock` CLI
 
-The console entry point (`backend/cli.py`) has two kinds of commands:
-host commands that run things locally (`serve`, `doctor`, `uninstall`) and **session
-commands** (`new`, `ls`, `attach`, `rm`, `open`, `events`) that are thin clients over
-a *running* server's HTTP API (`backend/client.py`). Session commands
-never spawn an engine of their own — the terminal and the web UI drive the same
-server, so a session created from either shows up in both.
+The console entry point (`backend/cli.py`) has two kinds of commands. **Host
+commands** run things locally: `serve`, `doctor`, `uninstall`, and `mcp`, the
+MindFlock MCP stdio server. **Session commands** (`new`, `ls`, `attach`, `rm`,
+`open`, `events`, `msg`, `inbox`) are thin clients over a *running* server's
+HTTP API (`backend/client.py`). Session commands never spawn an engine of
+their own: the terminal and the web UI drive the same server, so a session
+created from either shows up in both.
 
 ## Host commands
 
@@ -16,6 +17,8 @@ mindflock serve --port 9000 # custom port
 mindflock doctor            # dependency preflight; exit 1 if a required dep is missing
 mindflock doctor --fix      # offer to install/repair missing dependencies interactively
 mindflock uninstall         # undo MindFlock's writes to your repos (see below)
+mindflock mcp               # the MindFlock MCP server on stdio (for an agent CLI to start)
+mindflock mcp --print-config  # how to register it with your own Claude Code / Codex
 mindflock --version         # print the installed version
 ```
 
@@ -43,7 +46,9 @@ things survive it and cause real problems:
   you just deleted.
 
 It also removes the `.mindflock_*` scratch files and the `.git/info/exclude`
-lines that named them.
+lines that named them, and the per-session MindFlock-MCP run files
+(`~/.mindflock/run/mcp-*.json`, reported as `MCP run files: N`). Those go even
+without `--purge`, since they only describe sessions.
 
 ```bash
 mindflock uninstall --dry-run   # print everything that would be removed, change nothing
@@ -94,6 +99,38 @@ mindflock accounts rm or
 `mindflock new --account ID`, the New dialog's Account select, or the pane
 header's `@account` chip (which hot-swaps a live session).
 
+### `mindflock mcp [--scope readonly|children|all] [--host H] [--port P] [--print-config]`
+
+Runs the **MindFlock MCP server** in the foreground, speaking the Model
+Context Protocol on stdin/stdout. That lets an agent CLI list, read, message,
+spawn and steer MindFlock sessions (see [mcp.md](mcp.md)). It is meant to be
+started *by* an MCP client, not typed at a prompt. It writes nothing but
+protocol to stdout (logs go to stderr; `MINDFLOCK_MCP_LOG=DEBUG` for more),
+and exits when stdin closes. MindFlock already attaches it to the Claude Code
+and Codex sessions it launches, so you need this only for your own clients.
+
+- `--scope` is how far the server may steer other sessions: `readonly`,
+  `children` (the default: only sessions it, or its session, spawned and their
+  descendants) or `all`. The default is `$MINDFLOCK_MCP_SCOPE`, else
+  `children`.
+- `--host` / `--port` pick the server, found as for the session commands
+  below.
+- `--print-config` prints the registration snippets for this install and
+  exits:
+  - a `claude mcp add mindflock --scope user -- <python> -P -m backend.mcp`
+    line;
+  - the same entry as `.mcp.json` / `--mcp-config` JSON;
+  - a Codex `[mcp_servers.mindflock]` table with `tool_timeout_sec = 1620` and
+    `startup_timeout_sec = 30`, sized for the tools' 1500 s waits.
+
+  `--scope`, `--host` and `--port` given alongside are baked into the
+  snippets' `env`.
+
+```bash
+mindflock mcp --print-config                 # paste the line for your client
+mindflock mcp --print-config --scope all     # an external client allowed to manage every session
+```
+
 ## Session commands
 
 All of them find the server the same way:
@@ -106,6 +143,25 @@ The candidate must answer `GET /api/config` within ~1s with the MindFlock
 config shape, so another service on the port isn't mistaken for a server. When
 nothing is found the command prints
 `no MindFlock server found — start one with `mindflock serve`` and exits 1.
+
+**Auth.** Every HTTP request carries `Authorization: Bearer <token>` when a
+token resolves: `MINDFLOCK_AUTH_TOKEN`, else `general.auth_token` from the
+settings file (`MINDFLOCK_SETTINGS_FILE` honored). The token is read-only;
+the CLI never mints or writes one. A 401 makes it re-read the token once (it
+may have been rotated) and retry. That is what lets the session commands work
+against a server with the access-token gate on. `mindflock events` (a
+websocket) does not send it yet. The settings-file token goes only to a
+loopback address: with `--host`/`MINDFLOCK_HOST` naming another machine, set
+`MINDFLOCK_AUTH_TOKEN` to that server's token. Discovery probes without a
+token and sends it only once MindFlock's own gate has answered, so another
+program on the port never receives it.
+
+A server that is up but refuses the token is reported as exactly that, not as
+"no server found": the command prints `error: MindFlock server at http://…
+rejected the auth token — set MINDFLOCK_AUTH_TOKEN …` and exits 1.
+`mindflock accounts` stops there too rather than editing the settings file
+behind the server's back, and `mindflock uninstall` counts such a server as
+running.
 
 ### `mindflock new [REPO_PATH]`
 
@@ -166,6 +222,48 @@ exactly like `attach`; an unknown title prints ``no session named '<title>'
 
 Open (or focus) the session's workspace in the configured IDE
 (`POST /api/instances/{title}/ide` — Settings → Advanced picks the IDE).
+Prefix matching works like `attach`.
+
+### `mindflock msg TITLE TEXT`
+
+Leave a message for a session's agent
+(`POST /api/instances/{title}/messages`) from **outside the flock**
+(`from: ""`). The agent sees it typed in as `[MindFlock message <id> from
+outside the flock (CLI or external client) — …] <text>`, with no reply hint.
+`TITLE` may be any unambiguous prefix. Several `TEXT` words are joined with
+spaces, and a lone `-` reads the text from stdin.
+
+```bash
+mindflock msg orch "the staging DB is back, carry on"
+mindflock msg orch-w1 --delivery now "stop: you are on the wrong branch"
+git log -1 --format=%B | mindflock msg orch -
+```
+
+`--delivery` picks how it is delivered:
+
+- `auto` (the default) types it in once the agent is stably idle;
+- `inbox` only stores it, for the agent's `check_inbox`;
+- `now` types it immediately, even mid-turn, but never into an open dialog,
+  a usage-limit screen or a stopped agent, and not while someone is typing in
+  that window.
+
+It prints `sent <id> to <title> (<delivered|pending|held>)`, plus a `note:`
+on stderr explaining a held or not-yet-typed message. Delivery rules are in
+[mcp.md](mcp.md#messages).
+
+### `mindflock inbox TITLE [--all] [--json]`
+
+List a session's messages (`GET /api/instances/{title}/messages`)
+**without marking anything read**, so a peek from the terminal never steals a
+message from the agent. One line per message:
+
+```
+14:03:07  m1759600000123_42  [pending] from orch: Please also cover the empty-list case.
+14:05:12  m1759600031877_43  [held] result from orch-w1: Added the endpoint; 14 tests pass
+```
+
+By default it lists unread messages (`pending` and `held`). `--all` also
+lists messages already typed in or read. `--json` prints the raw response.
 Prefix matching works like `attach`.
 
 ### `mindflock events [--follow]`

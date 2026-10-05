@@ -5,19 +5,22 @@ import {
   memo,
   useCallback,
   useEffect,
+  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
   type MouseEvent,
+  type ReactElement,
 } from "react";
 import { rowDndProps } from "./rowDnd";
+import type { NestInfo } from "./ordering";
 import type { Instance } from "../../api/types";
 import { instApi } from "../../api/client";
-import { refreshInstances, useConfig } from "../../state/queries";
+import { queryClient, refreshInstances, useConfig } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { copyText } from "../../lib/clipboard";
 import { errMsg } from "../../lib/format";
-import { chipState, checkChip } from "../../lib/stage";
+import { chipState, checkChip, effectiveActivity } from "../../lib/stage";
 import { sessionLabel } from "../../lib/sessionLabel";
 import {
   PR_FALLBACK_HINT,
@@ -38,6 +41,12 @@ import {
 import { toast } from "../../lib/toast";
 import { peekTerm, subscribeTermStates } from "../../lib/terminals";
 import { codemapSeenAt, redZoneChip, subscribeCodemapSeen } from "../../lib/codemapSeen";
+import { inFamily, lineageMark, parentChip, rollup, workerLine } from "../../lib/agentMessages";
+import { openThread, pasteWrapup } from "../../lib/flockActions";
+import { forkBlockReason } from "../../lib/playbooks";
+import { isEditingTarget } from "../../lib/keymap";
+import { AnswerStrip, type AnswerStripHandle } from "../AnswerStrip";
+import { PlaybookRowItems } from "./PlaybookRowItems";
 
 /** How long a click on the selected row waits for a second click before it
  * turns into an inline rename. Under the browser's ~500ms dblclick ceiling,
@@ -48,6 +57,44 @@ function displayTitle(inst: Instance): string {
   return (inst as unknown as { display_title?: string }).display_title || inst.title || "";
 }
 
+/** Family nesting geometry (px, in the row's own box). The status dot of a
+ * flat row is centred at x≈32 (12px padding + the 11px number + a 5px gap);
+ * each level moves the dot onwards right by NEST_STEP, and a level's
+ * connector runs down the centre of its PARENT's dot. The number column never
+ * moves: numbering is railOrder's, nesting is paint. */
+const NEST_STEP = 14;
+const NEST_X0 = 32;
+const nestX = (depth: number) => NEST_X0 + NEST_STEP * (depth - 1);
+
+/** The connector lines of one nested row. `part` "row" draws inside the
+ * `.inst-row` (so the elbow can meet the dot at the row's vertical middle);
+ * "tail" draws through whatever hangs under the row — the answer strip, the
+ * actions menu — and on across the gap to the next row, so a family's guide
+ * never breaks around a blocked worker's buttons. */
+function NestLines({ nest, part }: { nest: NestInfo; part: "row" | "tail" }) {
+  const lines: ReactElement[] = [];
+  for (let k = 1; k < nest.depth; k++)
+    if (nest.guides[k])
+      lines.push(<span key={"g" + k} className="nl nl-v" style={{ left: nestX(k) }} />);
+  if (part === "row") {
+    if (nest.depth) {
+      lines.push(
+        <span key="elbow" className="nl nl-elbow" style={{ left: nestX(nest.depth), width: NEST_STEP - 5 }} />
+      );
+      if (nest.more) lines.push(<span key="more" className="nl nl-down" style={{ left: nestX(nest.depth) }} />);
+    }
+    if (nest.stem) lines.push(<span key="stem" className="nl nl-stem" style={{ left: nestX(nest.depth + 1) }} />);
+  } else {
+    if (nest.depth && nest.more)
+      lines.push(<span key="more" className="nl nl-v" style={{ left: nestX(nest.depth) }} />);
+    if (nest.stem) lines.push(<span key="stem" className="nl nl-v" style={{ left: nestX(nest.depth + 1) }} />);
+  }
+  return lines.length ? <>{lines}</> : null;
+}
+
+const FLAT: NestInfo = { depth: 0, more: false, guides: [], stem: false };
+const NO_KIDS: Instance[] = [];
+
 interface Props {
   inst: Instance;
   idx: number;
@@ -56,6 +103,12 @@ interface Props {
   onDragState(title: string | null): void;
   onDropCue(title: string, cue: "above" | "below" | null): void;
   onDropRow(dragTitle: string, targetTitle: string, before: boolean): void;
+  /** Visual family nesting (`railNesting`); absent = flat. */
+  nest?: NestInfo;
+  /** The live sessions whose `parent` is this one (its workers), rail order. */
+  kids?: Instance[];
+  /** This row's `parent` is a live session on this rail. */
+  parentLive?: boolean;
 }
 
 export const SidebarRow = memo(function SidebarRow({
@@ -66,8 +119,12 @@ export const SidebarRow = memo(function SidebarRow({
   onDragState,
   onDropCue,
   onDropRow,
+  nest = FLAT,
+  kids = NO_KIDS,
+  parentLive = false,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const strip = useRef<AnswerStripHandle | null>(null);
   const [editing, setEditing] = useState(false);
   // Escape must abandon the edit; unmounting the focused input can still run
   // the blur handler, so the cancel is flagged rather than inferred.
@@ -79,7 +136,11 @@ export const SidebarRow = memo(function SidebarRow({
   const { data: config } = useConfig();
   const focused = useUi((s) => s.focused);
   const hidden = useUi((s) => s.hidden.has(inst.title));
-  const alias = useUi((s) => s.aliases[inst.title]);
+  // All aliases, not just this row's: the lineage, the worker line, the
+  // roll-up and its tooltip name OTHER sessions, and memo would otherwise hold
+  // a renamed parent or worker until the next poll.
+  const aliases = useUi((s) => s.aliases);
+  const alias = aliases[inst.title];
   const openDialogFor = useUi((s) => s.openDialogFor);
   const setAlias = useUi((s) => s.setAlias);
 
@@ -101,6 +162,51 @@ export const SidebarRow = memo(function SidebarRow({
   // the bare slug; a hand-made session's title is passed through unchanged.
   const label = sessionLabel(displayTitle(inst), inst.branch || "");
   const shown = alias || label.text;
+  // Another session, named the way ITS row reads (alias, else the ticket/PR
+  // label) so the two can be matched by eye.
+  const nameOf = (t: string) => {
+    if (aliases[t]) return aliases[t];
+    const p = queryClient.getQueryData<Instance[]>(["instances"])?.find((x) => x.title === t);
+    return p ? sessionLabel(displayTitle(p), p.branch || "").text : t;
+  };
+  // Lineage (MindFlock MCP): a muted "↳ <parent>" sub-line under the name of a
+  // session another session's agent spawned or adopted.
+  const lineage = lineageMark(inst.parent, inst.spawned, nameOf);
+  // A family (an orchestrator and the workers it spawned or adopted) says how
+  // the split is going right on the rail, with no fetch: a worker swaps the
+  // "↳ parent" line for its status ("✓ reported", "? needs your answer" — still
+  // naming the parent when it isn't drawn under it), the orchestrator gets a
+  // roll-up of its workers, and while it sits idle over them its chip reads
+  // "waiting" or, once all have reported, a clickable "wrap up".
+  const activity = effectiveActivity(inst);
+  const isWorker = !!inst.parent && parentLive && !pending;
+  const nested = nest.depth > 0;
+  const wline = isWorker
+    ? workerLine(inst, { nested, parentName: nameOf(inst.parent!), act: activity })
+    : null;
+  const roll = kids.length && !pending ? rollup(kids, nameOf, effectiveActivity) : null;
+  // "wrap up" is a one-click paste into this session: never offered as one
+  // when it can't take a paste (no tools this launch) — the fork button's rule.
+  const pchip =
+    kids.length && !pending && !missing
+      ? parentChip(inst, kids, nameOf, effectiveActivity, forkBlockReason(inst))
+      : null;
+  // The answer strip: a family member stuck on a dialog gets that dialog's own
+  // buttons under its row (the orchestrator's spawn_session permission
+  // prompts land here too — from its very first one, via its playbook). Keys
+  // 1–9 press them while the ROW has focus.
+  const answering =
+    inFamily(inst, isWorker, kids.length) && activity === "clarify" && !missing && !paused;
+  const subline = !editing && (wline || roll || lineage);
+  // "working · 6m" counts up by itself: a busy worker's row data can sit
+  // unchanged between polls, and memo would freeze the minutes.
+  const [, tick] = useReducer((n: number) => n + 1, 0);
+  const counting = wline?.state === "working";
+  useEffect(() => {
+    if (!counting) return;
+    const t = window.setInterval(tick, 30_000);
+    return () => clearInterval(t);
+  }, [counting]);
   const folder = inst.folder || inst.path || "";
   // Subscribed (not a render-time snapshot): the row must clear its red dot
   // the moment the agent socket connects, not on the next instances poll.
@@ -163,6 +269,8 @@ export const SidebarRow = memo(function SidebarRow({
 
   const rowCls =
     "inst" +
+    (nested ? " nest-" + nest.depth : "") +
+    (nest.stem ? " has-stem" : "") +
     (focused === title ? " active" : "") +
     (hidden ? " is-hidden" : "") +
     (missing ? " ws-missing" : "") +
@@ -173,6 +281,17 @@ export const SidebarRow = memo(function SidebarRow({
     <li
       className={rowCls}
       data-title={title}
+      // Focusable only while it carries an answer strip, so Tab reaches a
+      // blocked worker and 1–9 answer it — never a bare digit typed elsewhere.
+      tabIndex={answering ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (!answering || e.ctrlKey || e.metaKey || e.altKey || !/^[1-9]$/.test(e.key)) return;
+        if (isEditingTarget(e.target as Element)) return;
+        if (strip.current?.answerKey(e.key)) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
       {...rowDndProps(
         title,
         { onDragState, onDropCue, onDropRow },
@@ -195,6 +314,7 @@ export const SidebarRow = memo(function SidebarRow({
           if (!missing && !pending) ideSession(title, true);
         }}
       >
+        {(nested || nest.stem) && <NestLines nest={nest} part="row" />}
         <span className="grip" title="Drag to reorder">⠿</span>
         <span className="idx" title={num ? `Ctrl+${num} / Alt+${num} to focus` : ""}>{num}</span>
         <span className={"dot " + inst.status + (disconnected ? " disconnected" : "")} />
@@ -207,7 +327,7 @@ export const SidebarRow = memo(function SidebarRow({
             ›
           </button>
         )}
-        <span className="meta">
+        <span className={"meta" + (subline ? " has-lineage" : "")}>
           {editing ? (
             <input
               className="title title-edit"
@@ -242,6 +362,7 @@ export const SidebarRow = memo(function SidebarRow({
                 // it's what every API path and `tmux attach` is keyed by.
                 label.kind ? `session: ${displayTitle(inst)}` : "",
                 inst.branch ? `branch: ${inst.branch}` : "",
+                wline ? wline.title : lineage ? lineage.title : "",
                 focused === title ? "Click again to rename" : "",
               ]
                 .filter(Boolean)
@@ -250,8 +371,64 @@ export const SidebarRow = memo(function SidebarRow({
               {shown}
             </span>
           )}
+          {!editing && wline && (
+            <span className={"lineage " + wline.cls} title={wline.title}>
+              {wline.text}
+            </span>
+          )}
+          {!editing && !wline && lineage && (
+            <span
+              className={"lineage" + (lineage.spawned ? " spawned" : "")}
+              title={lineage.title}
+            >
+              {lineage.text}
+            </span>
+          )}
+          {!editing && roll && (
+            <span
+              className="lineage workers"
+              title={roll.title}
+              // Keyboard-reachable like a button (Tab, then Enter/Space):
+              // it opens the family's Thread.
+              role="button"
+              tabIndex={0}
+              aria-label={roll.parts.map((p) => p.text).join(" · ") + " — open the Thread"}
+              onClick={(e) => act(() => openThread(title), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                e.stopPropagation();
+                openThread(title);
+              }}
+            >
+              {roll.parts.map((p, i) => (
+                <span key={i}>
+                  {i > 0 && " · "}
+                  <span className={p.cls || undefined}>{p.text}</span>
+                </span>
+              ))}
+            </span>
+          )}
         </span>
-        <span className={"stagechip " + chip.cls} title={chip.title}>{chip.label}</span>
+        {pchip?.kind === "wrap" ? (
+          <button
+            type="button"
+            className={"stagechip " + pchip.cls}
+            title={pchip.title}
+            aria-label={pchip.title}
+            onClick={(e) => act(() => void pasteWrapup(title), e)}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            {pchip.label}
+          </button>
+        ) : pchip ? (
+          <span className={"stagechip " + pchip.cls} title={pchip.title}>
+            {pchip.label}
+          </span>
+        ) : (
+          <span className={"stagechip " + chip.cls} title={chip.title}>{chip.label}</span>
+        )}
         {check && (
           <span className={"stagechip checkchip " + check.cls} title={check.title}>
             {check.label}
@@ -287,154 +464,175 @@ export const SidebarRow = memo(function SidebarRow({
           </button>
         )}
       </div>
-      {expanded && !pending && (
-        <div className="inst-actions">
-          <div className="folder-row">
-            <span className="folder-path" title={folder}>{inst.folder_label || folder || "—"}</span>
-            <button
-              className="folder-copy"
-              title="Copy full folder path"
-              onClick={(e) =>
-                act(async () => {
-                  if (!folder) return;
-                  if (await copyText(folder)) toast("Copied path");
-                }, e)
-              }
-            >
-              Copy path
-            </button>
-          </div>
-          <div className="menu-sep" />
-          {missing ? (
-            <button className="danger" onClick={() => cleanupMissing(title)}>
-              Clean up — remove session
-            </button>
-          ) : (
-            <>
-              {caps.git && (
-                <>
-                  <button onClick={() => commitSession(title)}>
-                    Commit…<span className="kbd">Ctrl+K C</span>
-                  </button>
-                  <button onClick={() => pushSession(title)}>
-                    Push<span className="kbd">Ctrl+K P</span>
-                  </button>
-                  <button
-                    onClick={() => makePrSession(title)}
-                    title={prSupport ? undefined : PR_FALLBACK_HINT}
-                  >
-                    Make PR{prSupport ? "" : " ↗"}
-                    <span className="kbd">Ctrl+K R</span>
-                  </button>
-                  {inst.stage === "pr" && (
-                    // Shares mergeSession() with the pill, the palette and the
-                    // pane header so the confirm text and the
-                    // can't-merge-from-here fallback exist in exactly one place.
+      {/* Everything that hangs under the row. flow-root so the strip's margins
+          stay inside, where the family connector is drawn through them. */}
+      <div className="inst-tail">
+        {(nested || nest.stem) && <NestLines nest={nest} part="tail" />}
+        {answering && (
+          <AnswerStrip
+            ref={strip}
+            title={title}
+            activity={activity}
+            variant="rail"
+            onOpen={() => selectSession(title)}
+            // "No…": the agent now wants to hear what to do instead — say it in
+            // the family's Thread, addressed to this session.
+            onRedirect={() => openThread(isWorker ? inst.parent! : title, title)}
+          />
+        )}
+        {expanded && !pending && (
+          <div className="inst-actions">
+            <div className="folder-row">
+              <span className="folder-path" title={folder}>{inst.folder_label || folder || "—"}</span>
+              <button
+                className="folder-copy"
+                title="Copy full folder path"
+                onClick={(e) =>
+                  act(async () => {
+                    if (!folder) return;
+                    if (await copyText(folder)) toast("Copied path");
+                  }, e)
+                }
+              >
+                Copy path
+              </button>
+            </div>
+            <div className="menu-sep" />
+            {missing ? (
+              <button className="danger" onClick={() => cleanupMissing(title)}>
+                Clean up — remove session
+              </button>
+            ) : (
+              <>
+                {caps.git && (
+                  <>
+                    <button onClick={() => commitSession(title)}>
+                      Commit…<span className="kbd">Ctrl+K C</span>
+                    </button>
+                    <button onClick={() => pushSession(title)}>
+                      Push<span className="kbd">Ctrl+K P</span>
+                    </button>
                     <button
-                      onClick={() => act(() => mergeSession(title))}
+                      onClick={() => makePrSession(title)}
                       title={prSupport ? undefined : PR_FALLBACK_HINT}
                     >
-                      Merge to staging{prSupport ? "" : " ↗"}
+                      Make PR{prSupport ? "" : " ↗"}
+                      <span className="kbd">Ctrl+K R</span>
                     </button>
-                  )}
-                  {inst.pr_url && (
-                    <button onClick={() => window.open(inst.pr_url!, "_blank")}>Open PR ↗</button>
-                  )}
-                  <div className="menu-sep" />
-                </>
-              )}
-              {inst.setup?.state === "failed" && (
-                <button
-                  onClick={(e) =>
-                    act(async () => {
-                      try {
-                        await instApi(title, "/setup/rerun", { method: "POST" });
-                        toast("Worktree setup re-running — watch the setup chip");
-                      } catch (err) {
-                        toast("Setup re-run failed: " + errMsg(err), { duration: 6000 });
-                      }
-                      await refreshInstances();
-                    }, e)
-                  }
-                >
-                  Re-run worktree setup
+                    {inst.stage === "pr" && (
+                      // Shares mergeSession() with the pill, the palette and the
+                      // pane header so the confirm text and the
+                      // can't-merge-from-here fallback exist in exactly one place.
+                      <button
+                        onClick={() => act(() => mergeSession(title))}
+                        title={prSupport ? undefined : PR_FALLBACK_HINT}
+                      >
+                        Merge to staging{prSupport ? "" : " ↗"}
+                      </button>
+                    )}
+                    {inst.pr_url && (
+                      <button onClick={() => window.open(inst.pr_url!, "_blank")}>Open PR ↗</button>
+                    )}
+                    <div className="menu-sep" />
+                  </>
+                )}
+                {/* Agent teams: the fork-icon menu's playbooks + Message…, with
+                    a separator of its own (renders nothing for a CLI that
+                    gets no MindFlock tools). */}
+                <PlaybookRowItems inst={inst} />
+                {inst.setup?.state === "failed" && (
+                  <button
+                    onClick={(e) =>
+                      act(async () => {
+                        try {
+                          await instApi(title, "/setup/rerun", { method: "POST" });
+                          toast("Worktree setup re-running — watch the setup chip");
+                        } catch (err) {
+                          toast("Setup re-run failed: " + errMsg(err), { duration: 6000 });
+                        }
+                        await refreshInstances();
+                      }, e)
+                    }
+                  >
+                    Re-run worktree setup
+                  </button>
+                )}
+                {inst.check && inst.check.state !== "running" && (
+                  <button
+                    onClick={(e) =>
+                      act(async () => {
+                        try {
+                          await instApi(title, "/check", { method: "POST" });
+                          toast("Checks running…");
+                        } catch (err) {
+                          toast("Check run failed: " + errMsg(err), { duration: 6000 });
+                        }
+                        await refreshInstances();
+                      }, e)
+                    }
+                  >
+                    Run checks now
+                  </button>
+                )}
+                <button onClick={() => openDialogFor("rename", title)}>Rename…</button>
+                <button onClick={() => copySession(title)}>
+                  Duplicate session<span className="kbd">Ctrl+K D</span>
                 </button>
-              )}
-              {inst.check && inst.check.state !== "running" && (
-                <button
-                  onClick={(e) =>
-                    act(async () => {
-                      try {
-                        await instApi(title, "/check", { method: "POST" });
-                        toast("Checks running…");
-                      } catch (err) {
-                        toast("Check run failed: " + errMsg(err), { duration: 6000 });
-                      }
-                      await refreshInstances();
-                    }, e)
-                  }
-                >
-                  Run checks now
+                <button onClick={() => ideSession(title)}>
+                  Open / focus {ideName}<span className="kbd">Ctrl+K O</span>
                 </button>
-              )}
-              <button onClick={() => openDialogFor("rename", title)}>Rename…</button>
-              <button onClick={() => copySession(title)}>
-                Duplicate session<span className="kbd">Ctrl+K D</span>
-              </button>
-              <button onClick={() => ideSession(title)}>
-                Open / focus {ideName}<span className="kbd">Ctrl+K O</span>
-              </button>
-              <button onClick={() => hideSession(title)}>
-                {hidden ? "Show window" : "Hide window"}
-                {!hidden && <span className="kbd">Ctrl+K H</span>}
-              </button>
-              {inst.ports?.base ? (
-                <button
-                  onClick={(e) =>
-                    act(
-                      () =>
-                        void window.open(
-                          `http://${location.hostname}:${inst.ports!.base}/`,
-                          "_blank"
-                        ),
-                      e
-                    )
-                  }
-                >
-                  Open preview ↗<span className="kbd">:{inst.ports.base}</span>
+                <button onClick={() => hideSession(title)}>
+                  {hidden ? "Show window" : "Hide window"}
+                  {!hidden && <span className="kbd">Ctrl+K H</span>}
                 </button>
-              ) : null}
-              <button onClick={() => (paused ? resumeSession(title) : pauseSession(title))}>
-                {paused ? "Resume session" : "Pause session"}
-              </button>
-              {caps.git && (
-                <button
-                  className="danger"
-                  onClick={() =>
-                    act(async () => {
-                      if (
-                        !confirm(
-                          `Delete '${title}' and PERMANENTLY remove its worktree directory?\nThis also closes its ${ideName} window. This cannot be undone.`
-                        )
+                {inst.ports?.base ? (
+                  <button
+                    onClick={(e) =>
+                      act(
+                        () =>
+                          void window.open(
+                            `http://${location.hostname}:${inst.ports!.base}/`,
+                            "_blank"
+                          ),
+                        e
                       )
-                        return;
-                      try {
-                        await instApi(title, "/cleanup", { method: "POST" });
-                      } catch (err) {
-                        alert("Cleanup failed: " + errMsg(err));
-                      }
-                      useUi.getState().setHidden(title, false);
-                      await refreshInstances();
-                    })
-                  }
-                >
-                  Delete + wipe worktree
+                    }
+                  >
+                    Open preview ↗<span className="kbd">:{inst.ports.base}</span>
+                  </button>
+                ) : null}
+                <button onClick={() => (paused ? resumeSession(title) : pauseSession(title))}>
+                  {paused ? "Resume session" : "Pause session"}
                 </button>
-              )}
-            </>
-          )}
-        </div>
-      )}
+                {caps.git && (
+                  <button
+                    className="danger"
+                    onClick={() =>
+                      act(async () => {
+                        if (
+                          !confirm(
+                            `Delete '${title}' and PERMANENTLY remove its worktree directory?\nThis also closes its ${ideName} window. This cannot be undone.`
+                          )
+                        )
+                          return;
+                        try {
+                          await instApi(title, "/cleanup", { method: "POST" });
+                        } catch (err) {
+                          alert("Cleanup failed: " + errMsg(err));
+                        }
+                        useUi.getState().setHidden(title, false);
+                        await refreshInstances();
+                      })
+                    }
+                  >
+                    Delete + wipe worktree
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
     </li>
   );
 });

@@ -242,12 +242,27 @@ class TicketIngestionController:
     def _env(self) -> dict:
         """Env for the pipeline child: put the CS engine (``mindflock``) and
         the src-layout pipeline on PYTHONPATH so the in-process bridge imports
-        regardless of which venv we picked."""
+        regardless of which venv we picked.
+
+        The child launches sessions through the engine too, so it also attaches
+        their MindFlock MCP (:mod:`backend.providers.mcp_attach`) — and must
+        point it at THIS server with THIS server's interpreter and package: its
+        own ``sys.executable`` may be another venv (see :meth:`_python`), and a
+        child started without the server's env has no ``UVICORN_PORT`` (its
+        ``PORT``, from an agent shell, is a session dev port)."""
         env = dict(os.environ)
         extra = [str(self._repo_root / "src")]
         if env.get("PYTHONPATH"):
             extra.append(env["PYTHONPATH"])
         env["PYTHONPATH"] = os.pathsep.join(extra)
+        try:
+            from backend.providers import mcp_attach
+
+            env["MINDFLOCK_MCP_PYTHON"] = mcp_attach.mcp_python()
+            env["MINDFLOCK_MCP_PYTHONPATH"] = mcp_attach.mcp_pythonpath()
+            env["MINDFLOCK_SERVER_PORT"] = str(mcp_attach.server_port())
+        except Exception:  # noqa: BLE001 — never block the pipeline over the MCP
+            pass
         return env
 
     def start(self) -> bool:

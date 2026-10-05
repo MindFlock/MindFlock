@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Instance } from "../../api/types";
 import { instApi } from "../../api/client";
-import { refreshInstances, useConfig } from "../../state/queries";
+import { refreshInstances, useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { copyText } from "../../lib/clipboard";
 import { fmtUsd, displayBranch } from "../../lib/format";
@@ -29,14 +29,54 @@ import { DiffTab } from "./DiffTab";
 import { HistoryOverlay } from "./HistoryOverlay";
 import { PaneFindBar, type FindMode } from "./PaneFindBar";
 import { QueueTab } from "./QueueTab";
+import { ThreadTab } from "./ThreadTab";
 import { CodeMapTab } from "./CodeMapTab";
 import { SessionUsageChip } from "../usage/SessionUsageChip";
 import { AccountChip } from "./AccountChip";
+import { PlaybookMenu } from "./PlaybookMenu";
+import { forkBlockReason, mcpCapable } from "../../lib/playbooks";
+import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
+import { effectiveActivity } from "../../lib/stage";
 
-type Tab = "agent" | "shell" | "diff" | "queue" | "map";
+/** "thread" is the Thread tab (the session's workers and what was said
+ * between them), opened by its own button or store.threadOpen. */
+type Tab = "agent" | "shell" | "diff" | "queue" | "map" | "thread";
 
 /** Tabs that need git (the Map reads the worktree's files, diff and imports). */
 const GIT_TABS: ReadonlySet<string> = new Set(["diff", "map"]);
+
+/** Tabs this pane can draw a body for. A saved or requested tab outside it
+ * shows the Agent tab instead of an empty pane. */
+const BODY_TABS: ReadonlySet<string> = new Set(["agent", "shell", "diff", "queue", "map", "thread"]);
+
+/** The tab a pane actually shows for a saved/requested one: a git tab without
+ * git, or a tab with no body here, falls back to Agent. */
+function paneTab(t: string, git: boolean): Tab {
+  if (!BODY_TABS.has(t)) return "agent";
+  if (GIT_TABS.has(t) && !git) return "agent";
+  return t as Tab;
+}
+
+/** The fork icon (two branches joining) of the "Work with other sessions"
+ * button. */
+const FORK_ICON = (
+  <svg
+    width="12"
+    height="12"
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.6"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <circle cx="4" cy="3.2" r="1.7" />
+    <circle cx="12" cy="3.2" r="1.7" />
+    <circle cx="8" cy="12.8" r="1.7" />
+    <path d="M4 5v1.2c0 1.6 1.2 2.6 2.8 2.6h2.4C10.8 8.8 12 7.8 12 6.2V5M8 8.8v2.3" />
+  </svg>
+);
 
 function queueRelTime(ms: number): string {
   const m = Math.ceil(ms / 60000);
@@ -61,6 +101,26 @@ export function Pane({
   const lastTab = useUi((s) => s.lastTab[title]);
   const setLastTab = useUi((s) => s.setLastTab);
   const reduceMotion = useUi((s) => s.reduceMotion);
+  // The Thread tab: shown for a session in a family (a parent or workers), or
+  // one opened on purpose (Ctrl+K T / S, the palette — threadOpen addressed
+  // its composer here). Its badge counts workers that need YOUR answer plus
+  // reports newer than the last time you looked.
+  const { data: allRows } = useInstances();
+  const family = familyOf(title, allRows ?? []);
+  const threadOpened = useUi((s) => s.threadComposeTarget?.title === title);
+  const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
+  const threadShown = threadTabShown(
+    !!family.parent || family.children.length > 0,
+    threadOpened || lastTab === "thread"
+  );
+  const badge = threadBadge(family.children, threadSeen, effectiveActivity);
+  const newestReport = newestReportTs(family.children);
+  // This pane's fork-icon menu, when it is the one open (Ctrl+K F opens it
+  // from anywhere, so it lives in the store rather than here).
+  const playbookMenu = useUi((s) => (s.playbookMenu?.title === title ? s.playbookMenu : null));
+  // State, not a ref: the menu measures itself against the button, and a menu
+  // opened in the same frame the pane mounts must re-render once it exists.
+  const [forkEl, setForkEl] = useState<HTMLButtonElement | null>(null);
   // Same "assume capable until the server says otherwise" fallback as the other
   // caps consumers (SidebarRow, CommandPalette, lib/sessionActions) — keep the
   // four literals identical so a PR affordance added here can't silently start
@@ -75,10 +135,8 @@ export function Pane({
   const missing = !!inst.workspace_missing;
   const loading = inst.status === "loading";
 
-  const savedTab = (lastTab as Tab) || "agent";
-  const [tab, setTab] = useState<Tab>(
-    GIT_TABS.has(savedTab) && !caps.git ? "agent" : savedTab
-  );
+  const savedTab = lastTab || "agent";
+  const [tab, setTab] = useState<Tab>(paneTab(savedTab, caps.git));
   const [booted, setBooted] = useState(false);
   const [wsState, setWsState] = useState("connecting");
   const [shellStarted, setShellStarted] = useState(savedTab === "shell");
@@ -333,8 +391,7 @@ export function Pane({
   // when lastTab is changed from outside the pane.
   useEffect(() => {
     if (!lastTab) return;
-    let t = lastTab as Tab;
-    if (GIT_TABS.has(t) && !caps.git) t = "agent";
+    const t = paneTab(lastTab, caps.git);
     if (t === tab) return;
     // Same rule as showTab: a switch done FOR the user (the commit dialog
     // jumping to the shell to watch pre-commit hooks) must be visible, so the
@@ -346,6 +403,13 @@ export function Pane({
     setTimeout(() => peekTerm(title, t === "shell" ? "shell" : "agent")?.doFit(), 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastTab]);
+
+  // Looking at the Thread is what "seen" means: on open, and again whenever a
+  // new report lands while it is open, so the badge only ever counts reports
+  // you have not had in front of you.
+  useEffect(() => {
+    if (tab === "thread") useUi.getState().setThreadLastSeen(title);
+  }, [tab, title, newestReport]);
 
   // Header drag wiring (shared semantics with special panes).
   const paneRef = useRef<HTMLElement | null>(null);
@@ -377,6 +441,13 @@ export function Pane({
       drag.commit();
     },
   };
+
+  // A menu whose button has gone (the agent hit a permission dialog, the pane
+  // lost its workspace) closes rather than waiting to reappear later.
+  const forkGone = missing || loading || !mcpCapable(caps, inst) || !!forkBlockReason(inst);
+  useEffect(() => {
+    if (playbookMenu && forkGone) useUi.getState().setPlaybookMenu(null);
+  }, [playbookMenu, forkGone]);
 
   if (missing) {
     return (
@@ -485,6 +556,10 @@ export function Pane({
   const budget = inst.budget;
   const ds = inst.workspace_missing ? null : inst.diff_stat;
   const hasDiffStat = !!(ds && ((ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0));
+  // "Work with other sessions": only on a CLI that gets the MindFlock tools,
+  // and blocked (with the reason) while this launch can't take a playbook.
+  const forkShown = mcpCapable(caps, inst);
+  const forkBlocked = forkShown ? forkBlockReason(inst) : "";
 
   return (
     <section
@@ -547,6 +622,25 @@ export function Pane({
               </span>
             )}
           </button>
+          {threadShown && (
+            <button
+              data-tab="thread"
+              className={"thread-tab" + (tab === "thread" ? " active" : "")}
+              title={
+                "Thread — this session's workers, what they reported and what passed between them; write to any of them as you (Ctrl+K T)" +
+                (badge.needs ? `\n${badge.needs} waiting on your answer` : "") +
+                (badge.fresh ? `\n${badge.fresh} new report${badge.fresh === 1 ? "" : "s"}` : "")
+              }
+              onClick={(e) => { e.stopPropagation(); showTab("thread"); }}
+            >
+              Thread
+              {badge.count > 0 && (
+                <span className={"queue-tab-badge thread-badge" + (badge.needs ? " needs" : "")}>
+                  {badge.count > 99 ? "99+" : String(badge.count)}
+                </span>
+              )}
+            </button>
+          )}
         </div>
         <div className="actions">
           {ns ? (
@@ -639,6 +733,32 @@ export function Pane({
         {/* Pinned right even when the header scrolls: history, copy-all, close
             stay reachable without scrolling to the end of a long header. */}
         <div className="head-tail">
+        {forkShown && (
+          <button
+            ref={setForkEl}
+            className={
+              "act playbooks" + (playbookMenu ? " open" : "") + (forkBlocked ? " is-blocked" : "")
+            }
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={!!playbookMenu}
+            aria-disabled={forkBlocked ? true : undefined}
+            title={
+              forkBlocked ||
+              "Work with other sessions — split across workers, ask, review, hand off (Ctrl+K F)"
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              if (forkBlocked) {
+                toast(forkBlocked, { duration: 5000 });
+                return;
+              }
+              useUi.getState().setPlaybookMenu(playbookMenu ? null : { title });
+            }}
+          >
+            {FORK_ICON}
+          </button>
+        )}
         <button
           className="act copyhist"
           type="button"
@@ -783,6 +903,11 @@ export function Pane({
         <div className={"pane-queue" + (tab !== "queue" ? " hidden" : "")}>
           <QueueTab title={title} active={tab === "queue"} />
         </div>
+        {threadShown && (
+          <div className={"pane-thread" + (tab !== "thread" ? " hidden" : "")}>
+            <ThreadTab title={title} active={tab === "thread"} />
+          </div>
+        )}
         {paneFind && (
           <PaneFindBar
             title={title}
@@ -821,6 +946,22 @@ export function Pane({
         )}
         {budget?.locked && <BudgetLock title={title} budget={budget} />}
       </div>
+      {playbookMenu && forkShown && !forkBlocked && forkEl && (
+        <PlaybookMenu
+          title={title}
+          anchor={forkEl}
+          initialSub={playbookMenu.sub ?? null}
+          onClose={(refocus) => {
+            const ui = useUi.getState();
+            if (ui.playbookMenu?.title === title) ui.setPlaybookMenu(null);
+            // Esc hands the keyboard back to the terminal the menu took it
+            // from. Nothing else does: a paste focuses the terminal itself,
+            // Message… hands it to the Thread composer, and an outside click
+            // has put it wherever the user clicked.
+            if (refocus) setTimeout(() => focusTerm(title), 0);
+          }}
+        />
+      )}
     </section>
   );
 }

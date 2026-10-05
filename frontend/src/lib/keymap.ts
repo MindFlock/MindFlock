@@ -33,6 +33,7 @@ import {
   selectSession,
   undoLastClose,
 } from "./sessionActions";
+import { openPlaybookMenu } from "./playbooks";
 import { toast } from "./toast";
 import { useUi, type DialogName } from "../state/store";
 
@@ -102,6 +103,24 @@ export function isEditingTarget(el: Element | null): boolean {
   );
 }
 
+/** The keyboard is in the Thread tab's composer (grid/ThreadTab.tsx) — a
+ * text box where you are writing to an agent. Ctrl+W there is a word-delete
+ * habit, never "end this session": the composer exempts itself from the
+ * close binding, the way isEditingTarget already exempts it from Delete. */
+export function threadComposerFocused(): boolean {
+  const el = document.activeElement as HTMLElement | null;
+  return !!el && isEditingTarget(el) && !!el.closest?.(".thread-compose");
+}
+
+/** Is the keyboard anywhere inside a Thread tab — its buttons (All/Reports,
+ * Show older, Show all, a worker's Review diff) keep the focus after a
+ * click, and Delete / Ctrl+W pressed next must not end the orchestrator
+ * behind them (the Map tab's `.cm-root` rule). */
+export function threadTabFocused(): boolean {
+  const el = document.activeElement as HTMLElement | null;
+  return !!el?.closest?.(".thread-root");
+}
+
 export function terminalFocused(): boolean {
   const el = document.activeElement;
   return !!(el && el.closest && el.closest(".xterm"));
@@ -143,6 +162,9 @@ const MODAL_DOM_IDS = [
   // its own buttons; a Delete meant for the card must not reach the session
   // running behind it.
   "break-screen",
+  // The fork-icon menu holds the keyboard for its arrows and letters; a
+  // Delete or Ctrl+W pressed at it must not end the session it hangs from.
+  "playbook-menu",
 ];
 export function modalOpen(): boolean {
   const open = useUi.getState().openDialog;
@@ -287,12 +309,41 @@ export const CHORDS: Record<string, ChordEntry> = {
       useUi.getState().setLastTab(t, "map");
     },
   },
+  // Agent teams (MindFlock MCP). Message… opens the Thread composer addressed
+  // to the focused session — what you type there goes in as YOU, never through
+  // the agents' mailbox. Ctrl+K F is the pane's fork-icon menu (the named
+  // prompts, pasted for you to send), Ctrl+K T the Thread itself.
+  s: { desc: "Message…", run: (t) => useUi.getState().threadOpen(t, { composeTo: t }) },
+  f: { desc: "Work with other sessions…", run: (t) => openPlaybookMenu(t) },
+  t: { desc: "Thread — workers and messages", run: (t) => useUi.getState().threadOpen(t) },
 };
 
 /** Effective second key for a chord action: the user's override or the
  * action's default letter (which doubles as its stable id). */
 export function chordKeyFor(id: string): string {
   return String(_keyOv.chords[id] || id).toLowerCase();
+}
+
+/** The chord whose user-chosen key took `id`'s DEFAULT letter, or null.
+ * A chord added later (S, F, T) can find its letter already given to
+ * another action by a rebinding made before it existed: the user's own
+ * choice wins (the "?" sheet refuses to create such a clash, so this only
+ * comes from history), and the sheet shows the newer chord as taken so it
+ * can be given a free key — never silently unreachable. */
+export function chordShadowedBy(id: string): string | null {
+  if (_keyOv.chords[id]) return null;
+  const key = chordKeyFor(id);
+  return Object.keys(CHORDS).find((c) => c !== id && !!_keyOv.chords[c] && chordKeyFor(c) === key) ?? null;
+}
+
+/** The chord a second key runs: a user's explicit binding first, then the
+ * defaults — whatever order the table lists them in. */
+export function chordForKey(pressed: string): string | undefined {
+  const ids = Object.keys(CHORDS);
+  return (
+    ids.find((k) => !!_keyOv.chords[k] && chordKeyFor(k) === pressed) ??
+    ids.find((k) => !_keyOv.chords[k] && chordKeyFor(k) === pressed)
+  );
 }
 
 let _chordPending = false;
@@ -320,7 +371,7 @@ function _handleChordKey(e: KeyboardEvent) {
   e.stopPropagation();
   if (key === "Escape") return;
   const pressed = key.toLowerCase();
-  const cid = Object.keys(CHORDS).find((k) => chordKeyFor(k) === pressed);
+  const cid = chordForKey(pressed);
   const chord = cid ? CHORDS[cid] : undefined;
   if (!chord) {
     toast("Ctrl+K " + key.toUpperCase() + " isn’t bound — press ? for shortcuts");
@@ -449,7 +500,8 @@ export const KEYMAP: KeymapEntry[] = [
     // rail row (the assistant, a log tail), and this one only ever ends the
     // focused SESSION — a selected window never takes keyboard focus.
     help: ["Focused session", "Ctrl+W / Delete", "End the focused session (undo: Ctrl+Shift+T)"],
-    when: () => !!useUi.getState().focused && !modalOpen(),
+    when: () =>
+      !!useUi.getState().focused && !modalOpen() && !threadComposerFocused() && !threadTabFocused(),
     run: () => {
       const f = useUi.getState().focused;
       if (f) killSession(f);
@@ -467,7 +519,8 @@ export const KEYMAP: KeymapEntry[] = [
       !!useUi.getState().focused &&
       !modalOpen() &&
       !isEditingTarget(document.activeElement) &&
-      !(document.activeElement as HTMLElement | null)?.closest?.(".cm-root"),
+      !(document.activeElement as HTMLElement | null)?.closest?.(".cm-root") &&
+      !threadTabFocused(),
     run: () => {
       const f = useUi.getState().focused;
       if (f) killSession(f);

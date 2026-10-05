@@ -1116,7 +1116,8 @@ def test_agent_activity_bare_shell_unknown_pid_is_idle(monkeypatch):
 def test_agent_activity_marker_outvotes_bare_shell(monkeypatch):
     # Layer order (F1): a fresh provider hook marker sits ABOVE the shell
     # heuristic — the CLI's own "working" wins even when the pane fg is bash
-    # (no ps / capture-pane needed at all).
+    # (no ps needed at all). The one capture is the screen-evidence layer's
+    # (a dialog on screen would outrank the marker); this screen has none.
     from backend.providers.claude import ClaudeProvider
 
     monkeypatch.setattr(ClaudeProvider, "activity_state", lambda self, name: "working")
@@ -1126,6 +1127,8 @@ def test_agent_activity_marker_outvotes_bare_shell(monkeypatch):
             return types.SimpleNamespace(returncode=0, stdout=b"")
         if cmd[:2] == ["tmux", "display-message"]:
             return _cap("bash\t100.0\t4242")
+        if cmd[:2] == ["tmux", "capture-pane"]:
+            return _cap(_tall("● Reading files… (esc to interrupt)"))
         pytest.fail("marker should short-circuit before %r" % (cmd,))
 
     monkeypatch.setattr(server.subprocess, "run", fake_run)

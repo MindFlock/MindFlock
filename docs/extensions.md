@@ -52,6 +52,7 @@ Core vocabulary (emitted by the server):
 | `session.queue_changed` | Any prompt-queue edit | `data: {pending, enabled, loop}` |
 | `session.usage_restored` | A provider window reopened for a session that had run out | `data: {resumed}` |
 | `session.turn_ended` | A session's work really is over — corroborated work, idle ever since, nothing queued | `data: {idle_for}` |
+| `session.message` | Another session (or the CLI / an external client, `from: ""`) left a message for this one | `data: {id, from, kind, text, delivery: delivered·pending·held, status?}` (`status` only on a `kind: "result"` report: `done`·`blocked`·`failed`) |
 | `session.pr_state_changed` | The branch's PR genuinely moved | `"" · OPEN · MERGED · CLOSED`, `data: {url}` |
 | `session.pr_review_changed` | A reviewer decided on the branch's open PR | `"" · approved · changes_requested` |
 | `session.red_zone_blocked` | The red-zone guard denied the agent an edit — or a push/PR while zoned files are committed (`push: true`) — once per session and zone (or push) per work cycle | `data: {count, zone_ids, patterns, paths, tool, push, detail}` |
@@ -82,6 +83,18 @@ namespace, e.g. `addon.notify.ping`. Notable transitions:
   the counterpart `session.usage_restored` is emitted once per reopening (not
   once per session) by the watcher that resumes such sessions, so it can only
   fire after a real outage — never on a window that merely rolled over
+- **an agent messaged another session**: `session.message`, which fires on the
+  **recipient** (`session` is the title the message was left for). There is
+  one event per message, at the moment it is stored, not when it is typed in.
+  `data.delivery` says where it stands then: `delivered` (typed already, a
+  `now` delivery), `pending` (it will be typed in once the agent is stably
+  idle) or `held` (kept in the inbox: `inbox` delivery, or a reply-chain or
+  rate limit). `data.kind == "result"` is a worker's `report_result` to its
+  parent, the useful one for "a worker finished"; its `data.status` says how
+  (`done`, `blocked` or `failed`).
+  `data.from == ""` means the CLI or an external client. `data.text` is only
+  the first 200 characters, flattened to one line, so read the full message
+  with `GET /api/instances/{title}/messages`. See [mcp.md](mcp.md#messages)
 
 The last ~100 envelopes are kept in a ring buffer for replay; `seq` survives the
 buffer rolling over (it keeps counting), but not a server restart.

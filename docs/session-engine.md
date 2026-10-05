@@ -25,6 +25,26 @@ strategies:
 
 `auto_yes` is accepted but **forced off** (matching the Go engine).
 
+**Lineage and fork point**:
+
+- `parent` (title) and `spawned` (bool) become `Instance.Parent` /
+  `Instance.Spawned`. They persist in `InstanceData` under the keys `parent`
+  and `spawned`, which are written only when set, so older entries serialize
+  byte-identically. `Spawned` is set once, at creation.
+- `base_ref` cuts a default-strategy (new-branch) worktree from that
+  commit-ish instead of HEAD.
+- `base_branch`, given with `base_ref`, is recorded as `BaseBranch` instead
+  of the inferred one. Without it, `BaseBranch` is `base_ref` when that is a
+  local branch, else the repo's current branch.
+- Both refs are read only by the first `Start` and are not persisted. With
+  `base_ref`, a branch that already exists is refused rather than reused: the
+  start fails, and the branch is marked pre-existing first, so the failed
+  start's cleanup never deletes it. The web server checks for the branch
+  before creating anything and answers 409, so this refusal is a backstop.
+
+The web server owns the rules around them (spawn limits, orphaning); see
+[mcp.md](mcp.md#lineage-parents-workers-limits).
+
 **Launch args** — `launch_args` are extra CLI flags interpolated (shell-quoted)
 into the launch command on **every** (re)start, after the provider's own saved
 `[launch] args` (see [providers.md](providers.md)). Semantics turn on `None` vs.
@@ -35,7 +55,20 @@ verbatim, so a default toggled off for one session is honored rather than
 re-applied. The resolved flags are stored on the instance as `LaunchArgs`,
 **persisted in `InstanceData` (`launch_args`)**, and replayed verbatim on every
 relaunch/resume — the global default is looked up once at creation, not re-read
-later.
+later. The stored list is de-duplicated by **flag group** (a `-`-prefixed token
+with the non-flag tokens that follow it), keeping first-seen order: a group
+repeated exactly appears once, while the same flag with a different value is
+kept in both places, so `--model sonnet` plus `--model opus` stays two pairs
+and the CLI's last-flag-wins rule applies. (De-duplicating single tokens used
+to tear such pairs apart into `--model sonnet opus`.)
+
+There is one known exception. A paused session resumed **after a server
+restart** is relaunched with the bare program, because the built launch
+command is not persisted. That drops its `LaunchArgs`, its profile and
+local-model args, and its MindFlock-MCP attach flags. A resume within the
+same process, or a relaunch from the web UI, keeps them. The MindFlock-MCP
+flags (see [mcp.md](mcp.md)) are added in front of the launch args at each
+launch, and are never stored in `LaunchArgs`.
 
 **`Start(first_time_setup)`** — builds the worktree (strategy above), resolves the
 launch command through the **provider framework** (`providers.resolve(program)`),

@@ -15,6 +15,34 @@ from .generic import GenericProvider
 
 
 class CodexProvider(GenericProvider):
+    # --- MindFlock MCP auto-attach ----------------------------------------- #
+    def mcp_launch_args(self, spec) -> tuple:
+        """ONE ``-c mcp_servers.mindflock={...}`` override (a TOML inline table,
+        see :func:`backend.providers.mcp_attach.codex_server_table`).
+
+        ``-c`` is a global option, so it stays valid in front of the generic
+        launch's ``resume`` subcommand. A per-launch override rather than a
+        ``config.toml`` edit: an auth profile points ``CODEX_HOME`` at its own
+        per-account directory, which a global file would miss.
+        """
+        from . import mcp_attach
+
+        return (
+            "-c",
+            "mcp_servers.%s=%s"
+            % (mcp_attach.SERVER_NAME, mcp_attach.codex_server_table(spec)),
+        )
+
+    # --- terminal classification ------------------------------------------ #
+    def parse_dialog(self, screen_text: str) -> Optional[dict]:
+        """The approval overlay (run a command / make edits / grant
+        permissions), a request for input or the folder-trust screen: the
+        question, an optional ``Reason:``, the ``$ command`` and ``› 1.``
+        options (see :func:`backend.providers.dialogs.parse_codex`)."""
+        from . import dialogs
+
+        return dialogs.parse_codex(screen_text)
+
     # --- usage-window knowledge ------------------------------------------- #
     def usage_mode(self) -> str:
         """Prefer the real auth mode from ``~/.codex/auth.json`` (ChatGPT plan

@@ -29,7 +29,7 @@ from .generic import GenericProvider
 # ``providers.local_models`` are always bound on the package — several launch
 # paths reach them as attributes. Neither imports back into this module at
 # module scope, so there is no cycle.
-from . import effort, launch_script, local_models  # noqa: E402
+from . import effort, launch_script, local_models, mcp_attach  # noqa: E402
 
 # Bundled config names whose behaviour needs a dedicated GenericProvider
 # subclass (live usage / telemetry / resume-thread discovery). Anything not
@@ -47,6 +47,7 @@ __all__ = [
     "effort",
     "launch_script",
     "local_models",
+    "mcp_attach",
     "register",
     "resolve",
     "normalize_program",

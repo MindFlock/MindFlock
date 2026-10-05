@@ -1,0 +1,13 @@
+• I need the redis client before wiring the shared limiter into search.
+
+  Would you like to run the following command?
+
+  Reason: add the redis client the shared search limiter needs
+
+  $ uv add redis
+
+› 1. Yes, just this once (y)
+  2. Yes, and don't ask again for commands that start with `uv add` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

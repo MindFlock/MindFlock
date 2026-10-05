@@ -51,8 +51,12 @@ def test_app_js_palette_has_send_and_queue_actions():
     js = client.get("/app.js").text
     assert "Send message… — " in js
     assert "Queue prompt… — " in js
-    assert "function sendMessagePrompt(" in js
-    assert "function queuePromptPrompt(" in js
+    # Both used to ask with window.prompt, a no-op in Electron. Send message…
+    # now opens the Thread composer and Queue prompt… the Queue tab's own box
+    # (pinned in test_frontend_playbooks.py); the old helpers must stay gone.
+    assert "function sendMessagePrompt(" not in js
+    assert "function queuePromptPrompt(" not in js
+    assert "function focusQueueInput(" in js
 
 
 def test_style_css_has_queue_rules():

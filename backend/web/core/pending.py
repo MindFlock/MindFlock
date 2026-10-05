@@ -159,11 +159,19 @@ def rows(engine=None) -> list:
                 "provisioned": True,
                 "workspace_strategy": meta.get("workspace_strategy", "clone"),
                 "in_place": False,
+                # Intake starts are human-side roots, never agent-spawned.
+                "parent": "",
+                "spawned": False,
+                "playbook": "",
+                "created_at": None,  # no session record exists yet
                 "diff_stat": None,
                 "workspace_missing": False,
                 "has_origin": False,
                 # No worktree yet, so no zones (red or green) to summarize.
                 "redzone": None,
+                # No agent launched yet, and an intake start reports to nobody.
+                "mcp_attached": None,
+                "last_report": None,
                 "stage": "provisioning",
                 "pr_url": None,
                 "merge_state": None,

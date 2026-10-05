@@ -3379,6 +3379,238 @@ p.set-hint {
   text-overflow: ellipsis;
 }
 
+/* Lineage (MindFlock MCP): "↳ orch" on a muted sub-line under the name of a
+   session another session's agent spawned or adopted. A sub-line, not a suffix:
+   the row is already full (name, chips, ✕), so an inline suffix was crushed to
+   "↳…" at the default rail width — the one part worth reading cut away. The
+   name keeps its own full line; only child rows grow (~13px), which also reads
+   as hierarchy at a glance. An agent-spawned row tints it with the accent; an
+   adopted human-made child stays plain muted. Hidden while renaming (the class
+   is dropped then), so the inline input keeps the single-line geometry. */
+.inst .meta.has-lineage {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+}
+
+.inst .meta.has-lineage .title {
+  flex: none;
+}
+
+.inst .lineage {
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--muted);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inst .lineage.spawned {
+  color: rgba(var(--accent-rgb), 0.85);
+}
+
+/* --- MindFlock MCP families ----------------------------------------------
+   Workers nest under their orchestrator VISUALLY: from the status dot onwards
+   the row moves right one 14px step per level, and a 1px accent connector
+   runs down from the parent's dot into each worker's. The number column never
+   moves — numbering, Alt+N and drag-and-drop all run off the unmodified rail
+   order (ordering.ts railNesting). The x of each line is set inline by
+   SidebarRow's NestLines, which owns the geometry; these rules paint it. */
+.inst.nest-1 .dot {
+  margin-left: 14px;
+}
+
+.inst.nest-2 .dot {
+  margin-left: 28px;
+}
+
+.inst.nest-3 .dot {
+  margin-left: 42px;
+}
+
+.inst .nl {
+  position: absolute;
+  width: 0;
+  border-left: 1px solid rgba(var(--accent-rgb), 0.45);
+  pointer-events: none;
+}
+
+/* Through-lines of the row: an ancestor's guide (top to bottom). */
+.inst-row > .nl-v {
+  top: 0;
+  bottom: 0;
+}
+
+/* └ into this row's dot. */
+.inst .nl-elbow {
+  top: 0;
+  height: 50%;
+  box-sizing: border-box;
+  border-bottom: 1px solid rgba(var(--accent-rgb), 0.45);
+  border-bottom-left-radius: 5px;
+}
+
+/* ├: a later sibling continues this level's line downwards. */
+.inst .nl-down {
+  top: 50%;
+  bottom: 0;
+}
+
+/* The line dropping from this row's own dot to its first worker; it starts
+   just below the dot rather than across it. */
+.inst .nl-stem {
+  top: calc(50% + 5px);
+  bottom: 0;
+}
+
+/* Whatever hangs under the row (the answer strip, the actions menu). The
+   lines run on through it and across the 4px gap to the next row. */
+.inst-tail {
+  position: relative;
+  display: flow-root;
+}
+
+.inst-tail > .nl-v {
+  top: 0;
+  bottom: -4px;
+}
+
+.inst.nest-1 .inst-actions {
+  padding-left: 44px;
+}
+
+.inst.nest-2 .inst-actions {
+  padding-left: 58px;
+}
+
+.inst.nest-3 .inst-actions {
+  padding-left: 72px;
+}
+
+/* A nested row's strip starts one step right of its connector, which leaves
+   the rail's narrow width to the buttons. A nested row that is ITSELF an
+   orchestrator has its own connector dropping from its dot, so its strip
+   clears that one instead. */
+.inst.nest-1 .flock-answer.fa-rail {
+  margin-left: 47px;
+}
+
+.inst.nest-2 .flock-answer.fa-rail {
+  margin-left: 61px;
+}
+
+.inst.nest-3 .flock-answer.fa-rail {
+  margin-left: 75px;
+}
+
+.inst.nest-1.has-stem .flock-answer.fa-rail {
+  margin-left: 54px;
+}
+
+.inst.nest-2.has-stem .flock-answer.fa-rail {
+  margin-left: 68px;
+}
+
+.inst.nest-3.has-stem .flock-answer.fa-rail {
+  margin-left: 82px;
+}
+
+/* A row carrying an answer strip is focusable (Tab, then 1–9). A mouse click
+   focuses it too; only keyboard focus draws the ring. */
+.inst:focus {
+  outline: none;
+}
+
+.inst:focus-visible {
+  outline: 1px dashed var(--accent);
+}
+
+/* Worker status line (replaces "↳ parent"): what the worker is doing, or
+   what it reported. */
+.inst .lineage.rep-done {
+  color: var(--green);
+}
+
+.inst .lineage.rep-blocked {
+  color: var(--red);
+}
+
+.inst .lineage.rep-ask {
+  color: var(--gold);
+}
+
+.inst .lineage.rep-work,
+.inst .lineage.rep-idle {
+  color: var(--muted);
+}
+
+/* The orchestrator's roll-up, most urgent first; a click opens its Thread. */
+.inst .lineage.workers {
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.inst .lineage.workers:hover,
+.inst .lineage.workers:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.inst .lineage.workers:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+.inst .lineage .needs {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+.inst .lineage .bad {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.inst .lineage .ok {
+  color: var(--green);
+  font-weight: 600;
+}
+
+/* The orchestrator's chip while it sits idle over its workers. "waiting":
+   dashed, some haven't reported. "wrap up": filled and clickable (like the
+   red-zone chip) — it pastes the Wrap up prompt. */
+.inst .stagechip.s-waiting {
+  color: rgba(var(--accent-rgb), 1);
+  background: rgba(var(--accent-rgb), 0.14);
+  border: 1px dashed rgba(var(--accent-rgb), 0.55);
+  padding: 0 6px;
+}
+
+.inst .stagechip.wrapchip {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+  line-height: inherit;
+  color: #fff;
+  background: rgba(var(--accent-rgb), 0.9);
+  font-weight: 600;
+  flex: none;
+}
+
+.inst .stagechip.wrapchip:hover {
+  filter: brightness(1.15);
+}
+
+.inst .stagechip.wrapchip:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .inst .kill {
   background: none;
   border: none;
@@ -4545,6 +4777,13 @@ p.set-hint {
   white-space: nowrap;
 }
 
+/* MindFlock MCP: "· worker of api" after a worker's reason, in the accent the
+   rail's lineage line uses, so the two read as the same fact. */
+.attn-lineage {
+  color: rgba(var(--accent-rgb), 0.9);
+  font-size: 11px;
+}
+
 .attn-more {
   font-size: 11px;
   margin: 2px 0 0 6px;
@@ -4552,6 +4791,226 @@ p.set-hint {
 }
 
 /* 110 + 270 */
+
+@layer components{
+/* The one-click answer strip (AnswerStrip.tsx): a blocked agent's prompt with
+   its own option buttons. Gold-tinted like every "needs your answer" surface;
+   the first option is the accent primary unless it is "Always". Three hosts:
+   under a rail row (.fa-rail, compact), in a bell attention item (.fa-bell,
+   question as the item's snippet line, buttons boxed), and in a Thread worker
+   row (.fa-thread, full labels). */
+.flock-answer {
+  font-size: 11px;
+  color: var(--text);
+  cursor: default;
+}
+
+.flock-answer .fa-q {
+  line-height: 1.3;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flock-answer .fa-q code {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  /* --text-tinted, so the chip reads on the light theme's white panel too. */
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.flock-answer .fa-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.flock-answer button {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+
+.flock-answer button:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.7);
+}
+
+.flock-answer button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.flock-answer button .k {
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 9.5px;
+  margin-right: 4px;
+}
+
+.flock-answer button.primary {
+  background: rgba(var(--accent-rgb), 0.9);
+  border-color: transparent;
+  color: #fff;
+}
+
+.flock-answer button.primary .k {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.flock-answer button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.flock-answer button.picked:disabled {
+  opacity: 1;
+}
+
+/* ↗ sits at the far end of the row, quiet until hovered. */
+.flock-answer button.fa-open {
+  margin-left: auto;
+  flex: none;
+  background: none;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.flock-answer button.fa-open:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.flock-answer .fa-state {
+  font-size: 10.5px;
+  color: var(--green);
+  white-space: nowrap;
+}
+
+.flock-answer .fa-hint,
+.flock-answer .fa-note {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 5px;
+  line-height: 1.3;
+}
+
+.flock-answer .fa-note {
+  color: var(--gold);
+}
+
+/* --- rail: one compact box under the row --------------------------------- */
+/* 40px clears the family connector dropping from the row's own dot (x≈32);
+   SidebarRow.css moves it right by one indent per nesting level. */
+.flock-answer.fa-rail {
+  margin: -1px 6px 6px 40px;
+  padding: 5px 7px 6px;
+  border-radius: 7px;
+  background: rgba(255, 215, 0, 0.06);
+  border: 1px solid rgba(255, 215, 0, 0.28);
+}
+
+/* Tighter buttons: "1 Yes  2 Always  3 No…  ↗" has to fit a nested row at
+   the rail's default width without ellipsizing. */
+.flock-answer.fa-rail .fa-btns {
+  gap: 3px;
+}
+
+.flock-answer.fa-rail button {
+  padding: 2px 5px;
+}
+
+.flock-answer.fa-rail button .k {
+  margin-right: 3px;
+}
+
+.flock-answer.fa-rail .fa-q {
+  font-size: 11px;
+  margin-bottom: 6px;
+  white-space: nowrap;
+}
+
+/* --- bell: the question reads as the item's snippet; the buttons are boxed - */
+/* A full-width line of the (flex-wrap) attention item, under the dot. */
+.flock-answer.fa-bell {
+  flex-basis: 100%;
+  min-width: 0;
+  margin: 0 0 1px 13px;
+}
+
+.flock-answer.fa-bell .fa-q {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--muted);
+  margin: 3px 0 0;
+  white-space: nowrap;
+}
+
+.flock-answer.fa-bell .fa-box {
+  margin: 8px 0 2px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: rgba(255, 215, 0, 0.06);
+  border: 1px solid rgba(255, 215, 0, 0.28);
+}
+
+/* --- thread: room for full labels and a wrapping question ----------------- */
+.flock-answer.fa-thread {
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 215, 0, 0.28);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.18);
+  font-size: 12.5px;
+}
+
+.flock-answer.fa-thread .fa-q {
+  margin-bottom: 7px;
+  line-height: 1.45;
+}
+
+.flock-answer.fa-thread .fa-btns {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.flock-answer.fa-thread button {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 6px;
+}
+
+.flock-answer.fa-thread button .k {
+  font-size: 10px;
+  margin-right: 5px;
+}
+
+.flock-answer.fa-thread .fa-sp {
+  flex: 1;
+}
+
+.flock-answer.fa-thread button.fa-open {
+  margin-left: 0;
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+}
+
+/* 110 — rail, bell
+   and Thread hosts; the rail's per-depth indents in SidebarRow.css out-rank it */
 
 @layer components{
 /* --- Bulk session actions: batch bar --- */
@@ -9685,6 +10144,913 @@ button.ct-chip:hover {
 /* 160 */
 
 @layer components{
+
+/* "Work with other sessions": the pane head's fork-icon button and the menu it
+   opens (PlaybookMenu.tsx), plus the playbook rows in the sidebar row's ›
+   menu. Written against the theme tokens only, so light mode and every
+   surface set need nothing of their own beyond the shadow (theme-light.css). */
+
+/* The fork-icon button: first in .head-tail, icon-only like its neighbours
+   (history, copy-all). A CONTROL, not a status chip — the rule that hides
+   .stagechip in pane heads is about status and does not apply here. */
+.pane-head .act.playbooks {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 6px;
+  color: var(--muted);
+}
+
+.pane-head .act.playbooks svg {
+  display: block;
+}
+
+.pane-head .act.playbooks:hover {
+  color: var(--text);
+}
+
+/* Open: the accent fill, so the menu below reads as hanging from it. */
+.pane-head .act.playbooks.open {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Blocked (a permission dialog up, or the agent launched without the tools):
+   still hoverable, so the tooltip can say why; a click says it too. */
+.pane-head .act.playbooks.is-blocked {
+  opacity: 0.45;
+  cursor: help;
+}
+
+.pane-head .act.playbooks.is-blocked:hover {
+  border-color: var(--border);
+}
+
+/* ---- The menu -------------------------------------------------------------- */
+
+.pb-menu,
+.pb-sub {
+  position: fixed;
+  z-index: 3000;
+  box-sizing: border-box;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  padding: 6px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.pb-menu {
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
+  outline: none;
+}
+
+.pb-menu .pb-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 8px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.pb-menu .pb-head b {
+  font-size: 12.5px;
+  flex: none;
+}
+
+.pb-menu .pb-head .muted {
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* "api's workers · 3" */
+.pb-menu .pb-sec {
+  padding: 8px 8px 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pb-menu .pb-sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
+}
+
+/* One item: name + key on the first line, the plain-language description
+   under it. */
+.pb-menu .pb-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1px 10px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.pb-menu .pb-item.sel {
+  background: var(--accent);
+  color: #fff;
+}
+
+.pb-menu .pb-name {
+  font-weight: 600;
+  min-width: 0;
+}
+
+/* "1 of 3 reported" beside Wrap up workers. */
+.pb-menu .pb-cnt {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.pb-menu .pb-key {
+  grid-row: 1 / 2;
+  grid-column: 2;
+  align-self: center;
+  font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pb-menu .pb-desc {
+  grid-column: 1 / 2;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.pb-menu .pb-item.sel .pb-desc,
+.pb-menu .pb-item.sel .pb-key,
+.pb-menu .pb-item.sel .pb-cnt,
+.pb-menu .pb-item.sel .pb-caret {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+/* Ask a session…'s submenu caret. */
+.pb-menu .pb-caret {
+  position: absolute;
+  right: 8px;
+  bottom: 7px;
+  color: var(--muted);
+}
+
+/* Not available for this session right now: the server's reason replaces the
+   description, so it is read where the description would have been. */
+.pb-menu .pb-item.off {
+  cursor: default;
+}
+
+.pb-menu .pb-item.off .pb-name {
+  opacity: 0.55;
+}
+
+.pb-menu .pb-item.off .pb-why {
+  font-style: italic;
+}
+
+.pb-menu .pb-note {
+  padding: 6px 8px;
+  font-size: 11.5px;
+}
+
+.pb-menu .pb-err {
+  color: var(--red);
+}
+
+.pb-menu .pb-foot {
+  margin-top: 4px;
+  padding: 8px 8px 4px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.pb-menu .pb-foot b {
+  color: var(--text);
+}
+
+/* ---- Ask a session › ------------------------------------------------------- */
+
+.pb-sub {
+  width: 250px;
+  max-height: min(420px, calc(100vh - 16px));
+  display: flex;
+  flex-direction: column;
+}
+
+.pb-sub .pb-sub-head {
+  padding: 4px 8px 6px;
+  font-size: 11px;
+}
+
+.pb-sub .pb-sub-list {
+  overflow-y: auto;
+}
+
+.pb-sub .pb-note {
+  padding: 6px 8px;
+  font-size: 11.5px;
+}
+
+.pb-sub .pb-sess {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pb-sub .pb-sess.hot {
+  background: var(--panel-2);
+}
+
+.pb-sub .slot {
+  flex: none;
+  width: 14px;
+  text-align: right;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.pb-sub .nm {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pb-sub .rel {
+  flex: none;
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* The asked session's activity, in the rail's dot colours. */
+.pb-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.pb-dot.working {
+  background: var(--accent);
+}
+
+.pb-dot.idle {
+  background: var(--green);
+}
+
+.pb-dot.clarify,
+.pb-dot.limit {
+  background: var(--gold);
+}
+
+/* ---- The sidebar row's › menu group --------------------------------------- */
+
+.inst-actions .pb-row-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 14px;
+}
+
+.inst-actions .pb-row-sub button {
+  font-size: 11.5px;
+  padding: 4px 10px;
+}
+
+.inst-actions .pb-row-none {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.inst-actions .pb-row-sub .rel {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.inst-actions button.pb-row-off {
+  color: var(--muted);
+  cursor: default;
+}
+
+.inst-actions button.pb-row-off:hover {
+  background: none;
+}
+}
+
+/* 165 — after
+   Pane.css, whose .pane-head .act the fork-icon button extends, and after
+   SidebarRow.css, whose .inst-actions the row's playbook group extends */
+
+@layer components{
+
+/* The Thread tab (ThreadTab.tsx): a session's workers, the read-only log of
+   what passed between them, and the composer pinned at the bottom. The body
+   fills the pane like the Queue tab; the log scrolls, the composer doesn't. */
+
+/* --- the tab button's badge (reuses .queue-tab-badge) --------------------- */
+.pane-head .tabs button.thread-tab.active .queue-tab-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border-color: transparent;
+}
+
+/* Someone is waiting on your answer: gold, like every needs-you surface. */
+.pane-head .tabs button.thread-tab:not(.active) .queue-tab-badge.needs {
+  background: var(--gold-fill);
+  color: var(--gold-ink);
+  border-color: transparent;
+}
+
+/* --- body ----------------------------------------------------------------- */
+.pane-thread {
+  position: absolute;
+  inset: 0;
+  color: var(--text);
+  /* size, not inline-size: the composer compacts in a SHORT pane too. The
+     box is absolutely inset, so its height never comes from its content. */
+  container-type: size;
+}
+
+.pane-thread.hidden {
+  display: none;
+}
+
+.thread-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.thread-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 22px 12px;
+}
+
+.thread-head {
+  margin-bottom: 14px;
+}
+
+.thread-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.thread-sub b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.thread-sub .th-sha {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.thread-sub .th-needs {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+.thread-sub .th-ok {
+  color: var(--green);
+}
+
+.thread-sub .th-bad {
+  color: var(--red);
+}
+
+.th-self-answer:not(:empty) {
+  margin-top: 10px;
+}
+
+.thread-head-btns {
+  margin-top: 10px;
+  display: flex;
+  gap: 6px;
+}
+
+/* --- sections ------------------------------------------------------------- */
+.thread-sec {
+  margin-top: 16px;
+}
+
+.thread-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.thread-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.thread-root .th-sp {
+  flex: 1;
+  min-width: 0;
+}
+
+.thread-root .th-btn {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.thread-root .th-btn:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.7);
+}
+
+.thread-root .th-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.thread-root .th-btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+.thread-root .th-btn.primary:hover:not(:disabled) {
+  background: var(--accent-deep);
+}
+
+/* All | Reports */
+.th-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.th-seg button {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 9px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.th-seg button.on {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/* --- worker rows ---------------------------------------------------------- */
+.thread-workers {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.th-worker {
+  padding: 9px 12px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.th-worker:first-child {
+  border-top: none;
+}
+
+/* The one that needs you: a gold rail on the left and a faint wash. */
+.th-worker.is-ask {
+  box-shadow: inset 3px 0 0 var(--gold-fill);
+  background: rgba(255, 215, 0, 0.04);
+}
+
+.th-w-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.th-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  align-self: center;
+  margin-right: 4px;
+  background: var(--muted);
+}
+
+.th-dot.needs {
+  background: var(--gold);
+}
+
+.th-dot.ok {
+  background: var(--green);
+}
+
+.th-dot.bad {
+  background: var(--red);
+}
+
+.th-dot.work {
+  background: var(--accent);
+}
+
+.th-w-name {
+  font: inherit;
+  font-weight: 600;
+  color: var(--text);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-right: 14px;
+}
+
+.th-w-name:hover {
+  text-decoration: underline;
+}
+
+.th-w-word {
+  font-weight: 600;
+  flex: none;
+}
+
+.th-w-word.needs {
+  color: var(--gold);
+}
+
+.th-w-word.ok {
+  color: var(--green);
+}
+
+.th-w-word.bad {
+  color: var(--red);
+}
+
+.th-w-word.work,
+.th-w-word.idle {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.th-w-detail {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.th-w-diff {
+  flex: none;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.th-w-body {
+  margin: 8px 0 0 17px;
+}
+
+.th-w-summary {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.th-w-acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.thread-root code {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+/* The Thread host of the shared answer strip: the dialog box inside the row.
+   The light theme's white page needs a lighter wash than AnswerStrip.css's
+   dark-glass default. */
+.light .thread-root .flock-answer.fa-thread {
+  background: rgba(255, 215, 0, 0.06);
+}
+
+/* --- the "Between sessions" log -------------------------------------------- */
+.thread-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.th-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 12px 9px;
+  background: color-mix(in srgb, var(--panel-2) 45%, transparent);
+}
+
+.th-card.k-spawn {
+  border-left-color: var(--accent);
+}
+
+.th-card.k-result {
+  border-left-color: var(--green);
+}
+
+.th-card.k-message {
+  border-left-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.th-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.th-card-head b {
+  font-weight: 600;
+}
+
+.th-card-to {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.th-arrow {
+  color: var(--muted);
+}
+
+.th-kind {
+  flex: none;
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 4px;
+  line-height: 16px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.th-kind.spawn {
+  color: var(--muted);
+}
+
+.th-kind.ok {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 55%, transparent);
+}
+
+.th-kind.bad {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+}
+
+.th-time {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.th-card-text {
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* A long message stays a card, not a wall: the full text is the recipient's. */
+  display: -webkit-box;
+  -webkit-line-clamp: 8;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.th-card-text i {
+  color: var(--muted);
+}
+
+.th-card-many {
+  margin-top: 4px;
+}
+
+.th-card-one {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.th-card-one .th-card-text {
+  margin-top: 2px;
+}
+
+.th-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.th-older {
+  font: inherit;
+  font-size: 11.5px;
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0 0 8px;
+}
+
+.thread-empty {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* --- the composer ------------------------------------------------------------ */
+.thread-compose {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: 10px 22px 12px;
+  background: var(--panel);
+}
+
+.th-to {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.th-to-label {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-right: 2px;
+}
+
+.th-chip {
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.th-chip:hover {
+  border-color: rgba(var(--accent-rgb), 0.7);
+}
+
+.th-chip.on {
+  background: rgba(var(--accent-rgb), 0.22);
+  border-color: var(--accent);
+}
+
+.thread-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 56px;
+  max-height: 40vh;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.thread-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.th-compose-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  min-width: 0;
+}
+
+.th-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A narrow pane (4-up grid): tighter gutters, the hint gives way first. */
+@container (max-width: 520px) {
+  .thread-scroll {
+    padding: 12px 12px 8px;
+  }
+
+  .thread-compose {
+    padding: 8px 12px 10px;
+  }
+
+  .th-to {
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+
+  .th-chip {
+    padding: 1px 8px;
+    font-size: 11px;
+  }
+}
+
+/* A short pane (a 2x2 grid): the composer must not eat the workers. It keeps
+   two lines of text; drag the corner for more. */
+@container (max-height: 640px) {
+  .thread-input {
+    height: 48px;
+    min-height: 40px;
+  }
+
+  .th-compose-foot {
+    margin-top: 6px;
+  }
+}
+}
+
+/* 166 — after
+   Pane.css (.pane-head .tabs button), QueueTab.css (.queue-tab-badge, which the
+   Thread tab's badge reuses) and AnswerStrip.css (the .fa-thread host) */
+
+@layer components{
 /* Modal */
 .modal {
   position: fixed;
@@ -10952,6 +12318,44 @@ button.ct-chip:hover {
   font-size: 12px;
   min-height: 16px;
   margin: 0;
+}
+
+
+/* "Split across workers" (SplitCheck.tsx), under the sentence on page 1 and
+   under Plan first in the Prompt fold. The note under it is a .nf-git-nudge
+   aligned with the label text (16px box + 9px gap) rather than tucked under
+   an input, so it takes ordinary margins. */
+.nf-split {
+  margin-top: 10px;
+}
+
+.nf-advanced-body .nf-split {
+  margin-top: 0;
+}
+
+#new-form .nf-split label.check.disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+}
+
+.nf-split-nudge {
+  margin: 4px 0 0 25px;
+}
+
+/* "suggested · billing · search · upload": a suggestion only, so an outline
+   and gold ink instead of a fill. The box is never ticked for the user. */
+.nf-split-pill {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 7px;
+  border: 1px solid var(--gold);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  vertical-align: 1px;
+  color: var(--gold);
+  white-space: nowrap;
 }
 }
 
@@ -16602,8 +18006,11 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
  *
  * Adding a component rule that needs a light-mode counterpart? Put the
  * counterpart here rather than raising specificity at the call site. */
+/* Not the ACTIVE tab: this layer beats the component layer whatever the
+   specificity, so a hover here used to wash the accent off the tab you had
+   just clicked (it is still under the pointer). */
 .light .inst-actions button:hover,
-.light .pane-head .tabs button:hover {
+.light .pane-head .tabs button:not(.active):hover {
   background: rgba(0, 0, 0, 0.06);
 }
 
@@ -16702,6 +18109,12 @@ body.no-ticketing .ik-panel[data-caps-need~="ticketing"]>.caps-gate[data-caps-ga
 
 .light #conn-banner {
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+
+/* The fork-icon menu and its Ask › picker (PlaybookMenu.css). */
+.light .pb-menu,
+.light .pb-sub {
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
 }
 
 /* Doctor warning chip (failures while sessions exist). */

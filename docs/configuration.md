@@ -504,6 +504,23 @@ server merges on save so multiple processes can share it.
   on every relaunch, removed when the session closes; absent for a session with
   no credentials. Exists so a key never lands in `/proc/<pid>/cmdline`. Override
   the directory with `$MINDFLOCK_RUN_DIR`.
+- `run/mcp-<tmux-session>.json` — a Claude session's `--mcp-config` document
+  for the MindFlock MCP: the interpreter, `-P -m backend.mcp`, the session's
+  title, the server port and the scope (mode 0600, written atomically). It
+  holds **no** token. The tmux name is sanitized for the file name, and a
+  12-character digest is appended when that changed it, so two sessions never
+  share a file. It is rewritten on every launch (emptied to
+  `{"mcpServers": {}}` on a provisioned relaunch with attaching off), deleted
+  when the session is deleted, closed or cleaned up, and swept by
+  `mindflock uninstall` (even without `--purge`). See
+  [mcp.md](mcp.md#how-it-gets-attached).
+- `mailbox.json` (+ `mailbox.json.lock`) — inter-agent messages, keyed by
+  recipient title, each with its exactly-once delivery state. It is capped at
+  500 messages and about 1 MB per recipient and about 20 MB overall (the
+  oldest consumed messages go first). A session's box is dropped when the
+  session is removed. Written atomically under an `fcntl` lock, because more
+  than one process writes it. Override with `$MINDFLOCK_MAILBOX_FILE`. See
+  [mcp.md](mcp.md#messages).
 - `accounts/<id>/` — an `account`-kind auth profile's isolated CLI config dir
   (mode 0700), created on save and pointed at by `CLAUDE_CONFIG_DIR` /
   `CODEX_HOME` when a session runs under that profile. **Holds real
@@ -557,10 +574,23 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `GH_TOKEN` / `GITHUB_TOKEN` | — | GitHub auth fallback for the PR flow |
 | `SHELL` | — | Shell used by each session's Terminal tab |
 | `MINDFLOCK_AUTH` | unset | Web auth gate override — `1` forces it on, `0` off (wins over settings) |
-| `MINDFLOCK_AUTH_TOKEN` | — | Web auth token; setting it enables the auth gate |
+| `MINDFLOCK_AUTH_TOKEN` | — | Web auth token; setting it enables the auth gate. The CLI's session commands and the MindFlock MCP send it as `Authorization: Bearer`, falling back to `general.auth_token` in the settings file (that fallback goes to loopback addresses only; set this variable to reach a server on another host) |
 | `MINDFLOCK_AUTH_PROFILE` | unset | App-wide default **auth profile** id — the identity new sessions run under when they pin none. Wins over `auth_profiles.default_profile` in settings; `default` means the CLI's own ambient login. `GET /api/settings/auth-profiles` reports it (`default_profile_env`, `default_profile_locked`) and the Accounts screen disables its picker while it is set. See [accounts.md](accounts.md) |
-| `MINDFLOCK_RUN_DIR` | `~/.mindflock/run` | Where a session's per-run credential file is written (mode 0600, removed on close) so API keys reach the CLI without passing through argv — see [accounts.md](accounts.md#where-the-credentials-go) |
-| `MINDFLOCK_HOST` / `MINDFLOCK_PORT` | `127.0.0.1` / `8765` | CLI client — where to find the running server (after `--host`/`--port` flags) |
+| `MINDFLOCK_RUN_DIR` | `~/.mindflock/run` | Where a session's per-run files are written (mode 0600, removed on close): the credential file that lets API keys reach the CLI without passing through argv (see [accounts.md](accounts.md#where-the-credentials-go)), and Claude's MindFlock-MCP `--mcp-config` file `mcp-<tmux name>.json` |
+| `MINDFLOCK_HOST` / `MINDFLOCK_PORT` | `127.0.0.1` / `8765` | CLI client and MindFlock MCP: where to find the running server (after `--host`/`--port` flags). Auto-attach sets both for each session's MCP |
+| `MINDFLOCK_AGENT_MCP` | unset | **Kill switch** for MindFlock-MCP auto-attach: `0`/`false`/`no`/`off` in the server's environment stops new launches from attaching it, and wins over `general.agent_mcp`. A truthy value does not force it on. See [mcp.md](mcp.md#turning-it-off-and-how-far-it-reaches) |
+| `MINDFLOCK_MCP_SCOPE` | `children` | The MindFlock MCP server's scope (`readonly`, `children` or `all`) when `--scope` isn't given. Auto-attach sets it from `general.agent_mcp_scope`. An unknown value runs `readonly` |
+| `MINDFLOCK_SESSION_TITLE` | — | Set by auto-attach in each session's MCP environment: the session the MCP acts as. Unset, the MCP falls back to the tmux pane's session, else it is an external client |
+| `MINDFLOCK_MCP_MANAGED` | — | Set to `1` by auto-attach. An MCP that MindFlock attached but that can't confirm its session then fails closed to `readonly` |
+| `MINDFLOCK_MCP_LOG` | `WARNING` | Log level of the MindFlock MCP server (to stderr) |
+| `MINDFLOCK_MCP_PYTHON` | the server's own interpreter | Interpreter auto-attach starts the MCP with. The web server hands its own to the ticket-pipeline child, which may run another venv |
+| `MINDFLOCK_MCP_PYTHONPATH` | the directory holding the running `backend/` | `PYTHONPATH` auto-attach gives the MCP. Travels with `MINDFLOCK_MCP_PYTHON` to the pipeline child |
+| `MINDFLOCK_SERVER_PORT` | — | The web server's port as auto-attach should bake it, checked before `UVICORN_PORT`, a `--port` argument and 8765 (never `PORT`, which inside an agent shell is the session's dev port). The web server passes it to the pipeline child |
+| `MINDFLOCK_MAILBOX_FILE` | `~/.mindflock/mailbox.json` | Path of the inter-agent mailbox store |
+| `MINDFLOCK_MSG_MAX_HOPS` | `6` | Reply-chain ceiling for inter-agent messages. A pushed reply deeper than this is held in the recipient's inbox instead of typed in. Read on every send |
+| `MINDFLOCK_MAX_CHILDREN` | `8` | Live children one session may have (`POST /api/instances` with `parent`, and adopting through `POST /api/instances/{title}/parent`; 409 beyond). Read per request; a malformed or negative value falls back to the default |
+| `MINDFLOCK_MAX_SPAWN_DEPTH` | `3` | Deepest a session may sit in a parent chain (root = 0), checked at create and on adoption |
+| `MINDFLOCK_MAX_SPAWNED` | `24` | Agent-spawned (`spawned: true`) sessions live at once, with or without a parent |
 | `MINDFLOCK_WSL_DISTRO` | — (your default distro) | Pins the WSL distro used for terminal/server launches. Unset, `wsl.exe` picks the default one — which is where the Windows installer puts the CLI. `wsl -l -v` lists them |
 | `MINDFLOCK_WT_COMMAND` | `wt.exe` | Windows Terminal executable used to open session terminals |
 | `MINDFLOCK_TERMINAL` | — | Preferred Linux terminal emulator (else gnome-terminal/konsole/… autodetect) |
@@ -641,6 +671,21 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   (empty entries dropped); a **bare string** left by an older build is coerced to
   the current `default_provider` key on load (dropped if no default provider is
   set).
+- **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
+  General → **Give agents the MindFlock MCP** and **Agent MCP scope**): whether
+  every session's agent CLI is launched with the MindFlock MCP server attached,
+  so agents can list, message, spawn and steer each other (see
+  [mcp.md](mcp.md)). `agent_mcp` unset means **on**; `false` turns it off for
+  new launches, and live sessions keep what they started with until their next
+  launch. `MINDFLOCK_AGENT_MCP=0` in the server's environment wins.
+  `agent_mcp_scope` is how far an attached agent may *manage* other sessions:
+  `readonly`, `children` (the default, also for `""`: only the sessions it
+  spawned or adopted, and their descendants) or `all`. Reading and messaging
+  are not limited beyond `readonly`. Unknown values read as the default. Both
+  are read fresh from the file at each launch, so a save reaches the ticket
+  pipeline's launches without a restart. Written through `POST /api/settings`
+  (`{"general": {"agent_mcp": false}}`); `GET /api/config` reports the live
+  state as `caps.agent_mcp`.
 - **Notification rules** (`notifications.muted_rules` / `enabled_rules`,
   Settings → Notifications) — which session events notify you. Default-on rules
   are opt-*out* (their id lands in `muted_rules`), noisier ones are opt-*in*

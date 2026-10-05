@@ -1,0 +1,214 @@
+/* The one-click answer strip (AnswerStrip.tsx): a blocked agent's prompt with
+   its own option buttons. Gold-tinted like every "needs your answer" surface;
+   the first option is the accent primary unless it is "Always". Three hosts:
+   under a rail row (.fa-rail, compact), in a bell attention item (.fa-bell,
+   question as the item's snippet line, buttons boxed), and in a Thread worker
+   row (.fa-thread, full labels). */
+.flock-answer {
+  font-size: 11px;
+  color: var(--text);
+  cursor: default;
+}
+
+.flock-answer .fa-q {
+  line-height: 1.3;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flock-answer .fa-q code {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  /* --text-tinted, so the chip reads on the light theme's white panel too. */
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.flock-answer .fa-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.flock-answer button {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+
+.flock-answer button:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.7);
+}
+
+.flock-answer button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.flock-answer button .k {
+  color: var(--muted);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 9.5px;
+  margin-right: 4px;
+}
+
+.flock-answer button.primary {
+  background: rgba(var(--accent-rgb), 0.9);
+  border-color: transparent;
+  color: #fff;
+}
+
+.flock-answer button.primary .k {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.flock-answer button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.flock-answer button.picked:disabled {
+  opacity: 1;
+}
+
+/* ↗ sits at the far end of the row, quiet until hovered. */
+.flock-answer button.fa-open {
+  margin-left: auto;
+  flex: none;
+  background: none;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.flock-answer button.fa-open:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.flock-answer .fa-state {
+  font-size: 10.5px;
+  color: var(--green);
+  white-space: nowrap;
+}
+
+.flock-answer .fa-hint,
+.flock-answer .fa-note {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 5px;
+  line-height: 1.3;
+}
+
+.flock-answer .fa-note {
+  color: var(--gold);
+}
+
+/* --- rail: one compact box under the row --------------------------------- */
+/* 40px clears the family connector dropping from the row's own dot (x≈32);
+   SidebarRow.css moves it right by one indent per nesting level. */
+.flock-answer.fa-rail {
+  margin: -1px 6px 6px 40px;
+  padding: 5px 7px 6px;
+  border-radius: 7px;
+  background: rgba(255, 215, 0, 0.06);
+  border: 1px solid rgba(255, 215, 0, 0.28);
+}
+
+/* Tighter buttons: "1 Yes  2 Always  3 No…  ↗" has to fit a nested row at
+   the rail's default width without ellipsizing. */
+.flock-answer.fa-rail .fa-btns {
+  gap: 3px;
+}
+
+.flock-answer.fa-rail button {
+  padding: 2px 5px;
+}
+
+.flock-answer.fa-rail button .k {
+  margin-right: 3px;
+}
+
+.flock-answer.fa-rail .fa-q {
+  font-size: 11px;
+  margin-bottom: 6px;
+  white-space: nowrap;
+}
+
+/* --- bell: the question reads as the item's snippet; the buttons are boxed - */
+/* A full-width line of the (flex-wrap) attention item, under the dot. */
+.flock-answer.fa-bell {
+  flex-basis: 100%;
+  min-width: 0;
+  margin: 0 0 1px 13px;
+}
+
+.flock-answer.fa-bell .fa-q {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--muted);
+  margin: 3px 0 0;
+  white-space: nowrap;
+}
+
+.flock-answer.fa-bell .fa-box {
+  margin: 8px 0 2px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: rgba(255, 215, 0, 0.06);
+  border: 1px solid rgba(255, 215, 0, 0.28);
+}
+
+/* --- thread: room for full labels and a wrapping question ----------------- */
+.flock-answer.fa-thread {
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 215, 0, 0.28);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.18);
+  font-size: 12.5px;
+}
+
+.flock-answer.fa-thread .fa-q {
+  margin-bottom: 7px;
+  line-height: 1.45;
+}
+
+.flock-answer.fa-thread .fa-btns {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.flock-answer.fa-thread button {
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border-radius: 6px;
+}
+
+.flock-answer.fa-thread button .k {
+  font-size: 10px;
+  margin-right: 5px;
+}
+
+.flock-answer.fa-thread .fa-sp {
+  flex: 1;
+}
+
+.flock-answer.fa-thread button.fa-open {
+  margin-left: 0;
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--text);
+}

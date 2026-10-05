@@ -25,8 +25,13 @@ import {
   movedRailOrder,
   orderedInstances,
   orderedKeys,
+  placeNewWorkers,
+  railNesting,
+  sameNest,
   SEARCH_MIN,
+  type NestInfo,
 } from "./ordering";
+import { childrenByParent } from "../../lib/agentMessages";
 import { computeVisible } from "../grid/layout";
 import { useDoctorWarn } from "../dialogs/SetupDialog";
 import { isVerifySession } from "../dialogs/verify";
@@ -68,9 +73,24 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // which is what gives a verify run its pane in the grid; the Verify dialog
   // offers to open or end it, so an unlisted session is never stranded.
   const listed = useMemo(() => instances.filter((i) => !isVerifySession(i.title)), [instances]);
+  // MindFlock MCP families: each session's live workers, and the saved order
+  // with every worker it has never seen slotted under its parent. An agent
+  // spawns server-side, so without this a new worker files at the very bottom
+  // of the rail, nowhere near the orchestrator it nests under. Rendered from
+  // at once (no bottom-then-jump), persisted by the effect below; workers
+  // the order already holds are never moved again — a drag owns them.
+  const families = useMemo(() => childrenByParent(listed), [listed]);
+  const order = useMemo(
+    () => placeNewWorkers(ui.order, listed.filter((i) => !i.device)),
+    [ui.order, listed]
+  );
+  useEffect(() => {
+    if (order !== ui.order) ui.setOrder(order);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [order]);
   const { rows: allRows } = useMemo(
-    () => orderedInstances(listed, ui.order),
-    [listed, ui.order]
+    () => orderedInstances(listed, order),
+    [listed, order]
   );
   const filtered = useMemo(
     () => allRows.filter((i) => matchesFilter(i, ui.filter, ui.aliases)),
@@ -99,9 +119,9 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     () =>
       orderedKeys(
         [...allRows.map((i) => i.title), ...windows.map((w) => w.key)],
-        ui.order
+        order
       ),
-    [allRows, windows, ui.order]
+    [allRows, windows, order]
   );
   const onScreen = useMemo(
     () =>
@@ -149,7 +169,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     if (!dragKey || dragKey === targetKey) return;
     ui.setOrder(
       movedRailOrder({
-        saved: ui.order,
+        saved: order,
         live: railKeys,
         drag: dragKey,
         target: targetKey,
@@ -253,10 +273,26 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     useUi.getState().setRailOrder(displayedKeys);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [railSig]);
+  // The last NestInfo handed to each row, reused while it is unchanged so
+  // the memoized rows don't all re-render on every Sidebar render.
+  const nestSeen = useRef(new Map<string, NestInfo>());
+  const stableNest = (key: string, n: NestInfo) => {
+    const prev = nestSeen.current.get(key);
+    if (prev && sameNest(prev, n)) return prev;
+    nestSeen.current.set(key, n);
+    return n;
+  };
   let rowIdx = -1;
-  const renderRail = (list: Array<{ key: string; inst?: Instance; win?: WindowRow }>) =>
-    list.map((r) => {
+  // Family nesting is computed per rendered list, AFTER grouping and the
+  // filter, so a worker indents only where it really sits directly under its
+  // parent (or a sibling) on screen. It is paint only: `list` — and with it
+  // rowIdx, the published railOrder above and every drop target — is used
+  // exactly as given.
+  const renderRail = (list: Array<{ key: string; inst?: Instance; win?: WindowRow }>) => {
+    const nest = railNesting(list.map((r) => ({ key: r.key, parent: r.inst?.parent })));
+    return list.map((r, i) => {
       rowIdx += 1;
+      const parent = r.inst?.parent;
       return r.inst ? (
         <SidebarRow
           key={r.key}
@@ -264,6 +300,9 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
           idx={rowIdx}
           onScreen={onScreen.has(r.key)}
           dropCue={cueFor(r.key)}
+          nest={stableNest(r.key, nest[i])}
+          kids={r.inst.device ? undefined : families.get(r.key)}
+          parentLive={!r.inst.device && !!parent && families.get(parent)?.includes(r.inst) === true}
           {...rowProps}
         />
       ) : (
@@ -277,6 +316,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
         />
       );
     });
+  };
 
   const cap = viewCap(ui.viewMode);
   // Counted off `listed`, not `instances`: the footer says how many sessions

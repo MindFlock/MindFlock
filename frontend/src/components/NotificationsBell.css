@@ -299,6 +299,13 @@
   white-space: nowrap;
 }
 
+/* MindFlock MCP: "· worker of api" after a worker's reason, in the accent the
+   rail's lineage line uses, so the two read as the same fact. */
+.attn-lineage {
+  color: rgba(var(--accent-rgb), 0.9);
+  font-size: 11px;
+}
+
 .attn-more {
   font-size: 11px;
   margin: 2px 0 0 6px;

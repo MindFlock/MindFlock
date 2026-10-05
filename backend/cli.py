@@ -20,8 +20,13 @@ Installed via ``[project.scripts]``::
     mindflock rm TITLE [--yes]    # end a session (keeps the worktree)
     mindflock open TITLE          # open the session workspace in the IDE
     mindflock events [--follow]   # print the /api/events stream
+    mindflock msg TITLE "text…"   # message a session's agent (typed in when idle)
+    mindflock inbox TITLE [--all] # read a session's messages (doesn't mark them read)
 
-    mindflock uninstall           # undo MindFlock's writes to your repos
+    mindflock mcp                 # MCP stdio server (lets agents reach other sessions)
+    mindflock mcp --print-config  # …the snippets to register it in Claude/Codex
+
+    mindflock uninstall          # undo MindFlock's writes to your repos
     mindflock uninstall --purge   # …and delete ~/.mindflock[-assistant] too
 
 ``serve`` delegates to :func:`backend.web.run.main` (the same code path as
@@ -34,6 +39,13 @@ commands (J1) are thin clients over a *running* server's HTTP API — discovery
 order is ``--host``/``--port`` → ``MINDFLOCK_HOST``/``MINDFLOCK_PORT`` →
 probe 127.0.0.1:8765 (see :mod:`backend.client`). They never spawn an
 engine of their own, so the terminal and the web UI stay one system.
+
+``mcp`` runs the MindFlock MCP stdio server (:mod:`backend.mcp`) in this
+process — the same server MindFlock attaches to Claude/Codex sessions — and
+speaks only MCP on stdout; ``--print-config`` prints how to register it with
+your own client instead. ``msg``/``inbox`` are the human side of the same
+mailbox: a message sent from the terminal carries ``from: ""`` (outside the
+flock).
 """
 
 from __future__ import annotations
@@ -46,7 +58,8 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import TYPE_CHECKING, Callable, List, Optional, TextIO
+import urllib.parse
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, TextIO, Tuple
 
 from backend import __version__, client
 
@@ -300,6 +313,67 @@ def _build_parser() -> argparse.ArgumentParser:
         "rm", parents=[server_opts_nested], help="remove an account profile"
     )
     acc_rm.add_argument("id", metavar="ID")
+
+    msg = sub.add_parser(
+        "msg",
+        parents=[server_opts],
+        help="send a message to a session's agent (typed into it when it is idle)",
+    )
+    msg.add_argument("title", metavar="TITLE", help="session (unambiguous prefix ok)")
+    msg.add_argument(
+        "text",
+        nargs="+",
+        metavar="TEXT",
+        help="message text (several words are joined; a lone '-' reads stdin)",
+    )
+    msg.add_argument(
+        "--delivery",
+        choices=("auto", "inbox", "now"),
+        default="auto",
+        help="auto = type it in once the agent is idle (default); inbox = store "
+        "only; now = type it immediately (never into an open dialog)",
+    )
+
+    inbox = sub.add_parser(
+        "inbox",
+        parents=[server_opts],
+        help="list a session's messages without marking them read",
+    )
+    inbox.add_argument("title", metavar="TITLE", help="session (unambiguous prefix ok)")
+    inbox.add_argument(
+        "--all",
+        action="store_true",
+        dest="include_consumed",
+        help="include messages already read or typed in (default: unread only)",
+    )
+    inbox.add_argument(
+        "--json", action="store_true", dest="as_json", help="raw JSON for scripting"
+    )
+
+    mcp = sub.add_parser(
+        "mcp",
+        parents=[server_opts],
+        help="run the MindFlock MCP stdio server (or --print-config to register it)",
+        description=(
+            "Serve the Model Context Protocol on stdin/stdout so an agent CLI can "
+            "list, message, spawn and steer MindFlock sessions. MindFlock attaches "
+            "it to the Claude/Codex sessions it starts; run --print-config to "
+            "register it with your own client."
+        ),
+    )
+    mcp.add_argument(
+        "--scope",
+        choices=("readonly", "children", "all"),
+        default=None,
+        help="what the server may steer: readonly, children (default: sessions "
+        "it or its session spawned) or all",
+    )
+    mcp.add_argument(
+        "--print-config",
+        action="store_true",
+        dest="print_config",
+        help="print the Claude Code / Codex registration snippets and exit",
+    )
 
     uninstall = sub.add_parser(
         "uninstall",
@@ -730,6 +804,184 @@ def _format_event(env: dict) -> str:
     return "  ".join(parts)
 
 
+def _quote_title(title: str) -> str:
+    """A title as one URL path segment (titles may contain spaces)."""
+    return urllib.parse.quote(title, safe=":@")
+
+
+def _cmd_msg(args: argparse.Namespace) -> int:
+    """POST /api/instances/{title}/messages from outside the flock (``from: ""``)."""
+    text = sys.stdin.read() if args.text == ["-"] else " ".join(args.text)
+    text = text.strip()
+    if not text:
+        print("error: empty message", file=sys.stderr)
+        return 1
+    base = client.discover(args.host, args.port)
+    inst = _resolve_title(client.get(base, "/api/instances") or [], args.title)
+    title = str(inst.get("title", ""))
+    result = client.post(
+        base,
+        "/api/instances/%s/messages" % _quote_title(title),
+        {"text": text, "from": "", "delivery": args.delivery},
+    )
+    result = result if isinstance(result, dict) else {}
+    message = result.get("message")
+    message = message if isinstance(message, dict) else {}
+    outcome = str(result.get("delivery") or message.get("state") or "sent")
+    print("sent %s to %s (%s)" % (message.get("id") or "message", title, outcome))
+    if result.get("detail"):
+        print("  note: %s" % result["detail"], file=sys.stderr)
+    return 0
+
+
+def _cmd_inbox(args: argparse.Namespace) -> int:
+    """GET /api/instances/{title}/messages — reads WITHOUT marking anything read,
+    so a peek from the terminal never steals a message from the agent."""
+    base = client.discover(args.host, args.port)
+    inst = _resolve_title(client.get(base, "/api/instances") or [], args.title)
+    title = str(inst.get("title", ""))
+    query = (
+        "unread=0&include_consumed=1"
+        if args.include_consumed
+        else "unread=1&include_consumed=0"
+    )
+    result = client.get(
+        base,
+        "/api/instances/%s/messages?%s&mark_read=0&limit=200"
+        % (_quote_title(title), query),
+    )
+    result = result if isinstance(result, dict) else {}
+    if args.as_json:
+        print(json.dumps(result, indent=2))
+        return 0
+    messages = [m for m in result.get("messages") or [] if isinstance(m, dict)]
+    if not messages:
+        print(
+            "no %smessages for %s" % ("" if args.include_consumed else "unread ", title)
+        )
+        return 0
+    for m in messages:
+        print(_format_message(m))
+    return 0
+
+
+def _format_message(m: dict) -> str:
+    """One line per message: `HH:MM:SS id [state] from sender: text`."""
+    ts = m.get("ts")
+    clock = (
+        time.strftime("%H:%M:%S", time.localtime(ts))
+        if isinstance(ts, (int, float))
+        else "--:--:--"
+    )
+    sender = str(m.get("from") or "") or "(outside the flock)"
+    kind = "result " if m.get("kind") == "result" else ""
+    text = " ".join(str(m.get("text") or "").split())
+    if len(text) > 200:
+        text = text[:199] + "…"
+    return "%s  %s  [%s] %sfrom %s: %s" % (
+        clock,
+        m.get("id", "?"),
+        m.get("state", "?"),
+        kind,
+        sender,
+        text,
+    )
+
+
+def _mcp_launch() -> Tuple[str, List[str], Dict[str, str]]:
+    """(python, args, env) that start the MCP server from THIS install.
+
+    ``-P`` keeps the client's cwd off ``sys.path`` (it may hold a different
+    ``backend/`` — a MindFlock checkout, say); ``PYTHONPATH`` is added only when
+    this package is not importable from the interpreter's own site-packages
+    (a source checkout run through ``uv run``)."""
+    import sysconfig
+
+    import backend
+
+    pkg_root = os.path.dirname(os.path.dirname(os.path.abspath(backend.__file__)))
+    paths = sysconfig.get_paths()
+    site_dirs = {
+        os.path.realpath(p) for p in (paths.get("purelib"), paths.get("platlib")) if p
+    }
+    env: Dict[str, str] = {}
+    if os.path.realpath(pkg_root) not in site_dirs:
+        env["PYTHONPATH"] = pkg_root
+    return sys.executable, ["-P", "-m", "backend.mcp"], env
+
+
+def _mcp_config_text(
+    scope: Optional[str], host: Optional[str], port: Optional[int]
+) -> str:
+    """The registration snippets ``mindflock mcp --print-config`` prints: a
+    ``claude mcp add`` line, the same entry as JSON, and a Codex TOML table
+    (timeouts sized for the 1500 s waits)."""
+    import shlex
+
+    python, args, env = _mcp_launch()
+    if scope:
+        env["MINDFLOCK_MCP_SCOPE"] = scope
+    if host:
+        env["MINDFLOCK_HOST"] = host
+    if port is not None:
+        env["MINDFLOCK_PORT"] = str(port)
+    entry: Dict[str, object] = {"type": "stdio", "command": python, "args": args}
+    if env:
+        entry["env"] = env
+    snippet = json.dumps({"mcpServers": {"mindflock": entry}}, indent=2)
+    # The server name goes FIRST: `--env` is variadic in `claude mcp add` and
+    # would swallow a name placed after it ("Invalid environment variable
+    # format: mindflock" — verified against Claude Code 2.1.289).
+    add = ["claude", "mcp", "add", "mindflock", "--scope", "user"]
+    for key, value in env.items():
+        add += ["--env", "%s=%s" % (key, value)]
+    add += ["--", python, *args]
+    # Every TOML string via json.dumps: a JSON string literal is a valid TOML
+    # basic string (same escapes), so odd paths can't break the table.
+    toml = [
+        "[mcp_servers.mindflock]",
+        "command = %s" % json.dumps(python),
+        "args = [%s]" % ", ".join(json.dumps(a) for a in args),
+        'env_vars = ["TMUX", "TMUX_PANE", "TMUX_TMPDIR", "MINDFLOCK_AUTH_TOKEN"]',
+        "startup_timeout_sec = 30",
+        "tool_timeout_sec = 1620",
+    ]
+    if env:
+        toml += ["", "[mcp_servers.mindflock.env]"]
+        toml += ["%s = %s" % (k, json.dumps(v)) for k, v in env.items()]
+    lines = [
+        "# MindFlock MCP server: register it with your own agent CLI.",
+        "# (Sessions MindFlock starts with Claude or Codex get it automatically.)",
+        "",
+        "# Claude Code (user scope):",
+        " ".join(shlex.quote(a) for a in add),
+        "",
+        "# ...or the same entry as JSON (.mcp.json / --mcp-config):",
+        snippet,
+        "",
+        "# Codex (~/.codex/config.toml):",
+        *toml,
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    """``mindflock mcp``: serve MCP on stdio, or print the registration config."""
+    if args.print_config:
+        sys.stdout.write(_mcp_config_text(args.scope, args.host, args.port))
+        return 0
+    from backend import mcp as mcp_server
+
+    argv: List[str] = []
+    if args.scope:
+        argv += ["--scope", args.scope]
+    if args.host:
+        argv += ["--host", args.host]
+    if args.port is not None:
+        argv += ["--port", str(args.port)]
+    return mcp_server.main(argv, prog="mindflock mcp")
+
+
 def _cmd_uninstall(args: argparse.Namespace) -> int:
     """Remove MindFlock's footprint outside its venv (see :mod:`backend.uninstall`).
 
@@ -766,6 +1018,8 @@ def _cmd_uninstall(args: argparse.Namespace) -> int:
         print("  worktrees to remove:  %d" % len(removable))
         print("  orphaned worktrees:   %d" % len(plan.orphan_worktrees))
     print("  repos to clean:       %d" % len(plan.workdirs))
+    if plan.run_files:
+        print("  MCP run files:        %d" % len(plan.run_files))
     if args.purge:
         for path in plan.purge_dirs:
             print("  purge:                %s" % path)
@@ -1065,14 +1319,16 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "rm": _cmd_rm,
     "open": _cmd_open,
     "events": _cmd_events,
+    "msg": _cmd_msg,
+    "inbox": _cmd_inbox,
 }
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     """Parse ``argv`` and dispatch to the matching subcommand; return the exit code.
 
-    ``doctor`` and the J1 session commands (new/ls/attach/rm/open/events) run
-    in-process; any other invocation — including no subcommand at all — falls
+    ``doctor``, ``mcp`` and the J1 session commands
+    (new/ls/attach/rm/open/events/msg/inbox) run in-process; any other invocation — including no subcommand at all — falls
     through to ``serve``. A session command that can't reach a server turns the
     :class:`client.ServerNotFound` / :class:`client.ClientError` into a one-line
     stderr message and exit 1, never a traceback.
@@ -1090,11 +1346,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         # refuses to run while a server is up), so it must never be wrapped in
         # the ServerNotFound handler below.
         return _cmd_uninstall(args)
+    if args.command == "mcp":
+        # A stdio protocol server (or a config printer): it discovers the
+        # server lazily per tool call, so it never goes through the
+        # ServerNotFound handler below either.
+        return _cmd_mcp(args)
     if args.command == "accounts":
         # Not a session command either: it prefers a running server but falls
         # back to the local settings store, so ServerNotFound is a routing
         # decision here, not an error.
-        return _cmd_accounts(args)
+        try:
+            return _cmd_accounts(args)
+        except client.AuthRejected as err:
+            # A server is up but refuses our token: editing the local store
+            # behind its back is exactly what this routing exists to avoid.
+            print("error: %s" % err, file=sys.stderr)
+            return 1
     handler: Optional[Callable[[argparse.Namespace], int]] = _SESSION_COMMANDS.get(
         args.command or ""
     )

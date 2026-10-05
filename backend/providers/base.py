@@ -244,6 +244,20 @@ class BaseProvider:
             return "%s --continue || %s" % (prog, prog)
         return prog
 
+    def mcp_launch_args(self, spec) -> tuple:
+        """argv tokens that attach the MindFlock MCP server described by
+        ``spec`` (a :class:`backend.providers.mcp_attach.McpSpec`) to this
+        launch, or ``()`` when the CLI can't be auto-attached.
+
+        The launch sites prepend these to the session's effective launch args
+        (see :func:`backend.providers.mcp_attach.attach_args`); they are raw
+        argv elements — every launch path shell-quotes launch args itself.
+        Implementations may write per-session files (Claude's run file).
+        Default: no auto-attach — the agent can still be pointed at
+        ``mindflock mcp`` by hand.
+        """
+        return ()
+
     # --- worktree launcher script ----------------------------------------- #
     def owns_launcher(self, ctx: LaunchContext) -> bool:
         """Whether this provider generates a launcher script. Only providers that
@@ -321,6 +335,70 @@ class BaseProvider:
         hash strips as per-frame noise, so the web layer scans the RAW pane for
         them, separately from that hash. Default: none (no such detection)."""
         return ()
+
+    def parse_dialog(self, screen_text: str) -> Optional[dict]:
+        """The dialog this CLI is blocked on, read from its VISIBLE screen
+        (``tmux capture-pane`` without scrollback), or None.
+
+        Called on every activity probe's screen (a parse reads as
+        ``clarify`` whatever the hooks last said), by ``GET /dialog`` and by
+        the typing guards, so the web UI can answer a permission / trust /
+        question dialog in place with
+        the dialog's own option buttons. A parse is the dict documented in
+        :mod:`backend.providers.dialogs` (heading, question, command, detail,
+        numbered ``options`` with a ``kind`` each, the cursor-free ``region``
+        its id is hashed from). Must be conservative: None whenever the
+        screen is not unmistakably a live selection menu — a wrong button is
+        worse than none. Default: no parser (the UI shows the question line
+        and a button that opens the pane)."""
+        return None
+
+    def parses_dialogs(self) -> bool:
+        """Whether :meth:`parse_dialog` is implemented for this CLI — i.e.
+        whether a capture of its screen can PROVE a dialog is up. The web
+        layer then reads every activity probe's screen for one (a dialog on
+        screen outranks whatever the CLI's hooks last said — see
+        ``agent_state._agent_activity``). Default: True exactly when a
+        subclass overrides :meth:`parse_dialog`."""
+        return type(self).parse_dialog is not BaseProvider.parse_dialog
+
+    def dialog_on_screen(self, screen_text: str) -> bool:
+        """Screen evidence that the CLI is showing a live dialog RIGHT NOW —
+        what every automated typer (the prompt-queue drain, the mailbox lane,
+        ``delivery: "now"``, ``/send`` with ``dialog_safe``, a playbook
+        paste) checks on a fresh capture just before it types, whatever the
+        activity reading says: text plus Enter typed into a permission
+        prompt approves it.
+
+        A parse (:meth:`parse_dialog`) with options, else this CLI's
+        waiting-prompt patterns or trust-gate phrases in the bottom lines of
+        the screen (:func:`backend.providers.dialogs.dialog_on_screen`).
+        Looser than the parse on purpose: a false positive only holds a
+        message for a later pass. Never raises."""
+        from . import dialogs
+
+        try:
+            parsed = self.parse_dialog(screen_text)
+        except Exception:  # noqa: BLE001 — a parser bug falls back to patterns
+            parsed = None
+        try:
+            waiting = tuple(self.waiting_prompt_patterns() or ())
+        except Exception:  # noqa: BLE001
+            waiting = ()
+        try:
+            spec = self.trust_prompt()
+            trust = tuple(spec.patterns) if spec else ()
+        except Exception:  # noqa: BLE001
+            trust = ()
+        try:
+            return dialogs.dialog_on_screen(
+                screen_text,
+                parsed if isinstance(parsed, dict) else None,
+                waiting,
+                trust,
+            )
+        except Exception:  # noqa: BLE001 — evidence we can't read is no evidence
+            return False
 
     def progress_token_pattern(self) -> Optional[str]:
         """A regex with ONE capture group holding a monotonically climbing turn

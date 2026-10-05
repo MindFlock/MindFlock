@@ -1,0 +1,23 @@
+
+● Agent(Get bye-worker diff and merge to main)
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+● Retrieving bye-worker diff...
+
+────────────────────────────────────────────────────────────────────────────────
+ Tool use · from the general-purpose agent                               6 of 7
+ mindflock — Answer a blocked prompt Tool: (MCP)
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ title: "hello-worker"
+ keys: ["1", "Enter"]
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ About the mindflock — Answer a blocked prompt Tool:
+ │ Answer a dialog that a session you manage is blocked on: activity
+ │ "clarify" (a permission or choice prompt) or "limit" (the usage-limit…
+ (ctrl+o to expand description)
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+
+ Esc to cancel · Tab to amend

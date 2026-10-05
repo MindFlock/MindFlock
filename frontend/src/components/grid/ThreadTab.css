@@ -1,0 +1,577 @@
+/* The Thread tab (ThreadTab.tsx): a session's workers, the read-only log of
+   what passed between them, and the composer pinned at the bottom. The body
+   fills the pane like the Queue tab; the log scrolls, the composer doesn't. */
+
+/* --- the tab button's badge (reuses .queue-tab-badge) --------------------- */
+.pane-head .tabs button.thread-tab.active .queue-tab-badge {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  border-color: transparent;
+}
+
+/* Someone is waiting on your answer: gold, like every needs-you surface. */
+.pane-head .tabs button.thread-tab:not(.active) .queue-tab-badge.needs {
+  background: var(--gold-fill);
+  color: var(--gold-ink);
+  border-color: transparent;
+}
+
+/* --- body ----------------------------------------------------------------- */
+.pane-thread {
+  position: absolute;
+  inset: 0;
+  color: var(--text);
+  /* size, not inline-size: the composer compacts in a SHORT pane too. The
+     box is absolutely inset, so its height never comes from its content. */
+  container-type: size;
+}
+
+.pane-thread.hidden {
+  display: none;
+}
+
+.thread-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.thread-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 22px 12px;
+}
+
+.thread-head {
+  margin-bottom: 14px;
+}
+
+.thread-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.thread-sub b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.thread-sub .th-sha {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.thread-sub .th-needs {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+.thread-sub .th-ok {
+  color: var(--green);
+}
+
+.thread-sub .th-bad {
+  color: var(--red);
+}
+
+.th-self-answer:not(:empty) {
+  margin-top: 10px;
+}
+
+.thread-head-btns {
+  margin-top: 10px;
+  display: flex;
+  gap: 6px;
+}
+
+/* --- sections ------------------------------------------------------------- */
+.thread-sec {
+  margin-top: 16px;
+}
+
+.thread-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  min-width: 0;
+}
+
+.thread-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.thread-root .th-sp {
+  flex: 1;
+  min-width: 0;
+}
+
+.thread-root .th-btn {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.thread-root .th-btn:hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.7);
+}
+
+.thread-root .th-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.thread-root .th-btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+.thread-root .th-btn.primary:hover:not(:disabled) {
+  background: var(--accent-deep);
+}
+
+/* All | Reports */
+.th-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.th-seg button {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 9px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.th-seg button.on {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/* --- worker rows ---------------------------------------------------------- */
+.thread-workers {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.th-worker {
+  padding: 9px 12px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.th-worker:first-child {
+  border-top: none;
+}
+
+/* The one that needs you: a gold rail on the left and a faint wash. */
+.th-worker.is-ask {
+  box-shadow: inset 3px 0 0 var(--gold-fill);
+  background: rgba(255, 215, 0, 0.04);
+}
+
+.th-w-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.th-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  align-self: center;
+  margin-right: 4px;
+  background: var(--muted);
+}
+
+.th-dot.needs {
+  background: var(--gold);
+}
+
+.th-dot.ok {
+  background: var(--green);
+}
+
+.th-dot.bad {
+  background: var(--red);
+}
+
+.th-dot.work {
+  background: var(--accent);
+}
+
+.th-w-name {
+  font: inherit;
+  font-weight: 600;
+  color: var(--text);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-right: 14px;
+}
+
+.th-w-name:hover {
+  text-decoration: underline;
+}
+
+.th-w-word {
+  font-weight: 600;
+  flex: none;
+}
+
+.th-w-word.needs {
+  color: var(--gold);
+}
+
+.th-w-word.ok {
+  color: var(--green);
+}
+
+.th-w-word.bad {
+  color: var(--red);
+}
+
+.th-w-word.work,
+.th-w-word.idle {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.th-w-detail {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.th-w-diff {
+  flex: none;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.th-w-body {
+  margin: 8px 0 0 17px;
+}
+
+.th-w-summary {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.th-w-acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.thread-root code {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+/* The Thread host of the shared answer strip: the dialog box inside the row.
+   The light theme's white page needs a lighter wash than AnswerStrip.css's
+   dark-glass default. */
+.light .thread-root .flock-answer.fa-thread {
+  background: rgba(255, 215, 0, 0.06);
+}
+
+/* --- the "Between sessions" log -------------------------------------------- */
+.thread-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.th-card {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 12px 9px;
+  background: color-mix(in srgb, var(--panel-2) 45%, transparent);
+}
+
+.th-card.k-spawn {
+  border-left-color: var(--accent);
+}
+
+.th-card.k-result {
+  border-left-color: var(--green);
+}
+
+.th-card.k-message {
+  border-left-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.th-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.th-card-head b {
+  font-weight: 600;
+}
+
+.th-card-to {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.th-arrow {
+  color: var(--muted);
+}
+
+.th-kind {
+  flex: none;
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 4px;
+  line-height: 16px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.th-kind.spawn {
+  color: var(--muted);
+}
+
+.th-kind.ok {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 55%, transparent);
+}
+
+.th-kind.bad {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+}
+
+.th-time {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.th-card-text {
+  margin: 5px 0 0;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* A long message stays a card, not a wall: the full text is the recipient's. */
+  display: -webkit-box;
+  -webkit-line-clamp: 8;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.th-card-text i {
+  color: var(--muted);
+}
+
+.th-card-many {
+  margin-top: 4px;
+}
+
+.th-card-one {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.th-card-one .th-card-text {
+  margin-top: 2px;
+}
+
+.th-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.th-older {
+  font: inherit;
+  font-size: 11.5px;
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0 0 8px;
+}
+
+.thread-empty {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* --- the composer ------------------------------------------------------------ */
+.thread-compose {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: 10px 22px 12px;
+  background: var(--panel);
+}
+
+.th-to {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.th-to-label {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-right: 2px;
+}
+
+.th-chip {
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  cursor: pointer;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.th-chip:hover {
+  border-color: rgba(var(--accent-rgb), 0.7);
+}
+
+.th-chip.on {
+  background: rgba(var(--accent-rgb), 0.22);
+  border-color: var(--accent);
+}
+
+.thread-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 56px;
+  max-height: 40vh;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.thread-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.th-compose-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  min-width: 0;
+}
+
+.th-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A narrow pane (4-up grid): tighter gutters, the hint gives way first. */
+@container (max-width: 520px) {
+  .thread-scroll {
+    padding: 12px 12px 8px;
+  }
+
+  .thread-compose {
+    padding: 8px 12px 10px;
+  }
+
+  .th-to {
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+
+  .th-chip {
+    padding: 1px 8px;
+    font-size: 11px;
+  }
+}
+
+/* A short pane (a 2x2 grid): the composer must not eat the workers. It keeps
+   two lines of text; drag the corner for more. */
+@container (max-height: 640px) {
+  .thread-input {
+    height: 48px;
+    min-height: 40px;
+  }
+
+  .th-compose-foot {
+    margin-top: 6px;
+  }
+}

@@ -19,6 +19,7 @@ import {
   refreshConfig,
   queryClient,
   useAuthProfiles,
+  useConfig,
 } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
@@ -39,6 +40,8 @@ import {
 import { useFileDropTextarea } from "../../lib/fileDropTextarea";
 import { FlagChips, tokenize } from "./FlagChips";
 import { NewTicketPane } from "./NewTicketPane";
+import { SplitCheck } from "./SplitCheck";
+import { splitGate, withSplit } from "../../lib/playbooks";
 
 /** The two things New makes. Session is the landing tab and stays that way:
  * it is the hot path (name → Enter), and a tab strip that makes the common
@@ -744,6 +747,13 @@ export function NewSessionDialog() {
   // means to touch (with intent) and wait — the Map tab turns that list into
   // ghost tiles and blast arms you can red-zone before a single edit.
   const [planFirst, setPlanFirst] = useState(false);
+  // Split across workers: the create carries `playbook: "split"` and the agent
+  // forks one worker per independent piece with its MindFlock tools. One state
+  // for both boxes (Describe page, Prompt fold). `splitMovedMode` remembers
+  // that ticking it moved "Work directly in this folder" to New worktree, so
+  // unticking can move it back. A mode the user picked stays as they set it.
+  const [split, setSplit] = useState(false);
+  const splitMovedMode = useRef(false);
   const [error, setError] = useState("");
   // "Git & workspace" starts OPEN — hiding those choices behind a click had
   // people launch with the wrong strategy rather than discover it, and they
@@ -963,6 +973,8 @@ export function NewSessionDialog() {
     setInPlace(true);
     setInitRepo(false);
     setPlanFirst(false);
+    setSplit(false);
+    splitMovedMode.current = false;
     // Matches the initial state, and has to be set here too: this reset runs
     // on EVERY open, so a useState default alone left the fold shut from the
     // second open onward.
@@ -1231,6 +1243,30 @@ export function NewSessionDialog() {
     return !prov || prov.plan_supported !== false;
   }, [canonAgent, program, providers]);
 
+  /** Split across workers needs an agent that gets the MindFlock tools. The
+   * cap missing (an older server, config not loaded yet) is "unknown", not
+   * "off": the box stays usable and the server's 400 is the backstop. */
+  const { data: config } = useConfig();
+  const mcpOk = useMemo(
+    () => splitGate(config?.caps, canonAgent(program)),
+    [config?.caps, canonAgent, program]
+  );
+  const splitOn = split && mcpOk.ok;
+
+  /** Tick or untick Split across workers. Workers fork from a branch, so a
+   * tick moves "Work directly in this folder" to New worktree, and an untick
+   * moves it back only if the tick moved it. */
+  const toggleSplit = (on: boolean) => {
+    setSplit(on);
+    if (on && inPlace && !provision) {
+      setInPlace(false);
+      splitMovedMode.current = true;
+    } else if (!on && splitMovedMode.current) {
+      splitMovedMode.current = false;
+      if (!inPlace && !provision) setInPlace(true);
+    }
+  };
+
   /** Picking an account steers the Agent field: with an OpenRouter (or any
    * key) account the identity is the choice that matters, so an agent the
    * account can't route is auto-swapped to one it can — the alternative is a
@@ -1333,7 +1369,9 @@ export function NewSessionDialog() {
     // instruction to erase the name the user typed before reaching for the box.
     if (a.title) setTitle(a.title);
     setPrompt(a.prompt || "");
-    setInPlace(planInPlace(a));
+    // A ticked Split keeps its worktree: the sentence's "in this folder"
+    // guess doesn't override a box the user ticked.
+    setInPlace(planInPlace(a) && !splitOn);
     setInitRepo(!!a.init_repo);
     // The whole folder, existing or not: the gate reads the "does it need
     // making" half of it and the note reads the path. Keeping a path only for a
@@ -1740,7 +1778,7 @@ export function NewSessionDialog() {
       body.init_repo = p.initRepo;
       body.in_place = p.inPlace;
     }
-    return body;
+    return withSplit(body, splitOn);
   };
 
   /** POST the create, and own everything that follows it.
@@ -1977,6 +2015,13 @@ export function NewSessionDialog() {
                   away skips. This says what the sentence is for, and that
                   reading it costs nothing, which is the fact that makes the
                   button row below safe to experiment with. */}
+              <SplitCheck
+                id="new-split"
+                split={split}
+                onSplit={toggleSplit}
+                gate={mcpOk}
+                text={describe}
+              />
               <p className="nf-describe-help">
                 Your coding CLI reads this and works out which folder to use, what
                 to call the session, and what to tell the agent first.{" "}
@@ -2528,6 +2573,12 @@ export function NewSessionDialog() {
                       onChange={() => {
                         setInPlace(true);
                         setProvision(false);
+                        // Workers can't fork from a folder edited in place, so
+                        // picking this mode unticks Split across workers.
+                        if (split) {
+                          setSplit(false);
+                          splitMovedMode.current = false;
+                        }
                       }}
                     />
                     Work directly in this folder{" "}
@@ -2742,6 +2793,13 @@ export function NewSessionDialog() {
                         : "(takes effect with a prompt)"}
                   </span>
                 </label>
+                <SplitCheck
+                  id="new-split-prompt"
+                  split={split}
+                  onSplit={toggleSplit}
+                  gate={mcpOk}
+                  text={prompt || describe}
+                />
               </div>
             </details>
   

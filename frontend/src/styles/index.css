@@ -30,6 +30,8 @@
 @import "../components/usage/usage.css" layer(components); /* 090 */
 @import "../components/grid/QueueTab.css" layer(components); /* 100 */
 @import "../components/NotificationsBell.css" layer(components); /* 110 + 270 */
+@import "../components/AnswerStrip.css" layer(components); /* 110 — rail, bell
+   and Thread hosts; the rail's per-depth indents in SidebarRow.css out-rank it */
 @import "../components/sidebar/BulkBar.css" layer(components); /* 110 */
 @import "../components/sidebar/SessionFilter.css" layer(components); /* 110 */
 @import "../components/palette/ShortcutsSheet.css" layer(components); /* 120 */
@@ -40,6 +42,12 @@
    DiffTab.css, whose .stagechip base the rail's red-zone chip extends */
 @import "../components/grid/paneOverlays.css" layer(components); /* 160 */
 @import "../components/grid/HistoryOverlay.css" layer(components); /* 160 */
+@import "../components/grid/PlaybookMenu.css" layer(components); /* 165 — after
+   Pane.css, whose .pane-head .act the fork-icon button extends, and after
+   SidebarRow.css, whose .inst-actions the row's playbook group extends */
+@import "../components/grid/ThreadTab.css" layer(components); /* 166 — after
+   Pane.css (.pane-head .tabs button), QueueTab.css (.queue-tab-badge, which the
+   Thread tab's badge reuses) and AnswerStrip.css (the .fa-thread host) */
 @import "../components/dialogs/NewSessionDialog.css" layer(components); /* 170 */
 @import "../components/dialogs/fileDropTextarea.css" layer(components); /* 175 — after
    NewSessionDialog so the drop cue wins over the plain textarea border it sets. */

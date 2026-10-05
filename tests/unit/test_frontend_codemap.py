@@ -111,9 +111,13 @@ def test_pane_has_map_tab_gated_like_diff(js):
     # Mounted like DiffTab: {title, active}, active only while the tab shows.
     assert in_bundle('title, active: tab === "map"', js)
     # Git-gated exactly like Diff, in BOTH the saved-tab and programmatic-switch
-    # fallbacks (one set drives both, so they can't disagree).
+    # fallbacks: one function (paneTab) over one set drives both, so they can't
+    # disagree.
     assert in_bundle('new Set(["diff", "map"])', js)
-    assert js.count("GIT_TABS.has(") >= 2
+    pane_tab = _function(js, "paneTab")
+    assert "GIT_TABS.has(t) && !git" in pane_tab
+    assert in_bundle("useState)(paneTab(savedTab, caps.git))", js)
+    assert in_bundle("const t = paneTab(lastTab, caps.git)", js)
 
 
 def test_every_route_lives_in_the_fetchers_module(js):
