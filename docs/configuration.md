@@ -257,6 +257,12 @@ of type **`state_one`** — a single destination, as against the multi-select
 filter `workflow_state` renders as — and it is only offered by the providers
 that can write a state back.
 
+**Ingest filters are enforced twice.** `workflow_state` and `ingest_labels`
+gate the scan, and they are checked again against a fresh read just before a
+queued ticket launches (and when a restart re-enqueues it). Moving a queued
+ticket out of the ingest state, or removing its ingest label, cancels it; see
+[ingestion-pipeline.md](ingestion-pipeline.md#story-flow), step 2.
+
 **Shortcut can also gate ingestion on a label.** `ingest_labels` takes one or
 more comma-separated label names (`ingest_labels = "brainflight"`); a story is
 only auto-ingested once it carries at least one of them, matched

@@ -1260,7 +1260,10 @@ count and the list cannot disagree).
 
 Two things are deliberately **not** here. Work the pipeline has already accepted:
 *"queued for ingestion (pending)"* is a skip reason, so those items are no longer
-eligible — they have become sessions, which is where you watch them. And anything
+eligible — they have become sessions, which is where you watch them. (One
+exception: a pending ticket since moved out of the ingest state still shows this
+reason, but the pipeline re-checks before launch and drops it instead — see
+[ingestion-pipeline.md](ingestion-pipeline.md#story-flow), step 2.) And anything
 that already has a session: ticket eligibility rules those out through the ledger,
 but PR and issue eligibility only consult the processed ledger, so an item started
 by hand seconds ago can still read as eligible, and calling work that is being

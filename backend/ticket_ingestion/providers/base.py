@@ -57,6 +57,16 @@ class ProviderError(RuntimeError):
     long-standing "fetch failed -> RuntimeError" contract."""
 
 
+class TicketNotFound(ProviderError):
+    """:meth:`TicketProvider.fetch` found no such ticket — deleted, or moved
+    somewhere this source's credentials can't see.
+
+    Its own type because a caller holding a remembered ticket id (the
+    crash-recovery pending store) has to tell "this ticket is gone, forget it"
+    from "the tracker is unreachable right now, try again later"; both used to
+    be the same ``ProviderError``, so a deleted ticket was retried forever."""
+
+
 # --------------------------------------------------------------------------- #
 # Shared, source-agnostic parsing (identical rules to the original Shortcut
 # pipeline, now reusable by every provider).
@@ -281,6 +291,45 @@ STATE_BOUNDED_PROVIDERS = frozenset({"shortcut", "jira", "linear"})
 #: Shortcut only for now; its search takes a label name server-side, which is
 #: what lets a label (rather than a state) bound an any-assignee search.
 LABEL_FILTER_PROVIDERS = frozenset({"shortcut"})
+
+
+def ingest_filter_miss(cfg, ticket: Ticket) -> str:
+    """Why ``ticket`` fails the source's ingest filters NOW, or ``""`` when it
+    passes.
+
+    The scan applies these filters server-side, at search time. Everything that
+    holds a ticket after that — the work queue behind the session cap, the
+    crash-recovery pending store across restarts — holds a snapshot, and the
+    person triaging the board keeps moving tickets in the meantime. This is the
+    same filter re-applied to a fresh read, so a ticket moved out of the ingest
+    state (or stripped of its ingest label) while it waited is dropped instead
+    of launched.
+
+    Fails open on what the ticket can't say: a provider that doesn't report a
+    state, or a stale ``workflow_state`` on a provider with no state model, is
+    not a reason to drop a ticket the scan already vetted. A configured state
+    matches the ticket's native state id or, for Jira's by-name filter, its
+    state name.
+    """
+    provider = (getattr(cfg, "provider", "") or "").strip().lower()
+    states = workflow_state_list(cfg) if provider in STATE_BOUNDED_PROVIDERS else []
+    legacy = getattr(cfg, "workflow_state_id", None)
+    if not states and provider == "shortcut" and legacy is not None:
+        # The legacy integer key, honoured exactly where the scan honours it.
+        states = [str(legacy)]
+    if states and (ticket.state_id or ticket.state):
+        wanted = {s.casefold() for s in states}
+        if (
+            ticket.state_id.casefold() not in wanted
+            and ticket.state.casefold() not in wanted
+        ):
+            return (
+                f"it left the ingest state (now in {ticket.state or ticket.state_id})"
+            )
+    labels = ingest_label_list(cfg)
+    if labels and not has_ingest_label(ticket.labels, labels):
+        return "it no longer carries an ingest label"
+    return ""
 
 
 def start_state_id(cfg) -> str:

@@ -13,6 +13,7 @@ from backend.ticket_ingestion.config import TicketProviderConfig
 from backend.ticket_ingestion.providers.asana import AsanaProvider
 from backend.ticket_ingestion.providers.base import (
     ProviderError,
+    TicketNotFound,
     TicketProvider,
     parse_acceptance_criteria,
 )
@@ -23,6 +24,7 @@ from backend.ticket_ingestion.providers.shortcut import ShortcutProvider
 
 __all__ = [
     "ProviderError",
+    "TicketNotFound",
     "TicketProvider",
     "parse_acceptance_criteria",
     "PROVIDER_REGISTRY",

@@ -78,6 +78,12 @@ class Ticket:
     # (Shortcut/Jira/Linear); the pipeline itself never reads it.
     # Empty = unknown.
     state: str = ""
+    # The same state's provider-native id — what a source's ``workflow_state``
+    # ingest filter stores (Shortcut's numeric workflow_state_id, Jira's status
+    # id, Linear's state id). Read by ``ingest_filter_miss`` to re-check a
+    # ticket that waited in the queue before it launches. Empty = unknown, which
+    # that check treats as a pass.
+    state_id: str = ""
     # Display names of the ticket's assignees, best-effort and panel-only like
     # ``state`` — ``owner_ids`` carries opaque ids, and a queue scoped to
     # "anyone" is full of other people's tickets, which are only legible with a

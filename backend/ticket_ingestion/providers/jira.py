@@ -26,6 +26,7 @@ from backend.ticket_ingestion.models import Attachment, Ticket
 from backend.ticket_ingestion.providers.base import (
     HTTP_TIMEOUT,
     ProviderError,
+    TicketNotFound,
     TicketProvider,
     ingests_any_assignee,
     parse_acceptance_criteria,
@@ -260,6 +261,7 @@ class JiraProvider(TicketProvider):
             # assigned-tickets panel matches the two to order its buckets and to
             # tell whether the issue sits in the source's ingest state.
             state=str((fields.get("status") or {}).get("name") or ""),
+            state_id=str((fields.get("status") or {}).get("id") or ""),
         )
 
     async def _search(self, jql: str) -> list[Ticket]:
@@ -335,7 +337,8 @@ class JiraProvider(TicketProvider):
             ) as resp:
                 if resp.status != 200:
                     text = await resp.text()
-                    raise ProviderError(
+                    err = TicketNotFound if resp.status == 404 else ProviderError
+                    raise err(
                         f"Jira API returned {resp.status} for issue {ticket_id}: {text[:200]}"
                     )
                 data = await resp.json()

@@ -18,12 +18,14 @@ from backend.ticket_ingestion.providers import (
     PROVIDER_META,
     PROVIDER_REGISTRY,
     ProviderError,
+    TicketNotFound,
     get_provider,
 )
 from backend.ticket_ingestion.providers.asana import AsanaProvider
 from backend.ticket_ingestion.providers.base import (
     extract_link_attachments,
     has_ingest_label,
+    ingest_filter_miss,
     ingest_label_list,
     ingests_any_assignee,
     parse_acceptance_criteria,
@@ -107,6 +109,20 @@ def test_shortcut_story_keeps_int_id_and_sc_slug():
     )
     assert t.id == 777 and t.slug == "sc-777" and t.provider == "shortcut"
     assert t.acceptance_criteria == ["do it"]
+
+
+@pytest.mark.parametrize(
+    "extra, expected",
+    [
+        ({"workflow_state_id": 500000007}, "500000007"),
+        ({"workflow_state_id": 0}, ""),
+        ({"workflow_state_id": None}, ""),
+        ({}, ""),
+    ],
+)
+def test_shortcut_story_state_id_is_stringified_or_empty(extra, expected):
+    t = story_from_api_response({"id": 7, "name": "X", **extra})
+    assert t.state_id == expected
 
 
 # --------------------------------------------------------------------------- #
@@ -956,6 +972,37 @@ class TestShortcutSearchAssigned:
         assert [b["workflow_state_id"] for b in bodies] == [100, 200]
         # Story 1 (present in both states) de-duped; both stories hydrated.
         assert sorted(t.id for t in out) == [1, 2]
+
+    async def test_hydrated_tickets_carry_the_state_id_the_filter_compares(
+        self, monkeypatch
+    ):
+        """A ticket the scan enqueued and the pre-launch re-fetch must
+        compare like-for-like against the same ``workflow_state`` config."""
+        prov = ShortcutProvider(
+            TicketProviderConfig(
+                provider="shortcut", api_token="t", member_id="m", workflow_state="100"
+            )
+        )
+
+        async def fake_search(body):
+            return [{"id": 1, "name": "a", "created_at": "2025-01-01T00:00:00Z"}]
+
+        async def fake_hydrate(session, sid):
+            return {
+                "id": sid,
+                "name": "full",
+                "description": "d",
+                "created_at": "2025-01-01T00:00:00Z",
+                "workflow_state_id": 100,
+            }
+
+        monkeypatch.setattr(prov, "_search_stories", fake_search)
+        monkeypatch.setattr(prov, "_hydrate_story", fake_hydrate)
+        with _patch_session(_FakeSession()):
+            (ticket,) = await prov.search_assigned(_SINCE)
+
+        assert ticket.state_id == "100"
+        assert ingest_filter_miss(prov.cfg, ticket) == ""
 
 
 # --------------------------------------------------------------------------- #
@@ -1818,12 +1865,29 @@ class TestGithubFetchAndTestConnection:
             t = await prov.fetch("15")
         assert t.id == 15 and t.slug == "gh-15"
 
-    async def test_fetch_non_200_raises(self, monkeypatch):
+    @pytest.mark.parametrize("status", [404, 410])
+    async def test_fetch_of_a_deleted_issue_raises_ticket_not_found(
+        self, monkeypatch, status
+    ):
+        """404 for a missing issue, 410 Gone for a deleted one — both mean a
+        remembered pending marker should be dropped, not retried."""
         prov = self._prov(monkeypatch)
-        session = _FakeSession(get_responses=[_FakeResp(404, text_data="nope")])
+        session = _FakeSession(get_responses=[_FakeResp(status, text_data="nope")])
         with _patch_session(session):
-            with pytest.raises(ProviderError, match="404"):
+            with pytest.raises(TicketNotFound, match=str(status)):
                 await prov.fetch("99")
+
+    @pytest.mark.parametrize("status", [403, 500])
+    async def test_fetch_other_failures_stay_plain_provider_errors(
+        self, monkeypatch, status
+    ):
+        """A rate limit or an outage is "try again later", not "gone"."""
+        prov = self._prov(monkeypatch)
+        session = _FakeSession(get_responses=[_FakeResp(status, text_data="nope")])
+        with _patch_session(session):
+            with pytest.raises(ProviderError, match=str(status)) as info:
+                await prov.fetch("99")
+        assert not isinstance(info.value, TicketNotFound)
 
     async def test_test_connection_success(self, monkeypatch):
         prov = self._prov(monkeypatch)
@@ -1942,8 +2006,10 @@ class TestAsanaHelpers:
     async def test_fetch_not_found_raises(self):
         session = _FakeSession(get_responses=[_FakeResp(200, json_data={"data": None})])
         with _patch_session(session):
-            with pytest.raises(ProviderError, match="not found"):
+            with pytest.raises(TicketNotFound, match="not found") as info:
                 await self._prov().fetch("404")
+        # Still a ProviderError, so every existing ``except ProviderError`` holds.
+        assert isinstance(info.value, ProviderError)
 
     async def test_test_connection_success(self):
         session = _FakeSession(
@@ -2066,11 +2132,37 @@ class TestJiraFetchTestStates:
             t = await self._prov().fetch("P-1")
         assert t.id == "P-1"
 
-    async def test_fetch_non_200_raises(self):
+    async def test_fetch_of_a_missing_issue_raises_ticket_not_found(self):
         session = _FakeSession(get_responses=[_FakeResp(404, text_data="nope")])
         with _patch_session(session):
-            with pytest.raises(ProviderError, match="404"):
+            with pytest.raises(TicketNotFound, match="404"):
                 await self._prov().fetch("P-9")
+
+    @pytest.mark.parametrize("status", [401, 403, 500])
+    async def test_fetch_other_failures_stay_plain_provider_errors(self, status):
+        session = _FakeSession(get_responses=[_FakeResp(status, text_data="nope")])
+        with _patch_session(session):
+            with pytest.raises(ProviderError, match=str(status)) as info:
+                await self._prov().fetch("P-9")
+        assert not isinstance(info.value, TicketNotFound)
+
+    def test_issue_to_ticket_carries_the_status_id_and_name(self):
+        issue = {
+            "key": "P-1",
+            "fields": {
+                "summary": "s",
+                "created": "2025-01-01",
+                "status": {"id": "10001", "name": "Ready for Dev"},
+            },
+        }
+        t = self._prov()._issue_to_ticket(issue)
+        assert t.state_id == "10001" and t.state == "Ready for Dev"
+
+    @pytest.mark.parametrize("fields", [{}, {"status": None}])
+    def test_issue_to_ticket_without_a_status_leaves_both_empty(self, fields):
+        issue = {"key": "P-1", "fields": {"summary": "s", **fields}}
+        t = self._prov()._issue_to_ticket(issue)
+        assert t.state_id == "" and t.state == ""
 
     async def test_test_connection_no_base_url(self):
         identity, err = await self._prov(base_url="").test_connection()
@@ -2190,8 +2282,37 @@ class TestLinearFetchTestStates:
             return {"issue": None}
 
         monkeypatch.setattr(prov, "_gql", fake_gql)
-        with pytest.raises(ProviderError, match="not found"):
+        with pytest.raises(TicketNotFound, match="not found"):
             await prov.fetch("ENG-404")
+
+    async def test_fetch_graphql_failure_stays_a_plain_provider_error(
+        self, monkeypatch
+    ):
+        prov = self._prov()
+
+        async def fake_gql(query, variables):
+            raise ProviderError("Linear GraphQL error: rate limited")
+
+        monkeypatch.setattr(prov, "_gql", fake_gql)
+        with pytest.raises(ProviderError) as info:
+            await prov.fetch("ENG-1")
+        assert not isinstance(info.value, TicketNotFound)
+
+    def test_issue_to_ticket_carries_the_state_id(self):
+        t = self._prov()._issue_to_ticket(
+            {
+                "identifier": "ENG-1",
+                "title": "T",
+                "state": {"id": "5c3e-uuid", "name": "Todo"},
+            }
+        )
+        assert t.state_id == "5c3e-uuid"
+
+    def test_issue_to_ticket_without_a_state_has_no_state_id(self):
+        t = self._prov()._issue_to_ticket(
+            {"identifier": "ENG-1", "title": "T", "state": None}
+        )
+        assert t.state_id == ""
 
     async def test_test_connection_success(self, monkeypatch):
         prov = self._prov()

@@ -29,6 +29,10 @@ from backend.ticket_ingestion.state import (
 )
 from tests._factories import make_ticket
 
+# Captured before the autouse stub below replaces it, for the tests that drive
+# the real re-check through the launch flow.
+_REAL_PRE_LAUNCH_RECHECK = PipelineOrchestrator._ingest_filter_miss_now
+
 
 @pytest.fixture(autouse=True)
 def _isolated_state_dir(tmp_path, monkeypatch):
@@ -65,6 +69,18 @@ def _no_real_subprocess(monkeypatch):
         return proc
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
+
+
+@pytest.fixture(autouse=True)
+def _no_pre_launch_recheck(monkeypatch):
+    """``process_story`` re-reads a queued ticket from its tracker before
+    launching it (tests/unit/test_ingest_filter_recheck.py pins that). These
+    tests build real providers with fake tokens, so stub the re-read out rather
+    than let every launch path make a doomed network call. ``TestPreLaunchRecheck``
+    puts the real one back."""
+    monkeypatch.setattr(
+        PipelineOrchestrator, "_ingest_filter_miss_now", AsyncMock(return_value="")
+    )
 
 
 @pytest.fixture
@@ -472,6 +488,65 @@ class TestIdempotency:
         assert "provisioning exploded" in entries[0]["failure_reason"]
         # And it stays blocked from re-ingestion.
         assert "sc-12345" in load_processed_story_ids(_isolated_state_dir)
+
+
+class TestPreLaunchRecheck:
+    """The real re-check inside the full launch flow (the autouse stub is
+    undone here); the case-by-case pins live in test_ingest_filter_recheck.py."""
+
+    @pytest.fixture(autouse=True)
+    def _real_recheck(self, monkeypatch):
+        monkeypatch.setattr(
+            PipelineOrchestrator, "_ingest_filter_miss_now", _REAL_PRE_LAUNCH_RECHECK
+        )
+
+    @pytest.fixture
+    def gated(self, config):
+        config.ticketing.workflow_state = "500000007"
+        orch = PipelineOrchestrator(config)
+        orch._scanners[0]._provider = MagicMock()
+        orch._provisioner.provision = AsyncMock()
+        orch._claude_runner.invoke = AsyncMock()
+        orch._cs_runner = None
+        return orch
+
+    @pytest.mark.asyncio
+    async def test_a_ticket_moved_out_of_the_ingest_state_never_starts(
+        self, gated, sample_story, _isolated_state_dir
+    ):
+        from backend.ticket_ingestion.state import _read_state
+
+        gated._scanners[0]._provider.fetch = AsyncMock(
+            return_value=make_ticket(id=12345, state_id="500000006")
+        )
+
+        await gated.process_story(sample_story)
+
+        gated._scanners[0]._provider.fetch.assert_awaited_once_with("12345")
+        gated._provisioner.provision.assert_not_called()
+        gated._claude_runner.invoke.assert_not_called()
+        assert _read_state(_isolated_state_dir).get("processed_stories", []) == []
+
+    @pytest.mark.asyncio
+    async def test_a_ticket_still_in_the_ingest_state_runs_to_completion(
+        self, gated, sample_story, _isolated_state_dir
+    ):
+        from backend.ticket_ingestion.state import _read_state
+
+        gated._scanners[0]._provider.fetch = AsyncMock(
+            return_value=make_ticket(id=12345, state_id="500000007")
+        )
+        gated._provisioner.provision.return_value = ProvisionedEnvironment(
+            directory=Path("/tmp/workspaces/shortcut-12345"),
+            branch_name="shortcut/12345",
+            cursor_window_id=999,
+        )
+
+        await gated.process_story(sample_story)
+
+        gated._claude_runner.invoke.assert_awaited_once()
+        entries = _read_state(_isolated_state_dir)["processed_stories"]
+        assert [e["status"] for e in entries] == ["completed"]
 
 
 class TestProcessPR:

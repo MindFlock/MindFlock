@@ -19,6 +19,7 @@ from backend.ticket_ingestion.models import Attachment, Ticket
 from backend.ticket_ingestion.providers.base import (
     HTTP_TIMEOUT,
     ProviderError,
+    TicketNotFound,
     TicketProvider,
     extract_link_attachments,
     has_ingest_label,
@@ -139,6 +140,7 @@ def story_from_api_response(data: dict[str, Any], token: str = "") -> Ticket:
         slug=f"sc-{story_id}",
         source_label="Shortcut",
         labels=_label_names(data),
+        state_id=str(data.get("workflow_state_id") or ""),
     )
 
 
@@ -452,7 +454,8 @@ class ShortcutProvider(TicketProvider):
             async with session.get(url, headers=self._headers()) as resp:
                 if resp.status != 200:
                     text = await resp.text()
-                    raise ProviderError(
+                    err = TicketNotFound if resp.status == 404 else ProviderError
+                    raise err(
                         f"Shortcut API returned {resp.status} for story {ticket_id}: {text[:200]}"
                     )
                 data = await resp.json()

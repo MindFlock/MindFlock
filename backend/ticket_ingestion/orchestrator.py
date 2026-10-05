@@ -21,7 +21,11 @@ from backend.ticket_ingestion.config import (
     source_effort_now,
 )
 from backend.ticket_ingestion.filter import AssigneeFilter
-from backend.ticket_ingestion.providers.base import ingests_any_assignee
+from backend.ticket_ingestion.providers.base import (
+    TicketNotFound,
+    ingest_filter_miss,
+    ingests_any_assignee,
+)
 from backend.ticket_ingestion.issue_monitor import (
     IssueCommentsFetchError,
     IssueMonitor,
@@ -375,6 +379,14 @@ class PipelineOrchestrator:
                 except (asyncio.CancelledError, Exception):
                     pass
 
+    def _scanner_for(self, source_key: str | None) -> BackfillScanner:
+        """The scanner (source + provider) a queued ticket came from; the
+        primary one for an unknown or unstamped key."""
+        for scanner in self._scanners:
+            if scanner._source_key == source_key:
+                return scanner
+        return self._scanners[0]
+
     async def _requeue_pending_stories(self) -> None:
         """Re-enqueue tickets that were enqueued but never picked up.
 
@@ -383,21 +395,33 @@ class PipelineOrchestrator:
         non-empty in-memory queue, those tickets would otherwise be lost
         forever (no ledger entry, checkpoint past their updated_at). Each is
         re-fetched from its source provider so the queued ticket is fresh.
+
+        …and re-checked against its source's ingest filters, because a marker
+        can outlive the reason it was written by days: a burst of new tickets
+        queued behind the session cap, triaged back out of the ingest state,
+        still came back on every restart and launched — straight into the
+        start state, undoing the triage. A ticket that no longer passes, or no
+        longer exists, loses its marker here instead.
         """
         pending = load_pending_stories(_STATE_DIR)
         if not pending:
             return
         processed_ids = load_processed_story_ids(_STATE_DIR)
-        scanners_by_key = {s._source_key: s for s in self._scanners}
         for entry in pending:
             slug = entry.get("story_id")
             if slug in processed_ids:
                 # Already picked up (or terminal) — the marker is stale.
                 remove_pending_story(_STATE_DIR, slug)
                 continue
-            scanner = scanners_by_key.get(entry.get("source_key"), self._scanners[0])
+            scanner = self._scanner_for(entry.get("source_key"))
             try:
                 story = await scanner._provider.fetch(str(entry.get("ticket_id")))
+            except TicketNotFound as e:
+                remove_pending_story(_STATE_DIR, slug)
+                _logger.info(
+                    "Dropped pending ticket %s: it no longer exists (%s).", slug, e
+                )
+                continue
             except Exception as e:  # noqa: BLE001
                 # Keep the marker: the next startup retries the re-fetch.
                 _logger.warning(
@@ -406,6 +430,11 @@ class PipelineOrchestrator:
                     slug,
                     e,
                 )
+                continue
+            miss = ingest_filter_miss(scanner._source, story)
+            if miss:
+                remove_pending_story(_STATE_DIR, slug)
+                _logger.info("Dropped pending ticket %s: %s.", slug, miss)
                 continue
             story.repo_url = scanner._source.repo_url
             # Re-read from disk, like the scanner's own stamp: a ticket pending
@@ -729,6 +758,17 @@ class PipelineOrchestrator:
             )
             return
 
+        # A queued ticket is a snapshot from its scan, and it may have waited
+        # hours behind the session cap. Nothing is recorded when it's dropped:
+        # moved back into the ingest state, it's a fresh poll match again.
+        if isinstance(item, Ticket):
+            miss = await self._ingest_filter_miss_now(story)
+            if miss:
+                _logger.info(
+                    "Not launching %s: %s since it was queued.", story.slug, miss
+                )
+                return
+
         # In-flight marker (guard 2): from here on, concurrent scans and
         # duplicate dequeues treat this story as processed.
         record_processed_story(
@@ -802,6 +842,29 @@ class PipelineOrchestrator:
             status="completed",
             branch=branch,
         )
+
+    async def _ingest_filter_miss_now(self, story: Ticket) -> str:
+        """Why a queued ticket should not launch after all, or ``""``.
+
+        Re-reads the ticket and re-applies its source's ingest filters
+        (:func:`ingest_filter_miss`). A ticket deleted while it waited fails
+        too. A read that fails for any other reason launches the ticket as
+        queued: the scan already vetted it, and a flaky API must not silently
+        eat real work.
+        """
+        scanner = self._scanner_for(story.source_key)
+        try:
+            fresh = await scanner._provider.fetch(str(story.id))
+        except TicketNotFound:
+            return "it no longer exists"
+        except Exception as e:  # noqa: BLE001
+            _logger.warning(
+                "Could not re-check %s before launch (%s); launching it as queued.",
+                story.slug,
+                e,
+            )
+            return ""
+        return ingest_filter_miss(scanner._source, fresh)
 
     async def _fetch_story(self, story_id: int | str) -> Ticket:
         """Full ticket detail for a webhook event, via the active provider."""

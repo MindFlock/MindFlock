@@ -31,6 +31,7 @@ from backend.ticket_ingestion.models import Ticket
 from backend.ticket_ingestion.providers.base import (
     HTTP_TIMEOUT,
     ProviderError,
+    TicketNotFound,
     TicketProvider,
     ingests_any_assignee,
     parse_acceptance_criteria,
@@ -273,7 +274,9 @@ class GithubIssuesProvider(TicketProvider):
             ) as resp:
                 if resp.status != 200:
                     text = await resp.text()
-                    raise ProviderError(
+                    # 410 Gone is what GitHub answers for a deleted issue.
+                    gone = resp.status in (404, 410)
+                    raise (TicketNotFound if gone else ProviderError)(
                         f"GitHub API returned {resp.status} for issue {ticket_id}: {text[:200]}"
                     )
                 issue = await resp.json()
