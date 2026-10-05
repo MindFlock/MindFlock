@@ -98,6 +98,20 @@ def test_pick_start_prefers_the_newest_at_or_above_the_view():
     assert sf.pick_start(hits, 1) == 0
 
 
+def test_burst_ticks_never_resends_a_burst_seen_to_overshoot():
+    # Accelerating wheel: 4 notches moved 6 lines, 12 moved 36. Scaling up
+    # from 4 alone asks for 12 to cover 18 lines, which overshoots both ways
+    # and bounces forever; the overshooting burst bounds it instead.
+    seen = {4: 6, 8: 20, 12: 36, 16: 72}
+    assert 4 <= sf.burst_ticks(seen, 18, 1.0) < 8
+    # Far moves still scale from the biggest burst that fell short.
+    assert sf.burst_ticks(seen, 100, 1.0) == 22
+    # No rates yet: a third of the distance in notches.
+    assert sf.burst_ticks({}, 30, 1.0) == 10
+    # Only an overshoot known: stay under it.
+    assert 1 <= sf.burst_ticks({8: 20}, 10, 1.0) < 8
+
+
 def test_bottom_chrome_matches_pinned_rows_only():
     normal = ["a", "b", "c", "────", "> ", "────", "status"]
     tall = ["x"] * 10 + ["", "", "────", "> ", "────", "status"]
@@ -238,27 +252,8 @@ def test_index_is_the_whole_scrollback_and_leaves_the_view_alone(tui, app):
     assert out.stdout.strip() == "24"
 
 
-# The "wheel" app (accelerating bursts + swallowed reversals + a height cap) is
-# timing-sensitive under CI load: the view can drift off the index twice in a
-# row ("lost track of the view"). Known flake, tracked separately — it still
-# runs and reports, but doesn't block (strict=False).
-_WALK_APPS = [
-    (
-        pytest.param(
-            a,
-            marks=pytest.mark.xfail(
-                strict=False, reason="timing-sensitive wheel simulation under load"
-            ),
-        )
-        if a == "wheel"
-        else a
-    )
-    for a in sorted(APPS)
-]
-
-
 @needs_tmux
-@pytest.mark.parametrize("app", _WALK_APPS)
+@pytest.mark.parametrize("app", sorted(APPS))
 def test_counts_first_then_walks_every_hit_and_wraps(tui, app):
     start, tmux = tui
     name = start(**APPS[app])

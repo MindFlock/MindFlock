@@ -212,6 +212,18 @@ def hook_command(
     running outside tmux), it no-ops (exit 0) and the web layer falls back to
     CPU/pane inspection.
 
+    The lookup targets the hook's OWN pane (``-t $TMUX_PANE``) and never runs
+    without one. A bare ``display-message`` answers for tmux's "current"
+    session, which, with no live pane to anchor it, is whichever session was
+    most recently active, i.e. the window the user is looking at. That was a
+    live incident: closing a ticket window killed its pane, the dying Claude's
+    SessionEnd/Stop hook asked tmux, and the answer was the window the user had
+    focused. That window got an ``idle`` marker and the dead conversation's
+    thread id, so it read idle while it waited on a background agent, and its
+    ``claude agents --json`` live signal (correctly ``busy``) was looked up
+    under the wrong conversation and missed. A dead pane id answers empty, so
+    the hook no-ops.
+
     The MARKER DIRECTORY is resolved at fire-time too, from the hook's own
     environment (``MINDFLOCK_ACTIVITY_MARKER_DIR``, else the real
     ``~/.mindflock-assistant/.activity-markers``) — never baked in at install
@@ -243,10 +255,11 @@ def hook_command(
         "if not isinstance(p,dict):",
         "    p={}",
         "s=os.environ.get('MINDFLOCK_SESSION_NAME') or ''",
-        "if not s:",
+        "tp=os.environ.get('TMUX_PANE') or ''",
+        "if not s and tp:",
         "    try:",
-        "        s=subprocess.run(['tmux','display-message','-p','#{session_name}'],"
-        "capture_output=True,text=True,timeout=5).stdout.strip()",
+        "        s=subprocess.run(['tmux','display-message','-p','-t',tp,"
+        "'#{session_name}'],capture_output=True,text=True,timeout=5).stdout.strip()",
         "    except Exception:",
         "        s=''",
         "if not s:",
@@ -334,10 +347,11 @@ def notification_hook_command(marker_dir=None) -> str:
         'if t.startswith("idle") or "waiting for your input" in m:\n'
         "    sys.exit(0)\n"
         "s=os.environ.get('MINDFLOCK_SESSION_NAME') or ''\n"
-        "if not s:\n"
+        "tp=os.environ.get('TMUX_PANE') or ''\n"
+        "if not s and tp:\n"
         "    try:\n"
-        "        s=subprocess.run(['tmux','display-message','-p','#{session_name}'],"
-        "capture_output=True,text=True,timeout=5).stdout.strip()\n"
+        "        s=subprocess.run(['tmux','display-message','-p','-t',tp,"
+        "'#{session_name}'],capture_output=True,text=True,timeout=5).stdout.strip()\n"
         "    except Exception:\n"
         "        s=''\n"
         "if not s:\n"

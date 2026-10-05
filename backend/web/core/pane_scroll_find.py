@@ -273,6 +273,29 @@ def pick_start(hits: list, anchor: int) -> int:
     return best if best >= 0 else 0
 
 
+def burst_ticks(seen: dict[int, int], n: int, lpn: float) -> int:
+    """Notches to send in one burst to move about ``n`` lines, from ``seen``
+    (burst size → lines it moved). Bracketed between the biggest burst known
+    to fall short and the smallest known to overshoot: apps accelerate a
+    burst, so lines grow faster than notches and scaling up from a small burst
+    alone over-promises — a burst already seen to overshoot is never resent."""
+    under = [k for k, d in seen.items() if d <= n]
+    over = [k for k, d in seen.items() if d > n]
+    lo = max(under) if under else 0
+    if lo:
+        ticks = min(lo * 3, max(1, int(lo * n / max(1, seen[lo]))))
+    else:
+        ticks = max(1, int(n / lpn / 3))
+    hi = min(over) if over else 0
+    if hi and ticks >= hi:
+        if lo >= hi:  # noisy rates (a swallowed notch): trust the overshoot
+            lo = 0
+        lo_d = seen[lo] if lo else 0
+        ticks = lo + int((hi - lo) * (n - lo_d) / max(1, seen[hi] - lo_d))
+        ticks = max(1, lo, min(ticks, hi - 1))
+    return ticks
+
+
 # --------------------------------------------------------------------------- #
 # Driving a pane
 # --------------------------------------------------------------------------- #
@@ -853,6 +876,9 @@ def _navigate(
         seen[k] = max(seen.get(k, 0), d)
     last_top: Optional[int] = None
     last_ticks = 0
+    last_burst = 0  # notches in the last burst, and which way it went
+    last_dir: Optional[bool] = None
+    cap = 0  # most notches a burst may send, once one overshot (0 = none)
     stuck = 0
     scr = p.settle()
     page_lines = float(max(1, (idx.region(p.h)[1] - idx.region(p.h)[0] + 1) // 2))
@@ -879,7 +905,7 @@ def _navigate(
             for _ in range(ticks):
                 p.wheel(delta > 0, 1)
                 time.sleep(0.05)  # lone notches: no acceleration
-            last_ticks = 0
+            last_ticks, last_dir = 0, None
             last_top = top
             new = p.settle(scr, wait=0.3)
             scr = new
@@ -892,16 +918,19 @@ def _navigate(
             ntop = locate(idx.lookup, new, lo, hi)
             if ntop is not None and ntop != top:
                 page_lines = max(1.0, abs(ntop - top) / pages)
-            last_ticks, last_top, scr = 0, top, new
+            last_ticks, last_top, scr, last_dir = 0, top, new, None
             continue
-        under = [k for k, d in seen.items() if d <= n]
-        if under:
-            k = max(under)
-            ticks = min(k * 3, max(1, int(k * n / max(1, seen[k]))))
-        else:
-            ticks = max(1, int(n / idx.lpn / 3))
+        ticks = burst_ticks(seen, n, idx.lpn)
+        if last_dir is not None and last_dir != (delta > 0):
+            # The last burst carried the view over the target: whatever the
+            # rates say, go back with fewer notches than that (acceleration
+            # makes rates over-promise), or two bursts bounce forever.
+            cap = max(1, cap // 2) if cap else max(1, last_burst // 2)
+        if cap:
+            ticks = min(ticks, cap)
         p.wheel(delta > 0, ticks)
         last_ticks, last_top = ticks, top
+        last_burst, last_dir = ticks, delta > 0
         scr = p.settle(scr, wait=0.4)
     lo, hi = idx.region(p.h)
     top = locate(idx.lookup, scr, lo, hi)
