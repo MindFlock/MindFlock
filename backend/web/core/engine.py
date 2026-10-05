@@ -22,6 +22,12 @@ other's dead sessions:
   grace window from creation/last-known activity so in-flight provisioning is
   never culled. Paused sessions are exempt (their worktree is removed by
   design; the branch lives on).
+
+Instances the engine drops on its own (the tombstone convergence above, in
+``Engine.save`` and ``_sync_external_instances``) never pass through a route,
+so the web server registers a removal listener on its engine
+(:meth:`Engine.add_removal_listener`) to run the same per-title teardown the
+delete routes do.
 """
 
 from __future__ import annotations
@@ -32,7 +38,7 @@ import os
 import subprocess
 import threading
 import time
-from typing import Dict, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 from backend import config, log
 from backend import session
@@ -167,6 +173,11 @@ class Engine:
         # helpers can take it again. Never held across slow operations
         # (subprocess calls, Start/Kill) — only around the dict access itself.
         self.lock = threading.RLock()
+        # Called as ``cb(title)`` for every instance THIS engine drops from
+        # ``instances`` on its own (tombstone convergence). Per engine, not
+        # global, so a throwaway Engine (tests, tools) never runs the server's
+        # teardown against the live registry.
+        self.removal_listeners: List[Callable[[str], None]] = []
         # Seed from persisted state so previously-created sessions show up —
         # skipping tombstoned entries (deleted by a co-running server) and
         # instances whose workspace + tmux session are both gone (L1). One bad
@@ -207,6 +218,35 @@ class Engine:
             if log.ErrorLog is not None:
                 log.ErrorLog.Printf("failed to load instances: %v", err)
 
+    def add_removal_listener(self, cb: Callable[[str], None]) -> None:
+        """Register ``cb(title)`` for engine-side removals (idempotent)."""
+        if cb not in self.removal_listeners:
+            self.removal_listeners.append(cb)
+
+    def remove_removal_listener(self, cb: Callable[[str], None]) -> None:
+        """Unregister a removal listener (no-op when absent)."""
+        try:
+            self.removal_listeners.remove(cb)
+        except ValueError:
+            pass
+
+    def _notify_removed(self, titles: Iterable[str]) -> None:
+        """Tell every removal listener about each dropped title.
+
+        Call AFTER the registry and state-file locks are released (a listener
+        may itself save). One title at a time; a failing listener is logged
+        and never raises into the engine.
+        """
+        for title in titles:
+            for cb in list(getattr(self, "removal_listeners", ()) or ()):
+                try:
+                    cb(title)
+                except Exception as err:  # noqa: BLE001 — never break a sync
+                    if log.ErrorLog is not None:
+                        log.ErrorLog.Printf(
+                            "removal listener failed for %s: %v", title, err
+                        )
+
     def default_program(self) -> str:
         """The agent CLI new sessions launch with.
 
@@ -243,6 +283,7 @@ class Engine:
         """
         from backend.session.storage import InstanceData, _marshal_instances
 
+        dropped: List[str] = []
         try:
             now = time.time()
             exclude = set(exclude_titles)
@@ -275,6 +316,7 @@ class Engine:
                             continue
                         if _is_tombstoned(title, _inst_last_seen(inst), tombs):
                             self.instances.pop(title, None)
+                            dropped.append(title)
 
                     mine = [i for i in self.instances.values() if i.Started()]
                 mine_titles = {i.Title for i in mine}
@@ -308,6 +350,8 @@ class Engine:
         except Exception as err:  # noqa: BLE001
             if log.ErrorLog is not None:
                 log.ErrorLog.Printf("failed to save instances: %v", err)
+        # Outside both locks: a listener may itself save.
+        self._notify_removed(dropped)
 
 
 _ENGINE: Optional[Engine] = None
@@ -353,20 +397,26 @@ def _sync_external_instances() -> int:
         pass
     if sig is not None and sig == _LAST_STATE_SIG[0] and _LAST_STATE_SIG[1] is not None:
         tombs = _LAST_STATE_SIG[1]
+        dropped: List[str] = []
         with engine.lock:
             for title, inst in list(engine.instances.items()):
                 if _is_tombstoned(title, _inst_last_seen(inst), tombs):
                     engine.instances.pop(title, None)
+                    dropped.append(title)
+        engine._notify_removed(dropped)
         return 0
     state = config.LoadState()
     tombs = _load_disk_tombstones(state, now)
     _LAST_STATE_SIG[0] = sig
     _LAST_STATE_SIG[1] = tombs
     # Apply other servers' deletions to the in-memory set (convergence).
+    dropped = []
     with engine.lock:
         for title, inst in list(engine.instances.items()):
             if _is_tombstoned(title, _inst_last_seen(inst), tombs):
                 engine.instances.pop(title, None)
+                dropped.append(title)
+    engine._notify_removed(dropped)
     raw = state.GetInstances()
     if isinstance(raw, (bytes, bytearray)):
         raw = bytes(raw).decode("utf-8")

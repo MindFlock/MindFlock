@@ -1,0 +1,25 @@
+     Add hello.txt with greeting message                                                   │                                                                      ✕
+     Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>                              │
+     EOF                                                                                   │1 file changed                                        source: Current ▾
+     )"                                                                                    │
+                                                                                           │hello.txt
+───────────────────────────────────────────────────────────────────────────────────────────│
+ Bash command                                                                              │───────────────────────────────────────────────────────────────────────
+ Stage and commit hello.txt file                                                           │hello.txt (untracked)
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│───────────────────────────────────────────────────────────────────────
+ │ git add hello.txt && git commit -m "$(cat <<'EOF'                                       │New file not yet staged.
+ │ Add hello.txt with greeting message                                                     │Run `git add :/hello.txt` to see line counts.
+ │ Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>                                │
+ │ EOF                                                                                     │
+ │ )"                                                                                      │
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│
+ This command requires approval                                                            │
+                                                                                           │
+ Do you want to proceed?                                                                   │
+ ❯ 1. Yes                                                                                  │
+   2. Yes, and don't ask again for git add and git commit -m ' commands in                 │
+      /home/emandel2630/mindflock-prototypes/mcp-ux/e2e-live/sandbox/home/.mindflock/worktr│
+      es/emandel2630/hello-worker_18dba7241c5af539                                         │
+   3. No                                                                                   │
+                                                                                           │
+ Esc to cancel · Tab to amend                                                              │

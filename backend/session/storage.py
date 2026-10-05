@@ -278,6 +278,17 @@ class InstanceData:
     # pre-feature entries serialize unchanged.
     profile_id: str = ""
     profile_model: str = ""
+    # Lineage: the title of the session that spawned or adopted this one
+    # ("" = a root), and whether an agent created it (set once at create time,
+    # never afterwards). Only emitted when set, so pre-feature entries
+    # serialize unchanged.
+    parent: str = ""
+    spawned: bool = False
+    # The playbook the session was CREATED with ("split" = the New dialog's
+    # "Split across workers": an orchestrator from its first prompt, before it
+    # has spawned anyone). Set once at create time. Only emitted when set, so
+    # pre-feature entries serialize unchanged.
+    playbook: str = ""
 
     def to_dict(self) -> dict:
         """Build the JSON-ready dict, preserving Go field order exactly."""
@@ -308,6 +319,12 @@ class InstanceData:
             d["profile_id"] = self.profile_id
         if self.profile_model:
             d["profile_model"] = self.profile_model
+        if self.parent:
+            d["parent"] = self.parent
+        if self.spawned:
+            d["spawned"] = True
+        if self.playbook:
+            d["playbook"] = self.playbook
         return d
 
     @classmethod
@@ -340,6 +357,9 @@ class InstanceData:
             base_branch=d.get("base_branch", "") or "",
             profile_id=d.get("profile_id", "") or "",
             profile_model=d.get("profile_model", "") or "",
+            parent=d.get("parent", "") or "",
+            spawned=bool(d.get("spawned", False)),
+            playbook=(d.get("playbook") if isinstance(d.get("playbook"), str) else ""),
         )
 
 

@@ -1,0 +1,25 @@
+     Create initial hello.txt file containing 'Hello, World!' greeting.
+     EOF
+     )"
+
+───────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Stage and commit hello.txt file
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ │ git add hello.txt && git commit -m "$(cat <<'EOF'
+ │ Add hello.txt with greeting message
+ │
+ │ Create initial hello.txt file containing 'Hello, World!' greeting.
+ │ EOF
+ │ )"
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ This command requires approval
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for git add and git commit -m ' commands in
+      /home/emandel2630/mindflock-prototypes/mcp-ux/e2e-live2/sandbox/home/.min
+      dflock/worktrees/emandel2630/add-hello-and-bye-files-w1_18dbaaac6caccdd9
+   3. No
+
+ Esc to cancel · Tab to amend

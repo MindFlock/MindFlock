@@ -278,6 +278,27 @@ class ClaudeProvider(BaseProvider):
         # as the generic base does (bare, resume with --continue).
         return super().build_launch_command(ctx)
 
+    # --- MindFlock MCP auto-attach ----------------------------------------- #
+    def mcp_launch_args(self, spec) -> tuple:
+        """``--mcp-config=<run file>`` + ``--allowedTools=<read/message tools>``.
+
+        Both in the single-token ``--opt=value`` form, and that is load-bearing:
+        both options are variadic, and the seed prompt follows the launch args
+        directly (:func:`claude_launch_command`), so the spaced form would
+        swallow the prompt as a second config path ("MCP config file not
+        found: <prompt text>" — reproduced against 2.1.289). Servers from
+        ``--mcp-config`` start without an approval dialog, and the allow list
+        is additive to the user's own permission rules (both verified there).
+        No ``--strict-mcp-config``: the user's own servers keep loading.
+        """
+        from . import mcp_attach
+
+        path = mcp_attach.write_claude_config(spec)
+        return (
+            "--mcp-config=" + path,
+            "--allowedTools=" + ",".join(mcp_attach.claude_tool_names()),
+        )
+
     # --- worktree launcher ------------------------------------------------ #
     def owns_launcher(self, ctx: LaunchContext) -> bool:
         # Claude generates the workspace launcher; in-place sessions borrow a
@@ -356,6 +377,15 @@ class ClaudeProvider(BaseProvider):
             "Type something\\.",  # AskUserQuestion free-text option
             "Chat about this",  # AskUserQuestion footer
         )
+
+    def parse_dialog(self, screen_text: str) -> Optional[dict]:
+        # Permission (Bash / Edit / Tool use — an MCP tool), folder-trust, plan
+        # approval and AskUserQuestion dialogs: a top rule, the heading, the
+        # body, the question and "❯ 1." options (see dialogs.parse_claude,
+        # pinned against golden screens).
+        from . import dialogs
+
+        return dialogs.parse_claude(screen_text)
 
     def working_pane_patterns(self) -> tuple:
         # Claude Code renders an interrupt hint on its status line for the whole

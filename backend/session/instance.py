@@ -91,6 +91,18 @@ class InstanceOptions:
         (``coding_cli.default_launch_args``); a list/tuple (even empty) is
         explicit and used verbatim (the global default is NOT re-applied).
       * ``workspace_path``     - adopt an already-provisioned directory.
+      * ``base_ref``           - plain new-branch worktrees only: cut the new
+        branch from this commit-ish instead of the repo's HEAD (a worker
+        forking from its orchestrator's commit while ``path`` stays the
+        canonical repo root).
+      * ``base_branch``        - the branch to record as the session's
+        ``BaseBranch`` (diff/stage base) instead of the inferred one; only
+        honored together with ``base_ref``.
+      * ``parent``             - title of the session that spawned this one
+        ("" = a root).
+      * ``spawned``            - True when an agent (not a human) created it.
+      * ``playbook``           - the playbook the session was created with
+        ("split" = an orchestrator from its first prompt), "" = none.
     """
 
     def __init__(
@@ -111,6 +123,11 @@ class InstanceOptions:
         in_place: bool = False,
         profile_id: str = "",
         profile_model: str = "",
+        base_ref: str = "",
+        base_branch: str = "",
+        parent: str = "",
+        spawned: bool = False,
+        playbook: str = "",
     ) -> None:
         self.title = title
         self.path = path
@@ -148,6 +165,15 @@ class InstanceOptions:
         # dialog's Model picker). "" = the profile's pin, itself defaulting to
         # the CLI's own model.
         self.profile_model = profile_model
+        # Fork point for a plain new-branch worktree ("" = the repo's HEAD),
+        # and the BaseBranch to record with it ("" = inferred).
+        self.base_ref = base_ref
+        self.base_branch = base_branch
+        # Lineage (see Instance.Parent / Instance.Spawned).
+        self.parent = parent
+        self.spawned = spawned
+        # Instance.Playbook.
+        self.playbook = playbook
 
 
 class Instance:
@@ -193,6 +219,17 @@ class Instance:
         # base via a fallback chain (origin/HEAD -> main/master -> configured
         # base).
         self.BaseBranch: str = ""
+        # Lineage. Parent is the title of the session that spawned (or later
+        # adopted) this one, "" for a root; the web server clears it when that
+        # session leaves, so a reused title never inherits someone's children.
+        # Spawned marks a session an agent created — set once at create time,
+        # never afterwards; it gates the destructive agent-driven operations.
+        self.Parent: str = ""
+        self.Spawned: bool = False
+        # The playbook the session was created with ("split": the New
+        # dialog's "Split across workers" — an orchestrator from its first
+        # prompt, before it has a child). Set once at create time.
+        self.Playbook: str = ""
 
         # Unexported fields.
         self._diff_stats: Optional[git.DiffStats] = None
@@ -201,6 +238,15 @@ class Instance:
         self._workspace_path: str = ""
         self._provision_repo: str = ""
         self._provision_repo_url: str = ""
+        # Create-time fork point / recorded base override for a plain
+        # new-branch worktree (InstanceOptions.base_ref / base_branch). Only
+        # read by the first Start; not persisted.
+        self._base_ref: str = ""
+        self._base_branch_override: str = ""
+        # Whether the launch command _configure_launch_command set carries the
+        # MindFlock MCP attach flags. A session loaded from storage has no
+        # configured command (it relaunches the bare program), hence False.
+        self._mcp_launch_attached: bool = False
         self._started: bool = False
         self._tmux_session: Optional[tmux.TmuxSession] = None
         self._git_worktree: Optional[git.GitWorktree] = None
@@ -232,6 +278,9 @@ class Instance:
             base_branch=self.BaseBranch,
             profile_id=getattr(self, "ProfileId", "") or "",
             profile_model=getattr(self, "ProfileModel", "") or "",
+            parent=getattr(self, "Parent", "") or "",
+            spawned=bool(getattr(self, "Spawned", False)),
+            playbook=getattr(self, "Playbook", "") or "",
         )
 
         if self._git_worktree is not None:
@@ -363,7 +412,8 @@ class Instance:
           * in-place    - run directly in the existing repo at ``self.Path``
             (no worktree, no new branch);
           * from-branch - a worktree checked out from an existing branch;
-          * new-branch  - a worktree on a fresh branch cut from HEAD.
+          * new-branch  - a worktree on a fresh branch cut from HEAD (or from
+            the create-time ``base_ref`` when one was given).
 
         Raises ``RuntimeError`` (wrapping the underlying error) on failure.
         """
@@ -443,11 +493,25 @@ class Instance:
             # K1: an existing branch is its own base (diff vs its origin).
             self.BaseBranch = self._selected_branch
         else:
-            # K1: record the source repo's current branch BEFORE cutting the
-            # worktree — that's the branch the new session forks from.
-            self.BaseBranch = _current_branch_of(self.Path)
+            base_ref = getattr(self, "_base_ref", "") or ""
+            # K1: record the branch the new session forks from BEFORE cutting
+            # the worktree — the source repo's current branch, unless the
+            # creator forked it elsewhere: then the branch it named, else the
+            # ref itself when that is a local branch.
+            self.BaseBranch = (
+                getattr(self, "_base_branch_override", "")
+                or (base_ref if _is_local_branch(self.Path, base_ref) else "")
+                or _current_branch_of(self.Path)
+            )
             try:
-                git_worktree, branch_name = git.NewGitWorktree(self.Path, self.Title)
+                if base_ref:
+                    git_worktree, branch_name = git.NewGitWorktree(
+                        self.Path, self.Title, base_ref=base_ref
+                    )
+                else:
+                    git_worktree, branch_name = git.NewGitWorktree(
+                        self.Path, self.Title
+                    )
             except Exception as err:  # noqa: BLE001
                 raise RuntimeError(
                     "failed to create git worktree: {}".format(err)
@@ -505,6 +569,27 @@ class Instance:
             )
         if _prof_env:
             self.ExtraEnv = {**(self.ExtraEnv or {}), **_prof_env}
+        # MindFlock MCP auto-attach: the provider's flags for this launch (a
+        # per-session --mcp-config run file for Claude, one -c inline table for
+        # Codex) ride in front of the launch args, for the provisioned launcher
+        # and the plain command alike. Per launch, never persisted into
+        # LaunchArgs. () when off / unsupported / anything fails.
+        from backend.providers import mcp_attach as _mcp_attach
+
+        _mcp_args = _mcp_attach.attach_args(
+            _provider,
+            title=self.Title,
+            tmux_name=_ctx.session_name,
+            workdir=_wt_path,
+        )
+        if _mcp_args:
+            _ctx = _dataclasses.replace(
+                _ctx, launch_args=tuple(_mcp_args) + tuple(_ctx.launch_args)
+            )
+        # Whether the command set below really carries them: only once the
+        # launcher is written / the provider built a command (a bare program
+        # runs without any launch args).
+        self._mcp_launch_attached = False
         if self.Provisioned:
             # Provisioned: launch via a wrapper script written into the
             # (now provisioned) workspace. The wrapper exports each
@@ -540,6 +625,7 @@ class Instance:
                     launch_args=_ctx.launch_args,
                 )
                 self._tmux_session.launch_command = launcher
+                self._mcp_launch_attached = bool(_mcp_args)
             except Exception as err:  # noqa: BLE001
                 if log.ErrorLog is not None:
                     log.ErrorLog.Printf("failed to write workspace launcher: %v", err)
@@ -561,9 +647,11 @@ class Instance:
                 _cmd = _provider.build_launch_command(_ctx)
                 if _cmd is not None:
                     self._tmux_session.launch_command = _cmd
+                    self._mcp_launch_attached = bool(_mcp_args)
             except Exception as err:  # noqa: BLE001
                 if log.ErrorLog is not None:
                     log.ErrorLog.Printf("failed to build launch command: %v", err)
+        _mcp_attach.note_launch(_ctx.session_name, self._mcp_launch_attached)
 
     def _cleanup_partial(self) -> None:
         """Tear down resources created by a Start() that failed before completion.
@@ -942,6 +1030,15 @@ class Instance:
         if self.ExtraEnv:
             self._tmux_session.extra_env = dict(self.ExtraEnv)
         start_err = self._tmux_session.start(self._git_worktree.GetWorktreePath())
+        if start_err is None:
+            # A new agent process: it has the MindFlock tools only when the
+            # command it reran was configured with them in this process.
+            from backend.providers import mcp_attach as _mcp_attach
+
+            _mcp_attach.note_launch(
+                getattr(self._tmux_session, "sanitized_name", "") or "",
+                self._mcp_launch_attached,
+            )
         if start_err is not None:
             if log.ErrorLog is not None:
                 log.ErrorLog.Print(start_err)
@@ -1055,20 +1152,41 @@ def provider_default_launch_args(program: str) -> tuple[str, ...]:
     return _provider_default_launch_args(program)
 
 
+def _flag_groups(args) -> list:
+    """Split an argv into flag groups: each ``-``-prefixed token together with
+    the non-flag tokens that follow it (its value(s)); leading positionals form
+    a group of their own."""
+    groups: list = []
+    for a in args or ():
+        if not groups or str(a).startswith("-"):
+            groups.append([a])
+        else:
+            groups[-1].append(a)
+    return [tuple(g) for g in groups]
+
+
 def _merge_launch_args(*groups) -> tuple[str, ...]:
-    """Concatenate arg groups, dropping duplicates while preserving first-seen
-    order — so a flag set both globally and per-session appears exactly once."""
+    """Concatenate arg groups, dropping a repeated FLAG GROUP (a flag together
+    with its value) while preserving first-seen order — so a flag set both
+    globally and per-session appears exactly once.
+
+    De-duplicating per TOKEN tore flag/value pairs apart: defaults
+    ``--model sonnet`` plus ``--model opus`` became ``--model sonnet opus`` (a
+    stray positional, claude's prompt slot), and ``--model opus`` plus
+    ``--fallback-model opus`` lost the second value so the CLI refused to
+    start. Whole groups only: a re-set flag with a DIFFERENT value is kept,
+    later, so the CLI's last-flag-wins rule applies."""
     seen: set = set()
     out: list = []
     for group in groups:
-        for a in group or ():
-            if a not in seen:
-                seen.add(a)
-                out.append(a)
+        for fg in _flag_groups(group):
+            if fg not in seen:
+                seen.add(fg)
+                out.extend(fg)
     return tuple(out)
 
 
-#: Public alias — same de-duplicating concatenation, for callers assembling
+#: Public alias — same group-de-duplicating concatenation, for callers assembling
 #: per-session launch args before :func:`new_instance` sees them.
 merge_launch_args = _merge_launch_args
 
@@ -1119,6 +1237,13 @@ def new_instance(opts: InstanceOptions) -> Instance:
     inst.InPlace = opts.in_place
     inst.ProfileId = getattr(opts, "profile_id", "") or ""
     inst.ProfileModel = getattr(opts, "profile_model", "") or ""
+    inst._base_ref = getattr(opts, "base_ref", "") or ""
+    inst._base_branch_override = (
+        (getattr(opts, "base_branch", "") or "") if inst._base_ref else ""
+    )
+    inst.Parent = getattr(opts, "parent", "") or ""
+    inst.Spawned = bool(getattr(opts, "spawned", False))
+    inst.Playbook = getattr(opts, "playbook", "") or ""
     return inst
 
 
@@ -1272,6 +1397,9 @@ def from_instance_data(data: InstanceData, attach: bool = True) -> Instance:
     inst.BaseBranch = data.base_branch or ""
     inst.ProfileId = data.profile_id or ""
     inst.ProfileModel = data.profile_model or ""
+    inst.Parent = data.parent or ""
+    inst.Spawned = bool(data.spawned)
+    inst.Playbook = data.playbook or ""
     inst._git_worktree = _worktree_from_data(data)
     inst._diff_stats = git.DiffStats(
         added=data.diff_stats.added,
@@ -1303,6 +1431,30 @@ def _current_branch_of(repo_path: str) -> str:
         return r.stdout.strip() if r.returncode == 0 else ""
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _is_local_branch(repo_path: str, name: str) -> bool:
+    """Whether ``name`` is a local branch (``refs/heads/<name>``) of the repo at
+    ``repo_path``. False for an empty name, a commit sha, a tag or any error."""
+    if not name or name.startswith("-"):
+        return False
+    try:
+        r = subprocess.run(
+            [
+                "git",
+                "-C",
+                repo_path,
+                "show-ref",
+                "--verify",
+                "--quiet",
+                "refs/heads/{}".format(name),
+            ],
+            capture_output=True,
+            timeout=_GIT_PROBE_TIMEOUT_SECONDS,
+        )
+        return r.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _remove_all(path: str) -> None:

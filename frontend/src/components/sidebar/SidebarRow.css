@@ -222,6 +222,238 @@
   text-overflow: ellipsis;
 }
 
+/* Lineage (MindFlock MCP): "↳ orch" on a muted sub-line under the name of a
+   session another session's agent spawned or adopted. A sub-line, not a suffix:
+   the row is already full (name, chips, ✕), so an inline suffix was crushed to
+   "↳…" at the default rail width — the one part worth reading cut away. The
+   name keeps its own full line; only child rows grow (~13px), which also reads
+   as hierarchy at a glance. An agent-spawned row tints it with the accent; an
+   adopted human-made child stays plain muted. Hidden while renaming (the class
+   is dropped then), so the inline input keeps the single-line geometry. */
+.inst .meta.has-lineage {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+}
+
+.inst .meta.has-lineage .title {
+  flex: none;
+}
+
+.inst .lineage {
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--muted);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inst .lineage.spawned {
+  color: rgba(var(--accent-rgb), 0.85);
+}
+
+/* --- MindFlock MCP families ----------------------------------------------
+   Workers nest under their orchestrator VISUALLY: from the status dot onwards
+   the row moves right one 14px step per level, and a 1px accent connector
+   runs down from the parent's dot into each worker's. The number column never
+   moves — numbering, Alt+N and drag-and-drop all run off the unmodified rail
+   order (ordering.ts railNesting). The x of each line is set inline by
+   SidebarRow's NestLines, which owns the geometry; these rules paint it. */
+.inst.nest-1 .dot {
+  margin-left: 14px;
+}
+
+.inst.nest-2 .dot {
+  margin-left: 28px;
+}
+
+.inst.nest-3 .dot {
+  margin-left: 42px;
+}
+
+.inst .nl {
+  position: absolute;
+  width: 0;
+  border-left: 1px solid rgba(var(--accent-rgb), 0.45);
+  pointer-events: none;
+}
+
+/* Through-lines of the row: an ancestor's guide (top to bottom). */
+.inst-row > .nl-v {
+  top: 0;
+  bottom: 0;
+}
+
+/* └ into this row's dot. */
+.inst .nl-elbow {
+  top: 0;
+  height: 50%;
+  box-sizing: border-box;
+  border-bottom: 1px solid rgba(var(--accent-rgb), 0.45);
+  border-bottom-left-radius: 5px;
+}
+
+/* ├: a later sibling continues this level's line downwards. */
+.inst .nl-down {
+  top: 50%;
+  bottom: 0;
+}
+
+/* The line dropping from this row's own dot to its first worker; it starts
+   just below the dot rather than across it. */
+.inst .nl-stem {
+  top: calc(50% + 5px);
+  bottom: 0;
+}
+
+/* Whatever hangs under the row (the answer strip, the actions menu). The
+   lines run on through it and across the 4px gap to the next row. */
+.inst-tail {
+  position: relative;
+  display: flow-root;
+}
+
+.inst-tail > .nl-v {
+  top: 0;
+  bottom: -4px;
+}
+
+.inst.nest-1 .inst-actions {
+  padding-left: 44px;
+}
+
+.inst.nest-2 .inst-actions {
+  padding-left: 58px;
+}
+
+.inst.nest-3 .inst-actions {
+  padding-left: 72px;
+}
+
+/* A nested row's strip starts one step right of its connector, which leaves
+   the rail's narrow width to the buttons. A nested row that is ITSELF an
+   orchestrator has its own connector dropping from its dot, so its strip
+   clears that one instead. */
+.inst.nest-1 .flock-answer.fa-rail {
+  margin-left: 47px;
+}
+
+.inst.nest-2 .flock-answer.fa-rail {
+  margin-left: 61px;
+}
+
+.inst.nest-3 .flock-answer.fa-rail {
+  margin-left: 75px;
+}
+
+.inst.nest-1.has-stem .flock-answer.fa-rail {
+  margin-left: 54px;
+}
+
+.inst.nest-2.has-stem .flock-answer.fa-rail {
+  margin-left: 68px;
+}
+
+.inst.nest-3.has-stem .flock-answer.fa-rail {
+  margin-left: 82px;
+}
+
+/* A row carrying an answer strip is focusable (Tab, then 1–9). A mouse click
+   focuses it too; only keyboard focus draws the ring. */
+.inst:focus {
+  outline: none;
+}
+
+.inst:focus-visible {
+  outline: 1px dashed var(--accent);
+}
+
+/* Worker status line (replaces "↳ parent"): what the worker is doing, or
+   what it reported. */
+.inst .lineage.rep-done {
+  color: var(--green);
+}
+
+.inst .lineage.rep-blocked {
+  color: var(--red);
+}
+
+.inst .lineage.rep-ask {
+  color: var(--gold);
+}
+
+.inst .lineage.rep-work,
+.inst .lineage.rep-idle {
+  color: var(--muted);
+}
+
+/* The orchestrator's roll-up, most urgent first; a click opens its Thread. */
+.inst .lineage.workers {
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.inst .lineage.workers:hover,
+.inst .lineage.workers:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.inst .lineage.workers:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+.inst .lineage .needs {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+.inst .lineage .bad {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.inst .lineage .ok {
+  color: var(--green);
+  font-weight: 600;
+}
+
+/* The orchestrator's chip while it sits idle over its workers. "waiting":
+   dashed, some haven't reported. "wrap up": filled and clickable (like the
+   red-zone chip) — it pastes the Wrap up prompt. */
+.inst .stagechip.s-waiting {
+  color: rgba(var(--accent-rgb), 1);
+  background: rgba(var(--accent-rgb), 0.14);
+  border: 1px dashed rgba(var(--accent-rgb), 0.55);
+  padding: 0 6px;
+}
+
+.inst .stagechip.wrapchip {
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+  line-height: inherit;
+  color: #fff;
+  background: rgba(var(--accent-rgb), 0.9);
+  font-weight: 600;
+  flex: none;
+}
+
+.inst .stagechip.wrapchip:hover {
+  filter: brightness(1.15);
+}
+
+.inst .stagechip.wrapchip:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .inst .kill {
   background: none;
   border: none;

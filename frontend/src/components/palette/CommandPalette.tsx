@@ -3,11 +3,16 @@
  * typed text filters (substring beats subsequence). */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { instApi } from "../../api/client";
 import { useConfig, useExtensions } from "../../state/queries";
-import { displayName, useUi } from "../../state/store";
-import { toast } from "../../lib/toast";
+import { useUi } from "../../state/store";
 import { runCommand } from "../../extensions/host";
+import {
+  focusQueueInput,
+  liveChildren,
+  mcpCapable,
+  openPlaybookMenu,
+  runPlaybook,
+} from "../../lib/playbooks";
 import type { KeymapHost } from "../../lib/keymap";
 import {
   commitSession,
@@ -27,28 +32,6 @@ interface PaletteAction {
   label: string;
   hint?: string;
   run(): void;
-}
-
-async function sendMessagePrompt(title: string) {
-  const text = window.prompt("Send a message to " + displayName(title) + ":");
-  if (!text || !text.trim()) return;
-  try {
-    await instApi(title, "/send", { json: { text: text.trim() } });
-    toast("Sent to " + displayName(title));
-  } catch (err) {
-    toast("Send failed: " + ((err as Error).message || ""));
-  }
-}
-
-async function queuePromptPrompt(title: string) {
-  const text = window.prompt("Queue a prompt for " + displayName(title) + " (auto-runs when idle):");
-  if (!text || !text.trim()) return;
-  try {
-    await instApi(title, "/queue", { json: { text: text.trim() } });
-    toast("Queued for " + displayName(title));
-  } catch (err) {
-    toast("Queue failed: " + ((err as Error).message || ""));
-  }
 }
 
 /** Contiguous substring beats a spread-out subsequence; earlier/tighter
@@ -107,8 +90,50 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     const t = ui.focused;
     if (t) {
       acts.push({ label: `Rename… — ${t}`, hint: "display", run: () => ui.openDialogFor("rename", t) });
-      acts.push({ label: `Send message… — ${t}`, hint: "agent", run: () => sendMessagePrompt(t) });
-      acts.push({ label: `Queue prompt… — ${t}`, hint: "auto-run", run: () => queuePromptPrompt(t) });
+      // Both used to ask for the text with window.prompt, which the desktop
+      // app never implements — the entries did nothing there. They now open
+      // the place the text is typed: the Thread composer (as you, Ctrl+Enter
+      // sends) and the Queue tab's own box.
+      acts.push({
+        label: `Send message… — ${t}`,
+        hint: "Ctrl+K S",
+        run: () => ui.threadOpen(t, { composeTo: t }),
+      });
+      acts.push({ label: `Queue prompt… — ${t}`, hint: "auto-run", run: () => focusQueueInput(t) });
+      // Agent teams: the fork-icon menu's playbooks, for a CLI that gets the
+      // MindFlock tools. Each pastes its prompt for you to send; the worker
+      // ones only while the session has workers (the server would omit them).
+      const inst = rows.find((r) => r.title === t);
+      if (inst && mcpCapable(caps, inst)) {
+        acts.push({
+          label: `Split across workers… — ${t}`,
+          hint: "pastes the prompt",
+          run: () => void runPlaybook(t, "split"),
+        });
+        acts.push({
+          label: `Ask a session… — ${t}`,
+          hint: "pastes the prompt",
+          run: () => openPlaybookMenu(t, "ask"),
+        });
+        if (liveChildren(t, rows).length) {
+          acts.push({
+            label: `Check on workers — ${t}`,
+            hint: "pastes the prompt",
+            run: () => void runPlaybook(t, "workers"),
+          });
+          acts.push({
+            label: `Wrap up workers — ${t}`,
+            hint: "pastes the prompt",
+            run: () => void runPlaybook(t, "wrapup"),
+          });
+        }
+        acts.push({
+          label: `Work with other sessions… — ${t}`,
+          hint: "Ctrl+K F",
+          run: () => openPlaybookMenu(t),
+        });
+      }
+      acts.push({ label: `Thread — ${t}`, hint: "Ctrl+K T", run: () => ui.threadOpen(t) });
       if (caps.git) {
         acts.push({ label: `Commit… — ${t}`, hint: "Ctrl+K C", run: () => commitSession(t) });
         acts.push({ label: `Push — ${t}`, hint: "Ctrl+K P", run: () => pushSession(t) });

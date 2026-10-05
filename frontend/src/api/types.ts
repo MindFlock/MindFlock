@@ -158,6 +158,122 @@ export interface Instance {
   /** Red-zone summary for the rail chip (backend/web/core/red_zone_monitor
    * .summary). null/absent = no zones and nothing to say. */
   redzone?: RedZoneSummary | null;
+  /** Lineage (MindFlock MCP): the title of the session that spawned or
+   * adopted this one. "" when there is none OR the stored parent is no longer
+   * a live local session (the server validates lazily). Optional: an older
+   * server doesn't send it. */
+  parent?: string;
+  /** True when an agent created this session (the MCP's spawn_session), as
+   * opposed to a human. Set once at create time, never afterwards. */
+  spawned?: boolean;
+  /** The playbook the session was CREATED with — "split" (the New dialog's
+   * "Split across workers": an orchestrator from its first prompt, before
+   * its first worker exists), "" for none. Set once at create time.
+   * Optional: an older server doesn't send it. */
+  playbook?: string;
+  /** Whether THIS launch of the agent was given the MindFlock MCP attach args.
+   * false = it launched without them (a resume after a server restart, attach
+   * switched off, a CLI that can't take them) — the playbooks would name tools
+   * the agent does not have; null = unknown (adopted from another process).
+   * Optional: an older server doesn't send it. */
+  mcp_attached?: boolean | null;
+  /** On a WORKER's row: the newest `kind=result` message it sent its current
+   * parent (consumed or not), or null when it has not reported. */
+  last_report?: LastReport | null;
+}
+
+/** A worker's report as the rail and the playbook menu read it. `summary` is
+ * server-sanitized and at most 140 chars. */
+export interface LastReport {
+  id: string;
+  status: string;
+  summary: string;
+  ts: number;
+}
+
+// --- Playbooks, dialogs and the Thread (MindFlock MCP, from the UI) ---------
+
+/** One argument a playbook takes. A "session" arg is picked from the flock, a
+ * "text" arg is typed; an optional text arg left empty renders a prompt that
+ * ends on a trailing "…: " so the user types it into the agent instead. */
+export interface PlaybookArg {
+  name: string;
+  label: string;
+  kind: "text" | "session";
+  required: boolean;
+}
+
+/** One named prompt from `GET /api/playbooks`. `available` false comes with
+ * the reason in `disabled_reason`; a `when: has_children` playbook on a
+ * session with no live workers is omitted, never sent disabled. */
+export interface Playbook {
+  id: string;
+  label: string;
+  desc: string;
+  letter: string;
+  args: PlaybookArg[];
+  when?: "any" | "has_children" | string;
+  available: boolean;
+  disabled_reason: string | null;
+}
+
+export interface PlaybooksResponse {
+  playbooks: Playbook[];
+}
+
+/** One option of a CLI's permission/trust dialog (`GET …/dialog`). */
+export interface DialogOption {
+  key: string;
+  label: string;
+  kind: "yes" | "always" | "no" | "other" | string;
+}
+
+/** `GET /api/instances/{t}/dialog`: the prompt a session in `clarify` is
+ * waiting on. `parsed` false = only the best-effort question line. */
+export interface Dialog {
+  id: string;
+  parsed: boolean;
+  question: string;
+  command: string | null;
+  options: DialogOption[];
+  /** Who raised it, from the dialog's tab header — "general-purpose agent"
+   * for a Claude background sub-agent's prompt. Only sent when known. */
+  source?: string;
+}
+
+/** One member of a session's family as `GET …/thread` returns it. */
+export interface ThreadMember {
+  title: string;
+  role: "self" | "parent" | "child" | string;
+  status: string;
+  activity: string;
+  activity_since: number;
+  branch: string;
+  diff_stat: DiffStat | null;
+  created_at: number;
+  last_report: LastReport | null;
+  base_sha: string | null;
+}
+
+/** One entry of the read-only "Between sessions" log (newest last). */
+export interface ThreadItem {
+  type: "spawn" | "message" | "result" | string;
+  id: string;
+  ts: number;
+  from: string;
+  to: string;
+  text: string;
+  status: string | null;
+  state: string | null;
+  base_sha: string | null;
+}
+
+export interface ThreadResponse {
+  title: string;
+  parent: string;
+  members: ThreadMember[];
+  items: ThreadItem[];
+  more: boolean;
 }
 
 // --- Code map + red zones (docs/web-api.md "Code map & red zones") ----------
@@ -412,6 +528,11 @@ export interface Caps {
    * page. Optional so an older server that doesn't report it is treated as
    * capable (feature-detected with `=== false`, never `!caps.github`). */
   github?: boolean;
+  /** MindFlock MCP auto-attach: whether NEW launches attach it (settings
+   * `general.agent_mcp`, overridden off by the server's MINDFLOCK_AGENT_MCP=0)
+   * and which CLIs it attaches to. The one non-boolean cap; absent on an
+   * older server. */
+  agent_mcp?: { enabled: boolean; providers: string[] };
 }
 
 export interface Config {

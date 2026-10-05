@@ -416,6 +416,98 @@ The bundled configs (`codex`, `antigravity`, `aider`, `opencode`, `cline`,
 versions noted in `config.py` (upstream CLIs change flags), and a user TOML with
 the same name overrides the bundled config.
 
+### MindFlock MCP attach (`mcp_launch_args`)
+
+`BaseProvider.mcp_launch_args(spec)` returns the argv tokens that attach the
+MindFlock MCP server to a launch. `spec` is a
+`providers.mcp_attach.McpSpec`: interpreter, `-P -m backend.mcp`, the env with
+the session's title, the server port and the scope. The default is `()`, no
+auto-attach. Two providers override it:
+
+- **`claude`** writes a 0600 run file and returns
+  `--mcp-config=<file>` and `--allowedTools=<the nine read, wait and report tools>`,
+  both in the single-token form, since a spaced value would swallow the seed
+  prompt.
+- **`codex`** returns `-c mcp_servers.mindflock={…}`, one TOML inline table.
+
+The launch sites prepend these tokens to the effective launch args. They
+never go into `build_launch_command` or `write_launcher` themselves, so the
+golden launcher scripts don't change. They are raw argv elements: every
+launch path shell-quotes launch args itself. A provisioned launcher bakes them
+in when it is written, so a relaunch from the web UI compares the baked tokens
+with what `mcp_launch_args` returns now (`mcp_attach.launcher_attach_stale`)
+and rewrites the launcher first when they differ. A TOML-only provider has no
+hook and is not attached; its users register `mindflock mcp` with that CLI by
+hand. See [mcp.md](mcp.md#how-it-gets-attached).
+
+Each launch site also records whether that launch carried the tokens
+(`mcp_attach.note_launch`), which is the session row's `mcp_attached`.
+
+### Reading a dialog (`parse_dialog`)
+
+`BaseProvider.parse_dialog(screen_text)` turns the visible screen of an agent
+blocked in `clarify` into data for the UI's answer buttons, or returns
+`None`. The default is `None` (the UI shows the question line and a button
+that opens the pane). The shared pieces and both layouts live in
+`providers/dialogs.py`:
+
+- **`claude`** reads Claude Code's dialogs: a top rule, the heading (`Bash
+  command`, `Edit file`, `Tool use` for an MCP tool, `Accessing workspace:`
+  for the folder trust gate, plan approval), the command or path, the
+  question and the `❯ 1.` options.
+- **`codex`** reads the approval overlay (`Would you like to run the
+  following command?` / `…make the following edits?`, an optional `Reason:`,
+  the `$ command`) and the trust screen, with `› 1.` options.
+
+A parse requires a numbered option list, numbered from 1 without gaps, with
+the CLI's selection cursor on one of its lines. A numbered list the agent
+merely printed never has the cursor, so it never parses. Options get a `kind`
+from their label: `yes`, `always` ("don't ask again", "allow all edits
+during this session", "auto-accept"), `no` or `other`. Both parsers are
+pinned against golden screens in `tests/unit/data/dialogs/`, which are
+checked against the same provider's `waiting_prompt_patterns` and trust
+patterns so the fixtures can't drift from what the classifier knows. The
+`claude2_*` screens are real Claude Code 2.1.289 captures: the 2.x Bash
+dialog puts the description under the heading and the command in a dashed
+box (`command` is the command, the description goes to the question); an MCP
+`Tool use` call leads its `command` with the argument that names the call,
+chosen by name (`title`, then `session` / `to` / `target`, else the first
+argument with a value — Claude lists arguments in the order the agent wrote
+them); a background sub-agent's tab header ("· from the general-purpose agent
+2 of 3") becomes `source`; a side panel to the right of the dialog is cut
+away. A command (or an option's path) the box hard-wrapped mid-token at the
+pane's edge is joined back without a space; the command's own line breaks (a
+heredoc) stay. The dialog id is built per component — each paragraph above
+the options, then each option as `key:label` — with all whitespace removed;
+an option label, a collapsed tool description and anything cut short with
+`…` contribute only their first 24 characters before the cut
+(`dialogs.ID_PREFIX_CHARS`), so the same dialog keeps one id from 47 to 200
+columns (`claude2_stop_session_w*`, `claude2_spawn_w*`, plus synthetic
+re-wraps checked line for line against those captures). The 2-option variant
+Claude draws at ≤ 80 columns has different keys, so a different id.
+
+Two capabilities sit on top of the parser:
+
+- **`parses_dialogs()`** — True when the provider overrides `parse_dialog`.
+  The activity layer then captures the screen once per probe and reads a
+  parsed dialog as `clarify` **whatever the hook marker says** (Claude's
+  background sub-agents rewrite it while one of them has a prompt up).
+- **`dialog_on_screen(screen_text)`** — the evidence every automated typer
+  (prompt queue, mailbox lane, `delivery: "now"`, `/send` with
+  `dialog_safe`, the playbook render) checks right before typing: a parse, or
+  the provider's waiting / trust phrases in the bottom 15 lines. Looser than
+  the parse on purpose — a false positive only holds a message for a later
+  pass, a miss types into the prompt and its Enter approves it.
+
+Whether an agent CLI is **holding a pane** (the precondition for the mailbox
+lane and `delivery: "now"` to type into it) is decided from the provider
+registry too: a process in the pane's tree whose executable, or whose script
+under `node`/`python`/a shell, is any provider's name, alias, `command` or
+`binary_path`, or the session's own program. A custom TOML provider is
+recognized without any extra configuration. The prompt queue uses a looser
+test, since it types the user's own text: anything but a bare shell in the
+foreground.
+
 ## Connection: install detection
 
 Settings → **Agent providers** surfaces a **connection** view for every

@@ -107,6 +107,10 @@ class Plan:
     workdirs: List[str] = field(default_factory=list)
     #: Orphaned directories under ~/.mindflock/worktrees with no live session.
     orphan_worktrees: List[str] = field(default_factory=list)
+    #: Per-session MCP run files (``~/.mindflock/run/mcp-*.json``, the Claude
+    #: ``--mcp-config`` documents :mod:`backend.providers.mcp_attach` writes).
+    #: Removed even without ``--purge``: they describe sessions that are gone.
+    run_files: List[str] = field(default_factory=list)
     #: Home directories --purge would remove.
     purge_dirs: List[str] = field(default_factory=list)
     #: Non-fatal problems found while planning (unreadable state, etc.).
@@ -220,6 +224,17 @@ def _orphan_worktrees(known: set) -> tuple[List[str], Optional[str]]:
     return out, None
 
 
+def _mcp_run_files() -> List[str]:
+    """The MCP run files on disk (``mcp-*.json`` under the run dir only — never
+    anything else that may share the directory)."""
+    try:
+        from backend.providers import mcp_attach
+
+        return mcp_attach.run_files()
+    except Exception:  # noqa: BLE001 — no resolvable home dir, import trouble
+        return []
+
+
 def build_plan() -> Plan:
     """Survey the machine and return everything uninstall would touch."""
     plan = Plan()
@@ -250,6 +265,7 @@ def build_plan() -> Plan:
     plan.orphan_worktrees, orphan_warning = _orphan_worktrees(known_worktrees)
     if orphan_warning:
         plan.warnings.append(orphan_warning)
+    plan.run_files = _mcp_run_files()
     plan.purge_dirs = home_dirs()
     return plan
 
@@ -443,11 +459,13 @@ def server_is_running(host: Optional[str] = None, port: Optional[int] = None) ->
     Uninstalling under a live server would pull worktrees out from under
     running sessions, so the CLI treats this as a hard stop.
     """
-    try:
-        from backend import client
+    from backend import client
 
+    try:
         client.discover(host, port)
         return True
+    except client.AuthRejected:
+        return True  # it answered — it just won't take our token
     except Exception:  # noqa: BLE001 — ServerNotFound and any probe failure alike
         return False
 
@@ -483,6 +501,18 @@ def execute(
             report.did("deleted orphaned worktree directory %s" % orphan)
         except OSError as err:
             report.failed("could not delete %s: %s" % (orphan, err))
+
+    for path in plan.run_files:
+        if dry_run:
+            report.did("would delete MCP run file %s" % path)
+            continue
+        try:
+            os.remove(path)
+            report.did("deleted MCP run file %s" % path)
+        except FileNotFoundError:
+            pass  # already gone (a session closed since the plan was built)
+        except OSError as err:
+            report.failed("could not delete %s: %s" % (path, err))
 
     if purge:
         for path in plan.purge_dirs:

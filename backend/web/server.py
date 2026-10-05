@@ -24,6 +24,9 @@ events state tick, prompt-queue drain, window-refresh keepalive) plus the
 short-TTL probe memo they share. Helper logic lives in focused modules under
 ``backend/web/core/``:
 
+    agent_io         another agent's view of a session: /output views (last
+                     reply, transcript, screen), /dialog (the parsed dialog)
+                     and /answer (dialog keys)
     agent_sessions   tmux plumbing for the agent/shell panes (ensure/send/kill)
     agent_state      activity detection: working/clarify/idle/offline, stage
     auth             the access-token gate
@@ -37,6 +40,11 @@ short-TTL probe memo they share. Helper logic lives in focused modules under
     events           the event bus behind /api/events
     git_ops          git primitives (branch/sha/dirty/origin probes, caches)
     ide_launch       launching the configured IDE on a folder
+    lineage          parent/child sessions: chain walks, spawn limits, base_ref
+    thread           a session's family thread (members, spawn records, the
+                     mail between them) and the row's last_report
+    mailbox          inter-agent messages: store, exactly-once states, the
+                     typed delivery line (the lane + routes live here)
     mobile_access    phone access: tailscale URLs, QR codes, startup banner
     pane_find        in-place Ctrl+F in a live pane (tmux copy-mode search)
     pane_scroll_find in-place Ctrl+F for apps that scroll themselves (wheel + look)
@@ -86,7 +94,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -121,6 +129,7 @@ from backend.web.core import ports as _ports
 from backend.web.core import issue_start as _issue_start
 from backend.web.core import github_pr as _github_pr
 from backend.web.core import live_stage as _live_stage
+from backend.web.core import mailbox as _mailbox
 from backend.web.core import pr_review as _pr_review
 from backend.web.core import reopen as _reopen
 from backend.web.core import worktree_reclaim as _worktree_reclaim
@@ -138,6 +147,10 @@ from backend.web.core import find_query as _find_query
 from backend.web.core import pane_find as _pane_find
 from backend.web.core import pane_scroll_find as _pane_scroll_find
 from backend.web.core import session_plan as _session_plan
+from backend.web.core import agent_io as _agent_io
+from backend.web.core import lineage as _lineage
+from backend.web.core import thread as _thread
+from backend.mcp import playbooks as _playbooks
 from backend.web.core import test_plans as _test_plans
 from backend.web.core import window_refresh as _window_refresh
 from backend.web.core import worktree_setup as _wt_setup
@@ -277,6 +290,7 @@ from backend.web.core.snapshot import (
     _DIFF_STAT_CACHE,
     _folder_label,
     _instance_json,
+    _live_parent,
     _parse_shortstat,
     _repo_name,
     _session_diff_stat,
@@ -1026,6 +1040,23 @@ def _tmux_client_input_recent(title: str, within: float) -> bool:
 _QUEUE_SEND_GRACE_S = 60.0
 
 
+def _autopilot_running(title: str) -> bool:
+    """Whether a fast-track chain is genuinely mid-flight on ``title``: its
+    record reads ``running`` AND a driver still holds the lease. Bounded by
+    that lease: the driver early-returns WITHOUT claiming on the paths it
+    cannot step (budget lock, missing worktree), so a chain nobody is actually
+    advancing goes lease-stale — "running" alone must not be able to mute or
+    hold a session forever. A file read; call it after the cheaper gates."""
+    run = _autopilot.get(title)
+    if run is None or (run.get("state") or "") != "running":
+        return False
+    try:
+        owner_at = float(run.get("owner_at") or 0.0)
+    except (TypeError, ValueError):
+        return True  # a running record we cannot read: hold, as before
+    return time.time() - owner_at <= _autopilot.LEASE_STALE_S * 2
+
+
 def _note_turn_boundary(title: str, snap: dict, now: float) -> None:
     """Emit ``session.turn_ended`` once per observed work cycle. Never raises.
 
@@ -1135,11 +1166,8 @@ def _note_turn_boundary(title: str, snap: dict, now: float) -> None:
         # paths it cannot step (budget lock, missing worktree), so a chain no
         # driver is actually advancing goes lease-stale and announcements
         # resume — "running" alone must not be able to mute a session forever.
-        run = _autopilot.get(title)
-        if run is not None and (run.get("state") or "") == "running":
-            owner_at = float(run.get("owner_at") or 0.0)
-            if time.time() - owner_at <= _autopilot.LEASE_STALE_S * 2:
-                return
+        if _autopilot_running(title):
+            return
         # Claiming the evidence is what grants permission to speak: two
         # unsynchronised tickers can reach this line in the same instant, and
         # only one of them can win the clear.
@@ -1246,6 +1274,65 @@ def _free_untitled() -> str:
     return title
 
 
+def _provider_seeds_prompt(program: str) -> bool:
+    """Whether a plain session's initial prompt must NOT be held in the prompt
+    queue: the provider declares a ``prompt_arg`` (the launch command carries
+    it), or the program is a bare shell — whose "prompt" the queue drain would
+    type into bash, which runs it. An unknown program resolves to ``generic``
+    with no ``prompt_arg`` and so reads as "no" (held, typed once idle); only
+    a provider lookup that RAISES reads as yes."""
+    try:
+        exe = os.path.basename((program or "").split()[0]).lower()
+    except IndexError:
+        exe = ""
+    if exe in _BARE_SHELLS:
+        return True
+    try:
+        return bool(providers.resolve(program or "").launcher_spec().prompt_arg)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _session_branch_name(title: str) -> str:
+    """The branch a plain worktree session titled ``title`` gets
+    (``<branch_prefix><title>``, sanitized exactly as ``new_git_worktree``
+    builds it); "" when the config cannot be read."""
+    try:
+        from backend.config import config as _config
+        from backend.session.git.worktree import sanitize_branch_name
+
+        return sanitize_branch_name(
+            "{}{}".format(_config.LoadConfig().branch_prefix, title)
+        )
+    except Exception:  # noqa: BLE001 — the engine's own check is the backstop
+        return ""
+
+
+#: Recent background-Start failures: title -> {"error", "ts"}. A create answers
+#: 202 before Start runs, so a caller polling the listing only ever sees the row
+#: vanish; ``GET /api/create_failures`` hands it the reason (the same text the
+#: ``session.create_failed`` event carries). Bounded and short-lived.
+_CREATE_FAILURES: Dict[str, dict] = {}
+_CREATE_FAILURES_LOCK = threading.Lock()
+_CREATE_FAILURE_TTL_S = 600.0
+_CREATE_FAILURES_MAX = 64
+
+
+def _note_create_failure(title: str, error: str) -> None:
+    now = time.time()
+    with _CREATE_FAILURES_LOCK:
+        for t in [
+            t
+            for t, rec in _CREATE_FAILURES.items()
+            if now - rec.get("ts", 0.0) > _CREATE_FAILURE_TTL_S
+        ]:
+            _CREATE_FAILURES.pop(t, None)
+        _CREATE_FAILURES[title] = {"error": str(error), "ts": now}
+        while len(_CREATE_FAILURES) > _CREATE_FAILURES_MAX:
+            oldest = min(_CREATE_FAILURES, key=lambda t: _CREATE_FAILURES[t]["ts"])
+            _CREATE_FAILURES.pop(oldest, None)
+
+
 def _drop_failed_start(title: str, inst) -> bool:
     """Clear the registry entry a failed background ``Start`` left behind, and
     say whether this failure is ours to report.
@@ -1268,10 +1355,117 @@ def _drop_failed_start(title: str, inst) -> bool:
     """
     with ENGINE.lock:
         current = ENGINE.instances.get(title)
-        if current is inst:
+        popped = current is inst
+        if popped:
             ENGINE.instances.pop(title, None)
-            return True
-        return current is None
+    if popped:
+        _on_session_removed(title)
+        return True
+    return current is None
+
+
+# --------------------------------------------------------------------------- #
+# Session removal: the one teardown every exit path runs.
+#
+# An instance leaves ``ENGINE.instances`` through many doors — DELETE, /close,
+# /cleanup, a workspace deleted from Settings, a background Start that failed
+# (_drop_failed_start), and the engine's own tombstone convergence. Each route
+# keeps its own specific teardown (tmux, worktree, ports, …); what every one of
+# them owes the REST of the flock goes through ``_on_session_removed``.
+# --------------------------------------------------------------------------- #
+#: Extra per-title cleanups run after a session is removed, in order, each
+#: called as ``hook(title)`` and isolated (a failing hook is logged and the
+#: rest still run). Features that keep per-title state elsewhere (a mailbox,
+#: a per-session run file) append their forget function here.
+_SESSION_REMOVED_HOOKS: list = []
+# A removed session's inbox goes with it (a reused title must not read the
+# old mail).
+_SESSION_REMOVED_HOOKS.append(_mailbox.drop)
+
+
+def _forget_mcp_run_file(title: str) -> None:
+    """Delete the session's auto-attach MCP run file (Claude's per-launch
+    ``--mcp-config``); a relaunch writes it afresh."""
+    from backend.providers import mcp_attach as _mcp_attach
+
+    _mcp_attach.forget(tmux.to_mindflock_tmux_name(title))
+
+
+_SESSION_REMOVED_HOOKS.append(_forget_mcp_run_file)
+
+
+def _orphan_children(title: str) -> list:
+    """Clear ``Parent`` on every instance whose parent is ``title``; persist
+    when any changed. Returns the orphaned titles.
+
+    Titles are reused (``untitled-2`` comes straight back), and a parent link
+    is authority — an orchestrator manages its children — so a dangling link
+    must never be inherited by whichever session takes the name next.
+    """
+    if not title:
+        return []
+    with ENGINE.lock:
+        orphans = [
+            t
+            for t, i in ENGINE.instances.items()
+            if t != title and (getattr(i, "Parent", "") or "") == title
+        ]
+        for t in orphans:
+            ENGINE.instances[t].Parent = ""
+    if orphans:
+        ENGINE.save()
+    return orphans
+
+
+def _orphan_dangling_parents() -> list:
+    """The backstop sweep behind :func:`_orphan_children`: clear any ``Parent``
+    that does not name a live session (a removal that slipped past every hook,
+    or a parent that never came back after a restart). Persists only when
+    something changed; returns the titles it detached."""
+    with ENGINE.lock:
+        live = set(ENGINE.instances)
+        stale = [
+            t
+            for t, i in ENGINE.instances.items()
+            if (getattr(i, "Parent", "") or "")
+            and (i.Parent not in live or i.Parent == t)
+        ]
+        for t in stale:
+            ENGINE.instances[t].Parent = ""
+    if stale:
+        ENGINE.save()
+    return stale
+
+
+def _on_session_removed(title: str) -> None:
+    """Run the flock-wide teardown for a session that just left the registry.
+
+    Call AFTER the instance is popped (and outside ``ENGINE.lock``): orphans its
+    children, then runs every :data:`_SESSION_REMOVED_HOOKS` entry. Never
+    raises — a removal has already happened and must not be reported as failed
+    because some cleanup did.
+    """
+    try:
+        _orphan_children(title)
+    except Exception as err:  # noqa: BLE001
+        if log.ErrorLog is not None:
+            log.ErrorLog.Printf("orphaning children of %s failed: %v", title, err)
+    for hook in list(_SESSION_REMOVED_HOOKS):
+        try:
+            hook(title)
+        except Exception as err:  # noqa: BLE001
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf(
+                    "session-removed hook %s failed for %s: %v",
+                    getattr(hook, "__name__", hook),
+                    title,
+                    err,
+                )
+
+
+# The engine drops instances on its own too (another MindFlock deleted them —
+# tombstone convergence); those removals get the same teardown.
+ENGINE.add_removal_listener(_on_session_removed)
 
 
 def _forget_probes(title: str) -> None:
@@ -1675,7 +1869,15 @@ def _send_queued_item(title: str, name: str, nxt: dict, rec: dict, now: float) -
     """Send one queued item to the agent and record it: pop/requeue in the
     store, disarm + stamp the drain record, and emit ``session.prompt_sent``.
     Shared by the idle send path and the usage-limit auto-resume path. Returns
-    whether the send landed (False leaves the item in place to retry)."""
+    whether the send landed (False leaves the item in place to retry).
+
+    The screen-evidence guard runs last, on a fresh capture: a dialog on
+    screen holds the item whatever the activity said (its Enter would pick
+    the highlighted option)."""
+    inst = ENGINE.instances.get(title)
+    if inst is not None and _dialog_on_screen(inst, name):
+        rec["idle_since"] = None
+        return False
     if not _send_to_agent(name, nxt["text"], submit=True):
         return False
     entry = _prompt_queue.record_sent(title, nxt["id"])
@@ -1702,6 +1904,81 @@ def _send_queued_item(title: str, name: str, nxt: dict, rec: dict, now: float) -
     return True
 
 
+def _dialog_on_screen(inst, name: str) -> bool:
+    """THE SCREEN-EVIDENCE GUARD every automated typer checks right before it
+    types: whether tmux session ``name``'s visible screen shows a live dialog,
+    by the session's provider (``BaseProvider.dialog_on_screen``: a parse, or
+    its waiting/trust phrases in the bottom lines).
+
+    Screen evidence beats the activity reading. The reading is assembled
+    from hook markers a background sub-agent can rewrite while its
+    permission prompt is up, and the live E2E run lost exactly that race:
+    the orchestrator read idle for 15 s with a sub-agent's ``answer_prompt``
+    dialog on screen, the mailbox lane typed a worker's result into it, and
+    the line's Enter approved the dialog (defect F). One ``capture-pane``;
+    a True answer HOLDS the text for a later pass, never drops it.
+
+    A capture that fails is no evidence either way (False): the session is
+    gone or tmux is down, and the typer's own send fails on its own."""
+    try:
+        provider = providers.resolve(getattr(inst, "Program", "") or "")
+    except Exception:  # noqa: BLE001 — an unresolvable CLI: the patterns are gone
+        return False
+    text, err = _agent_io.capture_screen(name)
+    if err is not None or not text:
+        return False
+    probe = getattr(provider, "dialog_on_screen", None)
+    try:
+        return bool(probe(text)) if callable(probe) else False
+    except Exception:  # noqa: BLE001 — evidence we can't read is no evidence
+        return False
+
+
+def _typing_held(inst, title: str) -> bool:
+    """The session-level gates every automatic typer obeys (the prompt-queue
+    drain and the mailbox delivery lane): not started / paused, over budget,
+    or the worktree's setup pass still running or failed. An instance whose
+    state cannot be read counts as held."""
+    try:
+        if not inst.Started() or inst.Status == session.Paused:
+            return True
+    except Exception:  # noqa: BLE001
+        return True
+    if _budget_locked(title):
+        return True  # over budget — hold until the user raises it
+    # O2: hold while the worktree's setup pass is running or failed — the deps
+    # the prompt needs aren't there yet (the held initial prompt from create
+    # lands in the queue too, so it can't get lost: #2847).
+    try:
+        _wt = inst.GetWorktreePath()
+    except Exception:  # noqa: BLE001
+        _wt = ""
+    if _wt:
+        _setup_st = _wt_setup.setup_status(_wt)
+        if _setup_st and _setup_st.get("state") in ("running", "failed"):
+            return True
+    return False
+
+
+def _idle_settled(rec: dict, title: str, now: float, since: float = 0.0) -> bool:
+    """Whether ``title``'s idle reading has PERSISTED long enough to type into.
+
+    ``rec["idle_since"]`` is the caller's dwell timer (the caller clears it on
+    any non-idle reading). The first idle sighting only starts it; after that
+    the settle is tiered by the reading's source — see _QUEUE_IDLE_SETTLE.
+    ``since`` restarts a dwell that began at or before it: something else
+    typed into the session then, so "idle ever since" is no longer known."""
+    if rec.get("idle_since") is None or rec["idle_since"] <= since:
+        rec["idle_since"] = now
+        return False
+    settle = (
+        _QUEUE_IDLE_SETTLE_MARKER
+        if _agent_state.reading_is_authoritative(title, "idle")
+        else _QUEUE_IDLE_SETTLE
+    )
+    return now - rec["idle_since"] >= settle
+
+
 def _drain_one_queue(title: str) -> None:
     """One drain decision for a single session. Never raises."""
     st = _prompt_queue.get_state(title)
@@ -1710,24 +1987,8 @@ def _drain_one_queue(title: str) -> None:
     inst = ENGINE.instances.get(title)
     if inst is None:
         return
-    try:
-        if not inst.Started() or inst.Status == session.Paused:
-            return
-    except Exception:  # noqa: BLE001
+    if _typing_held(inst, title):
         return
-    if _budget_locked(title):
-        return  # over budget — hold the queue until the user raises it
-    # O2: hold queued prompts while the worktree's setup pass is running or
-    # failed — the deps the prompt needs aren't there yet (the held initial
-    # prompt from create lands here too, so it can't get lost: #2847).
-    try:
-        _wt = inst.GetWorktreePath()
-    except Exception:  # noqa: BLE001
-        _wt = ""
-    if _wt:
-        _setup_st = _wt_setup.setup_status(_wt)
-        if _setup_st and _setup_st.get("state") in ("running", "failed"):
-            return
     rec = _QUEUE_STATE.setdefault(
         title,
         {"armed": True, "sent_at": 0.0, "rebooted_at": 0.0, "idle_since": None},
@@ -1808,15 +2069,9 @@ def _drain_one_queue(title: str) -> None:
     # working marker, which otherwise let the drain fire a prompt prematurely.
     if now - rec.get("rebooted_at", 0.0) < _QUEUE_BOOT_GRACE:
         return  # we only just relaunched it; let the CLI draw its prompt
-    if rec.get("idle_since") is None:
-        rec["idle_since"] = now
-        return
-    settle = (
-        _QUEUE_IDLE_SETTLE_MARKER
-        if _agent_state.reading_is_authoritative(title, "idle")
-        else _QUEUE_IDLE_SETTLE
-    )
-    if now - rec["idle_since"] < settle:
+    # A mailbox delivery typed into this session restarts the dwell too.
+    mail_sent = (_MAIL_STATE.get(title) or {}).get("sent_at", 0.0)
+    if not _idle_settled(rec, title, now, since=mail_sent):
         return
     # A send that never started a turn (it landed while the CLI sat on a
     # usage-limit screen, or the turn finished between two 5s polls) leaves
@@ -1829,10 +2084,12 @@ def _drain_one_queue(title: str) -> None:
         and now - rec.get("sent_at", 0.0) >= _QUEUE_REARM_IDLE
     ):
         rec["armed"] = True
-    # send the next prompt if armed + past the send cooldown.
+    # send the next prompt if armed + past the send cooldown (which counts a
+    # mailbox delivery as a send: two typers, one keyboard).
     if (
         not rec.get("armed", True)
         or now - rec.get("sent_at", 0.0) < _QUEUE_SEND_COOLDOWN
+        or now - mail_sent < _QUEUE_SEND_COOLDOWN
     ):
         return
     # Loop timer: with loop on and an interval set, only send every N minutes
@@ -1847,6 +2104,14 @@ def _drain_one_queue(title: str) -> None:
         return
     name, err = _ensure_agent_session(inst, title)
     if err is not None:
+        return
+    # Never type into a bare shell: a provisioned launcher that dropped to
+    # ``bash -i`` (or a shell/wrapper program) reads idle under the bare-shell
+    # rule, and the prompt — plus Enter — would run as commands. The looser
+    # test (no ``program``): a queued prompt is the user's own text, and a
+    # positive name match that missed some CLI would stall the queue for good.
+    if not _pane_holds_agent(name):
+        rec["idle_since"] = None
         return
     # Usage-limit gate: if the pane shows a limit that hasn't reset yet, either
     # hold (wait_for_limit on — the UI shows the countdown and a later pass sends
@@ -1941,6 +2206,8 @@ def _watch_one_limited(title: str) -> None:
     if resume:
         _send_escape_to_agent(name)  # drop the lingering limit menu
         time.sleep(0.15)  # let the CLI redraw its prompt before we type
+        if _dialog_on_screen(inst, name):
+            return  # the menu (or another prompt) is still up: next pass
         if _send_to_agent(name, _LIMIT_RESUME_PROMPT, submit=True):
             rec["armed"] = False
             rec["sent_at"] = now
@@ -1972,13 +2239,226 @@ def _watch_limited_sessions() -> None:
             pass
 
 
+# --- Mailbox delivery lane --------------------------------------------------- #
+# Types inter-agent messages (core.mailbox) into idle recipients. A lane of its
+# own, NOT the prompt queue: routing messages through the queue would re-enable
+# a queue the user paused, re-type them forever under ``loop``, put them in the
+# user's Queue tab, and — through the drain's offline path — reboot agents the
+# user stopped. Here a message stays ``pending`` in the mailbox until every
+# gate below passes, and is typed at most once (claimed under the mailbox lock
+# before typing, so an inbox fetch that got there first wins outright):
+#   * the session-level gates the queue obeys (_typing_held): started, not
+#     paused, not over budget, setup not running/failed;
+#   * no long-poll on the recipient's inbox (that poll is about to hand the
+#     message over itself), no fast-track chain mid-flight;
+#   * not inside the queue's post-reboot grace, and the CLI's tmux session
+#     alive — the lane NEVER boots an agent; offline / paused / loading wait;
+#   * activity ``idle``, settled exactly as the queue settles it, and past the
+#     queue's send cooldown counted across BOTH typers; clarify / limit wait;
+#   * human intent first: a queued user prompt that is ready goes before any
+#     message (the message waits for the next settled idle).
+# Typing goes straight through _send_to_agent: never _note_human_input (an
+# agent wrote this, not the person at the keys) and never the user's queue.
+_MAIL_STATE: Dict[str, dict] = {}  # title -> {"idle_since", "sent_at"}
+#: ``_mail_type``'s answer when the recipient's screen showed a dialog.
+_MAIL_ON_PROMPT = "on_prompt"
+#: Boxes whose recipient is no longer live are pruned only once their newest
+#: message is this old — a title another server just created may not have
+#: reached this process's engine yet, and its first message must survive that.
+_MAIL_PRUNE_AFTER_S = 600.0
+
+
+def _mail_provider_name(inst) -> str:
+    """The recipient's provider name, which picks the reply-hint wording."""
+    try:
+        return providers.resolve(getattr(inst, "Program", "") or "").name
+    except Exception:  # noqa: BLE001 — the hint degrades to the generic wording
+        return ""
+
+
+def _mail_type(inst, title: str, name: str, msg: dict, now: float):
+    """Claim ``msg`` and type its one-line rendering into tmux session ``name``
+    → the message's new state (``"delivered"``, or ``"held"`` when only a
+    long-body notice was typed), :data:`_MAIL_ON_PROMPT` when the screen
+    showed a dialog (nothing claimed, nothing typed — the screen-evidence
+    guard, which outranks the activity reading the caller gated on), or None
+    when nothing was typed (an inbox fetch consumed it first, or tmux refused
+    — the claim is then released so a later pass retries). Shared by the
+    lane and ``delivery: "now"``."""
+    if _dialog_on_screen(inst, name):
+        rec = _MAIL_STATE.setdefault(title, {"idle_since": None, "sent_at": 0.0})
+        rec["idle_since"] = None
+        return _MAIL_ON_PROMPT
+    line, full = _mailbox.render_delivery(msg, _mail_provider_name(inst))
+    state = "delivered" if full else "held"
+    claimed = _mailbox.claim(
+        title,
+        msg["id"],
+        state=state,
+        detail="" if full else _mailbox.long_notice_detail(),
+        now=now,
+    )
+    if claimed is None:
+        return None
+    if not _send_to_agent(name, line, submit=True):
+        _mailbox.release(title, msg["id"])
+        return None
+    rec = _MAIL_STATE.setdefault(title, {"idle_since": None, "sent_at": 0.0})
+    rec["sent_at"] = now
+    rec["idle_since"] = None
+    if log.ErrorLog is not None:
+        try:
+            log.ErrorLog.Printf(
+                "[MONITORING] mailbox typed %s from %r into %s (%s)",
+                msg["id"],
+                msg.get("from") or "",
+                title,
+                state,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return state
+
+
+def _queue_wants_turn(title: str, now: float) -> bool:
+    """Whether the user's prompt queue would send into ``title`` at its next
+    settled idle — in which case a pending message waits behind it. Mirrors
+    the queue's own send conditions (enabled, an item, armed, outside its loop
+    interval and any usage-limit hold) so a queue that is NOT going to send (a
+    timed loop between rounds, a paused queue) cannot starve the mailbox."""
+    st = _prompt_queue.get_state(title)
+    if not st["enabled"] or not st["items"]:
+        return False
+    if not (_QUEUE_STATE.get(title) or {}).get("armed", True):
+        return False
+    interval = int(st.get("loop_interval") or 0)
+    if st["loop"] and interval > 0:
+        last = st.get("last_sent") or 0.0
+        if last and now - last < interval * 60:
+            return False
+    return _session_limited_until(title) <= now
+
+
+def _pane_holds_agent(name: str, program: Optional[str] = None) -> bool:
+    """Whether an agent CLI (not a bare shell) holds tmux session ``name``'s
+    pane — the precondition for typing a mailbox line or a queued prompt.
+
+    A provisioned launcher drops to ``exec bash -i`` when the user quits the
+    agent on purpose, and that pane still reads ``idle`` (a SessionEnd/Stop
+    marker, or the bare-shell rule): typing there hands agent-written text to
+    the shell, which runs it.
+
+    With ``program`` (the session's ``Program``) the answer needs POSITIVE
+    evidence: an agent CLI's executable somewhere in the pane's process tree
+    (:func:`agent_state._pane_runs_agent`). Any non-shell foreground used to
+    count — so after a quit, ``vim``/``ssh prod``/``psql`` started in that
+    shell read as the agent and a sibling's message was typed into them, with
+    Enter (over ssh, a backticked command in it ran on the remote host).
+    Without ``program`` the older, looser test applies: a non-shell
+    foreground, or a bare-shell foreground with a live non-shell descendant.
+    When tmux cannot say, the exit marker for this incarnation decides."""
+    try:
+        fg, created, pane_pid, _size = _pane_meta(name)
+        if fg:
+            if program is not None:
+                names = _agent_state.agent_process_names(program)
+                if names:
+                    return bool(_agent_state._pane_runs_agent(pane_pid, names))
+            if fg.lower() not in _BARE_SHELLS:
+                return True
+            return bool(_pane_has_agent_process(pane_pid))
+        return not _agent_exited(name, created)
+    except Exception:  # noqa: BLE001 — can't tell: don't type blind
+        return False
+
+
+def _human_at_keys(title: str, probe_tmux: bool = True) -> bool:
+    """A person typed into ``title``'s window within ``_HUMAN_HOLD_S`` — a
+    half-written prompt fires no hook, so activity still reads idle, and the
+    lane's Enter would submit it merged with an agent's message. The web
+    stamp is a dict read; the tmux client probe (raw ``tmux attach`` / SSH)
+    shells out, so callers ask for it last."""
+    if time.time() - _HUMAN_INPUT_AT.get(title, 0.0) < _HUMAN_HOLD_S:
+        return True
+    return bool(probe_tmux and _tmux_client_input_recent(title, _HUMAN_HOLD_S))
+
+
+def _drain_one_mailbox(title: str) -> None:
+    """One delivery decision for one recipient: type at most its oldest pending
+    message. Never reboots, never types into clarify/limit/offline."""
+    inst = ENGINE.instances.get(title)
+    if inst is None:
+        return
+    msg = _mailbox.next_pending(title)
+    if msg is None:
+        return
+    rec = _MAIL_STATE.setdefault(title, {"idle_since": None, "sent_at": 0.0})
+    now = time.time()
+    if _typing_held(inst, title) or _mailbox.waiter_active(title, now):
+        rec["idle_since"] = None
+        return
+    q = _QUEUE_STATE.get(title) or {}
+    if now - q.get("rebooted_at", 0.0) < _QUEUE_BOOT_GRACE:
+        return  # the queue just relaunched it; let the CLI draw its prompt
+    # Deliberately UNCACHED, for the queue's reason: a memoized idle from
+    # before the last send could type a second message into a live turn.
+    activity = _agent_activity(inst, title)
+    if activity != "idle":
+        rec["idle_since"] = None  # working / clarify / limit / offline: wait
+        return
+    if _human_at_keys(title, probe_tmux=False):
+        rec["idle_since"] = None  # someone is mid-composition in this pane
+        return
+    last_typed = max(q.get("sent_at", 0.0), rec.get("sent_at", 0.0))
+    if not _idle_settled(rec, title, now, since=last_typed):
+        return
+    if now - last_typed < _QUEUE_SEND_COOLDOWN:
+        return
+    if _queue_wants_turn(title, now) or _autopilot_running(title):
+        return
+    name = _live_session_name(tmux.to_mindflock_tmux_name(title))
+    if name is None:
+        return  # never boot it: delivery resumes once someone starts it
+    if not _pane_holds_agent(name, getattr(inst, "Program", "") or ""):
+        rec["idle_since"] = None  # the agent quit: a bare shell would RUN it
+        return
+    if _refresh_limit_state(inst, title, name) > now:
+        return  # an idle prompt sitting under a usage-limit banner
+    if _tmux_client_input_recent(title, _HUMAN_HOLD_S):
+        rec["idle_since"] = None  # typing through a raw tmux client / SSH
+        return
+    _mail_type(inst, title, name, msg, now)
+
+
+def _drain_mailboxes() -> None:
+    """One pass of the mailbox delivery lane — run after the prompt queue's,
+    so a user prompt sent this pass holds the lane through the shared
+    cooldown. Never raises."""
+    try:
+        _mailbox.prune(
+            list(ENGINE.instances.keys()),
+            older_than=time.time() - _MAIL_PRUNE_AFTER_S,
+        )
+        titles = _mailbox.pending_titles()
+    except Exception:  # noqa: BLE001 — an unreadable store skips this pass
+        return
+    for title in titles:
+        try:
+            _drain_one_mailbox(title)
+        except Exception:  # noqa: BLE001 — one bad session can't stop the lane
+            pass
+    for gone in [t for t in _MAIL_STATE if t not in ENGINE.instances]:
+        _MAIL_STATE.pop(gone, None)
+
+
 def _drain_prompt_queues() -> None:
     """One pass over every session with a queue, plus every session parked on a
-    usage-limit screen. Runs in a worker thread (it shells out to tmux) so it
-    never blocks the event loop."""
+    usage-limit screen, then the mailbox delivery lane. Runs in a worker thread
+    (it shells out to tmux) so it never blocks the event loop."""
     titles = _prompt_queue.all_titles()
     if not titles:
         _watch_limited_sessions()
+        _drain_mailboxes()
         return
     _prompt_queue.prune(list(ENGINE.instances.keys()))
     _ports.prune(list(ENGINE.instances.keys()))
@@ -1988,6 +2468,7 @@ def _drain_prompt_queues() -> None:
         except Exception:  # noqa: BLE001 — one bad session can't stop the drain
             pass
     _watch_limited_sessions()
+    _drain_mailboxes()
     # Forget in-memory drain state for sessions that vanished.
     for gone in [t for t in _QUEUE_STATE if t not in ENGINE.instances]:
         _QUEUE_STATE.pop(gone, None)
@@ -4988,6 +5469,20 @@ def _build_instances_snapshot() -> list:
         return list(ex.map(lambda i: _session_snapshot(i, queues), insts))
 
 
+def _fresh_lineage(rows: list) -> None:
+    """Overwrite each cached row's ``parent`` with the live value, in place.
+
+    Lineage is authority (the MCP's kill / answer / report routing all read it
+    from this listing), and a re-parent changes no title, so the tick-snapshot
+    fast path would otherwise serve the OLD parent for up to a tick — a
+    just-detached former parent could still kill the session. It is a dict
+    lookup per row, nothing like the probes the snapshot exists to avoid."""
+    for d in rows:
+        inst = ENGINE.instances.get(d.get("title"))
+        if inst is not None:
+            d["parent"] = _live_parent(inst)
+
+
 @app.get("/api/instances")
 def list_instances() -> JSONResponse:
     """Hot path: polled every ~4s by every client. Read-only on purpose — the
@@ -5010,6 +5505,7 @@ def list_instances() -> JSONResponse:
     cached = _events.sessions_snapshot()
     if time.time() - _SNAPSHOT_AT <= _INSTANCES_TICK_INTERVAL * 2.5:
         if {d.get("title") for d in cached} == set(ENGINE.instances.keys()):
+            _fresh_lineage(cached)
             return JSONResponse(cached + _remote.merged_instances() + _pending_rows())
     queues = _prompt_queue.snapshot()
     by_title = {d.get("title"): d for d in cached}
@@ -5111,6 +5607,14 @@ def _instances_tick() -> None:
     # tick over dicts that are normally the size of the flock.
     try:
         _prune_session_state(list(ENGINE.instances.keys()))
+    except Exception:  # noqa: BLE001 — housekeeping can't fail the tick
+        pass
+    # And for parent links: every removal path orphans its children, but a
+    # parent that never came back after a restart (seeded as dead) leaves a
+    # link nobody removed. Lazy validity already hides it from the rows; this
+    # erases it before a namesake can make it live again.
+    try:
+        _orphan_dangling_parents()
     except Exception:  # noqa: BLE001 — housekeeping can't fail the tick
         pass
     # Publish the freshly computed state so AppContext.sessions() (Addon API
@@ -5574,6 +6078,7 @@ def _capabilities() -> dict:
     no ticketing source -> ingestion surfaces point at Intake → Tickets;
     no github -> Make PR / Merge hand the user a prefilled compare page
     instead of opening the PR themselves (they never fail outright).
+    ``agent_mcp`` is the one non-boolean: see :func:`_agent_mcp_caps`.
     Probed per-request (cheap) so installing/connecting takes effect on the
     next page load without a server restart.
     """
@@ -5582,7 +6087,26 @@ def _capabilities() -> dict:
         "tailscale": shutil.which("tailscale") is not None,
         "ticketing": _ticketing_connected(),
         "github": _github_pr_available(),
+        "agent_mcp": _agent_mcp_caps(),
     }
+
+
+def _agent_mcp_caps() -> dict:
+    """Whether new launches attach the MindFlock MCP, and to which CLIs.
+
+    ``{"enabled": bool, "providers": [names]}`` — what the MCP's spawn tool
+    reads to decide whether a child can report back (its report-back footer
+    names an MCP tool, which only exists when the child's CLI is attached).
+    Never raises: an unreadable state reports attach as off."""
+    try:
+        from backend.providers import mcp_attach as _mcp_attach
+
+        return {
+            "enabled": bool(_mcp_attach.enabled()),
+            "providers": list(_mcp_attach.supported_providers()),
+        }
+    except Exception:  # noqa: BLE001 — a capability probe must never 500
+        return {"enabled": False, "providers": []}
 
 
 def _start_agent_override(payload: dict) -> str:
@@ -6198,7 +6722,18 @@ def _profile_id_error(profile_id: str) -> str:
 
 def _rewrite_launcher_for_profile(inst, wt: str) -> bool:
     """Rewrite a provisioned session's launcher so a profile swap also updates
-    the profile's baked-in launch FLAGS (e.g. an OpenRouter model pin).
+    the profile's baked-in launch FLAGS (e.g. an OpenRouter model pin). See
+    :func:`_rewrite_provisioned_launcher`."""
+    return _rewrite_provisioned_launcher(inst, wt)
+
+
+def _rewrite_provisioned_launcher(inst, wt: str, title: str = "") -> bool:
+    """Rewrite a provisioned session's launcher from the session's current
+    state: the MindFlock MCP attach args (for ``title``, default
+    ``inst.Title``), the auth profile's flags, then the session's own launch
+    args — the order the engine's first write uses. A profile swap needs it for
+    the profile flags; a relaunch needs it when the baked MCP attach went stale
+    (a reopen under a de-duplicated title, the attach toggle turned off).
 
     Only when the worktree carries its own ``_provision_settings`` — the exact
     ``skip_permissions``/cache-env the original write used. Restored sessions
@@ -6233,13 +6768,29 @@ def _rewrite_launcher_for_profile(inst, wt: str) -> bool:
             getattr(inst, "ProfileId", "") or "",
             getattr(inst, "ProfileModel", "") or "",
         )
+        name_title = title or getattr(inst, "Title", "") or ""
+        # Without these the rewritten launcher silently dropped the MCP for the
+        # rest of the session's life (report_result gone, the parent's wait
+        # only ever seeing idle). () when off / unsupported / no title.
+        mcp_args = (
+            providers.mcp_attach.attach_args(
+                providers.resolve(inst.Program or ""),
+                title=name_title,
+                tmux_name=tmux.to_mindflock_tmux_name(name_title),
+                workdir=wt,
+            )
+            if name_title
+            else ()
+        )
         provisioning.write_launcher(
             wt,
             prompt,
             program=inst.Program or "claude",
             skip_permissions=scs.skip_permissions,
             cache_env=_ws.merged_cache_env(scs.caches),
-            launch_args=tuple(prof_args) + tuple(getattr(inst, "LaunchArgs", ()) or ()),
+            launch_args=tuple(mcp_args)
+            + tuple(prof_args)
+            + tuple(getattr(inst, "LaunchArgs", ()) or ()),
         )
         return True
     except Exception:  # noqa: BLE001 — flags are secondary to env
@@ -6350,7 +6901,9 @@ async def create_instance(payload: dict) -> JSONResponse:
     * ``story_id`` — ticket id; seeds a default title/branch when the title is
       blank.
     * ``prompt`` — initial prompt (held in the prompt queue instead of seeded
-      directly when the worktree declares a setup pass, so it survives setup).
+      directly when the worktree declares a setup pass, so it survives setup,
+      or when the CLI takes no prompt argument). The 202 body's
+      ``prompt_delivery`` says which: ``seeded`` / ``queued`` / ``none``.
     * ``repo_path`` — a user-chosen local repo to base the session on.
     * ``in_place`` — run directly in ``repo_path`` (no worktree); forced on for a
       non-git folder. Ignored in provisioned mode.
@@ -6358,6 +6911,8 @@ async def create_instance(payload: dict) -> JSONResponse:
       Combines with ``in_place``: init the folder and then work directly in it.
     * ``launch_args`` — per-session agent flags; absent means inherit the global
       default, present (even ``[]``) means use exactly these.
+    * ``extra_launch_args`` — flags ADDED to the global default (ignored when
+      ``launch_args`` is present).
     * ``profile_id`` — auth profile the agent runs under; absent/blank means
       inherit the global default profile, ``"default"`` pins the CLI's own
       ambient login, anything else must name a configured profile.
@@ -6367,12 +6922,41 @@ async def create_instance(payload: dict) -> JSONResponse:
       agent lists every file it intends to touch (a ``mindflock-plan`` block)
       and waits for Go before editing. The repo's red zones are named in the
       prompt either way.
+    * ``parent`` — title of a LIVE local session this one works for (an
+      orchestrator agent spawning a worker); 400 ``unknown parent session``
+      otherwise, 409 when the parent is over budget.
+    * ``spawned`` — boolean (strict): an agent, not a human, created this
+      session. Only settable here, never afterwards; it is what lets an agent
+      later delete the session.
+    * ``base_ref`` — plain worktree sessions only (400 for provisioned or
+      in-place): cut the new branch from this commit-ish of ``repo_path``
+      instead of its HEAD; 400 when it names no commit. ``repo_path`` stays the
+      canonical repo, so cleanup never depends on where the ref came from.
+    * ``base_branch`` — with ``base_ref``: the branch recorded as the session's
+      diff/stage base (default: ``base_ref`` itself when it is a local branch,
+      else the repo's current branch).
+    * ``playbook`` — ``"split"`` (the New dialog's "Split across workers"):
+      decorate ``prompt`` with the split playbook (the task stays its first
+      line; idempotent) so the agent splits it across worker sessions through
+      its MindFlock tools. Forces a worktree (``in_place`` is ignored). 400
+      for any other playbook, an empty prompt, a non-git folder, or a CLI
+      that doesn't get the MindFlock tools (attach off or unsupported). The
+      session records it (``Playbook``, the row's ``playbook``): it is an
+      orchestrator from its first prompt, before its first worker exists.
+
+    Spawn limits, checked under the registry lock as the title is claimed (409
+    naming the knob): a ``parent`` keeps at most ``MINDFLOCK_MAX_CHILDREN``
+    (8) live children and the new session's depth (root = 0) at most
+    ``MINDFLOCK_MAX_SPAWN_DEPTH`` (3); a ``spawned`` session keeps the live
+    total of spawned sessions at most ``MINDFLOCK_MAX_SPAWNED`` (24). The env
+    knobs are read per request.
 
     The three creation modes are provisioned, plain-worktree, and in-place. A
     409 is returned when the title already exists; the instance registers as
     Loading and its real Start (worktree/clone + provisioning + tmux) runs in a
     background task, so a failure is surfaced via a ``session.create_failed``
-    event rather than in the 202 response.
+    event rather than in the 202 response. ``session.created`` carries
+    ``parent`` / ``spawned`` in its data when set.
     """
     payload = payload or {}
     title = (payload.get("title", "") or "").strip()
@@ -6401,6 +6985,19 @@ async def create_instance(payload: dict) -> JSONResponse:
             )
         except ValueError as err:
             return JSONResponse({"error": str(err)}, status_code=400)
+    elif "extra_launch_args" in payload:
+        # ADDITIVE flags (the MCP's spawn_session): the user's configured
+        # defaults for this CLI stay, these are appended — an orchestrator
+        # adding "--model x" must not strip a worker's skip-permissions.
+        try:
+            extra = provider_config.validate_launch_args(
+                payload.get("extra_launch_args") or []
+            )
+        except ValueError as err:
+            return JSONResponse({"error": str(err)}, status_code=400)
+        launch_args = _instance.merge_launch_args(
+            _instance.provider_default_launch_args(program), extra
+        )
     else:
         launch_args = None  # not specified -> inherit the global default
 
@@ -6414,6 +7011,71 @@ async def create_instance(payload: dict) -> JSONResponse:
     err = _profile_model_error(profile_model)
     if err:
         return JSONResponse({"error": err}, status_code=400)
+
+    # Lineage. ``parent`` names the live session this one works for (an
+    # orchestrator spawning a worker); ``spawned`` marks an agent-made session
+    # and is only ever set here. Both are checked again under the registry lock
+    # below, with the spawn limits, at the moment the title is claimed.
+    parent = str(payload.get("parent", "") or "").strip()
+    spawned = payload.get("spawned", False)
+    if spawned is None:
+        spawned = False
+    if not isinstance(spawned, bool):
+        # Strict on purpose: "spawned" unlocks agent-driven deletion, so a
+        # string "false" must not read as True.
+        return JSONResponse({"error": "spawned must be a boolean"}, status_code=400)
+    if parent and parent not in ENGINE.instances:
+        return JSONResponse(
+            {"error": "unknown parent session: %s" % parent}, status_code=400
+        )
+    if parent and await asyncio.to_thread(_budget_locked, parent):
+        return JSONResponse(
+            {
+                "error": "parent session %s is over budget — raise its budget "
+                "before it spawns more sessions" % parent,
+                "budget_locked": True,
+            },
+            status_code=409,
+        )
+    # Split across workers: the agent fans the task out through its own
+    # MindFlock tools, so it must GET them (attach on, a CLI that attaches)
+    # and must have a task. Workers fork from its commits, so it runs in a
+    # worktree of its own — never in place.
+    playbook = payload.get("playbook")
+    if playbook is not None and playbook != "":
+        if playbook != "split":
+            return JSONResponse(
+                {"error": 'playbook must be "split" (got %r)' % (playbook,)},
+                status_code=400,
+            )
+        reason = _mcp_unattachable(program)
+        if reason is not None:
+            return JSONResponse(
+                {
+                    "error": "Split across workers needs the MindFlock tools: %s"
+                    % reason
+                },
+                status_code=400,
+            )
+        if not str(prompt).strip():
+            return JSONResponse(
+                {"error": "Split across workers needs a task: describe what to split"},
+                status_code=400,
+            )
+    split = playbook == "split"
+    # Fork point: cut the worktree from this commit-ish instead of the repo's
+    # HEAD (a worker forking from its orchestrator's commit), recording
+    # ``base_branch`` as the session's diff base. Plain worktree sessions only.
+    base_ref = str(payload.get("base_ref", "") or "").strip()
+    base_branch = str(payload.get("base_branch", "") or "").strip()
+    if (base_ref or base_branch) and is_provisioned:
+        return JSONResponse(
+            {
+                "error": "base_ref is only supported for plain worktree sessions "
+                "(not provisioned)"
+            },
+            status_code=400,
+        )
 
     if is_provisioned:
         # Provisioning is all git (base clone + worktree/clone per session).
@@ -6486,7 +7148,9 @@ async def create_instance(payload: dict) -> JSONResponse:
     in_place = False
     git_enabled = True
     if repo_path or not is_provisioned:
-        in_place = bool(payload.get("in_place", False)) and not is_provisioned
+        in_place = (
+            bool(payload.get("in_place", False)) and not is_provisioned and not split
+        )
         # Combinable with in_place, deliberately: "git init this folder, then work
         # directly in it" is the natural way to start a brand-new project, and
         # suppressing the init for in-place sessions silently dropped the tick and
@@ -6513,14 +7177,69 @@ async def create_instance(payload: dict) -> JSONResponse:
                     },
                     status_code=400,
                 )
+            if split:
+                return JSONResponse(
+                    {
+                        "error": "Split across workers needs a git repo — workers "
+                        "fork from its commits; pick a git repo, or tick 'Create "
+                        "a git repo in this folder' in Advanced"
+                    },
+                    status_code=400,
+                )
             in_place = True
         if is_provisioned:
             provision_repo = plain_path
+    if base_ref or base_branch:
+        # An in-place session runs ON the folder's checkout — there is no new
+        # branch to cut from anywhere.
+        if in_place:
+            return JSONResponse(
+                {
+                    "error": "base_ref is only supported for plain worktree sessions "
+                    "(not in-place)"
+                },
+                status_code=400,
+            )
+        err = await asyncio.to_thread(
+            _lineage.base_ref_error, plain_path, base_ref, base_branch
+        )
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
+        # The engine refuses to cut a base_ref branch whose name is taken (a
+        # closed or paused namesake keeps its branch) — say so NOW, as a 409,
+        # rather than 202 and an asynchronous create_failed nobody reads.
+        if base_ref:
+            err = await asyncio.to_thread(
+                _lineage.branch_taken_error, plain_path, _session_branch_name(title)
+            )
+            if err:
+                return JSONResponse({"error": err}, status_code=409)
+    # The provisioned twin: a closed session keeps its worktree (holding the
+    # deterministic branch) or its clone (at a deterministic path) — say so as
+    # a 409 now, not a create_failed later or a silently adopted old clone.
+    if is_provisioned and new_branch:
+        err = await asyncio.to_thread(
+            provisioning.provisioned_branch_taken_error,
+            workspace_strategy,
+            new_branch,
+            provision_repo,
+        )
+        if err:
+            return JSONResponse({"error": err}, status_code=409)
 
     # Red zones + plan-first: the launch prompt names the repo's zones and, when
     # the New Session "Plan first" box was ticked, asks for a file plan before
     # any edit. Keyed off the folder the session is cut from — its repo
     # identity is the future worktree's (same origin).
+    if split:
+        # First, so the task stays the prompt's first line (the pane pins it)
+        # and the zone / plan-first notes follow the split instructions.
+        try:
+            prompt = _playbooks.decorate_prompt(
+                "split", prompt, {"provider": providers.resolve(program).name}
+            )
+        except _playbooks.PlaybookError as perr:
+            return JSONResponse({"error": str(perr)}, status_code=400)
     if prompt:
 
         def _decorate(p=prompt, local=bool(repo_path or not is_provisioned)):
@@ -6542,6 +7261,11 @@ async def create_instance(payload: dict) -> JSONResponse:
             in_place=in_place,
             profile_id=profile_id,
             profile_model=profile_model,
+            base_ref=base_ref,
+            base_branch=base_branch,
+            parent=parent,
+            spawned=spawned,
+            playbook="split" if split else "",
         )
     )
     # O4: every session gets a deterministic dev-server port block, injected
@@ -6585,9 +7309,30 @@ async def create_instance(payload: dict) -> JSONResponse:
                 return JSONResponse(
                     {"error": "instance %s already exists" % title}, status_code=409
                 )
+        # Lineage, re-checked where it counts: the parent may have gone while
+        # the repo was prepared, and the spawn caps only hold if the count and
+        # the claim happen under one lock (two concurrent spawns must not both
+        # squeeze under the last slot).
+        if parent and parent not in ENGINE.instances:
+            return JSONResponse(
+                {"error": "unknown parent session: %s" % parent}, status_code=400
+            )
+        limit_err = _lineage.spawn_limit_error(ENGINE.instances, parent, spawned)
+        if limit_err:
+            return JSONResponse({"error": limit_err}, status_code=409)
         ENGINE.instances[title] = inst
 
-    if setup_cfg is not None and setup_cfg.has_setup and prompt:
+    # How the initial prompt reaches the agent: seeded at launch (the CLI takes
+    # a prompt argument, or the provisioned launcher types it in), or held in
+    # the prompt queue and typed once the agent is idle. A plain session on a
+    # CLI with no prompt argument (a custom script, aider, goose, …) has no
+    # launch-time seed at all — without the queue its task silently vanished.
+    prompt_delivery = "seeded" if prompt else "none"
+    hold_prompt = bool(prompt) and (
+        (setup_cfg is not None and setup_cfg.has_setup)
+        or (not is_provisioned and not _provider_seeds_prompt(program))
+    )
+    if hold_prompt:
         # Hold the initial prompt until setup succeeds: deliver it via the
         # prompt queue (drained only once setup is ok + the agent is idle)
         # instead of seeding the agent CLI directly. A failed setup keeps
@@ -6600,6 +7345,7 @@ async def create_instance(payload: dict) -> JSONResponse:
             inst.Prompt = ""
             _prompt_queue.enqueue(title, prompt)
             _prompt_queue.set_flags(title, enabled=True)
+            prompt_delivery = "queued"
         except Exception as err:  # noqa: BLE001
             # A FULL OR UNWRITABLE QUEUE MUST NOT COST THE SESSION. Both calls
             # can raise (`prompt_queue._save` re-raises, and `enqueue` refuses a
@@ -6617,6 +7363,9 @@ async def create_instance(payload: dict) -> JSONResponse:
                     title,
                     err,
                 )
+    # What this session was asked to do, for its spawn record in the parent's
+    # Thread — the queue path above clears inst.Prompt.
+    _thread.note_seed(title, _created_epoch(inst), prompt)
     _mark_onboarded()  # first-ever session ends first-run; setup card won't auto-show again
     # Remember the folder this session chose so the NEXT New Session dialog opens
     # on it and the repo suggestions rank it first — the second session in a repo
@@ -6670,6 +7419,7 @@ async def create_instance(payload: dict) -> JSONResponse:
             # Surface the failure to watchers (UI toast, `mindflock events`,
             # the CLI's create poll) — a session silently vanishing from the
             # list is the worst failure mode.
+            _note_create_failure(title, str(err))
             _events.BUS.emit(
                 "session.create_failed", session=title, data={"error": str(err)}
             )
@@ -6680,16 +7430,22 @@ async def create_instance(payload: dict) -> JSONResponse:
     # Seed the *_changed diff snapshot with the initial state so the first real
     # transition (loading->running etc.) emits instead of being swallowed (F6).
     _seed_event_snapshot(title)
+    created_data = {
+        "program": program,
+        "provisioned": is_provisioned,
+    }
+    if parent:
+        created_data["parent"] = parent
+    if spawned:
+        created_data["spawned"] = True
     _events.BUS.emit(
         "session.created",
         session=title,
         new="loading",
-        data={
-            "program": program,
-            "provisioned": is_provisioned,
-        },
+        data=created_data,
     )
     body = _instance_json(inst)
+    body["prompt_delivery"] = prompt_delivery
     # An account with no route for this agent runs the session on the CLI's own
     # login. The New dialog says so at selection time; API and CLI callers had
     # no way to hear it at all, and a session quietly launching as the wrong
@@ -6703,6 +7459,23 @@ async def create_instance(payload: dict) -> JSONResponse:
     except Exception:  # noqa: BLE001 — the note is enrichment only
         pass
     return JSONResponse(body, status_code=202)
+
+
+@app.get("/api/create_failures")
+def list_create_failures(title: str = "") -> JSONResponse:
+    """Why recent background creates failed: ``{"failures": {title: {"error",
+    "ts"}}}`` for the last ten minutes, or just ``title``'s entry when given
+    (``{"failures": {}}`` when there is none). Lets a poller that saw a
+    Loading row vanish say WHY instead of "it disappeared"."""
+    now = time.time()
+    with _CREATE_FAILURES_LOCK:
+        items = {
+            t: dict(rec)
+            for t, rec in _CREATE_FAILURES.items()
+            if now - rec.get("ts", 0.0) <= _CREATE_FAILURE_TTL_S
+            and (not title or t == title)
+        }
+    return JSONResponse({"failures": items})
 
 
 @app.get("/api/aliases")
@@ -6798,8 +7571,29 @@ async def delete_instance(title: str) -> JSONResponse:
     # A recreated same-title session must start with a fresh branch baseline.
     _LAST_BRANCH.pop(title, None)
     _ports.release(title)
+    _on_session_removed(title)
     _events.BUS.emit("session.deleted", session=title)
     return JSONResponse({"ok": True})
+
+
+#: The summary diff's shape must not depend on the user's gitconfig: per-file
+#: paths are parsed out of it (the MCP's get_diff ``files=[...]``), and
+#: ``diff.noprefix`` / ``diff.mnemonicPrefix`` / C-quoted non-ASCII paths / an
+#: external diff tool / colour each broke that parse.
+_DIFF_STABLE_CONFIG = (
+    "-c",
+    "core.quotePath=false",
+    "-c",
+    "diff.noprefix=false",
+    "-c",
+    "diff.mnemonicPrefix=false",
+)
+_DIFF_STABLE_FLAGS = (
+    "--no-ext-diff",
+    "--no-color",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+)
 
 
 @app.get("/api/instances/{title}/diff")
@@ -6843,7 +7637,16 @@ async def instance_diff(title: str, base: str = "fork") -> JSONResponse:
             timeout=60,
         )
         cp = subprocess.run(
-            ["git", "-C", wtp, "--no-pager", "diff", _session_fork_point(inst, wtp)],
+            [
+                "git",
+                "-C",
+                wtp,
+                *_DIFF_STABLE_CONFIG,
+                "--no-pager",
+                "diff",
+                *_DIFF_STABLE_FLAGS,
+                _session_fork_point(inst, wtp),
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=60,
@@ -8328,8 +9131,20 @@ _DELIVER_QUEUE_ACTIVITIES = ("clarify", "limit", "working")
 _SEND_FAILED = "failed to send to agent session"
 
 
+#: ``_deliver_to_agent``'s reason when a ``dialog_safe`` paste found the
+#: agent on a prompt: an unsubmitted paste can't be queued (the drain would
+#: submit it), so nothing happens and the caller says why.
+_SEND_IN_DIALOG = "Answer its prompt first — typing now would answer the dialog"
+
+
 def _deliver_to_agent(
-    inst, title: str, text: str, *, boot: bool = False, submit: bool = True
+    inst,
+    title: str,
+    text: str,
+    *,
+    boot: bool = False,
+    submit: bool = True,
+    dialog_safe: bool = False,
 ):
     """Type ``text`` into ``title``'s agent → ``(told, reason)``.
 
@@ -8343,6 +9158,16 @@ def _deliver_to_agent(
     reports an over-budget session instead of 409ing, and QUEUES instead of
     typing while the agent is mid-turn or waiting on a prompt.
 
+    ``dialog_safe`` (with ``boot=True``: ``/send``'s opt-in for the UI's own
+    buttons) keeps ``/send``'s boot and its typing into a working agent, but
+    re-probes the activity UNCACHED first — and checks the SCREEN for a
+    dialog, which outranks the reading — and never types into a prompt or
+    the usage-limit menu: a submitted message is queued instead (the drain
+    delivers it once the agent is free), an unsubmitted paste is refused
+    with :data:`_SEND_IN_DIALOG` (queueing it would submit it later). The
+    browser's view of the agent lags by a poll or two; a digit or an Enter
+    typed into a permission prompt approves it.
+
     Blocking (tmux + an activity probe) — call it via ``asyncio.to_thread``.
     Every collaborator is read off this module so tests patch the server.
     """
@@ -8350,6 +9175,24 @@ def _deliver_to_agent(
         name, err = _agent_session_ready(inst, title)
         if err is not None:
             return False, err
+        if dialog_safe:
+            try:
+                activity = _agent_activity(inst, title)
+            except Exception:  # noqa: BLE001 — unknown reads as "don't type blind"
+                activity = "unknown"
+            if (
+                activity in _PB_DIALOG_ACTIVITIES
+                or activity == "unknown"
+                or _dialog_on_screen(inst, name)
+            ):
+                if not submit:
+                    return False, _SEND_IN_DIALOG
+                try:
+                    _prompt_queue.enqueue(title, text)
+                except ValueError as err:
+                    return False, str(err)
+                _emit_queue_changed(title)
+                return "queued", None
     else:
         if _budget_locked(title):
             return False, "over budget"
@@ -8360,7 +9203,7 @@ def _deliver_to_agent(
             activity = _agent_activity(inst, title)
         except Exception:  # noqa: BLE001 — unknown reads as "don't type blind"
             activity = "working"
-        if activity in _DELIVER_QUEUE_ACTIVITIES:
+        if activity in _DELIVER_QUEUE_ACTIVITIES or _dialog_on_screen(inst, name):
             try:
                 _prompt_queue.enqueue(title, text)
             except ValueError as err:
@@ -8381,7 +9224,13 @@ async def instance_send(title: str, payload: dict) -> JSONResponse:
     """Send a single message to the session's agent window and (by default)
     submit it. Boots/resumes the agent session first if it isn't running, so a
     just-created session starts working from one call. ``submit=false`` types
-    the text without pressing Enter (leave the user to review/edit)."""
+    the text without pressing Enter (leave the user to review/edit).
+
+    ``dialog_safe=true`` (the UI's Send now and every paste): re-check the
+    agent's live activity first and never type into a prompt or the
+    usage-limit menu — a submitted message is queued instead (→ ``{"sent":
+    false, "queued": true, "submitted": false}``), an unsubmitted paste is
+    409 ``{"in_dialog": true}`` with nothing typed."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
@@ -8389,6 +9238,7 @@ async def instance_send(title: str, payload: dict) -> JSONResponse:
     if not text.strip():
         return JSONResponse({"error": "empty message"}, status_code=400)
     submit = bool((payload or {}).get("submit", True))
+    dialog_safe = bool((payload or {}).get("dialog_safe", False))
     if _budget_locked(title):
         return JSONResponse(
             {
@@ -8398,12 +9248,17 @@ async def instance_send(title: str, payload: dict) -> JSONResponse:
             status_code=409,
         )
     told, reason = await asyncio.to_thread(
-        lambda: _deliver_to_agent(inst, title, text, boot=True, submit=submit)
+        lambda: _deliver_to_agent(
+            inst, title, text, boot=True, submit=submit, dialog_safe=dialog_safe
+        )
     )
     if told is False:
-        return JSONResponse(
-            {"error": reason}, status_code=502 if reason == _SEND_FAILED else 409
-        )
+        body = {"error": reason}
+        if reason == _SEND_IN_DIALOG:
+            body["in_dialog"] = True
+        return JSONResponse(body, status_code=502 if reason == _SEND_FAILED else 409)
+    if told == "queued":
+        return JSONResponse({"sent": False, "queued": True, "submitted": False})
     return JSONResponse({"sent": True, "submitted": submit})
 
 
@@ -8614,6 +9469,341 @@ def delete_queue(title: str, item: str = "") -> JSONResponse:
         _prompt_queue.clear(title)
     _emit_queue_changed(title)
     return JSONResponse(_queue_state_json(title))
+
+
+# --------------------------------------------------------------------------- #
+# Inter-agent messages (core.mailbox).
+#
+# One session's agent (via the mindflock MCP server), the CLI or any client
+# leaves a message for another session. It is stored in the recipient's
+# mailbox and reaches it exactly once: typed into its pane by the delivery
+# lane (see _drain_one_mailbox) or fetched from its inbox, whichever is first.
+# --------------------------------------------------------------------------- #
+_MSG_MAX_CHARS = 20000
+_MSG_DATA_MAX_BYTES = 8192
+_MSG_LIST_DEFAULT = 50
+_MSG_LIST_MAX = 200
+_MSG_WAIT_MAX_S = 30.0
+_MSG_POLL_S = 0.5
+#: ``delivery: "now"`` types immediately only into these activities: an idle
+#: prompt, or a running turn (the CLI queues the text in its input box). Never
+#: clarify (the text would ANSWER the permission prompt) or limit (it would
+#: pick a menu item), and never an offline agent (it is not booted for this).
+_MSG_NOW_ACTIVITIES = ("idle", "working")
+_MSG_NOT_RUNNING = (
+    "the recipient's agent isn't running — it is typed in once it starts, and "
+    "stays in its inbox meanwhile"
+)
+_MSG_STARTING = (
+    "the recipient's agent is still starting — it is typed in once it is ready"
+)
+_MSG_HUMAN_TYPING = (
+    "someone is typing in the recipient's pane — it is typed in once they stop"
+)
+_MSG_WHY_WAITING = {
+    "clarify": "the recipient is waiting on a prompt",
+    "limit": "the recipient is on a usage-limit screen",
+    "offline": "the recipient's agent isn't running",
+}
+
+
+def _is_descendant(title: str, ancestor: str) -> bool:
+    """Whether ``ancestor`` is on ``title``'s live ``Parent`` chain. Lineage is
+    another unit's field, read defensively; a cycle or a link to a session
+    that is not live ends the walk."""
+    inst = ENGINE.instances.get(title)
+    parent = str(getattr(inst, "Parent", "") or "") if inst is not None else ""
+    seen = {title}
+    while parent and parent not in seen:
+        if parent == ancestor:
+            return True
+        seen.add(parent)
+        nxt = ENGINE.instances.get(parent)
+        if nxt is None:
+            return False
+        parent = str(getattr(nxt, "Parent", "") or "")
+    return False
+
+
+def _mail_deliver_now(inst, title: str, msg: dict):
+    """``delivery: "now"`` — type ``msg`` immediately when it is safe to →
+    ``(result, detail)`` with result ``"delivered"`` or ``"pending"`` (left for
+    the lane). Unlike the lane there is no idle settle (the sender asked for
+    now, and a working agent just queues the text), but every safety gate
+    still holds: no boot (nor typing inside the queue's boot grace), no
+    clarify/limit, no typing over a long-poll, into a pane whose agent has
+    quit (a bare shell), or over a human mid-composition.
+    Blocking (tmux + an activity probe) — call it via ``asyncio.to_thread``."""
+    if _typing_held(inst, title):
+        return "pending", (
+            "the recipient can't take input now (paused, over budget or still "
+            "setting up) — it is typed in once it can"
+        )
+    if _mailbox.waiter_active(title):
+        return "pending", "the recipient is waiting on its inbox and gets it there"
+    q = _QUEUE_STATE.get(title) or {}
+    if time.time() - q.get("rebooted_at", 0.0) < _QUEUE_BOOT_GRACE:
+        # The queue just relaunched the CLI: a quiet relaunching pane reads
+        # idle, and text typed before the input box is drawn is lost — while
+        # the claim would already have said "delivered".
+        return "pending", _MSG_STARTING
+    if _human_at_keys(title, probe_tmux=False):
+        return "pending", _MSG_HUMAN_TYPING
+    name = _live_session_name(tmux.to_mindflock_tmux_name(title))
+    if name is None:
+        return "pending", _MSG_NOT_RUNNING
+    if not _pane_holds_agent(name, getattr(inst, "Program", "") or ""):
+        return "pending", _MSG_NOT_RUNNING
+    try:
+        activity = _agent_activity(inst, title)
+    except Exception:  # noqa: BLE001 — unknown reads as "don't type blind"
+        activity = "unknown"
+    if activity not in _MSG_NOW_ACTIVITIES:
+        why = _MSG_WHY_WAITING.get(activity, "the recipient's state is unknown")
+        return "pending", "%s — typed in once it is idle" % why
+    if _tmux_client_input_recent(title, _HUMAN_HOLD_S):
+        return "pending", _MSG_HUMAN_TYPING
+    state = _mail_type(inst, title, name, msg, time.time())
+    if state == _MAIL_ON_PROMPT:
+        return "pending", "%s — typed in once it is idle" % _MSG_WHY_WAITING["clarify"]
+    if state == "delivered":
+        return "delivered", ""
+    if state == "held":
+        return "delivered", _mailbox.long_notice_detail()
+    cur = _mailbox.get(title, msg["id"]) or {}
+    if cur.get("state") == "read":
+        return "delivered", "already read from the recipient's inbox"
+    return "pending", "could not type it now — the delivery lane retries"
+
+
+def _fresh_session_diff_stat(inst):
+    """``_session_diff_stat`` with this session's cache entry dropped first, so
+    the answer reflects the worktree as it is now. None when unavailable."""
+    if inst is None:
+        return None
+    try:
+        wt = inst.GetWorktreePath() if inst.Started() else ""
+    except Exception:  # noqa: BLE001
+        wt = ""
+    if wt:
+        _DIFF_STAT_CACHE.pop(wt, None)
+    try:
+        return _session_diff_stat(inst)
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
+
+
+def _query_bool(raw, default: bool) -> bool:
+    if raw is None:
+        return default
+    return str(raw).strip().lower() not in ("", "0", "false", "no", "off")
+
+
+@app.post("/api/instances/{title}/messages")
+async def post_message(title: str, payload: dict) -> JSONResponse:
+    """Leave a message for ``title``'s agent.
+
+    Body ``{"text", "from"?, "reply_to"?, "delivery"?: auto|inbox|now,
+    "kind"?: message|result, "data"?: object}``. ``from`` is a live session's
+    title, or "" (default) for the CLI / an external client. ``auto`` types it
+    in when the recipient is next stably idle; ``inbox`` only stores it;
+    ``now`` (only into your own descendants, or from "") types it immediately
+    when the recipient is idle or working. Safety rules may hold a push in the
+    inbox instead (reply chain / rate limit; ``detail`` says which).
+
+    A ``kind: "result"`` from a session gets ``data.diff_stat`` re-measured
+    from the sender's worktree at post time (the listing's value lags).
+
+    201 ``{"message", "delivery": delivered|pending|held, "detail"?}`` and a
+    ``session.message`` event on the recipient."""
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    payload = payload or {}
+
+    def bad(msg: str) -> JSONResponse:
+        return JSONResponse({"error": msg}, status_code=400)
+
+    text = payload.get("text", "")
+    if not isinstance(text, str):
+        return bad("text must be a string")
+    if not text.strip():
+        return bad("empty message")
+    if len(text) > _MSG_MAX_CHARS:
+        return bad("message too long (%d chars; max %d)" % (len(text), _MSG_MAX_CHARS))
+    sender = payload.get("from") or ""
+    if not isinstance(sender, str):
+        return bad("from must be a session title")
+    if sender == title:
+        return bad("a session cannot message itself")
+    if sender and sender not in ENGINE.instances:
+        return bad("unknown sender session: %s" % sender)
+    reply_to = payload.get("reply_to") or None
+    if reply_to is not None and not isinstance(reply_to, str):
+        return bad("reply_to must be a message id")
+    delivery = payload.get("delivery") or "auto"
+    if delivery not in _mailbox.DELIVERIES:
+        return bad("bad delivery: %r (auto, inbox or now)" % (delivery,))
+    kind = payload.get("kind") or "message"
+    if kind not in _mailbox.KINDS:
+        return bad("bad kind: %r (message or result)" % (kind,))
+    data = payload.get("data")
+    if data is not None:
+        if not isinstance(data, dict):
+            return bad("data must be an object")
+        size = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+        if size > _MSG_DATA_MAX_BYTES:
+            return bad(
+                "data too large (%d bytes; max %d)" % (size, _MSG_DATA_MAX_BYTES)
+            )
+    if kind == "result" and sender:
+        # The sender's diff stat, measured NOW: the row's value is the tick's,
+        # cached up to ~14s, and a worker reports seconds after its last edit.
+        stat = await asyncio.to_thread(
+            _fresh_session_diff_stat, ENGINE.instances.get(sender)
+        )
+        if stat is not None:
+            data = dict(data or {})
+            data["diff_stat"] = stat
+    detail = ""
+    if delivery == "now" and sender and not _is_descendant(title, sender):
+        delivery = "auto"
+        detail = 'delivery "now" is only for your own descendants — sent as auto'
+    try:
+        msg = await asyncio.to_thread(
+            lambda: _mailbox.post(
+                title,
+                text,
+                sender=sender,
+                kind=kind,
+                data=data,
+                reply_to=reply_to,
+                delivery=delivery,
+                detail=detail,
+            )
+        )
+    except ValueError as err:
+        return bad(str(err))
+    if msg["state"] == "held":
+        result, detail = "held", msg["detail"]
+    elif msg["delivery"] == "now":
+        result, now_detail = await asyncio.to_thread(
+            _mail_deliver_now, inst, title, msg
+        )
+        detail = now_detail or detail
+    else:
+        result = "pending"
+        live = await asyncio.to_thread(
+            _live_session_name, tmux.to_mindflock_tmux_name(title)
+        )
+        if live is None:
+            detail = detail or _MSG_NOT_RUNNING
+    msg = _mailbox.get(title, msg["id"]) or msg
+    event_data = {
+        "id": msg["id"],
+        "from": sender,
+        "kind": kind,
+        "text": _mailbox.sanitize(text)[:200],
+        "delivery": result,
+    }
+    if kind == "result":
+        # A worker's report: the UI says done / blocked / failed without
+        # fetching the message.
+        status = (msg.get("data") or {}).get("status")
+        if isinstance(status, str) and status:
+            event_data["status"] = _mailbox.sanitize(status)[:24]
+    _events.BUS.emit("session.message", session=title, data=event_data)
+    body = {"message": msg, "delivery": result}
+    if detail:
+        body["detail"] = detail
+    return JSONResponse(body, status_code=201)
+
+
+@app.get("/api/instances/{title}/messages")
+async def get_messages(title: str, request: Request) -> JSONResponse:
+    """``title``'s inbox → ``{"messages": [...oldest→newest], "unread",
+    "version"}``.
+
+    Query: ``unread`` (default 1: pending + held only), ``include_consumed``
+    (1 = also delivered/read; the newest ``limit``), ``after`` (a message id),
+    ``from``, ``kind``, ``limit`` (default 50, max 200), ``mark_read`` (1 =
+    atomically mark the returned messages read — a pending one is then never
+    typed), ``wait`` (seconds, max 30: long-poll until a matching message
+    arrives). While a long-poll runs, the delivery lane holds this recipient's
+    pending messages — the poll is about to hand them over itself."""
+    if ENGINE.instances.get(title) is None:
+        return JSONResponse(
+            {"error": "instance not found: %s" % title}, status_code=404
+        )
+    q = request.query_params
+    try:
+        limit = int(q.get("limit") or _MSG_LIST_DEFAULT)
+        wait = float(q.get("wait") or 0.0)
+    except ValueError:
+        return JSONResponse({"error": "bad limit or wait"}, status_code=400)
+    limit = max(1, min(limit, _MSG_LIST_MAX))
+    wait = max(0.0, min(wait, _MSG_WAIT_MAX_S))  # NaN lands on 0.0 too
+    kind = q.get("kind") or None
+    if kind is not None and kind not in _mailbox.KINDS:
+        return JSONResponse({"error": "bad kind: %r" % kind}, status_code=400)
+    unread_only = _query_bool(q.get("unread"), True) and not _query_bool(
+        q.get("include_consumed"), False
+    )
+    query = dict(
+        unread_only=unread_only,
+        after=q.get("after") or None,
+        sender=q.get("from"),
+        kind=kind,
+        limit=limit,
+        mark_read=_query_bool(q.get("mark_read"), False),
+    )
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait
+    if wait > 0:
+        _mailbox.waiter_begin(title)
+    try:
+        while True:
+            try:
+                result = await asyncio.to_thread(lambda: _mailbox.fetch(title, **query))
+            except ValueError as err:
+                return JSONResponse({"error": str(err)}, status_code=400)
+            if result["messages"] or loop.time() >= deadline:
+                return JSONResponse(result)
+            # Nothing yet: watch the box's version (one fstat while the file
+            # is unchanged) on the event loop's clock — never a parked thread.
+            seen = result["version"]
+            while loop.time() < deadline:
+                await asyncio.sleep(min(_MSG_POLL_S, max(0.0, deadline - loop.time())))
+                if ENGINE.instances.get(title) is None:
+                    return JSONResponse(result)
+                if await request.is_disconnected():
+                    return JSONResponse(result)
+                if await asyncio.to_thread(_mailbox.version, title) != seen:
+                    break
+    finally:
+        if wait > 0:
+            _mailbox.waiter_end(title)
+
+
+@app.post("/api/instances/{title}/messages/read")
+def post_messages_read(title: str, payload: dict) -> JSONResponse:
+    """Mark messages read: ``{"ids": [...]}`` or ``{"all": true}`` →
+    ``{"marked", "unread"}``. A pending message marked read is never typed."""
+    if ENGINE.instances.get(title) is None:
+        return JSONResponse(
+            {"error": "instance not found: %s" % title}, status_code=404
+        )
+    payload = payload or {}
+    ids = payload.get("ids")
+    every = payload.get("all") is True
+    if not every and not (
+        isinstance(ids, list) and all(isinstance(i, str) for i in ids)
+    ):
+        return JSONResponse(
+            {"error": 'pass {"ids": [...]} or {"all": true}'}, status_code=400
+        )
+    marked, unread = _mailbox.mark_read(title, ids or (), all_unread=every)
+    return JSONResponse({"marked": marked, "unread": unread})
 
 
 # _workspace_roots / _dir_size_bytes / _find_worktrees / _classify_workspace
@@ -9075,6 +10265,7 @@ async def instance_cleanup(title: str) -> JSONResponse:
     _EVENT_SNAPSHOT.pop(title, None)
     _forget_session_state(title)
     _aliases.drop(title)
+    _on_session_removed(title)
     _events.BUS.emit("session.deleted", session=title, data={"cleaned": True})
     return JSONResponse({"ok": True})
 
@@ -9117,6 +10308,9 @@ async def close_instance(title: str) -> JSONResponse:
     # dicts from growing under churn.)
     _forget_session_state(title)
     _aliases.drop(title)
+    # Its children are orphaned now, not on reopen: the title is free for the
+    # next session to take, and a namesake must not inherit them.
+    _on_session_removed(title)
     _events.BUS.emit("session.deleted", session=title, data={"closed": True})
     return JSONResponse({"ok": True})
 
@@ -9162,8 +10356,9 @@ async def copy_instance(title: str) -> JSONResponse:
         except Exception as err:  # noqa: BLE001
             if log.ErrorLog is not None:
                 log.ErrorLog.Printf("failed to copy instance %s: %v", new_title, err)
-            with ENGINE.lock:
-                ENGINE.instances.pop(new_title, None)
+            # By identity, with the shared removal teardown — see
+            # :func:`_drop_failed_start`.
+            _drop_failed_start(new_title, inst)
 
     _register_task(_bg_start())
     _events.BUS.emit(
@@ -9173,6 +10368,47 @@ async def copy_instance(title: str) -> JSONResponse:
         data={"program": program, "copied_from": title},
     )
     return JSONResponse(_instance_json(inst), status_code=202)
+
+
+@app.post("/api/instances/{title}/parent")
+async def set_instance_parent(title: str, payload: dict = None) -> JSONResponse:
+    """Re-parent a session: ``{"parent": "<title>"}`` adopts it under that live
+    session, ``{"parent": ""}`` detaches it to a root.
+
+    404 for an unknown session; 400 for an unknown parent, the session itself,
+    or a parent that is the session's own descendant (a cycle); 409 when the
+    adoption would break a spawn limit (``MINDFLOCK_MAX_CHILDREN`` /
+    ``MINDFLOCK_MAX_SPAWN_DEPTH``, named in the error). ``Spawned`` is
+    untouched — it records who created the session, not who manages it now.
+    Persists, and answers the updated row (``_instance_json``).
+    """
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    raw = (payload or {}).get("parent", "")
+    if raw is None:
+        raw = ""
+    if not isinstance(raw, str):
+        return JSONResponse({"error": "parent must be a string"}, status_code=400)
+    parent = raw.strip()
+    with ENGINE.lock:
+        if ENGINE.instances.get(title) is not inst:
+            return JSONResponse(
+                {"error": "instance not found: %s" % title}, status_code=404
+            )
+        if parent:
+            perr = _lineage.parent_error(ENGINE.instances, title, parent)
+            if perr:
+                return JSONResponse({"error": perr}, status_code=400)
+            # Adopting is a second way to grow a fan-out: it answers to the
+            # same caps as a create (detaching is never limited).
+            if parent != _lineage.parent_of(inst):
+                lerr = _lineage.adopt_limit_error(ENGINE.instances, title, parent)
+                if lerr:
+                    return JSONResponse({"error": lerr}, status_code=409)
+        inst.Parent = parent
+    ENGINE.save()
+    return JSONResponse(_instance_json(inst))
 
 
 @app.post("/api/instances/{title}/profile")
@@ -9381,6 +10617,12 @@ async def _reopen_closed_entry(entry_id: str) -> JSONResponse:
     except Exception as err:  # noqa: BLE001
         return JSONResponse({"error": "failed to reopen: %s" % err}, status_code=500)
     with ENGINE.lock:
+        # The parent it was closed under may be gone by now — a reopened
+        # session comes back a root unless that parent is still live. Spawned
+        # is the session's own history and stays.
+        parent = getattr(inst, "Parent", "") or ""
+        if parent and (parent == title or parent not in ENGINE.instances):
+            inst.Parent = ""
         ENGINE.instances[title] = inst
     # Eagerly boot the agent tmux session on the preserved worktree instead of
     # leaving a phantom "running" instance whose agent only starts lazily when a
@@ -11421,8 +12663,8 @@ async def intake_reopen(payload: dict) -> JSONResponse:
         except Exception as err:  # noqa: BLE001
             if log.ErrorLog is not None:
                 log.ErrorLog.Printf("failed to reopen %s: %v", open_title, err)
-            with ENGINE.lock:
-                ENGINE.instances.pop(open_title, None)
+            if not _drop_failed_start(open_title, inst):
+                return
             _events.BUS.emit(
                 "session.create_failed", session=open_title, data={"error": str(err)}
             )
@@ -12598,6 +13840,7 @@ async def delete_workspace(payload: dict) -> JSONResponse:
     await asyncio.to_thread(_remove)
     if killed:
         ENGINE.save(exclude_titles={killed})
+        _on_session_removed(killed)
     return JSONResponse({"ok": True, "killed_session": killed})
 
 
@@ -13098,6 +14341,504 @@ def pane_history(title: str, pane: str = "agent") -> PlainTextResponse:
             out.stderr.strip() or "capture failed", status_code=500
         )
     return PlainTextResponse(out.stdout.rstrip("\n") + "\n")
+
+
+def _agent_output(inst, title: str, view: str):
+    """The text behind one ``/output`` view → ``(view, text, fallback, error,
+    status)``. Blocking (transcript reads, tmux) — call via
+    ``asyncio.to_thread``. See :mod:`backend.web.core.agent_io`."""
+    wt = ""
+    try:
+        wt = inst.GetWorktreePath() or ""
+    except Exception:  # noqa: BLE001
+        wt = ""
+    tmux_name = tmux.to_mindflock_tmux_name(title)
+    fallback = False
+    if view == "last_reply":
+        text = None
+        try:
+            prov = providers.resolve(getattr(inst, "Program", "") or "")
+            text = prov.last_assistant_text(tmux_name, wt)
+        except Exception:  # noqa: BLE001 — no reply reads as "use the screen"
+            text = None
+        if isinstance(text, str) and text.strip():
+            return "last_reply", text, False, None, 200
+        # No transcript for this provider (or no reply yet): the screen is the
+        # closest thing to "what it said last" — and saying so is the contract.
+        view, fallback = "screen", True
+    if view == "transcript":
+        # Exactly /history?pane=agent's source chain: the provider transcript,
+        # else the pane's whole scrollback.
+        text = _agent_transcript_text(wt, tmux_name) if wt else ""
+        if text:
+            return "transcript", text, False, None, 200
+        name = _live_session_name(tmux_name)
+        if name is None:
+            return view, "", False, "no live session", 409
+        text, cap_err = _agent_io.capture_scrollback(name)
+        if cap_err is not None:
+            return view, "", False, cap_err, 500
+        return "transcript", text, False, None, 200
+    name = _live_session_name(tmux_name)
+    if name is None:
+        return view, "", fallback, "no live session", 409
+    text, cap_err = _agent_io.capture_screen(name)
+    if cap_err is not None:
+        return view, "", fallback, cap_err, 500
+    return "screen", text, fallback, None, 200
+
+
+@app.get("/api/instances/{title}/output")
+async def instance_output(
+    title: str, view: str = "last_reply", max_chars: Optional[str] = None
+) -> JSONResponse:
+    """What the session's agent produced, for another agent to read.
+
+    ``view``: ``last_reply`` (default — the provider's newest assistant
+    message; falls back to ``screen`` with ``"fallback": true`` when the
+    provider has none), ``transcript`` (the text ``/history?pane=agent``
+    serves) or ``screen`` (the visible pane only — what a dialog looks like).
+    ``max_chars`` (default 6000, capped at 50000) keeps the TAIL.
+
+    → ``{"view", "text", "truncated", "activity"}`` (+ ``"fallback": true``).
+    404 unknown session, 400 bad view/max_chars, 409 ``no live session`` when
+    the view needs the tmux pane and it is gone.
+    """
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    if view not in _agent_io.OUTPUT_VIEWS:
+        return JSONResponse(
+            {"error": "view must be one of: %s" % ", ".join(_agent_io.OUTPUT_VIEWS)},
+            status_code=400,
+        )
+    limit_chars, perr = _agent_io.parse_max_chars(max_chars)
+    if perr:
+        return JSONResponse({"error": perr}, status_code=400)
+    got_view, text, fallback, oerr, status = await asyncio.to_thread(
+        _agent_output, inst, title, view
+    )
+    if oerr is not None:
+        return JSONResponse({"error": oerr}, status_code=status)
+    text, truncated = _agent_io.tail(text, limit_chars)
+    try:
+        activity = await asyncio.to_thread(_agent_activity_cached, inst, title)
+    except Exception:  # noqa: BLE001 — enrichment only
+        activity = ""
+    body = {
+        "view": got_view,
+        "text": text,
+        "truncated": truncated,
+        "activity": activity,
+    }
+    if fallback:
+        body["fallback"] = True
+    return JSONResponse(body)
+
+
+@app.post("/api/instances/{title}/answer")
+async def instance_answer(title: str, payload: dict = None) -> JSONResponse:
+    """Answer a dialog the session's agent is blocked on.
+
+    Body ``{"text"?: str, "keys"?: [..]}``: ``text`` (≤ 2000 chars, control
+    characters stripped) is typed literally WITHOUT an Enter, then each key
+    (allow-list: ``Enter Escape Up Down Left Right Tab BTab Space 1..9 y n``) is
+    pressed in order. Allowed only while the agent's live (uncached) activity
+    is ``clarify`` or ``limit``, or while its provider PARSES a dialog on the
+    visible screen whatever the reading says (screen evidence beats the
+    activity layer) — anything else is 409, because typing into a working or
+    idle agent is a prompt, not an answer (that is ``/send``).
+
+    ``dialog_id`` (optional, from ``GET /dialog``) pins the answer to the
+    dialog it was meant for: when the dialog on screen now has another id —
+    the prompt was answered meanwhile and the NEXT one is up — nothing is
+    typed and the answer is 409 ``{"error": "the prompt changed",
+    "dialog_changed": true}``. One answer per dialog: a settling answer
+    (a digit, Enter, Escape, y/n) to a ``dialog_id`` that got one less than
+    a few seconds ago is 409 ``{"error": "that prompt was just answered",
+    "dialog_answered": true}`` (a double click, or a person and an
+    orchestrator answering the same prompt). ``by`` (``"agent"`` default, or
+    ``"user"``): an agent's answer does not count as human presence, a
+    person's click in the UI does (it is stamped like ``/send``).
+    → ``{"ok": true, "activity_before"}``; 404 unknown, 400 bad body, 409 not
+    waiting / over budget / dialog changed / just answered, 502 when tmux
+    refused the keys.
+    """
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    text, keys, perr = _agent_io.parse_answer(payload)
+    if perr:
+        return JSONResponse({"error": perr}, status_code=400)
+    dialog_id, by, perr = _agent_io.parse_answer_meta(payload)
+    if perr:
+        return JSONResponse({"error": perr}, status_code=400)
+    if await asyncio.to_thread(_budget_locked, title):
+        return JSONResponse(
+            {
+                "error": "session is over budget — raise the budget to send",
+                "budget_locked": True,
+            },
+            status_code=409,
+        )
+    body, status = await asyncio.to_thread(
+        _answer_dialog, inst, title, text, keys, dialog_id, by
+    )
+    return JSONResponse(body, status_code=status)
+
+
+def _answer_dialog(inst, title: str, text: str, keys, dialog_id, by: str):
+    """``/answer``'s check-and-type → ``(body, status)``. Blocking.
+
+    Holds the session's answer lock from the activity probe through the
+    keys, so two answers to one prompt can't both pass the dialog check
+    before either has typed. A settling answer pinned to a ``dialog_id`` is
+    remembered: the same id answered again within
+    ``_agent_io.ANSWERED_HOLD_S`` is 409 ``dialog_answered`` — the CLI may
+    not have redrawn yet, so the old dialog still being on screen proves
+    nothing."""
+    with _agent_io.answer_lock(title):
+        try:
+            activity = _agent_activity(inst, title)
+        except Exception:  # noqa: BLE001 — unknown reads as "don't type blind"
+            activity = "unknown"
+        name = tmux.to_mindflock_tmux_name(title)
+        program = getattr(inst, "Program", "") or ""
+
+        def read_screen():
+            live = _live_session_name(name)
+            if live is None:
+                return None, "no live session"
+            return _agent_io.current_dialog(live, program)
+
+        body = derr = None
+        read = False
+        if activity not in _agent_io.ANSWERABLE_ACTIVITIES:
+            # Screen evidence beats the reading: a dialog the provider PARSES
+            # on the visible screen is a prompt to answer, whatever the
+            # activity says (a background sub-agent's tool events rewrite
+            # the hook marker while its permission prompt is still up — a
+            # click on a visible dialog was refused as "not waiting on a
+            # prompt (activity: working)"). A paused/offline session is
+            # never typed into.
+            if activity != "offline":
+                body, derr = read_screen()
+                read = True
+            if derr is not None or not (body or {}).get("parsed"):
+                return {
+                    "error": "session is not waiting on a prompt (activity: %s)"
+                    % activity
+                }, 409
+            activity = "clarify"
+        settles = dialog_id is not None and _agent_io.settles(keys)
+        if dialog_id is not None:
+            # The dialog the click was meant for must still be the one on
+            # screen: a click on a strip a poll behind would otherwise answer
+            # the NEXT prompt with a key chosen for the previous one. A screen
+            # that can't be read can't be vouched for either.
+            if not read:
+                body, derr = read_screen()
+            if derr is not None or body is None or body.get("id") != dialog_id:
+                if derr is None and body is not None:
+                    _agent_io.note_dialog_seen(title, body.get("id"))
+                return {"error": "the prompt changed", "dialog_changed": True}, 409
+            if settles and _agent_io.answered_recently(title, dialog_id):
+                return {
+                    "error": "that prompt was just answered",
+                    "dialog_answered": True,
+                }, 409
+        if by == "user":
+            # A person clicked the dialog's button: presence, exactly like /send.
+            _note_human_input(title)
+        if not _agent_io.send_answer(name, text, keys):
+            return {"error": _SEND_FAILED}, 502
+        if settles:
+            _agent_io.note_answered(title, dialog_id)
+        return {"ok": True, "activity_before": activity}, 200
+
+
+@app.get("/api/instances/{title}/dialog")
+async def instance_dialog(title: str, quiet: Optional[str] = None):
+    """The dialog the session's agent is blocked on, as data — for the UI's
+    in-place answer buttons (rail strip, bell, Thread tab).
+
+    → ``{"id", "parsed", "question", "command", "options": [{"key", "label",
+    "kind"}]}``. The session's provider parses its visible screen
+    (``parse_dialog``; Claude Code and Codex so far): ``kind`` is ``yes`` /
+    ``always`` / ``no`` / ``other``, ``key`` the digit that picks the option
+    (post it to ``/answer`` with this ``id`` as ``dialog_id``). Unparsed →
+    ``parsed: false``, the best-effort question line and no options. ``id``
+    hashes the dialog's screen region (cursor-free), so it holds while the
+    same dialog is up.
+
+    Served while the agent's live (uncached) activity is ``clarify`` — or,
+    whatever the reading, while its provider PARSES a dialog on the visible
+    screen (screen evidence beats the activity layer: a background
+    sub-agent's prompt can read ``working`` or ``idle`` for a poll or two).
+    ``limit`` / ``offline``, or another reading with no parsed dialog on
+    screen, is 409 ``session is not waiting on a prompt (activity: X)``. 404
+    unknown; 409 ``no live session``; 500 when the capture fails. ``source``
+    (only when set): who raised it, e.g. ``"general-purpose agent"`` for a
+    Claude background sub-agent's prompt.
+
+    ``?quiet=1`` (the UI's answer strips): "not waiting on a prompt" is
+    **204** with no body instead of the 409 — an expected answer for a strip
+    whose row reading is a poll behind, which a browser would otherwise log
+    as a failed request every time.
+    """
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+
+    def not_waiting(activity: str):
+        if quiet in ("1", "true"):
+            return Response(status_code=204)
+        return JSONResponse(
+            {"error": "session is not waiting on a prompt (activity: %s)" % activity},
+            status_code=409,
+        )
+
+    try:
+        activity = await asyncio.to_thread(_agent_activity, inst, title)
+    except Exception:  # noqa: BLE001 — unknown reads as "nothing to show"
+        activity = "unknown"
+    if activity in ("limit", "offline"):
+        return not_waiting(activity)
+    name = await asyncio.to_thread(
+        _live_session_name, tmux.to_mindflock_tmux_name(title)
+    )
+    if name is None:
+        if activity != "clarify":
+            return not_waiting(activity)
+        return JSONResponse({"error": "no live session"}, status_code=409)
+    body, derr = await asyncio.to_thread(
+        _agent_io.current_dialog, name, getattr(inst, "Program", "") or ""
+    )
+    if activity != "clarify" and (derr is not None or not body.get("parsed")):
+        return not_waiting(activity)
+    if derr is not None:
+        return JSONResponse({"error": derr}, status_code=500)
+    _agent_io.note_dialog_seen(title, body.get("id"))
+    return JSONResponse(body)
+
+
+@app.get("/api/instances/{title}/thread")
+async def instance_thread(
+    title: str, limit: Optional[str] = None, before: Optional[str] = None
+) -> JSONResponse:
+    """The session's family thread — read-only, never marks mail read.
+
+    → ``{"title", "parent", "members": [{"title", "role": self|parent|child,
+    "status", "activity", "activity_since", "branch", "diff_stat",
+    "created_at", "last_report", "base_sha"}], "items": [{"type":
+    spawn|message|result, "id", "ts", "from", "to", "text", "status",
+    "state", "base_sha"}], "more"}``. Members: the session, its live parent,
+    its live children. Items, oldest first: a spawn record per parent→child
+    edge (``ts`` = the child's creation, ``text`` = the start of its seed
+    prompt when known, ``base_sha`` = the commit its worktree was cut from)
+    and every message between two members, both directions, consumed or
+    not. ``limit`` (default 50, max 200) keeps the newest; ``before`` (an
+    item id) pages back, ``more`` says older items exist.
+
+    404 unknown session; 400 bad ``limit`` or an unknown ``before`` id.
+    """
+    if ENGINE.instances.get(title) is None:
+        return JSONResponse(
+            {"error": "instance not found: %s" % title}, status_code=404
+        )
+    n, perr = _thread.parse_limit(limit)
+    if perr:
+        return JSONResponse({"error": perr}, status_code=400)
+    body, terr = await asyncio.to_thread(_thread.thread, title, n, before or None)
+    if terr is not None:
+        status = 404 if terr.startswith("instance not found") else 400
+        return JSONResponse({"error": terr}, status_code=status)
+    return JSONResponse(body)
+
+
+# --------------------------------------------------------------------------- #
+# Playbooks: named orchestration prompts the UI pastes (backend.mcp.playbooks)
+# --------------------------------------------------------------------------- #
+#: Why a playbook can't be pasted into a session right now.
+_PB_NO_TOOLS = "This CLI doesn't get the MindFlock tools"
+_PB_NOT_ATTACHED = "Restart this agent to give it the MindFlock tools"
+_PB_IN_DIALOG = "Answer its prompt first — pasting now would answer the dialog"
+#: Activities in which pasted text would land in a dialog, not the input box.
+_PB_DIALOG_ACTIVITIES = ("clarify", "limit")
+
+
+def _mcp_unattachable(program: str) -> Optional[str]:
+    """Why ``program``'s agent gets no MindFlock tools (the feature is off, or
+    its CLI has no auto-attach), or None when new launches attach it."""
+    caps = _agent_mcp_caps()
+    try:
+        name = providers.resolve(program or "").name
+    except Exception:  # noqa: BLE001 — an unresolvable CLI can't attach
+        name = ""
+    if not caps.get("enabled") or name not in (caps.get("providers") or ()):
+        return _PB_NO_TOOLS
+    return None
+
+
+def _playbook_ctx(inst, title: str) -> dict:
+    """``playbooks.render``'s context for ``title``: its provider (tool
+    spelling), branch (what ``wrapup`` merges into) and live children with
+    whether each has reported."""
+    try:
+        provider = providers.resolve(getattr(inst, "Program", "") or "").name
+    except Exception:  # noqa: BLE001
+        provider = ""
+    with ENGINE.lock:
+        instances = dict(ENGINE.instances)
+    children = [
+        {
+            "title": c,
+            "reported": _thread.last_report(instances, c) is not None,
+        }
+        for c in _lineage.children_of(instances, title)
+    ]
+    return {
+        "provider": provider,
+        "branch": getattr(inst, "Branch", "") or "",
+        "children": children,
+    }
+
+
+def _playbook_blocked(inst, title: str, *, live: bool = False) -> Optional[str]:
+    """Why a playbook can't be pasted into ``title``'s agent now, or None.
+
+    The CLI gets no MindFlock tools, this launch of it didn't
+    (``mcp_attached`` false), or it is on a prompt / the usage-limit menu
+    (pasted text would answer the dialog). ``live``: probe the activity
+    uncached (the render route, right before a paste) rather than the
+    memoized read the menu uses. Blocking."""
+    reason = _mcp_unattachable(getattr(inst, "Program", "") or "")
+    if reason is None:
+        attached = providers.mcp_attach.launch_attached(
+            tmux.to_mindflock_tmux_name(title)
+        )
+        if attached is False:
+            reason = _PB_NOT_ATTACHED
+    if reason is None:
+        probe = _agent_activity if live else _agent_activity_cached
+        try:
+            activity = probe(inst, title)
+        except Exception:  # noqa: BLE001 — unknown never blocks the menu
+            activity = ""
+        if activity in _PB_DIALOG_ACTIVITIES:
+            reason = _PB_IN_DIALOG
+    if reason is None and live:
+        # Right before a paste: the screen outranks the reading.
+        name = _live_session_name(tmux.to_mindflock_tmux_name(title))
+        if name is not None and _dialog_on_screen(inst, name):
+            reason = _PB_IN_DIALOG
+    return reason
+
+
+def _playbook_menu(inst, title: str) -> list:
+    """The playbook list for ``title``'s menu: ``has_children`` ones omitted
+    without live children, each with ``available`` / ``disabled_reason``.
+    Blocking (the activity probe is the memoized one)."""
+    reason = _playbook_blocked(inst, title)
+    with ENGINE.lock:
+        instances = dict(ENGINE.instances)
+    has_children = bool(_lineage.children_of(instances, title))
+    out = []
+    for pb in _playbooks.registry(title):
+        if not _playbooks.visible(pb["id"], has_children):
+            continue
+        pb["available"] = reason is None
+        pb["disabled_reason"] = reason
+        out.append(pb)
+    return out
+
+
+@app.get("/api/playbooks")
+async def list_playbooks(title: Optional[str] = None) -> JSONResponse:
+    """The named orchestration prompts → ``{"playbooks": [{id, label, desc,
+    letter, args: [{name, label, kind, required}], when, available,
+    disabled_reason}]}``, in menu order.
+
+    With ``title``: the menu for that session. A ``when: has_children``
+    playbook is left out entirely while it has no live children; every item
+    is ``available: false`` with the reason when the session's CLI doesn't
+    get the MindFlock tools, when this launch of it didn't
+    (``mcp_attached`` false — a restart fixes it), or while it is in
+    ``clarify`` / ``limit`` (pasted text would answer the dialog). 404 for an
+    unknown title. Without ``title``: the whole registry, all available (the
+    New Session dialog's list)."""
+    if title is None or title == "":
+        items = []
+        for pb in _playbooks.registry():
+            pb["available"] = True
+            pb["disabled_reason"] = None
+            items.append(pb)
+        return JSONResponse({"playbooks": items})
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    items = await asyncio.to_thread(_playbook_menu, inst, title)
+    return JSONResponse({"playbooks": items})
+
+
+@app.post("/api/playbooks/{playbook_id}/render")
+async def render_playbook(playbook_id: str, payload: dict = None) -> JSONResponse:
+    """One playbook as prompt text for ``title``'s agent → ``{"text"}``.
+
+    Body ``{"title", "args": {}}``. The text is ONE paragraph that names the
+    session's own spelling of the MindFlock tools; a text argument left
+    empty ends it on its lead-in ("The task: ") so the user types straight
+    on. The UI pastes it with ``/send {"submit": false}`` — nothing runs
+    until the user presses Enter. A ``session`` argument must name a live
+    session (``ask``: any other session; ``wrapup``'s ``only``: one of
+    ``title``'s live children) — matched exactly, however long or oddly
+    spaced the title.
+
+    409 ``{"error", "disabled_reason"}`` when the paste can't go in now —
+    the menu's reasons, with the activity probed LIVE: the agent is on a
+    prompt or the usage-limit menu (the pasted text would answer it), this
+    launch of it has no MindFlock tools (``mcp_attached`` false), or its CLI
+    gets none. 400 unknown playbook / bad args (a text argument that would
+    push the paste past 600 characters included), 404 unknown title.
+    """
+    payload = payload if isinstance(payload, dict) else {}
+    if _playbooks.get(playbook_id) is None:
+        return JSONResponse(
+            {"error": "unknown playbook: %s" % playbook_id}, status_code=400
+        )
+    title = payload.get("title")
+    if not isinstance(title, str) or not title:
+        return JSONResponse({"error": "title is required"}, status_code=400)
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    try:
+        args = _playbooks.validate_args(playbook_id, payload.get("args"))
+    except _playbooks.PlaybookError as perr:
+        return JSONResponse({"error": str(perr)}, status_code=400)
+    ask = args.get("session") if playbook_id == "ask" else ""
+    if ask and (ask == title or ask not in ENGINE.instances):
+        return JSONResponse(
+            {"error": "session must name another live session: %s" % ask},
+            status_code=400,
+        )
+    only = args.get("only") if playbook_id == "wrapup" else ""
+    if only and only not in _lineage.children_of(ENGINE.instances, title):
+        return JSONResponse(
+            {"error": "only must name one of %s's workers: %s" % (title, only)},
+            status_code=400,
+        )
+    blocked = await asyncio.to_thread(_playbook_blocked, inst, title, live=True)
+    if blocked is not None:
+        return JSONResponse(
+            {"error": blocked, "disabled_reason": blocked}, status_code=409
+        )
+    ctx = await asyncio.to_thread(_playbook_ctx, inst, title)
+    try:
+        text = _playbooks.render(playbook_id, args, ctx)
+    except _playbooks.PlaybookError as perr:
+        return JSONResponse({"error": str(perr)}, status_code=400)
+    return JSONResponse({"text": text})
 
 
 @app.get("/api/instances/{title}/find")

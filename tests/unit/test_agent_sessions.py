@@ -10,6 +10,8 @@ exit-marker / launcher plumbing it consults.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from backend.web import server
@@ -166,9 +168,48 @@ def test_send_to_agent_submit_sends_enter_after_pause(rec, monkeypatch):
     rec.responses = {"has-session": FakeProc(0), "send-keys": FakeProc(0)}
     assert agent_sessions._send_to_agent("s", "hi", submit=True) is True
     sends = rec.argvs("send-keys")
-    assert sends[0][-2:] == ["-l", "hi"]
+    assert sends[0][-3:] == ["-l", "--", "hi"]
     assert sends[-1][-1] == "Enter"
     assert slept == [0.15]  # ended the paste burst before Enter
+
+
+def test_multi_line_text_goes_in_as_one_bracketed_paste(rec, monkeypatch):
+    """``send-keys -l`` sends each LF as a raw byte, and a prompt_toolkit CLI
+    (aider, …) submits on it: a held initial prompt decorated with the red-zone
+    note reached aider as four separate turns. A multi-line text is loaded
+    into a one-shot buffer and pasted with ``-p`` (bracketed), then ONE Enter."""
+    monkeypatch.setattr(agent_sessions.time, "sleep", lambda s: None)
+    seen = {}
+
+    class Loader:
+        def __call__(self, args, **kw):
+            argv = list(args)
+            if argv[1] == "load-buffer":
+                with open(argv[-1], encoding="utf-8") as fh:
+                    seen["content"] = fh.read()
+            return rec(args, **kw)
+
+    monkeypatch.setattr(server, "_run_capped", Loader())
+    text = "Fix the bug\n\n---\n\nRed zones: `a/`"
+    assert agent_sessions._send_to_agent("s", text, submit=True) is True
+    assert seen["content"] == text
+    (load,) = rec.argvs("load-buffer")
+    (paste,) = rec.argvs("paste-buffer")
+    buf = load[load.index("-b") + 1]
+    assert paste[paste.index("-b") + 1] == buf
+    assert "-p" in paste and "-d" in paste and paste[-2:] == ["-t", "s"]
+    sends = rec.argvs("send-keys")
+    # No literal typing of the text — only the submitting Enter.
+    assert sends == [["tmux", "send-keys", "-t", "s", "Enter"]]
+    assert not os.path.exists(load[-1])  # the temp file is cleaned up
+
+
+def test_multi_line_paste_failure_is_false_and_sends_no_enter(rec, monkeypatch):
+    monkeypatch.setattr(agent_sessions.time, "sleep", lambda s: None)
+    rec.responses = {"has-session": FakeProc(0), "paste-buffer": FakeProc(1)}
+    assert agent_sessions._send_to_agent("s", "a\nb", submit=True) is False
+    assert rec.argvs("send-keys") == []
+    assert rec.argvs("delete-buffer")  # the one-shot buffer is dropped
 
 
 def test_send_to_agent_no_submit_skips_enter(rec, monkeypatch):
@@ -177,7 +218,25 @@ def test_send_to_agent_no_submit_skips_enter(rec, monkeypatch):
     assert agent_sessions._send_to_agent("s", "hi", submit=False) is True
     sends = rec.argvs("send-keys")
     assert len(sends) == 1  # only the literal text; no Enter
-    assert sends[0][-2:] == ["-l", "hi"]
+    assert sends[0][-3:] == ["-l", "--", "hi"]
+
+
+def test_concurrent_typers_never_interleave_text_and_enter(rec, monkeypatch):
+    """Two automatic typers (queue drain + delivery "now") on one session:
+    the second's text must not land inside the first's text-to-Enter pause,
+    or the CLI submits "<prompt><message>" as one turn."""
+    import threading
+
+    real_sleep = agent_sessions.time.sleep
+    monkeypatch.setattr(agent_sessions.time, "sleep", lambda s: real_sleep(0.05))
+    rec.responses = {"has-session": FakeProc(0), "send-keys": FakeProc(0)}
+    first = threading.Thread(target=agent_sessions._send_to_agent, args=("s", "a"))
+    first.start()
+    real_sleep(0.01)  # inside the first typer's pause
+    agent_sessions._send_to_agent("s", "b")
+    first.join()
+    tail = [argv[-1] for argv in rec.argvs("send-keys")]
+    assert tail == ["a", "Enter", "b", "Enter"]
 
 
 # --------------------------------------------------------------------------- #

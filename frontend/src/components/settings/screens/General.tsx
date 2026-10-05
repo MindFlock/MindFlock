@@ -14,6 +14,7 @@ import {
 import { setWheelDamping } from "../../../lib/terminals";
 import { toast } from "../../../lib/toast";
 import { useUi } from "../../../state/store";
+import { useConfig } from "../../../state/queries";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -43,6 +44,7 @@ export function General(_: ScreenProps) {
         </span>
       </label>
       <ResumeOnUsageResetRow />
+      <AgentMcpRows />
       <ScrollSpeedRow />
       <ReduceMotionRow />
       <TakeABreakRow />
@@ -87,6 +89,87 @@ function ResumeOnUsageResetRow() {
         <span className="ca-slider" />
       </label>
     </div>
+  );
+}
+
+/** The scope select's options. "" is the server's default (children); stored
+ * only when the user picks something else (settings.GeneralSettings). */
+export const AGENT_MCP_SCOPE_OPTIONS = [
+  { value: "", label: "Default (children)" },
+  { value: "children", label: "Children — manage only sessions it spawned" },
+  { value: "readonly", label: "Read-only — look and check its inbox, no messaging" },
+  { value: "all", label: "All — manage any session" },
+];
+
+/** MindFlock MCP auto-attach: every Claude / Codex session's CLI is launched
+ * with the MindFlock MCP server, so its agent can list the flock, message other
+ * sessions and spawn / steer workers. Unset reads as on (see
+ * settings.GeneralSettings.agent_mcp). Both knobs are read at LAUNCH, so they
+ * apply to each session's next (re)launch — a running agent keeps the tools it
+ * started with. */
+function AgentMcpRows() {
+  const s = useSettings();
+  const { data: config } = useConfig();
+  const stored = s.get("general", "agent_mcp");
+  const on = stored !== false && stored !== "false" && stored !== "0";
+  // The server's MINDFLOCK_AGENT_MCP=0 wins over this switch; say so rather
+  // than show an "on" that does nothing. `=== false` so an older server (no
+  // agent_mcp cap) is not reported as overriding anything.
+  const envOff = on && config?.caps?.agent_mcp?.enabled === false;
+  const providers = config?.caps?.agent_mcp?.providers;
+  // Provider ids are lower-case ("claude"); the sentence names products.
+  const clis =
+    providers && providers.length
+      ? providers.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" and ")
+      : "Claude and Codex";
+  return (
+    <>
+      <div className="set-row set-switch-row agent-mcp-row">
+        <span className="notif-rule-text">
+          <span className="set-label">
+            Give agents the MindFlock MCP (agent-to-agent messaging and orchestration)
+          </span>
+          <span className="set-hint notif-rule-desc">
+            Launches each {clis} session with MindFlock's MCP server attached, so
+            its agent can see the other sessions, message them, and spawn and
+            steer worker sessions of its own. Applies on each session's next
+            launch — running agents keep what they started with.
+          </span>
+          {envOff && (
+            <span className="set-hint notif-rule-desc agent-mcp-env-off">
+              Off for now: the server was started with MINDFLOCK_AGENT_MCP=0,
+              which overrides this switch.
+            </span>
+          )}
+        </span>
+        {/* label wraps only the switch, so clicking the row text no longer flips it */}
+        <label className="ca-switch">
+          <input
+            type="checkbox"
+            checked={on}
+            onChange={(e) => {
+              s.saveField("general", "agent_mcp", e.target.checked);
+              toast(
+                e.target.checked
+                  ? "Agent MCP on — from each session's next launch"
+                  : "Agent MCP off — from each session's next launch"
+              );
+            }}
+          />
+          <span className="ca-slider" />
+        </label>
+      </div>
+      <label
+        className="set-row"
+        title="How far an agent may MANAGE other sessions through the MCP (answer their prompts, kill them, re-parent them). Reading the flock and messaging are allowed in every scope except read-only."
+      >
+        <span className="set-label">Agent MCP scope</span>
+        <SettingField group="general" field="agent_mcp_scope" options={AGENT_MCP_SCOPE_OPTIONS} />
+        <span className="set-hint">
+          Applies on each session's next launch. A guard-rail, not a security boundary.
+        </span>
+      </label>
+    </>
   );
 }
 

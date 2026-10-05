@@ -7,6 +7,9 @@ import {
   effBindings,
   defaultCombosFor,
   chordKeyFor,
+  chordForKey,
+  chordShadowedBy,
+  setChordKey,
   setKeyCombos,
   resetAllOverrides,
   modalOpen,
@@ -94,6 +97,27 @@ describe("chordKeyFor", () => {
   it("returns the default letter with no override", () => {
     expect(chordKeyFor("c")).toBe("c");
     expect(chordKeyFor("p")).toBe("p");
+  });
+});
+
+describe("a newer chord whose letter an older rebinding took", () => {
+  it("the user's own binding wins, and the newer chord says it is taken", () => {
+    // Rebound before Ctrl+K S existed: Commit moved to "s".
+    setChordKey("c", "s");
+    expect(chordForKey("s")).toBe("c");
+    expect(chordShadowedBy("s")).toBe("c");
+    expect(chordShadowedBy("c")).toBeNull();
+    // Given a free key, Message… is reachable again and nothing is taken.
+    setChordKey("s", "m");
+    expect(chordForKey("m")).toBe("s");
+    expect(chordShadowedBy("s")).toBeNull();
+  });
+
+  it("with no overrides every default letter is its own chord", () => {
+    for (const k of ["s", "f", "t", "c"]) {
+      expect(chordForKey(k)).toBe(k);
+      expect(chordShadowedBy(k)).toBeNull();
+    }
   });
 });
 

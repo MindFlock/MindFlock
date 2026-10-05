@@ -1235,3 +1235,330 @@ class TestUninstallCommand:
         cli.main(["uninstall", "--yes"])
 
         assert "could not read state.json" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# Bearer token + text responses in backend.client
+# --------------------------------------------------------------------------- #
+class TestClientAuth:
+    @pytest.fixture(autouse=True)
+    def _fresh_token_cache(self):
+        client.reset_auth_token()
+        yield
+        client.reset_auth_token()
+
+    @staticmethod
+    def _capture(monkeypatch, responses):
+        """urlopen stand-in: records each request's auth header and answers
+        with the next scripted payload (an exception instance raises)."""
+        seen = []
+
+        def _urlopen(req, timeout=None):
+            seen.append(req.get_header("Authorization"))
+            step = responses.pop(0)
+            if isinstance(step, Exception):
+                raise step
+            return _fake_response(step)
+
+        monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+        return seen
+
+    @staticmethod
+    def _401():
+        return urllib.error.HTTPError(
+            "http://x",
+            401,
+            "Unauthorized",
+            {},
+            io.BytesIO(b'{"error": "unauthorized"}'),
+        )
+
+    def test_no_token_sends_no_header(self, monkeypatch):
+        seen = self._capture(monkeypatch, [{"ok": 1}])
+        assert client.get("http://127.0.0.1:8765", "/api/x") == {"ok": 1}
+        assert seen == [None]
+
+    def test_env_token_wins(self, monkeypatch, tmp_path):
+        settings = tmp_path / "s.json"
+        settings.write_text(json.dumps({"general": {"auth_token": "from-file"}}))
+        monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(settings))
+        monkeypatch.setenv("MINDFLOCK_AUTH_TOKEN", "from-env")
+        seen = self._capture(monkeypatch, [{"ok": 1}])
+        client.get("http://127.0.0.1:8765", "/api/x")
+        assert seen == ["Bearer from-env"]
+
+    def test_settings_file_token_read_only(self, monkeypatch, tmp_path):
+        settings = tmp_path / "s.json"
+        settings.write_text(json.dumps({"general": {"auth_token": "from-file"}}))
+        before = settings.read_bytes()
+        monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(settings))
+        seen = self._capture(monkeypatch, [{"ok": 1}])
+        client.get("http://127.0.0.1:8765", "/api/x")
+        assert seen == ["Bearer from-file"]
+        assert settings.read_bytes() == before  # never minted or rewritten
+
+    def test_missing_or_garbled_settings_file_means_no_token(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "absent.json"))
+        assert client.auth_token() == ""
+        client.reset_auth_token()
+        settings = tmp_path / "s.json"
+        settings.write_text("{not json")
+        monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(settings))
+        assert client.auth_token() == ""
+
+    def test_token_is_cached(self, monkeypatch, tmp_path):
+        settings = tmp_path / "s.json"
+        settings.write_text(json.dumps({"general": {"auth_token": "one"}}))
+        monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(settings))
+        assert client.auth_token() == "one"
+        settings.write_text(json.dumps({"general": {"auth_token": "two"}}))
+        assert client.auth_token() == "one"
+
+    def test_401_rereads_a_rotated_token_and_retries_once(self, monkeypatch, tmp_path):
+        settings = tmp_path / "s.json"
+        settings.write_text(json.dumps({"general": {"auth_token": "old"}}))
+        monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(settings))
+        assert client.auth_token() == "old"
+        settings.write_text(json.dumps({"general": {"auth_token": "new"}}))
+        seen = self._capture(monkeypatch, [self._401(), {"ok": 1}])
+        assert client.get("http://127.0.0.1:8765", "/api/x") == {"ok": 1}
+        assert seen == ["Bearer old", "Bearer new"]
+
+    def test_401_with_unchanged_token_raises(self, monkeypatch):
+        seen = self._capture(monkeypatch, [self._401()])
+        with pytest.raises(client.ApiError) as exc:
+            client.get("http://127.0.0.1:8765", "/api/x")
+        assert exc.value.status == 401
+        assert len(seen) == 1
+
+    def test_probe_succeeds_behind_the_gate(self, monkeypatch):
+        monkeypatch.setenv("MINDFLOCK_AUTH_TOKEN", "t")
+        cfg = {"default_program": "claude", "caps": {}}
+
+        def _urlopen(req, timeout=None):
+            if req.get_header("Authorization") != "Bearer t":
+                raise self._401()
+            return _fake_response(cfg)
+
+        monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+        assert client.probe("http://127.0.0.1:8765") == cfg
+
+    def test_get_text_returns_the_body(self, monkeypatch):
+        class _Resp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return "## User\nhi — ünïcode".encode("utf-8")
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=None: _Resp())
+        assert client.get_text("http://x", "/history") == "## User\nhi — ünïcode"
+
+    def test_read_timeout_is_request_timeout(self, monkeypatch):
+        def _slow(req, timeout=None):
+            raise TimeoutError("timed out")
+
+        monkeypatch.setattr("urllib.request.urlopen", _slow)
+        with pytest.raises(client.RequestTimeout):
+            client.post("http://x", "/api/y", {})
+
+    def test_refused_is_server_not_found_not_timeout(self, monkeypatch):
+        def _refused(req, timeout=None):
+            raise urllib.error.URLError(ConnectionRefusedError(111, "refused"))
+
+        monkeypatch.setattr("urllib.request.urlopen", _refused)
+        with pytest.raises(client.ServerNotFound) as exc:
+            client.get("http://x", "/api/y")
+        assert not isinstance(exc.value, client.RequestTimeout)
+
+
+# --------------------------------------------------------------------------- #
+# mindflock msg / inbox / mcp
+# --------------------------------------------------------------------------- #
+class _FakeMailApi:
+    def __init__(self, monkeypatch, listing, post_result=None, get_result=None):
+        self.gets = []
+        self.posts = []
+        self._listing = listing
+        self._post_result = post_result or {}
+        self._get_result = get_result or {"messages": [], "unread": 0}
+        monkeypatch.setattr(client, "discover", lambda *a, **k: "http://127.0.0.1:8765")
+        monkeypatch.setattr(client, "get", self._get)
+        monkeypatch.setattr(client, "post", self._post)
+
+    def _get(self, base, path, timeout=None):
+        self.gets.append(path)
+        return self._listing if path == "/api/instances" else self._get_result
+
+    def _post(self, base, path, payload=None, timeout=None):
+        self.posts.append((path, payload))
+        return self._post_result
+
+
+class TestMsgCommand:
+    def test_sends_from_outside_the_flock(self, monkeypatch, capsys):
+        api = _FakeMailApi(
+            monkeypatch,
+            [{"title": "fix-auth"}],
+            post_result={"message": {"id": "m1_1"}, "delivery": "pending"},
+        )
+        assert cli.main(["msg", "fix", "please", "rebase"]) == 0
+        assert api.posts == [
+            (
+                "/api/instances/fix-auth/messages",
+                {"text": "please rebase", "from": "", "delivery": "auto"},
+            )
+        ]
+        assert "sent m1_1 to fix-auth (pending)" in capsys.readouterr().out
+
+    def test_delivery_flag_and_detail(self, monkeypatch, capsys):
+        api = _FakeMailApi(
+            monkeypatch,
+            [{"title": "docs"}],
+            post_result={
+                "message": {"id": "m2"},
+                "delivery": "held",
+                "detail": "rate limit",
+            },
+        )
+        assert cli.main(["msg", "docs", "hi", "--delivery", "inbox"]) == 0
+        assert api.posts[0][1]["delivery"] == "inbox"
+        captured = capsys.readouterr()
+        assert "(held)" in captured.out and "rate limit" in captured.err
+
+    def test_stdin_text_and_quoted_title(self, monkeypatch):
+        api = _FakeMailApi(monkeypatch, [{"title": "my session"}])
+        monkeypatch.setattr("sys.stdin", io.StringIO("line one\nline two\n"))
+        assert cli.main(["msg", "my session", "-"]) == 0
+        path, payload = api.posts[0]
+        assert path == "/api/instances/my%20session/messages"
+        assert payload["text"] == "line one\nline two"
+
+    def test_empty_text_refused(self, monkeypatch, capsys):
+        api = _FakeMailApi(monkeypatch, [{"title": "docs"}])
+        assert cli.main(["msg", "docs", "  "]) == 1
+        assert api.posts == []
+        assert "empty message" in capsys.readouterr().err
+
+    def test_api_error_is_one_line(self, monkeypatch, capsys):
+        _FakeMailApi(monkeypatch, [{"title": "docs"}])
+
+        def _post(*a, **k):
+            raise client.ApiError(400, "message text is too long")
+
+        monkeypatch.setattr(client, "post", _post)
+        assert cli.main(["msg", "docs", "x"]) == 1
+        assert "error: message text is too long" in capsys.readouterr().err
+
+
+class TestInboxCommand:
+    _MSGS = {
+        "messages": [
+            {
+                "id": "m1",
+                "ts": 0,
+                "from": "w1",
+                "kind": "result",
+                "state": "held",
+                "text": "done:\nall tests pass",
+            },
+            {
+                "id": "m2",
+                "ts": 0,
+                "from": "",
+                "kind": "message",
+                "state": "pending",
+                "text": "x" * 300,
+            },
+        ],
+        "unread": 2,
+    }
+
+    def test_lists_without_marking_read(self, monkeypatch, capsys):
+        api = _FakeMailApi(monkeypatch, [{"title": "orch"}], get_result=self._MSGS)
+        assert cli.main(["inbox", "orch"]) == 0
+        query = api.gets[-1]
+        assert query.startswith("/api/instances/orch/messages?")
+        assert "mark_read=0" in query and "unread=1" in query
+        out = capsys.readouterr().out.splitlines()
+        assert "[held] result from w1: done: all tests pass" in out[0]
+        assert "from (outside the flock)" in out[1] and out[1].endswith("…")
+
+    def test_all_and_json(self, monkeypatch, capsys):
+        api = _FakeMailApi(monkeypatch, [{"title": "orch"}], get_result=self._MSGS)
+        assert cli.main(["inbox", "orch", "--all", "--json"]) == 0
+        assert "include_consumed=1" in api.gets[-1]
+        assert "mark_read=0" in api.gets[-1]
+        assert json.loads(capsys.readouterr().out)["unread"] == 2
+
+    def test_empty(self, monkeypatch, capsys):
+        _FakeMailApi(monkeypatch, [{"title": "orch"}])
+        assert cli.main(["inbox", "orch"]) == 0
+        assert "no unread messages for orch" in capsys.readouterr().out
+
+
+class TestMcpCommand:
+    def test_print_config_snippets(self, capsys):
+        import tomllib
+
+        argv = ["mcp", "--print-config", "--scope", "all", "--port", "9100"]
+        assert cli.main(argv) == 0
+        out = capsys.readouterr().out
+        add = next(ln for ln in out.splitlines() if ln.startswith("claude mcp add"))
+        # The name must precede the variadic --env options.
+        assert add.startswith("claude mcp add mindflock --scope user")
+        assert " -- " in add and add.endswith("-P -m backend.mcp")
+        assert "MINDFLOCK_MCP_SCOPE=all" in add and "MINDFLOCK_PORT=9100" in add
+        start = out.index("{")
+        end = out.index("# Codex")
+        entry = json.loads(out[start:end])["mcpServers"]["mindflock"]
+        assert entry["type"] == "stdio" and entry["command"] == sys.executable
+        assert entry["args"] == ["-P", "-m", "backend.mcp"]
+        assert entry["env"]["MINDFLOCK_MCP_SCOPE"] == "all"
+        toml = tomllib.loads(out[end:])["mcp_servers"]["mindflock"]
+        assert toml["command"] == sys.executable
+        assert toml["tool_timeout_sec"] == 1620
+        assert toml["startup_timeout_sec"] == 30
+        assert "TMUX_PANE" in toml["env_vars"]
+        assert toml["env"]["MINDFLOCK_PORT"] == "9100"
+
+    def test_pythonpath_only_when_not_installed(self, monkeypatch):
+        import sysconfig
+
+        import backend
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(backend.__file__)))
+        monkeypatch.setattr(
+            sysconfig, "get_paths", lambda: {"purelib": root, "platlib": root}
+        )
+        _, _, env = cli._mcp_launch()
+        assert "PYTHONPATH" not in env
+        monkeypatch.setattr(sysconfig, "get_paths", lambda: {"purelib": "/nowhere"})
+        _, _, env = cli._mcp_launch()
+        assert env["PYTHONPATH"] == root
+
+    def test_serve_delegates_with_flags(self, monkeypatch):
+        from backend import mcp as mcp_server
+
+        seen = {}
+
+        def _main(argv, prog):
+            seen["argv"], seen["prog"] = argv, prog
+            return 0
+
+        monkeypatch.setattr(mcp_server, "main", _main)
+        monkeypatch.setattr(
+            client,
+            "discover",
+            lambda *a, **k: pytest.fail("mcp must not discover up front"),
+        )
+        assert cli.main(["mcp", "--scope", "readonly", "--port", "9"]) == 0
+        assert seen == {
+            "argv": ["--scope", "readonly", "--port", "9"],
+            "prog": "mindflock mcp",
+        }

@@ -1,0 +1,13 @@
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Ready to code?
+
+ Here is Claude's plan:
+ Add a per-user RateLimiter to billing, search and upload, one worker each.
+
+ Would you like to proceed?
+
+ ❯ 1. Yes, and auto-accept edits (shift+tab)
+   2. Yes, and manually approve edits
+   3. No, keep planning
+
+ ctrl-g to edit in Vim

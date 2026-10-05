@@ -90,6 +90,64 @@ def test_round_trip_preserves_fields():
     assert back.to_dict() == orig.to_dict()
 
 
+def test_lineage_keys_absent_when_unset():
+    """A pre-lineage entry serializes byte-identically: no ``parent`` /
+    ``spawned`` keys at all, not empty ones."""
+    d = InstanceData(title="t", path="/x", program="claude").to_dict()
+    assert list(d.keys()) == _PLAIN_KEYS
+    assert "parent" not in d and "spawned" not in d
+    # Explicit zero values are still "unset".
+    d = InstanceData(title="t", parent="", spawned=False).to_dict()
+    assert "parent" not in d and "spawned" not in d
+
+
+def test_lineage_keys_emitted_last_and_in_order():
+    d = InstanceData(
+        title="t",
+        in_place=True,
+        base_branch="main",
+        profile_id="work",
+        profile_model="m",
+        parent="orch",
+        spawned=True,
+    ).to_dict()
+    assert list(d.keys())[len(_PLAIN_KEYS) :] == [
+        "in_place",
+        "base_branch",
+        "profile_id",
+        "profile_model",
+        "parent",
+        "spawned",
+    ]
+    assert d["parent"] == "orch" and d["spawned"] is True
+    # Each emits independently of the other.
+    assert list(InstanceData(title="t", spawned=True).to_dict())[-1] == "spawned"
+    only_parent = InstanceData(title="t", parent="p").to_dict()
+    assert only_parent["parent"] == "p" and "spawned" not in only_parent
+
+
+def test_lineage_round_trips():
+    orig = InstanceData(title="w", program="claude", parent="orch", spawned=True)
+    back = InstanceData.from_dict(orig.to_dict())
+    assert back.parent == "orch" and back.spawned is True
+    assert back.to_dict() == orig.to_dict()
+    # Absent keys (pre-feature state.json) read back as unset.
+    old = InstanceData.from_dict({"title": "t"})
+    assert old.parent == "" and old.spawned is False
+    # A hand-edited null reads as unset, not as the string "None".
+    nulls = InstanceData.from_dict({"title": "t", "parent": None, "spawned": None})
+    assert nulls.parent == "" and nulls.spawned is False
+
+
+def test_lineage_marshal_bytes():
+    blob = _marshal_instances(
+        [InstanceData(title="w", parent="orch&co", spawned=True)]
+    ).decode("utf-8")
+    # Compact, HTML-escaped like every other string, appended after the
+    # always-present keys.
+    assert blob.endswith(',"parent":"orch\\u0026co","spawned":true}]')
+
+
 def test_marshal_is_compact_and_html_escaped():
     # Compact separators (no spaces) and Go HTML escaping of < > &.
     data = [InstanceData(title="a&b", path="</x>", program="claude")]
@@ -194,3 +252,38 @@ def test_save_instances_holds_state_file_lock(monkeypatch):
     monkeypatch.setattr(storage_mod, "state_file_lock", fake_lock)
     storage_mod.Storage(FakeState()).SaveInstances([])
     assert events == ["acquire", "save", "release"]
+
+
+def test_playbook_key_absent_when_unset():
+    """A pre-feature entry serializes byte-identically: no ``playbook`` key."""
+    d = InstanceData(title="t", path="/x", program="claude").to_dict()
+    assert list(d.keys()) == _PLAIN_KEYS and "playbook" not in d
+    assert "playbook" not in InstanceData(title="t", playbook="").to_dict()
+
+
+def test_playbook_key_emitted_last():
+    d = InstanceData(title="t", parent="orch", spawned=True, playbook="split")
+    assert list(d.to_dict().keys())[len(_PLAIN_KEYS) :] == [
+        "parent",
+        "spawned",
+        "playbook",
+    ]
+    only = InstanceData(title="t", playbook="split").to_dict()
+    assert list(only)[-1] == "playbook" and only["playbook"] == "split"
+
+
+def test_playbook_round_trips():
+    orig = InstanceData(title="o", program="claude", playbook="split")
+    back = InstanceData.from_dict(orig.to_dict())
+    assert back.playbook == "split" and back.to_dict() == orig.to_dict()
+    assert InstanceData.from_dict({"title": "t"}).playbook == ""
+    # A hand-edited null or a non-string reads as unset.
+    assert InstanceData.from_dict({"title": "t", "playbook": None}).playbook == ""
+    assert InstanceData.from_dict({"title": "t", "playbook": 3}).playbook == ""
+
+
+def test_playbook_marshal_bytes():
+    blob = _marshal_instances(
+        [InstanceData(title="o", spawned=True, playbook="split")]
+    ).decode("utf-8")
+    assert blob.endswith(',"spawned":true,"playbook":"split"}]')

@@ -1,0 +1,18 @@
+● Three independent pieces, disjoint files — one worker each:
+    services/billing/ → api-billing   services/search/ → api-search
+    services/upload/  → api-upload
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tool use
+
+   mindflock - spawn_session(title: "api-billing", prompt: "Add per-user rate limiting to
+   services/billing/ using common/ratelimit.RateLimiter. Only touch services/billing/ and its
+   tests.") (MCP)
+   Start a new MindFlock worker session forked from your HEAD commit
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for mindflock - spawn_session commands in /home/dev/api
+   3. No, and tell Claude what to do differently (esc)
+
+ Esc to cancel · Tab to amend

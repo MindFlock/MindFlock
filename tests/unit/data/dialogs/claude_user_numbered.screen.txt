@@ -1,0 +1,11 @@
+● Lint and tests are both red on main. Which first?
+
+> 1. fix the lint
+  2. then the tests
+
+● On it — starting with the lint.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle)

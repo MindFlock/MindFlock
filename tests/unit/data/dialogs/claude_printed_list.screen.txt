@@ -1,0 +1,11 @@
+● Here is the plan for the three workers:
+  1. services/billing/ → api-billing
+  2. services/search/ → api-search
+  3. services/upload/ → api-upload
+
+  Does that split look right to you?
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle)

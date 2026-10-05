@@ -301,6 +301,32 @@ def _session_diff_stat(inst) -> Optional[dict]:
         return None
 
 
+def _live_parent(inst: session.Instance) -> str:
+    """The session's ``Parent`` when it names a LIVE local session, else "".
+
+    Lazy validity: a stored parent is only a claim. Every removal path orphans
+    the children it leaves behind, but a row must never vouch for a parent that
+    is not there — a title reused before that cleanup lands would otherwise
+    inherit the dead session's children (and the authority over them that the
+    lineage grants)."""
+    parent = getattr(inst, "Parent", "") or ""
+    if not parent or parent == inst.Title:
+        return ""
+    try:
+        return parent if parent in _server().ENGINE.instances else ""
+    except Exception:  # noqa: BLE001 — enrichment only
+        return ""
+
+
+def _created_epoch(inst: session.Instance):
+    """``inst.CreatedAt`` as epoch seconds, or None when unknown."""
+    created = getattr(inst, "CreatedAt", None)
+    try:
+        return float(created.timestamp()) if created is not None else None
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
+
+
 def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
     """The per-session sidebar dict. ``cheap=True`` skips the fields that
     shell out to git (diff stat, origin probe) — they come back as None/False
@@ -365,6 +391,20 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         "provisioned": getattr(inst, "Provisioned", False),
         "workspace_strategy": getattr(inst, "WorkspaceStrategy", "worktree"),
         "in_place": getattr(inst, "InPlace", False),
+        # Lineage: the live session that spawned/adopted this one ("" for a
+        # root, or when the stored parent is gone), and whether an agent
+        # created it.
+        "parent": _live_parent(inst),
+        "spawned": bool(getattr(inst, "Spawned", False)),
+        # The playbook it was created with ("split" = an orchestrator from
+        # its first prompt — the rail shows its prompts' answer strip before
+        # it has a child). "" for none.
+        "playbook": getattr(inst, "Playbook", "") or "",
+        # When this session record was created (epoch seconds, or None): a
+        # title can be reused once its session is gone, and anything keyed by
+        # title (a stored report FROM it, say) must not be credited to the
+        # namesake that came later.
+        "created_at": _created_epoch(inst),
         # J3: {"files", "additions", "deletions"} — total change the session
         # has produced vs its per-session base — or null when unavailable.
         "diff_stat": None if cheap else srv._session_diff_stat(inst),
@@ -380,7 +420,36 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         # or null when there is nothing to say. An in-memory read of
         # what the red-zone loop last computed — never a probe on this path.
         "redzone": _red_zone_summary(inst.Title),
+        # Whether THIS launch of the agent got the MindFlock MCP tools: false
+        # when it started without them (the toggle was off, a CLI that can't
+        # attach, a resume path that bypasses the flags), null when no launch
+        # was seen by this server process. An in-memory read.
+        "mcp_attached": _mcp_attached(inst.Title),
+        # A worker's newest report_result to its current parent ({"id",
+        # "status", "summary", "ts"}, consumed or not) or null. A cached read
+        # of the mailbox, recomputed only when the parent's box changes.
+        "last_report": _last_report(inst.Title),
     }
+
+
+def _mcp_attached(title: str):
+    """``mcp_attach.launch_attached`` for the session's agent, never raising."""
+    try:
+        from backend.providers import mcp_attach
+
+        return mcp_attach.launch_attached(tmux.to_mindflock_tmux_name(title))
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
+
+
+def _last_report(title: str):
+    """``thread.last_report(title)``, never raising into the row build."""
+    try:
+        from backend.web.core import thread
+
+        return thread.last_report(_server().ENGINE.instances, title)
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
 
 
 def _red_zone_summary(title: str):

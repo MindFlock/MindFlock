@@ -22,6 +22,7 @@ import {
 } from "../lib/stage";
 import { selectSession } from "../lib/sessionActions";
 import { toast, type ToastOpts } from "../lib/toast";
+import { messageToastText, type MessageEventData } from "../lib/agentMessages";
 
 const BASE_TITLE = document.title || "MindFlock";
 const clarifyUnseen = new Set<string>(); // clarify sessions not yet looked at
@@ -370,6 +371,31 @@ export function EventToasts() {
         })
       );
     }
+    // Agent-to-agent messages (MindFlock MCP). Kept quiet on purpose: an
+    // orchestrator fanning one instruction out to five workers is ONE toast,
+    // not five — throttled per sender (30s, notifyOnce) — while each worker's
+    // report is its own line (keyed per worker → parent pair), because "w3
+    // reported: failed" is exactly the thing you'd otherwise miss. Never for a
+    // replayed backlog: a reconnect must not re-announce old traffic.
+    unsubs.push(
+      ev.subscribe("session.message", (env) => {
+        if (isReplay(env) || !env.session) return;
+        const d = (env.data || {}) as MessageEventData;
+        const from = String(d.from || "");
+        const isResult = d.kind === "result";
+        notifyOnce(
+          isResult ? env.session : from || "*external",
+          isResult ? "result:" + from : "message",
+          messageToastText(env.session, d, displayName),
+          {
+            onClick: () => {
+              if (instByTitle(env.session)) selectSession(env.session);
+            },
+            duration: isResult ? 8000 : 5000,
+          }
+        );
+      })
+    );
     unsubs.push(
       ev.subscribe("session.deleted", (env) => {
         dropActivity(env.session);

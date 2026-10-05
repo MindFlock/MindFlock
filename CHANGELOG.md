@@ -7,6 +7,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Agents can talk to each other, and an orchestrator can run a team of
+  workers.** Every Claude Code and Codex session MindFlock starts now gets
+  the MindFlock MCP server, which gives the agent 14 tools over the rest of
+  the flock. An agent can list the other sessions, read a session's last
+  reply or screen, look at its diff, and message it. An orchestrator can
+  spawn worker sessions that fork from its own commit, wait for their
+  reports, answer a permission prompt one of them is stuck on, merge their
+  branches, and close or delete them when they are done. Workers finish by
+  reporting back (done, blocked or failed, with a summary), and the report is
+  typed into the orchestrator's terminal when it is idle. Workers commit on
+  their own branch and don't merge, push or open a PR unless told to.
+  It is on by default. Turn it off, or limit how far agents may steer each
+  other, in Settings → General (`general.agent_mcp`,
+  `general.agent_mcp_scope`); `MINDFLOCK_AGENT_MCP=0` is a server-wide kill
+  switch. The attach happens per launch (Claude's `--mcp-config` plus an
+  allow-list for the read, wait and report tools, one `-c` override for
+  Codex) and never edits your own CLI config. Messaging, spawning, answering
+  and killing still ask for permission unless the session skips
+  permissions. See [docs/mcp.md](docs/mcp.md).
+
+- **Messages between sessions arrive once, at the right moment.** A message is
+  typed into the recipient only when it is stably idle and its agent still
+  holds the terminal. It is never typed into a permission prompt, a
+  usage-limit screen or a shell the agent quit to, never over your own typing,
+  it never wakes a stopped agent, and it waits behind your own queued prompts.
+  If the recipient reads its inbox first, the message is never typed at all.
+  Every message says it came from another agent and not from you. Reply-chain
+  and rate limits hold a runaway back-and-forth in the inbox instead of
+  letting two agents keep each other busy; a worker's first report always
+  gets through. A `session.message` event fires for hooks and extensions.
+
+- **See the team in the app.** A spawned or adopted session shows a muted
+  `↳ <parent>` line under its name in the sidebar. Each message gets a short
+  toast (one per sender per 30 s), and each worker report a toast that says
+  done, blocked or failed. The bell keeps the reports and leaves the chatter
+  out.
+
+- **Sessions know who spawned them.** A session can have a parent: the
+  orchestrator that spawned it, or one that adopted it later. Each row in
+  `GET /api/instances` carries `parent`, `spawned` and `created_at`. Spawning
+  and adopting have limits on children per parent and depth, and spawning on
+  the total number of agent-spawned sessions (`MINDFLOCK_MAX_CHILDREN`,
+  `MINDFLOCK_MAX_SPAWN_DEPTH`, `MINDFLOCK_MAX_SPAWNED`). When a parent goes
+  away, its children become ordinary top-level sessions. Only sessions an
+  agent created can ever be deleted by an agent, and then only once their
+  work is merged (or with an explicit force).
+
+- **`mindflock msg`, `mindflock inbox` and `mindflock mcp`.** Message a
+  session's agent from your terminal, read a session's inbox without taking
+  anything from it, or run the MCP server for your own Claude Code, Codex or
+  other client (`mindflock mcp --print-config` prints the line to register
+  it).
+
+- **New API routes and fields for agent-to-agent work.**
+  - `/api/instances/{title}/messages`, with long-poll.
+  - `/output`: a session's last reply, transcript or screen.
+  - `/answer`: answers a dialog the agent is blocked on.
+  - `/parent`: re-parents a session.
+  - `GET /api/create_failures`: why a session's background start failed.
+  - `POST /api/instances` gains `parent`, `spawned`, `base_ref` and
+    `base_branch` (cut a new worktree from any commit), and
+    `extra_launch_args` (flags added to the defaults rather than replacing
+    them). Its 202 body says how the initial prompt is delivered
+    (`prompt_delivery`).
+
+  See [docs/web-api.md](docs/web-api.md).
+
+### Changed
+
+- **Launch flags are merged as flag/value pairs.** When per-session flags
+  meet the defaults (an intake effort level, an agent's added flags), a pair
+  that repeats exactly appears once, and a flag set twice with different
+  values keeps both pairs, so the last one wins. Before, `--model sonnet`
+  plus `--model opus` became `--model sonnet opus`.
+
+- **A new session that would collide with a closed session's branch is
+  refused at once.** A create cut from a commit (`base_ref`) whose branch
+  already exists, or a provisioned create whose branch or clone a closed
+  session still keeps, answers 409 "already exists" instead of starting and
+  failing in the background. A provisioned clone is no longer silently
+  reused, old commits and all.
+
+- **Multi-line prompts arrive as one turn.** Prompts typed into an agent
+  (the queue, Send now) with more than one line go in as a single bracketed
+  paste, so aider and other CLIs that submit on every newline no longer run
+  each line as its own turn.
+
+### Fixed
+
+- **The CLI works when the server's access-token gate is on.** `mindflock ls`,
+  `new`, `rm` and the other session commands now send the token
+  (`MINDFLOCK_AUTH_TOKEN`, or the one the server saved in `settings.json`)
+  instead of getting a 401. A server that refuses the token is reported as
+  that, not as "no server found": `mindflock accounts` stops instead of
+  editing the settings file behind it, and `mindflock uninstall` treats it as
+  running. The settings-file token is only sent to this machine.
+
+- **A plain session on a CLI without a prompt argument gets its initial
+  prompt.** Outside ticket sessions (which already pasted it in), aider,
+  goose, opencode, cline and custom scripts dropped the prompt silently; it
+  now waits in the prompt queue and is typed in once the agent is idle.
+
+- **The prompt queue never types into a bare shell.** After you quit a
+  provisioned session's agent, its terminal drops to a shell that still
+  reads idle; a queued prompt (and its Enter) would have run there as a
+  command.
+
+- **The fork diff no longer depends on your gitconfig.** `diff.noprefix`,
+  `diff.mnemonicPrefix`, quoted non-ASCII paths, an external diff tool or
+  forced colour each changed the shape of a session's diff.
+
 ## [0.5.0] - 2026-10-03
 
 ### Added

@@ -1,0 +1,13 @@
+• Updating the search limiter to use the shared counter.
+
+  Would you like to make the following edits?
+
+  Reason: wire the shared RateLimiter into the search handler
+
+  services/search/limits.py (+2 -1)
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for these files (a)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

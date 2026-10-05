@@ -1267,3 +1267,40 @@
   margin: 0;
 }
 
+
+/* "Split across workers" (SplitCheck.tsx), under the sentence on page 1 and
+   under Plan first in the Prompt fold. The note under it is a .nf-git-nudge
+   aligned with the label text (16px box + 9px gap) rather than tucked under
+   an input, so it takes ordinary margins. */
+.nf-split {
+  margin-top: 10px;
+}
+
+.nf-advanced-body .nf-split {
+  margin-top: 0;
+}
+
+#new-form .nf-split label.check.disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+}
+
+.nf-split-nudge {
+  margin: 4px 0 0 25px;
+}
+
+/* "suggested · billing · search · upload": a suggestion only, so an outline
+   and gold ink instead of a fill. The box is never ticked for the user. */
+.nf-split-pill {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 7px;
+  border: 1px solid var(--gold);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  vertical-align: 1px;
+  color: var(--gold);
+  white-space: nowrap;
+}

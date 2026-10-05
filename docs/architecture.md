@@ -8,7 +8,9 @@ from a browser.
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Clients                                                                 │
 │   browser SPA (static/app.js) · mobile UI (/m) · Electron desktop app   │
-│   mindflock CLI (serve/doctor + new/ls/attach/rm/open/events)           │
+│   mindflock CLI (serve/doctor + new/ls/attach/rm/open/events/msg/inbox) │
+│   MindFlock MCP (backend/mcp, stdio) — started by each session's agent  │
+│     CLI, so agents list/message/spawn/steer each other over the API     │
 └──────────────┬────────────────────────────────────────┬─────────────────┘
                │ REST (poll /api/instances every 4s)    │ WebSockets (PTY bytes,
                │ + bearer-token auth (core/auth.py)     │  /api/events bus)
@@ -16,6 +18,7 @@ from a browser.
 │ Web server (backend.web.server — FastAPI)                             │
 │   routes · stage detection (git_ops) · terminal bridge (pump_pty)       │
 │   event bus (core/events.py) · prompt queue · PR auto-review            │
+│   lineage + mailbox delivery lane (core/lineage.py, core/mailbox.py)    │
 │   remote-device proxy (core/remote.py, tailnet)                         │
 │   addons: mindflock (pipeline) · assistant · settings · doctor ·        │
 │           connections · templates · notify                              │
@@ -118,6 +121,38 @@ FastAPI app `backend.web.server:app`. Key pieces:
 - **`core/prompt_queue.py`** — per-session FIFO of prompts drained into idle
   agents by a background loop (self-driving runs; state in
   `~/.mindflock/prompt_queues.json`).
+- **`core/mailbox.py`** — the inter-agent mailbox (`~/.mindflock/mailbox.json`,
+  keyed by recipient title). A message reaches its recipient **exactly once**:
+  either the delivery lane types it into the agent pane, or the recipient
+  fetches it from its inbox, whichever comes first, decided under one lock.
+  Several processes write the file (co-running servers, and every MCP process
+  through the API), so it carries a sidecar `fcntl.flock`, atomic writes and
+  mtime-cached reads. The lane, `server._drain_mailboxes`, is a pass in the
+  prompt-queue drain loop, **not** the queue itself. It types at most one
+  message per recipient per pass, only into a stably idle agent that still
+  holds its pane (an agent CLI in the pane's process tree, not a shell it quit
+  to). It never boots one, never types into a dialog or limit screen, lets the
+  user's queued prompts go first, holds while a long-poll is open on that
+  inbox, and waits while a person has typed in that window in the last 45 s.
+  Every typer into a pane shares one lock per tmux session
+  (`agent_sessions._typing_lock`), so a message can't merge into a queued
+  prompt. Hop and
+  rate limits hold a runaway ping-pong in the inbox. The delivery text (one
+  sanitized line plus a provider-aware reply hint) is rendered here too, so
+  the exact bytes an agent sees are unit-testable. See
+  [mcp.md](mcp.md#messages).
+- **`core/lineage.py`** — `parent`/`spawned` session lineage: parent-chain
+  walks, the spawn limits (`MINDFLOCK_MAX_CHILDREN` / `_SPAWN_DEPTH` /
+  `_SPAWNED`, read per request, checked at create and, for children and depth,
+  on adoption), `base_ref` validation, and the create-time "branch already
+  exists" probe that turns a doomed background start into a 409.
+  All of it is pure functions over the instances map. Every exit from
+  `ENGINE.instances` funnels through `server._on_session_removed`, which
+  orphans the session's children and runs `_SESSION_REMOVED_HOOKS` (the
+  mailbox drop and the MCP run-file delete). That includes the engine's own
+  tombstone convergence, via `Engine.add_removal_listener`. A per-tick sweep
+  backstops dangling parents. **`core/agent_io.py`** holds the
+  `/output` views and `/answer` key handling.
 - **`core/session_plan.py`** — one headless model turn behind
   `POST /api/session-plan`, turning a sentence into the New Session form's own
   fields. **Creates nothing.** The folder menu is walked *server-side* (the
@@ -305,12 +340,41 @@ workspaces only run diff-impacted tests, and a startup **workspace cleanup** tha
 prunes workspaces untouched for 3 days. See
 [ingestion-pipeline.md](ingestion-pipeline.md).
 
+### MindFlock MCP (`backend/mcp`, `providers/mcp_attach.py`)
+
+A stdlib-only Model Context Protocol server, `python -P -m backend.mcp` or
+`mindflock mcp`, that gives an agent 14 tools over the rest of the flock:
+list and inspect sessions, read their output and diffs, message them, spawn
+workers, wait for them, answer their dialogs, and close or delete them. It
+runs as a **child of the agent CLI**, not of the web server, and is a thin
+client of the HTTP API (`backend/client.py`, bearer token included), so it
+holds no engine state and everything it does shows in the UI.
+
+- **Wiring.** `protocol.py` handles JSON-RPC over stdio: tool calls run on
+  worker threads, with cancellation and progress. `tools.py` holds the
+  schemas and handlers.
+- **Identity.** `identity.py` works out which session the server runs in:
+  `MINDFLOCK_SESSION_TITLE`, else the tmux pane. An auto-attached server that
+  can't confirm its session fails closed to `readonly`.
+- **Policy.** `policy.py` applies the scopes (`readonly` < `children` <
+  `all`) and decides which sessions a server *manages*. This is a guard-rail,
+  not a security boundary: every agent is the same OS user as the server.
+
+`providers/mcp_attach.py` attaches it per launch. Claude gets
+`--mcp-config=<run file>` and `--allowedTools`; Codex gets one
+`-c mcp_servers.mindflock={…}`. The flags go in front of the effective launch
+args at every launch site and are never persisted into `LaunchArgs`. The
+attach is on by default and toggled by `general.agent_mcp`, with
+`MINDFLOCK_AGENT_MCP=0` as a kill switch. See [mcp.md](mcp.md).
+
 ### CLI (`backend/cli.py`)
 
-The `mindflock` console entry point: host commands (`serve`, `doctor [--fix]`)
-plus session commands (`new`, `ls`, `attach`, `rm`, `open`, `events`) that are
-thin clients over a running server's HTTP API — the terminal and the browser
-drive the same server. `doctor` (`backend/doctor.py`, also surfaced as a
+The `mindflock` console entry point: host commands (`serve`, `doctor [--fix]`,
+`uninstall`, and `mcp`, the MCP stdio server above) plus session commands
+(`new`, `ls`, `attach`, `rm`, `open`, `events`, `msg`, `inbox`). The session
+commands are thin clients over a running server's HTTP API that send the
+bearer token when one resolves, so the terminal and the browser drive the same
+server. `doctor` (`backend/doctor.py`, also surfaced as a
 web addon) preflights git/tmux/agent-CLI and can install missing deps. `gh` is
 preflighted too but reported as *optional* (`info`, never `fail`): it is not on
 any required path — pushing is plain `git push`.
@@ -357,6 +421,8 @@ independent cadences, so each side has to tolerate the other being older. See
 | `~/.mindflock/worktrees/` | engine | worktree-mode session directories |
 | `~/.mindflock/recently_closed.json` | web | reopenable closed sessions (cap 50) |
 | `~/.mindflock/prompt_queues.json` | web | per-session prompt queues (items + loop/enabled flags) |
+| `~/.mindflock/mailbox.json` (+ `.lock`) | web (`core/mailbox.py`) | inter-agent messages per recipient, with exactly-once states; dropped per session on removal |
+| `~/.mindflock/run/` | engine/providers | per-launch files: `<tmux name>.env` (an auth profile's credentials) and `mcp-<tmux name>.json` (Claude's `--mcp-config` for the MindFlock MCP). Mode 0600, directory 0700; removed with the session |
 | `~/.mindflock/session_templates.json` | web (templates addon) | saved new-session templates |
 | `~/.mindflock/remote_devices.json` | web (remote) | paired tailnet devices + tokens |
 | `~/.mindflock/settings.json` | web (settings addon) | the web settings store |
@@ -385,3 +451,7 @@ independent cadences, so each side has to tolerate the other being older. See
 - **Agents** — tmux sessions, independent of both. Launchers write an exit-code
   marker on exit; an unnatural exit (not 0/130) makes the next start resume the
   conversation with `--continue`.
+- **MCP servers** — one `python -P -m backend.mcp` per attached agent, started
+  and owned by that agent's CLI over stdio. Each exits when its stdin closes,
+  and talks to the web server only over HTTP. If the server restarts, the next
+  call reconnects, and waits retry for up to 120 s.

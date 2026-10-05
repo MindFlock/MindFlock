@@ -112,6 +112,138 @@ export function orderWithAfter(order: string[], title: string, after: string): s
   return next;
 }
 
+/** How deep the rail draws a family. The MCP refuses spawns past depth 3
+ * (MINDFLOCK_MAX_SPAWN_DEPTH), and an adopted subtree answers to the same
+ * limit; a deeper chain (the knob raised) simply stops indenting. */
+export const NEST_MAX = 3;
+
+/** One rail row's family geometry. `depth` 0 = not nested. `more`: a later
+ * sibling continues this row's connector downwards (├ rather than └).
+ * `guides[k]` (k = 1..depth-1): an ANCESTOR at depth k still has a sibling to
+ * come, so its connector passes down through this row. `stem`: the very next
+ * row nests under THIS one, so a connector drops from its dot. */
+export interface NestInfo {
+  depth: number;
+  more: boolean;
+  guides: boolean[];
+  stem: boolean;
+}
+
+/** The visual-only family nesting of a rail list, index-aligned with `rows`.
+ *
+ * A row nests only when it DIRECTLY follows its parent or a row already
+ * nested under that parent (a sibling, or a sibling's own subtree). Anything
+ * else — a window row, an unrelated session, a worker dragged elsewhere —
+ * breaks the chain, and the worker renders flat (its status line then names
+ * the parent instead).
+ *
+ * Deliberately a pure read of the order it is given: it never moves, hides or
+ * folds a row. `railOrder` (Alt+N, Ctrl+Tab, the notification "[N]"), the
+ * number badges and drag-and-drop all keep working off the unmodified list —
+ * nesting is paint, not structure. */
+export function railNesting(rows: Array<{ key: string; parent?: string }>): NestInfo[] {
+  const out: NestInfo[] = rows.map(() => ({ depth: 0, more: false, guides: [], stem: false }));
+  // The open chain: chain[d] = index of the row at depth d that later rows
+  // can still nest under.
+  let chain: number[] = [];
+  rows.forEach((r, i) => {
+    const p = r.parent || "";
+    const at = p ? chain.findIndex((j) => rows[j].key === p) : -1;
+    if (at >= 0 && at + 1 <= NEST_MAX) {
+      chain = chain.slice(0, at + 1);
+      out[i].depth = at + 1;
+      chain.push(i);
+    } else {
+      chain = [i];
+    }
+  });
+  for (let i = 0; i < rows.length; i++) {
+    const d = out[i].depth;
+    if (i + 1 < rows.length && out[i + 1].depth === d + 1) out[i].stem = true;
+    if (!d) continue;
+    // A later row at the same depth under the same parent, before the chain
+    // climbs above this depth, continues the connector.
+    for (let j = i + 1; j < rows.length && out[j].depth >= d; j++) {
+      if (out[j].depth === d) {
+        out[i].more = rows[j].parent === rows[i].parent;
+        break;
+      }
+    }
+  }
+  // Pass-through guides: each nested row inherits "does my ancestor at depth
+  // k continue below me" from the chain above it.
+  const open: boolean[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const d = out[i].depth;
+    open.length = Math.max(d, 0);
+    out[i].guides = [];
+    for (let k = 1; k < d; k++) out[i].guides[k] = !!open[k];
+    if (d) open[d] = out[i].more;
+  }
+  return out;
+}
+
+/** Do two rows draw the same connectors? */
+export function sameNest(a: NestInfo, b: NestInfo): boolean {
+  if (a.depth !== b.depth || a.more !== b.more || a.stem !== b.stem) return false;
+  for (let k = 1; k < a.depth; k++) if (!!a.guides[k] !== !!b.guides[k]) return false;
+  return true;
+}
+
+/** The saved order with every never-placed worker slotted beneath its family.
+ *
+ * An agent spawns its workers server-side, so to this rail they are simply
+ * sessions the saved order has never seen — `orderedInstances` would file
+ * each one after everything else, nowhere near the orchestrator, and nothing
+ * would nest. Each newcomer instead lands after the last row of its parent's
+ * contiguous subtree (`orderWithAfter`), ancestors first so a grandchild
+ * finds its parent already placed.
+ *
+ * Only titles the saved order has NEVER held are touched: once a worker is in
+ * the order, the user's drags own its position (dragging it away un-nests
+ * it, and it stays where it was put). Like placeAfter in sessionActions this
+ * MERGES with the live list rather than replacing the order, so the slot of a
+ * row missing from this snapshot (a sleeping device) survives. Returns `saved`
+ * itself when there is nothing to place. */
+export function placeNewWorkers(
+  saved: string[],
+  live: Array<{ title: string; parent?: string }>
+): string[] {
+  const parentOf = new Map(live.map((r) => [r.title, r.parent || ""]));
+  const seen = new Set(saved);
+  const depthOf = (t: string) => {
+    let d = 0;
+    for (let p = parentOf.get(t); p && d <= live.length; p = parentOf.get(p)) d++;
+    return d;
+  };
+  const fresh = live
+    .filter((r) => r.parent && r.parent !== r.title && parentOf.has(r.parent) && !seen.has(r.title))
+    .map((r) => r.title)
+    .sort((a, b) => depthOf(a) - depthOf(b));
+  if (!fresh.length) return saved;
+  const isUnder = (t: string, anc: string) => {
+    let hops = 0;
+    for (let p = parentOf.get(t); p && hops <= live.length; p = parentOf.get(p), hops++)
+      if (p === anc) return true;
+    return false;
+  };
+  let order = saved.concat(live.map((r) => r.title).filter((t) => !seen.has(t)));
+  // Newcomers still waiting their turn sit wherever the merge appended them;
+  // they must not count as the family's tail, or siblings created together
+  // would land in reverse.
+  const pending = new Set(fresh);
+  for (const t of fresh) {
+    pending.delete(t);
+    const p = parentOf.get(t)!;
+    const rest = order.filter((x) => x !== t);
+    let at = rest.indexOf(p);
+    if (at < 0) continue;
+    while (at + 1 < rest.length && !pending.has(rest[at + 1]) && isUnder(rest[at + 1], p)) at++;
+    order = orderWithAfter(order, t, rest[at]);
+  }
+  return order;
+}
+
 export const SEARCH_MIN = 6;
 
 /** Match only the session's own identifiers — name, alias, branch. NOT repo

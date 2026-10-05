@@ -20,6 +20,10 @@ List all sessions. Each item:
   "path": "…", "status": "running|ready|loading|paused", "started": true,
   "tmux_name": "mindflock_sc-19815",
   "provisioned": true, "workspace_strategy": "worktree", "in_place": false,
+  "parent": "",               // lineage: the live session that spawned/adopted it ("" = a root)
+  "spawned": false,           // true when an agent (not a human) created it
+  "playbook": "",             // the playbook it was created with ("split"), "" = none
+  "created_at": 1759600000.0, // epoch the session record was created, or null
   "stage": "provisioning|agent|precommit|interrupt|committed|pushed|pr|merged",
   "pr_url": "…",              // when a PR exists
   "failed_step": "…",         // when stage == "interrupt" (pre-commit ✗)
@@ -32,7 +36,9 @@ List all sessions. Each item:
   "diff_stat": {"files": 2, "additions": 42, "deletions": 7},  // or null
   "workspace_missing": false,  // L1(c): started but its directory vanished
   "has_origin": true,          // L2: workspace has an `origin` remote (cached ~30s)
-  "last_turn": "…"             // L3: ≤120-char snippet of the latest agent turn, or null
+  "last_turn": "…",            // L3: ≤120-char snippet of the latest agent turn, or null
+  "mcp_attached": true,        // this launch got the MindFlock MCP tools (null = unknown)
+  "last_report": {"id": "m…", "status": "done", "summary": "…", "ts": 1759600300.0}  // or null
 }
 ```
 
@@ -66,7 +72,15 @@ process memory (never persisted, and pruned when its session goes) and releases
 itself against the **worktree** — a dirty tree or a moved HEAD drops it on the
 next stage read — never against the stage label, since filing a PR flips
 `pushed` → `pr` a beat after it is set.
-`activity` is layered: the provider's own authoritative signal is preferred —
+`activity` is layered. **Screen evidence comes first**: for a CLI with a
+dialog parser (Claude Code, Codex) every probe captures the visible pane once,
+and a dialog the provider parses there reads `clarify` whatever the hooks last
+said — Claude's background sub-agents rewrite the hook marker (their tool
+events say `working`, the main turn's Stop says `idle`) while a sub-agent's
+permission prompt is still up. A stale `clarify` marker whose dialog is still
+at the bottom of the screen also stays `clarify` (the pane layer below needs a
+stable pane, and Claude blinks the pending tool's bullet while it waits). Then
+the provider's own authoritative signal —
 per-session `{state, ts}` markers written by the CLI's lifecycle hooks, or
 Claude's live `claude agents --json` report (see
 [providers.md](providers.md)) — then CPU sampling of the pane's process tree
@@ -102,6 +116,47 @@ workspace has no `origin` remote — pushing would only fail in the shell.
 latest conversational turn (provider-dependent; `null` when the provider
 doesn't expose one) for at-a-glance triage across many sessions.
 
+`parent` is the title of the session this one works for: the orchestrator
+that spawned it, or one that later adopted it through
+`POST /api/instances/{title}/parent`. It is `""` for a root, and also when the
+stored parent is not a live local session. A stored link is only a claim, and
+a reused title must never inherit someone else's children. `spawned` is
+`true` when an agent created the session (`POST /api/instances` with
+`spawned: true`, which the MindFlock MCP's `spawn_session` sends). It is set
+once and never changes, and it is what allows an agent to delete the session.
+`created_at` is when this session record was created (epoch seconds, `null`
+when unknown). A title can be reused once its session is gone, so anything
+keyed by title (a stored report from it, say) is compared against it.
+`playbook` is the playbook the session was created with — `"split"` for the
+New dialog's **Split across workers** (an orchestrator from its first prompt,
+before its first worker exists; the UI's answer strip keys on it), `""` for
+none. Set once at create time; persisted in `state.json` only when set.
+Pending (not-yet-created intake) rows carry `parent: ""`, `spawned: false`,
+`playbook: ""`, `created_at: null`. The cached fast path of this route recomputes `parent`
+on every call, so a re-parent shows at once rather than on the next tick.
+See [mcp.md](mcp.md#lineage-parents-workers-limits).
+
+`mcp_attached` says whether **this launch** of the session's agent got the
+MindFlock MCP tools: `true` when the launch carried the attach flags, `false`
+when the CLI started without them (attach was off, the CLI can't be
+attached, the provider ran the bare program, or a resumed session relaunched
+a command configured before this server started), `null` when this server
+process never saw it launch (an agent still running from before a restart).
+Every launch site records it — the engine's first start and resume, the web
+relaunch, the Assistant — in memory only; it is never written to
+`state.json`. The UI uses `false` to tell you to restart the agent before a
+playbook can name tools it doesn't have.
+
+`last_report` is on a **worker's** row: the newest `kind: "result"` message
+(its `report_result`) it sent to its **current** live parent, consumed or not
+— `{"id", "status", "summary", "ts"}`, with `summary` the report's summary
+line (its `Details:` block dropped) sanitized to one line of at most 140
+characters and `status` the reported `done`/`blocked`/`failed`. `null` for a
+root, before the first report, or when the only reports predate this
+session's `created_at` (a namesake's). Read from the mailbox, cached per
+(parent box version), never marking anything read. Pending rows carry
+`mcp_attached: null`, `last_report: null`.
+
 ### `POST /api/instances` → **202**
 
 Create + start a session. Provisioning runs in the background; the session
@@ -118,7 +173,13 @@ appears as `loading` until ready.
   "workspace_strategy": "worktree", // or "clone"
   "story_id": "19815",          // → branch feature/sc-19815/<slug>
   "prompt": "…ticket text…",    // seeds the agent on first launch
-  "launch_args": ["--dangerously-skip-permissions"] // optional per-session flags
+  "launch_args": ["--dangerously-skip-permissions"], // optional per-session flags
+  "extra_launch_args": ["--model", "opus"], // optional: flags ADDED to the defaults
+  "parent": "orch",             // optional: live session this one works for
+  "spawned": true,              // optional: an agent created it (strict boolean)
+  "base_ref": "3f2c9e1",        // optional: cut the worktree from this commit-ish
+  "base_branch": "you/orch",    // optional, with base_ref: the recorded diff base
+  "playbook": "split"           // optional: "Split across workers" (see below)
 }
 ```
 
@@ -126,7 +187,8 @@ A full slash-path in the title (e.g. `feature/sc-1/foo`) is used verbatim as the
 branch. `provisioned` + `repo_path` provisions **that local repo** (setup
 commands auto-detected, no shared cache seeds); `provisioned` without
 `repo_path` requires the configured `[repository].url`. Errors: 400 (empty
-title, bad strategy/config), 409 (title exists).
+title, bad strategy/config), 409 (title exists, a spawn limit, or a branch or
+workspace a closed session still holds; see below).
 
 `launch_args` (optional) are extra CLI flags appended on **every** (re)start of
 this session's agent, after the provider's own saved flags. They are validated
@@ -136,6 +198,14 @@ means "not specified", so the session inherits the global default for its
 provider (`coding_cli.default_launch_args`, see
 [configuration.md](configuration.md)); an explicit list — **even `[]`** — is used
 verbatim, so a default the caller toggled off is honored, not re-applied.
+
+`extra_launch_args` (optional, ignored when `launch_args` is present) are
+flags **added to** that global default instead of replacing it, validated the
+same way. This is what the MindFlock MCP's `spawn_session` sends, so an
+orchestrator adding `--model opus` never strips a worker's skip-permissions.
+The two lists are merged by flag group (a flag with the values that follow
+it): an identical group appears once, and the same flag with a different
+value is kept after the default, so the CLI's last-flag-wins rule applies.
 
 `profile_id` (optional) pins the auth profile the session's CLI runs under
 (see [accounts.md](accounts.md)), with the same tri-state: absent/`""` =
@@ -156,10 +226,96 @@ a `mindflock-plan` block and waits for the go-ahead (the Map's **Go** button).
 Independently, a prompt always names the repo's red zones when it has any —
 see [Code map & red zones](#code-map--red-zones).
 
-The 202 body is the usual session object, plus a `note` when the chosen account
-has no verified route for the chosen agent — the session will run on the CLI's
+`playbook` (optional) is the New dialog's **Split across workers**; the only
+value is `"split"`. The prompt is decorated through the playbook registry
+(`backend/mcp/playbooks.py`): its first line becomes `Split across workers
+(MindFlock): <task>` (the line the pane pins), followed by the split
+instructions naming the agent's own MindFlock tools — commit shared
+groundwork, one `spawn_session` per independent piece, `wait_for_session`,
+review and merge each report, ask before deleting. Decoration runs before
+the red-zone / plan-first notes and is idempotent (an already-decorated
+prompt is left alone). The session is forced into a worktree of its own
+(`in_place` is ignored), since its workers fork from its commits, and records
+`playbook: "split"` on the session (the row's `playbook`). **400** for
+any other value, an empty `prompt` (`… needs a task`), a non-git folder
+(`… needs a git repo`), or a program whose CLI doesn't get the MindFlock tools
+(`Split across workers needs the MindFlock tools: This CLI doesn't get the
+MindFlock tools` — attach turned off, or a provider with no auto-attach).
+
+**Lineage** (`parent`, `spawned`). These are what the MindFlock MCP's
+`spawn_session` sends; see [mcp.md](mcp.md#lineage-parents-workers-limits).
+
+- `parent` must name a live local session, else **400** `unknown parent
+  session: <x>`. A parent that is over its budget answers **409** with
+  `budget_locked: true`.
+- `spawned` must be a real JSON boolean (`null` means false), else **400**
+  `spawned must be a boolean`. It can't be set any other way, ever, so a
+  string `"false"` must not read as true.
+- **Spawn limits** are checked under the registry lock at the moment the title
+  is claimed, so two concurrent creates can't both take the last slot. Each
+  violation answers **409** with a message naming its env knob. With a
+  `parent`: the parent may have at most `MINDFLOCK_MAX_CHILDREN` (default 8)
+  live children, and the new session's depth (root = 0) may be at most
+  `MINDFLOCK_MAX_SPAWN_DEPTH` (default 3). With `spawned: true`, with or
+  without a parent: at most `MINDFLOCK_MAX_SPAWNED` (default 24) agent-spawned
+  sessions live in total. The knobs are read on every request.
+- `session.created` carries `parent` / `spawned: true` in its `data` when set.
+- `/copy` never inherits either field.
+
+**Fork point** (`base_ref`, `base_branch`). For plain worktree sessions only.
+`base_ref` is a commit-ish resolved in `repo_path`; the new branch is cut from
+it instead of the repo's HEAD. `repo_path` stays the canonical repo, so the
+session's cleanup never depends on where the ref came from. `base_branch` is
+recorded as the session's diff/stage base. Without it, the base is `base_ref`
+itself when that is a local branch, else the repo's current branch.
+
+| Request | Response |
+|---|---|
+| `base_ref` or `base_branch` with `provisioned` | **400** `base_ref is only supported for plain worktree sessions (not provisioned)` |
+| `base_ref` or `base_branch` on an in-place session (including a non-git folder forced in-place) | **400** `… (not in-place)` |
+| `base_branch` without `base_ref` | **400** `base_branch requires base_ref` |
+| a ref that names no commit | **400** `unknown base_ref: <x> (no such commit in <repo>)` |
+| an option-shaped or control-character ref | **400** `invalid base_ref: …` |
+
+If the new branch name already exists in the repo (say, left over by a closed
+or paused session with the same title), the create answers **409** `a branch
+named X already exists (a closed or paused session may still hold it) — pick
+another session title` before anything starts. Should the background start
+refuse it anyway (a race), the existing branch is marked pre-existing and is
+never deleted by the failed start's cleanup.
+
+**Provisioned branch taken.** A provisioned create answers **409** when its
+branch is still checked out in the base clone by a kept worktree (`a worktree
+for branch X already exists at …`), or, with the `clone` strategy, when the
+clone directory already exists (`a workspace for branch X already exists at
+…`). Without this the start would fail later, or silently adopt the old
+clone with its commits. Both messages say "already exists", the wording the
+MCP's default-title retry keys on.
+
+**How the prompt is delivered.** A plain session whose CLI takes no prompt
+argument (aider, goose, opencode, cline, or a custom script resolving to the
+generic provider) has no way to receive `prompt` at launch, so the prompt is
+held in the session's prompt queue and typed in once the agent is idle, as for
+a worktree with a setup pass. A bare shell as the program never gets a queued
+prompt. A multi-line prompt is pasted as one bracketed paste, so it arrives
+as one turn.
+
+The 202 body is the usual session object, plus `prompt_delivery` (`seeded`:
+the CLI gets it at launch; `queued`: held in the prompt queue; `none`: no
+prompt), plus a `note` when the chosen account has no verified route for the
+chosen agent — the session will run on the CLI's
 own login, and the web UI warns about that at selection time while API and CLI
 callers would otherwise never hear it.
+
+### `GET /api/create_failures`
+
+A create answers 202 before its background start runs, so a caller polling the
+listing only sees a failed session's row vanish. This route says why:
+`{"failures": {title: {"error", "ts"}}}` for every background start that
+failed in the last 10 minutes (at most 64 kept), or only `?title=X`'s entry
+(`{"failures": {}}` when there is none). `error` is the same text the
+`session.create_failed` event carries. The MCP's `spawn_session` reads it to
+explain a worker that vanished while loading.
 
 ### `POST /api/session-plan` → **200**
 
@@ -254,8 +410,23 @@ Errors carry one human sentence and leave the form untouched:
 | POST | `/api/instances/{title}/cleanup` | Kill + permanently delete the workspace dir (+ close its Cursor window) |
 | POST | `/api/instances/{title}/copy` → 202 | New in-place session `<title>-copy` sharing the same worktree (inherits the source's agent **and** auth profile) |
 | POST | `/api/instances/{title}/profile` | Hot-swap the session's auth profile. Body `{profile_id}` (`""` = inherit the global default, `"default"` = the CLI's own login) plus optional `profile_model` — **sending the key at all is what matters**: present sets this session's model override, absent keeps the current pin on a model-only no-op and *clears* it when the identity changes (a pin belongs to the catalog of the account it was picked from). Persists the pin and restarts the agent under the new identity; the worktree, shell pane and diff survive, and so does *that account's* conversation in this window — a thread belongs to the account that created it, so the marker is re-pointed at the incoming identity's own thread before the relaunch. → `{ok, profile_id, note, resumed}`, where `note` warns when the session's CLI has no route for the profile and `resumed` says whether the new identity had a conversation here to go back to (false = it starts fresh). Re-picking the identity and model already in force is a no-op that answers `{ok, unchanged: true}` **without** restarting the agent. 400 on an unknown id or a malformed model (nothing is mutated); 500 if the agent was killed and did not come back |
+| POST | `/api/instances/{title}/parent` | Re-parent a session. Body `{"parent": "<title>"}` puts it under that live session; `{"parent": ""}` (or `null`) detaches it to a root. → **200** with the updated row. **404** for an unknown session. **400** for an unknown parent (`unknown parent session: X`), the session itself (`a session cannot be its own parent`), a parent that is the session's own descendant (`… that would make a cycle`), or a non-string `parent`. **409** when adopting would break a spawn limit: the new parent's live children (this one included) over `MINDFLOCK_MAX_CHILDREN`, or any session of the adopted subtree deeper than `MINDFLOCK_MAX_SPAWN_DEPTH` (the error names the knob). Detaching, and re-sending the current parent, are never limited. `spawned` is never touched. Persists |
 | POST | `/api/instances/{title}/pause` | Pause (commit, detach, remove worktree, keep branch) |
 | POST | `/api/instances/{title}/resume` | Resume a paused session |
+
+Every way a session leaves the registry runs one teardown,
+`_on_session_removed`. That covers `DELETE`, `/close`, `/cleanup`,
+`/api/workspaces/delete`, a failed background start, and another MindFlock
+process deleting it. The teardown does three things:
+
+- it clears `parent` on the session's children, so they become roots;
+- it drops the session's mailbox, so a reused title starts with an empty
+  inbox;
+- it deletes its MindFlock-MCP run file (`~/.mindflock/run/mcp-<tmux
+  name>.json`).
+
+Reopening a closed session restores its `parent` only when that parent is
+still live.
 
 ### Diff
 
@@ -789,7 +960,8 @@ not ready"}` without a worktree, and 409 "git is not installed" without git.
 
 **Delivering messages** (`ask-plan`, `go`, `tell_agent`): typed into the agent
 when it is idle, **queued** on the session's prompt queue while it is
-`working`, on a `clarify` prompt, or on the usage-limit screen (typing there
+`working`, on a `clarify` prompt, or on the usage-limit screen — or whenever the
+screen shows a dialog, whatever the activity says (typing there
 would interleave with the turn or answer the prompt), and never used to reboot
 an agent — a dead session reports `told: false` with a reason, as does one over
 its cost budget. `POST /api/instances` accepts `plan_first: true` to append the
@@ -813,7 +985,7 @@ provisioning base clone.
 
 | Method | Path | Behavior |
 |---|---|---|
-| POST | `/api/instances/{title}/send` | Body `{text, submit?}`. Types `text` into the **agent** window and (default) presses Enter, booting/resuming the agent tmux first if it isn't running — so one call kicks a fresh session into motion (max token use). `submit:false` types without submitting. Enter is a separate keystroke a beat after the text so an agent TUI doesn't read the burst as a paste. → `{sent, submitted}` (409 if the workspace is gone or `{budget_locked: true}` when the session is over budget, 502 if the send fails) |
+| POST | `/api/instances/{title}/send` | Body `{text, submit?, dialog_safe?}`. Types `text` into the **agent** window and (default) presses Enter, booting/resuming the agent tmux first if it isn't running — so one call kicks a fresh session into motion (max token use). `submit:false` types without submitting. Enter is a separate keystroke a beat after the text so an agent TUI doesn't read the burst as a paste. `dialog_safe:true` (the web UI's Thread "Send now" and every playbook paste) re-probes the agent's live, uncached activity first — and checks the screen for a dialog, which outranks the reading (see the screen-evidence guard under [Inter-agent messages](#inter-agent-messages)) — and never types into a prompt or the usage-limit menu (a digit or an Enter there would answer it): on `clarify`/`limit`, a dialog on screen (or an activity that can't be read) a submitted message is **queued** instead → `{sent: false, queued: true, submitted: false}` (the drain delivers it once the agent is free), and an unsubmitted paste is **409** `{error, in_dialog: true}` with nothing typed (queueing it would submit it later). A working agent is still typed into. → `{sent, submitted}` (409 if the workspace is gone or `{budget_locked: true}` when the session is over budget, 502 if the send fails) |
 | GET | `/api/instances/{title}/queue` | `{items: [{id, text, added}], pending, enabled, loop, loop_interval, wait_for_limit, limited_until, last_sent}` |
 | POST | `/api/instances/{title}/queue` | Body `{text, index?}` — append a prompt, or insert it at a 0-based position (clamped) when `index` is given — or `{texts: [...]}` to bulk-append (one write; blank rows skipped, overflow past the queue cap dropped; response adds `added`/`skipped` counts). Enqueuing re-enables draining. → queue state |
 | POST | `/api/instances/{title}/queue/flags` | Body `{enabled?, loop?, loop_interval?, wait_for_limit?}` — `enabled` gates auto-draining; `loop` re-queues each sent prompt so a self-improving prompt cycles forever; `wait_for_limit` holds draining until the usage window resets |
@@ -849,6 +1021,220 @@ was working; the hold states it instead. `GET /api/instances` carries a
 per-session
 `queue: {pending, enabled, loop}` summary for the UI badge. Each auto-send emits
 `session.prompt_sent`; queue edits emit `session.queue_changed`.
+
+### Another agent's view: output + answer
+
+What the MindFlock MCP's `read_output` and `answer_prompt` call, so one agent
+can read another's result and unblock a dialog. See [mcp.md](mcp.md).
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/api/instances/{title}/output?view=last_reply\|transcript\|screen&max_chars=N` | What the session's agent produced → `{view, text, truncated, activity}`, plus `fallback: true` when the view fell back. `last_reply` (the default) is the provider's newest assistant message. A provider with none (no readable transcript, or no reply yet) falls back to `screen`, answering `view: "screen", fallback: true`. `transcript` is the text `/history?pane=agent` serves (the provider transcript, else the pane's scrollback). `screen` is the visible pane only (`tmux capture-pane -p -J`, no scrollback), which is what a dialog looks like. `max_chars` defaults to 6000 and is clamped at 50000; truncation keeps the **tail**. `activity` is the memoized probe. **400** for a bad view or a non-integer/non-positive `max_chars`, **404** for an unknown session, **409** `no live session` when the view needs the tmux pane and it is gone |
+| POST | `/api/instances/{title}/answer` | Answer a dialog the agent is blocked on. Body `{text?, keys?, dialog_id?, by?}`. `text` (≤ 2000 chars, all C0/C1 control characters stripped) is typed literally **without** Enter, even when it starts with `-`. Then each of `keys` (≤ 20, allow-list `Enter Escape Up Down Left Right Tab BTab Space 1`–`9 y n`) is pressed in order. Allowed while the agent's live, uncached activity is `clarify` or `limit`, or — whatever the reading (`offline` excepted) — while its provider **parses a dialog on the visible screen**: screen evidence beats the activity layer, so a click on a dialog that is plainly up is never refused because a background sub-agent's hooks made the session read `working` or `idle` (it then answers `activity_before: "clarify"`). Anything else answers **409** `session is not waiting on a prompt (activity: X)`, because typing into a working or idle agent is a prompt, not an answer (that is `/send`). `dialog_id` (optional, from `GET /dialog`) pins the answer to that dialog: when the dialog on screen now has a different id (it was answered meanwhile and the next one is up), or the screen can't be read, nothing is typed and the answer is **409** `{"error": "the prompt changed", "dialog_changed": true}`. One answer per dialog: the route holds a per-session lock from its screen read through its keys, and a settling answer (any of `1`–`9`, `Enter`, `Escape`, `y`, `n`) pinned to a `dialog_id` that got one less than 4 s ago (`agent_io.ANSWERED_HOLD_S`) is **409** `{"error": "that prompt was just answered", "dialog_answered": true}` — the CLI may not have redrawn yet. Seeing a different dialog in between (on `/dialog` or `/answer`) clears that memory, so an identical prompt asked again is answerable. `by` is `"agent"` (default) or `"user"`: an agent's answer doesn't count as human input; a person's click in the UI (`by: "user"`) is stamped as presence like `/send`. → `{ok: true, activity_before}`. **400** for a bad body (including a non-string or > 64-char `dialog_id`, or another `by`), **404** unknown, **409** over budget (`budget_locked: true`) or just answered (`dialog_answered: true`), **502** when tmux refuses the keys |
+| GET | `/api/instances/{title}/dialog` | The dialog the agent is blocked on, as data, for the UI's answer buttons → `{id, parsed, question, command, options: [{key, label, kind}], source?}`. The session's provider parses the visible screen (`BaseProvider.parse_dialog`; Claude Code and Codex implement it, pinned against golden screens in `tests/unit/data/dialogs/`): `question` is one self-contained line (`"Bash command — Add redis as a dependency. Do you want to proceed?"`), `command` the command or MCP tool call it asks about (else `null`) — for Claude Code 2.x's Bash dialog the boxed command line itself (its description goes into `question`), for an MCP **Tool use** dialog the call led by the argument that names it, chosen by name — `title`, then `session` / `to` / `target`, else the first argument with a value (`hello-worker · mindflock — Spawn worker session`, also when Claude lists `prompt:` first; the arguments go into `question`) so a narrow strip still says WHICH call it is. A command the dialog's box hard-wrapped mid-token at the pane's edge (a long path) is joined back without a space; its own line breaks (a heredoc) are kept. A tab header on the heading (`· from the general-purpose agent 2 of 3`, a Claude background sub-agent's prompt) is cut off the question and reported as `source` (`"general-purpose agent"`, only when set). A side panel Claude draws to the right of the dialog (its diff view) is cut away before parsing. `options` the dialog's own numbered choices with `key` the digit to press and `kind` one of `yes` (approve once), `always` (a standing rule — "don't ask again", "allow all edits during this session"), `no` (refuse / exit) or `other`. A screen no parser recognizes answers `parsed: false`, the best-effort question line and no options — a numbered list the agent merely printed carries no selection cursor and never parses, and an option list counts only when nothing but blank lines, rules and a key-hint footer follows it (a numbered prompt in the transcript has more transcript or the input box under it). Claude Code's parser takes only its `❯` cursor (`>` marks the user's own prompts) and needs the rule Claude draws above every dialog — a rule with text drawn on it still counts. `id` is a 12-hex digest of the dialog built **per component** — each paragraph above the options (heading, command box, question), then each option as `key:label` — with the selection cursor and **all whitespace** removed; what the width can cut (every option label, Claude's collapsed "About the … Tool:" description, any paragraph with a line cut short with `…`) counts only by its first 24 characters before the cut, `ctrl+o to expand` hints and the tab header's `N of M` not at all. Nothing is left out whole, so it holds while the same dialog is up — arrowing through options, a resize that re-wraps or re-cuts its lines (47 to 200 columns), another tab being answered — and changes with the next prompt (another command, tool, argument or question); the 2-option variant Claude draws at ≤ 80 columns has other keys and so another id. Send it back as `/answer`'s `dialog_id`. Served while the live, uncached activity is `clarify`, or whatever the reading while the provider parses a dialog on screen; `limit`/`offline`, or another reading with no parsed dialog, is **409** `session is not waiting on a prompt (activity: X)` — or, with `?quiet=1` (what the UI's answer strips send), **204** with no body: "not waiting" is the routine answer for a strip whose row reading is a poll behind, and a 4xx would be logged by the browser every time. **404** unknown, **409** `no live session` (also with `quiet`), **500** when the capture fails |
+
+### Inter-agent messages
+
+A message one session's agent (through the MindFlock MCP), the CLI
+(`mindflock msg`) or any API client leaves for another session. It is stored
+in the recipient's mailbox (`~/.mindflock/mailbox.json`) and reaches it
+**exactly once**, by whichever happens first:
+
+- the server's delivery lane types it into the agent pane once the agent is
+  stably idle, so it becomes `delivered`;
+- the recipient fetches it with `mark_read`, so it becomes `read`, which also
+  cancels the typing.
+
+The full semantics are in [mcp.md](mcp.md#messages).
+
+| Method | Path | Behavior |
+|---|---|---|
+| POST | `/api/instances/{title}/messages` → 201 | Leave a message for `title`. Body `{text, from?, reply_to?, delivery?, kind?, data?}`, described below the table. → **201** `{message, delivery: "delivered"\|"pending"\|"held", detail?}` and a `session.message` event on the recipient. **400**: empty or non-string `text`, `text` > 20000 chars, an unknown `from`, `from` == the recipient, a bad `delivery`/`kind`, `data` not an object or > 8192 bytes serialized, a non-string `reply_to`. **404**: unknown recipient |
+| GET | `/api/instances/{title}/messages` | The inbox → `{messages: [...oldest→newest], unread, version}`. Query parameters are described below the table. **400** for a non-numeric `limit`/`wait`, a bad `kind` or an unparseable `after` id. **404** for an unknown session |
+| POST | `/api/instances/{title}/messages/read` | Body `{ids: [...]}` or `{all: true}`. Marks those messages `read`; only `pending`/`held` ones change, and a pending message marked read is never typed. → `{marked, unread}` |
+
+**POST body.**
+
+- `text` (required): at most 20000 chars.
+- `from`: a live session's title, or `""` (the default) for the CLI or an
+  external client.
+- `reply_to`: the id being answered.
+- `delivery` (default `auto`):
+  - `auto` types it in when the recipient is next stably idle;
+  - `inbox` stores it only;
+  - `now` types it immediately when the recipient is `idle` or `working`.
+    `now` is allowed only from an ancestor of the recipient (or from `""`);
+    from anyone else it is sent as `auto` with a `detail`. It is never typed
+    into `clarify`, `limit` or an offline agent, never over an open
+    long-poll, never while the recipient's screen shows a dialog (whatever
+    its activity reads — see the screen-evidence guard under the delivery
+    lane), never into a paused, over-budget or still-setting-up session,
+    never within 20 s of the prompt queue relaunching the agent, never into a
+    pane no agent CLI holds (a shell the agent quit to, or `vim`/`ssh` run
+    there), and never while someone has typed in that window in the last
+    45 s. In those cases the message stays `pending` for the lane, with a
+    `detail` saying why.
+- `kind`: `message` (the default) or `result`. `result` is what the MCP's
+  `report_result` sends, with `data: {status, branch, head_sha, diff_stat}`.
+  For a `result` from a session the server replaces `data.diff_stat` with one
+  measured from the sender's worktree as the message is posted.
+- `data`: any JSON object, at most 8192 bytes serialized.
+
+**Safety rules.** A push (`auto`/`now`) that breaks one is stored `held`, with
+`detail` naming the rule:
+
+- `hop` is the `reply_to` message's hop + 1. A push deeper than
+  `MINDFLOCK_MSG_MAX_HOPS` (default 6) is held as a "reply chain limit".
+- More than 6 pushes from one sender to one recipient within 10 minutes, or
+  more than 30 from one sender overall, are held as a "rate limit". Sender
+  `""` is exempt, and so is a sender's **first** `kind: "result"` to a
+  recipient in the window (the report the parent is waiting on). Later
+  results count like any other push.
+
+**Message object.**
+
+```jsonc
+{"id": "m1759600000123_42", "kind": "message", "from": "orch", "to": "orch-w1",
+ "text": "…", "data": null, "ts": 1759600000.12, "reply_to": null, "hop": 0,
+ "delivery": "auto",            // the mode actually applied (a downgrade reads "inbox")
+ "state": "pending",            // pending | delivered | read | held
+ "delivered_ts": null, "read_ts": null, "detail": ""}
+```
+
+Ids are `m<epoch_ms>_<seq>`, where `seq` is a file-wide counter, so ids sort
+globally.
+
+**GET query parameters.**
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `unread` | 1 | only `pending` and `held` messages |
+| `include_consumed` | 0 | `1` also returns `delivered` and `read` messages |
+| `after` | — | a message id; only strictly newer messages |
+| `from` | — | only messages from this sender; `""` selects the CLI and external clients |
+| `kind` | — | `message` or `result` |
+| `limit` | 50 | clamped to 1–200 |
+| `mark_read` | 0 | `1` atomically marks the returned messages read |
+| `wait` | 0 | seconds, clamped to 0–30: long-poll until a match arrives |
+
+- **Which messages come back.** An unread-only query returns the **oldest**
+  `limit` matches, a FIFO inbox. With `include_consumed=1` it returns the
+  **newest** `limit`. Either way they are ordered oldest to newest.
+- **`version`** comes from the same counter as the ids. It changes on every
+  mutation of that box and only grows, including across a dropped box, so
+  compare it with `!=`.
+- **Long-poll.** `wait` polls the box's version on the event loop, never on a
+  parked thread. It returns early when the session is removed or the client
+  disconnects. While it runs, and for 5 s after it ends, the delivery lane
+  doesn't type into that recipient, because the poll is about to hand the
+  message over itself.
+
+The **delivery lane** is a pass in the 5-second prompt-queue drain loop. It
+types at most one message per recipient per pass, and only under all of these
+conditions:
+
+- the agent is started, not paused, not over budget, and its setup isn't
+  running or failed;
+- no long-poll is open on its inbox;
+- the agent wasn't just rebooted by the queue (20 s grace);
+- its live activity is `idle`, settled for 4 s with hook evidence or 12 s
+  otherwise;
+- the 8 s send cooldown has passed, counting the queue's sends too;
+- the user's prompt queue doesn't want this turn, and no fast-track chain is
+  mid-flight;
+- its tmux session is alive; the lane **never** boots an agent;
+- an agent CLI holds the pane: its executable (any provider's binary, or the
+  session's own program, also as `node …/claude`) is in the pane's process
+  tree, so a shell the agent quit to, or `vim`/`ssh`/`psql` started there,
+  never receives the line;
+- no usage-limit banner is showing;
+- nobody has typed in that window in the last 45 s (the web terminal, or a
+  raw `tmux attach` / SSH client);
+- the **screen shows no dialog** — checked last, on a fresh capture.
+
+**The screen-evidence guard.** Every automated typer — this lane, `delivery:
+"now"`, the prompt-queue drain (and its usage-limit resume), the limit
+watcher's `continue`, `/send` with `dialog_safe`, the Code Map's button
+messages and the playbook render (its **409** "Answer its prompt first") — captures the pane right before it types
+and **holds** when the session's provider sees a live dialog at the bottom of
+the screen (`BaseProvider.dialog_on_screen`: a parse, or the provider's
+waiting-prompt / trust phrases in the bottom 15 lines), whatever the activity
+reads. Screen evidence beats the activity reading: in a live run the
+orchestrator read `idle` (its main turn's Stop hook) with a background
+sub-agent's `answer_prompt` permission on screen, this lane typed a worker's
+result into it, and the line's Enter approved the dialog. A held message stays
+`pending` (nothing is claimed), a held queue item stays queued; a capture that
+fails is no evidence either way (the send itself then decides).
+
+Typed messages don't count as human input and never touch the user's queue.
+Every typer into an agent pane (the queue, the lane, `now`, `/answer`, `/send`,
+the usage-limit resume) holds one lock per tmux session across its text, pause
+and Enter, so two of them can never merge into one submitted turn.
+A body over 1500 characters (after it is flattened to one line) is typed as a
+one-line notice with a 300-character preview. The message stays `held` so the
+full text can still be fetched.
+
+### Family thread
+
+The mail an orchestrator and its workers exchanged, for a person to read — the
+web UI's Thread tab. Strictly read-only: it never marks a message read and
+never claims a pending delivery, so looking at it can't cancel a typing or eat
+the report an orchestrator is waiting on.
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/api/instances/{title}/thread?limit=50&before=<item id>` | → `{title, parent, members, items, more}`. Messages count only when sent since both their sender and their recipient were created (a reused title doesn't inherit its deleted namesake's mail — the rule the row's `last_report` applies). A `before` id that is no longer stored (inboxes drop their oldest messages over their caps) pages back from the time its id carries (`m<ms>_<n>`, `spawn:<title>:<ms>`). **404** unknown session, **400** a non-integer/non-positive `limit` or a `before` id that is neither stored nor time-stamped |
+
+- `parent`: the session's live parent, or `""`.
+- `members`: the session itself (`role: "self"`), its live parent
+  (`"parent"`) and its live children (`"child"`), each `{title, role, status,
+  activity, activity_since, branch, diff_stat, created_at, last_report,
+  base_sha}`. Status, activity, branch and diff stat come from the listing's
+  tick snapshot (at most a tick old; a member it doesn't have yet gets a cheap
+  row and the memoized activity probe). `last_report` is the row field above;
+  `base_sha` is the commit the member's worktree was cut from (`null` when not
+  recorded).
+- `items`, oldest first (newest last): `{type, id, ts, from, to, text, status,
+  state, base_sha}`.
+  - `spawn`: one per parent→child edge in the family (the session's own
+    spawn when it has a parent, and one per child). `ts` is the child's
+    `created_at`, `text` the first 300 characters of its seed prompt when
+    known (remembered at create time, else the instance's own prompt, else a
+    provisioned workspace's prompt file; `""` otherwise), `base_sha` the
+    child's fork commit. Its `id` is `spawn:<child>:<created_at ms>`.
+  - `message` / `result`: every mailbox message whose sender **and**
+    recipient are both members, in both directions, consumed or not (mail from
+    the CLI or an unrelated session is left out). `text` is the stored body
+    (capped at 4000 chars), `status` a result's `done`/`blocked`/`failed`,
+    `state` its delivery state (`pending`/`delivered`/`read`/`held`).
+- `limit` (default 50, max 200) keeps the newest items; `before` pages back
+  from an item's `id`, and `more` says older items exist beyond the page.
+
+### Playbooks
+
+Named orchestration prompts the UI pastes into an agent's input box — **Split
+across workers**, **Ask a session**, **Check on workers**, **Wrap up
+workers**. The registry is `backend/mcp/playbooks.py`; every template is one
+paragraph of at most 600 characters (Claude Code collapses a longer paste into
+"[Pasted text]") that names only real MindFlock tools, spelled
+`mcp__mindflock__<tool>` for Claude and by the bare name for other CLIs. The UI
+pastes the rendered text with `POST /send {"text", "submit": false}`; nothing
+runs until the user presses Enter, and every step the agent then takes goes
+through its own MCP tools. See [mcp.md](mcp.md#from-the-ui).
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/api/playbooks?title=<t>` | → `{"playbooks": [{id, label, desc, letter, args: [{name, label, kind: "text"\|"session", required}], when: "any"\|"has_children", available, disabled_reason}]}` in menu order. With `title`, the menu for that session: a `when: "has_children"` playbook is **omitted** while the session has no live children, and every item is `available: false` with a `disabled_reason` when the session's CLI doesn't get the MindFlock tools (`This CLI doesn't get the MindFlock tools` — attach off or a provider with no auto-attach), when this launch didn't (`mcp_attached: false` → `Restart this agent to give it the MindFlock tools`), or while it is in `clarify`/`limit` (`Answer its prompt first — pasting now would answer the dialog`; pasted text would land in the dialog). **404** unknown title. Without `title`: the whole registry, all available (the New dialog's list) |
+| POST | `/api/playbooks/{id}/render` | Body `{title, args: {}}` → `{text}`: the prompt for `title`'s agent. A text argument left empty ends the text on its lead-in (`The task: `, `The question: `) so the user types straight on. `ask`'s `session` must name another live session; `wrapup`'s optional `only` must name one of `title`'s live children; `wrapup` lists the children that have reported and merges into `title`'s branch. **400** unknown id, a missing `title`, or bad args (an undeclared or non-string argument, a missing required one, one over its length cap, a session argument naming no such session, a filled-in text argument that would push the paste past 600 characters — the error names the room left); **404** unknown title; **409** `{error, disabled_reason}` when the paste can't go in now — the menu's reasons, with the activity probed live: the agent is on a prompt or the usage-limit menu, this launch has no MindFlock tools (`mcp_attached: false`), or its CLI gets none. Session arguments are matched exactly (no length cap of their own beyond 256, runs of spaces kept); the text quotes at most 120 characters of a title |
+
+v1 registry:
+
+| id | Label | Letter | Args | Shown | Tells the agent |
+|---|---|---|---|---|---|
+| `split` | Split across workers… | S | `task` (text) | any | `whoami`; commit shared groundwork; disjoint pieces; one `spawn_session` each; `wait_for_session`; answer only read-only prompts; per report `get_diff`, merge, run the tests; ask before `kill_session` with mode delete |
+| `ask` | Ask a session… | A | `session` (required), `question` (text) | any | `send_message` to it, then `wait_for_message` from it, then use the answer (give up after 10 minutes and say so) |
+| `workers` | Check on workers | C | — | has children | `list_sessions` filter children; one line per worker; answer only clearly safe read-only prompts, flag the rest; touch nothing |
+| `wrapup` | Wrap up workers | W | `only` (session) | has children | per reported worker (or just `only`): `get_diff`, merge into the branch, full test suite; stop on a conflict or failure; ask before deleting |
 
 ### Session budget (J5)
 
@@ -913,7 +1299,7 @@ the owning device.
 
 | Method | Path | Returns / accepts |
 |---|---|---|
-| GET | `/api/config` | `{default_program, provisioning_available, caps: {git, tailscale, ticketing, github}, home, repo_root, ide_name, onboarded, auth_mode, auth_enabled}` — `caps` reports which optional integrations are usable right now; the UI hides absent features and shows "connect X" guidance wherever they are configured (a Settings screen, or an Intake tab via its `data-caps-need`). `caps.github` is true when **either** credential exists (`gh` authenticated **or** a token resolves) and is cached ~60 s (unlike its PATH-stat siblings it shells out to `gh auth status`, and this endpoint is hit on every page load); it gates one-click **Make PR** / **Merge**, and when false those buttons take the browser-URL path rather than disappearing — pushing is unaffected either way |
+| GET | `/api/config` | `{default_program, provisioning_available, caps: {git, tailscale, ticketing, github, agent_mcp}, home, repo_root, ide_name, onboarded, auth_mode, auth_enabled}` — `caps` reports which optional integrations are usable right now; the UI hides absent features and shows "connect X" guidance wherever they are configured (a Settings screen, or an Intake tab via its `data-caps-need`). `caps.github` is true when **either** credential exists (`gh` authenticated **or** a token resolves) and is cached ~60 s (unlike its PATH-stat siblings it shells out to `gh auth status`, and this endpoint is hit on every page load); it gates one-click **Make PR** / **Merge**, and when false those buttons take the browser-URL path rather than disappearing — pushing is unaffected either way. `caps.agent_mcp` is the one non-boolean cap: `{"enabled": bool, "providers": ["claude", "codex"]}`. `enabled` says whether new launches attach the MindFlock MCP (`general.agent_mcp` and the `MINDFLOCK_AGENT_MCP` kill switch). `providers` lists the CLIs that get it automatically. On any error it reads `{enabled: false, providers: []}`. The MCP's `spawn_session` reads it to decide whether a worker can report back (see [mcp.md](mcp.md)) |
 | GET | `/api/providers` | `{providers: [{name, aliases, profiles: [{id, label}], default_selector}], default}` |
 | GET | `/api/usage` | Rolling day/week/month/year token+cost totals per provider (Claude, Codex, …) |
 | GET/POST | `/api/scroll-speed` | `{speed}` 1–20, applied live to tmux |
@@ -944,7 +1330,7 @@ Live stream of the server-side session event bus (see
 Events: `session.created|create_failed|deleted|paused|resumed|status_changed|
 activity_changed|stage_changed|setup_started|setup_finished|check_started|
 check_finished|budget_exceeded|budget_raised|prompt_sent|queue_changed|
-usage_restored|turn_ended|pr_state_changed|pr_review_changed|test_plan_ready|
+usage_restored|turn_ended|message|pr_state_changed|pr_review_changed|test_plan_ready|
 test_plan_failed|test_plan_due|test_plan_checked|test_plan_gave_up|
 red_zone_blocked|red_zone_breached|red_zone_tampered`
 (plus addon-originated `addon.*`). `session.pr_review_changed` reports a
@@ -966,7 +1352,16 @@ drain-loop pass that nudges sessions parked on a limit screen to carry on
 off). It only ever fires for sessions that had actually run out, so it is the
 "your usage is back" signal; running *out* is `session.activity_changed` with
 `new == "limit"`. `session.turn_ended` is the one that says an agent has
-**finished** (`data: {"idle_for": <float>}`) — see below. The three
+**finished** (`data: {"idle_for": <float>}`) — see below.
+`session.message` fires on the **recipient** whenever a message is left for it
+([Inter-agent messages](#inter-agent-messages)). Its `data` is `{id, from,
+kind, text, delivery, status?}`. `from` is `""` for the CLI or an external client.
+`text` is the first 200 characters, flattened to one line. `delivery` is
+`delivered`, `pending` or `held`: typed in already, waiting for the agent to
+be idle, or kept in the inbox. A `kind: "result"` event also carries `status`
+when the report has one: its `data.status` (`done`, `blocked` or `failed` from
+`report_result`), sanitized and cut to 24 characters, so the UI can say how a
+worker finished without fetching the message. The three
 `session.red_zone_*` events (see [Code map & red zones](#code-map--red-zones))
 carry `data.detail`, a sentence for humans that notification templates fill as
 `{detail}`: `red_zone_blocked` `{count, zone_ids, patterns, paths, tool,

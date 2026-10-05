@@ -67,6 +67,10 @@ class GitWorktree(
       * ``baseCommitSHA``    - base commit hash for the worktree
       * ``isExistingBranch`` - True if the branch existed before the session was
         created (when True, the branch is not deleted on cleanup)
+      * ``baseRef``          - Python-side extension: the commit-ish a NEW
+        branch is cut from instead of the repo's HEAD ("" = HEAD). One-shot:
+        consumed by the first successful setup and never persisted, so a later
+        Setup (Resume) takes the ordinary existing-branch path.
     """
 
     def __init__(
@@ -77,6 +81,7 @@ class GitWorktree(
         branchName: str = "",
         baseCommitSHA: str = "",
         isExistingBranch: bool = False,
+        baseRef: str = "",
     ) -> None:
         self.repoPath = repoPath
         self.worktreePath = worktreePath
@@ -84,6 +89,7 @@ class GitWorktree(
         self.branchName = branchName
         self.baseCommitSHA = baseCommitSHA
         self.isExistingBranch = isExistingBranch
+        self.baseRef = baseRef
 
     # --- Getters ----------------------------------------------------------
     def IsExistingBranch(self) -> bool:
@@ -168,11 +174,15 @@ def resolve_worktree_paths(repo_path: str, branch_name: str) -> Tuple[str, str]:
     return resolved_repo, worktree_path
 
 
-def new_git_worktree(repo_path: str, session_name: str) -> Tuple[GitWorktree, str]:
+def new_git_worktree(
+    repo_path: str, session_name: str, base_ref: str = ""
+) -> Tuple[GitWorktree, str]:
     """Create a new ``GitWorktree`` instance for a fresh branch.
 
     Builds the branch name as ``<branch_prefix><session_name>`` (sanitized),
-    resolves paths, and returns ``(worktree, branch_name)``.
+    resolves paths, and returns ``(worktree, branch_name)``. ``base_ref`` (a
+    Python-side extension) cuts the branch from that commit-ish instead of
+    HEAD when the worktree is set up.
     """
     cfg = config.LoadConfig()
     branch_name = "{}{}".format(cfg.branch_prefix, session_name)
@@ -187,6 +197,7 @@ def new_git_worktree(repo_path: str, session_name: str) -> Tuple[GitWorktree, st
         sessionName=session_name,
         branchName=branch_name,
         worktreePath=worktree_path,
+        baseRef=base_ref,
     )
     return tree, branch_name
 

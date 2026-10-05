@@ -143,6 +143,12 @@ EVENT_NAMES = (
     # profile id). Emitted by the hot-swap route, which restarts the agent, so
     # a hook can re-key whatever it tracks per identity.
     "session.profile_changed",
+    # Inter-agent mailbox (core.mailbox): a message was left for this session
+    # (data: {"id", "from" — the sending session's title, "" for the CLI or an
+    # external client, "kind": "message"|"result", "text" — its first 200
+    # chars, sanitised to one line, "delivery": "delivered"|"pending"|"held" —
+    # typed already, waiting for the agent to be idle, or kept in the inbox}).
+    "session.message",
     # Red zones (core.red_zone_monitor). All three are SEEDED rather than
     # boot-gated: the loop's first sight of a session/worktree records what is
     # already there without emitting, so a restart never re-announces.

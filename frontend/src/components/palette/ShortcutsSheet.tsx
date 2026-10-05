@@ -10,6 +10,7 @@ import {
   CHORDS,
   KEYMAP,
   chordKeyFor,
+  chordShadowedBy,
   comboLabel,
   comboProblem,
   defaultCombosFor,
@@ -71,10 +72,15 @@ function buildSheet(): Array<[string, SheetRow[]]> {
   }
   for (const k of Object.keys(CHORDS)) {
     const suf = chordKeyFor(k);
+    // A newer chord whose default letter an older rebinding already took:
+    // say so, and the row's click gives it a free key.
+    const by = chordShadowedBy(k);
     rows["Focused session"].push([
-      "Ctrl+K " + suf.toUpperCase(),
-      CHORDS[k].desc,
-      { kind: "chord", id: k, custom: suf !== k },
+      by ? "Ctrl+K " + suf.toUpperCase() + " (taken)" : "Ctrl+K " + suf.toUpperCase(),
+      by
+        ? CHORDS[k].desc + " — your Ctrl+K " + suf.toUpperCase() + " runs “" + CHORDS[by].desc + "”; click to pick a key"
+        : CHORDS[k].desc,
+      { kind: "chord", id: k, custom: suf !== k || !!by },
     ]);
   }
   for (const x of SHORTCUT_EXTRAS) rows[x[0]].push([x[1], x[2], null]);
@@ -119,7 +125,9 @@ export function ShortcutsSheet() {
           toast("Chords take one plain second key — press a single letter or digit");
           return; // stay in capture
         }
-        const clash = Object.keys(CHORDS).find((c) => c !== meta.id && chordKeyFor(c) === norm);
+        const clash = Object.keys(CHORDS).find(
+          (c) => c !== meta.id && chordKeyFor(c) === norm && !chordShadowedBy(c)
+        );
         if (clash) {
           toast("Ctrl+K " + norm.toUpperCase() + " is already “" + CHORDS[clash].desc + "”");
           return;

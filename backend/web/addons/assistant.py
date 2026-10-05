@@ -204,6 +204,13 @@ def _ensure_assistant_session():
     # profile applies. Local-model routing composes the same way, and wins.
     prof_env, prof_args = providers.launch_script.profile_overlay(program)
     local_env, local_args = providers.launch_script.local_overlay(program)
+    # The MindFlock MCP, so the Assistant can see and steer the flock. It is
+    # not a session, so it attaches unmanaged with no title: the MCP treats it
+    # as an external client (it manages only what it spawns under the default
+    # scope). () when off / unsupported.
+    mcp_args = providers.mcp_attach.attach_args(
+        provider, title="", tmux_name=name, workdir=str(ASSIST_DIR), managed=False
+    )
     cmd = provider.build_launch_command(
         providers.LaunchContext(
             program=program,
@@ -216,7 +223,7 @@ def _ensure_assistant_session():
             workdir=str(ASSIST_DIR),
             resume=resume,
             session_name=name,
-            launch_args=tuple(prof_args) + tuple(local_args),
+            launch_args=tuple(mcp_args) + tuple(prof_args) + tuple(local_args),
         )
     )
     _clear_exit_marker(name)
@@ -271,6 +278,8 @@ def _ensure_assistant_session():
         except subprocess.TimeoutExpired:
             pass
         return name, created.stderr.decode("utf-8", "replace").strip()
+    # Recorded like every other launch (see mcp_attach.note_launch).
+    providers.mcp_attach.note_launch(name, bool(mcp_args) and cmd is not None)
     for opt, val in (
         ("mouse", "on"),
         ("history-limit", "10000"),

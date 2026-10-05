@@ -10,7 +10,7 @@ import { computeVisibleSlots } from "../components/grid/layout";
 import { orderWithAfter } from "../components/sidebar/ordering";
 import { patchInstance, queryClient, refreshInstances } from "../state/queries";
 import { freshStage } from "./stageWatch";
-import { displayName, useUi, windowKey } from "../state/store";
+import { displayName, setSessionSelector, useUi, windowKey } from "../state/store";
 import { toast } from "./toast";
 import { errMsg } from "./format";
 import { clearLoopReset, clearStep, markLoopReset, markStep } from "./stage";
@@ -76,6 +76,9 @@ export function selectSession(title: string, opts?: { noKeyboard?: boolean }) {
   ui.setFocused(title);
   if (!opts?.noKeyboard) focusTerm(title);
 }
+// The store's own actions that bring a session forward (threadOpen) go through
+// this function too, so there is one selection rule, not a second copy of it.
+setSessionSelector(selectSession);
 
 /** Select a non-session window by its grid sentinel: top of the MRU, so a
  * capped view ("1", "2", "4") gives it a slot — the same thing selecting a

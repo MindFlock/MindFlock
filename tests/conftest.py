@@ -81,6 +81,12 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "MINDFLOCK_AUTOPILOT_FILE", str(tmp_path / "mindflock" / "autopilot.json")
     )
+    # The inter-agent mailbox (``~/.mindflock/mailbox.json``): the drain loop a
+    # lifespan test starts runs the delivery lane, which reads — and prunes —
+    # this store, so it must never be the developer's live one.
+    monkeypatch.setenv(
+        "MINDFLOCK_MAILBOX_FILE", str(tmp_path / "mindflock" / "mailbox.json")
+    )
     # Red-zone stores (roadmap: Code Map + red zones). Point the zone store, the
     # per-root guard-file dir and the per-session tool-feed dir at tmp so the
     # suite never reads or writes the owner's real ~/.mindflock /
@@ -97,6 +103,26 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     # ("rz-c: red zone breached", "session.created rz-new", ...). Point the root
     # at an empty per-test dir; tests that exercise hooks re-set it themselves.
     monkeypatch.setenv("MINDFLOCK_HOOKS_DIR", str(tmp_path / "no-hooks"))
+    # MindFlock MCP auto-attach run files (``~/.mindflock/run/mcp-*.json``):
+    # every launch path writes one for a Claude session, so a test that starts
+    # a session would otherwise drop files into the owner's real run dir.
+    monkeypatch.setenv("MINDFLOCK_RUN_DIR", str(tmp_path / "mindflock" / "run"))
+    # ...and each launch records whether it attached (the row's
+    # ``mcp_attached``), in process memory: start every test with none seen.
+    try:
+        from backend.providers import mcp_attach as _mcp_attach
+
+        monkeypatch.setattr(_mcp_attach, "_LAUNCHED", {})
+    except Exception:  # noqa: BLE001 — import is best-effort here
+        pass
+    # ``/answer`` remembers the dialog it just answered (a repeat within a
+    # few seconds is refused): start every test with nothing answered.
+    try:
+        from backend.web.core import agent_io as _agent_io
+
+        monkeypatch.setattr(_agent_io, "_ANSWERED", {})
+    except Exception:  # noqa: BLE001 — import is best-effort here
+        pass
     # Neutralize the web auth gate's enable signals so the suite never depends on
     # the ambient shell. auth.auth_enabled() turns on when CS_WEB_MODE is a
     # non-local mode (a dev shell often exports CS_WEB_MODE=tailscale), when an

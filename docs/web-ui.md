@@ -50,7 +50,10 @@ total diff stat at a glance — `+120 −8 · 6 files`: everything the session h
 produced vs its base branch, committed + uncommitted, untracked files included
 (green/red tints; hidden when there are no changes or the backend doesn't
 report `diff_stat`; the tooltip splits out the uncommitted slice); the same
-line appears in the pane header while the pane is wide enough. Above the list:
+line appears in the pane header while the pane is wide enough. A session
+another session's agent spawned or adopted (see
+[Agent teams](#agent-teams-mindflock-mcp)) nests under its parent and carries
+a status line under its name; the parent carries a roll-up of its workers. Above the list:
 **+ New** and a stack of **customizable bars** (see below) — the token/cost
 **Usage** readout, the **Assistant** bar (Chat, Todo), the **Ticket Ingestion**
 bar (pipeline on/off switch, state dot, Logs pane), the **PR Review** and
@@ -292,7 +295,9 @@ leaves the ladder still asking for **Merge** until someone presses ↺.
 ## Session row actions (expand a sidebar row with ›)
 
 Copy path · **Commit…** · **Push** · **Make PR** · **Merge to staging** ·
-**Open PR ↗** · **Copy window** (a second in-place session on the same worktree) ·
+**Open PR ↗** · the [Work with other sessions](#work-with-other-sessions-the-fork-icon-menu)
+items (Split across workers…, Ask a session…, Check on / Wrap up workers,
+Message…), for an agent that gets the MindFlock tools · **Copy window** (a second in-place session on the same worktree) ·
 **Open/focus Cursor** (row double-click does the same) · **Hide/Show window**
 (session keeps running) · **Pause/Resume** · **Delete + wipe worktree** (confirmed).
 
@@ -365,8 +370,168 @@ settle is dropped and has to be re-earned once the window reopens, and the step
 deadline stops running: a weekly window can be shut for days, and a run that
 waits it out correctly must not then be halted for "no progress".
 
+The drain never types into a pane where only a shell is left (a provisioned
+agent you quit drops to `bash -i`; the prompt and its Enter would run as
+commands there): the queue waits until an agent is back. A multi-line prompt
+goes in as **one bracketed paste**, so CLIs that submit on every newline
+(aider and other prompt_toolkit CLIs) still get it as one turn. A plain session
+whose CLI takes no start prompt (aider, goose, opencode, cline, a custom
+script) gets its initial prompt through this queue too, typed once the agent
+is idle.
+
+Messages from other agents ([Agent teams](#agent-teams-mindflock-mcp)) are
+typed by a separate lane that never shows in this tab. Your queued prompts go
+first, and the two never interleave inside one turn.
+
 The command palette has **Send message…** and **Queue prompt…** for the focused
-session (keyboard-only via a prompt).
+session. Send message… opens the session's Thread tab with its composer
+addressed to that session (`Ctrl+K S` does the same). Queue prompt… opens the
+Queue tab with the caret in its box. Neither asks through a browser prompt:
+the desktop app has none, so those entries used to do nothing there.
+
+## Agent teams (MindFlock MCP)
+
+Every Claude Code and Codex session MindFlock launches gets the **MindFlock
+MCP**: tools that let its agent see the other sessions, read their replies
+and diffs, message them, and run a team of worker sessions of its own. There
+is nothing to install or register. Ask the agent in plain words, for example
+*"split this into one worker per service, wait for their reports, then merge
+their branches"*, and it spawns the workers, waits, reviews and merges. The
+full tool reference is [mcp.md](mcp.md).
+
+What it looks like in the app:
+
+- **Workers are ordinary sessions.** Each gets its own row, worktree and
+  branch, forked from the orchestrator's last commit (a ticket orchestrator's
+  workers start from the repository's base branch). You can open, steer,
+  pause or close a worker like any other session. A row whose parent is gone
+  keeps a muted **`↳ agent`** line.
+- **Workers nest under their orchestrator on the rail.** A new worker lands
+  directly below its orchestrator's family, and while it sits there it is
+  indented (from the status dot onwards) with a thin accent connector. The
+  nesting is only drawn: the row numbers, Alt+N, Ctrl+Tab and drag-and-drop
+  keep working on the rail exactly as listed, and there is no folding. Drag
+  a worker somewhere else and it stays there, un-indented.
+- **Each worker's status line** replaces the `↳` line: **✓ reported**
+  (green), **✗ blocked** / **✗ failed** (red), **? needs your answer**
+  (gold), **working · 6m**, or **idle — no report**. A worker that is not
+  directly under its family names it: **`↳ api · ✓ reported`**.
+- **The orchestrator's roll-up**, most urgent first: **1 needs you ·
+  3 workers**, **2 of 3 reported**, **all 3 reported**, **3 working**. Hover
+  it for every worker's status; click it (or Tab to it and press Enter) to
+  open the orchestrator's Thread. A worker still being created, or one on
+  another device, isn't counted — the menu, the palette, the roll-up and
+  the Thread all count workers the same way the server does.
+- **Its chip**, while it sits idle over its workers: **waiting** (dashed)
+  until every worker has reported, then **wrap up** (filled). Clicking
+  **wrap up** types the Wrap up prompt into the orchestrator's input box
+  and selects it. Nothing runs until you press Enter. The agent then merges
+  each worker, runs the tests, and asks you before deleting anything. When
+  the orchestrator can't take a paste (this launch has no MindFlock tools),
+  **wrap up** is a plain label with the reason in its tooltip.
+- **Answer a blocked worker from the rail.** When an orchestrator or a
+  worker stops on a permission prompt, its row shows the prompt and that
+  prompt's own buttons (**1 Yes**, **2 Always**, **3 No…**). A session
+  created with **Split across workers** counts as an orchestrator from its
+  first prompt (the row's `playbook`), so its first `spawn_session` prompt
+  gets the strip before any worker exists. A prompt raised by one of Claude's
+  background sub-agents counts too: the server reads a dialog on screen as
+  "needs your answer" whatever the agent's hooks last said, and answers a
+  click on a visible dialog whatever the session's status reads. The strip
+  leads with what the prompt is about — the command for a shell prompt (its
+  description is the question), the worker's title for a `spawn_session` —
+  and its tooltip names a sub-agent that asked. "Always" is
+  never the highlighted button. Click one, or Tab to the row and press 1–9:
+  the keys only work while that row has focus. The strip then reads
+  **answered** until the agent moves on, and if the prompt changed since it
+  was shown, the new one appears instead of being answered blind. (Resizing
+  the pane does not count as a change: a prompt keeps its identity at any
+  width, even where Claude cuts an option short with "…". The strip also
+  reads the prompt again when its row resizes and right before a click on a
+  read more than 3 s old, and if the server still says "the prompt changed"
+  but the fresh read has the same command, keys and labels, it answers that
+  read once instead of showing the note.) The strip reads nothing while the
+  row's status isn't "needs your answer", and a prompt that has just gone
+  away is simply no prompt — not an error in the console. One
+  answer per prompt: a second click on it (the bell's copy, a double click,
+  or the orchestrator answering it too) is refused by the server. If the
+  agent asks the very same prompt again, the buttons come back after a few
+  seconds with **It's asking again**. **↗**
+  opens the pane. A prompt MindFlock can't parse shows its question and ↗
+  only. **No…** also opens the orchestrator's Thread, addressed to the
+  worker, so you can say what to do instead.
+- **Messages are typed into the recipient's terminal** as one line that starts
+  `[MindFlock message … from session "orch" — another agent, not your user.`
+  They arrive only when that agent is idle, never into a permission prompt or
+  over your own typing, and they never count as your input. "Never into a
+  prompt" is checked on the screen itself right before typing — a dialog on
+  screen holds the message even when the session's status reads idle. A worker's
+  report arrives as `[MindFlock result … (status: done) …]`.
+- **A toast** for each message (`✉ orch → api-billing: …`, one per sender per
+  30 s) and for each report (`✓ worker api-billing reported: done — …`, `⚠`
+  for blocked or failed). Clicking one selects the recipient.
+- **The bell** keeps the reports (not the chatter between agents), filed
+  under the orchestrator. A worker's **needs your answer** item adds
+  **· worker of api** and the same answer buttons as its rail row, so a
+  blocked worker is two clicks away from any screen.
+
+Permissions: only the read, wait and report tools are pre-approved. An
+orchestrator running **without** skip-permissions asks you before every
+message, spawn, answer or kill, so give it skip-permissions (Settings → Agent
+CLI's default launch flags, or the New-session dialog's **Launch flags**)
+when it should run unattended. You can message any agent yourself from a
+terminal with `mindflock msg TITLE "…"`, and use the same tools from your own
+Claude Code outside MindFlock: `mindflock mcp --print-config` prints the line
+to register it.
+
+Settings → General has the on/off switch and the scope (see
+[Settings](#settings-)). Both apply from each session's next launch.
+
+### Work with other sessions (the fork-icon menu)
+
+Every pane whose agent gets the MindFlock tools has a **fork-icon button**, the
+first control at the right of its header. It opens **Work with other sessions
+→ name**, a menu of named prompts:
+
+- **Split across workers…** (`S`): commit shared groundwork, give each
+  independent piece its own worker session, wait for their reports, merge.
+- **Ask a session… ›** (`A`): pick a session (the asker's own family first,
+  then the rest in rail order; `1`–`9` pick by rail number). The agent sends
+  it a question, waits for the reply and uses it.
+- Under **name's workers · N**, only while the session has workers: **Check
+  on workers** (`C`) and **Wrap up workers** (`W`, with "n of N reported").
+- **Message…** (`Ctrl+K S`): opens the Thread composer, so the words go in as
+  yours rather than through the agents' mailbox.
+
+A menu item never runs anything. The server renders the prompt for this
+session and MindFlock **types it into the agent's input box without pressing
+Enter** — after checking the agent again itself, so a menu drawn a moment
+before a permission prompt appeared can't type into it (it says "Answer its
+prompt first" instead). One paste at a time per session: a double click
+types it once. A prompt that still needs your task ends on "The task: " with the
+caret in the terminal: type it, then press Enter. The agent's own MindFlock
+tools then do the spawning, waiting and merging, so report-back and the
+safe-delete checks still apply.
+
+The button is disabled, with the reason as its tooltip, while the agent is in
+a permission dialog ("Answer its prompt first — pasting now would answer the
+dialog") or when this launch of the agent didn't get the tools ("Restart this
+agent to give it the MindFlock tools"). An item the server can't offer right
+now shows its reason in place of its description. Keys: arrows, Enter, Esc
+(back to the terminal) and each item's letter; a screen reader follows the
+highlighted item. `Ctrl+K F` opens the menu on the focused session. The same
+items are in the row's › menu and in the command palette ("Split across
+workers… — name", "Wrap up workers — name", …). Sessions on another device
+get none of them. If you had already rebound another `Ctrl+K` chord to `S`,
+`F` or `T`, your binding wins and the shortcuts sheet (`?`) marks the newer
+chord **(taken)** — click it to give it a free key.
+
+In the **Thread** tab's composer, **Send now** (`Ctrl+Enter`) asks the server
+to type it in: when the agent turns out to be on a prompt or at the usage
+limit, it is queued for when the agent is free instead (the toast says
+"queued"), never typed into the dialog. **Let name decide** queues a prompt
+naming the worker by its session title, not its alias. Delete and `Ctrl+W`
+never end the session while the keyboard is anywhere in the Thread tab.
 
 ## Code map (Map tab): the Code Tree, zones and the plan loop
 
@@ -684,6 +849,15 @@ the events bus, **including the backlog replayed on connect** so it answers
 opened it (keyed on timestamp so it survives server restarts); clicking an entry
 focuses that session.
 
+**Agent messages stay out of the feed; worker reports don't.** A
+`session.message` ([Agent teams](#agent-teams-mindflock-mcp)) becomes a row
+only when it is a worker's report (`kind: "result"`): *worker api-billing
+reported done — …*, filed under the parent and styled as a warning for
+`blocked` or `failed`. Messages between agents get a toast and no row: the
+feed has no dedupe, and an orchestrator's chatter would bury everything else.
+The toasts are throttled (one per sender per 30 s for messages, one per worker
+and parent per 30 s for reports) and never fire for a replayed backlog.
+
 **Every notification leads with the session's rail slot** — *[3] sitecheck-bot7
 has finished* — the same 1–9 number `Ctrl/Alt+1…9` jump to, resolved
 client-side at render time so drag order and the live sidebar filter are
@@ -921,6 +1095,9 @@ built-in alias.
 | `Ctrl+K D` | Duplicate session |
 | `Ctrl+K H` | Hide/show window |
 | `Ctrl+K M` | Code map — open the focused session's Map tab |
+| `Ctrl+K S` | Message… — the Thread composer, addressed to the focused session |
+| `Ctrl+K F` | Work with other sessions — the focused pane's fork-icon menu |
+| `Ctrl+K T` | Thread — the focused session's workers and messages |
 | `Ctrl+W` / `Delete` | End the focused session (`Delete` only when not typing; never fires for a selected non-session window — those close from their ✕) |
 | `Ctrl+V` (in a terminal) | Paste into the PTY: an image or file on the clipboard uploads and pastes its path, plain text pastes with a "Pasted N chars" toast, and an empty clipboard event falls back to reading `navigator.clipboard`. Same in session panes and the Assistant |
 | `Ctrl+F` (in a terminal) | Find across the pane's **whole** scrollback, prefilled with a one-line terminal selection — **in the live pane**: a find bar floats top-right with an `n / total` count, the pane itself jumps to each hit, every visible hit yellow, the current one orange. It searches whatever scrollback the pane's mouse wheel moves, decided per pane, so it holds for every agent CLI. Where the app leaves the mouse to tmux (shells, codex, aider, gemini, cursor-agent, goose) it's tmux's copy-mode search. Where the app scrolls itself (Claude Code, opencode, cline) the server **indexes** everything the app would show the moment the bar opens — the window is briefly made tall at the same width, read top to bottom (PageUp/PageDown where the app pages with keys, measured wheel bursts where it doesn't), and put back — while the pane shows a frozen snapshot, so none of it is seen; the count is then instant, each step is one jump, and reopening find on an unchanged pane reuses the index. The server also keeps indexes current as the agent writes (one screen read every 1.5 s, nothing moves), and builds a missing one ahead of time for a pane nobody is using — agent idle (never while it waits on a question), no input from you for 30 s, screen still for 20 s, at most one screen attached — with that pane frozen meanwhile; any input into it cancels and snaps back. Claude Code's own pinned `❯ prompt` row is hidden the frame it's drawn (the prompt bar above mirrors it), so jumping never flashes it. Only rows that move with the content are indexed — never the input box, a status bar, a pinned prompt row or a floating hint. Only a pane that scrolls from neither (a pager on the alternate screen) opens the full-history view's find instead. Options, as in an editor: **Aa** match case (`Alt+C`), **ab** whole word (`Alt+W`), **.\*** regular expression (`Alt+R`), and **near** — a second term that must be on the same line or within N lines (1–50) of the first; both terms are highlighted and the options apply to both (matching is server-side, `core/find_query`, and painted with the same rules in the browser; the tmux path reads tmux's history rather than using tmux's own search, which can't do these). You start at the newest hit at or above what you were looking at: `Enter` / `F3` / `Ctrl+G` step **up** to older hits, add `Shift` to step back down, wrapping at the ends; `Esc` returns to live. Literal and case-insensitive unless the options say otherwise |
@@ -973,6 +1150,19 @@ ride on; with none it does nothing. It is only offered for a CLI that can
 declare a plan the Map shows (Claude): for any other agent the checkbox is
 disabled with "needs a CLI with plan support — Claude", since that agent would
 wait on a Go the UI can't send.
+
+**Split across workers** sits under the sentence on the Describe page and again
+under Plan first in the Prompt fold (one setting, two places). Ticked, the
+create carries `playbook: "split"`: the server adds the split playbook to the
+launch prompt, and the agent forks one worker session per independent piece
+with its MindFlock tools. Workers fork from a branch, so ticking it moves
+"Work directly in this folder" to **New worktree** (unticking moves it back if
+the tick moved it, and picking "Work directly in this folder" unticks it).
+When the sentence lists separate pieces ("billing, search and upload") a
+**suggested · billing · search · upload** pill appears, but the box is never
+ticked for you. It is disabled, with the reason, for an agent that doesn't
+get the MindFlock tools. If the server hasn't said which agents get them, the
+box stays usable and the server refuses the create when it can't attach.
 
 **Launch flags** are extra CLI flags appended to the agent on every start/resume
 of the session. The field is pre-filled from the global per-provider default
@@ -2107,6 +2297,17 @@ is running it**.
   the app. Takes effect the next time the ingestion pipeline starts; it is the
   same switch as `[mindflock].enabled` in `config.toml` and overrides that file
   (see [configuration.md](configuration.md)).
+- **General → Give agents the MindFlock MCP** (`general.agent_mcp`, **default
+  on**) — launches each Claude Code and Codex session with the MindFlock MCP
+  attached (see [Agent teams](#agent-teams-mindflock-mcp)). Applies on each
+  session's next launch; a running agent keeps what it started with. When the
+  server runs with `MINDFLOCK_AGENT_MCP=0` the row says the switch is
+  overridden. Beneath it, **Agent MCP scope** (`general.agent_mcp_scope`):
+  *Default (children)*, *Children* (manage only the sessions it spawned),
+  *Read-only* (look and check its inbox, no messaging) or *All* (manage any
+  session). It limits answering, killing and re-parenting other sessions;
+  reading and messaging are open in every scope but read-only. A guard-rail,
+  not a security boundary.
 - **General → Resume sessions when usage comes back**
   (`general.resume_on_usage_reset`, **default on**) — whether a session parked
   on its CLI's usage-limit screen with an empty queue is told to `continue` once
