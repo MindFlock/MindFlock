@@ -20,6 +20,7 @@ from backend.ticket_ingestion.models import Attachment, Ticket
 from backend.ticket_ingestion.providers.base import (
     HTTP_TIMEOUT,
     ProviderError,
+    TicketNotFound,
     TicketProvider,
     ingests_any_assignee,
     parse_acceptance_criteria,
@@ -192,6 +193,7 @@ class LinearProvider(TicketProvider):
             slug=self.make_slug(identifier),
             source_label=self.label,
             state=_state_label(issue.get("state")),
+            state_id=str((issue.get("state") or {}).get("id") or ""),
         )
 
     async def _assigned(self, since: datetime, *, with_state: bool) -> list[Ticket]:
@@ -238,7 +240,7 @@ class LinearProvider(TicketProvider):
         data = await self._gql(_FETCH_QUERY, {"id": ticket_id})
         issue = data.get("issue")
         if not issue:
-            raise ProviderError(f"Linear issue {ticket_id} not found")
+            raise TicketNotFound(f"Linear issue {ticket_id} not found")
         return self._issue_to_ticket(issue)
 
     async def set_state(self, ticket_id: str, state_id: str) -> None:

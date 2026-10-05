@@ -62,6 +62,18 @@ mechanics differ per tracker:
 Failures here are warnings, never failed launches — see step 8 of the story flow
 below.
 
+**Reading one ticket back (`fetch(ticket_id)`)** has an error contract the
+pending-ticket re-check (story flow step 2) depends on: raise `TicketNotFound`
+(a `ProviderError` subclass, so existing `except ProviderError` callers are
+unaffected) only when the ticket is definitively gone, and plain
+`ProviderError` for anything transient. `TicketNotFound` drops the pending
+marker; `ProviderError` keeps it. Shortcut and Jira map a 404, GitHub a 404 or
+410, and Linear and Asana an empty payload. A state-bounded adapter should also
+fill `Ticket.state_id` with the same native id `workflow_state` stores
+(Shortcut `workflow_state_id`, Jira `status.id`, Linear `state.id`): the
+re-check matches a configured state against `state_id` or the state name,
+case-folded, and fails open when the ticket reports neither.
+
 **`github_issues` is the zero-config on-ramp** and therefore leads both the
 registry and the UI catalog (the Intake → Tickets tab seeds a newly added source
 with the catalog's first entry). It is the only source that needs **no fields
@@ -344,6 +356,35 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
 2. **Dedup** — a story is skipped if a remote branch `feature/sc-<id>/…` already
    exists (`git ls-remote`) or its id is in `state.json`'s `processed_stories`.
    Survivors are processed oldest-first.
+
+   **Queued tickets are re-checked before they launch.** A survivor is queued
+   with a `pending_stories` marker in `state.json` (crash recovery: a restart
+   re-enqueues it), and it can wait a long time there — behind the session cap,
+   across restarts. The board doesn't stand still meanwhile, so the source's
+   ingest filters (`workflow_state` — or Shortcut's legacy integer
+   `workflow_state_id` where the scan uses it — and `ingest_labels`) are applied again to a
+   fresh read of the ticket, twice: when a restart re-enqueues a marker, and
+   when the ticket is dequeued for launch (`ingest_filter_miss`). A ticket
+   moved out of the ingest state or stripped of its ingest label is dropped,
+   logged as `Dropped pending ticket …` / `Not launching …`, and recorded
+   nowhere, so moving it back makes it a fresh poll match. A ticket that no
+   longer exists (`TicketNotFound`, a 404) loses its marker too, instead of
+   being retried on every startup. A re-read that fails for any other reason
+   keeps the old behavior: the marker stays for the next startup, and a ticket
+   at the head of the queue launches as queued. Without this, a burst queued
+   behind the cap and then triaged back out of "Will do" kept relaunching on
+   every restart — and each launch moved its ticket into the start state,
+   undoing the triage.
+
+   The dequeue re-check runs after the processed-ledger and assignee guards and
+   before the `in_flight` marker is written. It re-reads the ticket from its own
+   source, which costs **one extra provider API call per launch** (watch the
+   rate-limit budget when a large burst drains). Only the filter decision uses
+   that fresh read: the session still launches from the queued snapshot, so
+   description and acceptance-criteria edits made while the ticket waited are
+   not picked up. Force-starts (Intake's **Start now**,
+   `POST /api/tickets/start`) bypass this path, so a manual start of a ticket
+   outside the ingest state still launches, by design.
 3. **Parse** — the description is mined for an `## Acceptance Criteria` section
    (bullets, numbered items, or WHEN/THEN/AND blocks); comments and attachments
    (Shortcut-hosted files get authenticated downloads) are collected.
@@ -534,7 +575,7 @@ artifact `.testmondata`, refresh command `pytest --testmon` with
 
 | File | Contents |
 |---|---|
-| `./state.json` | `{last_run_timestamp, processed_stories: [{story_id, branch, status, processed_at}], processed_prs: [{number, head_sha, processed_at}]}` — dedup/resume state. Corrupt/missing → starts fresh. |
+| `./state.json` | `{last_run_timestamp, processed_stories: [{story_id, branch, status, processed_at}], pending_stories: [{story_id, ticket_id, source_key}], processed_prs: [{number, head_sha, processed_at}]}` — dedup/resume state; `pending_stories` is the crash-recovery queue (see Story flow step 2): an entry is removed on dequeue, on a filter miss at restart, or when the ticket is gone (`TicketNotFound`), and kept on a transient fetch failure. Corrupt/missing → starts fresh. |
 | `./.mindflock-pipeline.lock` | Singleton flock; contains the winner's PID |
 | `./logs/pipeline.log` | The pipeline's own log (`[logging]` config) |
 | `./logs/ticket-ingestion.log` | stdout/stderr when run under the web UI addon |
@@ -561,6 +602,15 @@ hand-editing `state.json`.
   still launch an archived story. And a failed or non-200 `/epics` call degrades
   silently to no epic filtering: if archived rows reappear, grep the log for
   `Could not resolve archived Shortcut epics`.
+- **A 404 is not always "deleted".** Jira and GitHub also answer 404 for a
+  ticket the credentials can no longer see. After a token, permission or
+  workspace change, pending markers are dropped at the next restart (logged
+  `Dropped pending ticket … no longer exists`) rather than retried, and those
+  tickets come back only once they are updated again.
+- **The Intake panel's skip reasons use their own state comparison.** A pending
+  ticket moved out of the ingest state still reads *queued for ingestion
+  (pending)* there, although the pipeline will drop it at dequeue or restart
+  rather than launch it.
 - Only review-thread comments are actioned on PRs; top-level issue comments are
   fetched by dead code and ignored.
 - The clarification handler always continues with the original story after

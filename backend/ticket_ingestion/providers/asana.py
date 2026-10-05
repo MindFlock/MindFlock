@@ -18,6 +18,7 @@ from backend.ticket_ingestion.models import Attachment, Ticket
 from backend.ticket_ingestion.providers.base import (
     HTTP_TIMEOUT,
     ProviderError,
+    TicketNotFound,
     TicketProvider,
     parse_acceptance_criteria,
     parse_iso8601,
@@ -151,7 +152,7 @@ class AsanaProvider(TicketProvider):
         async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
             task = await self._get(session, f"/tasks/{ticket_id}", params)
             if not task:
-                raise ProviderError(f"Asana task {ticket_id} not found")
+                raise TicketNotFound(f"Asana task {ticket_id} not found")
             return await self._task_to_ticket(session, task)
 
     async def test_connection(self) -> tuple[dict | None, str]:
