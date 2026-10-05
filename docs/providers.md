@@ -165,7 +165,10 @@ config; each hook fires and writes a per-session `{state, ts}` JSON marker to
 `<marker dir>/<session>.json`, which the web layer trusts over pane inspection.
 Both halves of that path are resolved **inside the firing hook**, never baked
 in at install time: the session name from `MINDFLOCK_SESSION_NAME` (falling
-back to the live tmux `#{session_name}`), and the directory from the firing
+back to the `#{session_name}` of the hook's own pane, `-t $TMUX_PANE`; with no
+pane, or a pane that is already gone, the hook writes nothing, because a bare
+`display-message` answers with whichever window the user last focused), and
+the directory from the firing
 CLI's own environment — `MINDFLOCK_ACTIVITY_MARKER_DIR`, else the real
 `~/.mindflock-assistant/.activity-markers`. The install-time alternative was a
 live incident: sessions sharing a repo share one hooks file, and a sandboxed

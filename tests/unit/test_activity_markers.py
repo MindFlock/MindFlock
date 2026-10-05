@@ -200,6 +200,59 @@ def test_hook_command_falls_back_to_the_firing_homes_default(marker_dir, tmp_pat
     assert json.loads(p.read_text(encoding="utf-8"))["state"] == "idle"
 
 
+# A stand-in for tmux's session resolution: `-t %1` is the hook's own live
+# pane, any other target is a pane that no longer exists (real tmux prints
+# nothing), and NO target answers with tmux's "current" session, which is the
+# most recently active one: the window the user happens to be looking at.
+_FAKE_TMUX = """#!/bin/sh
+case "$*" in
+  *"-t %1 "*) echo own_window ;;
+  *"-t "*) ;;
+  *) echo focused_window ;;
+esac
+"""
+
+
+@pytest.mark.parametrize("pane", ["%1", "%99", None])
+def test_hooks_resolve_only_their_own_pane(marker_dir, thread_dir, tmp_path, pane):
+    """THE FOCUSED-WINDOW HIJACK REGRESSION.
+
+    Closing a ticket window killed its pane; the dying Claude's SessionEnd/Stop
+    hook ran a bare ``tmux display-message`` and got the window the user was
+    focused on. That window read ``idle`` while it waited on a background
+    agent, and inherited the dead conversation's thread id. A hook may only
+    name its own pane's session, and a pane that is gone, or no pane at all,
+    must write nothing.
+    """
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "tmux").write_text(_FAKE_TMUX)
+    (bindir / "tmux").chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if k not in ("TMUX", "TMUX_PANE")}
+    env.pop("MINDFLOCK_SESSION_NAME", None)
+    env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "/usr/bin:/bin")
+    env["HOME"] = str(tmp_path / "home")  # the guard hook may write feed files
+    if pane:
+        env["TMUX_PANE"] = pane
+    payload = json.dumps(
+        {"session_id": "dying-convo", "notification_type": "permission_prompt"}
+    ).encode()
+    for cmd in (
+        am.hook_command("idle", record_thread=True),
+        am.hook_command("working", tool_hook="pre"),
+        am.notification_hook_command(),
+    ):
+        subprocess.run(["sh", "-c", cmd], input=payload, check=True, env=env)
+    assert am.read_activity_marker("focused_window") is None
+    assert thread_markers.read("focused_window") == ""
+    if pane == "%1":
+        # Last writer was the Notification hook.
+        assert am.read_activity_marker("own_window") == "clarify"
+        assert thread_markers.read("own_window") == "dying-convo"
+    else:
+        assert am.read_activity_marker("own_window") is None
+
+
 # --------------------------------------------------------------------------- #
 # merge_activity_hooks: the shared settings-file merge
 # --------------------------------------------------------------------------- #
