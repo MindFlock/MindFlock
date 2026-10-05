@@ -56,7 +56,8 @@ def test_plain_session_agent_under_the_exit_wrapper(monkeypatch):
         ],
     )
     assert agent_state._pane_runs_agent("100", NAMES) is True
-    assert calls[0][:3] == ["ps", "-e", "-o"] and "args=" in calls[0][3]
+    # -ww: full command lines whatever $COLUMNS says.
+    assert calls[0][:4] == ["ps", "-ww", "-e", "-o"] and "args=" in calls[0][4]
 
 
 @pytest.mark.parametrize(
@@ -128,16 +129,20 @@ def test_pane_holds_agent_needs_the_agent_when_the_program_is_known(monkeypatch)
     assert server._pane_holds_agent("s", "claude") is False
 
 
-def test_real_ps_sees_this_process_tree():
+def test_real_ps_sees_this_process_tree(monkeypatch):
     """Against the real ``ps``: a child running a script named like an agent
-    is found under its parent; a plain ``sleep`` is not."""
+    is found under its parent; a plain ``sleep`` is not. ``COLUMNS=80`` (what
+    CI and a narrow terminal export) must not cut the script off the args."""
     import os
     import sys
     import tempfile
 
     if sys.platform.startswith("win"):
         pytest.skip("posix ps only")
-    d = tempfile.mkdtemp()
+    monkeypatch.setenv("COLUMNS", "80")
+    # A long path, so an 80-column ps would cut the script name off.
+    d = os.path.join(tempfile.mkdtemp(), "x" * 60)
+    os.makedirs(d)
     script = os.path.join(d, "aider")
     with open(script, "w") as fh:
         fh.write("import time\ntime.sleep(30)\n")

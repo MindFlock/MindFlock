@@ -765,7 +765,10 @@ def _pane_runs_agent(pane_pid, names: frozenset) -> Optional[bool]:
         return None
     try:
         cp = _server()._run_capped(
-            ["ps", "-e", "-o", "pid=,ppid=,args="],
+            # -ww: unlimited width. Without it ps cuts args at $COLUMNS (80 on
+            # CI, or a server started from a narrow terminal), losing the
+            # script after `python`/`node` and so the agent itself.
+            ["ps", "-ww", "-e", "-o", "pid=,ppid=,args="],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=10,
