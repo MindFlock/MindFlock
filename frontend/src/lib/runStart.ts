@@ -296,13 +296,18 @@ export function runBody(o: {
   };
 }
 
-/** The fast-track the dialog starts on, whatever is in the box (one line, a
- * list, a split): THE default — Settings → Workspace "Fast-track goes as far
- * as", which may be Off. The preview's own `lane_default` is not read: one
- * setting, one default, so the dialog can never start somewhere Settings
- * doesn't say. */
-export function defaultLaneFor(setting: string | null | undefined): Lane {
-  return laneDefault(setting);
+/** The fast-track the dialog starts on before the user picks (the owner's
+ * rule: "Off unless I pick"):
+ *
+ *  - a SINGLE new session (one line, the "Set it up myself" form) starts
+ *    Off, whatever Settings says;
+ *  - a BATCH (a list, tickets, Intake's Start together, a split) starts on
+ *    Settings → Workspace "Fast-track goes as far as" — itself Off when unset.
+ *
+ * The preview's own `lane_default` is not read: the setting is the one
+ * default. */
+export function defaultLaneFor(batch: boolean, setting: string | null | undefined): Lane {
+  return batch ? laneDefault(setting) : "leave";
 }
 
 /** The primary button. One item keeps today's words; a list says how many;

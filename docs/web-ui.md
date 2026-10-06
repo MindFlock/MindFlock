@@ -532,16 +532,21 @@ into the group's one PR) show the picker greyed, with the reason.
   and the palette (**Fast-track… — name**) open the ⏩ picker on that pane.
 - The **New** dialog: **Fast-track to** (one line, and on the "Set it up
   myself" form) or **Fast-track each to** (a list — Intake's **Start
-  together…** opens New this way). It starts on the Settings default below.
+  together…** opens New this way). **Off unless you pick**: a single session
+  (one line, or the form) always starts Off; a list starts on the Settings
+  default below.
   Fast-track commits for *this* session, so it gets its own worktree:
   choosing **Work directly in this folder** turns fast-track Off (the radio
   says so).
 - The **Commit** dialog: **Then fast-track to** Off / Push / Open a PR /
   Merge when green, plus ask-first — the commit happens now, the rest
   follows.
-- **Settings → Workspace → Fast-track goes as far as** is the one default
-  every new session starts on (Off is an answer). A ticket source keeps its
-  own **Fast-track tickets to** in Intake, which never offers Merge.
+- **Settings → Workspace → Fast-track goes as far as**: *"New sessions
+  start Off; batches and ticket runs start at this default."* A batch is a
+  list in New or Intake's Start together; a team run the MCP's
+  `start_team_run` starts without a lane takes it too. Unset, it is **Off**.
+  A ticket source keeps its own **Fast-track tickets to** in Intake, which
+  never offers Merge and never falls back to this setting.
 
 Under the hood a fast-track target is what the API calls a **lane**:
 `POST /api/instances/{title}/lane` (`{lane: "leave"|"commit"|"push"|"pr"|
@@ -1308,7 +1313,7 @@ read-only rather than disabled so the caret and the selection survive the wait.
 **One thing per line, or ticket IDs.** The box is a textarea (three lines,
 growing to eight). One plain line is everything above, unchanged — the only
 addition is **Fast-track to** (Off / Commit / Push / Open a PR / Merge when
-green, starting on Settings → Workspace's default) and **Ask me before it
+green, starting **Off** unless you pick) and **Ask me before it
 ships**; anything but Off is armed on the new session as soon as its worktree
 exists. The "Set it up myself" form shows the same row. Shift+Enter
 starts another line, and once the box holds **two or more things, or any ticket
@@ -1320,8 +1325,8 @@ ID**, it becomes a list:
   which takes it out of the box. A ticket that can't be found stays a red row
   with the reason — never quietly a task — and Start refuses until it is
   removed. Plain Enter adds a line in a list.
-- **Fast-track each to** starts on the same default (Settings →
-  Workspace), **PRs** One per line / One for all ("one-for-all merges them
+- **Fast-track each to** starts on the batch default (Settings →
+  Workspace; Off when unset), **PRs** One per line / One for all ("one-for-all merges them
   into one branch first"; until `caps.team_runs.together` is true One for all
   is disabled with "one PR for the whole group is coming next" and every group
   is sent as one PR per line), **At a time** 1–8 (default 3; "the rest wait in the

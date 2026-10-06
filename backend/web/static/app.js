@@ -27596,7 +27596,7 @@ function normalizeLane(v) {
 	return LANE_ORDER.includes(s) ? s : "";
 }
 function laneDefault(setting) {
-	return normalizeLane(setting) || "pr";
+	return normalizeLane(setting) || "leave";
 }
 function laneChoice(inst) {
 	const l = laneOf(inst);
@@ -56959,8 +56959,8 @@ function runBody(o) {
 		split: o.split
 	};
 }
-function defaultLaneFor(setting) {
-	return laneDefault(setting);
+function defaultLaneFor(batch, setting) {
+	return batch ? laneDefault(setting) : "leave";
 }
 function startLabel(n, split) {
 	if (split) return "Start the lead";
@@ -57125,7 +57125,8 @@ function useRunDraft(o) {
 		repoLabel
 	]);
 	const oneForAll = o.split && oneTask || grouping === "together" && (rows.length || items.length) >= 2;
-	const chosen = laneChoice ?? defaultLaneFor(o.fasttrackDefault);
+	const batch = !o.single && (listMode || o.split && oneTask);
+	const chosen = laneChoice ?? defaultLaneFor(batch, o.fasttrackDefault);
 	const lane = oneForAll ? oneForAllLane(chosen) : chosen;
 	const start = async ({ split }) => {
 		if (starting) return {
@@ -57895,7 +57896,8 @@ function NewSessionDialog() {
 		text: describe,
 		repoPath,
 		program: canonAgent(program),
-		fasttrackDefault: config?.fasttrack_default ?? config?.fasttrack_depth,
+		fasttrackDefault: config?.fasttrack_default,
+		single: page !== 1,
 		split: page === 1 && split && mcpOk.ok,
 		togetherOk
 	});
@@ -65133,11 +65135,7 @@ function Workspace({ gotoScreen }) {
 					options: [
 						{
 							value: "",
-							label: "Open a PR (default)"
-						},
-						{
-							value: "off",
-							label: "Off"
+							label: "Off (default)"
 						},
 						{
 							value: "commit",
@@ -65160,9 +65158,11 @@ function Workspace({ gotoScreen }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "set-hint",
 					children: [
-						"Where every new session is fast-tracked to unless you pick otherwise — the New dialog (one line or a list) and Intake's ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "New sessions start Off; batches and ticket runs start at this default." }),
+						" ",
+						"A batch is a list in the New dialog or Intake's ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Start together" }),
-						" start here. Fast-track waits for the agent to finish, then commits, pushes and carries on to this rung. Change one session any time with its ",
+						". Fast-track waits for the agent to finish, then commits, pushes and carries on to this rung. Change one session any time with its ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "⏩" }),
 						" button. A ticket ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "source" }),

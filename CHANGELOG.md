@@ -32,8 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opens a picker: Off, Commit, Push, Open a PR, Merge when green, and **Ask me
   before it ships**, which parks the session one step short of its first
   outward step until you approve it in the Outbox. The same choices appear in
-  the New dialog (**Fast-track to** / **Fast-track each to**, starting on
-  Settings → Workspace "Fast-track goes as far as", which can now be Off) and
+  the New dialog (**Fast-track to** / **Fast-track each to**) and
   the Commit dialog (**Then fast-track to**); `Ctrl+K F`, the row's › menu
   and the palette open the ⏩ picker. **Split into parallel pieces…** and
   **Move out of a group** are row › menu actions of their own. The rail's
@@ -43,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST …/ship-now`; every row carries `lane` and `run`, a copy window shows
   the target of the window that drives its branch, and `/api/config` reports
   the default as `fasttrack_default`.
+
+- **Off unless you pick.** A single new session starts with fast-track Off
+  whatever Settings says. Batches and ticket runs (a list in New, Intake's
+  Start together, a team run started over MCP without a lane) start at
+  Settings → Workspace "Fast-track goes as far as" — which is now **Off**
+  when unset instead of Open a PR. A value you stored keeps working as
+  before. Ticket sources keep their own depth and never fall back to it.
 
 - **`GET /api/outbox`**: what is waiting on you (a prompt, an approval, a
   group's escalation with its next action), what is shipping, what shipped

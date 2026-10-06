@@ -273,6 +273,7 @@ class TestShipNow:
         nobody's choice for THIS session."""
         monkeypatch.setattr(server, "_agent_activity", lambda i, t: "idle")
         monkeypatch.setattr(server, "_fasttrack_depth", lambda: "merge")
+        monkeypatch.setattr(server, "_fasttrack_default", lambda: "merge")
         code, body = _run(server.instance_ship_now("ln-session", {}))
         assert code == 409 and "no lane of its own" in body["error"]
         assert ap.get("ln-session") is None

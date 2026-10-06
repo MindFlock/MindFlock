@@ -441,11 +441,13 @@ def test_a_junk_configured_depth_falls_back(monkeypatch):
     assert server._fasttrack_depth() == "pr"
 
 
-def test_the_one_default_can_be_off_and_config_reports_it(monkeypatch):
-    """Settings → Workspace "Fast-track goes as far as" seeds every new-session
-    picker, and Off is one of its answers. ``fasttrack_default`` says so on
-    /api/config; ``fasttrack_depth`` (what a depth-less /fast-track arms) can
-    never be off, so an "off" setting reads as the built-in PR there."""
+def test_the_one_default_is_off_unless_set_and_config_reports_it(monkeypatch):
+    """Settings → Workspace "Fast-track goes as far as" seeds batches and
+    ticket runs (a single new session always starts Off). Out of the box —
+    UNSET — it is Off; an explicit stored rung keeps working exactly as before.
+    ``fasttrack_default`` says so on /api/config; ``fasttrack_depth`` (what an
+    EXPLICIT depth-less /fast-track arms) can never be off, so an unset or Off
+    setting reads as the built-in PR there."""
     from fastapi.testclient import TestClient
 
     # The route reports the helper (the fake settings below are too thin for
@@ -457,9 +459,34 @@ def test_the_one_default_can_be_off_and_config_reports_it(monkeypatch):
     _fake_settings(monkeypatch, depth="off")
     assert server._fasttrack_default() == "off"
     assert server._fasttrack_depth() == "pr"
-    for raw, want in (("", "pr"), ("merge", "merge"), ("push", "push"), ("junk", "pr")):
+    for raw, want in (
+        ("", "off"),
+        ("off", "off"),
+        ("junk", "off"),
+        ("agent", "off"),
+        ("commit", "commit"),
+        ("push", "push"),
+        ("pr", "pr"),
+        ("merge", "merge"),
+    ):
         _fake_settings(monkeypatch, depth=raw)
         assert server._fasttrack_default() == want, raw
+    # The explicit-arm convenience is unchanged: unset arms the built-in PR,
+    # and the owner's stored "pr" arms PR.
+    _fake_settings(monkeypatch, depth="")
+    assert server._fasttrack_depth() == "pr"
+    _fake_settings(monkeypatch, depth="pr")
+    assert server._fasttrack_depth() == "pr"
+
+
+def test_an_unreadable_settings_file_seeds_off(monkeypatch):
+    from backend.config import settings as settings_mod
+
+    def _boom():
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(settings_mod, "load_settings", _boom)
+    assert server._fasttrack_default() == "off"
 
 
 def test_source_defaults_cannot_choose_merge():

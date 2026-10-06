@@ -63,8 +63,7 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           group="repository"
           field="fasttrack_depth"
           options={[
-            { value: "", label: "Open a PR (default)" },
-            { value: "off", label: "Off" },
+            { value: "", label: "Off (default)" },
             { value: "commit", label: "Commit" },
             { value: "push", label: "Push" },
             { value: "pr", label: "Open a PR" },
@@ -72,8 +71,8 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           ]}
         />
         <span className="set-hint">
-          Where every new session is fast-tracked to unless you pick otherwise — the New
-          dialog (one line or a list) and Intake's <em>Start together</em> start here. Fast-track
+          <strong>New sessions start Off; batches and ticket runs start at this default.</strong>{" "}
+          A batch is a list in the New dialog or Intake's <em>Start together</em>. Fast-track
           waits for the agent to finish, then commits, pushes and carries on to this rung. Change
           one session any time with its <strong>⏩</strong> button. A ticket <em>source</em>{" "}
           keeps its own <em>Fast-track tickets to</em> (Intake), which never merges.

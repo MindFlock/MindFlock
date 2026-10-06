@@ -80,10 +80,12 @@ describe("the vocabulary", () => {
     expect(words).not.toMatch(/\bShip\b/);
   });
 
-  it("THE default is the Settings one — Off included — falling back to a PR", () => {
-    expect(L.laneDefault("")).toBe("pr");
-    expect(L.laneDefault(undefined)).toBe("pr");
+  it("THE default is the Settings one, Off when unset", () => {
+    expect(L.laneDefault("")).toBe("leave");
+    expect(L.laneDefault(undefined)).toBe("leave");
+    expect(L.laneDefault("junk")).toBe("leave");
     expect(L.laneDefault("off")).toBe("leave");
+    expect(L.laneDefault("pr")).toBe("pr");
     expect(L.laneDefault("commit")).toBe("commit");
     expect(L.laneDefault("merge")).toBe("merge");
   });

@@ -89,7 +89,7 @@ class TestPreview:
             "repo": "repo",
             "title_hint": "per-user-rate-limit-webhooks",
         }
-        assert body["lane_default"] in ("commit", "push", "pr", "merge")
+        assert body["lane_default"] in ("leave", "commit", "push", "pr", "merge")
         assert body["warnings"] == [
             "PAY-412 already has a session (jira-PAY-412) — it will be added to "
             "the group, not restarted"
@@ -135,6 +135,49 @@ class TestCreateAndRead:
         assert run["split"] is False and run["lead"] is None and run["plan"] is None
         assert run["tasks"][0]["row_present"] is False
         assert run["counts"]["queued"] == 2
+
+    @pytest.mark.parametrize(
+        "setting, grouping, want",
+        [
+            # Out of the box (unset reads as Off): nothing is fast-tracked
+            # unless asked — and one-for-all, which can't be Off, commits.
+            ("off", "each", "leave"),
+            ("off", "together", "commit"),
+            # An explicit stored value keeps working exactly as before.
+            ("pr", "each", "pr"),
+            ("pr", "together", "pr"),
+            ("merge", "each", "merge"),
+        ],
+    )
+    def test_no_lane_given_takes_the_settings_default_off_when_unset(
+        self, env, monkeypatch, setting, grouping, want
+    ):
+        """The MCP's start_team_run sends no lane unless the agent picks one:
+        the run takes THE default (Settings → Workspace), Off when unset."""
+        monkeypatch.setattr(server, "_fasttrack_default", lambda: setting)
+        r = _create(env, policy={"grouping": grouping, "release": "ask"})
+        assert r.status_code == 201, r.text
+        assert r.json()["run"]["policy"]["lane"] == want
+
+    def test_an_explicit_leave_is_still_refused_for_one_for_all(self, env):
+        r = _create(env, policy={"lane": "leave", "grouping": "together"})
+        assert r.status_code == 400 and "one PR for all" in r.json()["error"]
+
+    def test_the_preview_default_is_off_when_unset(self, env, monkeypatch):
+        monkeypatch.setattr(server, "_fasttrack_default", lambda: "off")
+        assert (
+            client.post("/api/runs/preview", json={"text": "a\nb"}).json()[
+                "lane_default"
+            ]
+            == "leave"
+        )
+        monkeypatch.setattr(server, "_fasttrack_default", lambda: "pr")
+        assert (
+            client.post("/api/runs/preview", json={"text": "a\nb"}).json()[
+                "lane_default"
+            ]
+            == "pr"
+        )
 
     @pytest.mark.parametrize(
         "over, status, message",

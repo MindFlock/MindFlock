@@ -91,12 +91,13 @@ export function normalizeLane(v: string | null | undefined): Lane | "" {
   return (LANE_ORDER as readonly string[]).includes(s) ? (s as Lane) : "";
 }
 
-/** The ONE default: Settings → Workspace "Fast-track goes as far as". It
- * seeds the New dialog (one line or many) and Intake's "Start together";
- * a setting of Off seeds Off. Blank or unknown falls back to a PR — the
- * server's own default for that setting. */
+/** THE default for batches and ticket runs: Settings → Workspace
+ * "Fast-track goes as far as" (`/api/config` fasttrack_default). Out of the
+ * box — unset, blank or unknown — it is Off: nothing is fast-tracked unless
+ * someone asked. A single new session never reads it (runStart.defaultLaneFor
+ * starts it Off). */
 export function laneDefault(setting: string | null | undefined): Lane {
-  return normalizeLane(setting) || "pr";
+  return normalizeLane(setting) || "leave";
 }
 
 /** A session's target as the controls read it: agentMessages.laneOf (THE rule

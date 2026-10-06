@@ -857,6 +857,29 @@ def test_depth_is_looked_up_by_the_tickets_source_key(config, monkeypatch, tmp_p
     assert runner._depth_for("jira-web") == "commit"
 
 
+def test_a_source_without_its_own_depth_never_falls_back_to_the_global_default(
+    config, monkeypatch, tmp_path
+):
+    """Ticket ingestion is per source. A source with no depth of its own (and
+    an unknown source) is Off — never the Settings fast-track default, even
+    when that is explicitly "pr": an unattended pipeline is only ever armed by
+    the source it came from."""
+    from backend.config import settings as settings_store
+    from backend.web import server
+
+    monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
+    settings_store.invalidate()
+    settings_store.update_settings(
+        repository={"fasttrack_depth": "pr"},
+        ticketing={"sources": [{"id": "jira-pay", "provider": "jira"}]},
+    )
+    runner = SessionRunner(config)
+    assert runner._depth_for("jira-pay") == ""
+    assert runner._depth_for("nowhere") == ""
+    assert server._source_intake_depth("jira-pay") == ""
+    assert server._fasttrack_default() == "pr"  # the global one is untouched
+
+
 def test_a_provider_name_still_resolves_an_unkeyed_lookup(
     config, monkeypatch, tmp_path
 ):

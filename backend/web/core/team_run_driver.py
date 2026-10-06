@@ -2070,7 +2070,9 @@ async def preview(text: str, repo_path: str = "", program: str = "") -> dict:
     return {
         "items": out,
         "name_suggestion": _runs.name_suggestion(items),
-        "lane_default": _lanes.lane_of_depth(srv._fasttrack_depth()) or "pr",
+        # THE default (Settings; Off when unset) — the New dialog seeds a
+        # list from /api/config's fasttrack_default, the same value.
+        "lane_default": _lanes.normalize_lane(srv._fasttrack_default()) or "leave",
         "warnings": warnings,
     }
 
@@ -2250,10 +2252,13 @@ async def create_run(payload: dict) -> Tuple[dict, List[str]]:
         raise RunError("at most %d items in one group" % _runs.MAX_ITEMS)
     pol = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
     raw_lane = pol.get("lane")
+    # No lane given (the MCP's start_team_run without one): THE default from
+    # Settings, which is Off ("leave") when the user never set it.
+    defaulted = raw_lane in (None, "")
     lane = (
-        _lanes.normalize_lane(raw_lane)
-        if raw_lane not in (None, "")
-        else (_lanes.lane_of_depth(srv._fasttrack_depth()) or "pr")
+        _lanes.normalize_lane(srv._fasttrack_default()) or "leave"
+        if defaulted
+        else _lanes.normalize_lane(raw_lane)
     )
     if not lane:
         raise RunError("unknown lane")
@@ -2277,6 +2282,11 @@ async def create_run(payload: dict) -> Tuple[dict, List[str]]:
         # "leave it" group would commit unasked, so it is refused rather than
         # silently committing. "Ask me first" means the group's one outward
         # step — the release — asks (members' commits are internal).
+        if lane == "leave" and defaulted:
+            # A DEFAULTED Off can't be one-for-all's lane (it would commit
+            # unasked): the nearest one that keeps everything on this
+            # machine, exactly as the New dialog shows it.
+            lane = "commit"
         if lane == "leave":
             raise RunError(
                 "one PR for all commits each line into the group's branch — "

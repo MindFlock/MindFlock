@@ -434,13 +434,21 @@ def test_new_and_commit_dialogs_draw_one_fast_track_choice(js):
     assert '"Fast-track each to" : "Fast-track to"' in new
     assert in_bundle("jsx)(FastTrackChoice, {", new)
     # THE default is Settings', for every shape: the preview's own is unread.
-    assert "defaultLaneFor(o.fasttrackDefault)" in new
+    # "Off unless I pick": a single session starts Off, a batch on Settings'
+    # default (Off when unset). The preview's own default is never read.
+    assert "const batch = !o.single && (listMode || o.split && oneTask);" in new
+    assert "defaultLaneFor(batch, o.fasttrackDefault)" in new
     assert "lane_default" not in new
+    fn = _function(js, "defaultLaneFor")
+    assert 'return batch ? laneDefault(setting) : "leave";' in fn
+    assert 'return normalizeLane(setting) || "leave";' in _function(js, "laneDefault")
     dlg = _region(js, "src/components/dialogs/NewSessionDialog.tsx")
     assert 'id: "new-ft-row"' in dlg
-    assert (
-        "fasttrackDefault: config?.fasttrack_default ?? config?.fasttrack_depth" in dlg
-    )
+    # Never the resolved fasttrack_depth (it reads "pr" when nothing is set),
+    # and the "Set it up myself" form is a single session.
+    assert "fasttrackDefault: config?.fasttrack_default," in dlg
+    assert "config?.fasttrack_depth" not in dlg
+    assert "single: page !== 1" in dlg
     # The shared-folder radio turns fast-track off instead of being disabled.
     assert "(turns fast-track off — it commits for this session" in dlg
     assert 'if (laneNeedsWorktree) draft.setLane("leave");' in dlg
@@ -456,11 +464,16 @@ def test_new_and_commit_dialogs_draw_one_fast_track_choice(js):
     assert "startFastTrack(" not in commit
 
 
-def test_settings_holds_the_one_default_and_off_is_an_answer(js):
+def test_settings_holds_the_one_default_off_out_of_the_box(js):
     ws = _region(js, "src/components/settings/screens/Workspace.tsx")
     assert '"Fast-track goes as far as"' in ws
+    # Unset is Off, and the screen says who reads it.
+    assert in_bundle('value: "", label: "Off (default)"', ws)
+    assert "Open a PR (default)" not in ws
+    assert (
+        '"New sessions start Off; batches and ticket runs start at this default."' in ws
+    )
     for value, label in (
-        ("off", "Off"),
         ("commit", "Commit"),
         ("push", "Push"),
         ("pr", "Open a PR"),

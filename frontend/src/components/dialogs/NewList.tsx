@@ -93,9 +93,12 @@ export function useRunDraft(o: {
   text: string;
   repoPath: string;
   program: string;
-  /** Settings → Workspace "Fast-track goes as far as" — THE default every
-   * shape starts on ("off" allowed). */
+  /** Settings → Workspace "Fast-track goes as far as" — what a BATCH starts
+   * on (Off when unset). A single session starts Off. */
   fasttrackDefault: string | undefined;
+  /** The dialog is creating ONE session whatever the box holds (the "Set it
+   * up myself" form): it starts Off. */
+  single?: boolean;
   /** The split box is ticked (and the agent can take one). */
   split: boolean;
   /** caps.team_runs.together — false: every group is one PR per line. */
@@ -186,11 +189,12 @@ export function useRunDraft(o: {
     [listMode, items, fresh, repoLabel]
   );
 
-  // Every shape — one line, a list, a split — starts on the ONE default
-  // (Settings → Workspace "Fast-track goes as far as"). An explicit pick wins.
+  // "Off unless I pick": one session starts Off; a batch (a list, tickets,
+  // a split) starts on Settings → Workspace's default. An explicit pick wins.
   const oneForAll =
     (o.split && oneTask) || (grouping === "together" && (rows.length || items.length) >= 2);
-  const chosen = laneChoice ?? defaultLaneFor(o.fasttrackDefault);
+  const batch = !o.single && (listMode || (o.split && oneTask));
+  const chosen = laneChoice ?? defaultLaneFor(batch, o.fasttrackDefault);
   const lane = oneForAll ? oneForAllLane(chosen) : chosen;
 
   const start: RunDraft["start"] = async ({ split }) => {

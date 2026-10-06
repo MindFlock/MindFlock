@@ -1274,9 +1274,11 @@ export function NewSessionDialog() {
     text: describe,
     repoPath,
     program: canonAgent(program),
-    // THE default (Settings → Workspace "Fast-track goes as far as"); an
-    // older server without `fasttrack_default` reports the resolved rung.
-    fasttrackDefault: config?.fasttrack_default ?? config?.fasttrack_depth,
+    // What a BATCH starts on (Settings → Workspace; Off when unset). Never
+    // the resolved `fasttrack_depth`, which reads "pr" when nothing is set.
+    fasttrackDefault: config?.fasttrack_default,
+    // The "Set it up myself" form makes ONE session: it starts Off.
+    single: page !== 1,
     split: page === 1 && split && mcpOk.ok,
     togetherOk,
   });

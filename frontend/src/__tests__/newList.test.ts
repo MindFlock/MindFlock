@@ -25,13 +25,13 @@ import {
 describe("one plain line is today's single session", () => {
   const one = localItems("fix the login bug in acme-api");
 
-  it("is not a list, keeps 'Create session', and starts on THE fast-track default", () => {
+  it("is not a list, keeps 'Create session', and starts Off whatever Settings says", () => {
     expect(one).toEqual([{ kind: "task", text: "fix the login bug in acme-api" }]);
     expect(isListMode(one)).toBe(false);
     expect(startLabel(1, false)).toBe("Create session");
-    // One setting seeds every shape — one line included; Off is a setting too.
-    expect(defaultLaneFor("merge")).toBe("merge");
-    expect(defaultLaneFor("off")).toBe("leave");
+    // "Off unless I pick": a single session never reads the setting.
+    for (const setting of ["merge", "pr", "commit", "off", "", undefined])
+      expect(defaultLaneFor(false, setting), String(setting)).toBe("leave");
   });
 
   it("says nothing extra while it is Leave it", () => {
@@ -181,12 +181,17 @@ describe("POST /api/runs body (SPEC §5)", () => {
     expect(clampConcurrency(Number.NaN)).toBe(3);
   });
 
-  it("a batch starts on the Settings default (never the preview's own), else a PR", () => {
-    expect(defaultLaneFor("commit")).toBe("commit");
-    expect(defaultLaneFor("agent")).toBe("leave");
-    expect(defaultLaneFor("off")).toBe("leave");
-    expect(defaultLaneFor("")).toBe("pr");
-    expect(defaultLaneFor(undefined)).toBe("pr");
+  it("a batch starts on the Settings default (never the preview's own), Off when unset", () => {
+    // An explicit stored value keeps working exactly as before.
+    expect(defaultLaneFor(true, "pr")).toBe("pr");
+    expect(defaultLaneFor(true, "commit")).toBe("commit");
+    expect(defaultLaneFor(true, "merge")).toBe("merge");
+    // Unset (or anything that isn't a rung) is Off.
+    expect(defaultLaneFor(true, "off")).toBe("leave");
+    expect(defaultLaneFor(true, "agent")).toBe("leave");
+    expect(defaultLaneFor(true, "")).toBe("leave");
+    expect(defaultLaneFor(true, undefined)).toBe("leave");
+    expect(defaultLaneFor(true, "junk")).toBe("leave");
   });
 
   it("the button says how many, or that a split starts its lead", () => {
