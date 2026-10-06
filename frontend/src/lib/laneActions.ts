@@ -120,9 +120,20 @@ export function laneChoice(inst: Partial<Pick<Instance, "lane" | "autopilot">>):
  * group; splitting one line into pieces). A server that doesn't say is read
  * as "can't": its create would 400 them. Every control that offers either one
  * reads this. */
-export function teamRunCaps(caps: Partial<Caps> | undefined): { split: boolean; together: boolean } {
+export function teamRunCaps(caps: Partial<Caps> | undefined): {
+  split: boolean;
+  together: boolean;
+  /** The most pieces a split may have — 8 (the server's default) when an
+   * older server doesn't say. */
+  maxPieces: number;
+} {
   const t = caps?.team_runs;
-  return { split: t?.split === true, together: t?.together === true };
+  const max = Number(t?.max_pieces);
+  return {
+    split: t?.split === true,
+    together: t?.together === true,
+    maxPieces: Number.isFinite(max) && max >= 2 ? Math.floor(max) : 8,
+  };
 }
 
 /** The reason shown on a control an OLDER server can't take (its caps don't

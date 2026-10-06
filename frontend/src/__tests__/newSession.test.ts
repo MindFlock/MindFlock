@@ -846,7 +846,7 @@ describe("immediateStartBlockReason — the one thing the fast path does not ski
   it("names the button by the label it actually wears", () => {
     // The fast path's button reads "Create session" (startLabel); a sentence
     // telling you to press a "Start session" nobody can find is a dead end.
-    expect(immediateStartBlockReason(missing)).toContain("press " + startLabel(1, false) + " again");
+    expect(immediateStartBlockReason(missing)).toContain("press " + startLabel(1) + " again");
   });
 
   it("names something rather than nothing when the plan sent no label", () => {

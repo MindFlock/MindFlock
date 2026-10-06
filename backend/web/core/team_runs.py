@@ -238,6 +238,18 @@ LEAD_BRIEF = (
     "files; once the user approves, MindFlock starts them and merges each "
     "back into your branch."
 )
+#: An OPTIONAL split's lead (the New dialog's "Auto-split into up to N"): it
+#: decides first, and pieces=[] means "no split — I'll do it myself".
+LEAD_OPTIONAL_BRIEF = (
+    '---\nMindFlock auto-split: you lead group "{name}" (run {run}). Read the '
+    "code, then decide. Small, or won't cut cleanly? Call {propose}(run_id="
+    "{run}, pieces=[], why) and do the task yourself here. Worth splitting? "
+    "Call it with 2-{max} pieces [{{title, prompt, paths}}] whose path globs "
+    "don't overlap, each prompt standalone; commit shared groundwork first "
+    "(workers fork from your last commit), don't spawn sessions or edit their "
+    "files. Once the user approves, MindFlock starts them and merges each "
+    "back into your branch."
+)
 #: A one-for-all group's lead: an integration point, idle until a conflict.
 INTEGRATOR_BRIEF = (
     'MindFlock group "{name}" (run {run}): {n} lines, one PR. You are its '
@@ -678,6 +690,12 @@ def _normalize(d) -> dict:
         # A one-for-all group (and a split) merges every line into ONE
         # branch — the LEAD's — and ships that as one PR.
         "split": bool(d.get("split")),
+        # An optional split: the lead may decide not to split at all
+        # (pieces=[]), and the group dissolves into its one session.
+        "optional": bool(d.get("optional")),
+        # A split's piece cap as the user chose it (0 = the server's limit,
+        # MINDFLOCK_MAX_CHILDREN — which always caps it too).
+        "max_pieces": max(0, _i(d.get("max_pieces"))),
         # A split's one line: what the lead is asked to cut into pieces.
         "goal": _s(d.get("goal"))[:4000],
         "lead": _normalize_lead(d.get("lead")),
@@ -1188,8 +1206,10 @@ def run_brief(run: dict, provider: str = "") -> str:
 
 def lead_brief(run: dict, max_pieces: int, provider: str = "") -> str:
     """The split lead's brief (appended to its task). A lead on its trunk is
-    also told to commit nothing there."""
-    out = LEAD_BRIEF.format(
+    also told to commit nothing there. An optional split's lead is told it
+    may decline (``pieces=[]``) and do the task itself."""
+    tmpl = LEAD_OPTIONAL_BRIEF if run.get("optional") else LEAD_BRIEF
+    out = tmpl.format(
         name=run["name"][:60], run=run["id"], max=max_pieces, **tools_for(provider)
     )
     lead = run.get("lead") or {}
@@ -1738,6 +1758,8 @@ def run_dto(run: dict, live_titles: Optional[Iterable[str]] = None) -> dict:
             "concurrency",
             "budget_usd",
             "split",
+            "optional",
+            "max_pieces",
             "mode",
             "origin",
             "lead",

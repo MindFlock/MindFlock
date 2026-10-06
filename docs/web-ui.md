@@ -1365,21 +1365,28 @@ declare a plan the Map shows (Claude): for any other agent the checkbox is
 disabled with "needs a CLI with plan support — Claude", since that agent would
 wait on a Go the UI can't send.
 
-**Split a big line into parallel pieces first** sits under the fast-track in the
-Describe page's **Options** fold. On a server that doesn't take splits
+**Auto-split into up to N sessions if it's worth it** sits under the
+fast-track in the Describe page's **Options** fold, off by default, with a
+− / + stepper for N (2 up to the server's `caps.team_runs.max_pieces`,
+`MINDFLOCK_MAX_CHILDREN`; default 3). On a server that doesn't take splits
 (`caps.team_runs.split` false) it is not shown at all, rather than shown
-disabled — everything below describes it once the server takes splits. It
-applies to exactly one task line. Ticked, the primary button
-reads **Start the lead** and starts a split run (`POST /api/runs`, `split:
-true`) instead of a session: MindFlock creates the lead in a new worktree of
-the folder shown on **Starts in**, the lead proposes the pieces with separate
-paths, you approve them in its Thread tab, and the server starts the workers
-and merges them back. When the sentence lists separate pieces ("billing,
-search and upload") a **suggested · billing · search · upload** pill appears,
-but the box is never ticked for you. It is disabled, with the reason, for a
-list, a ticket, or an agent that doesn't get the MindFlock tools; if the server
-hasn't said which agents get them, the box stays usable and the server refuses
-the start when it can't attach.
+disabled. The whole box is the task, however many lines it holds — line
+breaks never split anything. Ticked, the primary button still reads **Create
+session** and starts an optional split run (`POST /api/runs`, `split: true,
+split_optional: true, max_pieces: N`): MindFlock creates one session in a new
+worktree of the folder shown on **Starts in**, named for the work, and its
+agent reads the code and decides. Not worth splitting: it says so, the group
+dissolves (a 7-second toast says "*<session>* didn't split it — it's doing the
+task itself: *<why>*", the reason cut at 120 characters) and that session does the task, fast-tracked as chosen. Worth it: it
+proposes up to N pieces with separate paths (while it decides, the group's
+lead line reads "deciding whether to split…" and its subline "Waiting for
+*<lead>* to decide whether to split — …"), you approve them in its Thread
+tab, and the server starts the workers and merges them back. When the sentence
+lists separate pieces ("billing, search and upload") a **suggested · billing ·
+search · upload** pill appears, but the box is never ticked for you. It is
+disabled, with the reason, for an agent that doesn't get the MindFlock tools;
+if the server hasn't said which agents get them, the box stays usable and the
+server refuses the start when it can't attach.
 
 **Launch flags** are extra CLI flags appended to the agent on every start/resume
 of the session. The field is pre-filled from the global per-provider default
@@ -1479,7 +1486,7 @@ a spinner that never changes reads as a hang long before the route's own timeout
 would say anything. A **Cancel** link appears beside the box, which goes
 read-only rather than disabled so the caret and the selection survive the wait.
 
-**One thing per line, or ticket IDs.** The box is a textarea (three lines,
+**One prompt, however many lines; batches come from Intake.** The box is a textarea (three lines,
 growing to eight). One plain line is everything above, unchanged — the only
 addition is a folded **Options** row (`#new-options`) whose summary says what it
 holds, e.g. **Options · Fast-track: Off** or **Options · Fast-track: Open a PR,
@@ -1489,9 +1496,10 @@ and the split box. The fold opens by itself when the fast-track differs from
 the dialog's default or split is on, and otherwise remembers whether you left
 it open (`mf_new_options_open`). Anything but Off is armed on the new session
 as soon as its worktree exists. The "Set it up myself" form shows the same
-fast-track row. Shift+Enter starts another line, and once the box holds **two
-or more things, or any ticket ID**, it becomes a list (lists and splits show
-their choices unfolded):
+fast-track row. Shift+Enter starts another line; the box stays ONE prompt
+however many lines it holds. Only Intake's **Start together…** opens New as a
+**batch** — its ticked tickets in the box, one session per line or ticket —
+and a batch shows its choices unfolded (it has no auto-split box):
 
 - Rows under the box, read by the server (`POST /api/runs/preview`, 300 ms
   after you stop typing): a `TICKET`/`TASK` chip, the ID, the title, where it
@@ -1595,7 +1603,7 @@ persisted in `localStorage`):
 - **Welcome tour** (`onboarding/WelcomeTour.tsx`) — a replayable five-slide
   tour: **Welcome to MindFlock** (agents side by side on this machine, no
   account and no cloud; each session is its own branch and folder), **Sessions
-  & the grid** (New, one task or one per line; a pane and a row per session;
+  & the grid** (New, one task — Auto-split lets its agent split a big one; a pane and a row per session;
   View picks how many panes show; the Assistant), **Shipping** (the pane's
   next-step button, ⏩ Fast-track, and the bell for anything waiting on you),
   **Where work comes from** (Intake, Verify for checking what you shipped, and

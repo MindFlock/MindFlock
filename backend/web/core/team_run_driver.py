@@ -2620,6 +2620,17 @@ async def create_run(payload: dict) -> Tuple[dict, List[str]]:
     if grouping not in ("each", "together"):
         raise RunError("grouping must be each or together")
     split = _bool(payload, "split")
+    # An optional split ("Auto-split into up to N sessions if it's worth it"):
+    # the lead may decide not to split and do the task itself.
+    optional = split and _bool(payload, "split_optional")
+    max_asked = 0
+    if split and payload.get("max_pieces") not in (None, ""):
+        try:
+            max_asked = int(payload.get("max_pieces"))
+        except (TypeError, ValueError):
+            raise RunError("max_pieces must be a number") from None
+        if max_asked < _runs.MIN_PIECES:
+            raise RunError("max_pieces must be at least %d" % _runs.MIN_PIECES)
     if grouping == "together" and not _runs.CAPABILITIES["together"]:
         raise RunError("one-for-all (one PR for the whole group) isn't available")
     if split and not _runs.CAPABILITIES["split"]:
@@ -2719,6 +2730,8 @@ async def create_run(payload: dict) -> Tuple[dict, List[str]]:
         "created_by": created_by,
         "state": "planning" if split else "running",
         "split": split,
+        "optional": optional,
+        "max_pieces": min(max_asked, max_kids) if max_asked else 0,
         "goal": goal,
         "repo_root": repo_root,
         "program": program,
@@ -2793,6 +2806,14 @@ def _max_pieces() -> int:
     from backend.web.core import lineage as _lineage
 
     return _lineage.limit(_lineage.MAX_CHILDREN_ENV, _lineage.DEFAULT_MAX_CHILDREN)
+
+
+def _split_max(run: dict) -> int:
+    """The most pieces ``run``'s lead may propose: the user's own cap (the
+    New dialog's "up to N"), never above the server's limit."""
+    limit = _max_pieces()
+    asked = int(run.get("max_pieces") or 0)
+    return min(asked, limit) if asked else limit
 
 
 def _lead_fit(inst) -> dict:
@@ -2879,7 +2900,7 @@ async def _start_lead(run: dict, existing=None, fit: Optional[dict] = None) -> d
         )
         brief = "Split this task into parallel pieces for MindFlock:\n\n%s\n\n%s" % (
             run["goal"],
-            _runs.lead_brief(brief_run, _max_pieces(), provider),
+            _runs.lead_brief(brief_run, _split_max(run), provider),
         )
         await asyncio.to_thread(_prompt_queue.enqueue, title, brief)
         lead = {
@@ -2907,14 +2928,17 @@ async def _start_lead(run: dict, existing=None, fit: Optional[dict] = None) -> d
             base = base.rsplit("-", 1)[0]
         base = base or "group"
         taken = _taken_titles(run["repo_root"])
-        title = base + "-lead"
+        # An optional split's lead may end up the ONE session doing the work,
+        # so it is named for the work, not for its role.
+        suffix = "" if run.get("optional") else "-lead"
+        title = base + suffix
         n = 2
         while title in taken:
-            title = "%s-lead-%d" % (base, n)
+            title = "%s%s-%d" % (base, suffix, n)
             n += 1
         if run.get("split"):
             prompt = (
-                run["goal"] + "\n\n" + _runs.lead_brief(run, _max_pieces(), provider)
+                run["goal"] + "\n\n" + _runs.lead_brief(run, _split_max(run), provider)
             )
         else:
             prompt = _runs.integrator_brief(run, provider)
@@ -3547,12 +3571,15 @@ def propose_plan(run_id: str, payload: dict) -> dict:
             "this group's plan was already approved (%s)" % run["state"], 409
         )
     sender = _check_sender(run, payload.get("from"), "propose its plan")
+    pieces_in = payload.get("pieces")
+    if run.get("optional") and isinstance(pieces_in, list) and not pieces_in:
+        return _decline_split(run_id, str(payload.get("why") or ""), sender)
     _inst, wt = _lead_wt(run)
     root = wt or run["repo_root"]
     files = _git_merge.tracked_files(root) if root else []
     red = _red_res(root) if root else []
     pieces, problems = _runs.validate_plan(
-        payload.get("pieces"), files, red, _max_pieces()
+        payload.get("pieces"), files, red, _split_max(run)
     )
     if problems:
         raise RunError(
@@ -3594,6 +3621,49 @@ def propose_plan(run_id: str, payload: dict) -> dict:
         out = r
     _changed(out)
     return {"plan": _runs.run_dto(out)["plan"], "problems": []}
+
+
+def _decline_split(run_id: str, why: str, sender: str) -> dict:
+    """An optional split's lead decided not to split (``pieces=[]``): the
+    group dissolves and its lead is an ordinary session doing the task
+    itself, fast-tracked to the group's lane. A lead MindFlock started gets
+    that lane; an adopted one keeps whatever it had. Nothing was started for
+    the group (a split's lines come only from an approved plan), so there is
+    nothing else to stop or hand back."""
+    with _runs.edit(run_id) as r:
+        if r is None:
+            raise RunError("no such group: %s" % run_id, 404)
+        if r["state"] not in ("planning", "plan_ready"):
+            raise RunError("this group's plan was already approved", 409)
+        lead = dict(r.get("lead") or {})
+        pol = dict(r["policy"])
+        # Removed under the same lock it was read in (``r`` is unchanged, so
+        # the edit writes nothing back): a driver pass can't resurrect it.
+        _runs.remove(run_id)
+    title = lead.get("title") or ""
+    lane = ""
+    if title and not lead.get("adopted") and pol["lane"] != "leave":
+        lane = pol["lane"]
+        # The split promised nothing leaves this machine without your go
+        # (its release asks): the one session keeps that promise.
+        ask = pol["release"] == "ask" and lane != "commit"
+        try:
+            _lanes.arm_session(title, lane, ask_first=ask, source="session")
+        except Exception:  # noqa: BLE001
+            lane = ""
+    _emit(
+        "run.changed",
+        data={
+            "run": run_id,
+            "state": "dissolved",
+            "counts": {},
+            "lead": title,
+            "by": sender or "user",
+            "why": why[:500],
+        },
+    )
+    wake()
+    return {"plan": None, "problems": [], "dissolved": True, "lane": lane}
 
 
 def _mode(mode) -> str:

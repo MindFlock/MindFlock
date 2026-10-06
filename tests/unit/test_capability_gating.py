@@ -50,7 +50,9 @@ def test_config_team_runs_caps_match_what_create_accepts(monkeypatch):
     from backend.web.core import team_runs
 
     caps = client.get("/api/config").json()["caps"]["team_runs"]
-    assert caps == team_runs.CAPABILITIES == {"split": True, "together": True}
+    assert team_runs.CAPABILITIES == {"split": True, "together": True}
+    # ``max_pieces`` rides along: the cap a split's "up to N" may not exceed.
+    assert caps == dict(team_runs.CAPABILITIES, max_pieces=8)
     # Taken now: what refuses them is the request's own shape, not the table.
     r = client.post(
         "/api/runs",
@@ -74,6 +76,7 @@ def test_config_team_runs_caps_match_what_create_accepts(monkeypatch):
     assert client.get("/api/config").json()["caps"]["team_runs"] == {
         "split": False,
         "together": False,
+        "max_pieces": 8,
     }
     r = client.post(
         "/api/runs",
@@ -87,6 +90,26 @@ def test_config_team_runs_caps_match_what_create_accepts(monkeypatch):
         "/api/runs", json={"items": [{"kind": "task", "text": "x"}], "split": True}
     )
     assert r.status_code == 400 and "isn't available" in r.json()["error"]
+
+
+def test_config_max_pieces_follows_the_children_limit(monkeypatch):
+    # The New dialog's "up to N" stepper tops out here; the server clamps a
+    # split's own cap to the same limit, read per request.
+    monkeypatch.setenv("MINDFLOCK_MAX_CHILDREN", "5")
+    assert client.get("/api/config").json()["caps"]["team_runs"]["max_pieces"] == 5
+    # And the route refuses a cap it can't read, or one too small to split.
+    one = [{"kind": "task", "text": "x"}]
+    for value, words in (("abc", "must be a number"), (1, "at least 2")):
+        r = client.post(
+            "/api/runs",
+            json={
+                "items": one,
+                "split": True,
+                "split_optional": True,
+                "max_pieces": value,
+            },
+        )
+        assert r.status_code == 400 and words in r.json()["error"]
 
 
 def test_caps_github_follows_the_pr_probe(monkeypatch):

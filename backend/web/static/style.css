@@ -12932,11 +12932,30 @@ button.ct-chip:hover {
 }
 
 
-/* "Split a big line into parallel pieces first" (SplitCheck.tsx), on page 1
-   under the lane rows. */
+/* "Auto-split into up to N sessions if it's worth it" (SplitCheck.tsx), on
+   page 1 under the lane rows. The checkbox's label stops before N: the − / +
+   stepper sits outside it, so a click there never toggles the box. */
+#new-form .nf-split {
+  font-size: 13px;
+}
+
+#new-form .nf-split label.check {
+  display: inline;
+}
+
 #new-form .nf-split label.check.disabled {
   cursor: not-allowed;
   color: var(--muted);
+}
+
+#new-form .nf-split .nf-split-n {
+  vertical-align: middle;
+  margin: 0 2px;
+}
+
+#new-form .nf-split .nf-split-n button {
+  width: 22px;
+  padding: 1px 0;
 }
 
 /* "suggested · billing · search · upload": a suggestion only, so an outline

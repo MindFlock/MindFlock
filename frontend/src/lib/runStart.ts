@@ -1,13 +1,14 @@
-/** The New dialog's list mode, the pure half: reading the describe box as a
- * list of things to work on, the request that starts them (SPEC §5
- * `POST /api/runs`), and the plain-language sentence that says what will
- * happen before anything does.
+/** The New dialog's runs, the pure half: reading a BATCH's box (Intake's
+ * "Start together…" — one session per ticket) as a list, the request that
+ * starts a batch or an auto-split (SPEC §5 `POST /api/runs`), and the
+ * plain-language sentence that says what will happen before anything does.
  *
- * The server is the authority on what a line IS (`POST /api/runs/preview`
- * resolves ticket IDs against the configured sources). The local reading
- * here only decides WHEN to ask it — two lines, or anything shaped like a
- * ticket — and draws placeholder rows while it answers. One plain line never
- * reaches the server's parser at all: it is today's single session. */
+ * Typing never makes a list: the box the user writes in is ONE prompt,
+ * however many lines it holds, and only "Auto-split into up to N" hands the
+ * question of splitting it to an agent. The server is the authority on what
+ * a batch's line IS (`POST /api/runs/preview` resolves ticket IDs against the
+ * configured sources); the local reading draws placeholder rows while it
+ * answers. */
 
 import { laneDefault, type Lane } from "./laneActions";
 
@@ -46,25 +47,6 @@ export function localItems(text: string): LocalItem[] {
     }
   }
   return out;
-}
-
-/** List mode: two or more things, or any ticket at all. One plain line stays
- * the single-session flow it has always been. */
-export function isListMode(items: readonly LocalItem[]): boolean {
-  return items.length >= 2 || items.some((i) => i.kind === "ticket");
-}
-
-/** "Split a big line into parallel pieces first" applies to exactly one task
- * line — splitting a list, or a ticket, is not what it does. */
-export function splitApplies(items: readonly LocalItem[]): boolean {
-  return items.length === 1 && items[0].kind === "task";
-}
-
-/** Why the split box is off for what is in the box, or "". */
-export function splitShapeReason(items: readonly LocalItem[]): string {
-  if (!items.length) return "";
-  if (items.length > 1) return "one line only — this is a list of " + items.length;
-  return items[0].kind === "ticket" ? "a ticket starts as itself" : "";
 }
 
 // --- The server's reading (SPEC §5 POST /api/runs/preview) ----------------------
@@ -233,6 +215,18 @@ export function startTogetherText(
 
 export type Grouping = "each" | "together";
 
+/** "Auto-split into up to N sessions": N's bounds. A split is at least two
+ * pieces; the server's own cap (caps.team_runs.max_pieces) is the top. */
+export const SPLIT_MIN = 2;
+export const SPLIT_DEFAULT = 3;
+export const SPLIT_LIMIT_DEFAULT = 8;
+
+export function clampSplit(n: number, limit: number = SPLIT_LIMIT_DEFAULT): number {
+  const top = Math.max(SPLIT_MIN, Number.isFinite(limit) ? Math.floor(limit) : SPLIT_LIMIT_DEFAULT);
+  if (!Number.isFinite(n)) return Math.min(SPLIT_DEFAULT, top);
+  return Math.min(top, Math.max(SPLIT_MIN, Math.round(n)));
+}
+
 export const CONCURRENCY_MIN = 1;
 export const CONCURRENCY_MAX = 8;
 export const CONCURRENCY_DEFAULT = 3;
@@ -276,10 +270,17 @@ export function runBody(o: {
   concurrency: number;
   program: string;
   repoPath: string;
+  /** "Auto-split into up to N" is ticked: an OPTIONAL split — its lead may
+   * decide not to split and do the task itself. */
   split: boolean;
+  /** N, sent with a split only. */
+  maxPieces?: number;
 }): Record<string, unknown> {
   const together = o.split || o.grouping === "together";
   const lane = together ? oneForAllLane(o.lane) : o.lane;
+  const split = o.split
+    ? { split_optional: true, max_pieces: clampSplit(o.maxPieces ?? SPLIT_DEFAULT) }
+    : {};
   return {
     name: o.name.trim(),
     items: o.items,
@@ -293,6 +294,7 @@ export function runBody(o: {
     program: o.program.trim(),
     repo_path: o.repoPath.trim(),
     split: o.split,
+    ...split,
   };
 }
 
@@ -310,10 +312,9 @@ export function defaultLaneFor(batch: boolean, setting: string | null | undefine
   return batch ? laneDefault(setting) : "leave";
 }
 
-/** The primary button. One item keeps today's words; a list says how many;
- * a split starts its lead. */
-export function startLabel(n: number, split: boolean): string {
-  if (split) return "Start the lead";
+/** The primary button. One session keeps today's words — an auto-split too,
+ * since it may well stay one session; a batch says how many. */
+export function startLabel(n: number): string {
   if (n >= 2) return `Start ${n} sessions`;
   return "Create session";
 }
@@ -330,23 +331,27 @@ export function summarySentence(o: {
   askFirst: boolean;
   grouping: Grouping;
   split: boolean;
+  /** N of "Auto-split into up to N" (a split only). */
+  maxPieces?: number;
 }): { lead: string; tail: string } | null {
   const together = o.split || (o.n >= 2 && o.grouping === "together");
   const ask = !together && o.lane !== "leave" && o.askFirst;
   const asks = ask ? " Before the first commit it stops and asks you first, in the bell." : "";
   if (o.split) {
+    const n = clampSplit(o.maxPieces ?? SPLIT_DEFAULT);
     const lead =
-      "One lead session in a new worktree. Its agent proposes pieces with separate paths; you " +
+      "One session in a new worktree. Its agent reads the code and decides: not worth splitting, " +
+      `it does the task itself; worth it, it proposes up to ${n} pieces with separate paths — you ` +
       "approve the split in its Thread tab, then MindFlock starts the workers, fences each to its " +
       "paths and merges them back.";
     const tail =
       o.lane === "pr"
-        ? "Then it opens one PR — after you say go."
+        ? "Either way it then opens one PR — after you say go."
         : o.lane === "merge"
-          ? "Then it opens one PR and merges it once checks pass — after you say go."
+          ? "Either way it then opens one PR and merges it once checks pass — after you say go."
           : o.lane === "push"
-            ? "Then the merged branch is pushed — after you say go."
-            : "The merged branch waits for you; nothing is pushed.";
+            ? "Either way the branch is then pushed — after you say go."
+            : "Either way it is committed on its branch and waits for you; nothing is pushed.";
     return { lead, tail: tail + asks };
   }
   if (o.n >= 2) {

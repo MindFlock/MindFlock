@@ -14,6 +14,7 @@ import { api, ApiError } from "../api/client";
 import type { OutboxResponse, RunDTO, RunSummary } from "../api/types";
 import { needsRunDetail, RUN_DONE_STATES, type RunInfo } from "../lib/runs";
 import { queryClient, type EventEnvelope } from "./queries";
+import { toast } from "../lib/toast";
 
 /** While a group is live: the server driver's own cadence (RUN_INTERVAL_S). */
 export const RUNS_LIVE_MS = 5_000;
@@ -176,4 +177,21 @@ function bridgeRunEvents() {
   const bump = (_env: EventEnvelope) => void refreshRuns();
   for (const name of ["run.changed", "run.needs_you", "run.task_shipped", "run.finished", "session.autopilot_changed"])
     ev.subscribe(name, bump);
+  // An auto-split whose lead decided not to split: its group vanishes from
+  // the rail, so say where the work went. Never for replayed history.
+  ev.subscribe("run.changed", (env: EventEnvelope) => {
+    if (env.data?.state !== "dissolved") return;
+    if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+    const lead = String(env.data?.lead || "");
+    if (lead) toast(dissolvedText(lead, String(env.data?.why || "")), { duration: 7000 });
+  });
+}
+
+/** The toast for an auto-split that stayed one session. */
+export function dissolvedText(lead: string, why: string): string {
+  const reason = why.trim().replace(/\s+/g, " ");
+  return (
+    `${lead} didn't split it — it's doing the task itself` +
+    (reason ? `: ${reason.length > 120 ? reason.slice(0, 119) + "…" : reason}` : "")
+  );
 }

@@ -6281,7 +6281,8 @@ def _capabilities() -> dict:
     instead of opening the PR themselves (they never fail outright).
     ``agent_mcp`` is the one non-boolean: see :func:`_agent_mcp_caps`.
     ``team_runs`` says which team-run shapes the routes accept yet
-    (``{"split", "together"}``, from ``core.team_runs.CAPABILITIES``).
+    (``{"split", "together"}``, from ``core.team_runs.CAPABILITIES``) and
+    ``max_pieces``, the most pieces a split may have (MINDFLOCK_MAX_CHILDREN).
     Probed per-request (cheap) so installing/connecting takes effect on the
     next page load without a server restart.
     """
@@ -6291,7 +6292,9 @@ def _capabilities() -> dict:
         "ticketing": _ticketing_connected(),
         "github": _github_pr_available(),
         "agent_mcp": _agent_mcp_caps(),
-        "team_runs": dict(_team_runs.CAPABILITIES),
+        "team_runs": dict(
+            _team_runs.CAPABILITIES, max_pieces=_team_run_driver._max_pieces()
+        ),
     }
 
 

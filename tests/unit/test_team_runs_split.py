@@ -161,11 +161,34 @@ class TestNamesAndBriefs:
         assert "mcp__mindflock__propose_run_plan(run_id=r_abcdef" in claude
         codex = tr.lead_brief(run, 8, "codex")
         assert "propose_run_plan(run_id=" in codex and "mcp__" not in codex
+        auto = tr.lead_brief(dict(run, optional=True), 8, "claude")
+        assert len(auto) <= 600 and "pieces=[]" in auto and "yourself" in auto
         assert len(tr.run_brief(run, "claude")) <= 600
         assert "report_result" in tr.run_brief(run, "claude")
         assert len(tr.piece_brief(run, ["a/**"] * 8, "claude")) <= 800
         assert "`a/**`" in tr.piece_brief(run, ["a/**"], "claude")
         assert "report_integrated" in tr.integrator_brief(run, "claude")
+
+    def test_the_auto_split_brief_names_its_cap_and_keeps_the_trunk_note(self):
+        run = tr._normalize(
+            {"id": "r_abcdef", "name": "auth", "split": True, "optional": True}
+        )
+        # The literal {title, prompt, paths} survives .format (escaped braces).
+        auto = tr.lead_brief(run, 3, "claude")
+        assert "2-3 pieces [{title, prompt, paths}]" in auto
+        assert "mcp__mindflock__propose_run_plan(run_id=r_abcdef, pieces=[]" in auto
+        assert auto.startswith("---\nMindFlock auto-split:")
+        assert "MindFlock auto-split" not in tr.lead_brief(
+            dict(run, optional=False), 3, "claude"
+        )
+        # A lead on its trunk is told to commit nothing there, auto-split or
+        # not — the note is purely additive to the 600-char brief.
+        run["lead"] = tr._normalize_lead(
+            {"title": "l", "trunk": True, "branch": "main"}
+        )
+        trunk = tr.lead_brief(run, 3, "claude")
+        assert trunk == auto + tr.LEAD_TRUNK_CLAUSE.format(branch="main")
+        assert len(auto) <= 600
 
     def test_tests_line_and_count(self):
         assert tr.tests_line("did x\n\nDetails:\nTests: pytest -q — 24 passed") == (
@@ -716,6 +739,24 @@ class TestApplyAndViews:
         assert "missing_since" not in dto["lead"]
         assert dto["check"]["state"] == "pending" and dto["release"]["state"] == "none"
         assert dto["tasks"][0]["commits"] == ["x"]
+        assert dto["optional"] is False and dto["max_pieces"] == 0
+        dto = tr.run_dto(_split_run(optional=True, max_pieces=3))
+        assert dto["optional"] is True and dto["max_pieces"] == 3
+
+    @pytest.mark.parametrize(
+        "raw,optional,max_pieces",
+        [
+            ({}, False, 0),  # a state.json from before auto-split
+            ({"optional": True, "max_pieces": 3}, True, 3),
+            ({"optional": 1, "max_pieces": "4"}, True, 4),
+            ({"max_pieces": -2}, False, 0),
+            ({"max_pieces": "lots"}, False, 0),
+            ({"max_pieces": None}, False, 0),
+        ],
+    )
+    def test_auto_split_fields_normalize(self, raw, optional, max_pieces):
+        run = tr._normalize(dict({"id": "r_old", "name": "x", "split": True}, **raw))
+        assert run["optional"] is optional and run["max_pieces"] == max_pieces
 
     def test_together_summary_names_the_one_pr(self):
         run = _split_run(tasks=[_member("t1", "a", "integrated")])

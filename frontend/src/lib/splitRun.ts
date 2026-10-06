@@ -147,10 +147,13 @@ export function leadSubline(run: RunDTO, leadName: string): SubPart[] {
   if (run.state === "planning")
     return [
       {
-        text:
-          "Waiting for " +
-          leadName +
-          " to propose the pieces — it reads the code first, then MindFlock shows the plan here.",
+        text: run.optional
+          ? "Waiting for " +
+            leadName +
+            " to decide whether to split — it reads the code first; a plan shows here, or it just does the task."
+          : "Waiting for " +
+            leadName +
+            " to propose the pieces — it reads the code first, then MindFlock shows the plan here.",
       },
     ];
   if (run.state === "plan_ready")
@@ -565,7 +568,7 @@ export function leadLine(
   const live = tasks.filter((t) => !["cancelled", "skipped", "failed"].includes(t.state)).length;
   switch (run.state) {
     case "planning":
-      return { text: "proposing the pieces…", cls: "" };
+      return { text: run.optional ? "deciding whether to split…" : "proposing the pieces…", cls: "" };
     case "plan_ready":
       return { text: "plan ready — approve it", cls: "needs" };
     case "checking":
