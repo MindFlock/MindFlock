@@ -546,8 +546,12 @@ def test_pane_draws_the_thread_tab_and_falls_back_to_agent(js):
 
 def test_new_dialog_split_check(js):
     dlg = _region(js, "src/components/dialogs/NewSessionDialog.tsx")
-    # One box now, on page 1; the Prompt fold's copy is gone.
+    # One box, on the form (page 2) beside Fast-track; page 1 is only the
+    # prompt ("I should be able to just prompt and it fills out the second
+    # menu"), so its options appear for an Intake batch alone.
     assert 'id: "new-split"' in dlg and 'id: "new-split-prompt"' not in dlg
+    assert dlg.index('id: "new-ft-row"') < dlg.index('id: "new-split-row"')
+    assert "splitBox: null" in dlg
     reset = dlg[dlg.find("if (failedReopen.current) {") :]
     reset = reset[: reset.find('folderDo({ t: "reopen" });')]
     assert "setSplit(false);" in reset and "setMaxPieces(SPLIT_DEFAULT);" in reset
@@ -555,10 +559,11 @@ def test_new_dialog_split_check(js):
     assert "setBatch(!!prefill);" in reset
     # Gated by the agent, never by the box's line breaks; a batch has no box.
     assert in_bundle("splitGate(config?.caps, canonAgent(program))", dlg)
-    assert (
-        'const splitOn = page === 1 && !batch && split && mcpOk.ok && describe.trim() !== "";'
-        in dlg
-    )
+    assert "const splitOn = page === 2 && split && mcpOk.ok;" in dlg
+    assert "const runMode = page === 1 && draft.listMode || splitOn;" in dlg
+    # The form's Prompt is the lead's task, and an empty one is refused there.
+    assert "text: page === 1 ? describe : prompt," in dlg
+    assert "Auto-split needs a task" in dlg
     assert "splitShapeReason" not in js
     # A split starts through the run with its N, and its button stays
     # "Create session" — it may well not split.

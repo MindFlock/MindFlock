@@ -1,5 +1,5 @@
 /** The New dialog's "Auto-split into up to N sessions if it's worth it" box,
- * under the describe box on page 1. Off by default.
+ * on the form (page 2), under Fast-track. Off by default.
  *
  * Ticking it makes the start an OPTIONAL split run (`POST /api/runs` with
  * `split: true, split_optional: true, max_pieces: N`): MindFlock creates one

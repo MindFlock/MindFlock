@@ -58,6 +58,7 @@ import {
   removeItem,
   runRepoOptions,
   startLabel,
+  summarySentence,
 } from "../../lib/runStart";
 
 /** The two things New makes. Session is the landing tab and stays that way:
@@ -1299,7 +1300,9 @@ export function NewSessionDialog() {
    * below runs exactly as it always has. */
   const draft = useRunDraft({
     open,
-    text: describe,
+    // Page 1's box is a batch's list; on the form, the Prompt is what an
+    // auto-split's lead is given.
+    text: page === 1 ? describe : prompt,
     repoPath,
     program: canonAgent(program),
     // What a BATCH starts on (Settings → Workspace; Off when unset). Never
@@ -1308,15 +1311,29 @@ export function NewSessionDialog() {
     // The "Set it up myself" form makes ONE session: it starts Off.
     single: page !== 1,
     batch: page === 1 && batch,
-    split: page === 1 && !batch && split && mcpOk.ok,
+    split: page === 2 && split && mcpOk.ok,
     togetherOk,
   });
-  /** An auto-split run: the box ticked, something to do, an agent with the
-   * tools. The whole box is the task, however many lines it holds. */
-  const splitOn = page === 1 && !batch && split && mcpOk.ok && describe.trim() !== "";
-  /** Page 1 starts a RUN (POST /api/runs) rather than one session: a batch
-   * (Intake's tickets) or an auto-split. */
-  const runMode = page === 1 && (draft.listMode || splitOn);
+  /** An auto-split run: ticked on the form (page 2) with an agent that has
+   * the tools. Page 1 is only the prompt — the owner's rule: "I should be
+   * able to just prompt and it fills out the second menu" — so the box, like
+   * Fast-track, lives with the rest of the details. The Prompt is the task. */
+  const splitOn = page === 2 && split && mcpOk.ok;
+  /** Create starts a RUN (POST /api/runs) rather than one session: a batch
+   * (Intake's tickets, page 1) or an auto-split (the form). */
+  const runMode = (page === 1 && draft.listMode) || splitOn;
+  /** What a ticked Auto-split will do, in a sentence, under the box. */
+  const splitSum = splitOn
+    ? summarySentence({
+        n: 1,
+        concurrency: draft.concurrency,
+        lane: draft.lane,
+        askFirst: draft.askFirst,
+        grouping: draft.grouping,
+        split: true,
+        maxPieces: clampSplit(maxPieces, splitLimit),
+      })
+    : null;
   const toggleSplit = (on: boolean) => setSplit(on);
   useEffect(() => {
     if (!open) setRunBrowse(false);
@@ -1336,14 +1353,26 @@ export function NewSessionDialog() {
   // session gets its own worktree.
   const laneNeedsWorktree = draft.lane !== "leave";
 
-  /** Page 1's start in run mode: POST /api/runs, and the dialog closes only
-   * once the server has taken it — a refusal ("one-for-all needs a single
-   * repository") has to land beside the choices it is about. */
+  /** A start in run mode: POST /api/runs, and the dialog closes only once the
+   * server has taken it — a refusal ("one-for-all needs a single repository",
+   * "repo_path must be a git repository") has to land beside the choices it
+   * is about: page 1's note for a batch, the form's error row for a split. */
   const startRun = async () => {
+    const fail = splitOn ? setError : setPlanError;
     setPlanError("");
-    const r = await draft.start({ split: splitOn, maxPieces: clampSplit(maxPieces, splitLimit) });
+    setError("");
+    if (splitOn && !prompt.trim()) {
+      setPromptOpen(true);
+      fail("Auto-split needs a task — write it in the Prompt below, or untick Auto-split.");
+      return;
+    }
+    const r = await draft.start({
+      split: splitOn,
+      maxPieces: clampSplit(maxPieces, splitLimit),
+      name: title.trim(),
+    });
     if (!r.ok) {
-      if (r.error) setPlanError(r.error);
+      if (r.error) fail(r.error);
       return;
     }
     const n = Array.isArray(r.body.items) ? r.body.items.length : 0;
@@ -1933,6 +1962,12 @@ export function NewSessionDialog() {
 
   const submit = async () => {
     if (runMode) {
+      if (splitOn && isNameQuery(repoPath)) {
+        setError(
+          `“${repoPath.trim()}” is a name to look up, not a folder — pick one of the matches, or type a full path.`
+        );
+        return;
+      }
       void startRun();
       return;
     }
@@ -2173,14 +2208,19 @@ export function NewSessionDialog() {
                     {w}
                   </p>
                 ))}
+              {/* Options only for a BATCH (Intake's "Start together…"). One
+                  session's page 1 is the prompt and nothing else: the model
+                  fills in the form, and Fast-track and Auto-split sit there
+                  with the rest of the details. */}
+              {batch && (
               <RunOptions
                 draft={draft}
                 n={draft.listMode ? draft.count : 1}
-                split={splitOn}
+                split={false}
                 repoPicker={
-                  runMode && (splitOn || draft.items.some((i) => i.kind === "task")) ? (
-                    // Typed tasks and a split's lead need a folder; tickets
-                    // bring their own (the source's repo).
+                  runMode && draft.items.some((i) => i.kind === "task") ? (
+                    // Typed tasks need a folder; tickets bring their own (the
+                    // source's repo).
                     <span className="rt-repo-pick">
                       <select
                         id="new-run-repo"
@@ -2207,23 +2247,10 @@ export function NewSessionDialog() {
                     </span>
                   ) : null
                 }
-                maxPieces={clampSplit(maxPieces, splitLimit)}
-                splitBox={
-                  // A batch is already one session per line: nothing to split.
-                  batch ? null : (
-                    <SplitCheck
-                      id="new-split"
-                      split={split}
-                      onSplit={toggleSplit}
-                      gate={mcpOk}
-                      maxPieces={clampSplit(maxPieces, splitLimit)}
-                      onMaxPieces={(n) => setMaxPieces(clampSplit(n, splitLimit))}
-                      limit={splitLimit}
-                      text={describe}
-                    />
-                  )
-                }
+                // A batch is already one session per line: nothing to split.
+                splitBox={null}
               />
+              )}
               {runMode && runBrowse && (
                 // The list's "tasks start in" → Browse…: the same inline
                 // folder browser the Folder field uses (inline: Electron has
@@ -2718,9 +2745,9 @@ export function NewSessionDialog() {
             )}
   
             {config?.caps?.git !== false && (
-              // The same fast-track choice page 1 shows (and the same draft):
-              // a session made from the form goes as far as this says, and
-              // it is never set out of sight.
+              // The one fast-track choice for a single session (page 1 holds
+              // only the prompt): a session made from the form goes as far as
+              // this says, and it is never set out of sight.
               <div id="new-ft-row" className="rt-row rt-row-top" data-caps="git">
                 <span className="rt-label">Fast-track to</span>
                 <div className="rt-ctl">
@@ -2731,8 +2758,44 @@ export function NewSessionDialog() {
                     onChange={draft.setLane}
                     askFirst={draft.askFirst}
                     onAskFirst={draft.setAskFirst}
+                    // A split commits each piece into the group's branch, so
+                    // Off reads Commit and the release always asks — the same
+                    // rule RunOptions draws for one-PR-for-all.
+                    disabledReason={
+                      splitOn
+                        ? { leave: "An auto-split commits each piece into its branch — Commit keeps it all on this machine" }
+                        : undefined
+                    }
+                    askReason={
+                      splitOn ? "An auto-split always asks you before anything leaves this machine" : undefined
+                    }
                   />
                 </div>
+              </div>
+            )}
+
+            {config?.caps?.git !== false && (
+              // "Auto-split into up to N sessions if it's worth it": the form's
+              // folder and Prompt become the lead's, and Create starts the run.
+              <div id="new-split-row" data-caps="git">
+                <SplitCheck
+                  id="new-split"
+                  split={split}
+                  onSplit={toggleSplit}
+                  gate={mcpOk}
+                  maxPieces={clampSplit(maxPieces, splitLimit)}
+                  onMaxPieces={(n) => setMaxPieces(clampSplit(n, splitLimit))}
+                  limit={splitLimit}
+                  text={prompt || describe}
+                />
+                {splitSum && (
+                  <p className="rt-sum" aria-live="polite">
+                    {splitSum.lead} {splitSum.tail && <span className="muted">{splitSum.tail}</span>}{" "}
+                    <span className="muted">
+                      The account, plan-first, launch flags and Git &amp; workspace choices don't apply to a split.
+                    </span>
+                  </p>
+                )}
               </div>
             )}
 
@@ -2802,13 +2865,16 @@ export function NewSessionDialog() {
                         // drives a checkout others share: choosing the shared
                         // folder turns it off (said on the line, not hidden).
                         if (laneNeedsWorktree) draft.setLane("leave");
+                        setSplit(false);
                         setInPlace(true);
                         setProvision(false);
                       }}
                     />
                     Work directly in this folder{" "}
                     <span className="muted">
-                      {laneNeedsWorktree
+                      {splitOn
+                        ? "(turns auto-split off — a split works in its own worktree)"
+                        : laneNeedsWorktree
                         ? "(turns fast-track off — it commits for this session, so it needs its own worktree)"
                         : "(no worktree — edits the original; multiple sessions can share it)"}
                     </span>
@@ -3206,9 +3272,7 @@ export function NewSessionDialog() {
                 disabled={describing || draft.starting}
                 aria-busy={draft.starting || undefined}
                 title={
-                  splitOn
-                    ? "Create it now. Its agent reads the code and decides whether to split; a split waits for your approval in its Thread tab."
-                    : runMode
+                  runMode
                     ? "Start them now. MindFlock queues the rest and ships each one as chosen above, and the bell shows anything that needs you."
                     : "Create the session right now from what you typed, without showing you the details first."
                 }
@@ -3231,7 +3295,9 @@ export function NewSessionDialog() {
               >
                 ← Back
               </button>
-              <button type="submit">Create</button>
+              <button type="submit" disabled={draft.starting} aria-busy={draft.starting || undefined}>
+                {draft.starting ? "Starting…" : "Create"}
+              </button>
             </>
           )}
         </div>
