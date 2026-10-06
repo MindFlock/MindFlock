@@ -1169,6 +1169,9 @@ ipcMain.on('update:skip', (_e, version) => {
 // is what lets an engine-only version bump reach users who never update the
 // (unsigned, no-auto-update) shell. null = up to date / unknown.
 let engineNotice = null      // { current, latest, ref } | null
+// What the last check actually learned, so Settings can tell "up to date"
+// apart from "couldn't tell" (which it used to report as up to date).
+let engineCheck = { checked: false, current: '' }
 
 // GET a JSON document from the local server, or null on ANY failure. Never
 // throws: an engine check must never be able to break app startup.
@@ -1194,6 +1197,16 @@ function fetchLocalJSON(pathname, timeoutMs) {
   })
 }
 
+// The running engine's version ('' when it can't be read).
+async function localEngineVersion() {
+  for (const p of ['/api/remote/hello', '/api/doctor']) {
+    const doc = await fetchLocalJSON(p)
+    const v = doc && typeof doc.version === 'string' ? doc.version.trim() : ''
+    if (v) return v
+  }
+  return ''
+}
+
 async function checkEngineVersion() {
   // Compare the INSTALLED engine (GET /api/doctor) against the latest RELEASED
   // engine (GitHub /releases/latest). Re-runnable (no one-shot latch): a new
@@ -1201,11 +1214,18 @@ async function checkEngineVersion() {
   // notice. Every failure path is silent — an engine check must never break
   // startup, and "offline / no release / server booting" simply tries later.
   if (!app.isPackaged) return          // dev: Electron's own version is noise
-  const doc = await fetchLocalJSON('/api/doctor')
-  const current = doc && typeof doc.version === 'string' ? doc.version.trim() : ''
-  if (!current) return                 // server down, or an engine too old to report it
+  // The PUBLIC identity ping first: with the access-token gate on (Tailscale
+  // mode) /api/doctor 401s this tokenless request, and every check silently
+  // ended in "up to date". /api/doctor stays as the fallback for engines that
+  // predate the ping.
+  const current = await localEngineVersion()
+  if (!current) {                      // server down / booting -- try later
+    engineCheck = { checked: false, current: '' }
+    return
+  }
   const rel = await fetchLatestRelease()
   const latest = rel && rel.tag_name ? String(rel.tag_name).replace(/^v/i, '').trim() : ''
+  engineCheck = { checked: !!latest, current }
   if (!latest || cmpVersion(latest, current) <= 0) {
     engineNotice = null                // up to date (or couldn't tell) — no nag
     return
@@ -1223,9 +1243,11 @@ function pushEngineNotice() {
 
 ipcMain.handle('engine:get', () => engineNotice)
 // What Settings → Advanced polls to show/hide its engine-update control.
+// `checked` is false when the last check couldn't read the engine's version
+// or the latest release (offline, server booting) -- not "up to date".
 ipcMain.handle('engine:update-info', () => (engineNotice
-  ? { available: true, current: engineNotice.current, latest: engineNotice.latest }
-  : { available: false }))
+  ? { available: true, checked: true, current: engineNotice.current, latest: engineNotice.latest }
+  : { available: false, checked: engineCheck.checked, current: engineCheck.current }))
 ipcMain.handle('engine:install', () => {
   // Install the LATEST released engine when an update is pending; fall back to
   // this app's pinned version otherwise (e.g. a manual reinstall with no notice

@@ -287,7 +287,9 @@ function ServerEngineUpdate() {
  * whether the installed engine is behind the latest released one and, if so,
  * offers a one-click update that pulls just the small engine package (not the
  * app) and self-restarts the server. */
-type EngineInfo = { available?: boolean; current?: string; latest?: string };
+// `checked` comes from shells that report whether the check succeeded; older
+// shells omit it, and keep the old wording.
+type EngineInfo = { available?: boolean; checked?: boolean; current?: string; latest?: string };
 function ShellEngineUpdate() {
   const mfengine = (
     window as unknown as {
@@ -355,6 +357,11 @@ function ShellEngineUpdate() {
             </p>
           )}
         </>
+      ) : info?.checked === false ? (
+        <p className="set-hint">
+          Couldn’t check for engine updates right now
+          {info.current ? ` (this engine is ${info.current})` : ""}. Try again in a minute.
+        </p>
       ) : (
         <p className="set-hint">
           The engine is up to date{info?.current ? ` (${info.current})` : ""}.
