@@ -1024,6 +1024,14 @@ class GeneralSettings:
     sessions it spawned and their descendants) or ``"all"``. Reading the flock
     and messaging are not gated by it beyond ``readonly``. Unknown values read
     as ``""``.
+
+    ``agent_max_children`` / ``agent_max_spawn_depth`` / ``agent_max_spawned``:
+    the spawn guard-rails (``backend.web.core.lineage``) — live sub-sessions
+    per orchestrator, how deep spawns may nest, and agent-spawned sessions
+    alive at once. ``None`` = the built-in default (8 / 3 / 24); a negative
+    value reads as unset. The ``MINDFLOCK_MAX_CHILDREN`` /
+    ``MINDFLOCK_MAX_SPAWN_DEPTH`` / ``MINDFLOCK_MAX_SPAWNED`` env vars, when
+    set, still win over these (an operator's override).
     """
 
     session_budget_usd: Optional[float] = None
@@ -1038,6 +1046,9 @@ class GeneralSettings:
     resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
     agent_mcp: Optional[bool] = None  # None = on (see docstring)
     agent_mcp_scope: str = ""  # "" (= children) | "readonly" | "children" | "all"
+    agent_max_children: Optional[int] = None  # None = lineage default (8)
+    agent_max_spawn_depth: Optional[int] = None  # None = lineage default (3)
+    agent_max_spawned: Optional[int] = None  # None = lineage default (24)
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -1065,6 +1076,10 @@ class GeneralSettings:
             d["agent_mcp"] = self.agent_mcp
         if self.agent_mcp_scope:
             d["agent_mcp_scope"] = self.agent_mcp_scope
+        for key in AGENT_SPAWN_CAP_FIELDS:
+            value = getattr(self, key)
+            if value is not None:
+                d[key] = value
         return d
 
     @classmethod
@@ -1082,6 +1097,9 @@ class GeneralSettings:
             resume_on_usage_reset=_opt_bool(d.get("resume_on_usage_reset")),
             agent_mcp=_opt_bool(d.get("agent_mcp")),
             agent_mcp_scope=_agent_mcp_scope(d.get("agent_mcp_scope")),
+            agent_max_children=_opt_nonneg_int(d.get("agent_max_children")),
+            agent_max_spawn_depth=_opt_nonneg_int(d.get("agent_max_spawn_depth")),
+            agent_max_spawned=_opt_nonneg_int(d.get("agent_max_spawned")),
         )
 
 
@@ -1323,6 +1341,13 @@ def _opt_float(v: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
 
+
+#: The ``general`` fields holding the spawn guard-rails (see GeneralSettings).
+AGENT_SPAWN_CAP_FIELDS = (
+    "agent_max_children",
+    "agent_max_spawn_depth",
+    "agent_max_spawned",
+)
 
 #: Values ``general.agent_mcp_scope`` accepts (``""`` = the default, children).
 AGENT_MCP_SCOPES = ("readonly", "children", "all")

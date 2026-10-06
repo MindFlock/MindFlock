@@ -162,6 +162,7 @@ from backend.web.core import ship_status as _ship_status
 from backend.web.core import agent_io as _agent_io
 from backend.web.core import lineage as _lineage
 from backend.web.core import thread as _thread
+from backend.web.core import finished_children as _finished_children
 from backend.mcp import playbooks as _playbooks
 from backend.web.core import test_plans as _test_plans
 from backend.web.core import window_refresh as _window_refresh
@@ -1429,6 +1430,44 @@ _SESSION_REMOVED_HOOKS: list = []
 # A removed session's inbox goes with it (a reused title must not read the
 # old mail).
 _SESSION_REMOVED_HOOKS.append(_mailbox.drop)
+
+
+def _closed_just_now(title: str, within_s: float = 120.0) -> bool:
+    """Whether ``title`` was just closed (the newest Recently-closed entry,
+    stamped within ``within_s``), as opposed to deleted."""
+    try:
+        newest = (_load_recently_closed() or [None])[0]
+        if not newest or newest.get("title") != title:
+            return False
+        closed = _datetime.datetime.fromisoformat(str(newest.get("closed_at")))
+        return (
+            _datetime.datetime.now().astimezone() - closed
+        ).total_seconds() < within_s
+    except Exception:  # noqa: BLE001 — unknown reads as deleted
+        return False
+
+
+def _remember_finished_child(title: str) -> None:
+    """Keep a removed sub-session on its orchestrator's Thread.
+
+    Runs before the next tick replaces the snapshot, so ``title``'s last row
+    (branch, stage, PR, diff size, final report) is still there. A removed
+    PARENT takes its own finished list with it: a reused title must not show
+    its namesake's workers."""
+    rows = {r.get("title"): r for r in _events.sessions_snapshot()}
+    row = rows.get(title)
+    if row and row.get("parent"):
+        parent_row = rows.get(row.get("parent")) or {}
+        _finished_children.record(
+            row,
+            parent_created=parent_row.get("created_at"),
+            how="closed" if _closed_just_now(title) else "deleted",
+            seed=_thread.seed_for(title, row.get("created_at")),
+        )
+    _finished_children.forget_parent(title)
+
+
+_SESSION_REMOVED_HOOKS.append(_remember_finished_child)
 
 
 def _forget_mcp_run_file(title: str) -> None:
@@ -6295,7 +6334,32 @@ def _capabilities() -> dict:
         "team_runs": dict(
             _team_runs.CAPABILITIES, max_pieces=_team_run_driver._max_pieces()
         ),
+        "orchestration": _orchestration_caps(),
     }
+
+
+def _orchestration_caps() -> dict:
+    """The spawn guard-rails as they apply right now, for Settings → Agent
+    orchestration: each cap's effective value, built-in default and where it
+    comes from (``env`` — an env var overrides the setting — ``settings`` or
+    ``default``)."""
+    out = {}
+    for key, env, default in (
+        ("max_children", _lineage.MAX_CHILDREN_ENV, _lineage.DEFAULT_MAX_CHILDREN),
+        (
+            "max_spawn_depth",
+            _lineage.MAX_SPAWN_DEPTH_ENV,
+            _lineage.DEFAULT_MAX_SPAWN_DEPTH,
+        ),
+        ("max_spawned", _lineage.MAX_SPAWNED_ENV, _lineage.DEFAULT_MAX_SPAWNED),
+    ):
+        out[key] = {
+            "value": _lineage.limit(env, default),
+            "default": default,
+            "source": _lineage.source(env),
+            "env": env,
+        }
+    return out
 
 
 def _agent_mcp_caps() -> dict:

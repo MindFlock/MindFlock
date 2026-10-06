@@ -52,7 +52,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 	}
 })();
 //#endregion
-//#region node_modules/react/cjs/react.production.js
+//#region ../../app/frontend/node_modules/react/cjs/react.production.js
 /**
 * @license React
 * react.production.js
@@ -439,12 +439,12 @@ var require_react_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region node_modules/react/index.js
+//#region ../../app/frontend/node_modules/react/index.js
 var require_react = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_production();
 }));
 //#endregion
-//#region node_modules/scheduler/cjs/scheduler.production.js
+//#region ../../app/frontend/node_modules/scheduler/cjs/scheduler.production.js
 /**
 * @license React
 * scheduler.production.js
@@ -699,12 +699,12 @@ var require_scheduler_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region node_modules/scheduler/index.js
+//#region ../../app/frontend/node_modules/scheduler/index.js
 var require_scheduler = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_scheduler_production();
 }));
 //#endregion
-//#region node_modules/react-dom/cjs/react-dom.production.js
+//#region ../../app/frontend/node_modules/react-dom/cjs/react-dom.production.js
 /**
 * @license React
 * react-dom.production.js
@@ -857,7 +857,7 @@ var require_react_dom_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region node_modules/react-dom/index.js
+//#region ../../app/frontend/node_modules/react-dom/index.js
 var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -871,7 +871,7 @@ var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_production();
 }));
 //#endregion
-//#region node_modules/react-dom/cjs/react-dom-client.production.js
+//#region ../../app/frontend/node_modules/react-dom/cjs/react-dom-client.production.js
 /**
 * @license React
 * react-dom-client.production.js
@@ -11446,7 +11446,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	};
 }));
 //#endregion
-//#region node_modules/react-dom/client.js
+//#region ../../app/frontend/node_modules/react-dom/client.js
 var require_client = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -11460,7 +11460,7 @@ var require_client = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_client_production();
 }));
 //#endregion
-//#region node_modules/react/cjs/react-jsx-runtime.production.js
+//#region ../../app/frontend/node_modules/react/cjs/react-jsx-runtime.production.js
 /**
 * @license React
 * react-jsx-runtime.production.js
@@ -11495,12 +11495,12 @@ var require_react_jsx_runtime_production = /* @__PURE__ */ __commonJSMin(((expor
 	exports.jsxs = jsxProd;
 }));
 //#endregion
-//#region node_modules/react/jsx-runtime.js
+//#region ../../app/frontend/node_modules/react/jsx-runtime.js
 var require_jsx_runtime = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_jsx_runtime_production();
 }));
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/QueryClientProvider.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/QueryClientProvider.js
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var import_jsx_runtime = require_jsx_runtime();
 var QueryClientContext = import_react.createContext(void 0);
@@ -11523,7 +11523,7 @@ var QueryClientProvider = ({ client, children }) => {
 	});
 };
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/timeoutManager.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/timeoutManager.js
 var defaultTimeoutProvider = {
 	setTimeout: (callback, delay) => setTimeout(callback, delay),
 	clearTimeout: (timeoutId) => clearTimeout(timeoutId),
@@ -11554,7 +11554,7 @@ function systemSetTimeoutZero(callback) {
 	setTimeout(callback, 0);
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/utils.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/utils.js
 var isServer$1 = typeof window === "undefined" || "Deno" in globalThis;
 function noop() {}
 function functionalUpdate(updater, input) {
@@ -11717,11 +11717,11 @@ function addConsumeAwareSignal(object, getSignal, onCancelled) {
 	return object;
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/environmentManager.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/environmentManager.js
 var isServerFn = () => isServer$1;
 var isServer = () => isServerFn();
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/subscribable.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/subscribable.js
 var Subscribable = class {
 	constructor() {
 		this.listeners = /* @__PURE__ */ new Set();
@@ -11742,7 +11742,7 @@ var Subscribable = class {
 	onUnsubscribe() {}
 };
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/focusManager.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/focusManager.js
 var FocusManager = class extends Subscribable {
 	#focused;
 	#cleanup;
@@ -11795,7 +11795,7 @@ var FocusManager = class extends Subscribable {
 };
 var focusManager = new FocusManager();
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/notifyManager.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/notifyManager.js
 var defaultScheduler = systemSetTimeoutZero;
 function createNotifyManager() {
 	let queue = [];
@@ -11857,7 +11857,7 @@ function createNotifyManager() {
 }
 var notifyManager = createNotifyManager();
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/onlineManager.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/onlineManager.js
 var OnlineManager = class extends Subscribable {
 	#online = true;
 	#cleanup;
@@ -11905,7 +11905,7 @@ var OnlineManager = class extends Subscribable {
 };
 var onlineManager = new OnlineManager();
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/retryer.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/retryer.js
 function defaultRetryDelay(failureCount) {
 	return Math.min(1e3 * 2 ** failureCount, 3e4);
 }
@@ -12020,7 +12020,7 @@ function createRetryer(config) {
 	};
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/removable.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/removable.js
 var Removable = class {
 	#gcTimeout;
 	destroy() {
@@ -12043,7 +12043,7 @@ var Removable = class {
 	}
 };
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/infiniteQueryBehavior.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/infiniteQueryBehavior.js
 function infiniteQueryBehavior(pages) {
 	return { onFetch: (context, query) => {
 		const options = context.options;
@@ -12122,7 +12122,7 @@ function getPreviousPageParam(options, { pages, pageParams }) {
 	return pages.length > 0 ? options.getPreviousPageParam?.(pages[0], pages, pageParams[0], pageParams) : void 0;
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/query.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/query.js
 var Query = class extends Removable {
 	#queryType;
 	#initialState;
@@ -12495,7 +12495,7 @@ function getDefaultState$1(options) {
 	};
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/queryObserver.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/queryObserver.js
 var QueryObserver = class extends Subscribable {
 	#client;
 	#currentQuery = void 0;
@@ -12824,7 +12824,7 @@ function isStale(query, options) {
 	return resolveQueryValue(options.enabled, query) !== false && query.isStaleByTime(resolveQueryValue(options.staleTime, query));
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/mutation.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/mutation.js
 var Mutation = class extends Removable {
 	#client;
 	#observers;
@@ -13041,7 +13041,7 @@ function getDefaultState() {
 	};
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/mutationCache.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/mutationCache.js
 var MutationCache = class extends Subscribable {
 	#mutations;
 	#scopes;
@@ -13148,7 +13148,7 @@ function scopeFor(mutation) {
 	return mutation.options.scope?.id;
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/queryCache.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/queryCache.js
 var QueryCache = class extends Subscribable {
 	#queries;
 	constructor(config = {}) {
@@ -13240,7 +13240,7 @@ var QueryCache = class extends Subscribable {
 	}
 };
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/queryClient.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/queryClient.js
 var QueryClient = class {
 	#queryCache;
 	#mutationCache;
@@ -13489,12 +13489,12 @@ var QueryClient = class {
 	}
 };
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/IsRestoringProvider.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/IsRestoringProvider.js
 var IsRestoringContext = import_react.createContext(false);
 var useIsRestoring = () => import_react.useContext(IsRestoringContext);
 IsRestoringContext.Provider;
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/QueryErrorResetBoundary.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/QueryErrorResetBoundary.js
 function createValue() {
 	let isReset = false;
 	return {
@@ -13512,7 +13512,7 @@ function createValue() {
 var QueryErrorResetBoundaryContext = import_react.createContext(createValue());
 var useQueryErrorResetBoundary = () => import_react.useContext(QueryErrorResetBoundaryContext);
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/errorBoundaryUtils.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/errorBoundaryUtils.js
 var ensurePreventErrorBoundaryRetry = (options, errorResetBoundary, query) => {
 	const throwOnError = query?.state.error && typeof options.throwOnError === "function" ? shouldThrowError(options.throwOnError, [query.state.error, query]) : options.throwOnError;
 	if (options.suspense || throwOnError) {
@@ -13528,7 +13528,7 @@ var getHasError = ({ result, errorResetBoundary, throwOnError, query, suspense }
 	return result.isError && !errorResetBoundary.isReset() && !result.isFetching && query && (suspense && result.data === void 0 || shouldThrowError(throwOnError, [result.error, query]));
 };
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/suspense.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/suspense.js
 var ensureSuspenseTimers = (defaultedOptions) => {
 	if (defaultedOptions.suspense) {
 		const MIN_SUSPENSE_TIME_MS = 1e3;
@@ -13543,7 +13543,7 @@ var fetchOptimistic = (defaultedOptions, observer, errorResetBoundary) => observ
 	errorResetBoundary.clearReset();
 });
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/useBaseQuery.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/useBaseQuery.js
 function useBaseQuery(options, Observer, queryClient) {
 	const isRestoring = useIsRestoring();
 	const errorResetBoundary = useQueryErrorResetBoundary();
@@ -13577,12 +13577,12 @@ function useBaseQuery(options, Observer, queryClient) {
 	return !defaultedOptions.notifyOnChangeProps ? observer.trackResult(result) : result;
 }
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/useQuery.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/useQuery.js
 function useQuery(options, queryClient) {
 	return useBaseQuery(options, QueryObserver, queryClient);
 }
 //#endregion
-//#region node_modules/@xterm/xterm/lib/xterm.mjs
+//#region ../../app/frontend/node_modules/@xterm/xterm/lib/xterm.mjs
 var import_client = require_client();
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
@@ -23946,7 +23946,7 @@ var Dl = class extends D {
 	}
 };
 //#endregion
-//#region node_modules/@xterm/addon-fit/lib/addon-fit.mjs
+//#region ../../app/frontend/node_modules/@xterm/addon-fit/lib/addon-fit.mjs
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
 * @license MIT
@@ -23989,7 +23989,7 @@ var o = class {
 	}
 };
 //#endregion
-//#region node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs
+//#region ../../app/frontend/node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
 * @license MIT
@@ -25423,7 +25423,7 @@ function freshStage(title) {
 	return p;
 }
 //#endregion
-//#region node_modules/zustand/esm/vanilla.mjs
+//#region ../../app/frontend/node_modules/zustand/esm/vanilla.mjs
 var createStoreImpl = (createState) => {
 	let state;
 	const listeners = /* @__PURE__ */ new Set();
@@ -25452,7 +25452,7 @@ var createStoreImpl = (createState) => {
 };
 var createStore = ((createState) => createState ? createStoreImpl(createState) : createStoreImpl);
 //#endregion
-//#region node_modules/zustand/esm/react.mjs
+//#region ../../app/frontend/node_modules/zustand/esm/react.mjs
 var identity = (arg) => arg;
 function useStore(api, selector = identity) {
 	const slice = import_react.useSyncExternalStore(api.subscribe, import_react.useCallback(() => selector(api.getState()), [api, selector]), import_react.useCallback(() => selector(api.getInitialState()), [api, selector]));
@@ -25699,6 +25699,7 @@ var useUi = create((set, get) => ({
 	aliases: load$1("mf_aliases", {}),
 	collapsedDevices: new Set(load$1("cs_devcollapse", [])),
 	collapsedRuns: new Set(load$1("mf_runcollapse", [])),
+	collapsedFamilies: new Set(load$1("mf_familycollapse", [])),
 	hiddenBars: new Set(firstRun("mf_hiddenbars") ? defaultHiddenBars() : load$1("mf_hiddenbars", [])),
 	barOrder: load$1("mf_barorder", []),
 	reduceMotion: load$1("mf_reduce_motion", false),
@@ -25836,6 +25837,13 @@ var useUi = create((set, get) => ({
 		else next.add(runId);
 		save("mf_runcollapse", [...next]);
 		set({ collapsedRuns: next });
+	},
+	toggleFamilyCollapsed: (parent) => {
+		const next = new Set(get().collapsedFamilies);
+		if (next.has(parent)) next.delete(parent);
+		else next.add(parent);
+		save("mf_familycollapse", [...next]);
+		set({ collapsedFamilies: next });
 	},
 	toggleBarHidden: (key) => {
 		const next = new Set(get().hiddenBars);
@@ -27681,7 +27689,7 @@ function splitBlockReason(caps, inst) {
 	if (!teamRunCaps(caps).split) return SERVER_NO_SPLIT.charAt(0).toUpperCase() + SERVER_NO_SPLIT.slice(1);
 	const m = caps?.agent_mcp;
 	if (m) {
-		if (!m.enabled) return "MindFlock tools are switched off for new sessions — Settings → General";
+		if (!m.enabled) return "MindFlock tools are switched off for new sessions — Settings → Agent orchestration";
 		const provider = inst.provider || inst.program || "";
 		if (!(m.providers || []).includes(provider)) return "This CLI doesn't get the MindFlock tools";
 	}
@@ -30192,7 +30200,7 @@ function splitGate(caps, provider) {
 	};
 	if (!m.enabled) return {
 		ok: false,
-		reason: "MindFlock tools are switched off for new sessions — Settings → General"
+		reason: "MindFlock tools are switched off for new sessions — Settings → Agent orchestration"
 	};
 	if (!(m.providers || []).includes(provider)) {
 		const names = (m.providers || []).map((p) => p.charAt(0).toUpperCase() + p.slice(1));
@@ -33240,6 +33248,17 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	const lchip = isLead ? leadChip(leadRun) : null;
 	const lline = isLead ? leadLine(leadRun) : null;
 	const roll = kids.length && !pending && !isLead ? rollup(kids, nameOf, effectiveActivity) : null;
+	const folded = useUi((s) => s.collapsedFamilies.has(title));
+	const foldBtn = kids.length && !pending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "fold-kids",
+		"aria-expanded": !folded,
+		title: folded ? `Show its ${kids.length} sub-session${kids.length === 1 ? "" : "s"} in the sidebar` : `Hide its ${kids.length} sub-session${kids.length === 1 ? "" : "s"} from the sidebar — they keep running`,
+		onMouseDown: (e) => e.stopPropagation(),
+		onClick: (e) => act(() => useUi.getState().toggleFamilyCollapsed(title), e),
+		onDoubleClick: (e) => e.stopPropagation(),
+		children: folded ? "show " + kids.length : "hide"
+	}) : null;
 	const pchip = kids.length && !pending && !missing && !isLead ? parentChip(inst, kids, nameOf, effectiveActivity, forkBlockReason(inst)) : null;
 	const ship = pending || isLead && lline ? null : shipLine(inst, {
 		act: activity,
@@ -33424,30 +33443,33 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 							})]
 						}),
 						!editing && !ship && lline && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "lineage workers lead-line",
-							title: "Its group: " + (leadRun?.name || "") + "\nClick to open the Thread",
-							role: "button",
-							tabIndex: 0,
-							onClick: (e) => act(() => openThread(title), e),
-							onDoubleClick: (e) => e.stopPropagation(),
-							onKeyDown: (e) => {
-								if (e.key !== "Enter" && e.key !== " ") return;
-								e.preventDefault();
-								e.stopPropagation();
-								openThread(title);
-							},
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: lline.cls || void 0,
-								children: lline.text
-							}), lline.url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-								className: "lead-link",
-								href: lline.url,
-								target: "_blank",
-								rel: "noreferrer",
-								title: lline.url,
-								onClick: (e) => e.stopPropagation(),
-								children: " ↗"
-							})]
+							className: "roll-line",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "lineage workers lead-line",
+								title: "Its group: " + (leadRun?.name || "") + "\nClick to open the Thread",
+								role: "button",
+								tabIndex: 0,
+								onClick: (e) => act(() => openThread(title), e),
+								onDoubleClick: (e) => e.stopPropagation(),
+								onKeyDown: (e) => {
+									if (e.key !== "Enter" && e.key !== " ") return;
+									e.preventDefault();
+									e.stopPropagation();
+									openThread(title);
+								},
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: lline.cls || void 0,
+									children: lline.text
+								}), lline.url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+									className: "lead-link",
+									href: lline.url,
+									target: "_blank",
+									rel: "noreferrer",
+									title: lline.url,
+									onClick: (e) => e.stopPropagation(),
+									children: " ↗"
+								})]
+							}), foldBtn]
 						}),
 						!editing && !ship && !lline && wline && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "lineage " + wline.cls,
@@ -33459,24 +33481,27 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 							title: lineage.title,
 							children: lineage.text
 						}),
-						!editing && roll && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "lineage workers",
-							title: roll.title,
-							role: "button",
-							tabIndex: 0,
-							"aria-label": roll.parts.map((p) => p.text).join(" · ") + " — open the Thread",
-							onClick: (e) => act(() => openThread(title), e),
-							onDoubleClick: (e) => e.stopPropagation(),
-							onKeyDown: (e) => {
-								if (e.key !== "Enter" && e.key !== " ") return;
-								e.preventDefault();
-								e.stopPropagation();
-								openThread(title);
-							},
-							children: roll.parts.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [i > 0 && " · ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: p.cls || void 0,
-								children: p.text
-							})] }, i))
+						!editing && roll && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "roll-line",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "lineage workers",
+								title: roll.title,
+								role: "button",
+								tabIndex: 0,
+								"aria-label": roll.parts.map((p) => p.text).join(" · ") + " — open the Thread",
+								onClick: (e) => act(() => openThread(title), e),
+								onDoubleClick: (e) => e.stopPropagation(),
+								onKeyDown: (e) => {
+									if (e.key !== "Enter" && e.key !== " ") return;
+									e.preventDefault();
+									e.stopPropagation();
+									openThread(title);
+								},
+								children: roll.parts.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [i > 0 && " · ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: p.cls || void 0,
+									children: p.text
+								})] }, i))
+							}), foldBtn]
 						})
 					]
 				}),
@@ -35204,6 +35229,25 @@ function FooterCustomize() {
 	});
 }
 //#endregion
+//#region src/lib/familyFold.ts
+function hideFoldedFamilies(list, folded, keep) {
+	if (!folded.size) return list;
+	const parentOf = /* @__PURE__ */ new Map();
+	for (const e of list) if (e.inst && !e.inst.device && e.inst.parent) parentOf.set(e.inst.title, e.inst.parent);
+	const onRail = new Set(list.filter((e) => e.inst && !e.inst.device).map((e) => e.inst.title));
+	const hidden = (title) => {
+		const seen = /* @__PURE__ */ new Set([title]);
+		let p = parentOf.get(title);
+		while (p && onRail.has(p) && !seen.has(p)) {
+			if (folded.has(p)) return true;
+			seen.add(p);
+			p = parentOf.get(p);
+		}
+		return false;
+	};
+	return list.filter((e) => !e.inst || e.inst.device || e.inst.title === keep || !hidden(e.inst.title));
+}
+//#endregion
 //#region src/components/sidebar/RunGroupHeader.tsx
 function RunGroupHeader({ group, repoPath }) {
 	const toggle = useUi((s) => s.toggleRunCollapsed);
@@ -35965,6 +36009,7 @@ function Hint({ id, children, action, className }) {
 }
 //#endregion
 //#region src/components/sidebar/Sidebar.tsx
+var NO_FOLDS = /* @__PURE__ */ new Set();
 var VIEW_MODES = [
 	"auto",
 	"1",
@@ -36139,7 +36184,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		});
 		return railKeys.filter((k) => byKey.has(k)).map((k) => byKey.get(k));
 	};
-	const localSplit = splitRail(toRail(localRows, winFiltered), runs, {
+	const localSplit = splitRail(hideFoldedFamilies(toRail(localRows, winFiltered), ui.filter ? NO_FOLDS : ui.collapsedFamilies, ui.focused), runs, {
 		collapsed: ui.collapsedRuns,
 		act: effectiveActivity,
 		filtering: !!ui.filter
@@ -38505,6 +38550,22 @@ function normMember(v) {
 		base_sha: strOrNull(o.base_sha)
 	};
 }
+function normFinished(v) {
+	const o = obj$1(v);
+	const title = str$1(o.title).trim();
+	if (!title) return null;
+	return {
+		title,
+		branch: str$1(o.branch),
+		created_at: num$2(o.created_at),
+		ended_at: num$2(o.ended_at),
+		how: str$1(o.how, "deleted"),
+		stage: str$1(o.stage),
+		pr_url: str$1(o.pr_url),
+		diff_stat: normDiffStat(o.diff_stat),
+		last_report: normReport(o.last_report)
+	};
+}
 function normItem(v) {
 	const o = obj$1(v);
 	const id = str$1(o.id);
@@ -38526,10 +38587,12 @@ function normThread(v, title = "") {
 	const o = obj$1(v);
 	const members = Array.isArray(o.members) ? o.members.map(normMember).filter((m) => !!m) : [];
 	const items = Array.isArray(o.items) ? o.items.map(normItem).filter((i) => !!i) : [];
+	const finished = Array.isArray(o.finished) ? o.finished.map(normFinished).filter((f) => !!f) : [];
 	return {
 		title: str$1(o.title, title) || title,
 		parent: str$1(o.parent),
 		members,
+		finished,
 		items,
 		more: o.more === true
 	};
@@ -38595,7 +38658,8 @@ function workerRows(children, members, actOf) {
 			activitySince: Number(merged.activity_since) || 0,
 			report: merged.last_report ?? null,
 			diff: c.diff_stat ?? m?.diff_stat ?? null,
-			baseSha: m?.base_sha ?? null
+			baseSha: m?.base_sha ?? null,
+			stage: c.stage || ""
 		};
 	}).map((r, i) => ({
 		r,
@@ -38612,8 +38676,11 @@ function forkPoint(rows) {
 	return [...shas][0].slice(0, 7);
 }
 var plural$4 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
-function headerSummary(rows) {
-	if (!rows.length) return [];
+function headerSummary(rows, finished = 0) {
+	if (!rows.length) return finished ? [{
+		text: "All " + plural$4(finished, "worker") + " finished",
+		cls: "ok"
+	}] : [];
 	const n = (s) => rows.filter((r) => r.state === s).length;
 	const sha = forkPoint(rows);
 	const parts = [{
@@ -38655,7 +38722,64 @@ function headerSummary(rows) {
 		text: n("idle") + " idle without a report",
 		cls: ""
 	});
+	if (finished) parts.push({
+		text: finished + " finished",
+		cls: "ok"
+	});
 	return parts;
+}
+function progressOf(rows, finished) {
+	const n = (...states) => rows.filter((r) => states.includes(r.state)).length;
+	const finBad = finished.filter((f) => f.last_report?.status === "failed" || f.last_report?.status === "blocked").length;
+	const done = n("done") + finished.length - finBad;
+	const total = rows.length + finished.length;
+	return {
+		total,
+		done,
+		segs: [
+			{
+				key: "done",
+				n: done,
+				label: "done"
+			},
+			{
+				key: "bad",
+				n: n("failed", "blocked") + finBad,
+				label: "failed or blocked"
+			},
+			{
+				key: "needs",
+				n: n("ask"),
+				label: "need your answer"
+			},
+			{
+				key: "working",
+				n: n("working", "limit"),
+				label: "working"
+			},
+			{
+				key: "idle",
+				n: n("idle"),
+				label: "idle without a report"
+			}
+		].filter((s) => s.n > 0),
+		text: total ? `${done} of ${total} done` : ""
+	};
+}
+function finishedStatus(f) {
+	const st = f.last_report?.status || "";
+	if (st === "failed" || st === "blocked") return {
+		word: "reported " + st,
+		cls: "bad"
+	};
+	if (f.last_report) return {
+		word: "reported " + (st || "done"),
+		cls: "ok"
+	};
+	return {
+		word: "no report",
+		cls: ""
+	};
 }
 function since(ts, now = Date.now() / 1e3) {
 	const secs = Math.max(0, Math.floor(now - ts));
@@ -39611,9 +39735,11 @@ function ThreadTab({ title, active }) {
 			if (live.current) setBusy("");
 		}
 	};
-	const summary = headerSummary(workers);
+	const finished = data?.finished ?? [];
+	const summary = headerSummary(workers, finished.length);
+	const progress = progressOf(workers, finished);
 	const entries = logEntries(data?.items ?? [], filter);
-	const hasWorkers = workers.length > 0;
+	const hasWorkers = workers.length > 0 || finished.length > 0;
 	const selfMember = data?.members.find((m) => m.role === "self");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "thread-root",
@@ -39627,24 +39753,28 @@ function ThreadTab({ title, active }) {
 					rows
 				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", {
 					className: "thread-head",
-					children: hasWorkers ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", {
-						className: "thread-title",
-						children: [myName, "'s workers"]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-						className: "thread-sub",
-						children: [
-							summary.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [i > 0 && p.cls !== "sha" ? " · " : "", p.cls === "sha" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", {
-								className: "th-sha",
-								children: p.text
-							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: p.cls ? "th-" + p.cls : void 0,
-								children: p.text
-							})] }, i)),
-							". Buttons below either answer directly or paste a prompt into ",
-							myName,
-							" — nothing is typed without you."
-						]
-					})] }) : parent ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					children: hasWorkers ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", {
+							className: "thread-title",
+							children: [myName, "'s workers"]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "thread-sub",
+							children: [
+								summary.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [i > 0 && p.cls !== "sha" ? " · " : "", p.cls === "sha" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", {
+									className: "th-sha",
+									children: p.text
+								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: p.cls ? "th-" + p.cls : void 0,
+									children: p.text
+								})] }, i)),
+								". Buttons below either answer directly or paste a prompt into ",
+								myName,
+								" — nothing is typed without you."
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ThreadProgress, { p: progress })
+					] }) : parent ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
 							className: "thread-title",
 							children: myName
@@ -39702,7 +39832,7 @@ function ThreadTab({ title, active }) {
 						]
 					})] })
 				}),
-				hasWorkers && !leadOf && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				workers.length > 0 && !leadOf && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 					className: "thread-sec",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "thread-sec-head",
@@ -39746,6 +39876,7 @@ function ThreadTab({ title, active }) {
 						}, w.title))
 					})]
 				}),
+				finished.length > 0 && !leadOf && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FinishedSection, { finished }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 					className: "thread-sec",
 					children: [
@@ -39886,6 +40017,11 @@ function WorkerItem({ row, parentName, busy, pasteBlocked, onDecide, onMerge, on
 						children: ["· ", st.detail]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+					row.stage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "th-w-stage",
+						title: "How far its branch has got",
+						children: stageMeta(row.stage).label
+					}),
 					ds && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "th-w-diff",
 						children: ds
@@ -39941,6 +40077,123 @@ function WorkerItem({ row, parentName, busy, pasteBlocked, onDecide, onMerge, on
 				})]
 			})
 		]
+	});
+}
+function ThreadProgress({ p }) {
+	if (!p.total) return null;
+	const said = p.segs.map((s) => s.n + " " + s.label).join(", ");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "th-progress",
+		role: "img",
+		"aria-label": p.text + " — " + said,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "th-prog-bar",
+			children: p.segs.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "th-prog-seg k-" + s.key,
+				style: { flexGrow: s.n },
+				title: s.n + " " + s.label
+			}, s.key))
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "th-prog-text",
+			title: said,
+			children: p.text
+		})]
+	});
+}
+function FinishedSection({ finished }) {
+	const [open, setOpen] = (0, import_react.useState)(true);
+	const newestFirst = [...finished].reverse();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "thread-sec th-finished",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "thread-sec-head",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "thread-label",
+					children: [
+						"Finished (",
+						finished.length,
+						")"
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "th-btn",
+					"aria-expanded": open,
+					onClick: () => setOpen((o) => !o),
+					children: open ? "Hide" : "Show"
+				})
+			]
+		}), open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "thread-workers",
+			children: newestFirst.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FinishedItem, { f }, f.title + ":" + f.created_at))
+		})]
+	});
+}
+function FinishedItem({ f }) {
+	const st = finishedStatus(f);
+	const ds = diffText(f.diff_stat);
+	const ended = f.ended_at ? " " + since(f.ended_at) + " ago" : "";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "th-worker th-gone is-" + (st.cls || "none"),
+		"data-title": f.title,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "th-w-head",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "th-dot " + st.cls,
+					"aria-hidden": "true"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "th-w-name th-gone-name",
+					title: f.branch ? "Branch " + f.branch : void 0,
+					children: nameOf(f.title)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "th-w-word " + st.cls,
+					children: st.word
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "th-w-detail",
+					children: [
+						"· ",
+						f.how === "closed" ? "closed" : "deleted",
+						ended
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+				f.stage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "th-w-stage",
+					title: "How far its branch got",
+					children: stageMeta(f.stage).label
+				}),
+				ds && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "th-w-diff",
+					children: ds
+				})
+			]
+		}), (f.last_report?.summary || f.pr_url || f.how === "closed") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "th-w-body",
+			children: [f.last_report?.summary && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "th-w-summary",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Spans, { text: f.last_report.summary })
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "th-w-acts",
+				children: [f.pr_url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "th-btn",
+					onClick: () => window.open(f.pr_url, "_blank"),
+					children: "Open PR ↗"
+				}), f.how === "closed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "th-btn",
+					title: "Closed sessions can be reopened from Recently closed",
+					onClick: () => useUi.getState().openDialogFor("recent"),
+					children: "Recently closed…"
+				})]
+			})]
+		})]
 	});
 }
 function LogCard({ entry }) {
@@ -64241,14 +64494,7 @@ function General(_) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReduceMotionRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeABreakRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IdleFlockRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-			className: "pr-advanced agent-mcp-fold",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Agent orchestration (MindFlock MCP)" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "pr-advanced-body",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentMcpRows, {})
-			})]
-		})
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IdleFlockRow, {})
 	] });
 }
 function ResumeOnUsageResetRow() {
@@ -64277,85 +64523,6 @@ function ResumeOnUsageResetRow() {
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
 	});
-}
-var AGENT_MCP_SCOPE_OPTIONS = [
-	{
-		value: "",
-		label: "Default (children)"
-	},
-	{
-		value: "children",
-		label: "Children — manage only sessions it spawned"
-	},
-	{
-		value: "readonly",
-		label: "Read-only — look and check its inbox, no messaging"
-	},
-	{
-		value: "all",
-		label: "All — manage any session"
-	}
-];
-function AgentMcpRows() {
-	const s = useSettings();
-	const { data: config } = useConfig();
-	const stored = s.get("general", "agent_mcp");
-	const on = stored !== false && stored !== "false" && stored !== "0";
-	const envOff = on && config?.caps?.agent_mcp?.enabled === false;
-	const providers = config?.caps?.agent_mcp?.providers;
-	const clis = providers && providers.length ? providers.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" and ") : "Claude and Codex";
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-row set-switch-row agent-mcp-row",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "notif-rule-text",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Give agents the MindFlock MCP (agent-to-agent messaging and orchestration)"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "set-hint notif-rule-desc",
-					children: [
-						"Launches each ",
-						clis,
-						" session with MindFlock's MCP server attached, so its agent can see the other sessions, message them, and spawn and steer worker sessions of its own. Applies on each session's next launch — running agents keep what they started with."
-					]
-				}),
-				envOff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint notif-rule-desc agent-mcp-env-off",
-					children: "Off for now: the server was started with MINDFLOCK_AGENT_MCP=0, which overrides this switch."
-				})
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "ca-switch",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "checkbox",
-				checked: on,
-				onChange: (e) => {
-					s.saveField("general", "agent_mcp", e.target.checked);
-					toast(e.target.checked ? "Agent MCP on — from each session's next launch" : "Agent MCP off — from each session's next launch");
-				}
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
-		})]
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "set-row",
-		title: "How far an agent may MANAGE other sessions through the MCP (answer their prompts, kill them, re-parent them). Reading the flock and messaging are allowed in every scope except read-only.",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Agent MCP scope"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-				group: "general",
-				field: "agent_mcp_scope",
-				options: AGENT_MCP_SCOPE_OPTIONS
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint",
-				children: "Applies on each session's next launch. A guard-rail, not a security boundary."
-			})
-		]
-	})] });
 }
 function GettingStarted() {
 	const enabled = useUi((s) => s.hintsEnabled);
@@ -66261,6 +66428,176 @@ function LocalModel(_) {
 			})]
 		})
 	] });
+}
+//#endregion
+//#region src/components/settings/screens/AgentOrchestration.tsx
+function AgentOrchestration(_) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Agent orchestration"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint orch-intro",
+			children: "Agents can see the other sessions, message them, and start and steer sub-sessions of their own through the MindFlock MCP."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentMcpRows, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Spawn limits"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint orch-intro",
+			children: "Guard-rails on how far one orchestrator can fan out. A change applies to the next spawn. Leave a box empty for the default."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CapRow, {
+			cap: "max_children",
+			field: "agent_max_children",
+			label: "Sub-sessions per orchestrator",
+			hint: "How many live sub-sessions one session may have at once. Also the most pieces a split can make."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CapRow, {
+			cap: "max_spawned",
+			field: "agent_max_spawned",
+			label: "Agent-spawned sessions in total",
+			hint: "Every agent-started session alive at once, across all orchestrators. Raise it with the per-orchestrator cap, or it stops you first."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CapRow, {
+			cap: "max_spawn_depth",
+			field: "agent_max_spawn_depth",
+			label: "Nesting depth",
+			hint: "How deep spawns may nest: 1 = only your sessions spawn, 2 = their sub-sessions may spawn too, and so on."
+		})
+	] });
+}
+function CapRow({ cap, field, label, hint }) {
+	const { data: config } = useConfig();
+	const now = config?.caps?.orchestration?.[cap];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row orch-cap-row",
+		title: hint,
+		"data-cap": cap,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: label
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+				group: "general",
+				field,
+				type: "number",
+				placeholder: now ? String(now.default) : ""
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				children: [
+					hint,
+					now && now.source === "env" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "orch-cap-env",
+						children: [
+							" ",
+							"Now ",
+							now.value,
+							": the server was started with ",
+							now.env,
+							"=",
+							now.value,
+							", which overrides this box."
+						]
+					}),
+					now && now.source !== "env" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "orch-cap-now",
+						children: [
+							" ",
+							"Now ",
+							now.value,
+							now.source === "default" ? " (default)" : "",
+							"."
+						]
+					})
+				]
+			})
+		]
+	});
+}
+var AGENT_MCP_SCOPE_OPTIONS = [
+	{
+		value: "",
+		label: "Default (children)"
+	},
+	{
+		value: "children",
+		label: "Children — manage only sessions it spawned"
+	},
+	{
+		value: "readonly",
+		label: "Read-only — look and check its inbox, no messaging"
+	},
+	{
+		value: "all",
+		label: "All — manage any session"
+	}
+];
+function AgentMcpRows() {
+	const s = useSettings();
+	const { data: config } = useConfig();
+	const stored = s.get("general", "agent_mcp");
+	const on = stored !== false && stored !== "false" && stored !== "0";
+	const envOff = on && config?.caps?.agent_mcp?.enabled === false;
+	const providers = config?.caps?.agent_mcp?.providers;
+	const clis = providers && providers.length ? providers.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" and ") : "Claude and Codex";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row agent-mcp-row",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Give agents the MindFlock MCP (agent-to-agent messaging and orchestration)"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint notif-rule-desc",
+					children: [
+						"Launches each ",
+						clis,
+						" session with MindFlock's MCP server attached, so its agent can see the other sessions, message them, and spawn and steer worker sessions of its own. Applies on each session's next launch — running agents keep what they started with."
+					]
+				}),
+				envOff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint notif-rule-desc agent-mcp-env-off",
+					children: "Off for now: the server was started with MINDFLOCK_AGENT_MCP=0, which overrides this switch."
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				checked: on,
+				onChange: (e) => {
+					s.saveField("general", "agent_mcp", e.target.checked);
+					toast(e.target.checked ? "Agent MCP on — from each session's next launch" : "Agent MCP off — from each session's next launch");
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		title: "How far an agent may MANAGE other sessions through the MCP (answer their prompts, kill them, re-parent them). Reading the flock and messaging are allowed in every scope except read-only.",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Agent MCP scope"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+				group: "general",
+				field: "agent_mcp_scope",
+				options: AGENT_MCP_SCOPE_OPTIONS
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "Applies on each session's next launch. A guard-rail, not a security boundary."
+			})
+		]
+	})] });
 }
 //#endregion
 //#region src/components/settings/screens/Workspace.tsx
@@ -68739,6 +69076,12 @@ var SCREENS = [
 		label: "Local model",
 		group: "Agents",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LocalModel, { ...p })
+	},
+	{
+		key: "orchestration",
+		label: "Agent orchestration",
+		group: "Agents",
+		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentOrchestration, { ...p })
 	},
 	{
 		key: "workspace",

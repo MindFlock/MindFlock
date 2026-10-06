@@ -11,7 +11,7 @@
  * Normalizers never throw: a half-built response renders as "less", not a
  * crash (the rule codemapApi.ts and flockActions.ts follow). */
 
-import type { DiffStat, Instance, LastReport, ThreadItem, ThreadMember, ThreadResponse } from "../api/types";
+import type { DiffStat, Instance, LastReport, ThreadItem, ThreadMember, ThreadResponse, FinishedChild } from "../api/types";
 import { childrenOf, workerState, type WorkerState } from "./agentMessages";
 
 type Obj = Record<string, unknown>;
@@ -57,6 +57,23 @@ function normMember(v: unknown): ThreadMember | null {
   };
 }
 
+function normFinished(v: unknown): FinishedChild | null {
+  const o = obj(v);
+  const title = str(o.title).trim();
+  if (!title) return null;
+  return {
+    title,
+    branch: str(o.branch),
+    created_at: num(o.created_at),
+    ended_at: num(o.ended_at),
+    how: str(o.how, "deleted"),
+    stage: str(o.stage),
+    pr_url: str(o.pr_url),
+    diff_stat: normDiffStat(o.diff_stat),
+    last_report: normReport(o.last_report),
+  };
+}
+
 function normItem(v: unknown): ThreadItem | null {
   const o = obj(v);
   const id = str(o.id);
@@ -82,7 +99,17 @@ export function normThread(v: unknown, title = ""): ThreadResponse {
     ? o.members.map(normMember).filter((m): m is ThreadMember => !!m)
     : [];
   const items = Array.isArray(o.items) ? o.items.map(normItem).filter((i): i is ThreadItem => !!i) : [];
-  return { title: str(o.title, title) || title, parent: str(o.parent), members, items, more: o.more === true };
+  const finished = Array.isArray(o.finished)
+    ? o.finished.map(normFinished).filter((f): f is FinishedChild => !!f)
+    : [];
+  return {
+    title: str(o.title, title) || title,
+    parent: str(o.parent),
+    members,
+    finished,
+    items,
+    more: o.more === true,
+  };
 }
 
 /** Prepend an older page to the items already shown (paging back with
@@ -108,6 +135,7 @@ export type FamilyInst = Pick<Instance, "title"> &
       | "last_report"
       | "diff_stat"
       | "provider"
+      | "stage"
     >
   >;
 
@@ -175,6 +203,8 @@ export interface WorkerRow {
   report: LastReport | null;
   diff: DiffStat | null;
   baseSha: string | null;
+  /** Its git stage (agent → committed → pushed → pr), "" when unknown. */
+  stage: string;
 }
 
 /** Where each state sorts: needs-you first, then the reported ones (what you
@@ -212,6 +242,7 @@ export function workerRows(
       report: merged.last_report ?? null,
       diff: c.diff_stat ?? m?.diff_stat ?? null,
       baseSha: m?.base_sha ?? null,
+      stage: c.stage || "",
     };
   });
   return rows
@@ -244,9 +275,10 @@ export interface SummaryPart {
 const plural = (n: number, word: string) => n + " " + word + (n === 1 ? "" : "s");
 
 /** "3 workers forked from 3f2c1a0 · 1 needs your answer · 1 reported ·
- * 1 working" — every non-zero group, most urgent first. */
-export function headerSummary(rows: readonly WorkerRow[]): SummaryPart[] {
-  if (!rows.length) return [];
+ * 1 working · 2 finished" — every non-zero group, most urgent first;
+ * `finished` counts the workers already closed or deleted. */
+export function headerSummary(rows: readonly WorkerRow[], finished = 0): SummaryPart[] {
+  if (!rows.length) return finished ? [{ text: "All " + plural(finished, "worker") + " finished", cls: "ok" }] : [];
   const n = (s: WorkerState) => rows.filter((r) => r.state === s).length;
   const sha = forkPoint(rows);
   const parts: SummaryPart[] = [{ text: plural(rows.length, "worker") + (sha ? " forked from " : ""), cls: "" }];
@@ -261,7 +293,48 @@ export function headerSummary(rows: readonly WorkerRow[]): SummaryPart[] {
   if (n("limit")) parts.push({ text: n("limit") + " at the usage limit", cls: "" });
   if (n("working")) parts.push({ text: n("working") + " working", cls: "" });
   if (n("idle")) parts.push({ text: n("idle") + " idle without a report", cls: "" });
+  if (finished) parts.push({ text: finished + " finished", cls: "ok" });
   return parts;
+}
+
+/** One coloured run of the progress bar. */
+export interface ProgressSeg {
+  key: "done" | "bad" | "needs" | "working" | "idle";
+  n: number;
+  label: string;
+}
+
+/** The orchestrator's progress over ALL its workers, live and finished:
+ * "3 of 5 done", and the bar's runs in order done → failed/blocked → needs
+ * you → working → idle. Done = a live worker that reported done, or a
+ * finished one that did not report failed/blocked (closing a worker is how
+ * an orchestrator says it is through with it). */
+export function progressOf(
+  rows: readonly WorkerRow[],
+  finished: readonly FinishedChild[]
+): { total: number; done: number; segs: ProgressSeg[]; text: string } {
+  const n = (...states: WorkerState[]) => rows.filter((r) => states.includes(r.state)).length;
+  const finBad = finished.filter(
+    (f) => f.last_report?.status === "failed" || f.last_report?.status === "blocked"
+  ).length;
+  const done = n("done") + finished.length - finBad;
+  const total = rows.length + finished.length;
+  const segs: ProgressSeg[] = [
+    { key: "done" as const, n: done, label: "done" },
+    { key: "bad" as const, n: n("failed", "blocked") + finBad, label: "failed or blocked" },
+    { key: "needs" as const, n: n("ask"), label: "need your answer" },
+    { key: "working" as const, n: n("working", "limit"), label: "working" },
+    { key: "idle" as const, n: n("idle"), label: "idle without a report" },
+  ].filter((s) => s.n > 0);
+  return { total, done, segs, text: total ? `${done} of ${total} done` : "" };
+}
+
+/** A finished worker's one-line status: its report, else that it never sent one. */
+export function finishedStatus(f: FinishedChild): { word: string; cls: string } {
+  const st = f.last_report?.status || "";
+  if (st === "failed" || st === "blocked") return { word: "reported " + st, cls: "bad" };
+  if (f.last_report) return { word: "reported " + (st || "done"), cls: "ok" };
+  return { word: "no report", cls: "" };
 }
 
 /** "40s", "6m", "2h", "3d" since `ts` (epoch seconds). */

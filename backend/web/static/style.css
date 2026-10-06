@@ -1484,6 +1484,16 @@ p.set-hint {
   user-select: none;
   cursor: default;
 }
+
+/* Settings → Agent orchestration: the one-line intro under each heading, and
+   the cap rows' "now N" / env-override line. */
+.orch-intro {
+  margin: -2px 0 10px;
+}
+
+.orch-cap-row .orch-cap-env {
+  color: var(--warn, #d9a33b);
+}
 }
 
 /* 040 */
@@ -3989,6 +3999,47 @@ p.set-hint {
 .inst .lineage .lead-link {
   color: var(--accent);
   text-decoration: none;
+}
+
+/* An orchestrator's roll-up line and its "hide" / "show N" fold toggle
+   (lib/familyFold). Words, not a chevron: the row's › is its actions menu. */
+.inst .roll-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.inst .roll-line > .lineage {
+  flex: 0 1 auto;
+}
+
+.inst .fold-kids {
+  flex: none;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.inst .fold-kids:hover,
+.inst .fold-kids:focus-visible {
+  opacity: 1;
+  color: var(--text);
+  background: var(--panel-2);
+  outline: none;
+}
+
+/* Folded: the toggle is how you know rows are tucked away, so it shows. */
+.inst .fold-kids[aria-expanded="false"] {
+  opacity: 1;
+  color: rgba(var(--accent-rgb), 0.95);
 }
 }
 
@@ -11624,6 +11675,77 @@ button.ct-chip:hover {
 
 .thread-root .th-w-detail.th-ok {
   color: var(--green);
+}
+
+/* ---- Progress: every worker, live and finished, as one bar ------------------- */
+
+.th-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.th-prog-bar {
+  flex: 1;
+  display: flex;
+  gap: 2px;
+  height: 8px;
+  min-width: 80px;
+  max-width: 420px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--panel-2);
+}
+
+.th-prog-seg {
+  flex-basis: 0;
+  min-width: 6px;
+}
+
+.th-prog-seg.k-done {
+  background: var(--green);
+}
+
+.th-prog-seg.k-bad {
+  background: var(--red);
+}
+
+.th-prog-seg.k-needs {
+  background: var(--gold);
+}
+
+.th-prog-seg.k-working {
+  background: var(--accent);
+}
+
+.th-prog-seg.k-idle {
+  background: var(--border);
+}
+
+.th-prog-text {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* A worker's git stage, beside its diff size. A word, not a chip. */
+.th-w-stage {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ---- Finished: workers that were closed or deleted ----------------------------- */
+
+.th-gone {
+  opacity: 0.85;
+}
+
+.th-gone .th-gone-name {
+  font-weight: 600;
+  color: var(--text);
 }
 }
 

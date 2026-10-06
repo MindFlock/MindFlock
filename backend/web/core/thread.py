@@ -29,6 +29,7 @@ import re
 import threading
 from typing import Dict, List, Mapping, Optional, Tuple
 
+from backend.web.core import finished_children as _finished_children
 from backend.web.core import lineage as _lineage
 from backend.web.core import mailbox as _mailbox
 
@@ -150,6 +151,19 @@ def note_seed(title: str, created_at: Optional[float], prompt: str) -> None:
         _SEEDS[title] = (created_at, text[: SEED_CHARS * 4])
 
 
+def seed_for(title: str, created_at: Optional[float]) -> str:
+    """The create-time memo of ``title``'s seed prompt (same session — matched
+    on its creation time), capped like :func:`seed_text`; "" when unknown.
+    For a session that is already gone (no instance left to ask)."""
+    with _SEEDS_LOCK:
+        hit = _SEEDS.get(title)
+    if hit is None or not (
+        hit[0] is None or created_at is None or hit[0] == created_at
+    ):
+        return ""
+    return _cap(hit[1], SEED_CHARS)
+
+
 def seed_text(inst) -> str:
     """The first :data:`SEED_CHARS` characters of ``inst``'s seed prompt, or
     "" when it can't be found: the create-time memo (same session — matched
@@ -259,6 +273,47 @@ def _message_item(msg: Mapping) -> dict:
     }
 
 
+def _finished(title: str, created: Optional[float]) -> List[dict]:
+    """``title``'s finished children for the thread body, each with its
+    newest report to ``title`` re-read from the mailbox (it may have arrived
+    after the last snapshot the record was built from)."""
+    out = []
+    for e in _finished_children.for_parent(title, created):
+        report = report_json(
+            _mailbox.last_result(title, e.get("title"), since=e.get("created_at"))
+        )
+        out.append(
+            {
+                "title": e.get("title") or "",
+                "branch": e.get("branch") or "",
+                "created_at": e.get("created_at"),
+                "ended_at": e.get("ended_at"),
+                "how": e.get("how") or "deleted",
+                "stage": e.get("stage") or "",
+                "pr_url": e.get("pr_url") or "",
+                "diff_stat": e.get("diff_stat"),
+                "last_report": report or e.get("last_report"),
+                "seed": e.get("seed") or "",
+            }
+        )
+    return out
+
+
+def _finished_spawn_item(parent: str, f: Mapping) -> dict:
+    created = f.get("created_at") or 0.0
+    return {
+        "type": "spawn",
+        "id": "spawn:%s:%d" % (f.get("title"), int(created * 1000)),
+        "ts": created,
+        "from": parent,
+        "to": f.get("title"),
+        "text": f.get("seed") or "",
+        "status": None,
+        "state": None,
+        "base_sha": None,
+    }
+
+
 #: The creation time (epoch ms) an item id carries: a message's
 #: ``m<ms>_<seq>``, a spawn record's ``spawn:<title>:<ms>``.
 _ID_MS = re.compile(r"^m(\d+)_\d+$|^spawn:.*:(\d+)$")
@@ -300,11 +355,14 @@ def thread(title: str, limit: int = DEFAULT_LIMIT, before: Optional[str] = None)
     member's activity) — call via ``asyncio.to_thread``. The caller has
     already checked that ``title`` is a live session.
 
-    ``body``: ``{"title", "parent", "members", "items", "more"}`` — members
-    are the session (role ``self``), its live parent and its live children;
+    ``body``: ``{"title", "parent", "members", "finished", "items",
+    "more"}`` — members are the session (role ``self``), its live parent and
+    its live children; ``finished`` are its children that were closed or
+    deleted (``finished_children``), oldest first, each with its final report;
     items (oldest first, newest last) are a spawn record per parent→child
-    edge in the family plus every message between two members sent since
-    both were created (a reused title doesn't inherit its namesake's mail).
+    edge in the family — finished children included — plus every message
+    between two of them sent since both were created (a reused title doesn't
+    inherit its namesake's mail).
     ``before`` pages back from an item id — one evicted meanwhile by the
     time its id carries; an id with neither is the error."""
     srv = _server()
@@ -330,6 +388,15 @@ def thread(title: str, limit: int = DEFAULT_LIMIT, before: Optional[str] = None)
     # deleted namesake. A message counts only when it is no older than BOTH
     # ends of it — the same rule ``last_report`` applies to the row.
     created = {t: _created_epoch(instances.get(t)) for t in family}
+    finished = _finished(title, _created_epoch(me))
+    for f in finished:
+        # A finished child whose title a live member reuses stays listed, but
+        # the live one owns the title's mail and spawn record.
+        if f["title"] in created:
+            continue
+        family.append(f["title"])
+        created[f["title"]] = f["created_at"]
+        items.append(_finished_spawn_item(title, f))
     items.extend(
         _message_item(m) for m in _mailbox.between(family) if _current(m, created)
     )
@@ -343,6 +410,7 @@ def thread(title: str, limit: int = DEFAULT_LIMIT, before: Optional[str] = None)
         "title": title,
         "parent": parent,
         "members": members,
+        "finished": finished,
         "items": page,
         "more": more,
     }, None
