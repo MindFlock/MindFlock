@@ -52,7 +52,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 	}
 })();
 //#endregion
-//#region ../../app/frontend/node_modules/react/cjs/react.production.js
+//#region node_modules/react/cjs/react.production.js
 /**
 * @license React
 * react.production.js
@@ -439,12 +439,12 @@ var require_react_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region ../../app/frontend/node_modules/react/index.js
+//#region node_modules/react/index.js
 var require_react = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_production();
 }));
 //#endregion
-//#region ../../app/frontend/node_modules/scheduler/cjs/scheduler.production.js
+//#region node_modules/scheduler/cjs/scheduler.production.js
 /**
 * @license React
 * scheduler.production.js
@@ -699,12 +699,12 @@ var require_scheduler_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region ../../app/frontend/node_modules/scheduler/index.js
+//#region node_modules/scheduler/index.js
 var require_scheduler = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_scheduler_production();
 }));
 //#endregion
-//#region ../../app/frontend/node_modules/react-dom/cjs/react-dom.production.js
+//#region node_modules/react-dom/cjs/react-dom.production.js
 /**
 * @license React
 * react-dom.production.js
@@ -857,7 +857,7 @@ var require_react_dom_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region ../../app/frontend/node_modules/react-dom/index.js
+//#region node_modules/react-dom/index.js
 var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -871,7 +871,7 @@ var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_production();
 }));
 //#endregion
-//#region ../../app/frontend/node_modules/react-dom/cjs/react-dom-client.production.js
+//#region node_modules/react-dom/cjs/react-dom-client.production.js
 /**
 * @license React
 * react-dom-client.production.js
@@ -11446,7 +11446,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	};
 }));
 //#endregion
-//#region ../../app/frontend/node_modules/react-dom/client.js
+//#region node_modules/react-dom/client.js
 var require_client = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -11460,7 +11460,7 @@ var require_client = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_client_production();
 }));
 //#endregion
-//#region ../../app/frontend/node_modules/react/cjs/react-jsx-runtime.production.js
+//#region node_modules/react/cjs/react-jsx-runtime.production.js
 /**
 * @license React
 * react-jsx-runtime.production.js
@@ -11495,12 +11495,12 @@ var require_react_jsx_runtime_production = /* @__PURE__ */ __commonJSMin(((expor
 	exports.jsxs = jsxProd;
 }));
 //#endregion
-//#region ../../app/frontend/node_modules/react/jsx-runtime.js
+//#region node_modules/react/jsx-runtime.js
 var require_jsx_runtime = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_jsx_runtime_production();
 }));
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/QueryClientProvider.js
+//#region node_modules/@tanstack/react-query/build/modern/QueryClientProvider.js
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var import_jsx_runtime = require_jsx_runtime();
 var QueryClientContext = import_react.createContext(void 0);
@@ -11523,7 +11523,7 @@ var QueryClientProvider = ({ client, children }) => {
 	});
 };
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/timeoutManager.js
+//#region node_modules/@tanstack/query-core/build/modern/timeoutManager.js
 var defaultTimeoutProvider = {
 	setTimeout: (callback, delay) => setTimeout(callback, delay),
 	clearTimeout: (timeoutId) => clearTimeout(timeoutId),
@@ -11554,7 +11554,7 @@ function systemSetTimeoutZero(callback) {
 	setTimeout(callback, 0);
 }
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/utils.js
+//#region node_modules/@tanstack/query-core/build/modern/utils.js
 var isServer$1 = typeof window === "undefined" || "Deno" in globalThis;
 function noop() {}
 function functionalUpdate(updater, input) {
@@ -11717,11 +11717,11 @@ function addConsumeAwareSignal(object, getSignal, onCancelled) {
 	return object;
 }
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/environmentManager.js
+//#region node_modules/@tanstack/query-core/build/modern/environmentManager.js
 var isServerFn = () => isServer$1;
 var isServer = () => isServerFn();
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/subscribable.js
+//#region node_modules/@tanstack/query-core/build/modern/subscribable.js
 var Subscribable = class {
 	constructor() {
 		this.listeners = /* @__PURE__ */ new Set();
@@ -11742,7 +11742,7 @@ var Subscribable = class {
 	onUnsubscribe() {}
 };
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/focusManager.js
+//#region node_modules/@tanstack/query-core/build/modern/focusManager.js
 var FocusManager = class extends Subscribable {
 	#focused;
 	#cleanup;
@@ -11795,7 +11795,7 @@ var FocusManager = class extends Subscribable {
 };
 var focusManager = new FocusManager();
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/notifyManager.js
+//#region node_modules/@tanstack/query-core/build/modern/notifyManager.js
 var defaultScheduler = systemSetTimeoutZero;
 function createNotifyManager() {
 	let queue = [];
@@ -11857,7 +11857,7 @@ function createNotifyManager() {
 }
 var notifyManager = createNotifyManager();
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/onlineManager.js
+//#region node_modules/@tanstack/query-core/build/modern/onlineManager.js
 var OnlineManager = class extends Subscribable {
 	#online = true;
 	#cleanup;
@@ -11905,7 +11905,7 @@ var OnlineManager = class extends Subscribable {
 };
 var onlineManager = new OnlineManager();
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/retryer.js
+//#region node_modules/@tanstack/query-core/build/modern/retryer.js
 function defaultRetryDelay(failureCount) {
 	return Math.min(1e3 * 2 ** failureCount, 3e4);
 }
@@ -12020,7 +12020,7 @@ function createRetryer(config) {
 	};
 }
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/removable.js
+//#region node_modules/@tanstack/query-core/build/modern/removable.js
 var Removable = class {
 	#gcTimeout;
 	destroy() {
@@ -12043,7 +12043,7 @@ var Removable = class {
 	}
 };
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/infiniteQueryBehavior.js
+//#region node_modules/@tanstack/query-core/build/modern/infiniteQueryBehavior.js
 function infiniteQueryBehavior(pages) {
 	return { onFetch: (context, query) => {
 		const options = context.options;
@@ -12122,7 +12122,7 @@ function getPreviousPageParam(options, { pages, pageParams }) {
 	return pages.length > 0 ? options.getPreviousPageParam?.(pages[0], pages, pageParams[0], pageParams) : void 0;
 }
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/query.js
+//#region node_modules/@tanstack/query-core/build/modern/query.js
 var Query = class extends Removable {
 	#queryType;
 	#initialState;
@@ -12495,7 +12495,7 @@ function getDefaultState$1(options) {
 	};
 }
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/queryObserver.js
+//#region node_modules/@tanstack/query-core/build/modern/queryObserver.js
 var QueryObserver = class extends Subscribable {
 	#client;
 	#currentQuery = void 0;
@@ -12824,7 +12824,7 @@ function isStale(query, options) {
 	return resolveQueryValue(options.enabled, query) !== false && query.isStaleByTime(resolveQueryValue(options.staleTime, query));
 }
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/mutation.js
+//#region node_modules/@tanstack/query-core/build/modern/mutation.js
 var Mutation = class extends Removable {
 	#client;
 	#observers;
@@ -13041,7 +13041,7 @@ function getDefaultState() {
 	};
 }
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/mutationCache.js
+//#region node_modules/@tanstack/query-core/build/modern/mutationCache.js
 var MutationCache = class extends Subscribable {
 	#mutations;
 	#scopes;
@@ -13148,7 +13148,7 @@ function scopeFor(mutation) {
 	return mutation.options.scope?.id;
 }
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/queryCache.js
+//#region node_modules/@tanstack/query-core/build/modern/queryCache.js
 var QueryCache = class extends Subscribable {
 	#queries;
 	constructor(config = {}) {
@@ -13240,7 +13240,7 @@ var QueryCache = class extends Subscribable {
 	}
 };
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/queryClient.js
+//#region node_modules/@tanstack/query-core/build/modern/queryClient.js
 var QueryClient = class {
 	#queryCache;
 	#mutationCache;
@@ -13489,12 +13489,12 @@ var QueryClient = class {
 	}
 };
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/IsRestoringProvider.js
+//#region node_modules/@tanstack/react-query/build/modern/IsRestoringProvider.js
 var IsRestoringContext = import_react.createContext(false);
 var useIsRestoring = () => import_react.useContext(IsRestoringContext);
 IsRestoringContext.Provider;
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/QueryErrorResetBoundary.js
+//#region node_modules/@tanstack/react-query/build/modern/QueryErrorResetBoundary.js
 function createValue() {
 	let isReset = false;
 	return {
@@ -13512,7 +13512,7 @@ function createValue() {
 var QueryErrorResetBoundaryContext = import_react.createContext(createValue());
 var useQueryErrorResetBoundary = () => import_react.useContext(QueryErrorResetBoundaryContext);
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/errorBoundaryUtils.js
+//#region node_modules/@tanstack/react-query/build/modern/errorBoundaryUtils.js
 var ensurePreventErrorBoundaryRetry = (options, errorResetBoundary, query) => {
 	const throwOnError = query?.state.error && typeof options.throwOnError === "function" ? shouldThrowError(options.throwOnError, [query.state.error, query]) : options.throwOnError;
 	if (options.suspense || throwOnError) {
@@ -13528,7 +13528,7 @@ var getHasError = ({ result, errorResetBoundary, throwOnError, query, suspense }
 	return result.isError && !errorResetBoundary.isReset() && !result.isFetching && query && (suspense && result.data === void 0 || shouldThrowError(throwOnError, [result.error, query]));
 };
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/suspense.js
+//#region node_modules/@tanstack/react-query/build/modern/suspense.js
 var ensureSuspenseTimers = (defaultedOptions) => {
 	if (defaultedOptions.suspense) {
 		const MIN_SUSPENSE_TIME_MS = 1e3;
@@ -13543,7 +13543,7 @@ var fetchOptimistic = (defaultedOptions, observer, errorResetBoundary) => observ
 	errorResetBoundary.clearReset();
 });
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/useBaseQuery.js
+//#region node_modules/@tanstack/react-query/build/modern/useBaseQuery.js
 function useBaseQuery(options, Observer, queryClient) {
 	const isRestoring = useIsRestoring();
 	const errorResetBoundary = useQueryErrorResetBoundary();
@@ -13577,12 +13577,12 @@ function useBaseQuery(options, Observer, queryClient) {
 	return !defaultedOptions.notifyOnChangeProps ? observer.trackResult(result) : result;
 }
 //#endregion
-//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/useQuery.js
+//#region node_modules/@tanstack/react-query/build/modern/useQuery.js
 function useQuery(options, queryClient) {
 	return useBaseQuery(options, QueryObserver, queryClient);
 }
 //#endregion
-//#region ../../app/frontend/node_modules/@xterm/xterm/lib/xterm.mjs
+//#region node_modules/@xterm/xterm/lib/xterm.mjs
 var import_client = require_client();
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
@@ -23946,7 +23946,7 @@ var Dl = class extends D {
 	}
 };
 //#endregion
-//#region ../../app/frontend/node_modules/@xterm/addon-fit/lib/addon-fit.mjs
+//#region node_modules/@xterm/addon-fit/lib/addon-fit.mjs
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
 * @license MIT
@@ -23989,7 +23989,7 @@ var o = class {
 	}
 };
 //#endregion
-//#region ../../app/frontend/node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs
+//#region node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
 * @license MIT
@@ -25423,7 +25423,7 @@ function freshStage(title) {
 	return p;
 }
 //#endregion
-//#region ../../app/frontend/node_modules/zustand/esm/vanilla.mjs
+//#region node_modules/zustand/esm/vanilla.mjs
 var createStoreImpl = (createState) => {
 	let state;
 	const listeners = /* @__PURE__ */ new Set();
@@ -25452,7 +25452,7 @@ var createStoreImpl = (createState) => {
 };
 var createStore = ((createState) => createState ? createStoreImpl(createState) : createStoreImpl);
 //#endregion
-//#region ../../app/frontend/node_modules/zustand/esm/react.mjs
+//#region node_modules/zustand/esm/react.mjs
 var identity = (arg) => arg;
 function useStore(api, selector = identity) {
 	const slice = import_react.useSyncExternalStore(api.subscribe, import_react.useCallback(() => selector(api.getState()), [api, selector]), import_react.useCallback(() => selector(api.getInitialState()), [api, selector]));
