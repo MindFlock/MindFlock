@@ -129,7 +129,9 @@ describe("PromptsPanel source", () => {
     expect(src).not.toContain('"/send"');
     expect(barSrc as string).not.toContain('"/send"');
     expect(src).toContain("pastePrompt as pasteInto");
-    expect(barSrc as string).toContain("pastePrompt(target, running, p.prompt)");
+    // The bar pastes into the focused session only (no picker), then focuses it.
+    expect(barSrc as string).toContain("pastePrompt(target, [], p.prompt)");
+    expect(barSrc as string).not.toContain("prompts-bar-target");
   });
   it("closes the Prompts dialog only while it is still the open dialog", () => {
     expect(src).toContain('useUi.getState().openDialog === "prompts"');

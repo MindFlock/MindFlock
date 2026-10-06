@@ -34960,7 +34960,7 @@ function PromptsMenu({ anchor, mine, builtins, targetLabel, onPick, onManage, on
 			row(entries[manageAt], manageAt),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "pb-foot",
-				children: "Pasted, not sent — press Enter in the session to send it."
+				children: "Pasted into the session you are in, not sent — press Enter to send it."
 			})
 		]
 	}), document.body);
@@ -34969,11 +34969,8 @@ function PromptsMenu({ anchor, mine, builtins, targetLabel, onPick, onManage, on
 //#region src/components/sidebar/PromptsBar.tsx
 function PromptsBar() {
 	const focused = useUi((s) => s.focused);
-	const railOrder = useUi((s) => s.railOrder);
-	const aliases = useUi((s) => s.aliases);
+	const alias = useUi((s) => focused ? s.aliases[focused] : void 0);
 	const openDialogFor = useUi((s) => s.openDialogFor);
-	const { data: instances } = useInstances();
-	const [picked, setPicked] = (0, import_react.useState)(null);
 	const [saved, setSaved] = (0, import_react.useState)(() => loadUserPresets());
 	const [menuOpen, setMenuOpen] = (0, import_react.useState)(false);
 	const menuBtn = (0, import_react.useRef)(null);
@@ -34986,14 +34983,11 @@ function PromptsBar() {
 			window.removeEventListener("storage", reload);
 		};
 	}, []);
-	const running = (0, import_react.useMemo)(() => runningTitles(instances, railOrder), [instances, railOrder]);
-	const options = (0, import_react.useMemo)(() => promptTargets(focused, running, (t) => aliases[t] || windowName(t)), [
-		focused,
-		running,
-		aliases
-	]);
-	const target = resolveTarget(picked, focused, options);
-	const targetLabel = options.find((o) => o.value === target)?.label || "";
+	const target = focused || "";
+	const targetLabel = focused ? alias || windowName(focused) : "";
+	const paste = async (p) => {
+		if (await pastePrompt(target, [], p.prompt)) focusTerm(target);
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "prompts-bar",
 		children: [
@@ -35001,33 +34995,12 @@ function PromptsBar() {
 				className: "pb-label",
 				children: "Prompts"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "pb-target",
-				title: "Where a picked prompt is pasted",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					"aria-hidden": "true",
-					children: "→"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-					id: "prompts-bar-target",
-					"aria-label": "Paste into",
-					value: target,
-					disabled: !options.length,
-					onChange: (e) => setPicked(e.target.value || null),
-					children: [!target && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-						value: "",
-						children: "no session selected"
-					}), options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-						value: o.value,
-						children: o.label
-					}, o.value))]
-				})]
-			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				id: "prompts-bar-menu",
 				ref: menuBtn,
 				type: "button",
 				className: "as-toggle" + (menuOpen ? " active" : ""),
-				title: "Pick a saved prompt to paste (or manage them)",
+				title: targetLabel ? `Paste a saved prompt into ${targetLabel} (or manage them)` : "Select a session, then paste a saved prompt into it",
 				"aria-haspopup": "menu",
 				"aria-expanded": menuOpen,
 				onClick: () => setMenuOpen((o) => !o),
@@ -35038,7 +35011,7 @@ function PromptsBar() {
 				mine: saved,
 				builtins: BUILTIN_PRESETS,
 				targetLabel,
-				onPick: (p) => void pastePrompt(target, running, p.prompt),
+				onPick: (p) => void paste(p),
 				onManage: () => openDialogFor("prompts"),
 				onClose: (refocus) => {
 					setMenuOpen(false);
@@ -68914,7 +68887,7 @@ var NOTES = {
 	},
 	assistant: { text: "Chat, a todo list, and its editable agent file" },
 	prompts: {
-		text: "Your saved prompts — pick one to paste it into any session",
+		text: "Your saved prompts — pick one to paste it into the session you are in",
 		link: {
 			label: "Manage prompts",
 			dialog: "prompts"

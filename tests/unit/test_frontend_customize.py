@@ -263,17 +263,18 @@ def test_saved_prompts_own_pasting_into_running_sessions():
     assert "pastedAllToast(ok.length)" in paste
     assert "errorPop(" in paste
     assert "if (busy) return false;" in paste
-    for path in (
-        "components/dialogs/PromptsDialog.tsx",
-        "components/sidebar/PromptsBar.tsx",
-    ):
-        src = _code(path)
-        assert '"/send"' not in src, path
-        assert "useInstances()" in src and '"/api/instances"' not in src, path
-        assert "promptTargets(focused, running," in src, path
+    src = _code("components/dialogs/PromptsDialog.tsx")
+    assert '"/send"' not in src
+    assert "useInstances()" in src and '"/api/instances"' not in src
+    assert "promptTargets(focused, running," in src
     bar = _code("components/sidebar/PromptsBar.tsx")
-    assert 'id="prompts-bar-target"' in bar
-    assert "pastePrompt(target, running, p.prompt)" in bar
+    assert '"/send"' not in bar
+    # The bar pastes into the FOCUSED session only, then hands it the keyboard
+    # so Enter sends; other targets (or all running) are the dialog's job.
+    assert 'const target = focused || "";' in bar
+    assert "if (await pastePrompt(target, [], p.prompt)) focusTerm(target);" in bar
+    assert "prompts-bar-target" not in bar and "<select" not in bar
+    assert "promptTargets(" not in bar
     assert 'openDialogFor("prompts")' in bar
     assert "PRESETS_CHANGED" in bar
     assert 'case "prompts":' in _code("components/sidebar/SidebarBars.tsx")
@@ -292,7 +293,7 @@ def test_saved_prompts_own_pasting_into_running_sessions():
 
 
 def test_prompts_bar_is_one_row_with_the_prompts_in_a_menu():
-    """The bar is ONE row (label · target · "Paste ▾") at any number of saved
+    """The bar is ONE row (label · "Paste ▾") at any number of saved
     prompts. Wrapping chips stacked one per line in the 260px sidebar (prompt
     names are phrases) and took ~150px of the session list."""
     bar = _code("components/sidebar/PromptsBar.tsx")
@@ -303,6 +304,7 @@ def test_prompts_bar_is_one_row_with_the_prompts_in_a_menu():
     assert "pb-chip" not in bar and "prompts-bar-manage" not in bar
     css = _src("components/sidebar/toolbars.css")
     assert "pb-chip" not in css and "max-height: 104px" not in css
+    assert ".pb-target" not in css
     bar_rule = re.search(r"#prompts-bar \{(.*?)\}", css, flags=re.S).group(1)
     assert "flex-direction: column" not in bar_rule
     menu = _code("components/sidebar/PromptsMenu.tsx")

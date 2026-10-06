@@ -188,11 +188,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Customize chooses which bars the sidebar shows**, and says when each
     one has something to show. The footer's **⚙ Customize** opens it.
   - **Saved prompts are a one-row sidebar bar**, switched on in Customize
-    like the Assistant: pick a target (the selected session, another running
-    one or all of them), open **Paste ▾** and pick a prompt to paste it
-    there; nothing is sent until you press Enter. The prompts live in that
-    menu rather than under the bar, so it stays one row however many you
-    save. The menu's **Manage prompts…** opens the Prompts dialog to add,
+    like the Assistant: open **Paste ▾** and pick a prompt to paste it into
+    the session you are in, with the keyboard moved there; nothing is sent
+    until you press Enter. The prompts live in that menu rather than under
+    the bar, so it stays one row however many you save. (Pasting into
+    another session, or all running ones, is the Prompts dialog's.) The menu's **Manage prompts…** opens the Prompts dialog to add,
     read or delete them (the templates manager's send row is gone: a template only
     starts a session).
   - **A shorter top bar**: New, Intake, Verify (always, with its due

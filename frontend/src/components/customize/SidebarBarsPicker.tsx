@@ -38,7 +38,7 @@ const NOTES: Record<string, BarNote> = {
   },
   assistant: { text: "Chat, a todo list, and its editable agent file" },
   prompts: {
-    text: "Your saved prompts — pick one to paste it into any session",
+    text: "Your saved prompts — pick one to paste it into the session you are in",
     link: { label: "Manage prompts", dialog: "prompts" },
   },
 };
