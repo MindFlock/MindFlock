@@ -68455,7 +68455,14 @@ function ShellEngineUpdate() {
 			className: "error",
 			children: "The update didn’t finish. Try again, or check Settings → System logs."
 		})
-	] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+	] }) : info?.checked === false ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "set-hint",
+		children: [
+			"Couldn’t check for engine updates right now",
+			info.current ? ` (this engine is ${info.current})` : "",
+			". Try again in a minute."
+		]
+	}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 		className: "set-hint",
 		children: [
 			"The engine is up to date",

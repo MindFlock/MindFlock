@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The desktop app offers engine updates when Tailscale mode is on.** Its
+  update check asked the server for the engine version through an endpoint
+  the access-token gate refuses, so with Tailscale mode on it never learned
+  the version and Settings → Advanced said "The engine is up to date" on an
+  outdated engine. It now asks the public identity endpoint, so the
+  one-click **Update engine** offer appears, and a check that genuinely could
+  not run says so instead of claiming the engine is current.
+
+### Changed
+
+- **Larger top-bar labels.** New, Intake, Verify and Settings read at 13px,
+  the wordmark's size, instead of 11px.
+
 ## [0.6.0] - 2026-10-06
 
 ### Added
