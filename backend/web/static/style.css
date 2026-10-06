@@ -2782,7 +2782,8 @@ p.set-hint {
   gap: 6px;
 }
 
-#assistant-bar .as-toggle {
+#assistant-bar .as-toggle,
+#prompts-bar .as-toggle {
   cursor: pointer;
   font-size: 11px;
   padding: 4px 10px;
@@ -2797,8 +2798,84 @@ p.set-hint {
   color: #fff;
 }
 
-#assistant-bar .as-toggle:hover {
+#assistant-bar .as-toggle:hover,
+#prompts-bar .as-toggle:hover {
   border-color: var(--accent);
+}
+
+/* Prompts bar: the Assistant bar's head (label · target · Manage) over a
+   wrap of one-click chips. The chip list caps its height and scrolls so a long
+   library never pushes the sessions off screen. */
+#prompts-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#prompts-bar .pb-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+#prompts-bar .pb-label {
+  font-weight: 600;
+}
+
+#prompts-bar .pb-target {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+
+#prompts-bar .pb-target select {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  text-overflow: ellipsis;
+}
+
+#prompts-bar .pb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  /* Four whole rows of chips (22px + 5px gaps), then scroll. */
+  max-height: 104px;
+  overflow-y: auto;
+}
+
+#prompts-bar .pb-chip {
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#prompts-bar .pb-chip:hover,
+#prompts-bar .pb-chip:focus-visible {
+  border-color: var(--accent);
+  outline: none;
 }
 
 /* Generic addon bars (rendered by core/slots.js for auto-surfaced addons,
@@ -3036,8 +3113,8 @@ p.set-hint {
   color: var(--red, #e55);
 }
 
-/* Prompts library — the Prompts tab of Customize. The frame (border, width,
-   height) is the dialog's; the panel fills the tab and only the list scrolls. */
+/* Prompts library — the Prompts dialog's body. The frame (border, width,
+   height) is the dialog's; the panel fills it and only the list scrolls. */
 #prompts-panel {
   flex: 1;
   min-height: 0;
@@ -3906,32 +3983,34 @@ p.set-hint {
 #view-modes {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 #view-modes .vm-label {
   font-size: 11px;
   color: var(--muted);
+  margin-right: 2px;
 }
 
-/* One quiet picker, not a row of five toggles: the view is set once and left. */
-#view-modes select {
+#view-modes .vm {
   flex: 1;
-  min-width: 0;
   cursor: pointer;
-  font: inherit;
   font-size: 11px;
-  padding: 3px 6px;
+  padding: 4px 0;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
 }
 
-#view-modes select:hover,
-#view-modes select:focus-visible {
+#view-modes .vm:hover {
   border-color: var(--accent);
-  outline: none;
+}
+
+#view-modes .vm.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 
@@ -17867,18 +17946,16 @@ span.pr-open-ref.ob-ref {
 
 @layer components{
 
-/* Customize: Sidebar · Prompts in one dialog.
- *
- * The frame mirrors #intake-panel (the same family as Verify): the shared
- * `.ws-head`, `.ik-subtitle` and `.ik-tab` kit, one fixed height for both tabs
- * so switching never makes the dialog jump, and only the tab's own list
- * scrolls. Imported right after Outbox.css, so it can shape the panels that
- * live inside it. */
+/* Customize (which bars the sidebar shows) and the Prompts dialog share one
+ * frame. It mirrors #intake-panel (the same family as Verify): the shared
+ * `.ws-head` and `.ik-subtitle` kit, and only the inner list scrolls.
+ * Imported right after Outbox.css, so it can shape the panels inside it. */
 
-#customize-panel {
+#customize-panel,
+#prompts-dialog-panel {
   width: 760px;
   max-width: 94vw;
-  height: min(620px, 86vh);
+  max-height: 86vh;
   padding: 18px 22px 20px;
   border-radius: 12px;
   background: var(--panel);
@@ -17891,22 +17968,21 @@ span.pr-open-ref.ob-ref {
   box-sizing: border-box;
 }
 
-#customize-panel .ws-head {
+#prompts-dialog-panel {
+  height: min(620px, 86vh);
+}
+
+#customize-panel .ws-head,
+#prompts-dialog-panel .ws-head {
   display: flex;
   align-items: baseline;
   gap: 9px;
 }
 
-#customize-panel .ws-head h2 {
+#customize-panel .ws-head h2,
+#prompts-dialog-panel .ws-head h2 {
   margin: 0;
   font-size: 14.5px;
-}
-
-#customize-tabs {
-  display: flex;
-  gap: 4px;
-  flex: none;
-  border-bottom: 1px solid var(--border);
 }
 
 #customize-body {
@@ -17916,8 +17992,8 @@ span.pr-open-ref.ob-ref {
   flex-direction: column;
 }
 
-/* A tab's own first line (the Prompts target). */
-#customize-body .cz-tab-head {
+/* The Prompts dialog's first line (its target). */
+#prompts-panel .cz-tab-head {
   display: flex;
   align-items: baseline;
   gap: 9px;

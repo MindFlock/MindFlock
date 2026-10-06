@@ -26,6 +26,7 @@ import { NewSessionDialog } from "./components/dialogs/NewSessionDialog";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { IntakeDialog } from "./components/intake/IntakeDialog";
 import { CustomizeDialog } from "./components/customize/CustomizeDialog";
+import { PromptsDialog } from "./components/dialogs/PromptsDialog";
 import { VerifyDialog } from "./components/dialogs/VerifyDialog";
 import { CommitDialog } from "./components/dialogs/CommitDialog";
 import { MakePrDialog } from "./components/dialogs/MakePrDialog";
@@ -264,8 +265,8 @@ export default function App() {
       <NewSessionDialog />
       <SettingsDialog onOpenSysLogsPane={() => toggleSpecial("syslogs")} />
       <IntakeDialog />
-      {/* Sidebar · Prompts — mounts for "customize" and "prompts". */}
       <CustomizeDialog />
+      <PromptsDialog />
       <VerifyDialog />
       <CommitDialog />
       <MakePrDialog />

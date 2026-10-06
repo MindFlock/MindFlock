@@ -52,13 +52,7 @@ interface Props {
 /** The footer's view picker. One <select> rather than five buttons: it is a
  * set-once preference, and a row of five toggles read as the sidebar's loudest
  * control. */
-const VIEW_MODES: Array<{ value: ViewMode; label: string }> = [
-  { value: "auto", label: "Auto — fit every window" },
-  { value: "1" as ViewMode, label: "1 window" },
-  { value: "2", label: "2 windows" },
-  { value: "4", label: "4 windows" },
-  { value: "9", label: "9 windows" },
-];
+const VIEW_MODES: ViewMode[] = ["auto", "1" as ViewMode, "2", "4", "9"];
 
 export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   const { data: instances = [] } = useInstances();
@@ -588,23 +582,21 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
           id="view-modes"
           title="Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots"
         >
-          <label className="vm-label" htmlFor="view-mode-select">
-            View
-          </label>
-          <select
-            id="view-mode-select"
-            value={ui.viewMode}
-            onChange={(e) => ui.setViewMode(e.target.value as ViewMode)}
-          >
-            {VIEW_MODES.map((v) => (
-              <option key={v.value} value={v.value}>
-                {v.label}
-              </option>
-            ))}
-          </select>
+          <span className="vm-label">View</span>
+          {VIEW_MODES.map((v) => (
+            <button
+              key={v}
+              type="button"
+              className={"vm" + (ui.viewMode === v ? " active" : "")}
+              data-view={v}
+              onClick={() => ui.setViewMode(v)}
+            >
+              {v === "auto" ? "Auto" : v}
+            </button>
+          ))}
         </div>
         <Hint id="customize" className="hint-footer">
-          Extra sidebar bars and your saved prompts live under <b>Customize</b>.
+          More sidebar bars — like <b>Prompts</b> — are under <b>⚙ Customize</b>.
         </Hint>
         <div className="foot-row foot-tools">
           <span id="session-count">{countHead}</span>
@@ -616,7 +608,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
             title="Keyboard shortcuts (?)"
             onClick={() => ui.openDialogFor("shortcuts")}
           >
-            Shortcuts
+            ⌨ Shortcuts
           </button>
         </div>
       </footer>

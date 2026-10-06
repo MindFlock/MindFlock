@@ -13,7 +13,7 @@ import {
 describe("defaultHiddenBars", () => {
   it("hides every bar that is not one of the essentials", () => {
     const hidden = defaultHiddenBars();
-    expect(hidden).toEqual(["pr-review", "issue-handling", "verify"]);
+    expect(hidden).toEqual(["pr-review", "issue-handling", "verify", "prompts"]);
     // The headline feature's bar is visible out of the box.
     expect(DEFAULT_VISIBLE_BARS).toContain("ingestion");
     // The essentials are never hidden.
@@ -33,6 +33,7 @@ describe("SIDEBAR_BARS labels", () => {
     expect(label("usage")).toBe("Usage");
     expect(label("verify")).toBe("Verify");
     expect(label("assistant")).toBe("Assistant");
+    expect(label("prompts")).toBe("Prompts");
   });
 
   it("keeps the owner's out-of-the-box set: Usage, Tickets and Assistant", () => {
@@ -46,6 +47,8 @@ describe("orderedSections", () => {
   });
   it("honors the saved order, then appends the sections it omitted", () => {
     expect(orderedSections([SESSIONS_KEY, "usage"])).toEqual([
+      // A late bar (Prompts) the save never saw lands just above the sessions.
+      "prompts",
       "sessions",
       "usage",
       "ingestion",
@@ -63,8 +66,17 @@ describe("orderedSections", () => {
       "pr-review",
       "issue-handling",
       "verify",
+      "prompts",
       "sessions",
     ]);
+  });
+  it("puts a late bar the saved order never mentioned right above the sessions", () => {
+    // A save from before Prompts existed: bars, sessions, nothing below.
+    const save = ["usage", "ingestion", "assistant", SESSIONS_KEY];
+    const out = orderedSections(save);
+    expect(out.indexOf("prompts")).toBe(out.indexOf(SESSIONS_KEY) - 1);
+    // Once the order mentions it, its saved place wins.
+    expect(orderedSections([SESSIONS_KEY, "prompts", "usage"]).slice(0, 2)).toEqual([SESSIONS_KEY, "prompts"]);
   });
   it("dedupes repeated keys, keeping the first occurrence", () => {
     expect(orderedSections(["usage", "usage"])).toEqual(DEFAULT_SECTION_ORDER);
@@ -99,6 +111,7 @@ describe("orderedSections with extension bars", () => {
     // Missing built-ins still tail-append (existing behaviour); the extra lands
     // just above the anchor, which here is the first slot.
     expect(out).toEqual([
+      "prompts",
       DB,
       "sessions",
       "usage",
@@ -110,8 +123,8 @@ describe("orderedSections with extension bars", () => {
     ]);
   });
   it("keeps the saved place of an extension bar the order already mentions", () => {
-    const out = orderedSections([DB, "usage", SESSIONS_KEY], [DB]);
-    expect(out.slice(0, 3)).toEqual([DB, "usage", SESSIONS_KEY]);
+    const out = orderedSections([DB, "usage", "prompts", SESSIONS_KEY], [DB]);
+    expect(out.slice(0, 4)).toEqual([DB, "usage", "prompts", SESSIONS_KEY]);
     // It is not inserted a second time.
     expect(out.filter((k) => k === DB)).toHaveLength(1);
   });
@@ -141,6 +154,7 @@ describe("orderedBars", () => {
   it("mirrors a reordered section list, still dropping sessions", () => {
     const bars = orderedBars([SESSIONS_KEY, "assistant", "usage"]);
     expect(bars.map((b) => b.key)).toEqual([
+      "prompts",
       "assistant",
       "usage",
       "ingestion",

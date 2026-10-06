@@ -164,25 +164,26 @@ def test_the_door_style_exists():
     assert "#mindflock-bar .dc-open:focus-visible" in css
 
 
-def test_the_assistant_bar_is_chat_and_todo():
+def test_the_assistant_bar_is_chat_todo_and_agent():
     bars = _code("components/sidebar/SidebarBars.tsx")
     assert 'id="assistant-chat-btn"' in bars
     assert 'id="assistant-todo-btn"' in bars
-    assert "assistant-agent-btn" not in bars
+    assert 'id="assistant-agent-btn"' in bars
+    assert 'openDialogFor("assistant-agent")' in bars
 
 
 # --- Sidebar: fewer banners, one link, one picker ------------------------------------
 
 
-def test_no_welcome_hint_and_the_customize_hint_names_its_two_tabs():
+def test_no_welcome_hint_and_the_customize_hint_points_at_prompts():
     side = _code("components/sidebar/Sidebar.tsx")
     assert 'id="welcome"' not in side
     assert "Welcome to MindFlock." not in side
-    assert "Extra sidebar bars and your saved prompts live under" in side
+    assert "More sidebar bars" in side and "Prompts" in side
     assert "Outbox" not in side
     footer = _code("components/sidebar/FooterCustomize.tsx")
-    assert 'title="Sidebar bars and saved prompts"' in footer
-    assert "⚙ Customize" not in side
+    assert "⚙ Customize" in footer
+    assert "Choose which bars the sidebar shows" in footer
 
 
 def test_doctor_chip_waits_out_the_first_run_card():
@@ -218,16 +219,21 @@ def test_recently_closed_is_a_link_under_the_list_never_a_rail_row():
     assert "window.mindflock?.events" in side
 
 
-def test_the_view_picker_is_one_select():
+def test_the_view_buttons_and_footer_icons_are_back():
+    """The owner missed them: Auto / 1 / 2 / 4 / 9 as buttons, and the ⚙ / ⌨
+    glyphs on Customize and Shortcuts."""
     side = _code("components/sidebar/Sidebar.tsx")
     assert 'id="view-modes"' in side
-    assert 'id="view-mode-select"' in side
-    assert "Auto — fit every window" in side
-    assert 'className={"vm"' not in side
-    assert "⌨ Shortcuts" not in side
-    css = _src("components/sidebar/Sidebar.css")
-    assert "#foot-customize-menu" not in css
-    assert ".fc-item" not in css
+    assert 'className={"vm" + (ui.viewMode === v ? " active" : "")}' in side
+    assert "onClick={() => ui.setViewMode(v)}" in side
+    assert 'id="view-mode-select"' not in side
+    assert "⌨ Shortcuts" in side
+    css = _src("components/sidebar/SidebarRow.css")
+    assert "#view-modes .vm.active {" in css
+    assert "#view-modes select" not in css
+    side_css = _src("components/sidebar/Sidebar.css")
+    assert "#foot-customize-menu" not in side_css
+    assert ".fc-item" not in side_css
 
 
 # --- Rail rows ------------------------------------------------------------------------
@@ -372,6 +378,7 @@ def test_the_rename_kept_every_persisted_bar_key():
         "issue-handling",
         "verify",
         "assistant",
+        "prompts",
     ]
 
 
@@ -390,14 +397,10 @@ def test_the_assistant_bar_no_longer_takes_a_dialog_opener():
     )
 
 
-def test_the_view_select_offers_the_five_modes_and_writes_through():
+def test_the_view_buttons_offer_the_five_modes():
     side = _code("components/sidebar/Sidebar.tsx")
-    modes = side[
-        side.index("const VIEW_MODES") : side.index(
-            "];", side.index("const VIEW_MODES")
-        )
-    ]
-    assert re.findall(r'value: "([^"]+)"', modes) == ["auto", "1", "2", "4", "9"]
-    assert "value={ui.viewMode}" in side
-    assert "onChange={(e) => ui.setViewMode(e.target.value as ViewMode)}" in side
-    assert 'htmlFor="view-mode-select"' in side
+    assert (
+        'const VIEW_MODES: ViewMode[] = ["auto", "1" as ViewMode, "2", "4", "9"];'
+        in side
+    )
+    assert '{v === "auto" ? "Auto" : v}' in side

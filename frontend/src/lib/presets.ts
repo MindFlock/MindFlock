@@ -50,12 +50,17 @@ export function loadUserPresets(): Preset[] {
   }
 }
 
+/** Fired on document after every save, so a surface that lists the saved
+ * prompts (the sidebar Prompts bar) repaints when another one edits them. */
+export const PRESETS_CHANGED = "mf-presets-changed";
+
 export function saveUserPresets(list: Preset[]) {
   try {
     localStorage.setItem(PRESET_STORE_KEY, JSON.stringify(list));
   } catch {
     /* storage unavailable */
   }
+  if (typeof document !== "undefined") document.dispatchEvent(new Event(PRESETS_CHANGED));
 }
 
 /** Option values are "b:<name>" / "u:<name>" so the two namespaces can share

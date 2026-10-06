@@ -52,7 +52,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 	}
 })();
 //#endregion
-//#region node_modules/react/cjs/react.production.js
+//#region ../../app/frontend/node_modules/react/cjs/react.production.js
 /**
 * @license React
 * react.production.js
@@ -439,12 +439,12 @@ var require_react_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region node_modules/react/index.js
+//#region ../../app/frontend/node_modules/react/index.js
 var require_react = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_production();
 }));
 //#endregion
-//#region node_modules/scheduler/cjs/scheduler.production.js
+//#region ../../app/frontend/node_modules/scheduler/cjs/scheduler.production.js
 /**
 * @license React
 * scheduler.production.js
@@ -699,12 +699,12 @@ var require_scheduler_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region node_modules/scheduler/index.js
+//#region ../../app/frontend/node_modules/scheduler/index.js
 var require_scheduler = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_scheduler_production();
 }));
 //#endregion
-//#region node_modules/react-dom/cjs/react-dom.production.js
+//#region ../../app/frontend/node_modules/react-dom/cjs/react-dom.production.js
 /**
 * @license React
 * react-dom.production.js
@@ -857,7 +857,7 @@ var require_react_dom_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region node_modules/react-dom/index.js
+//#region ../../app/frontend/node_modules/react-dom/index.js
 var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -871,7 +871,7 @@ var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_production();
 }));
 //#endregion
-//#region node_modules/react-dom/cjs/react-dom-client.production.js
+//#region ../../app/frontend/node_modules/react-dom/cjs/react-dom-client.production.js
 /**
 * @license React
 * react-dom-client.production.js
@@ -11446,7 +11446,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	};
 }));
 //#endregion
-//#region node_modules/react-dom/client.js
+//#region ../../app/frontend/node_modules/react-dom/client.js
 var require_client = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -11460,7 +11460,7 @@ var require_client = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_client_production();
 }));
 //#endregion
-//#region node_modules/react/cjs/react-jsx-runtime.production.js
+//#region ../../app/frontend/node_modules/react/cjs/react-jsx-runtime.production.js
 /**
 * @license React
 * react-jsx-runtime.production.js
@@ -11495,12 +11495,12 @@ var require_react_jsx_runtime_production = /* @__PURE__ */ __commonJSMin(((expor
 	exports.jsxs = jsxProd;
 }));
 //#endregion
-//#region node_modules/react/jsx-runtime.js
+//#region ../../app/frontend/node_modules/react/jsx-runtime.js
 var require_jsx_runtime = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_jsx_runtime_production();
 }));
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/QueryClientProvider.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/QueryClientProvider.js
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var import_jsx_runtime = require_jsx_runtime();
 var QueryClientContext = import_react.createContext(void 0);
@@ -11523,7 +11523,7 @@ var QueryClientProvider = ({ client, children }) => {
 	});
 };
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/timeoutManager.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/timeoutManager.js
 var defaultTimeoutProvider = {
 	setTimeout: (callback, delay) => setTimeout(callback, delay),
 	clearTimeout: (timeoutId) => clearTimeout(timeoutId),
@@ -11554,7 +11554,7 @@ function systemSetTimeoutZero(callback) {
 	setTimeout(callback, 0);
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/utils.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/utils.js
 var isServer$1 = typeof window === "undefined" || "Deno" in globalThis;
 function noop() {}
 function functionalUpdate(updater, input) {
@@ -11717,11 +11717,11 @@ function addConsumeAwareSignal(object, getSignal, onCancelled) {
 	return object;
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/environmentManager.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/environmentManager.js
 var isServerFn = () => isServer$1;
 var isServer = () => isServerFn();
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/subscribable.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/subscribable.js
 var Subscribable = class {
 	constructor() {
 		this.listeners = /* @__PURE__ */ new Set();
@@ -11742,7 +11742,7 @@ var Subscribable = class {
 	onUnsubscribe() {}
 };
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/focusManager.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/focusManager.js
 var FocusManager = class extends Subscribable {
 	#focused;
 	#cleanup;
@@ -11795,7 +11795,7 @@ var FocusManager = class extends Subscribable {
 };
 var focusManager = new FocusManager();
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/notifyManager.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/notifyManager.js
 var defaultScheduler = systemSetTimeoutZero;
 function createNotifyManager() {
 	let queue = [];
@@ -11857,7 +11857,7 @@ function createNotifyManager() {
 }
 var notifyManager = createNotifyManager();
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/onlineManager.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/onlineManager.js
 var OnlineManager = class extends Subscribable {
 	#online = true;
 	#cleanup;
@@ -11905,7 +11905,7 @@ var OnlineManager = class extends Subscribable {
 };
 var onlineManager = new OnlineManager();
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/retryer.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/retryer.js
 function defaultRetryDelay(failureCount) {
 	return Math.min(1e3 * 2 ** failureCount, 3e4);
 }
@@ -12020,7 +12020,7 @@ function createRetryer(config) {
 	};
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/removable.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/removable.js
 var Removable = class {
 	#gcTimeout;
 	destroy() {
@@ -12043,7 +12043,7 @@ var Removable = class {
 	}
 };
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/infiniteQueryBehavior.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/infiniteQueryBehavior.js
 function infiniteQueryBehavior(pages) {
 	return { onFetch: (context, query) => {
 		const options = context.options;
@@ -12122,7 +12122,7 @@ function getPreviousPageParam(options, { pages, pageParams }) {
 	return pages.length > 0 ? options.getPreviousPageParam?.(pages[0], pages, pageParams[0], pageParams) : void 0;
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/query.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/query.js
 var Query = class extends Removable {
 	#queryType;
 	#initialState;
@@ -12495,7 +12495,7 @@ function getDefaultState$1(options) {
 	};
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/queryObserver.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/queryObserver.js
 var QueryObserver = class extends Subscribable {
 	#client;
 	#currentQuery = void 0;
@@ -12824,7 +12824,7 @@ function isStale(query, options) {
 	return resolveQueryValue(options.enabled, query) !== false && query.isStaleByTime(resolveQueryValue(options.staleTime, query));
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/mutation.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/mutation.js
 var Mutation = class extends Removable {
 	#client;
 	#observers;
@@ -13041,7 +13041,7 @@ function getDefaultState() {
 	};
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/mutationCache.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/mutationCache.js
 var MutationCache = class extends Subscribable {
 	#mutations;
 	#scopes;
@@ -13148,7 +13148,7 @@ function scopeFor(mutation) {
 	return mutation.options.scope?.id;
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/queryCache.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/queryCache.js
 var QueryCache = class extends Subscribable {
 	#queries;
 	constructor(config = {}) {
@@ -13240,7 +13240,7 @@ var QueryCache = class extends Subscribable {
 	}
 };
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/queryClient.js
+//#region ../../app/frontend/node_modules/@tanstack/query-core/build/modern/queryClient.js
 var QueryClient = class {
 	#queryCache;
 	#mutationCache;
@@ -13489,12 +13489,12 @@ var QueryClient = class {
 	}
 };
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/IsRestoringProvider.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/IsRestoringProvider.js
 var IsRestoringContext = import_react.createContext(false);
 var useIsRestoring = () => import_react.useContext(IsRestoringContext);
 IsRestoringContext.Provider;
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/QueryErrorResetBoundary.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/QueryErrorResetBoundary.js
 function createValue() {
 	let isReset = false;
 	return {
@@ -13512,7 +13512,7 @@ function createValue() {
 var QueryErrorResetBoundaryContext = import_react.createContext(createValue());
 var useQueryErrorResetBoundary = () => import_react.useContext(QueryErrorResetBoundaryContext);
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/errorBoundaryUtils.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/errorBoundaryUtils.js
 var ensurePreventErrorBoundaryRetry = (options, errorResetBoundary, query) => {
 	const throwOnError = query?.state.error && typeof options.throwOnError === "function" ? shouldThrowError(options.throwOnError, [query.state.error, query]) : options.throwOnError;
 	if (options.suspense || throwOnError) {
@@ -13528,7 +13528,7 @@ var getHasError = ({ result, errorResetBoundary, throwOnError, query, suspense }
 	return result.isError && !errorResetBoundary.isReset() && !result.isFetching && query && (suspense && result.data === void 0 || shouldThrowError(throwOnError, [result.error, query]));
 };
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/suspense.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/suspense.js
 var ensureSuspenseTimers = (defaultedOptions) => {
 	if (defaultedOptions.suspense) {
 		const MIN_SUSPENSE_TIME_MS = 1e3;
@@ -13543,7 +13543,7 @@ var fetchOptimistic = (defaultedOptions, observer, errorResetBoundary) => observ
 	errorResetBoundary.clearReset();
 });
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/useBaseQuery.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/useBaseQuery.js
 function useBaseQuery(options, Observer, queryClient) {
 	const isRestoring = useIsRestoring();
 	const errorResetBoundary = useQueryErrorResetBoundary();
@@ -13577,12 +13577,12 @@ function useBaseQuery(options, Observer, queryClient) {
 	return !defaultedOptions.notifyOnChangeProps ? observer.trackResult(result) : result;
 }
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/useQuery.js
+//#region ../../app/frontend/node_modules/@tanstack/react-query/build/modern/useQuery.js
 function useQuery(options, queryClient) {
 	return useBaseQuery(options, QueryObserver, queryClient);
 }
 //#endregion
-//#region node_modules/@xterm/xterm/lib/xterm.mjs
+//#region ../../app/frontend/node_modules/@xterm/xterm/lib/xterm.mjs
 var import_client = require_client();
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
@@ -23946,7 +23946,7 @@ var Dl = class extends D {
 	}
 };
 //#endregion
-//#region node_modules/@xterm/addon-fit/lib/addon-fit.mjs
+//#region ../../app/frontend/node_modules/@xterm/addon-fit/lib/addon-fit.mjs
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
 * @license MIT
@@ -23989,7 +23989,7 @@ var o = class {
 	}
 };
 //#endregion
-//#region node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs
+//#region ../../app/frontend/node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
 * @license MIT
@@ -25423,7 +25423,7 @@ function freshStage(title) {
 	return p;
 }
 //#endregion
-//#region node_modules/zustand/esm/vanilla.mjs
+//#region ../../app/frontend/node_modules/zustand/esm/vanilla.mjs
 var createStoreImpl = (createState) => {
 	let state;
 	const listeners = /* @__PURE__ */ new Set();
@@ -25452,7 +25452,7 @@ var createStoreImpl = (createState) => {
 };
 var createStore = ((createState) => createState ? createStoreImpl(createState) : createStoreImpl);
 //#endregion
-//#region node_modules/zustand/esm/react.mjs
+//#region ../../app/frontend/node_modules/zustand/esm/react.mjs
 var identity = (arg) => arg;
 function useStore(api, selector = identity) {
 	const slice = import_react.useSyncExternalStore(api.subscribe, import_react.useCallback(() => selector(api.getState()), [api, selector]), import_react.useCallback(() => selector(api.getInitialState()), [api, selector]));
@@ -25597,8 +25597,13 @@ var SIDEBAR_BARS = [
 	{
 		key: "assistant",
 		label: "Assistant"
+	},
+	{
+		key: "prompts",
+		label: "Prompts"
 	}
 ];
+var LATE_BARS = /* @__PURE__ */ new Set(["prompts"]);
 var DEFAULT_VISIBLE_BARS = [
 	"usage",
 	"ingestion",
@@ -25619,10 +25624,13 @@ function orderedSections(order, extraKeys = []) {
 		out.push(key);
 		seen.add(key);
 	}
+	const lateMissing = [];
 	for (const key of DEFAULT_SECTION_ORDER) if (!seen.has(key)) {
-		out.push(key);
+		if (order.length && LATE_BARS.has(key)) lateMissing.push(key);
+		else out.push(key);
 		seen.add(key);
 	}
+	if (lateMissing.length) out.splice(out.indexOf(SESSIONS_KEY), 0, ...lateMissing);
 	const missingExtras = extraKeys.filter((key) => {
 		if (seen.has(key)) return false;
 		seen.add(key);
@@ -28951,6 +28959,7 @@ var MODAL_DOM_IDS = [
 	"device-dialog",
 	"intake-dialog",
 	"customize-dialog",
+	"prompts-dialog",
 	"verify-dialog",
 	"red-zones-dialog",
 	"break-screen",
@@ -34651,6 +34660,219 @@ function PrReviewBar() {
 	});
 }
 //#endregion
+//#region src/lib/promptTargets.ts
+var ALL_RUNNING = "*";
+function isRunningTarget(row) {
+	if (!row || !row.title) return false;
+	if (isVerifySession(String(row.title))) return false;
+	if (row.status === "paused") return false;
+	return row.status === "running" || !!row.started;
+}
+function runningTitles(rows, railOrder = []) {
+	const titles = (rows || []).filter(isRunningTarget).map((r) => String(r.title));
+	const pos = (t) => {
+		const i = railOrder.indexOf(t);
+		return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+	};
+	return titles.map((t, i) => ({
+		t,
+		i
+	})).sort((a, b) => pos(a.t) - pos(b.t) || a.i - b.i).map((x) => x.t);
+}
+function promptTargets(focused, running, nameOf) {
+	const out = [];
+	if (focused) out.push({
+		value: focused,
+		label: nameOf(focused)
+	});
+	for (const t of running) if (t !== focused) out.push({
+		value: t,
+		label: nameOf(t)
+	});
+	if (running.length >= 2) out.push({
+		value: ALL_RUNNING,
+		label: `All running sessions (${running.length})`
+	});
+	return out;
+}
+function resolveTarget(picked, focused, options) {
+	if (picked && options.some((o) => o.value === picked)) return picked;
+	return focused || "";
+}
+async function pasteIntoAll(titles, send) {
+	const settled = await Promise.allSettled(titles.map((t) => send(t)));
+	const out = {
+		ok: [],
+		failed: []
+	};
+	settled.forEach((r, i) => {
+		if (r.status === "fulfilled") out.ok.push(titles[i]);
+		else out.failed.push({
+			title: titles[i],
+			error: String(r.reason?.message || r.reason || "failed")
+		});
+	});
+	return out;
+}
+function pastedAllToast(n) {
+	return n === 1 ? "Pasted into 1 session — press Enter there to send" : `Pasted into ${n} sessions — press Enter in each to send`;
+}
+//#endregion
+//#region src/lib/promptPaste.ts
+var busy = false;
+async function pastePrompt(target, running, prompt) {
+	if (!target) {
+		toast("Choose a session to paste into first, then click a prompt");
+		return false;
+	}
+	if (busy) return false;
+	busy = true;
+	const send = (t) => instApi(t, "/send", { json: {
+		text: prompt,
+		submit: false,
+		dialog_safe: true
+	} });
+	try {
+		if (target === ALL_RUNNING) {
+			const titles = running.slice();
+			const { ok, failed } = await pasteIntoAll(titles, send);
+			if (failed.length) errorPop(`Couldn't paste into ${failed.length} of ${titles.length} sessions`, failed.map((f) => windowName(f.title) + ": " + f.error).join(" · "));
+			if (!ok.length) return false;
+			toast(pastedAllToast(ok.length));
+			return true;
+		}
+		try {
+			await send(target);
+			toast("Pasted into " + windowName(target) + " — press Enter there to send");
+			return true;
+		} catch (err) {
+			toast("Paste failed: " + (err.message || ""));
+			return false;
+		}
+	} finally {
+		busy = false;
+	}
+}
+//#endregion
+//#region src/lib/presets.ts
+var PRESET_STORE_KEY = "mindflock.prompt_presets";
+var BUILTIN_PRESETS = [
+	{
+		name: "Fix failing tests",
+		prompt: "Run the test suite, find the failing tests, and fix the underlying causes. Do not weaken, skip, or delete tests just to make them pass."
+	},
+	{
+		name: "Address PR review comments",
+		prompt: "Look up the open pull request for this branch, read every unresolved review comment, and address each one with a code change (or explain why no change is needed)."
+	},
+	{
+		name: "Write tests for recent changes",
+		prompt: "Inspect the most recent commits and the working tree, then write focused tests covering the changed behavior. Run them and make them pass."
+	},
+	{
+		name: "Refactor for clarity — no behavior change",
+		prompt: "Refactor the code you touch for clarity and simplicity WITHOUT changing behavior. Keep the public API stable and keep all tests green."
+	}
+];
+function loadUserPresets() {
+	try {
+		const arr = JSON.parse(localStorage.getItem(PRESET_STORE_KEY) || "[]");
+		return Array.isArray(arr) ? arr.filter((p) => p && typeof p.name === "string" && p.name && typeof p.prompt === "string") : [];
+	} catch {
+		return [];
+	}
+}
+var PRESETS_CHANGED = "mf-presets-changed";
+function saveUserPresets(list) {
+	try {
+		localStorage.setItem(PRESET_STORE_KEY, JSON.stringify(list));
+	} catch {}
+	if (typeof document !== "undefined") document.dispatchEvent(new Event(PRESETS_CHANGED));
+}
+function findPreset(value) {
+	const m = /^([bu]):([\s\S]*)$/.exec(value || "");
+	if (!m) return null;
+	return (m[1] === "b" ? BUILTIN_PRESETS : loadUserPresets()).find((p) => p.name === m[2]) || null;
+}
+//#endregion
+//#region src/components/sidebar/PromptsBar.tsx
+function PromptsBar() {
+	const focused = useUi((s) => s.focused);
+	const railOrder = useUi((s) => s.railOrder);
+	const aliases = useUi((s) => s.aliases);
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const { data: instances } = useInstances();
+	const [picked, setPicked] = (0, import_react.useState)(null);
+	const [saved, setSaved] = (0, import_react.useState)(() => loadUserPresets());
+	(0, import_react.useEffect)(() => {
+		const reload = () => setSaved(loadUserPresets());
+		document.addEventListener(PRESETS_CHANGED, reload);
+		window.addEventListener("storage", reload);
+		return () => {
+			document.removeEventListener(PRESETS_CHANGED, reload);
+			window.removeEventListener("storage", reload);
+		};
+	}, []);
+	const running = (0, import_react.useMemo)(() => runningTitles(instances, railOrder), [instances, railOrder]);
+	const options = (0, import_react.useMemo)(() => promptTargets(focused, running, (t) => aliases[t] || windowName(t)), [
+		focused,
+		running,
+		aliases
+	]);
+	const target = resolveTarget(picked, focused, options);
+	const prompts = [...saved, ...BUILTIN_PRESETS];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "prompts-bar",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "pb-head",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pb-label",
+					children: "Prompts"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "pb-target",
+					title: "Where a clicked prompt is pasted",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						"aria-hidden": "true",
+						children: "→"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+						id: "prompts-bar-target",
+						"aria-label": "Paste into",
+						value: target,
+						disabled: !options.length,
+						onChange: (e) => setPicked(e.target.value || null),
+						children: [!target && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "",
+							children: "no session selected"
+						}), options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: o.value,
+							children: o.label
+						}, o.value))]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					id: "prompts-bar-manage",
+					type: "button",
+					className: "as-toggle",
+					title: "Add, read or delete saved prompts",
+					onClick: () => openDialogFor("prompts"),
+					children: "Manage"
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "pb-chips",
+			children: prompts.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "pb-chip",
+				title: (target === ALL_RUNNING ? "Paste into every running session" : "Paste into the chosen session") + " (Enter there sends it):\n\n" + p.prompt,
+				onClick: () => void pastePrompt(target, running, p.prompt),
+				children: p.name
+			}, (i < saved.length ? "u:" : "b:") + p.name))
+		})]
+	});
+}
+//#endregion
 //#region src/components/sidebar/VerifyBar.tsx
 function useVerifySettings() {
 	return useQuery({
@@ -34747,21 +34969,32 @@ function barContent(key, cbs) {
 				children: "Assistant"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "as-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					id: "assistant-chat-btn",
-					className: "as-toggle",
-					title: "Open a chat window with your personal assistant",
-					onClick: cbs.onOpenChat,
-					children: "Chat"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					id: "assistant-todo-btn",
-					className: "as-toggle",
-					title: "Show the todo list (drag to reorder)",
-					onClick: cbs.onOpenTodo,
-					children: "Todo"
-				})]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						id: "assistant-chat-btn",
+						className: "as-toggle",
+						title: "Open a chat window with your personal assistant",
+						onClick: cbs.onOpenChat,
+						children: "Chat"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						id: "assistant-todo-btn",
+						className: "as-toggle",
+						title: "Show the todo list (drag to reorder)",
+						onClick: cbs.onOpenTodo,
+						children: "Todo"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						id: "assistant-agent-btn",
+						className: "as-toggle",
+						title: "Edit the assistant's agent file — its standing instructions",
+						onClick: () => useUi.getState().openDialogFor("assistant-agent"),
+						children: "Agent"
+					})
+				]
 			})]
 		});
+		case "prompts": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsBar, {});
 		default: return null;
 	}
 }
@@ -34815,9 +35048,9 @@ function FooterCustomize() {
 			id: "foot-customize-btn",
 			type: "button",
 			className: "foot-link",
-			title: "Sidebar bars and saved prompts",
+			title: "Choose which bars the sidebar shows — Prompts, Assistant, Tickets…",
 			onClick: () => openDialogFor("customize"),
-			children: "Customize"
+			children: "⚙ Customize"
 		})
 	});
 }
@@ -35584,26 +35817,11 @@ function Hint({ id, children, action, className }) {
 //#endregion
 //#region src/components/sidebar/Sidebar.tsx
 var VIEW_MODES = [
-	{
-		value: "auto",
-		label: "Auto — fit every window"
-	},
-	{
-		value: "1",
-		label: "1 window"
-	},
-	{
-		value: "2",
-		label: "2 windows"
-	},
-	{
-		value: "4",
-		label: "4 windows"
-	},
-	{
-		value: "9",
-		label: "9 windows"
-	}
+	"auto",
+	"1",
+	"2",
+	"4",
+	"9"
 ];
 function Sidebar({ onOpenChat, onOpenTodo }) {
 	const { data: instances = [] } = useInstances();
@@ -35985,26 +36203,25 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						id: "view-modes",
 						title: "Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "vm-label",
-							htmlFor: "view-mode-select",
 							children: "View"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-							id: "view-mode-select",
-							value: ui.viewMode,
-							onChange: (e) => ui.setViewMode(e.target.value),
-							children: VIEW_MODES.map((v) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: v.value,
-								children: v.label
-							}, v.value))
-						})]
+						}), VIEW_MODES.map((v) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "vm" + (ui.viewMode === v ? " active" : ""),
+							"data-view": v,
+							onClick: () => ui.setViewMode(v),
+							children: v === "auto" ? "Auto" : v
+						}, v))]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Hint, {
 						id: "customize",
 						className: "hint-footer",
 						children: [
-							"Extra sidebar bars and your saved prompts live under ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Customize" }),
+							"More sidebar bars — like ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Prompts" }),
+							" — are under ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⚙ Customize" }),
 							"."
 						]
 					}),
@@ -36022,7 +36239,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 								className: "foot-link",
 								title: "Keyboard shortcuts (?)",
 								onClick: () => ui.openDialogFor("shortcuts"),
-								children: "Shortcuts"
+								children: "⌨ Shortcuts"
 							})
 						]
 					})
@@ -55975,15 +56192,15 @@ function ChatBody({ headDrag }) {
 				children: state
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				id: "assistant-agent-btn",
+				id: "assistant-agent-head-btn",
 				className: "act",
 				type: "button",
-				title: "Edit the assistant's standing instructions",
+				title: "Edit the assistant's agent file — its standing instructions",
 				onClick: (e) => {
 					e.stopPropagation();
 					useUi.getState().openDialogFor("assistant-agent");
 				},
-				children: "Instructions"
+				children: "Agent file"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CloseBtn, { desc: { kind: "chat" } })
 		]
@@ -56352,12 +56569,12 @@ function CommandPalette({ host }) {
 		});
 		acts.push({
 			label: "Customize…",
-			hint: "sidebar bars, prompts",
+			hint: "choose sidebar bars",
 			run: () => ui.openDialogFor("customize")
 		});
 		acts.push({
 			label: "Prompts…",
-			hint: "paste a saved prompt",
+			hint: "manage saved prompts",
 			run: () => ui.openDialogFor("prompts")
 		});
 		acts.push({
@@ -56366,7 +56583,7 @@ function CommandPalette({ host }) {
 			run: () => ui.openDialogFor("recent")
 		});
 		acts.push({
-			label: "Assistant instructions…",
+			label: "Assistant agent file…",
 			run: () => ui.openDialogFor("assistant-agent")
 		});
 		if (caps.git) acts.push({
@@ -56844,45 +57061,6 @@ function ShortcutsSheet() {
 			]
 		})
 	});
-}
-//#endregion
-//#region src/lib/presets.ts
-var PRESET_STORE_KEY = "mindflock.prompt_presets";
-var BUILTIN_PRESETS = [
-	{
-		name: "Fix failing tests",
-		prompt: "Run the test suite, find the failing tests, and fix the underlying causes. Do not weaken, skip, or delete tests just to make them pass."
-	},
-	{
-		name: "Address PR review comments",
-		prompt: "Look up the open pull request for this branch, read every unresolved review comment, and address each one with a code change (or explain why no change is needed)."
-	},
-	{
-		name: "Write tests for recent changes",
-		prompt: "Inspect the most recent commits and the working tree, then write focused tests covering the changed behavior. Run them and make them pass."
-	},
-	{
-		name: "Refactor for clarity — no behavior change",
-		prompt: "Refactor the code you touch for clarity and simplicity WITHOUT changing behavior. Keep the public API stable and keep all tests green."
-	}
-];
-function loadUserPresets() {
-	try {
-		const arr = JSON.parse(localStorage.getItem(PRESET_STORE_KEY) || "[]");
-		return Array.isArray(arr) ? arr.filter((p) => p && typeof p.name === "string" && p.name && typeof p.prompt === "string") : [];
-	} catch {
-		return [];
-	}
-}
-function saveUserPresets(list) {
-	try {
-		localStorage.setItem(PRESET_STORE_KEY, JSON.stringify(list));
-	} catch {}
-}
-function findPreset(value) {
-	const m = /^([bu]):([\s\S]*)$/.exec(value || "");
-	if (!m) return null;
-	return (m[1] === "b" ? BUILTIN_PRESETS : loadUserPresets()).find((p) => p.name === m[2]) || null;
 }
 //#endregion
 //#region src/lib/fileDropTextarea.ts
@@ -63593,7 +63771,7 @@ var LEGACY_SCREEN_TABS = {
 	repo: "prs",
 	issues: "issues"
 };
-var TABS$1 = [
+var TABS = [
 	{
 		key: "tickets",
 		label: "Tickets",
@@ -63654,7 +63832,7 @@ function IntakeDialog() {
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		const wanted = target && (LEGACY_SCREEN_TABS[target] || target);
-		setTab(wanted && TABS$1.some((t) => t.key === wanted) ? wanted : "tickets");
+		setTab(wanted && TABS.some((t) => t.key === wanted) ? wanted : "tickets");
 	}, [open, target]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
@@ -63705,7 +63883,7 @@ function IntakeDialog() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
 						id: "intake-tabs",
 						"aria-label": "Intake tabs",
-						children: TABS$1.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						children: TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							type: "button",
 							className: "ik-tab" + (tab === t.key ? " active" : ""),
 							"data-intake-tab": t.key,
@@ -63716,7 +63894,7 @@ function IntakeDialog() {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						id: "intake-body",
-						children: TABS$1.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
+						children: TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
 							className: "ik-panel" + (tab === t.key ? " active" : ""),
 							"data-intake-tab": t.key,
 							id: t.legacyId,
@@ -68480,7 +68658,14 @@ var NOTES = {
 			dialog: "verify"
 		}
 	},
-	assistant: { text: "Chat and a todo list with your personal assistant" }
+	assistant: { text: "Chat, a todo list, and its editable agent file" },
+	prompts: {
+		text: "Your saved prompts — click one to paste it into any session",
+		link: {
+			label: "Manage prompts",
+			dialog: "prompts"
+		}
+	}
 };
 var EXTENSION_NOTE = { text: "From an extension" };
 function SidebarBarsPicker() {
@@ -68534,62 +68719,57 @@ function SidebarBarsPicker() {
 	});
 }
 //#endregion
-//#region src/lib/promptTargets.ts
-var ALL_RUNNING = "*";
-function isRunningTarget(row) {
-	if (!row || !row.title) return false;
-	if (isVerifySession(String(row.title))) return false;
-	if (row.status === "paused") return false;
-	return row.status === "running" || !!row.started;
-}
-function runningTitles(rows, railOrder = []) {
-	const titles = (rows || []).filter(isRunningTarget).map((r) => String(r.title));
-	const pos = (t) => {
-		const i = railOrder.indexOf(t);
-		return i < 0 ? Number.MAX_SAFE_INTEGER : i;
-	};
-	return titles.map((t, i) => ({
-		t,
-		i
-	})).sort((a, b) => pos(a.t) - pos(b.t) || a.i - b.i).map((x) => x.t);
-}
-function promptTargets(focused, running, nameOf) {
-	const out = [];
-	if (focused) out.push({
-		value: focused,
-		label: nameOf(focused)
+//#region src/components/customize/CustomizeDialog.tsx
+function CustomizeDialog() {
+	const open = useUi((s) => s.openDialog === "customize");
+	const closeDialog = useUi((s) => s.closeDialog);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const onKey = (e) => {
+			if (e.key !== "Escape" || e.defaultPrevented) return;
+			e.preventDefault();
+			closeDialog();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [open, closeDialog]);
+	if (!open) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		id: "customize-dialog",
+		className: "modal",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "customize-title",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) closeDialog();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "customize-panel",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						id: "customize-title",
+						children: "Customize"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-subtitle",
+						children: "Choose what the sidebar shows"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "customize-close",
+						onClick: closeDialog,
+						children: "Close"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				id: "customize-body",
+				"data-tab": "sidebar",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarBarsPicker, {})
+			})]
+		})
 	});
-	for (const t of running) if (t !== focused) out.push({
-		value: t,
-		label: nameOf(t)
-	});
-	if (running.length >= 2) out.push({
-		value: ALL_RUNNING,
-		label: `All running sessions (${running.length})`
-	});
-	return out;
-}
-function resolveTarget(picked, focused, options) {
-	if (picked && options.some((o) => o.value === picked)) return picked;
-	return focused || "";
-}
-async function pasteIntoAll(titles, send) {
-	const settled = await Promise.allSettled(titles.map((t) => send(t)));
-	const out = {
-		ok: [],
-		failed: []
-	};
-	settled.forEach((r, i) => {
-		if (r.status === "fulfilled") out.ok.push(titles[i]);
-		else out.failed.push({
-			title: titles[i],
-			error: String(r.reason?.message || r.reason || "failed")
-		});
-	});
-	return out;
-}
-function pastedAllToast(n) {
-	return n === 1 ? "Pasted into 1 session — press Enter there to send" : `Pasted into ${n} sessions — press Enter in each to send`;
 }
 //#endregion
 //#region src/components/dialogs/PromptsDialog.tsx
@@ -68636,44 +68816,10 @@ function PromptsPanel() {
 		aliases
 	]);
 	const target = resolveTarget(picked, focused, options);
-	const busy = (0, import_react.useRef)(false);
-	const closeIfStillOpen = () => {
+	const pastePrompt$1 = async (prompt) => {
+		if (!await pastePrompt(target, running, prompt)) return;
+		setPop(null);
 		if (useUi.getState().openDialog === "prompts") closeDialog();
-	};
-	const pastePrompt = async (prompt) => {
-		if (!target) {
-			toast("Choose a session to paste into first, then click a prompt");
-			return;
-		}
-		if (busy.current) return;
-		busy.current = true;
-		const send = (t) => instApi(t, "/send", { json: {
-			text: prompt,
-			submit: false,
-			dialog_safe: true
-		} });
-		try {
-			if (target === ALL_RUNNING) {
-				const titles = running.slice();
-				const { ok, failed } = await pasteIntoAll(titles, send);
-				if (failed.length) errorPop(`Couldn't paste into ${failed.length} of ${titles.length} sessions`, failed.map((f) => windowName(f.title) + ": " + f.error).join(" · "));
-				if (!ok.length) return;
-				toast(pastedAllToast(ok.length));
-				setPop(null);
-				closeIfStillOpen();
-				return;
-			}
-			try {
-				await send(target);
-				toast("Pasted into " + windowName(target));
-				setPop(null);
-				closeIfStillOpen();
-			} catch (err) {
-				toast("Paste failed: " + (err.message || ""));
-			}
-		} finally {
-			busy.current = false;
-		}
 	};
 	const addPrompt = () => {
 		const n = name.trim();
@@ -68711,7 +68857,7 @@ function PromptsPanel() {
 						type: "button",
 						className: "prompt-card-main",
 						title: target === ALL_RUNNING ? "Paste into every running session" : "Paste into the chosen session",
-						onClick: () => pastePrompt(p.prompt),
+						onClick: () => pastePrompt$1(p.prompt),
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "prompt-card-name",
 							children: p.name
@@ -68791,7 +68937,7 @@ function PromptsPanel() {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "prompts-hint",
-				children: "Choose where it goes, then click a prompt to paste it there — nothing is sent until you press Enter in that session (in each, for all running sessions). Saved prompts also show in New → Saved prompt."
+				children: "Click a prompt to paste it into the chosen session — nothing is sent until you press Enter there. The same prompts sit in the sidebar's Prompts bar and in New → Saved prompt."
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				id: "prompts-list",
@@ -68840,27 +68986,9 @@ function PromptsPanel() {
 		]
 	});
 }
-//#endregion
-//#region src/components/customize/CustomizeDialog.tsx
-var TABS = [{
-	key: "sidebar",
-	label: "Sidebar",
-	dialog: "customize"
-}, {
-	key: "prompts",
-	label: "Prompts",
-	dialog: "prompts"
-}];
-function customizeTab(name) {
-	if (name === "customize") return "sidebar";
-	if (name === "prompts") return name;
-	return null;
-}
-function CustomizeDialog() {
-	const tab = useUi((s) => customizeTab(s.openDialog));
+function PromptsDialog() {
+	const open = useUi((s) => s.openDialog === "prompts");
 	const closeDialog = useUi((s) => s.closeDialog);
-	const openDialogFor = useUi((s) => s.openDialogFor);
-	const open = tab !== null;
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		const onKey = (e) => {
@@ -68871,58 +68999,37 @@ function CustomizeDialog() {
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	}, [open, closeDialog]);
-	if (!tab) return null;
+	if (!open) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		id: "customize-dialog",
+		id: "prompts-dialog",
 		className: "modal",
 		role: "dialog",
 		"aria-modal": "true",
-		"aria-labelledby": "customize-title",
+		"aria-labelledby": "prompts-title",
 		onClick: (e) => {
 			if (e.target === e.currentTarget) closeDialog();
 		},
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "customize-panel",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "ws-head",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-							id: "customize-title",
-							children: "Customize"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "ik-subtitle",
-							children: "Extras you can switch on"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "customize-close",
-							onClick: closeDialog,
-							children: "Close"
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
-					id: "customize-tabs",
-					"aria-label": "Customize",
-					children: TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			id: "prompts-dialog-panel",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						id: "prompts-title",
+						children: "Prompts"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-subtitle",
+						children: "Saved text you paste into sessions"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: "ik-tab" + (tab === t.key ? " active" : ""),
-						"data-customize-tab": t.key,
-						"aria-current": tab === t.key ? "page" : void 0,
-						onClick: () => {
-							if (tab !== t.key) openDialogFor(t.dialog);
-						},
-						children: t.label
-					}, t.key))
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					id: "customize-body",
-					"data-tab": tab,
-					children: [tab === "sidebar" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarBarsPicker, {}), tab === "prompts" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsPanel, {})]
-				})
-			]
+						id: "prompts-close",
+						onClick: closeDialog,
+						children: "Close"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsPanel, {})]
 		})
 	});
 }
@@ -72300,7 +72407,7 @@ function AssistantAgentDialog() {
 				await api("/api/assistant/restart", { method: "POST" });
 			} catch {}
 			setStatus(restart ? "Saved — assistant restarted; reopen Chat to talk to it." : "Saved — applies the next time the assistant starts.");
-			toast(restart ? "Assistant instructions saved & restarted" : "Assistant instructions saved");
+			toast(restart ? "Agent file saved & assistant restarted" : "Agent file saved");
 		} catch (err) {
 			setStatus("Save failed: " + (err.message || ""));
 		}
@@ -72316,7 +72423,7 @@ function AssistantAgentDialog() {
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "ws-head",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Assistant instructions" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Assistant agent file" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						id: "assistant-agent-close",
 						onClick: closeDialog,
@@ -72867,8 +72974,11 @@ var SLIDES = [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
 			" checks what you shipped.",
 			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Customize" }),
-			" at the bottom of the sidebar holds extra bars and your saved prompts."
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⚙ Customize" }),
+			" at the bottom of the sidebar adds more bars — like",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Prompts" }),
+			", your saved text one click from any session."
 		] }),
 		screen: "ticketing"
 	},
@@ -73411,6 +73521,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsDialog, { onOpenSysLogsPane: () => toggleSpecial("syslogs") }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IntakeDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomizeDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommitDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MakePrDialog, {}),

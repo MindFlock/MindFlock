@@ -453,7 +453,8 @@
   gap: 6px;
 }
 
-#assistant-bar .as-toggle {
+#assistant-bar .as-toggle,
+#prompts-bar .as-toggle {
   cursor: pointer;
   font-size: 11px;
   padding: 4px 10px;
@@ -468,8 +469,84 @@
   color: #fff;
 }
 
-#assistant-bar .as-toggle:hover {
+#assistant-bar .as-toggle:hover,
+#prompts-bar .as-toggle:hover {
   border-color: var(--accent);
+}
+
+/* Prompts bar: the Assistant bar's head (label · target · Manage) over a
+   wrap of one-click chips. The chip list caps its height and scrolls so a long
+   library never pushes the sessions off screen. */
+#prompts-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+#prompts-bar .pb-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+#prompts-bar .pb-label {
+  font-weight: 600;
+}
+
+#prompts-bar .pb-target {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+}
+
+#prompts-bar .pb-target select {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  text-overflow: ellipsis;
+}
+
+#prompts-bar .pb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  /* Four whole rows of chips (22px + 5px gaps), then scroll. */
+  max-height: 104px;
+  overflow-y: auto;
+}
+
+#prompts-bar .pb-chip {
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#prompts-bar .pb-chip:hover,
+#prompts-bar .pb-chip:focus-visible {
+  border-color: var(--accent);
+  outline: none;
 }
 
 /* Generic addon bars (rendered by core/slots.js for auto-surfaced addons,

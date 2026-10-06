@@ -185,16 +185,24 @@ def test_narrow_heads_keep_the_cost():
         assert f'className="{part}"' in chip, part
 
 
-def test_assistant_window_has_instructions():
+def test_assistant_agent_file_has_one_name_and_two_doors():
+    """The owner looks for the "assistant agent file": its bar button is back
+    ("Agent"), the chat window's head has "Agent file", and the palette row
+    and the dialog heading say agent file too."""
     special = _read("components/grid/SpecialPane.tsx")
-    assert 'id="assistant-agent-btn"' in special
+    assert 'id="assistant-agent-head-btn"' in special
     assert 'openDialogFor("assistant-agent")' in special
-    assert "Edit the assistant's standing instructions" in special
-    # One name for one dialog: the button, the palette row and the dialog's
-    # own heading all say "instructions".
+    assert "Agent file" in special
+    bars = _read("components/sidebar/SidebarBars.tsx")
+    assert 'id="assistant-agent-btn"' in bars
+    # One id per button: the head no longer reuses the bar's.
+    assert 'id="assistant-agent-btn"' not in special
     dialog = _read("components/dialogs/AssistantAgentDialog.tsx")
-    assert "<h2>Assistant instructions</h2>" in dialog
-    assert "Assistant agent file" not in dialog
+    assert "<h2>Assistant agent file</h2>" in dialog
+    assert 'id="assistant-agent-text"' in dialog  # editable in place
+    assert 'label: "Assistant agent file…"' in _read(
+        "components/palette/CommandPalette.tsx"
+    )
 
 
 def test_stage_chip_says_question():

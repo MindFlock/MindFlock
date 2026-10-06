@@ -138,10 +138,10 @@ const MODAL_DIALOG_NAMES: DialogName[] = [
   // The Intake reads like a page, not a popover, and its per-card Remove buttons make
   // a stray Delete genuinely dangerous behind it.
   "intake",
-  // Customize, on either tab: the Prompts tab has text fields where Ctrl+W is
-  // muscle memory, and the Sidebar tab's checkboxes are about the rail — neither
-  // may end the focused session behind the dialog. (The waiting rows' Retry /
-  // Skip / Commit live in the bell: see "notif-pop" in MODAL_DOM_IDS.)
+  // Customize's checkboxes are about the rail, and the Prompts dialog has text
+  // fields where Ctrl+W is muscle memory — neither may end the focused session
+  // behind the dialog. (The waiting rows' Retry / Skip / Commit live in the
+  // bell: see "notif-pop" in MODAL_DOM_IDS.)
   "customize",
   "prompts",
   // Same shape as Intake: a full-page surface with per-plan Delete buttons, and
@@ -163,6 +163,7 @@ const MODAL_DOM_IDS = [
   "device-dialog",
   "intake-dialog",
   "customize-dialog",
+  "prompts-dialog",
   "verify-dialog",
   "red-zones-dialog",
   // The take-a-break screen owns the whole window and holds the keyboard on

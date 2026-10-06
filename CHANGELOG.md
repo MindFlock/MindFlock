@@ -185,17 +185,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     gone, and a rebind saved for `Alt+O` is dropped on load. A group's row in
     the bell, or its *finished* toast, scrolls to the group's header and
     pulses it, or opens the lead's Thread for a group with no header.
-  - **Customize is a dialog with two tabs: Sidebar and Prompts.** The
-    footer's **Customize** opens it. Sidebar says when each bar has
-    something to show; Prompts pastes a saved prompt into the selected
-    session, another running one or all of them (the templates manager's
-    send row is gone: a template only starts a session).
+  - **Customize chooses which bars the sidebar shows**, and says when each
+    one has something to show. The footer's **⚙ Customize** opens it.
+  - **Saved prompts are a sidebar bar**, switched on in Customize like the
+    Assistant: pick a target (the selected session, another running one or
+    all of them) and click a prompt to paste it there; nothing is sent until
+    you press Enter. Its **Manage** opens the Prompts dialog to add, read or
+    delete them (the templates manager's send row is gone: a template only
+    starts a session).
   - **A shorter top bar**: New, Intake, Verify (always, with its due
     badge) and Settings, plus a magnifier for the command palette. Recently
     closed is a *Recently closed (n)* link under the session list.
   - **The sidebar bars carry the Intake tabs' names** (Tickets, Pull
-    requests, Issues), and each label opens its tab. View is one select,
-    and the first run has no welcome hint.
+    requests, Issues), and each label opens its tab. The first run has no
+    welcome hint.
   - **A pane is named like its row**, and its header is quieter: the next
     step is outlined until it is your move, ⏩ is just the glyph while Off,
     **−** hides the window (✕ always ends or closes), Copy all moved into
@@ -213,8 +216,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     **Options**.
   - **The command palette lists commands first**, then a *Focus:* row per
     session named like its rail row. It gains *Customize…*, *Prompts…* and
-    *Assistant instructions…* (the Assistant bar is now *Chat · Todo*; the
-    instructions also open from *Instructions* in its chat window), and says
+    *Assistant agent file…* (the Assistant bar's **Agent** and the chat
+    window's **Agent file** open the same editor), and says
     *Make PR* and *Merge PR*.
   - **Settings' nav is grouped** under Agents, Code, This device and
     Troubleshooting. Every screen key and label is unchanged.

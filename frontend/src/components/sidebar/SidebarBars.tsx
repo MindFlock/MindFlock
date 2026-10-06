@@ -1,5 +1,5 @@
 /** The movable sidebar sections. Each customizable bar (Usage, Tickets, Pull
- * requests, Issues, Verify, Assistant) renders inside a <BarSlot> that carries
+ * requests, Issues, Verify, Assistant, Prompts) renders inside a <BarSlot> that carries
  * the drag affordance (a grip on the left, since the bars themselves are
  * wall-to-wall buttons/toggles that would otherwise swallow the drag gesture)
  * and the accent insertion cue. Reordering happens in Sidebar, which owns the shared
@@ -15,6 +15,8 @@ import { AutomationBar } from "./AutomationBar";
 import { EXT_BAR_PREFIX } from "./barDefs";
 import { GitIssueBar } from "./GitIssueBar";
 import { PrReviewBar } from "./PrReviewBar";
+import { PromptsBar } from "./PromptsBar";
+import { useUi } from "../../state/store";
 import { VerifyBar } from "./VerifyBar";
 
 /** DataTransfer type that marks a drag as a section (bar) move. */
@@ -45,9 +47,8 @@ export function barContent(key: string, cbs: ContentCbs): ReactNode {
     case "verify":
       return <VerifyBar />;
     case "assistant":
-      // Chat and Todo only. The assistant's standing instructions are a
-      // set-once edit, so they open from "Instructions" in the Assistant
-      // window's own head (and the palette), not from a third bar button.
+      // Chat, Todo, and Agent: the assistant's agent file (its standing
+      // instructions), editable in place.
       return (
         <div
           id="assistant-bar"
@@ -71,9 +72,19 @@ export function barContent(key: string, cbs: ContentCbs): ReactNode {
             >
               Todo
             </button>
+            <button
+              id="assistant-agent-btn"
+              className="as-toggle"
+              title="Edit the assistant's agent file — its standing instructions"
+              onClick={() => useUi.getState().openDialogFor("assistant-agent")}
+            >
+              Agent
+            </button>
           </span>
         </div>
       );
+    case "prompts":
+      return <PromptsBar />;
     default:
       return null;
   }

@@ -36,7 +36,11 @@ const NOTES: Record<string, BarNote> = {
     text: "Appears once Verify tracks a repository or has a checklist",
     link: { label: "Open Verify", dialog: "verify" },
   },
-  assistant: { text: "Chat and a todo list with your personal assistant" },
+  assistant: { text: "Chat, a todo list, and its editable agent file" },
+  prompts: {
+    text: "Your saved prompts — click one to paste it into any session",
+    link: { label: "Manage prompts", dialog: "prompts" },
+  },
 };
 
 const EXTENSION_NOTE: BarNote = { text: "From an extension" };
