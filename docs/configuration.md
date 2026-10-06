@@ -601,9 +601,10 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_MAILBOX_FILE` | `~/.mindflock/mailbox.json` | Path of the inter-agent mailbox store |
 | `MINDFLOCK_RUNS_DIR` | `~/.mindflock/runs` | Directory of the team-run files (`<id>.json` + `<id>.lease`; finished runs move to `archive/` after 30 days) |
 | `MINDFLOCK_MSG_MAX_HOPS` | `6` | Reply-chain ceiling for inter-agent messages. A pushed reply deeper than this is held in the recipient's inbox instead of typed in. Read on every send |
-| `MINDFLOCK_MAX_CHILDREN` | `8` | Live children one session may have (`POST /api/instances` with `parent`, and adopting through `POST /api/instances/{title}/parent`; 409 beyond). Read per request; a malformed or negative value falls back to the default |
-| `MINDFLOCK_MAX_SPAWN_DEPTH` | `3` | Deepest a session may sit in a parent chain (root = 0), checked at create and on adoption |
-| `MINDFLOCK_MAX_SPAWNED` | `24` | Agent-spawned (`spawned: true`) sessions live at once, with or without a parent |
+| `MINDFLOCK_MAX_CHILDREN` | `8` | Live children one session may have (`POST /api/instances` with `parent`, and adopting through `POST /api/instances/{title}/parent`; 409 beyond). Also the most pieces a split may have. Read per request. When set it **overrides** `general.agent_max_children` (Settings → Agent orchestration); a malformed or negative value is ignored, falling back to the setting, then the default |
+| `MINDFLOCK_MAX_SPAWN_DEPTH` | `3` | Deepest a session may sit in a parent chain (root = 0), checked at create and on adoption. Overrides `general.agent_max_spawn_depth` |
+| `MINDFLOCK_MAX_SPAWNED` | `24` | Agent-spawned (`spawned: true`) sessions live at once, with or without a parent. Overrides `general.agent_max_spawned` |
+| `MINDFLOCK_FINISHED_CHILDREN_FILE` | `~/.mindflock/finished_children.json` | Path of the finished-children store an orchestrator's Thread lists its closed / deleted workers from |
 | `MINDFLOCK_WSL_DISTRO` | — (your default distro) | Pins the WSL distro used for terminal/server launches. Unset, `wsl.exe` picks the default one — which is where the Windows installer puts the CLI. `wsl -l -v` lists them |
 | `MINDFLOCK_WT_COMMAND` | `wt.exe` | Windows Terminal executable used to open session terminals |
 | `MINDFLOCK_TERMINAL` | — | Preferred Linux terminal emulator (else gnome-terminal/konsole/… autodetect) |
@@ -685,7 +686,8 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   the current `default_provider` key on load (dropped if no default provider is
   set).
 - **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
-  General → **Give agents the MindFlock MCP** and **Agent MCP scope**): whether
+  Agent orchestration → **Give agents the MindFlock MCP** and **Agent MCP
+  scope**): whether
   every session's agent CLI is launched with the MindFlock MCP server attached,
   so agents can list, message, spawn and steer each other (see
   [mcp.md](mcp.md)). `agent_mcp` unset means **on**; `false` turns it off for
@@ -699,6 +701,16 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   pipeline's launches without a restart. Written through `POST /api/settings`
   (`{"general": {"agent_mcp": false}}`); `GET /api/config` reports the live
   state as `caps.agent_mcp`.
+- **Spawn limits** (`general.agent_max_children`,
+  `general.agent_max_spawned`, `general.agent_max_spawn_depth`; Settings →
+  Agent orchestration → **Spawn limits**): live sub-sessions per
+  orchestrator (default 8, also the most pieces a split may have),
+  agent-spawned sessions alive at once (24) and how deep spawns may nest (3).
+  Unset or negative means the default. Read per request, so a save applies to
+  the next spawn. The matching `MINDFLOCK_MAX_*` env var, when set, wins.
+  `GET /api/config` reports each one's effective value, default and source
+  (`env` / `settings` / `default`) as `caps.orchestration`, and a refusal
+  names the limit and where to raise it.
 - **Notification rules** (`notifications.muted_rules` / `enabled_rules`,
   Settings → Notifications) — which session events notify you. Default-on rules
   are opt-*out* (their id lands in `muted_rules`), noisier ones are opt-*in*

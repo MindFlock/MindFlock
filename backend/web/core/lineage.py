@@ -10,8 +10,10 @@ pure logic the routes apply to them:
   engine's in-memory registry — a ``Parent`` that is not a live title is a dead
   link and ends the walk, the same lazy-validity rule the snapshot row applies;
 * the create-time spawn limits (children per parent, depth, total spawned),
-  whose knobs are env vars read at request time so an operator can tighten
-  them without a restart;
+  read at request time from an env var when one is set (an operator's
+  override), else Settings → Agent orchestration (``general.agent_max_*`` in
+  settings.json), else the built-in default — so either can change them
+  without a restart;
 * validating a ``base_ref`` / ``base_branch`` pair against a real repo before
   a create is accepted, so a typo is a 400 rather than an asynchronous
   ``session.create_failed``.
@@ -46,21 +48,81 @@ _MAX_REF_LEN = 256
 _BAD_REF_CHARS = re.compile(r"[\x00-\x20\x7f]")
 
 
-def limit(env_name: str, default: int) -> int:
-    """The non-negative integer in ``env_name``, else ``default``.
+#: The settings.json field (``general.<field>``) behind each env knob.
+_SETTING_FOR = {
+    MAX_CHILDREN_ENV: "agent_max_children",
+    MAX_SPAWN_DEPTH_ENV: "agent_max_spawn_depth",
+    MAX_SPAWNED_ENV: "agent_max_spawned",
+}
+#: Where a person changes the caps — named in every refusal, so an agent that
+#: hits one can tell its user what to raise.
+SETTINGS_PLACE = "Settings → Agent orchestration"
 
-    Read at call time (not import time), so a changed env applies to the next
-    request. A malformed or negative value falls back to the default rather
-    than silently disabling the guard-rail.
-    """
+
+def _from_env(env_name: str) -> Optional[int]:
+    """The non-negative integer in ``env_name``, else None (unset, malformed
+    or negative — a bad value never silently disables the guard-rail)."""
     raw = (os.environ.get(env_name) or "").strip()
     if not raw:
-        return default
+        return None
     try:
         value = int(raw)
     except ValueError:
-        return default
-    return value if value >= 0 else default
+        return None
+    return value if value >= 0 else None
+
+
+def _from_settings(env_name: str) -> Optional[int]:
+    """The settings.json value behind ``env_name``'s knob, else None."""
+    field = _SETTING_FOR.get(env_name)
+    if not field:
+        return None
+    try:
+        # Local import: settings is a leaf module, but lineage must stay
+        # importable (and unit-testable) without the config layer loaded.
+        from backend.config.settings import load_settings
+
+        value = getattr(load_settings().general, field, None)
+    except Exception:  # noqa: BLE001 — an unreadable store reads as unset
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def source(env_name: str) -> str:
+    """Where ``env_name``'s cap currently comes from: ``"env"``,
+    ``"settings"`` or ``"default"``."""
+    if _from_env(env_name) is not None:
+        return "env"
+    if _from_settings(env_name) is not None:
+        return "settings"
+    return "default"
+
+
+def limit(env_name: str, default: int) -> int:
+    """The cap behind ``env_name``: the env var when set (an operator's
+    override), else the user's setting, else ``default``.
+
+    Read at call time (not import time), so a changed env or a saved setting
+    applies to the next request. A malformed or negative value falls through
+    to the next layer rather than silently disabling the guard-rail.
+    """
+    value = _from_env(env_name)
+    if value is None:
+        value = _from_settings(env_name)
+    return default if value is None else value
+
+
+def _limit_note(env_name: str, value: int) -> str:
+    """How a refusal names the cap it hit: the env var when that set it, else
+    the place in Settings to change it."""
+    where = source(env_name)
+    if where == "env":
+        return "limit %s=%d" % (env_name, value)
+    if where == "settings":
+        return "limit %d, set in %s" % (value, SETTINGS_PLACE)
+    return "limit %s=%d; raise it in %s" % (env_name, value, SETTINGS_PLACE)
 
 
 def parent_of(inst) -> str:
@@ -151,20 +213,18 @@ def spawn_limit_error(instances: Mapping, parent: str, spawned: bool) -> Optiona
         max_children = limit(MAX_CHILDREN_ENV, DEFAULT_MAX_CHILDREN)
         n_children = len(children_of(instances, parent))
         if n_children >= max_children:
-            return "session %s already has %d live children (limit %s=%d)" % (
+            return "session %s already has %d live children (%s)" % (
                 parent,
                 n_children,
-                MAX_CHILDREN_ENV,
-                max_children,
+                _limit_note(MAX_CHILDREN_ENV, max_children),
             )
         max_depth = limit(MAX_SPAWN_DEPTH_ENV, DEFAULT_MAX_SPAWN_DEPTH)
         depth = depth_of(instances, parent) + 1
         if depth > max_depth:
-            return "a child of %s would be at depth %d (limit %s=%d)" % (
+            return "a child of %s would be at depth %d (%s)" % (
                 parent,
                 depth,
-                MAX_SPAWN_DEPTH_ENV,
-                max_depth,
+                _limit_note(MAX_SPAWN_DEPTH_ENV, max_depth),
             )
     if spawned:
         max_spawned = limit(MAX_SPAWNED_ENV, DEFAULT_MAX_SPAWNED)
@@ -172,10 +232,9 @@ def spawn_limit_error(instances: Mapping, parent: str, spawned: bool) -> Optiona
             1 for inst in instances.values() if bool(getattr(inst, "Spawned", False))
         )
         if n_spawned >= max_spawned:
-            return "%d agent-spawned sessions are already live (limit %s=%d)" % (
+            return "%d agent-spawned sessions are already live (%s)" % (
                 n_spawned,
-                MAX_SPAWNED_ENV,
-                max_spawned,
+                _limit_note(MAX_SPAWNED_ENV, max_spawned),
             )
     return None
 
@@ -196,21 +255,19 @@ def adopt_limit_error(instances: Mapping, title: str, parent: str) -> Optional[s
     max_children = limit(MAX_CHILDREN_ENV, DEFAULT_MAX_CHILDREN)
     n_children = len([t for t in children_of(instances, parent) if t != title])
     if n_children >= max_children:
-        return "session %s already has %d live children (limit %s=%d)" % (
+        return "session %s already has %d live children (%s)" % (
             parent,
             n_children,
-            MAX_CHILDREN_ENV,
-            max_children,
+            _limit_note(MAX_CHILDREN_ENV, max_children),
         )
     max_depth = limit(MAX_SPAWN_DEPTH_ENV, DEFAULT_MAX_SPAWN_DEPTH)
     depth = depth_of(instances, parent) + 1 + _subtree_height(instances, title)
     if depth > max_depth:
-        return "adopting %s under %s would put a session at depth %d (limit %s=%d)" % (
+        return "adopting %s under %s would put a session at depth %d (%s)" % (
             title,
             parent,
             depth,
-            MAX_SPAWN_DEPTH_ENV,
-            max_depth,
+            _limit_note(MAX_SPAWN_DEPTH_ENV, max_depth),
         )
     return None
 

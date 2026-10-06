@@ -226,3 +226,13 @@ p.set-hint {
   user-select: none;
   cursor: default;
 }
+
+/* Settings → Agent orchestration: the one-line intro under each heading, and
+   the cap rows' "now N" / env-override line. */
+.orch-intro {
+  margin: -2px 0 10px;
+}
+
+.orch-cap-row .orch-cap-env {
+  color: var(--warn, #d9a33b);
+}

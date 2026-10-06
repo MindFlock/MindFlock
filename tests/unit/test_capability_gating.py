@@ -35,12 +35,41 @@ def test_config_exposes_caps_booleans():
         "github",
         "agent_mcp",
         "team_runs",
+        "orchestration",
     }
-    # agent_mcp and team_runs are the structured caps (see test_mcp_attach.py);
-    # the integration caps stay plain booleans.
-    structured = {"agent_mcp", "team_runs"}
+    # agent_mcp, team_runs and orchestration are the structured caps (see
+    # test_mcp_attach.py); the integration caps stay plain booleans.
+    structured = {"agent_mcp", "team_runs", "orchestration"}
     assert all(isinstance(v, bool) for k, v in caps.items() if k not in structured)
     assert set(caps["agent_mcp"]) == {"enabled", "providers"}
+
+
+def test_config_orchestration_caps_say_value_default_and_source(monkeypatch):
+    # Settings → Agent orchestration shows the caps as they apply right now,
+    # and says when an env var overrides the setting.
+    from backend.config import settings as S
+
+    for env in (
+        "MINDFLOCK_MAX_CHILDREN",
+        "MINDFLOCK_MAX_SPAWN_DEPTH",
+        "MINDFLOCK_MAX_SPAWNED",
+    ):
+        monkeypatch.delenv(env, raising=False)
+    S.update_settings(general={"agent_max_children": 12})
+    monkeypatch.setenv("MINDFLOCK_MAX_SPAWNED", "30")
+    orch = client.get("/api/config").json()["caps"]["orchestration"]
+    assert orch["max_children"] == {
+        "value": 12,
+        "default": 8,
+        "source": "settings",
+        "env": "MINDFLOCK_MAX_CHILDREN",
+    }
+    assert orch["max_spawn_depth"]["value"] == 3
+    assert orch["max_spawn_depth"]["source"] == "default"
+    assert orch["max_spawned"]["value"] == 30
+    assert orch["max_spawned"]["source"] == "env"
+    # A split's piece cap follows the sub-session cap.
+    assert client.get("/api/config").json()["caps"]["team_runs"]["max_pieces"] == 12
 
 
 def test_config_team_runs_caps_match_what_create_accepts(monkeypatch):

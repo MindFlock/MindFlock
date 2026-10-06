@@ -15,11 +15,11 @@
  * The pure half (rows, badge, log cards, send routing) is lib/thread.ts. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Instance, ThreadResponse } from "../../api/types";
+import type { FinishedChild, Instance, ThreadResponse } from "../../api/types";
 import { instApi } from "../../api/client";
 import { useInstances } from "../../state/queries";
 import { displayName, useUi } from "../../state/store";
-import { effectiveActivity } from "../../lib/stage";
+import { effectiveActivity, stageMeta } from "../../lib/stage";
 import { errMsg } from "../../lib/format";
 import { selectSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
@@ -37,12 +37,15 @@ import {
   deliveryText,
   diffText,
   familyOf,
+  finishedStatus,
   headerSummary,
   logEntries,
   mergeOlder,
   normThread,
+  progressOf,
   reportedCount,
   sendPlan,
+  since,
   workerRows,
   workerStatus,
   type LogEntry,
@@ -313,9 +316,13 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
   };
 
   // --- Render -------------------------------------------------------------------------
-  const summary = headerSummary(workers);
+  const finished = data?.finished ?? [];
+  const summary = headerSummary(workers, finished.length);
+  const progress = progressOf(workers, finished);
   const entries = logEntries(data?.items ?? [], filter);
-  const hasWorkers = workers.length > 0;
+  // Finished workers count: an orchestrator whose workers are all done still
+  // shows them (and its progress), not "No workers yet".
+  const hasWorkers = workers.length > 0 || finished.length > 0;
   const selfMember = data?.members.find((m) => m.role === "self");
 
   return (
@@ -338,6 +345,7 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
                 . Buttons below either answer directly or paste a prompt into {myName} — nothing is typed
                 without you.
               </p>
+              <ThreadProgress p={progress} />
             </>
           ) : parent ? (
             <>
@@ -379,7 +387,7 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
         </header>
         )}
 
-        {hasWorkers && !leadOf && (
+        {workers.length > 0 && !leadOf && (
           <section className="thread-sec">
             <div className="thread-sec-head">
               <span className="thread-label">Workers</span>
@@ -426,6 +434,8 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
             </div>
           </section>
         )}
+
+        {finished.length > 0 && !leadOf && <FinishedSection finished={finished} />}
 
         <section className="thread-sec">
           <div className="thread-sec-head">
@@ -579,6 +589,11 @@ function WorkerItem({
         <span className={"th-w-word " + st.cls}>{st.word}</span>
         {st.detail && <span className="th-w-detail">· {st.detail}</span>}
         <span className="th-sp" />
+        {row.stage && (
+          <span className="th-w-stage" title="How far its branch has got">
+            {stageMeta(row.stage).label}
+          </span>
+        )}
         {ds && <span className="th-w-diff">{ds}</span>}
       </div>
       {row.state === "ask" && (
@@ -633,6 +648,114 @@ function WorkerItem({
             >
               Merge into {parentName}
             </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The header's progress bar: every worker, live and finished, as coloured
+ * runs (done · failed/blocked · needs you · working · idle) plus "3 of 5 done". */
+function ThreadProgress({ p }: { p: ReturnType<typeof progressOf> }) {
+  if (!p.total) return null;
+  const said = p.segs.map((s) => s.n + " " + s.label).join(", ");
+  return (
+    <div className="th-progress" role="img" aria-label={p.text + " — " + said}>
+      <div className="th-prog-bar">
+        {p.segs.map((s) => (
+          <span
+            key={s.key}
+            className={"th-prog-seg k-" + s.key}
+            style={{ flexGrow: s.n }}
+            title={s.n + " " + s.label}
+          />
+        ))}
+      </div>
+      <span className="th-prog-text" title={said}>
+        {p.text}
+      </span>
+    </div>
+  );
+}
+
+/** Workers that are gone — closed or deleted — newest first, so "my three
+ * workers finished" is visible after they leave the rail. Hideable. */
+function FinishedSection({ finished }: { finished: FinishedChild[] }) {
+  const [open, setOpen] = useState(true);
+  const newestFirst = [...finished].reverse();
+  return (
+    <section className="thread-sec th-finished">
+      <div className="thread-sec-head">
+        <span className="thread-label">Finished ({finished.length})</span>
+        <span className="th-sp" />
+        <button
+          type="button"
+          className="th-btn"
+          aria-expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? "Hide" : "Show"}
+        </button>
+      </div>
+      {open && (
+        <div className="thread-workers">
+          {newestFirst.map((f) => (
+            <FinishedItem key={f.title + ":" + f.created_at} f={f} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function FinishedItem({ f }: { f: FinishedChild }) {
+  const st = finishedStatus(f);
+  const ds = diffText(f.diff_stat);
+  const ended = f.ended_at ? " " + since(f.ended_at) + " ago" : "";
+  return (
+    <div className={"th-worker th-gone is-" + (st.cls || "none")} data-title={f.title}>
+      <div className="th-w-head">
+        <span className={"th-dot " + st.cls} aria-hidden="true" />
+        <span className="th-w-name th-gone-name" title={f.branch ? "Branch " + f.branch : undefined}>
+          {nameOf(f.title)}
+        </span>
+        <span className={"th-w-word " + st.cls}>{st.word}</span>
+        <span className="th-w-detail">
+          · {f.how === "closed" ? "closed" : "deleted"}
+          {ended}
+        </span>
+        <span className="th-sp" />
+        {f.stage && (
+          <span className="th-w-stage" title="How far its branch got">
+            {stageMeta(f.stage).label}
+          </span>
+        )}
+        {ds && <span className="th-w-diff">{ds}</span>}
+      </div>
+      {(f.last_report?.summary || f.pr_url || f.how === "closed") && (
+        <div className="th-w-body">
+          {f.last_report?.summary && (
+            <p className="th-w-summary">
+              <Spans text={f.last_report.summary} />
+            </p>
+          )}
+          <div className="th-w-acts">
+            {f.pr_url && (
+              <button type="button" className="th-btn" onClick={() => window.open(f.pr_url, "_blank")}>
+                Open PR ↗
+              </button>
+            )}
+            {f.how === "closed" && (
+              <button
+                type="button"
+                className="th-btn"
+                title="Closed sessions can be reopened from Recently closed"
+                onClick={() => useUi.getState().openDialogFor("recent")}
+              >
+                Recently closed…
+              </button>
+            )}
           </div>
         </div>
       )}

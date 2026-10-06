@@ -79,7 +79,7 @@ export function splitGate(
   if (!m.enabled)
     return {
       ok: false,
-      reason: "MindFlock tools are switched off for new sessions — Settings → General",
+      reason: "MindFlock tools are switched off for new sessions — Settings → Agent orchestration",
     };
   if (!(m.providers || []).includes(provider)) {
     const names = (m.providers || []).map((p) => p.charAt(0).toUpperCase() + p.slice(1));

@@ -294,10 +294,27 @@ export interface ThreadItem {
   base_sha: string | null;
 }
 
+/** A worker that was closed or deleted, as its orchestrator's Thread keeps
+ * it (backend.web.core.finished_children): what it was, how far it got, and
+ * its final report. `how` "closed" = reopenable from Recently closed. */
+export interface FinishedChild {
+  title: string;
+  branch: string;
+  created_at: number;
+  ended_at: number;
+  how: "closed" | "deleted" | string;
+  stage: string;
+  pr_url: string;
+  diff_stat: DiffStat | null;
+  last_report: LastReport | null;
+}
+
 export interface ThreadResponse {
   title: string;
   parent: string;
   members: ThreadMember[];
+  /** Workers that are gone, oldest first (absent on an older server = []). */
+  finished: FinishedChild[];
   items: ThreadItem[];
   more: boolean;
 }
@@ -565,6 +582,18 @@ export interface Caps {
    * through laneActions.teamRunCaps, never directly. */
   /** max_pieces: the most pieces a split may have (MINDFLOCK_MAX_CHILDREN). */
   team_runs?: { split: boolean; together: boolean; max_pieces?: number };
+  /** The spawn guard-rails as they apply now (Settings → Agent orchestration):
+   * each cap's effective value, built-in default, where it comes from (an env
+   * var overrides the setting) and that env var's name. Absent on an older
+   * server. */
+  orchestration?: Record<"max_children" | "max_spawn_depth" | "max_spawned", OrchestrationCap>;
+}
+
+export interface OrchestrationCap {
+  value: number;
+  default: number;
+  source: "env" | "settings" | "default";
+  env: string;
 }
 
 export interface Config {

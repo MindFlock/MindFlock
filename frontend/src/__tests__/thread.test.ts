@@ -10,7 +10,7 @@
  * never typed into, and with nobody free "Send now" becomes "When it's
  * free". */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Instance, ThreadItem, ThreadMember } from "../api/types";
+import type { FinishedChild, Instance, ThreadItem, ThreadMember } from "../api/types";
 
 const killSession = vi.fn();
 vi.mock("../lib/sessionActions", async (orig) => ({
@@ -33,8 +33,10 @@ const {
   familyOf,
   quoteTitle,
   forkPoint,
+  finishedStatus,
   headerSummary,
   logEntries,
+  progressOf,
   mergeOlder,
   newestReportTs,
   normThread,
@@ -115,7 +117,7 @@ const MEMBERS: ThreadMember[] = ["api-billing", "api-search", "api-upload"].map(
   diff_stat: null,
   created_at: NOW - 900,
   last_report: null,
-  base_sha: "3f2c1a0d9e8b",
+  base_sha: "3f2c1a0d9e8b", // pragma: allowlist secret
 }));
 
 describe("worker rows and the header", () => {
@@ -240,7 +242,7 @@ describe("the Between sessions log", () => {
 
 describe("normThread", () => {
   it("never throws on a half-built body", () => {
-    expect(normThread(null, "t")).toEqual({ title: "t", parent: "", members: [], items: [], more: false });
+    expect(normThread(null, "t")).toEqual({ title: "t", parent: "", members: [], finished: [], items: [], more: false });
     const t = normThread({ members: [{ title: "a", base_sha: "" }, {}], items: [{ id: "x", type: "result" }, { id: "" }], more: true });
     expect(t.members.map((m) => [m.title, m.base_sha])).toEqual([["a", null]]);
     expect(t.items.map((i) => i.id)).toEqual(["x"]);
@@ -463,5 +465,67 @@ describe("the shared children-of rule", () => {
       { title: "dev::w3", parent: "api", device: "dev" },
     ] as Instance[];
     expect(familyOf("api", rows).children.map((r) => r.title)).toEqual(["w1"]);
+  });
+});
+
+
+// --- Finished workers and progress ---------------------------------------------------
+
+const gone = (title: string, status: string | null, how = "deleted"): FinishedChild => ({
+  title,
+  branch: "you/" + title,
+  created_at: NOW - 3000,
+  ended_at: NOW - 60,
+  how,
+  stage: "pushed",
+  pr_url: "",
+  diff_stat: null,
+  last_report: status === null ? null : { id: "m1", status, summary: title + " done", ts: NOW - 100 },
+});
+
+describe("finished workers and progress", () => {
+  const rows = workerRows(familyOf("api", FAMILY).children, MEMBERS, act);
+
+  it("normalizes the finished list (and an older server without one)", () => {
+    const body = normThread({ title: "api", members: [], items: [], finished: [gone("old", "done"), { title: "" }] });
+    expect(body.finished.map((f) => f.title)).toEqual(["old"]);
+    expect(body.finished[0].last_report?.status).toBe("done");
+    expect(normThread({ title: "api", members: [], items: [] }).finished).toEqual([]);
+  });
+
+  it("counts finished workers as done unless they reported failed or blocked", () => {
+    // live: 1 ask, 1 done, 1 working; finished: 2 done-ish (one never reported), 1 failed
+    const p = progressOf(rows, [gone("a", "done"), gone("b", null, "closed"), gone("c", "failed")]);
+    expect(p.total).toBe(6);
+    expect(p.done).toBe(3);
+    expect(p.text).toBe("3 of 6 done");
+    expect(p.segs.map((s) => [s.key, s.n])).toEqual([
+      ["done", 3],
+      ["bad", 1],
+      ["needs", 1],
+      ["working", 1],
+    ]);
+  });
+
+  it("has no bar for a session with no workers at all", () => {
+    expect(progressOf([], [])).toEqual({ total: 0, done: 0, segs: [], text: "" });
+  });
+
+  it("names finished workers in the header, alone or beside live ones", () => {
+    expect(headerSummary(rows, 2).at(-1)).toEqual({ text: "2 finished", cls: "ok" });
+    expect(headerSummary([], 3)).toEqual([{ text: "All 3 workers finished", cls: "ok" }]);
+    expect(headerSummary([], 0)).toEqual([]);
+  });
+
+  it("says how a finished worker ended", () => {
+    expect(finishedStatus(gone("a", "done"))).toEqual({ word: "reported done", cls: "ok" });
+    expect(finishedStatus(gone("a", "blocked"))).toEqual({ word: "reported blocked", cls: "bad" });
+    expect(finishedStatus(gone("a", null))).toEqual({ word: "no report", cls: "" });
+  });
+
+  it("carries each live worker's git stage onto its row", () => {
+    const kids = familyOf("api", FAMILY).children.map((c, i) => ({ ...c, stage: i ? "pushed" : "agent" }));
+    const staged = workerRows(kids, MEMBERS, act);
+    expect(new Set(staged.map((r) => r.stage))).toEqual(new Set(["agent", "pushed"]));
   });
 });

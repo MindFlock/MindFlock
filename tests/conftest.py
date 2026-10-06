@@ -115,6 +115,12 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "MINDFLOCK_MAILBOX_FILE", str(tmp_path / "mindflock" / "mailbox.json")
     )
+    # Finished sub-sessions an orchestrator's Thread keeps showing
+    # (``~/.mindflock/finished_children.json``): every session removal writes it.
+    monkeypatch.setenv(
+        "MINDFLOCK_FINISHED_CHILDREN_FILE",
+        str(tmp_path / "mindflock" / "finished_children.json"),
+    )
     # Red-zone stores (roadmap: Code Map + red zones). Point the zone store, the
     # per-root guard-file dir and the per-session tool-feed dir at tmp so the
     # suite never reads or writes the owner's real ~/.mindflock /

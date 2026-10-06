@@ -160,7 +160,7 @@ export function splitBlockReason(
   if (!teamRunCaps(caps).split) return SERVER_NO_SPLIT.charAt(0).toUpperCase() + SERVER_NO_SPLIT.slice(1);
   const m = caps?.agent_mcp;
   if (m) {
-    if (!m.enabled) return "MindFlock tools are switched off for new sessions — Settings → General";
+    if (!m.enabled) return "MindFlock tools are switched off for new sessions — Settings → Agent orchestration";
     const provider = inst.provider || inst.program || "";
     if (!(m.providers || []).includes(provider)) return "This CLI doesn't get the MindFlock tools";
   }

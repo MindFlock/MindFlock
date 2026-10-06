@@ -454,3 +454,97 @@ def test_last_result_cache_survives_a_store_reset(fam):
     _post("api", "r2", sender="api-billing", kind="result", ts=T0 + 31)
     assert mailbox.version("api") == 1  # the same version as before the reset
     assert mailbox.last_result("api", "api-billing")["text"] == "r2"
+
+
+# --------------------------------------------------------------------------- #
+# Finished children: a closed / deleted worker stays on its parent's Thread    #
+# --------------------------------------------------------------------------- #
+def _finish(fam, title, *, parent="api", created, **row):
+    """Give ``title`` the snapshot row a tick would have, then remove it the
+    way every removal route does (pop, then the flock-wide teardown)."""
+    fam.rows[:] = [r for r in fam.rows if r["title"] != title]
+    fam.rows.append(
+        {
+            "title": title,
+            "parent": parent,
+            "created_at": created,
+            "branch": "br-" + title,
+            "stage": row.pop("stage", "pushed"),
+            "pr_url": row.pop("pr_url", ""),
+            "diff_stat": {"files": 2, "additions": 30, "deletions": 4},
+            "last_report": row.pop("last_report", None),
+        }
+    )
+    for r in fam.rows:
+        if r["title"] == parent:
+            r["created_at"] = T0
+    fam.instances.pop(title)
+    server._on_session_removed(title)
+
+
+def test_a_deleted_worker_stays_on_its_orchestrators_thread(fam):
+    _post("api-billing", "use common/ratelimit", sender="api", ts=T0 + 30)
+    rep = _post(
+        "api",
+        "billing done",
+        sender="api-billing",
+        kind="result",
+        ts=T0 + 50,
+        status="done",
+    )
+    thread.note_seed("api-billing", T0 + 10, "Add per-user rate limiting")
+    _finish(fam, "api-billing", created=T0 + 10, pr_url="https://x/pr/7")
+
+    body = _thread()
+    assert [m["title"] for m in body["members"]] == ["api", "api-search"]
+    (done,) = body["finished"]
+    assert done["title"] == "api-billing" and done["how"] == "deleted"
+    assert done["branch"] == "br-api-billing" and done["stage"] == "pushed"
+    assert done["pr_url"] == "https://x/pr/7"
+    assert done["diff_stat"] == {"files": 2, "additions": 30, "deletions": 4}
+    # Its report is read back from the parent's box (the worker's own inbox
+    # went with it, so the instruction TO it is not in the log any more).
+    assert done["last_report"]["status"] == "done"
+    assert done["last_report"]["id"] == rep["id"]
+    kinds = [(i["type"], i["from"], i["to"]) for i in body["items"]]
+    assert ("spawn", "api", "api-billing") in kinds
+    assert ("result", "api-billing", "api") in kinds
+    spawn = next(i for i in body["items"] if i["to"] == "api-billing")
+    assert spawn["text"] == "Add per-user rate limiting"
+
+
+def test_a_closed_worker_says_it_can_be_reopened(fam, monkeypatch):
+    now = _dt.datetime.now().astimezone().isoformat()
+    monkeypatch.setattr(
+        server,
+        "_load_recently_closed",
+        lambda: [{"title": "api-search", "closed_at": now}],
+    )
+    _finish(fam, "api-search", created=T0 + 20)
+    (done,) = _thread()["finished"]
+    assert done["title"] == "api-search" and done["how"] == "closed"
+
+
+def test_a_removed_parent_takes_its_finished_list_with_it(fam):
+    _finish(fam, "api-billing", created=T0 + 10)
+    assert [f["title"] for f in _thread()["finished"]] == ["api-billing"]
+    # The orchestrator goes, and a new session takes its title.
+    fam.instances.pop("api")
+    server._on_session_removed("api")
+    fam.add("api", created=T0 + 500)
+    assert _thread()["finished"] == []
+
+
+def test_a_reused_parent_title_does_not_inherit_finished_children(fam):
+    _finish(fam, "api-billing", created=T0 + 10)
+    # Replace the parent WITHOUT the removal hook (e.g. a crash + recreate):
+    # the stored parent creation time no longer matches.
+    fam.add("api", created=T0 + 900)
+    assert _thread()["finished"] == []
+
+
+def test_a_root_session_is_nobodys_finished_child(fam):
+    fam.instances.pop("other")
+    server._on_session_removed("other")
+    assert _thread()["finished"] == []
+    assert _thread("api-billing")["finished"] == []

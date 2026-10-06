@@ -262,6 +262,73 @@ def test_spawn_limits_defaults():
     assert err and "MINDFLOCK_MAX_CHILDREN=8" in err
 
 
+# --- the caps as settings (Settings → Agent orchestration) --------------------
+def _cap_settings(monkeypatch, **general):
+    from backend.config import settings as S
+
+    for env in (
+        "MINDFLOCK_MAX_CHILDREN",
+        "MINDFLOCK_MAX_SPAWN_DEPTH",
+        "MINDFLOCK_MAX_SPAWNED",
+    ):
+        monkeypatch.delenv(env, raising=False)
+    S.update_settings(general=general)
+
+
+def test_limit_reads_the_setting_when_no_env(monkeypatch):
+    _cap_settings(monkeypatch, agent_max_children=3, agent_max_spawned=40)
+    assert lineage.limit("MINDFLOCK_MAX_CHILDREN", 8) == 3
+    assert lineage.limit("MINDFLOCK_MAX_SPAWNED", 24) == 40
+    # Unset field: the built-in default.
+    assert lineage.limit("MINDFLOCK_MAX_SPAWN_DEPTH", 3) == 3
+    assert lineage.source("MINDFLOCK_MAX_CHILDREN") == "settings"
+    assert lineage.source("MINDFLOCK_MAX_SPAWN_DEPTH") == "default"
+
+
+def test_env_still_overrides_the_setting(monkeypatch):
+    _cap_settings(monkeypatch, agent_max_children=3)
+    monkeypatch.setenv("MINDFLOCK_MAX_CHILDREN", "5")
+    assert lineage.limit("MINDFLOCK_MAX_CHILDREN", 8) == 5
+    assert lineage.source("MINDFLOCK_MAX_CHILDREN") == "env"
+    # A bad env value falls through to the setting, not to "no limit".
+    monkeypatch.setenv("MINDFLOCK_MAX_CHILDREN", "lots")
+    assert lineage.limit("MINDFLOCK_MAX_CHILDREN", 8) == 3
+
+
+def test_a_raised_setting_lets_a_ninth_child_spawn(monkeypatch):
+    eight = {"p": _Inst("p")}
+    for i in range(8):
+        eight["c%d" % i] = _Inst("c%d" % i, parent="p")
+    _cap_settings(monkeypatch)
+    err = lineage.spawn_limit_error(eight, "p", False)
+    # The default refusal names both the env knob and where to raise it.
+    assert "MINDFLOCK_MAX_CHILDREN=8" in err and "Settings → Agent orchestration" in err
+    _cap_settings(monkeypatch, agent_max_children=12)
+    assert lineage.spawn_limit_error(eight, "p", False) is None
+    _cap_settings(monkeypatch, agent_max_children=2)
+    err = lineage.spawn_limit_error(eight, "p", False)
+    assert "limit 2, set in Settings → Agent orchestration" in err
+    assert "MINDFLOCK_MAX_CHILDREN" not in err
+
+
+def test_settings_round_trip_the_caps_and_drop_negatives():
+    from backend.config.settings import GeneralSettings
+
+    g = GeneralSettings.from_dict(
+        {
+            "agent_max_children": "12",
+            "agent_max_spawn_depth": -1,
+            "agent_max_spawned": 0,
+        }
+    )
+    assert (g.agent_max_children, g.agent_max_spawn_depth, g.agent_max_spawned) == (
+        12,
+        None,
+        0,
+    )
+    assert g.to_dict() == {"agent_max_children": 12, "agent_max_spawned": 0}
+
+
 # --- base_ref validation against a real repo ---------------------------------
 def _git(cwd, *args):
     res = subprocess.run(

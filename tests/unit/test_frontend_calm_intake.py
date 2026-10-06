@@ -206,6 +206,7 @@ def test_settings_nav_order_and_groups():
         "providers",
         "accounts",
         "localmodel",
+        "orchestration",
         "workspace",
         "ide",
         "security",
@@ -219,7 +220,7 @@ def test_settings_nav_order_and_groups():
     ]
     for k in ("general", "connections", "notifications"):
         assert not groups[k], k
-    for k in ("coding", "providers", "accounts", "localmodel"):
+    for k in ("coding", "providers", "accounts", "localmodel", "orchestration"):
         assert groups[k] == "Agents", k
     for k in ("workspace", "ide"):
         assert groups[k] == "Code", k
@@ -243,13 +244,16 @@ def test_notifications_no_longer_points_at_the_sidebar_header():
     assert "sidebar header" not in _read(_SETTINGS / "screens" / "Notifications.tsx")
 
 
-def test_general_leads_with_getting_started_and_folds_the_mcp():
+def test_general_leads_with_getting_started_and_the_mcp_has_its_own_screen():
     src = _read(_SETTINGS / "screens" / "General.tsx")
     body = src[src.index("export function General(") :]
     body = body[: body.index("\n}\n")]
     assert body.index("<GettingStarted />") < body.index('"set-section-title">General<')
-    assert "<summary>Agent orchestration (MindFlock MCP)</summary>" in body
-    assert "function AgentMcpRows(" in src
+    # The MCP rows moved out of General's fold to Agents → Agent orchestration.
+    assert "Agent orchestration (MindFlock MCP)" not in src
+    assert "AgentMcpRows" not in src
+    orch = _read(_SETTINGS / "screens" / "AgentOrchestration.tsx")
+    assert "function AgentMcpRows(" in orch and "<AgentMcpRows />" in orch
     assert "top bar" not in src
     assert "sidebar's Usage bar" in src
 

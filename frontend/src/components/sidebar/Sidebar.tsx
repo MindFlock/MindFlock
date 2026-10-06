@@ -37,12 +37,16 @@ import {
 import { childrenByParent, type ShipTask } from "../../lib/agentMessages";
 import { effectiveActivity } from "../../lib/stage";
 import { splitKeys, splitRail } from "../../lib/runs";
+import { hideFoldedFamilies } from "../../lib/familyFold";
 import { useRuns } from "../../state/runs";
 import { OwnHeader, QueuedRow, RunGroupHeader } from "./RunGroupHeader";
 import { computeVisible } from "../grid/layout";
 import { useDoctorWarn } from "../dialogs/SetupDialog";
 import { isVerifySession } from "../dialogs/verify";
 import { Hint } from "../onboarding/Hint";
+
+/** No folds (while a search filter is on). */
+const NO_FOLDS: ReadonlySet<string> = new Set();
 
 interface Props {
   onOpenChat(): void;
@@ -302,7 +306,14 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   };
   // Windows are local by definition, so under device grouping they ride in
   // this device's section; a remote group holds sessions only.
-  const localRail = toRail(localRows, winFiltered);
+  // An orchestrator folded on the rail (its row's "hide N") takes its
+  // sub-sessions out of the list HERE, before numbering — so they leave
+  // railOrder too. Not while searching: a filter shows every match.
+  const localRail = hideFoldedFamilies(
+    toRail(localRows, winFiltered),
+    ui.filter ? NO_FOLDS : ui.collapsedFamilies,
+    ui.focused
+  );
   // Ship lanes: this device's rail split into run groups (each under its
   // header, folded or not) and the rest ("On their own"). Re-sequencing only —
   // the same entries, so the published keys below are still exactly what is

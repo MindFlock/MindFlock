@@ -1352,7 +1352,9 @@ def validate_plan(
         problems.append(
             {
                 "piece": "",
-                "error": "at most %d pieces (MINDFLOCK_MAX_CHILDREN)" % max_pieces,
+                "error": "at most %d pieces (the sub-session cap: "
+                "MINDFLOCK_MAX_CHILDREN or Settings → Agent orchestration)"
+                % max_pieces,
             }
         )
     seen_titles: set = set()

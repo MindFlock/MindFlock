@@ -221,6 +221,29 @@ export const SidebarRow = memo(function SidebarRow({
   const lchip = isLead ? leadChip(leadRun) : null;
   const lline = isLead ? leadLine(leadRun as RunDTO | null) : null;
   const roll = kids.length && !pending && !isLead ? rollup(kids, nameOf, effectiveActivity) : null;
+  // Fold this session's sub-sessions out of the rail (lib/familyFold). A
+  // worded toggle beside the roll-up, never another chevron: the row's ›
+  // already means "actions". The roll-up stays, so a folded family still
+  // says what needs you.
+  const folded = useUi((s) => s.collapsedFamilies.has(title));
+  const foldBtn =
+    kids.length && !pending ? (
+      <button
+        type="button"
+        className="fold-kids"
+        aria-expanded={!folded}
+        title={
+          folded
+            ? `Show its ${kids.length} sub-session${kids.length === 1 ? "" : "s"} in the sidebar`
+            : `Hide its ${kids.length} sub-session${kids.length === 1 ? "" : "s"} from the sidebar — they keep running`
+        }
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => act(() => useUi.getState().toggleFamilyCollapsed(title), e)}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
+        {folded ? "show " + kids.length : "hide"}
+      </button>
+    ) : null;
   // "wrap up" is a one-click paste into this session: never offered as one
   // when it can't take a paste (no tools this launch) — the fork button's rule.
   const pchip =
@@ -473,33 +496,36 @@ export const SidebarRow = memo(function SidebarRow({
             </span>
           )}
           {!editing && !ship && lline && (
-            <span
-              className={"lineage workers lead-line"}
-              title={"Its group: " + (leadRun?.name || "") + "\nClick to open the Thread"}
-              role="button"
-              tabIndex={0}
-              onClick={(e) => act(() => openThread(title), e)}
-              onDoubleClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
-                if (e.key !== "Enter" && e.key !== " ") return;
-                e.preventDefault();
-                e.stopPropagation();
-                openThread(title);
-              }}
-            >
-              <span className={lline.cls || undefined}>{lline.text}</span>
-              {lline.url && (
-                <a
-                  className="lead-link"
-                  href={lline.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  title={lline.url}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {" ↗"}
-                </a>
-              )}
+            <span className="roll-line">
+              <span
+                className={"lineage workers lead-line"}
+                title={"Its group: " + (leadRun?.name || "") + "\nClick to open the Thread"}
+                role="button"
+                tabIndex={0}
+                onClick={(e) => act(() => openThread(title), e)}
+                onDoubleClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openThread(title);
+                }}
+              >
+                <span className={lline.cls || undefined}>{lline.text}</span>
+                {lline.url && (
+                  <a
+                    className="lead-link"
+                    href={lline.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={lline.url}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {" ↗"}
+                  </a>
+                )}
+              </span>
+              {foldBtn}
             </span>
           )}
           {!editing && !ship && !lline && wline && (
@@ -516,29 +542,32 @@ export const SidebarRow = memo(function SidebarRow({
             </span>
           )}
           {!editing && roll && (
-            <span
-              className="lineage workers"
-              title={roll.title}
-              // Keyboard-reachable like a button (Tab, then Enter/Space):
-              // it opens the family's Thread.
-              role="button"
-              tabIndex={0}
-              aria-label={roll.parts.map((p) => p.text).join(" · ") + " — open the Thread"}
-              onClick={(e) => act(() => openThread(title), e)}
-              onDoubleClick={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
-                if (e.key !== "Enter" && e.key !== " ") return;
-                e.preventDefault();
-                e.stopPropagation();
-                openThread(title);
-              }}
-            >
-              {roll.parts.map((p, i) => (
-                <span key={i}>
-                  {i > 0 && " · "}
-                  <span className={p.cls || undefined}>{p.text}</span>
-                </span>
-              ))}
+            <span className="roll-line">
+              <span
+                className="lineage workers"
+                title={roll.title}
+                // Keyboard-reachable like a button (Tab, then Enter/Space):
+                // it opens the family's Thread.
+                role="button"
+                tabIndex={0}
+                aria-label={roll.parts.map((p) => p.text).join(" · ") + " — open the Thread"}
+                onClick={(e) => act(() => openThread(title), e)}
+                onDoubleClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  openThread(title);
+                }}
+              >
+                {roll.parts.map((p, i) => (
+                  <span key={i}>
+                    {i > 0 && " · "}
+                    <span className={p.cls || undefined}>{p.text}</span>
+                  </span>
+                ))}
+              </span>
+              {foldBtn}
             </span>
           )}
         </span>
