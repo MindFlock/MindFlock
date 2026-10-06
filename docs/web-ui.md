@@ -1564,23 +1564,24 @@ Saved prompts are text you reuse — mostly to paste straight into a session.
 They have three doors, one job each:
 
 - **The Prompts bar** (sidebar; switch it on in [Customize](#customize), like
-  the Assistant) is the daily one. It is one row at any number of prompts:
-  **Prompts → [target ▾] Paste ▾**. **Paste ▾** opens a menu
-  (`#prompts-menu`): yours first, then the built-ins, each name over a
-  one-line preview of its text, and **Manage prompts…** last (arrows, Enter,
-  Esc). The target is the selected session by default, any other running session by
-  the name its rail row shows, or **All running sessions (n)** once two or more
-  are running ("running" = status `running` or started, but not paused; verify
-  sessions are left out). Pick a prompt to paste it there
-  (`POST /api/instances/{title}/send` with `submit: false` and
-  `dialog_safe: true`, once per session for *All*) — *nothing is sent until you
-  press Enter in that session*, and a session sitting on a permission or limit
-  prompt is skipped rather than typed into. Hover a menu item to read the
-  whole prompt.
-- **The Prompts dialog** (`#prompts-dialog`, from the bar menu's **Manage prompts…**, the
-  palette's **Prompts…** or New's **Manage…**) adds and deletes them, previews
-  a long one (⋮), and pastes the same way with the same target picker. Both
-  surfaces use one paste path, `lib/promptPaste.ts`.
+  the Assistant) is the daily one: one short row, **Prompts · Paste ▾**, at
+  any number of prompts. **Paste ▾** opens a menu (`#prompts-menu`): yours
+  first, then the built-ins, each name over a one-line preview of its text
+  (hover for all of it), and **Manage prompts…** last (arrows, Enter, Esc).
+  A pick is pasted into the **focused** session (`POST
+  /api/instances/{title}/send` with `submit: false` and `dialog_safe: true`)
+  and the keyboard moves to that session's terminal: *nothing is sent until
+  you press Enter*, and a session sitting on a permission or limit prompt is
+  skipped rather than typed into. There is no target picker on the bar; with
+  no session selected, a pick says to select one first.
+- **The Prompts dialog** (`#prompts-dialog`, from the bar menu's **Manage
+  prompts…**, the palette's **Prompts…** or New's **Manage…**) adds and
+  deletes them, previews a long one (⋮), and pastes the same way into a
+  session you choose: the selected one by default, any other running session
+  by the name its rail row shows, or **All running sessions (n)** once two or
+  more are running ("running" = status `running` or started, but not paused;
+  verify sessions are left out; *All* sends once per session). Both surfaces
+  use one paste path, `lib/promptPaste.ts`.
 - **New → page 2's Prompt fold** picks one as a new session's opening prompt.
   The **Saved prompt…** select sits beside the optional **Prompt** textarea
   (sent to the agent at launch). Built-ins ship for the common loops — *Fix
@@ -2187,7 +2188,7 @@ added* with **Intake → Pull requests** / **Intake → Issues** (Pull requests,
 Issues); *Appears once Verify tracks a repository or has a checklist* with
 **Open Verify** (the sidebar's Verify bar — the top bar's **Verify** button is
 always there); *Chat, a todo list, and its editable agent file* (Assistant);
-*Your saved prompts — pick one to paste it into any session* with **Manage
+*Your saved prompts — pick one to paste it into the session you are in* with **Manage
 prompts** (Prompts); *From an extension* for an extension's bar. A last line
 says how to reorder: drag a bar's ⠿ grip in the sidebar.
 

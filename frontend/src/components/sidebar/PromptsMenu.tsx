@@ -178,7 +178,7 @@ export function PromptsMenu({
       {entries.slice(builtinStart, manageAt).map((e, i) => row(e, builtinStart + i))}
       <div className="pb-sep" />
       {row(entries[manageAt], manageAt)}
-      <div className="pb-foot">Pasted, not sent — press Enter in the session to send it.</div>
+      <div className="pb-foot">Pasted into the session you are in, not sent — press Enter to send it.</div>
     </div>,
     document.body
   );

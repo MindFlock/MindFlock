@@ -474,9 +474,9 @@
   border-color: var(--accent);
 }
 
-/* Prompts bar: ONE row — label · target · "Paste ▾". The prompts live in the
-   button's menu (PromptsMenu, styled with the ⏩ picker's .pb-menu), so the
-   bar is the same height however many prompts are saved. */
+/* Prompts bar: ONE short row, label · "Paste ▾". The prompts live in the
+   button's menu (PromptsMenu, styled with the ⏩ picker's .pb-menu), and a
+   pick always goes to the focused session, so there is no target picker. */
 #prompts-bar {
   display: flex;
   align-items: center;
@@ -491,30 +491,9 @@
   font-weight: 600;
 }
 
-#prompts-bar .pb-target {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--muted);
-}
-
-#prompts-bar .pb-target select {
-  flex: 1;
-  min-width: 0;
-  font: inherit;
-  font-size: 11px;
-  padding: 3px 4px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  text-overflow: ellipsis;
-}
-
 #prompts-bar .as-toggle {
   flex: none;
+  margin-left: auto;
   white-space: nowrap;
 }
 
