@@ -97,6 +97,9 @@ export type DialogName =
   | "new-session"
   | "settings"
   | "intake"
+  // What's shipping, and what's waiting on you (ship lanes) — the out-side of
+  // Intake; dialogTarget may name a run id ("own" = sessions on their own).
+  | "outbox"
   | "verify"
   | "commit"
   | "make-pr"
@@ -166,6 +169,10 @@ interface UiState {
   aliases: Record<string, string>;
   /** Collapsed device groups in the sidebar. */
   collapsedDevices: Set<string>;
+  /** Folded run groups (sessions started together) in the sidebar, by run id.
+   * Same contract as collapsedDevices: a folded group's rows leave railOrder,
+   * so Alt+N numbering skips them exactly as it skips a folded device. */
+  collapsedRuns: Set<string>;
   /** Sidebar bars hidden via the footer Customize menu (keys in BAR_KEYS). */
   hiddenBars: Set<string>;
   /** User drag order of the sidebar bars (keys; see barDefs.ts). Empty = default. */
@@ -211,9 +218,12 @@ interface UiState {
   /** When this browser last looked at each session's Thread tab (epoch ms) —
    * the tab's badge counts results newer than this. Persisted. */
   threadLastSeen: Record<string, number>;
-  /** The pane whose "Work with other sessions" (fork-icon) menu is open, and
-   * whether it opened straight into a submenu. Transient. */
+  /** The pane whose Ship & split (fork-icon) menu is open, and where its
+   * highlight starts. Transient. */
   playbookMenu: PlaybookMenuState | null;
+  /** Text the New dialog's describe box opens with, once — Intake's "Start
+   * together…" hands its ticked tickets over this way. Transient. */
+  newPrefill: string;
 
   setFocused(title: string | null): void;
   touchMru(title: string): void;
@@ -245,6 +255,7 @@ interface UiState {
   clearBulk(): void;
   setAlias(title: string, alias: string): void;
   toggleDeviceCollapsed(device: string): void;
+  toggleRunCollapsed(runId: string): void;
   toggleBarHidden(key: string): void;
   setBarOrder(order: string[]): void;
   /** Toggle the reduce-motion terminal cover. */
@@ -276,6 +287,11 @@ interface UiState {
   setThreadLastSeen(title: string, ts?: number): void;
   /** Open the fork-icon menu on a session's pane, or close it (null). */
   setPlaybookMenu(menu: PlaybookMenuState | null): void;
+  /** Open New with `text` already in its describe box (list mode when it is
+   * a list or ticket IDs). */
+  openNewWith(text: string): void;
+  /** The prefill for this opening of New, cleared as it is read. */
+  takeNewPrefill(): string;
 }
 
 export interface ThreadComposeTarget {
@@ -286,8 +302,9 @@ export interface ThreadComposeTarget {
 
 export interface PlaybookMenuState {
   title: string;
-  /** Open with this submenu already showing ("ask" = the session picker). */
-  sub?: "ask" | null;
+  /** Where the highlight starts: "lane" = on the session's current lane
+   * (Ctrl+K L), which is also the default. */
+  sub?: "lane" | null;
 }
 
 /** How the store brings a session forward. The real one is
@@ -319,6 +336,7 @@ export const useUi = create<UiState>((set, get) => ({
   bulkSelected: new Set<string>(),
   aliases: load<Record<string, string>>("mf_aliases", {}),
   collapsedDevices: new Set(load<string[]>("cs_devcollapse", [])),
+  collapsedRuns: new Set(load<string[]>("mf_runcollapse", [])),
   // Fresh users start with the essentials (Usage + Ticket Ingestion + Assistant)
   // so a first run isn't overwhelming; the rest are one click away in Customize.
   // Once the user touches Customize the saved set wins, empty included.
@@ -342,6 +360,7 @@ export const useUi = create<UiState>((set, get) => ({
   threadComposeTarget: null,
   threadLastSeen: load<Record<string, number>>("mf_thread_seen", {}),
   playbookMenu: null,
+  newPrefill: "",
 
   setFocused: (title) => set({ focused: title }),
   touchMru: (title) => {
@@ -459,6 +478,13 @@ export const useUi = create<UiState>((set, get) => ({
     save("cs_devcollapse", [...next]);
     set({ collapsedDevices: next });
   },
+  toggleRunCollapsed: (runId) => {
+    const next = new Set(get().collapsedRuns);
+    if (next.has(runId)) next.delete(runId);
+    else next.add(runId);
+    save("mf_runcollapse", [...next]);
+    set({ collapsedRuns: next });
+  },
   toggleBarHidden: (key) => {
     const next = new Set(get().hiddenBars);
     if (next.has(key)) next.delete(key);
@@ -552,6 +578,12 @@ export const useUi = create<UiState>((set, get) => ({
     set({ threadLastSeen });
   },
   setPlaybookMenu: (menu) => set({ playbookMenu: menu }),
+  openNewWith: (text) => set({ newPrefill: text, openDialog: "new-session", dialogTarget: null }),
+  takeNewPrefill: () => {
+    const t = get().newPrefill;
+    if (t) set({ newPrefill: "" });
+    return t;
+  },
 }));
 
 /** Display name helper: alias if set, else the raw title. */

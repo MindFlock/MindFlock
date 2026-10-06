@@ -70,10 +70,17 @@ def run_dir() -> Path:
     ``~/.mindflock/run``, so an uninstall ``--purge`` sweeps it with everything
     else and it is never inside a git worktree.
     """
+    from backend.config.home_guard import guard
+
     env = os.environ.get("MINDFLOCK_RUN_DIR")
     if env:
-        return Path(env)
-    return Path(os.path.expanduser("~")) / ".mindflock" / "run"
+        return Path(guard(env, "secret-env run dir"))
+    return Path(
+        guard(
+            str(Path(os.path.expanduser("~")) / ".mindflock" / "run"),
+            "secret-env run dir",
+        )
+    )
 
 
 def _path(session_name: str) -> Path:

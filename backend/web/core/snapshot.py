@@ -286,6 +286,7 @@ def _session_diff_stat(inst) -> Optional[dict]:
             else {"additions": 0, "deletions": 0}
         )
         result["uncommitted"] = {
+            "files": int(un.get("files") or 0),
             "additions": un["additions"],
             "deletions": un["deletions"],
         }
@@ -429,6 +430,14 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         # "status", "summary", "ts"}, consumed or not) or null. A cached read
         # of the mailbox, recomputed only when the parent's box changes.
         "last_report": _last_report(inst.Title),
+        # The ship lane ({"target", "ask_first", "owner"}) — how far MindFlock
+        # carries this session once its agent is done — or null. A copy window
+        # on a driven branch gets its owner's lane in a pass over the whole
+        # listing (core.lanes.fill_duplicates); ``owner`` names the driver.
+        "lane": srv._row_lane(inst.Title),
+        # The team run this session belongs to ({"id", "name", "task", "role",
+        # "grouping"}) or null — what the rail groups members under.
+        "run": srv._row_run(inst.Title),
     }
 
 

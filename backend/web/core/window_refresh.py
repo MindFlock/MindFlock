@@ -39,7 +39,9 @@ DEFAULT_INTERVAL_HOURS = 5.0
 def config_path() -> str:
     env = os.environ.get("MINDFLOCK_WINDOW_REFRESH_FILE")
     if env:
-        return env
+        from backend.config.home_guard import guard
+
+        return guard(env, "window-refresh store")
     return os.path.join(GetConfigDir(), _FileName)
 
 

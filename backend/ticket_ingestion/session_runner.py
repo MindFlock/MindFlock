@@ -44,7 +44,7 @@ from backend.ticket_ingestion.models import (
 from backend.ticket_ingestion.pr_provisioner import PRProvisioner
 from backend.ticket_ingestion.pr_runner import build_consolidated_pr_prompt
 from backend.ticket_ingestion.provisioner import _branch_name_for
-from backend.ticket_ingestion.start_state import move_started
+from backend.ticket_ingestion.start_state import move_started, source_key_of
 
 logger = logging.getLogger(__name__)
 
@@ -188,10 +188,14 @@ class SessionRunner:
         title = story.slug
         agent = self._agent_for(story)
         effort = self._effort_for(story)
+        # Depth is configured per SOURCE, and two sources can share a provider
+        # (two Jira projects, a Shortcut workspace per team). Looking it up by
+        # ``story.provider`` matched whichever source of that provider came
+        # first, so the second project silently ran at the first one's rung.
         self._arm_autopilot(
             title,
             "tix",
-            getattr(story, "provider", "") or "",
+            source_key_of(story),
             str(getattr(story, "id", "") or story.slug),
             str(getattr(story, "name", "") or ""),
         )
@@ -406,11 +410,15 @@ class SessionRunner:
             from backend.config.settings import load_settings
 
             st = load_settings()
-            for src in st.ticketing.sources:
-                if source and source in (
-                    getattr(src, "id", ""),
-                    getattr(src, "provider", ""),
-                ):
+            # The source's own key first: a provider name is only a fallback
+            # for an unkeyed source (or a ticket built before ``source_key``
+            # existed), and must never shadow a later source's exact id.
+            sources = list(st.ticketing.sources)
+            for src in sources:
+                if source and source == getattr(src, "id", ""):
+                    return str(getattr(src, "depth", "") or "")
+            for src in sources:
+                if source and source == getattr(src, "provider", ""):
                     return str(getattr(src, "depth", "") or "")
             for table in (st.github.repo_settings, st.github.issue_repo_settings):
                 block = (table or {}).get(source) or {}

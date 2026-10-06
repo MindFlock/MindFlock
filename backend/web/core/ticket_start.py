@@ -21,10 +21,12 @@ grid) — mirroring :mod:`backend.web.core.pr_review` exactly.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -47,6 +49,18 @@ def _resolve_repo_root() -> Path:
 
 
 _REPO_ROOT = _resolve_repo_root()
+
+
+def _server():
+    """The ``backend.web.server`` module, imported lazily (circular import).
+
+    :func:`launch` registers the session in the server's live engine, so it
+    calls back through the server namespace for everything it needs from
+    there — which also keeps ``monkeypatch.setattr(server, "_foo", …)``
+    working wherever ``_foo`` is used."""
+    from backend.web import server
+
+    return server
 
 
 def _load_config():
@@ -487,9 +501,16 @@ async def move_to_start_state(story) -> str:
 
 def record_started(story) -> None:
     """In-flight ledger marker — from here concurrent pipeline scans treat the
-    ticket as taken (same guard as the orchestrator's)."""
+    ticket as taken (same guard as the orchestrator's). A team run's
+    reservation for it becomes this marker in place (never two entries)."""
     from backend.ticket_ingestion.models import ProcessingRecord
-    from backend.ticket_ingestion.state import record_processed_story
+    from backend.ticket_ingestion.state import (
+        claim_reservation,
+        record_processed_story,
+    )
+
+    if claim_reservation(_REPO_ROOT, story.slug):
+        return
 
     record_processed_story(
         _REPO_ROOT,
@@ -515,3 +536,328 @@ def record_result(story, branch: str | None = None, error: str | None = None) ->
         branch=branch,
         failure_reason=error,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Launching a ticket session (the Intake panel's "Begin work", the MCP's
+# spawn_ticket_session, and a team run's ticket task)
+# --------------------------------------------------------------------------- #
+class LaunchError(Exception):
+    """A ticket start refused before anything launched: ``status`` and
+    ``body`` are exactly what the route answers with."""
+
+    def __init__(self, status: int, body: dict) -> None:
+        super().__init__(str(body.get("error") or status))
+        self.status = status
+        self.body = body
+
+
+_NO_LINEAGE = {"parent": "", "spawned": False, "report_back": False, "note": ""}
+
+
+async def launch(
+    source: str,
+    ticket_id: str,
+    *,
+    title: Optional[str] = None,
+    branch: Optional[str] = None,
+    depth: str = "",
+    agent: str = "",
+    effort: str = "",
+    lineage: Optional[dict] = None,
+    extra_prompt: str = "",
+    run_id: str = "",
+) -> dict:
+    """Start a coding session for one ticket and return the 202 body.
+
+    The body of ``POST /api/tickets/start``, callable without HTTP: the route
+    validates its payload and calls this; a team run calls it for each ticket
+    task. The session is registered and provisioned on a background task (the
+    engine owns provisioning, inside ``Instance.Start``), so this returns as
+    soon as the title is claimed in the pending registry; a launch failure is
+    reported as ``session.create_failed`` plus ``/api/create_failures``.
+
+    * ``title`` / ``branch`` override the ticket's own (a team run's "retry
+      fresh" starts ``<title>-2`` on a new branch and keeps the old one).
+    * ``depth``: ``""`` = the source's configured rung, ``"off"`` = do not arm
+      (the caller arms its own lane), else that rung.
+    * ``agent`` / ``effort``: per-start overrides of the source's chain.
+    * ``lineage``: ``{parent, spawned, report_back, note}`` from
+      ``server._intake_lineage`` (all-empty for the Intake panel and runs).
+    * ``extra_prompt``: appended after the ticket text (a run's brief).
+
+    Raises :class:`LaunchError` (404 unknown ticket / source, 409 a session
+    for it already exists, 502 the tracker failed).
+    """
+    srv = _server()
+    lineage = dict(lineage or _NO_LINEAGE)
+    agent_override = str(agent or "")
+    effort_override = str(effort or "")
+    depth_override = str(depth or "")
+    # Row first, provider fetch second (see the PR endpoint). The panel's
+    # cached list is the title's source: ticket slugs are provider-defined
+    # (Shortcut hardcodes sc-<id>), so deriving one here would be a second
+    # implementation waiting to drift.
+    early = title or srv._cached_session_title(
+        srv._ASSIGNED_TICKETS_CACHE,
+        "tickets",
+        lambda t: t.get("source") == source and str(t.get("id")) == ticket_id,
+    )
+    if early:
+        if early in srv.ENGINE.instances or srv._pending_has(early):
+            raise LaunchError(
+                409,
+                {
+                    "error": "session %s already exists — close it to re-run" % early,
+                    "title": early,
+                },
+            )
+        srv._pending_add(early, "tix")
+
+    try:
+        story = await find_ticket(source, ticket_id)
+    except LookupError as err:
+        srv._pending_drop(early)
+        raise LaunchError(404, {"error": str(err)}) from None
+    except Exception as err:  # noqa: BLE001
+        srv._pending_drop(early)
+        raise LaunchError(502, {"error": str(err)}) from None
+
+    # A per-start choice outranks the source's card. Stamped onto the story
+    # because that is the field every launch path already consults first.
+    if agent_override:
+        story.agent = agent_override
+
+    title = title or session_title(story)
+    if title != early:
+        srv._pending_drop(early)  # stale cache entry — keep only the real title
+        if title in srv.ENGINE.instances or srv._pending_has(title):
+            raise LaunchError(
+                409,
+                {
+                    "error": "session %s already exists — close it to re-run" % title,
+                    "title": title,
+                },
+            )
+    branch = branch or branch_for(story)
+    # The branch is known now, so the row can read as the ticket it is rather
+    # than a bare slug (add() keeps the original `since`).
+    srv._pending_add(
+        title,
+        "tix",
+        branch=branch,
+        workspace_strategy=workspace_mode(),
+        parent=lineage["parent"],
+        spawned=lineage["spawned"],
+    )
+    srv._arm_intake_autopilot(
+        title,
+        depth_override or srv._source_intake_depth(source),
+        "tix",
+        str(getattr(story, "id", "") or ticket_id),
+        message=str(getattr(story, "name", "") or ""),
+        by=("agent:" + lineage["parent"]) if lineage.get("parent") else "user",
+    )
+    # The ticket's source may pin its own agent CLI; empty falls back to this
+    # app's default program. Resolved before the 202 (not in the launch) so an
+    # agent-spawned start can be told whether its worker gets the report-back
+    # footer — that depends on which CLI it runs.
+    program = agent_for(story) or srv.ENGINE.default_program()
+    prompt_tail, report_back, report_reason = srv._intake_prompt_tail(
+        lineage, title, program
+    )
+    if extra_prompt:
+        prompt_tail = "\n\n" + extra_prompt.strip() + prompt_tail
+
+    async def _bg_start() -> None:
+        # Same shape as the pipeline's SessionRunner.run, but against THIS
+        # server's engine so the session shows up in the grid without a
+        # reload. The engine owns provisioning (inside Instance.Start), so
+        # unlike the PR path there is no pre-provision step.
+        marked = False
+        try:
+            prompt = build_prompt(story)
+            # A previous run of this ticket may have left a worktree holding the
+            # branch: the session is long gone (nothing blocked the button) but
+            # git still refuses to check the branch out twice. Reclaim it when
+            # nothing owns it and it holds no work — otherwise the provisioning
+            # error stands, unchanged.
+            await asyncio.to_thread(
+                srv._worktree_reclaim.reclaim_for_launch,
+                getattr(story, "repo_url", "") or "",
+                branch,
+            )
+            # In-flight ledger marker BEFORE the slow launch, so a running
+            # pipeline's scans treat the ticket as taken (orchestrator guard).
+            record_started(story)
+            marked = True
+            # `program` was resolved above, before the options, because this
+            # start's effort has to be translated into THAT CLI's spelling.
+            # This start's own rung wins; the source's default is what applies
+            # when the row did not pick one. Resolved here rather than in
+            # `_start_effort_override` because the source is only knowable once
+            # the story is — and an explicit choice on the row must be able to
+            # ask for LESS thinking than the queue's default, not just more.
+            level = effort_override or effort_for(story)
+            prompt = srv._provider_effort.decorate_prompt(prompt, program, level)
+            # Red zones + the repo's Plan-first flag (worktree not cut yet:
+            # key off the source repo's local checkout / base clone).
+            prompt = await asyncio.to_thread(
+                lambda p=prompt: srv._red_zone_prompt(
+                    p,
+                    program,
+                    srv._repo_url_workdirs(getattr(story, "repo_url", "") or ""),
+                    None,
+                )
+            )
+            # An agent-spawned worker's note + report-back footer go LAST, so
+            # the footer is the final thing it reads (as spawn_session's is).
+            prompt += prompt_tail
+            inst = srv.session.NewInstance(
+                srv.session.InstanceOptions(
+                    title=title,
+                    path=".",
+                    program=program,
+                    provisioned=True,
+                    workspace_strategy=workspace_mode(),
+                    new_branch=branch,
+                    prompt=prompt,
+                    provision_repo_url=getattr(story, "repo_url", "") or "",
+                    launch_args=srv._start_launch_args(program, level),
+                    parent=lineage["parent"],
+                    spawned=lineage["spawned"],
+                )
+            )
+            inst.ExtraEnv = srv._ports.env_for(title)
+            inst.SetStatus(srv.Loading)
+            with srv.ENGINE.lock:
+                # Re-checked under the claim, like the create route: the
+                # parent may have gone, or a concurrent spawn taken the slot.
+                claim_err = srv._intake_claim_error(lineage)
+                if claim_err:
+                    raise RuntimeError(claim_err)
+                srv.ENGINE.instances[title] = inst
+            if lineage["parent"]:
+                # The spawn record in the parent's Thread tab.
+                srv._thread.note_seed(title, srv._created_epoch(inst), prompt)
+            srv._seed_event_snapshot(title)
+            created_data = {
+                "program": inst.Program,
+                "provisioned": True,
+                "ticket": str(story.id),
+            }
+            if lineage["parent"]:
+                created_data["parent"] = lineage["parent"]
+            if lineage["spawned"]:
+                created_data["spawned"] = True
+            if run_id:
+                created_data["run"] = run_id
+            srv._events.BUS.emit(
+                "session.created",
+                session=title,
+                new="loading",
+                data=created_data,
+            )
+            try:
+                await asyncio.to_thread(inst.Start, True)
+                srv.ENGINE.save()
+            except Exception:
+                # By identity: this task may be the loser of a re-start, and
+                # popping by name would delete the LIVE session's record.
+                srv._drop_failed_start(title, inst)
+                raise
+            # Terminal ledger entry so auto ingestion doesn't run it again.
+            record_result(story, branch=branch)
+            await download_attachments(inst, story)
+            # …and move the ticket on its board, if its source asked for that.
+            # After the launch, like the attachments above: the state means "a
+            # session is working on this", which only became true just now.
+            moved = await move_to_start_state(story)
+            if moved and srv.log.InfoLog is not None:
+                srv.log.InfoLog.Printf(
+                    "ticket %s moved to its source's start state (%s)", title, moved
+                )
+            if srv.log.InfoLog is not None:
+                srv.log.InfoLog.Printf("forced ticket session %s live", title)
+        except Exception as err:  # noqa: BLE001
+            if marked:
+                record_result(story, error=str(err))
+            if srv.log.ErrorLog is not None:
+                srv.log.ErrorLog.Printf(
+                    "forced ticket session %s failed: %v", title, err
+                )
+            # The reason a caller polling the listing can ask for (the row
+            # just vanishes otherwise) — GET /api/create_failures.
+            srv._note_create_failure(title, str(err))
+            srv._events.BUS.emit(
+                "session.create_failed", session=title, data={"error": str(err)}
+            )
+        finally:
+            srv._pending_drop(title)
+
+    srv._register_task(_bg_start())
+    body = {"started": True, "title": title}
+    if lineage["parent"] or lineage["spawned"] or lineage["report_back"]:
+        # What an agent-spawned start needs to report about its worker.
+        body.update(
+            {
+                "branch": branch,
+                "program": program,
+                "parent": lineage["parent"],
+                "spawned": lineage["spawned"],
+                "report_back": report_back,
+            }
+        )
+        if lineage["report_back"] and not report_back:
+            body["reason"] = report_reason
+    return body
+
+
+def ledger_holder(slug: str) -> Optional[str]:
+    """Who holds ``slug`` in flight in the ingestion ledger: ``""`` for a
+    started session (the pipeline's, a launch's), ``"run:<id>"`` for a team
+    run's reservation, None when it is not in flight."""
+    from backend.ticket_ingestion.state import latest_story_entry
+
+    entry = latest_story_entry(_REPO_ROOT, slug)
+    if not entry or entry.get("status") != "in_flight":
+        return None
+    return str(entry.get("reserved_by") or "")
+
+
+def reserve(slug: str, by: str = "") -> bool:
+    """Record ``slug`` ``in_flight`` in the ingestion ledger NOW, before any
+    session exists — a team run reserves its queued tickets so the pipeline's
+    scans skip them (the same guard :func:`record_started` sets at launch).
+    ``by`` (``"run:<id>"``) tags the reservation so only that holder hands it
+    back. Returns False — and records nothing — when the ticket is already in
+    flight for someone else (the pipeline started it, or another run holds
+    it): the caller must not start it too."""
+    from backend.ticket_ingestion.models import ProcessingRecord
+    from backend.ticket_ingestion.state import record_processed_story
+
+    holder = ledger_holder(slug)
+    if holder is not None:
+        return bool(by) and holder == by
+    record_processed_story(
+        _REPO_ROOT,
+        ProcessingRecord(
+            story_id=slug,
+            branch=slug,
+            status="in_flight",
+            processed_at=datetime.now(timezone.utc),
+            reserved_by=by or None,
+        ),
+    )
+    return True
+
+
+def release_reservation(slug: str, by: str = "") -> bool:
+    """Undo :func:`reserve` for a ticket that never launched (a team run
+    cancelled while it was still queued): drop that one ``in_flight`` ledger
+    entry so auto ingestion may pick it up again. Only the reservation ``by``
+    made is dropped; history (an earlier completed/failed run of the ticket)
+    and anyone else's marker are left alone."""
+    from backend.ticket_ingestion.state import remove_in_flight_story
+
+    return remove_in_flight_story(_REPO_ROOT, slug, reserved_by=by or None)

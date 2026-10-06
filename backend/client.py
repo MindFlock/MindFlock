@@ -107,10 +107,13 @@ class ApiError(ClientError):
     """The server answered with an HTTP error; ``message`` is its ``error``
     field when the body was the usual ``{"error": "..."}`` JSON."""
 
-    def __init__(self, status: int, message: str) -> None:
+    def __init__(self, status: int, message: str, payload=None) -> None:
         super().__init__(message)
         self.status = status
         self.message = message
+        #: The whole JSON error body when there was one (a 422 carries more
+        #: than its sentence — a plan's ``problems``, say).
+        self.payload = payload if isinstance(payload, dict) else None
 
 
 class AuthRejected(ApiError):
@@ -283,12 +286,13 @@ def _send(
             return resp.read()
     except urllib.error.HTTPError as err:
         # FastAPI error responses are {"error": "..."} JSON; surface that text.
+        payload = None
         try:
             payload = json.loads(err.read().decode("utf-8", "replace"))
             message = str(payload.get("error") or payload)
         except Exception:  # noqa: BLE001 — non-JSON error body
             message = "%s %s" % (err.code, err.reason)
-        raise ApiError(err.code, message) from None
+        raise ApiError(err.code, message, payload) from None
     except TimeoutError as err:
         # A bare timeout (not wrapped in URLError) is a READ timeout: the
         # connection was made, so the server may have acted on the request.

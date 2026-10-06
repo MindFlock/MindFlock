@@ -25690,6 +25690,7 @@ var useUi = create((set, get) => ({
 	bulkSelected: /* @__PURE__ */ new Set(),
 	aliases: load$1("mf_aliases", {}),
 	collapsedDevices: new Set(load$1("cs_devcollapse", [])),
+	collapsedRuns: new Set(load$1("mf_runcollapse", [])),
 	hiddenBars: new Set(firstRun("mf_hiddenbars") ? defaultHiddenBars() : load$1("mf_hiddenbars", [])),
 	barOrder: load$1("mf_barorder", []),
 	reduceMotion: load$1("mf_reduce_motion", false),
@@ -25708,6 +25709,7 @@ var useUi = create((set, get) => ({
 	threadComposeTarget: null,
 	threadLastSeen: load$1("mf_thread_seen", {}),
 	playbookMenu: null,
+	newPrefill: "",
 	setFocused: (title) => set({ focused: title }),
 	touchMru: (title) => {
 		const mru = [title, ...get().mru.filter((t) => t !== title)].slice(0, 50);
@@ -25820,6 +25822,13 @@ var useUi = create((set, get) => ({
 		save("cs_devcollapse", [...next]);
 		set({ collapsedDevices: next });
 	},
+	toggleRunCollapsed: (runId) => {
+		const next = new Set(get().collapsedRuns);
+		if (next.has(runId)) next.delete(runId);
+		else next.add(runId);
+		save("mf_runcollapse", [...next]);
+		set({ collapsedRuns: next });
+	},
 	toggleBarHidden: (key) => {
 		const next = new Set(get().hiddenBars);
 		if (next.has(key)) next.delete(key);
@@ -25928,7 +25937,17 @@ var useUi = create((set, get) => ({
 		save("mf_thread_seen", threadLastSeen);
 		set({ threadLastSeen });
 	},
-	setPlaybookMenu: (menu) => set({ playbookMenu: menu })
+	setPlaybookMenu: (menu) => set({ playbookMenu: menu }),
+	openNewWith: (text) => set({
+		newPrefill: text,
+		openDialog: "new-session",
+		dialogTarget: null
+	}),
+	takeNewPrefill: () => {
+		const t = get().newPrefill;
+		if (t) set({ newPrefill: "" });
+		return t;
+	}
 }));
 function displayName(title) {
 	return useUi.getState().aliases[title] || title;
@@ -27375,6 +27394,400 @@ function nextStep(inst) {
 	}
 }
 //#endregion
+//#region src/lib/agentMessages.ts
+var MESSAGE_SNIPPET = 80;
+function snippet(text, max = MESSAGE_SNIPPET) {
+	const s = String(text ?? "").replace(/\s+/g, " ").trim();
+	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
+}
+function senderName(from, nameOf) {
+	return from ? nameOf(from) : "external";
+}
+function resultStatus(d) {
+	return String(d.status || "").trim().toLowerCase();
+}
+function resultMark(status) {
+	return status === "blocked" || status === "failed" ? "⚠" : "✓";
+}
+function messageToastText(recipient, data, nameOf) {
+	const d = data || {};
+	const from = senderName(String(d.from || ""), nameOf);
+	const body = snippet(d.text);
+	if (d.kind === "result") {
+		const status = resultStatus(d);
+		const head = resultMark(status) + " worker " + from + " reported";
+		if (status) return head + ": " + status + (body ? " — " + body : "");
+		return head + (body ? ": " + body : "");
+	}
+	return "✉ " + from + " → " + nameOf(recipient) + (body ? ": " + body : "");
+}
+function messageNotif(data, nameOf) {
+	const d = data || {};
+	if (d.kind !== "result") return null;
+	const status = resultStatus(d);
+	const from = senderName(String(d.from || ""), nameOf);
+	const body = snippet(d.text);
+	const warn = status === "blocked" || status === "failed";
+	return {
+		text: "worker " + from + " reported" + (status ? " " + status : "") + (body ? " — " + body : ""),
+		cls: warn ? "n-warn" : "n-done"
+	};
+}
+function lineageMark(parent, spawned, nameOf) {
+	const p = String(parent || "");
+	const s = !!spawned;
+	if (!p && !s) return null;
+	if (p) {
+		const name = nameOf(p);
+		return {
+			text: "↳ " + name,
+			title: s ? "Spawned by the agent in “" + name + "”" : "Child of “" + name + "” (adopted)",
+			spawned: s
+		};
+	}
+	return {
+		text: "↳ agent",
+		title: "Spawned by an agent — its parent session is gone, or it was an external MCP client",
+		spawned: true
+	};
+}
+function isChildOf(row, title) {
+	return !!title && row.title !== title && String(row.parent || "") === title && !row.pending && !row.device;
+}
+function childrenOf(title, rows) {
+	return rows.filter((r) => isChildOf(r, title));
+}
+var rawActivity = (r) => String(r.activity || "idle");
+function currentReport(row, act) {
+	const r = row.last_report;
+	if (!r || !String(r.status || "").trim()) return null;
+	if ((act === "working" || act === "clarify" || act === "limit") && Number(row.activity_since) > Number(r.ts)) return null;
+	return r;
+}
+function workerState(row, act) {
+	if (act === "clarify") return "ask";
+	const r = currentReport(row, act);
+	if (r) {
+		const s = String(r.status).trim().toLowerCase();
+		return s === "blocked" || s === "failed" ? s : "done";
+	}
+	if (act === "limit") return "limit";
+	if (act === "working") return "working";
+	return "idle";
+}
+var isReported$1 = (s) => s === "done" || s === "blocked" || s === "failed";
+function since$1(ts, now) {
+	const secs = Math.max(0, Math.floor(now - ts));
+	if (secs < 60) return secs + "s";
+	if (secs < 3600) return Math.floor(secs / 60) + "m";
+	if (secs < 86400) return Math.floor(secs / 3600) + "h";
+	return Math.floor(secs / 86400) + "d";
+}
+function workerLine(row, opts) {
+	const act = opts.act ?? rawActivity(row);
+	const now = opts.now ?? Date.now() / 1e3;
+	const state = workerState(row, act);
+	const r = currentReport(row, act);
+	let text;
+	let cls;
+	if (state === "ask") {
+		text = "? needs your answer";
+		cls = "rep-ask";
+	} else if (state === "blocked" || state === "failed") {
+		text = "✗ " + state;
+		cls = "rep-blocked";
+	} else if (state === "done") {
+		text = "✓ reported";
+		cls = "rep-done";
+	} else if (state === "limit") {
+		text = "usage limit — waiting";
+		cls = "rep-blocked";
+	} else if (state === "working") {
+		const t = Number(row.activity_since) || 0;
+		text = t > 0 ? "working · " + since$1(t, now) : "working";
+		cls = "rep-work";
+	} else {
+		text = "idle — no report";
+		cls = "rep-idle";
+	}
+	const lead = laneLead(row.lane);
+	if (lead && (state === "working" || state === "idle" || state === "done" || state === "limit")) text = lead + " · " + text;
+	const parent = opts.parentName;
+	let detail;
+	if (state === "ask") detail = "it is waiting on a prompt — answer it here or in its pane";
+	else if (r) detail = "reported " + String(r.status).trim().toLowerCase() + " " + since$1(Number(r.ts), now) + " ago" + (r.summary ? ": " + snippet(r.summary, 140) : "");
+	else if (state === "working") detail = "still working, no report yet";
+	else if (state === "limit") detail = "hit the usage limit; its queue resumes when the window resets";
+	else detail = "stopped without reporting back";
+	return {
+		text: opts.nested || !parent ? text : "↳ " + parent + " · " + text,
+		cls,
+		title: (parent ? "Worker of “" + parent + "” — " : "") + detail,
+		state
+	};
+}
+var plural$6 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
+	const n = children.length;
+	if (!n) return null;
+	const states = children.map((c) => workerState(c, actOf(c)));
+	const count = (s) => states.filter((x) => x === s).length;
+	const ask = count("ask");
+	const failed = count("failed");
+	const blocked = count("blocked");
+	const reported = states.filter(isReported$1).length;
+	const working = count("working");
+	const parts = [];
+	if (ask) parts.push({
+		text: ask + " needs you",
+		cls: "needs"
+	});
+	if (failed) parts.push({
+		text: failed + " failed",
+		cls: "bad"
+	});
+	if (blocked) parts.push({
+		text: blocked + " blocked",
+		cls: "bad"
+	});
+	if (ask) parts.push({
+		text: plural$6(n, "worker"),
+		cls: ""
+	});
+	else if (reported === n) parts.push({
+		text: n === 1 ? "worker reported" : "all " + n + " reported",
+		cls: "ok"
+	});
+	else if (reported) parts.push({
+		text: reported + " of " + n + " reported",
+		cls: ""
+	});
+	else if (working === n) parts.push({
+		text: n + " working",
+		cls: ""
+	});
+	else if (working) parts.push({
+		text: working + " of " + n + " working",
+		cls: ""
+	});
+	else parts.push({
+		text: plural$6(n, "worker") + " · no reports",
+		cls: ""
+	});
+	return {
+		parts,
+		title: children.map((c) => nameOf(c.title) + " — " + workerLine(c, {
+			nested: true,
+			parentName: "",
+			act: actOf(c),
+			now
+		}).text).join("\n") + "\nClick to open the Thread"
+	};
+}
+function parentChip(parent, children, nameOf, actOf = rawActivity, blocked = "") {
+	const n = children.length;
+	if (!n || actOf(parent) !== "idle") return null;
+	if (parent.status && parent.status !== "running") return null;
+	const name = nameOf(parent.title);
+	const reported = children.filter((c) => isReported$1(workerState(c, actOf(c)))).length;
+	if (reported === n && blocked) return {
+		kind: "blocked",
+		label: "wrap up",
+		cls: "s-waiting",
+		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — " + blocked
+	};
+	if (reported === n) return {
+		kind: "wrap",
+		label: "wrap up",
+		cls: "wrapchip",
+		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — paste the Wrap up prompt into " + name + " (you press Enter; it merges, runs the tests, and asks before deleting)"
+	};
+	return {
+		kind: "waiting",
+		label: "waiting",
+		cls: "s-waiting",
+		title: name + " is idle — " + (n - reported) + " of " + n + " workers haven't reported yet"
+	};
+}
+function childrenByParent(rows) {
+	const live = new Set(rows.filter((r) => !r.device).map((r) => r.title));
+	const out = /* @__PURE__ */ new Map();
+	for (const r of rows) {
+		const p = String(r.parent || "");
+		if (!live.has(p) || !isChildOf(r, p)) continue;
+		if (!out.has(p)) out.set(p, []);
+		out.get(p).push(r);
+	}
+	return out;
+}
+function inFamily(row, isWorker, kids) {
+	return isWorker || kids > 0 || !!row.playbook;
+}
+function workerOf(parent, nameOf) {
+	return parent ? "· worker of " + nameOf(parent) : "";
+}
+var LANE_HEAD = {
+	leave: "agent only",
+	commit: "→ commit",
+	push: "→ push",
+	pr: "→ PR",
+	merge: "→ merge"
+};
+var LANE_MEANS = {
+	leave: "MindFlock commits nothing for it",
+	commit: "MindFlock commits it with a message written from the diff once its agent stops and your hooks pass",
+	push: "MindFlock commits and pushes it once its agent stops and your hooks pass",
+	pr: "MindFlock commits, pushes and opens its PR once its agent stops and your hooks pass",
+	merge: "MindFlock commits, pushes, opens its PR and merges it once checks pass"
+};
+var LANE_RANK = {
+	leave: 0,
+	commit: 1,
+	push: 2,
+	pr: 3,
+	merge: 4
+};
+function laneOf(row) {
+	const l = row.lane;
+	if (l && l.target && l.target in LANE_RANK) return l;
+	const ap = row.autopilot;
+	if (ap && ap.depth) {
+		const target = ap.depth === "agent" ? "leave" : ap.depth;
+		if (target in LANE_RANK) return {
+			target,
+			ask_first: false
+		};
+	}
+	return null;
+}
+function laneLead(lane) {
+	const t = String(lane?.target || "");
+	if (!t || t === "leave") return "";
+	return LANE_HEAD[t] || "→ " + t;
+}
+var LANE_DEPTH_RANK = {
+	agent: 0,
+	commit: 1,
+	push: 2,
+	pr: 3,
+	merge: 4
+};
+function awaitingApproval(row) {
+	const lane = laneOf(row);
+	const ap = row.autopilot;
+	if (!lane || !lane.ask_first || !ap || ap.state !== "done") return false;
+	return (LANE_DEPTH_RANK[ap.depth] ?? 0) < (LANE_RANK[lane.target] ?? 0);
+}
+function prNumber(row) {
+	const n = row.merge_state?.number;
+	if (n) return String(n);
+	const m = String(row.pr_url || "").match(/\/pull\/(\d+)/);
+	return m ? m[1] : "";
+}
+function checksText(row) {
+	const c = String(row.merge_state?.checks || "");
+	if (c === "ok") return {
+		text: "checks ✓",
+		bad: false
+	};
+	if (c === "failed") return {
+		text: "checks ✗",
+		bad: true
+	};
+	if (c === "pending") return {
+		text: "checks…",
+		bad: false
+	};
+	return {
+		text: "",
+		bad: false
+	};
+}
+function stageRank(stage) {
+	return stage === "committed" ? 1 : stage === "pushed" ? 2 : stage === "pr" ? 3 : 0;
+}
+function escalationText(reason) {
+	const r = String(reason || "").trim();
+	switch (r) {
+		case "stuck": return "stalled twice — no diff, no report";
+		case "blocked": return "its agent reported blocked";
+		case "ship_halted": return "hooks failed twice";
+		case "conflict": return "merge conflict";
+		case "budget": return "the group's budget is used up";
+		case "restart": return "couldn't pick it back up after a restart";
+		case "": return "needs you";
+		default: return r;
+	}
+}
+function shipLine(row, opts = {}) {
+	const lane = laneOf(row);
+	if (!lane && !row.run) return null;
+	const target = lane?.target || "leave";
+	if (target === "leave" && !row.run) return null;
+	const act = opts.act ?? rawActivity(row);
+	const now = opts.now ?? Date.now() / 1e3;
+	const task = opts.task || null;
+	const ap = row.autopilot || null;
+	const stage = String(row.stage || "");
+	const head = (LANE_HEAD[target] || "→ " + target) + (lane?.ask_first ? ", asks first" : "");
+	const copy = lane?.owner && lane.owner !== row.title ? "\nThis window shares its branch with “" + lane.owner + "”, which carries it." : "";
+	const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and shows it to you in the Outbox before anything leaves this machine" : "");
+	const base = {
+		restCls: "",
+		title: (means ? "Lane: " + means + "." : "") + copy
+	};
+	const line = (lead, rest, cls, state, why = "") => ({
+		...base,
+		lead,
+		rest,
+		cls,
+		state,
+		title: (why ? why + "\n" : "") + base.title
+	});
+	if (act === "clarify") return line("? needs your answer", "", "rep-ask", "ask", "Its agent is waiting on a prompt — answer it here, in the Outbox, or in its pane.");
+	const tstate = String(task?.state || "");
+	const reason = String(task?.reason || "");
+	if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve") return line("! " + escalationText(reason), " — open the Outbox", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
+	if (tstate === "failed") return line("! failed", reason ? " — " + escalationText(reason) : " — open the Outbox", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
+	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
+	if (tstate === "integrated") return line("✓ merged back", "", "rep-done", "shipped", "Merged back into its lead's branch.");
+	if (tstate === "integrating" && (reason === "conflict" || !!task?.conflict)) return line("! conflict", " — open the Thread", "rep-ask", "shipping", "Merging it back conflicted — its lead is resolving it; the lead's Thread shows where it is.");
+	if (tstate === "integrating") return line("⇄ merging", "", "rep-ship", "shipping", "MindFlock is merging it back into its lead's branch.");
+	const rank = LANE_RANK[target] ?? 0;
+	const merges = row.run?.grouping === "together" && row.run?.role !== "lead";
+	if ((tstate === "shipped" || tstate === "integrated" || rank > 0 && target !== "merge" && !merges && stageRank(stage) >= rank || target === "merge" && !!ap && ap.state === "done" && ap.step === "merge") && rank > 0) {
+		if (target === "pr" || target === "merge") {
+			const n = prNumber(row);
+			const pr = n ? "PR #" + n : "PR";
+			if (target === "merge" && ap?.state === "done" && ap.step === "merge") return line("✓ merged", n ? " · " + pr : "", "rep-done", "shipped", "Merged.");
+			const ck = checksText(row);
+			return {
+				...line("✓ " + pr, ck.text ? " · " + ck.text : "", "rep-done", "shipped", "Its PR is open."),
+				restCls: ck.bad ? "bad" : ""
+			};
+		}
+		return line(target === "push" ? "✓ pushed" : "✓ committed", "", "rep-done", "shipped", "Done: its lane ends at " + target + ".");
+	}
+	if ((tstate === "shipping" || tstate === "integrating" || !!ap && ap.state === "running" && act !== "working" && !!ap.step && ap.step !== "agent") && rank > 0) {
+		const s = stageRank(stage);
+		const note = String(ap?.note || "");
+		return line("⇡ " + (ap?.step === "check" || /\bcheck/i.test(note) ? "running checks" : tstate === "integrating" ? "merging back" : s === 0 ? "committing" : s === 1 ? "pushing" : s === 2 ? "opening PR" : "merging"), "", "rep-ship", "shipping", note ? "MindFlock: " + note : "MindFlock is shipping it.");
+	}
+	if (tstate === "needs_you" && reason === "approve" || !tstate && awaitingApproval(row)) return line(head, " · ready — see the Outbox", "rep-ask", "approve", "It stopped where you asked: the Outbox shows the commit message and PR before anything is pushed.");
+	let rest;
+	let state = "idle";
+	if (act === "working") {
+		const t = Number(row.activity_since) || 0;
+		rest = t > 0 ? " · working " + since$1(t, now) : " · working";
+		state = "working";
+	} else if (act === "limit") {
+		rest = " · usage limit — waiting";
+		state = "limit";
+	} else if (act === "offline") rest = " · offline";
+	else rest = " · idle";
+	return line(head, rest, "rep-lane", state);
+}
+//#endregion
 //#region src/components/sidebar/ordering.ts
 function orderedKeys(keys, order) {
 	const present = new Set(keys);
@@ -27497,6 +27910,24 @@ function placeNewWorkers(saved, live) {
 	}
 	return order;
 }
+function placeNewRunMembers(saved, live) {
+	const seen = new Set(saved);
+	const fresh = live.filter((r) => r.run?.id && !seen.has(r.title));
+	if (!fresh.length) return saved;
+	const runOf = new Map(live.map((r) => [r.title, r.run?.id || ""]));
+	let order = saved.concat(live.map((r) => r.title).filter((t) => !seen.has(t)));
+	const placed = /* @__PURE__ */ new Set();
+	for (const r of fresh) {
+		const rest = order.filter((t) => t !== r.title);
+		let at = -1;
+		rest.forEach((t, i) => {
+			if (runOf.get(t) === r.run.id && (seen.has(t) || placed.has(t))) at = i;
+		});
+		placed.add(r.title);
+		if (at >= 0) order = orderWithAfter(order, r.title, rest[at]);
+	}
+	return order;
+}
 var SEARCH_MIN = 6;
 function matchesFilter(inst, filter, aliases) {
 	if (!filter) return true;
@@ -27533,12 +27964,13 @@ function attentionItems(instances) {
 			title: inst.title,
 			reason: "checks failing"
 		});
-		else if (inst.stage === "pushed") items.push({
-			p: 3,
-			title: inst.title,
-			reason: "pushed — ready for PR"
-		});
-		else if (act === "idle" && Number(inst.activity_since) > 0) {
+		else if (inst.stage === "pushed") {
+			if (laneOf(inst)?.target !== "push") items.push({
+				p: 3,
+				title: inst.title,
+				reason: "pushed — ready for PR"
+			});
+		} else if (act === "idle" && Number(inst.activity_since) > 0) {
 			const idleFor = Date.now() / 1e3 - Number(inst.activity_since);
 			const un = (inst.diff_stat || {})?.uncommitted || {};
 			const unfinished = (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
@@ -27953,248 +28385,10 @@ function Appearance(_) {
 	] });
 }
 //#endregion
-//#region src/lib/agentMessages.ts
-var MESSAGE_SNIPPET = 80;
-function snippet(text, max = MESSAGE_SNIPPET) {
-	const s = String(text ?? "").replace(/\s+/g, " ").trim();
-	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
-}
-function senderName(from, nameOf) {
-	return from ? nameOf(from) : "external";
-}
-function resultStatus(d) {
-	return String(d.status || "").trim().toLowerCase();
-}
-function resultMark(status) {
-	return status === "blocked" || status === "failed" ? "⚠" : "✓";
-}
-function messageToastText(recipient, data, nameOf) {
-	const d = data || {};
-	const from = senderName(String(d.from || ""), nameOf);
-	const body = snippet(d.text);
-	if (d.kind === "result") {
-		const status = resultStatus(d);
-		const head = resultMark(status) + " worker " + from + " reported";
-		if (status) return head + ": " + status + (body ? " — " + body : "");
-		return head + (body ? ": " + body : "");
-	}
-	return "✉ " + from + " → " + nameOf(recipient) + (body ? ": " + body : "");
-}
-function messageNotif(data, nameOf) {
-	const d = data || {};
-	if (d.kind !== "result") return null;
-	const status = resultStatus(d);
-	const from = senderName(String(d.from || ""), nameOf);
-	const body = snippet(d.text);
-	const warn = status === "blocked" || status === "failed";
-	return {
-		text: "worker " + from + " reported" + (status ? " " + status : "") + (body ? " — " + body : ""),
-		cls: warn ? "n-warn" : "n-done"
-	};
-}
-function lineageMark(parent, spawned, nameOf) {
-	const p = String(parent || "");
-	const s = !!spawned;
-	if (!p && !s) return null;
-	if (p) {
-		const name = nameOf(p);
-		return {
-			text: "↳ " + name,
-			title: s ? "Spawned by the agent in “" + name + "”" : "Child of “" + name + "” (adopted)",
-			spawned: s
-		};
-	}
-	return {
-		text: "↳ agent",
-		title: "Spawned by an agent — its parent session is gone, or it was an external MCP client",
-		spawned: true
-	};
-}
-function isChildOf(row, title) {
-	return !!title && row.title !== title && String(row.parent || "") === title && !row.pending && !row.device;
-}
-function childrenOf(title, rows) {
-	return rows.filter((r) => isChildOf(r, title));
-}
-var rawActivity = (r) => String(r.activity || "idle");
-function currentReport(row, act) {
-	const r = row.last_report;
-	if (!r || !String(r.status || "").trim()) return null;
-	if ((act === "working" || act === "clarify" || act === "limit") && Number(row.activity_since) > Number(r.ts)) return null;
-	return r;
-}
-function workerState(row, act) {
-	if (act === "clarify") return "ask";
-	const r = currentReport(row, act);
-	if (r) {
-		const s = String(r.status).trim().toLowerCase();
-		return s === "blocked" || s === "failed" ? s : "done";
-	}
-	if (act === "limit") return "limit";
-	if (act === "working") return "working";
-	return "idle";
-}
-var isReported$1 = (s) => s === "done" || s === "blocked" || s === "failed";
-function since$1(ts, now) {
-	const secs = Math.max(0, Math.floor(now - ts));
-	if (secs < 60) return secs + "s";
-	if (secs < 3600) return Math.floor(secs / 60) + "m";
-	if (secs < 86400) return Math.floor(secs / 3600) + "h";
-	return Math.floor(secs / 86400) + "d";
-}
-function workerLine(row, opts) {
-	const act = opts.act ?? rawActivity(row);
-	const now = opts.now ?? Date.now() / 1e3;
-	const state = workerState(row, act);
-	const r = currentReport(row, act);
-	let text;
-	let cls;
-	if (state === "ask") {
-		text = "? needs your answer";
-		cls = "rep-ask";
-	} else if (state === "blocked" || state === "failed") {
-		text = "✗ " + state;
-		cls = "rep-blocked";
-	} else if (state === "done") {
-		text = "✓ reported";
-		cls = "rep-done";
-	} else if (state === "limit") {
-		text = "usage limit — waiting";
-		cls = "rep-blocked";
-	} else if (state === "working") {
-		const t = Number(row.activity_since) || 0;
-		text = t > 0 ? "working · " + since$1(t, now) : "working";
-		cls = "rep-work";
-	} else {
-		text = "idle — no report";
-		cls = "rep-idle";
-	}
-	const parent = opts.parentName;
-	let detail;
-	if (state === "ask") detail = "it is waiting on a prompt — answer it here or in its pane";
-	else if (r) detail = "reported " + String(r.status).trim().toLowerCase() + " " + since$1(Number(r.ts), now) + " ago" + (r.summary ? ": " + snippet(r.summary, 140) : "");
-	else if (state === "working") detail = "still working, no report yet";
-	else if (state === "limit") detail = "hit the usage limit; its queue resumes when the window resets";
-	else detail = "stopped without reporting back";
-	return {
-		text: opts.nested || !parent ? text : "↳ " + parent + " · " + text,
-		cls,
-		title: (parent ? "Worker of “" + parent + "” — " : "") + detail,
-		state
-	};
-}
-var plural$5 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
-function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
-	const n = children.length;
-	if (!n) return null;
-	const states = children.map((c) => workerState(c, actOf(c)));
-	const count = (s) => states.filter((x) => x === s).length;
-	const ask = count("ask");
-	const failed = count("failed");
-	const blocked = count("blocked");
-	const reported = states.filter(isReported$1).length;
-	const working = count("working");
-	const parts = [];
-	if (ask) parts.push({
-		text: ask + " needs you",
-		cls: "needs"
-	});
-	if (failed) parts.push({
-		text: failed + " failed",
-		cls: "bad"
-	});
-	if (blocked) parts.push({
-		text: blocked + " blocked",
-		cls: "bad"
-	});
-	if (ask) parts.push({
-		text: plural$5(n, "worker"),
-		cls: ""
-	});
-	else if (reported === n) parts.push({
-		text: n === 1 ? "worker reported" : "all " + n + " reported",
-		cls: "ok"
-	});
-	else if (reported) parts.push({
-		text: reported + " of " + n + " reported",
-		cls: ""
-	});
-	else if (working === n) parts.push({
-		text: n + " working",
-		cls: ""
-	});
-	else if (working) parts.push({
-		text: working + " of " + n + " working",
-		cls: ""
-	});
-	else parts.push({
-		text: plural$5(n, "worker") + " · no reports",
-		cls: ""
-	});
-	return {
-		parts,
-		title: children.map((c) => nameOf(c.title) + " — " + workerLine(c, {
-			nested: true,
-			parentName: "",
-			act: actOf(c),
-			now
-		}).text).join("\n") + "\nClick to open the Thread"
-	};
-}
-function parentChip(parent, children, nameOf, actOf = rawActivity, blocked = "") {
-	const n = children.length;
-	if (!n || actOf(parent) !== "idle") return null;
-	if (parent.status && parent.status !== "running") return null;
-	const name = nameOf(parent.title);
-	const reported = children.filter((c) => isReported$1(workerState(c, actOf(c)))).length;
-	if (reported === n && blocked) return {
-		kind: "blocked",
-		label: "wrap up",
-		cls: "s-waiting",
-		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — " + blocked
-	};
-	if (reported === n) return {
-		kind: "wrap",
-		label: "wrap up",
-		cls: "wrapchip",
-		title: (n === 1 ? "Its worker has reported" : "All " + n + " workers reported") + " — paste the Wrap up prompt into " + name + " (you press Enter; it merges, runs the tests, and asks before deleting)"
-	};
-	return {
-		kind: "waiting",
-		label: "waiting",
-		cls: "s-waiting",
-		title: name + " is idle — " + (n - reported) + " of " + n + " workers haven't reported yet"
-	};
-}
-function childrenByParent(rows) {
-	const live = new Set(rows.filter((r) => !r.device).map((r) => r.title));
-	const out = /* @__PURE__ */ new Map();
-	for (const r of rows) {
-		const p = String(r.parent || "");
-		if (!live.has(p) || !isChildOf(r, p)) continue;
-		if (!out.has(p)) out.set(p, []);
-		out.get(p).push(r);
-	}
-	return out;
-}
-function inFamily(row, isWorker, kids) {
-	return isWorker || kids > 0 || !!row.playbook;
-}
-function workerOf(parent, nameOf) {
-	return parent ? "· worker of " + nameOf(parent) : "";
-}
-//#endregion
 //#region src/lib/playbooks.ts
 var NO_TOOLS_REASON = "This CLI doesn't get the MindFlock tools";
 var RESTART_REASON = "Restart this agent to give it the MindFlock tools";
 var ANSWER_FIRST_REASON = "Answer its prompt first — pasting now would answer the dialog";
-function mcpCapable(caps, inst) {
-	if (isRemote(inst)) return false;
-	const m = caps?.agent_mcp;
-	if (!m || !m.enabled) return false;
-	const provider = inst.provider || inst.program || "";
-	return !!provider && (m.providers || []).includes(provider);
-}
 function isRemote(inst) {
 	return !!inst.device || String(inst.title || "").includes("::");
 }
@@ -28225,57 +28419,6 @@ function splitGate(caps, provider) {
 		reason: ""
 	};
 }
-function liveChildren(title, rows) {
-	return childrenOf(title, rows);
-}
-function reportedLabel(children) {
-	return `${children.filter((c) => !!c.last_report).length} of ${children.length} reported`;
-}
-var WORKER_PLAYBOOKS = /* @__PURE__ */ new Set(["workers", "wrapup"]);
-function isWorkerPlaybook(p) {
-	return p.when === "has_children" || WORKER_PLAYBOOKS.has(p.id);
-}
-function menuModel(playbooks, children) {
-	const general = playbooks.filter((p) => !isWorkerPlaybook(p));
-	const items = playbooks.filter((p) => isWorkerPlaybook(p));
-	return {
-		general,
-		workers: children.length || items.length ? {
-			count: children.length,
-			reported: reportedLabel(children),
-			items
-		} : null
-	};
-}
-function letterOf(p) {
-	return String(p.letter || "").slice(0, 1).toUpperCase();
-}
-function askTargets(self, rows, railOrder, nameOf) {
-	const me = rows.find((r) => r.title === self);
-	const candidates = rows.filter((r) => r.title !== self && !r.device && !r.pending);
-	const rank = (t) => {
-		const i = railOrder.indexOf(t);
-		return i < 0 ? Number.MAX_SAFE_INTEGER : i;
-	};
-	const relOf = (r) => {
-		if (r.parent === self) return "worker";
-		if (me?.parent && r.title === me.parent) return "parent";
-		if (me?.parent && r.parent === me.parent) return "sibling";
-		return "";
-	};
-	const famRank = (rel) => rel === "parent" ? 0 : rel === "worker" ? 1 : rel === "sibling" ? 2 : 3;
-	return candidates.map((r) => {
-		const i = rank(r.title);
-		return {
-			title: r.title,
-			name: nameOf(r.title),
-			slot: i < 9 ? String(i + 1) : "",
-			rel: relOf(r),
-			activity: String(r.activity || ""),
-			_i: i
-		};
-	}).sort((a, b) => famRank(a.rel) - famRank(b.rel) || a._i - b._i).map(({ _i: _unused, ...t }) => t);
-}
 var LIST_RE = /\b([a-z][\w-]*)((?:\s*,\s*(?:the\s+)?[a-z][\w-]*)+),?\s+(?:and|&)\s+(?:the\s+|an?\s+)?([a-z][\w-]*)/i;
 var CUE_RE = /\b(?:in parallel|split (?:it |this |the work )?(?:across|into|between)|fan(?:ning)? (?:it )?out|one (?:worker|session|agent) (?:per|for each)|across (?:\w+ )?workers)\b/i;
 var NOT_A_PIECE = /* @__PURE__ */ new Set([
@@ -28304,15 +28447,6 @@ function splitSuggestion(text) {
 }
 function suggestionPill(sug) {
 	return ["suggested", ...sug.pieces].join(" · ");
-}
-function withSplit(body, on) {
-	if (!on) return body;
-	const next = {
-		...body,
-		playbook: "split"
-	};
-	if ("in_place" in next) next.in_place = false;
-	return next;
 }
 async function fetchPlaybooks(title) {
 	return (await api("/api/playbooks" + (title ? "?title=" + encodeURIComponent(title) : "")))?.playbooks || [];
@@ -28374,23 +28508,6 @@ async function runPlaybook(title, id, args = {}, label) {
 		label
 	} : pb, args);
 }
-function openPlaybookMenu(title, sub = null) {
-	const inst = instances$1().find((r) => r.title === title);
-	if (!inst || !mcpCapable(configCaps(), inst)) {
-		toast(NO_TOOLS_REASON);
-		return;
-	}
-	const why = forkBlockReason(inst);
-	if (why) {
-		toast(why, { duration: 5e3 });
-		return;
-	}
-	selectSession(title, { noKeyboard: true });
-	requestAnimationFrame(() => useUi.getState().setPlaybookMenu({
-		title,
-		sub
-	}));
-}
 function focusQueueInput(title) {
 	selectSession(title, { noKeyboard: true });
 	useUi.getState().setLastTab(title, "queue");
@@ -28405,8 +28522,610 @@ function focusQueueInput(title) {
 	};
 	setTimeout(tick, 0);
 }
-function configCaps() {
-	return queryClient.getQueryData(["config"])?.caps;
+//#endregion
+//#region src/lib/runs.ts
+var RUN_DONE_STATES = /* @__PURE__ */ new Set([
+	"done",
+	"done_with_failures",
+	"cancelled"
+]);
+var TOGETHER_DETAIL_S = 604800;
+function needsRunDetail(r, nowS) {
+	if (!RUN_DONE_STATES.has(r.state)) return true;
+	return r.policy?.grouping === "together" && nowS - (Number(r.created_at) || 0) <= TOGETHER_DETAIL_S;
+}
+function splitRail(entries, runs, opts = {}) {
+	const act = opts.act || ((i) => String(i.activity || "idle"));
+	const byId = new Map(runs.map((r) => [r.id, r]));
+	const members = /* @__PURE__ */ new Map();
+	const firstAt = /* @__PURE__ */ new Map();
+	const named = /* @__PURE__ */ new Map();
+	entries.forEach((e, i) => {
+		const run = e.inst && !e.inst.device ? e.inst.run : null;
+		if (!run || !run.id) return;
+		if (!members.has(run.id)) members.set(run.id, []);
+		members.get(run.id).push(e);
+		if (!firstAt.has(run.id)) firstAt.set(run.id, i);
+		if (run.name && !named.has(run.id)) named.set(run.id, run.name);
+	});
+	const ids = [.../* @__PURE__ */ new Set([...members.keys(), ...runs.map((r) => r.id)])];
+	const groups = [];
+	for (const id of ids) {
+		const info = byId.get(id) || null;
+		const mine = members.get(id) || [];
+		if (info?.policy?.grouping === "together" || info?.split || mine.some((e) => e.inst?.run?.role === "lead" || e.inst?.run?.grouping === "together")) continue;
+		const tasks = info?.tasks || [];
+		const done = !!info && RUN_DONE_STATES.has(info.state);
+		const queued = done ? [] : tasks.filter((t) => t.state === "queued");
+		if (!mine.length && !queued.length) continue;
+		if (opts.filtering && !mine.length) continue;
+		const total = Math.max(info?.counts?.total || 0, tasks.length, mine.length + queued.length);
+		if (total < 2) continue;
+		const taskOf = /* @__PURE__ */ new Map();
+		for (const t of tasks) if (t.title) taskOf.set(t.title, t);
+		const needsTitles = /* @__PURE__ */ new Set();
+		let limited = false;
+		for (const e of mine) {
+			const a = act(e.inst);
+			if (a === "clarify") needsTitles.add(e.key);
+			if (a === "limit") limited = true;
+		}
+		for (const t of tasks) if (t.state === "needs_you") needsTitles.add(t.title || t.id);
+		const localShipped = mine.filter((e) => shipLine(e.inst, {
+			act: act(e.inst),
+			task: taskOf.get(e.key)
+		})?.state === "shipped").length;
+		const shipped = info?.counts ? Math.max(info.counts.shipped || 0, 0) : localShipped;
+		const failed = info?.counts?.failed || tasks.filter((t) => t.state === "failed").length;
+		const lane = info?.policy?.lane ? LANE_HEAD[info.policy.lane] || "→ " + info.policy.lane : "";
+		groups.push({
+			id,
+			name: info?.name || named.get(id) || "Group",
+			lane,
+			state: info?.state || "running",
+			paused: !!info?.paused,
+			pauseReason: info?.pause_reason || "",
+			done,
+			cancelled: info?.state === "cancelled",
+			waitingUsage: limited || info?.pause_reason === "limit" || !!info?.waiting_for_usage,
+			collapsed: !!opts.collapsed?.has(id),
+			entries: mine,
+			queued,
+			needs: needsTitles.size,
+			shipped,
+			failed,
+			total,
+			taskOf
+		});
+	}
+	const at = (g) => firstAt.get(g.id) ?? Number.MAX_SAFE_INTEGER;
+	const created = (g) => byId.get(g.id)?.created_at || 0;
+	groups.sort((a, b) => at(a) - at(b) || created(a) - created(b));
+	const grouped = new Set(groups.flatMap((g) => g.entries.map((e) => e.key)));
+	const rest = entries.filter((e) => !grouped.has(e.key));
+	const family = (e) => {
+		const run = e.inst && !e.inst.device ? e.inst.run : null;
+		return !!run && (run.role === "lead" || run.grouping === "together");
+	};
+	return {
+		groups,
+		families: rest.filter(family),
+		own: rest.filter((e) => !family(e))
+	};
+}
+function splitKeys(split) {
+	const out = [];
+	for (const g of split.groups) if (!g.collapsed) for (const e of g.entries) out.push(e.key);
+	for (const e of split.families || []) out.push(e.key);
+	for (const e of split.own) out.push(e.key);
+	return out;
+}
+function queuedLine(i) {
+	if (i <= 0) return "queued · next free slot";
+	const n = i + 1;
+	const suf = n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th";
+	return "queued · " + n + suf;
+}
+function queuedTitle(t) {
+	const ref = String(t.ticket_id || "").trim();
+	const text = String(t.text || "").trim();
+	if (ref && text) return ref + " " + text;
+	return ref || text || t.title || "queued line";
+}
+function shippedBadge(g) {
+	return g.shipped + "/" + g.total + " shipped";
+}
+function groupTitle(g) {
+	const bits = [g.name + (g.lane ? " — each line goes " + g.lane.replace(/^→\s*/, "to ") : ""), shippedBadge(g) + (g.failed ? ", " + g.failed + " failed" : "")];
+	if (g.needs) bits.push(g.needs + (g.needs === 1 ? " needs" : " need") + " you");
+	if (g.queued.length) bits.push(g.queued.length + " queued — they start as slots free");
+	if (g.cancelled) bits.push("cancelled — its sessions and branches were kept");
+	else if (g.paused) bits.push(g.pauseReason === "budget" ? "paused: the budget is used up" : g.pauseReason === "limit" ? "paused: waiting for usage to come back" : "paused — nothing new starts and nothing ships");
+	else if (g.waitingUsage) bits.push("waiting for usage to come back");
+	bits.push("Click to fold");
+	return bits.join("\n");
+}
+var LEAD_ASKS = {
+	plan: "the lead proposed the pieces — approve them",
+	release: "one PR is ready to open",
+	check_failed: "the check failed on the merged branch",
+	lead_gone: "its lead is gone — nothing can merge or ship"
+};
+var num$3 = (v) => Number(v) || 0;
+var str$3 = (v) => v == null ? "" : String(v);
+function runNote(event, data, info = {}) {
+	const d = data || {};
+	const run = str$3(d.run);
+	const name = str$3(d.name) || info.name?.(run) || "A group";
+	const who = str$3(d.ref) || str$3(d.title) || str$3(d.task) || "a line";
+	switch (event) {
+		case "run.needs_you": {
+			const reason = str$3(d.reason);
+			if (reason === "prompt") return null;
+			if (reason in LEAD_ASKS) {
+				const lead = str$3(d.title) || str$3(d.session);
+				return {
+					text: name + ": " + (str$3(d.text) || LEAD_ASKS[reason]),
+					cls: reason === "check_failed" || reason === "lead_gone" ? "n-warn" : "n-info",
+					run,
+					dedupe: d.key ? "needs:" + str$3(d.key) : [
+						"needs",
+						run,
+						reason,
+						str$3(d.round) || str$3(d.incarnation)
+					].join(":"),
+					rule: "run_needs_you",
+					lead: reason === "check_failed" || reason === "lead_gone" ? void 0 : lead || void 0
+				};
+			}
+			return {
+				text: name + ": " + who + " " + (str$3(d.text) || escalationText(reason)),
+				cls: "n-warn",
+				run,
+				dedupe: d.key ? "needs:" + str$3(d.key) : [
+					"needs",
+					run,
+					str$3(d.task),
+					reason,
+					str$3(d.incarnation)
+				].join(":"),
+				rule: "run_needs_you"
+			};
+		}
+		case "run.finished": {
+			const shipped = num$3(d.shipped);
+			const failed = num$3(d.failed);
+			const lane = info.lane?.(run) || "";
+			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " shipped";
+			const what = str$3(d.outcome) || shipped + word;
+			return {
+				text: name + " finished — " + what + (failed ? ", " + failed + " failed" : ""),
+				cls: failed ? "n-warn" : "n-done",
+				run,
+				dedupe: "finished:" + run,
+				rule: "run_finished"
+			};
+		}
+		case "run.task_shipped": {
+			const m = str$3(d.pr_url).match(/\/pull\/(\d+)/);
+			return {
+				text: name + ": " + who + " shipped" + (m ? " — PR #" + m[1] : ""),
+				cls: "n-done",
+				run,
+				dedupe: [
+					"shipped",
+					run,
+					str$3(d.task)
+				].join(":"),
+				rule: ""
+			};
+		}
+		default: return null;
+	}
+}
+//#endregion
+//#region src/state/runs.ts
+var RUNS_LIVE_MS = 5e3;
+var RUNS_IDLE_MS = 3e4;
+var ROUTE_MISSING_MS = 12e4;
+var missing = (e) => e instanceof ApiError && (e.status === 404 || e.status === 405);
+async function fetchRuns() {
+	let list;
+	try {
+		list = (await api("/api/runs"))?.runs || [];
+	} catch (e) {
+		if (missing(e)) return null;
+		throw e;
+	}
+	const nowS = Date.now() / 1e3;
+	const live = list.filter((r) => needsRunDetail(r, nowS));
+	const details = await Promise.all(live.map((r) => api("/api/runs/" + encodeURIComponent(r.id)).then((d) => d?.run || null, () => null)));
+	const byId = new Map(details.filter((d) => !!d).map((d) => [d.id, d]));
+	return list.map((r) => ({
+		...r,
+		...byId.get(r.id) || {}
+	}));
+}
+function liveRuns(data) {
+	return !!data && data.some((r) => !RUN_DONE_STATES.has(r.state));
+}
+function useRuns() {
+	(0, import_react.useEffect)(bridgeRunEvents, []);
+	return useQuery({
+		queryKey: ["runs"],
+		queryFn: fetchRuns,
+		refetchInterval: (q) => q.state.data === null ? ROUTE_MISSING_MS : liveRuns(q.state.data) && !document.hidden ? RUNS_LIVE_MS : RUNS_IDLE_MS,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useRun(id) {
+	(0, import_react.useEffect)(bridgeRunEvents, []);
+	return useQuery({
+		queryKey: ["run", id || ""],
+		queryFn: async () => {
+			try {
+				return (await api("/api/runs/" + encodeURIComponent(String(id))))?.run || null;
+			} catch (e) {
+				if (missing(e)) return null;
+				throw e;
+			}
+		},
+		enabled: !!id,
+		refetchInterval: (q) => q.state.data && RUN_DONE_STATES.has(q.state.data.state) ? RUNS_IDLE_MS : document.hidden ? RUNS_IDLE_MS : RUNS_LIVE_MS,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev, prevQuery) => prevQuery?.queryKey[1] === (id || "") ? prev : void 0,
+		retry: false
+	});
+}
+async function fetchOutbox() {
+	try {
+		return await api("/api/outbox?group=all");
+	} catch (e) {
+		if (missing(e)) return null;
+		throw e;
+	}
+}
+function useOutbox() {
+	(0, import_react.useEffect)(bridgeRunEvents, []);
+	return useQuery({
+		queryKey: ["outbox"],
+		queryFn: fetchOutbox,
+		refetchInterval: (q) => q.state.data === null ? ROUTE_MISSING_MS : document.hidden ? RUNS_IDLE_MS : RUNS_LIVE_MS,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useNotifyConfig() {
+	return useQuery({
+		queryKey: ["notify-config"],
+		queryFn: () => api("/api/notify/config").catch(() => ({ rules: [] })),
+		staleTime: 6e4,
+		refetchInterval: 12e4,
+		retry: false
+	});
+}
+function ruleOn(id) {
+	if (!id) return true;
+	const rule = queryClient.getQueryData(["notify-config"])?.rules?.find((r) => r.id === id);
+	return !rule || rule.enabled !== false;
+}
+var runLookups = {
+	name: (id) => (queryClient.getQueryData(["runs"]) || []).find((r) => r.id === id)?.name || "",
+	lane: (id) => (queryClient.getQueryData(["runs"]) || []).find((r) => r.id === id)?.policy?.lane || ""
+};
+function refreshRuns() {
+	queryClient.invalidateQueries({ queryKey: ["runs"] });
+	queryClient.invalidateQueries({ queryKey: ["run"] });
+	return queryClient.invalidateQueries({ queryKey: ["outbox"] });
+}
+var runsBridged = false;
+function bridgeRunEvents() {
+	const ev = window.mindflock?.events;
+	if (runsBridged || !ev) return;
+	runsBridged = true;
+	const bump = (_env) => void refreshRuns();
+	for (const name of [
+		"run.changed",
+		"run.needs_you",
+		"run.task_shipped",
+		"run.finished",
+		"session.autopilot_changed"
+	]) ev.subscribe(name, bump);
+}
+//#endregion
+//#region src/lib/runsApi.ts
+var runPath = (id, rest = "") => "/api/runs/" + encodeURIComponent(id) + rest;
+var taskPath = (id, task, verb) => runPath(id, "/tasks/" + encodeURIComponent(task) + "/" + verb);
+async function runAction(what, path, body = {}, done = "") {
+	try {
+		await api(path, { json: body });
+		if (done) toast(done);
+		return true;
+	} catch (err) {
+		errorPop(what + " failed", errMsg(err));
+		return false;
+	} finally {
+		refreshRuns();
+		refreshInstances();
+	}
+}
+function raiseBudget(runId, usd, name = "") {
+	return runAction("Raise the budget", runPath(runId, "/resume"), { budget_usd: usd }, (name || "The group") + " resumed with a $" + usd + " budget");
+}
+function cancelRun(runId, name = "") {
+	return runAction("Cancel", runPath(runId, "/cancel"), {}, (name || "The group") + " cancelled — its sessions and branches are kept");
+}
+function suggestedBudget(budget, spent) {
+	const floor = Math.max(spent, budget) * 1.5;
+	const step = floor < 10 ? 1 : floor < 100 ? 5 : 25;
+	return Math.max(step, Math.ceil(floor / step) * step);
+}
+//#endregion
+//#region src/lib/laneActions.ts
+var LANE_ORDER = [
+	"leave",
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var LANE_CHOICES = [
+	"leave",
+	"commit",
+	"pr",
+	"merge"
+];
+var LANE_LABEL = {
+	leave: "Leave it",
+	commit: "Commit",
+	push: "Push",
+	pr: "Open a PR",
+	merge: "Merge when green"
+};
+var LANE_MENU = [
+	{
+		lane: "leave",
+		label: "Leave it",
+		key: "L",
+		desc: "MindFlock doesn't commit anything"
+	},
+	{
+		lane: "commit",
+		label: "Commit",
+		key: "C",
+		desc: "Commit with a message from the diff once the agent stops and hooks pass"
+	},
+	{
+		lane: "pr",
+		label: "Open a PR",
+		key: "P",
+		desc: "Commit, push, open the PR"
+	},
+	{
+		lane: "merge",
+		label: "Merge when checks pass",
+		key: "M",
+		desc: "…and merge it once CI is green"
+	}
+];
+function normalizeLane(v) {
+	const s = String(v || "").trim().toLowerCase();
+	if (s === "agent" || s === "off" || s === "none") return "leave";
+	return LANE_ORDER.includes(s) ? s : "";
+}
+function laneDefault(fasttrackDepth) {
+	return normalizeLane(fasttrackDepth) || "pr";
+}
+function laneChoice(inst) {
+	const l = laneOf(inst);
+	const lane = l ? normalizeLane(l.target) : "";
+	if (!l || !lane) return {
+		lane: "leave",
+		askFirst: false,
+		owner: ""
+	};
+	return {
+		lane,
+		askFirst: !!l.ask_first,
+		owner: l.owner || ""
+	};
+}
+function teamRunCaps(caps) {
+	const t = caps?.team_runs;
+	return {
+		split: t?.split === true,
+		together: t?.together === true
+	};
+}
+var SERVER_NO_SPLIT = "this MindFlock server can't split a line into pieces — update it";
+var SERVER_NO_TOGETHER = "this MindFlock server can't make one PR for a group — update it";
+function askFirstApplies(lane) {
+	return lane !== "leave";
+}
+function splitBlockReason(caps, inst) {
+	if (!teamRunCaps(caps).split) return SERVER_NO_SPLIT.charAt(0).toUpperCase() + SERVER_NO_SPLIT.slice(1);
+	const m = caps?.agent_mcp;
+	if (m) {
+		if (!m.enabled) return "MindFlock tools are switched off for new sessions — Settings → General";
+		const provider = inst.provider || inst.program || "";
+		if (!(m.providers || []).includes(provider)) return "This CLI doesn't get the MindFlock tools";
+	}
+	if (inst.mcp_attached === false) return "Restart this agent to give it the MindFlock tools";
+	if (inst.activity === "clarify") return "Answer its prompt first";
+	if (inst.activity === "limit") return "It's at its usage limit — split once it's back";
+	return "";
+}
+function splitTaskOf(inst) {
+	return String(inst.last_prompt_full || inst.last_prompt || inst.last_turn || "").trim();
+}
+function groupSize(inst, rows) {
+	const id = inst.run?.id;
+	if (!id) return 0;
+	return rows.filter((r) => r.run?.id === id).length;
+}
+async function setLane(title, lane, askFirst) {
+	return instApi(title, "/lane", { json: {
+		lane,
+		ask_first: askFirstApplies(lane) && askFirst
+	} });
+}
+async function shipNow(title, lane) {
+	await instApi(title, "/ship-now", { json: lane && lane !== "leave" ? { lane } : {} });
+}
+function laneLockReason(inst) {
+	const run = inst.run;
+	if (run && run.id) {
+		const group = run.name || "its group";
+		if (run.role === "lead") return `It leads ${group} — the group ships it once, through the group's release`;
+		if (run.grouping === "together") return `Its work merges into ${group}'s one PR — move it out of the group to give it a lane of its own`;
+	}
+	const owner = inst.lane?.owner;
+	if (owner && inst.title && owner !== inst.title) return `${owner} drives this branch — set its lane from that window`;
+	return "";
+}
+async function moveOutOfGroup(runId, taskId) {
+	await api(taskPath(runId, taskId, "skip"), { json: {} });
+}
+async function startSplitOf(inst, name, lane, askFirst) {
+	return api("/api/runs", { json: {
+		name,
+		items: [{
+			kind: "task",
+			text: splitTaskOf(inst)
+		}],
+		policy: {
+			lane,
+			ask_first: askFirstApplies(lane) && askFirst,
+			grouping: "together",
+			release: "ask"
+		},
+		concurrency: 3,
+		program: inst.provider || inst.program,
+		split: true,
+		lead: inst.title
+	} });
+}
+async function setLaneWhenReady(title, lane, askFirst, delays = [
+	1500,
+	3e3,
+	5e3,
+	8e3,
+	12e3,
+	2e4
+]) {
+	if (lane === "leave") return true;
+	for (let i = 0;; i++) try {
+		await setLane(title, lane, askFirst);
+		return true;
+	} catch (err) {
+		if (!(err instanceof ApiError && err.status === 409 && i < delays.length)) {
+			toast(`Couldn't set “${LANE_LABEL[lane]}” on ${title}: ${errMsg(err)}`, { duration: 7e3 });
+			return false;
+		}
+		await new Promise((r) => setTimeout(r, delays[i]));
+	}
+}
+function shipMenuModel(inst, rows, caps) {
+	const cur = laneChoice(inst);
+	const lock = laneLockReason(inst);
+	const lanes = LANE_MENU.map((m) => ({
+		kind: "lane",
+		...m,
+		current: m.lane === cur.lane,
+		why: lock
+	}));
+	lanes.push({
+		kind: "ask",
+		key: "A",
+		on: cur.askFirst && askFirstApplies(cur.lane),
+		why: lock || (askFirstApplies(cur.lane) ? "" : "Nothing ships while it's “Leave it” — pick a lane first")
+	});
+	const split = [{
+		kind: "split",
+		key: "S",
+		why: splitBlockReason(caps, inst)
+	}];
+	const member = inst.run && inst.run.id ? inst.run : null;
+	const tail = [{
+		kind: "shipnow",
+		key: "N",
+		why: lock || (cur.lane === "leave" ? "Pick how far it goes first — “Leave it” ships nothing" : "")
+	}];
+	if (member && member.task && member.role !== "lead") tail.push({
+		kind: "detach",
+		key: "O"
+	});
+	tail.push({ kind: "message" });
+	return {
+		current: {
+			lane: cur.lane,
+			askFirst: cur.askFirst
+		},
+		lanes,
+		split,
+		group: member ? {
+			name: member.name || "group",
+			count: Math.max(1, groupSize(inst, rows))
+		} : null,
+		tail
+	};
+}
+function shipEntries(m) {
+	return [
+		...m.lanes,
+		...m.split,
+		...m.tail
+	];
+}
+function entryKey(e) {
+	return e.kind === "message" ? "" : e.key;
+}
+function entryWhy(e) {
+	return e.kind === "lane" || e.kind === "ask" || e.kind === "split" || e.kind === "shipnow" ? e.why : "";
+}
+async function runShipEntry(e, inst, name, current) {
+	const title = inst.title;
+	switch (e.kind) {
+		case "lane":
+			await setLane(title, e.lane, current.askFirst);
+			return e.lane === "leave" ? `${name}: MindFlock won't commit anything` : `${name} → ${LANE_LABEL[e.lane]}${current.askFirst ? ", asks first" : ""}`;
+		case "ask":
+			await setLane(title, current.lane, !e.on);
+			return e.on ? `${name} ships without asking` : `${name} stops before it ships and asks in the Outbox`;
+		case "split":
+			await startSplitOf(inst, name, current.lane === "leave" ? "pr" : current.lane, current.askFirst);
+			useUi.getState().threadOpen(title);
+			return `${name} is proposing the pieces — approve the plan in its Thread tab`;
+		case "shipnow":
+			await shipNow(title, current.lane);
+			return `Shipping ${name} now → ${LANE_LABEL[current.lane]}`;
+		case "detach": {
+			const run = inst.run;
+			if (!run) return "";
+			await moveOutOfGroup(run.id, run.task);
+			return `${name} is out of ${run.name} — its session and lane stay as they are`;
+		}
+		case "message": return "";
+	}
+}
+function openShipMenu(title, sub = null) {
+	const inst = instances$1().find((r) => r.title === title);
+	if (!inst || inst.pending) {
+		toast("That session isn't ready yet");
+		return;
+	}
+	if (isRemote(inst)) {
+		toast("Ship & split works on this machine's sessions — open it on its own device");
+		return;
+	}
+	selectSession(title, { noKeyboard: true });
+	requestAnimationFrame(() => useUi.getState().setPlaybookMenu({
+		title,
+		sub
+	}));
 }
 //#endregion
 //#region src/lib/keymap.ts
@@ -28434,6 +29153,7 @@ var MODAL_DIALOG_NAMES = [
 	"rename",
 	"device",
 	"intake",
+	"outbox",
 	"verify",
 	"extension",
 	"red-zones"
@@ -28445,10 +29165,11 @@ var MODAL_DOM_IDS = [
 	"rename-dialog",
 	"device-dialog",
 	"intake-dialog",
+	"outbox-dialog",
 	"verify-dialog",
 	"red-zones-dialog",
 	"break-screen",
-	"playbook-menu"
+	"ship-menu"
 ];
 function modalOpen() {
 	const open = useUi.getState().openDialog;
@@ -28571,8 +29292,12 @@ var CHORDS = {
 		run: (t) => useUi.getState().threadOpen(t, { composeTo: t })
 	},
 	f: {
-		desc: "Work with other sessions…",
-		run: (t) => openPlaybookMenu(t)
+		desc: "Ship & split…",
+		run: (t) => openShipMenu(t)
+	},
+	l: {
+		desc: "When it's done… (lane)",
+		run: (t) => openShipMenu(t, "lane")
 	},
 	t: {
 		desc: "Thread — workers and messages",
@@ -28678,6 +29403,18 @@ var KEYMAP = [
 		],
 		when: () => !isEditingTarget(document.activeElement),
 		run: () => useUi.getState().openDialogFor("intake")
+	},
+	{
+		key: "o",
+		alt: true,
+		id: "outbox",
+		help: [
+			"Navigation",
+			"Alt+O",
+			"Outbox — what's shipping, and what's waiting on you"
+		],
+		when: () => !isEditingTarget(document.activeElement),
+		run: () => useUi.getState().openDialogFor("outbox")
 	},
 	{
 		key: "v",
@@ -29637,6 +30374,633 @@ function ExtensionDialog() {
 	});
 }
 //#endregion
+//#region src/lib/splitRun.ts
+function firstLine(text, max = 120) {
+	const s = String(text || "").trim().split(/\r?\n/)[0].trim();
+	return s.length > max ? s.slice(0, max - 1).trimEnd() + "…" : s;
+}
+function testsLabel(tests) {
+	if (typeof tests === "number") return tests > 0 ? tests + (tests === 1 ? " test" : " tests") : "";
+	const s = String(tests || "");
+	const m = s.match(/(\d+)\s+(?:tests?\s+)?passed/i) || s.match(/(\d+)\s+tests?\b/i);
+	if (!m) return "";
+	const n = Number(m[1]);
+	return n + (n === 1 ? " test" : " tests");
+}
+function memberTasks(run) {
+	return (run.tasks || []).filter((t) => t.state !== "cancelled" || !!t.title);
+}
+function pieceLabel(t, run) {
+	const pieces = run.plan?.pieces || [];
+	const ix = (run.tasks || []).filter((x) => x.kind === "piece").indexOf(t);
+	const p = t.kind === "piece" && ix >= 0 ? pieces[ix] : void 0;
+	if (p) return {
+		name: p.title,
+		what: firstLine(p.prompt, 90)
+	};
+	const what = firstLine(t.text, 90);
+	return {
+		name: t.title || what || t.id,
+		what: t.title && what !== t.title ? what : ""
+	};
+}
+function pathsText(paths) {
+	return (paths || []).filter(Boolean).join(", ");
+}
+function pieceStatus(t, leadName) {
+	const tests = testsLabel(t.tests);
+	const files = (t.conflict?.files || []).join(", ");
+	switch (t.state) {
+		case "integrated": return {
+			word: "merged back ✓",
+			cls: "ok",
+			detail: tests
+		};
+		case "integrating":
+			if (t.reason === "conflict" || t.conflict) return {
+				word: "conflict",
+				cls: "needs",
+				detail: leadName + " is resolving" + (files ? " " + files : " it")
+			};
+			return {
+				word: "merging…",
+				cls: "work",
+				detail: ""
+			};
+		case "needs_you": return {
+			word: t.reason === "conflict" ? "conflict — needs you" : "needs you",
+			cls: "needs",
+			detail: t.detail || ""
+		};
+		case "failed": return {
+			word: "failed",
+			cls: "bad",
+			detail: t.detail || ""
+		};
+		case "shipping": return {
+			word: "committing",
+			cls: "work",
+			detail: ""
+		};
+		case "working": return {
+			word: "working",
+			cls: "work",
+			detail: ""
+		};
+		case "starting": return {
+			word: "starting",
+			cls: "idle",
+			detail: ""
+		};
+		case "queued": return {
+			word: "queued",
+			cls: "idle",
+			detail: ""
+		};
+		case "skipped":
+		case "cancelled": return {
+			word: "left out",
+			cls: "idle",
+			detail: t.detail || ""
+		};
+		case "shipped": return {
+			word: "done",
+			cls: "ok",
+			detail: tests
+		};
+		default: return {
+			word: t.state || "—",
+			cls: "idle",
+			detail: ""
+		};
+	}
+}
+function plural$5(n, one, many = one + "s") {
+	return n + " " + (n === 1 ? one : many);
+}
+function leadSubline(run, leadName) {
+	const split = !!run.split;
+	const tasks = memberTasks(run);
+	const n = split && run.plan && run.state === "plan_ready" ? run.plan.pieces.length : tasks.length;
+	const branch = run.lead?.branch || run.release?.branch || "";
+	if (run.state === "planning") return [{ text: "Waiting for " + leadName + " to propose the pieces — it reads the code first, then MindFlock shows the plan here." }];
+	if (run.state === "plan_ready") return [
+		{ text: leadName + " proposed " },
+		{
+			text: plural$5(n, "piece") + " with separate paths",
+			b: true
+		},
+		{ text: " — approve them and MindFlock starts the workers." }
+	];
+	const parts = split ? [{ text: "Split into " }, {
+		text: plural$5(n, "piece") + " with separate paths",
+		b: true
+	}] : [{
+		text: plural$5(n, "line") + ", one PR",
+		b: true
+	}];
+	const merged = tasks.filter((t) => t.state === "integrated").length;
+	const live = tasks.filter((t) => ![
+		"cancelled",
+		"skipped",
+		"failed"
+	].includes(t.state)).length;
+	if (merged) {
+		parts.push({ text: " · " });
+		parts.push({
+			text: merged === live && merged > 1 ? "all " + merged + " merged back" : merged + " of " + live + " merged back",
+			cls: "ok"
+		});
+		if (branch) {
+			parts.push({ text: " into " });
+			parts.push({
+				text: branch,
+				b: true
+			});
+		}
+	} else if (live) {
+		parts.push({ text: " · merging back into " });
+		parts.push({
+			text: branch || "the lead's branch",
+			b: true
+		});
+		parts.push({ text: " as each finishes" });
+	}
+	const conflicts = tasks.filter((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict)).length;
+	if (conflicts) parts.push({
+		text: " · " + plural$5(conflicts, "conflict") + " with " + leadName,
+		cls: "needs"
+	});
+	const c = run.check;
+	if (c && c.state === "ok") {
+		const tests = testsLabel(c.tests ?? null);
+		parts.push({ text: " · " });
+		parts.push({
+			text: tests ? tests + " pass" : "the check passed",
+			cls: "ok"
+		});
+		parts.push({ text: " after the last merge" });
+	} else if (c && c.state === "running") parts.push({ text: " · running the check on the merged branch" });
+	else if (c && c.state === "failed") parts.push({
+		text: " · the check failed on the merged branch",
+		cls: "bad"
+	});
+	return parts;
+}
+function planRows(pieces) {
+	return (pieces || []).map((p) => ({
+		title: String(p.title || ""),
+		prompt: String(p.prompt || ""),
+		paths: (p.paths || []).map(String),
+		pathsText: pathsText(p.paths)
+	}));
+}
+function startWorkersLabel(n) {
+	return "Start " + plural$5(n, "worker");
+}
+function parsePaths(text) {
+	return String(text || "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+}
+function editPlan(pieces, i, next) {
+	return pieces.map((p, j) => j === i ? {
+		title: next.title.trim(),
+		prompt: next.prompt.trim(),
+		paths: parsePaths(next.paths)
+	} : {
+		...p,
+		paths: [...p.paths]
+	});
+}
+function planProblems(body) {
+	const b = body || {};
+	const out = (b.problems || []).map((p) => (p.piece ? p.piece + ": " : "") + String(p.error || "")).filter(Boolean);
+	if (!out.length && b.error) out.push(String(b.error));
+	return out;
+}
+function releaseCard(run) {
+	const r = run.release || { state: "none" };
+	const base = r.base || "the base branch";
+	const branch = r.branch || run.lead?.branch || "";
+	const files = Number(r.files) || 0;
+	const stat = files ? plural$5(files, "file") + " +" + (Number(r.add) || 0) + " −" + (Number(r.del) || 0) : "";
+	const fixes = Number(r.conflict_fixes) || 0;
+	const split = !!run.split;
+	return {
+		title: r.title || run.name,
+		into: base + " ← " + (branch || "its branch"),
+		stat,
+		commits: (split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$5(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
+		body: split ? "a section per piece: what changed, the tests it ran" : "a section per line: what changed, the tests it ran"
+	};
+}
+function checkLine(run) {
+	const c = run.check;
+	const cmd = c?.command ? "`" + c.command + "`" : "the check";
+	switch (c?.state) {
+		case "none": return "no check configured — add a check_command to .mindflock.toml to run one";
+		case "ok": return cmd + " passed" + (c.tests ? " (" + c.tests + " tests)" : "");
+		case "failed": return cmd + " failed" + (c.summary ? ": " + c.summary : "");
+		case "running": return cmd + " is running on the merged branch…";
+		case "fixing": return cmd + " failed — the lead is fixing it";
+		case "pending": return "runs once every piece is merged back";
+		default: return "";
+	}
+}
+function releaseChoices(lane) {
+	if (lane === "push") return [{
+		merge: false,
+		label: "Push the branch",
+		primary: true,
+		title: "Push the group's branch — no PR is opened"
+	}];
+	const pr = {
+		merge: false,
+		label: lane === "merge" ? "Open the PR only" : "Open the PR",
+		primary: lane !== "merge",
+		title: "Open the group's one PR — it is not merged"
+	};
+	const merge = {
+		merge: true,
+		label: lane === "merge" ? "Open the PR, merge when checks pass" : "Open it, merge when checks pass",
+		primary: lane === "merge",
+		title: "Open the group's one PR and merge it once its checks pass"
+	};
+	return lane === "merge" ? [merge, pr] : [pr, merge];
+}
+function laneNote(lane) {
+	const t = String(lane?.target || "");
+	if (!t) return "";
+	return "this session's lane: " + (t === "leave" ? "leave it" : LANE_HEAD[t] || "→ " + t) + (lane?.ask_first ? ", asks first" : "");
+}
+function releaseOutcome(run) {
+	const r = run.release;
+	const lane = run.policy?.lane || "";
+	if (run.state === "releasing" || r?.state === "releasing") return {
+		text: lane === "push" ? "Pushing the branch…" : "Opening the PR…",
+		cls: "work",
+		url: "",
+		link: ""
+	};
+	if (r?.state === "done" && r.pr_url) {
+		const m = r.pr_url.match(/\/pull\/(\d+)/);
+		return {
+			text: "✓ " + (m ? "PR #" + m[1] : "PR") + " opened",
+			cls: "ok",
+			url: r.pr_url,
+			link: "Open the PR ↗"
+		};
+	}
+	if (r?.state === "handoff") return {
+		text: r.compare_url ? "Pushed — MindFlock couldn't open the PR here (no gh or token)" : "Pushed — MindFlock couldn't open the PR here: copy its title and body below into a PR on your host",
+		cls: "idle",
+		url: r.compare_url || "",
+		link: r.compare_url ? "Open the compare page ↗" : ""
+	};
+	if (r?.state === "failed") return {
+		text: "The release stopped: " + (r.detail || "see the lead's pane"),
+		cls: "bad",
+		url: "",
+		link: ""
+	};
+	if (r?.state === "done") return {
+		text: lane === "push" ? "✓ pushed" : "✓ released",
+		cls: "ok",
+		url: "",
+		link: ""
+	};
+	if (run.state === "done" && (lane === "commit" || lane === "leave")) return {
+		text: "All merged into " + (run.lead?.branch || "the lead's branch") + " — nothing pushed (this group's lane is " + (lane === "commit" ? "Commit" : "Leave it") + ")",
+		cls: "ok",
+		url: "",
+		link: ""
+	};
+	return null;
+}
+function railExtraChips(check, rz, o) {
+	if (!o.integrated && !o.leadAsks) return {
+		check,
+		rz
+	};
+	const loud = (c) => !!c && /(interrupt|breach|warn)/.test(c.cls);
+	return {
+		check: loud(check) ? check : null,
+		rz: loud(rz) ? rz : null
+	};
+}
+function leadChip(run) {
+	if (!run) return null;
+	if (run.state === "release_ready") {
+		const lane = run.policy?.lane || "pr";
+		return {
+			label: lane === "push" ? "→ push?" : lane === "merge" ? "→ merge?" : "→ PR?",
+			title: "Everything merged back and checked — open its Thread to release the one PR"
+		};
+	}
+	if (run.state === "plan_ready") return {
+		label: "plan?",
+		title: "The lead proposed the pieces — open its Thread to approve them"
+	};
+	return null;
+}
+function leadLine(run) {
+	if (!run) return null;
+	const tasks = memberTasks(run);
+	const merged = tasks.filter((t) => t.state === "integrated").length;
+	const live = tasks.filter((t) => ![
+		"cancelled",
+		"skipped",
+		"failed"
+	].includes(t.state)).length;
+	switch (run.state) {
+		case "planning": return {
+			text: "proposing the pieces…",
+			cls: ""
+		};
+		case "plan_ready": return {
+			text: "plan ready — approve it",
+			cls: "needs"
+		};
+		case "checking": return run.check?.state === "failed" ? {
+			text: "the check failed",
+			cls: "bad"
+		} : {
+			text: "running the check",
+			cls: ""
+		};
+		case "releasing": return {
+			text: "opening the PR",
+			cls: ""
+		};
+		case "cancelled": return {
+			text: "cancelled",
+			cls: ""
+		};
+	}
+	if (run.release?.state === "done" && run.release.pr_url) {
+		const m = run.release.pr_url.match(/\/pull\/(\d+)/);
+		return {
+			text: "✓ " + (m ? "PR #" + m[1] : "PR"),
+			cls: "ok",
+			url: run.release.pr_url
+		};
+	}
+	if (run.release?.state === "handoff") return {
+		text: "⇡ pushed — open the PR",
+		cls: "",
+		url: run.release.compare_url || void 0
+	};
+	if (tasks.some((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict))) return {
+		text: "resolving a conflict",
+		cls: "needs"
+	};
+	if (!live) return null;
+	return {
+		text: merged + " of " + live + " merged back",
+		cls: merged === live ? "ok" : ""
+	};
+}
+//#endregion
+//#region src/components/outbox/outbox.ts
+function dedupe(list) {
+	const seen = /* @__PURE__ */ new Set();
+	const out = [];
+	for (const it of list || []) {
+		const k = it.key || it.title || "";
+		if (k && seen.has(k)) continue;
+		if (k) seen.add(k);
+		out.push(it);
+	}
+	return out;
+}
+function runOf(item, rowOf) {
+	if (item.run?.id) return item.run.id;
+	if (item.title) return rowOf(item.title)?.run?.id || "";
+	return "";
+}
+function viewFor(data, tab, rowOf) {
+	const g = data?.groups;
+	const keep = (it) => {
+		if (tab === "all") return true;
+		const r = runOf(it, rowOf);
+		return tab === "own" ? !r : r === tab;
+	};
+	return {
+		waiting: dedupe(g?.waiting).filter(keep),
+		shipping: dedupe(g?.shipping).filter(keep),
+		shipped: dedupe(g?.shipped).filter(keep),
+		queued: (g?.queued || []).filter((q) => tab === "all" || tab !== "own" && q.run?.id === tab),
+		summaries: (data?.summaries || []).filter((s) => tab === "all" || s.run === tab)
+	};
+}
+function viewCount(v) {
+	return v.waiting.length + v.shipping.length + v.shipped.length + v.queued.length;
+}
+function waitingCount(data) {
+	if (!data) return 0;
+	if (data.groups?.waiting) return dedupe(data.groups.waiting).length;
+	return Number(data.counts?.waiting) || 0;
+}
+function outboxTabs(data, rowOf, names = () => "") {
+	const tabs = [{
+		key: "all",
+		label: "All",
+		count: viewCount(viewFor(data, "all", rowOf))
+	}];
+	const g = data?.groups;
+	const order = [];
+	const label = /* @__PURE__ */ new Map();
+	const note = (id, name) => {
+		if (!id) return;
+		if (!label.has(id)) order.push(id);
+		if (name || !label.get(id)) label.set(id, name || label.get(id) || "");
+	};
+	const all = [
+		...g?.waiting || [],
+		...g?.shipping || [],
+		...g?.shipped || []
+	];
+	for (const it of all) note(runOf(it, rowOf), it.run?.name || (it.title ? rowOf(it.title)?.run?.name : "") || "");
+	for (const q of g?.queued || []) note(q.run?.id || "", q.run?.name);
+	for (const id of order) {
+		const count = viewCount(viewFor(data, id, rowOf));
+		if (count) tabs.push({
+			key: id,
+			label: label.get(id) || names(id) || "Group",
+			count
+		});
+	}
+	const own = viewCount(viewFor(data, "own", rowOf));
+	if (own && order.length) tabs.push({
+		key: "own",
+		label: "On their own",
+		count: own
+	});
+	return tabs;
+}
+function shipVerb(step) {
+	switch (String(step || "")) {
+		case "push": return "Push";
+		case "pr":
+		case "make_pr": return "Open the PR";
+		case "merge": return "Merge";
+		default: return "Commit";
+	}
+}
+var LADDER = [
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var STEP_WORD = {
+	commit: "commit",
+	push: "push",
+	pr: "PR",
+	merge: "merge"
+};
+function thenText(step, laneTarget) {
+	const s = String(step || "commit") === "make_pr" ? "pr" : String(step || "commit");
+	const lane = String(laneTarget || s);
+	const from = LADDER.indexOf(s);
+	const to = LADDER.indexOf(lane);
+	if (from < 0 || to <= from) return s === "commit" ? "stays local — this session's lane ends at commit" : "this session's lane ends at " + (STEP_WORD[s] || s);
+	return "then " + LADDER.slice(from + 1, to + 1).map((x) => STEP_WORD[x]).join(", ");
+}
+function waitingChip(w) {
+	if (w.kind === "prompt") return {
+		text: w.reason || "its agent is asking",
+		cls: "warn"
+	};
+	if (w.kind === "plan") return {
+		text: w.reason || "the lead proposed the pieces — approve them",
+		cls: "warn"
+	};
+	if (w.kind === "release") return {
+		text: w.reason || "one PR is ready to open",
+		cls: ""
+	};
+	if (w.kind === "check_failed") return {
+		text: w.reason || "the check failed on the merged branch",
+		cls: "bad"
+	};
+	if (w.kind === "approve") return {
+		text: "ready to " + shipVerb(w.step).toLowerCase().replace("open the pr", "open the PR") + " — you asked to see it first",
+		cls: ""
+	};
+	return {
+		text: w.reason || "needs you",
+		cls: "bad"
+	};
+}
+function approvalKey(w) {
+	return w.title + "@" + String(w.armed_at || w.since || "");
+}
+function messageHead(msg) {
+	const s = String(msg || "");
+	const i = s.indexOf("\n");
+	return i < 0 ? s : s.slice(0, i).trimEnd() + " …";
+}
+function statText(p) {
+	if (!p) return "";
+	const bits = [];
+	if (p.files) bits.push(p.files + (p.files === 1 ? " file" : " files"));
+	if (p.add || p.del) bits.push("+" + (p.add || 0) + " −" + (p.del || 0));
+	return bits.join(" ");
+}
+function shippedChip(s) {
+	const m = String(s.pr_url || "").match(/\/pull\/(\d+)/);
+	const pr = m ? "PR #" + m[1] : s.pr_url ? "PR" : "";
+	const state = String(s.pr_state || "").toLowerCase();
+	const checks = s.checks === "pass" || s.checks === "ok" ? "checks ✓" : s.checks === "fail" || s.checks === "failed" ? "checks ✗" : s.checks === "pending" ? "checks…" : "";
+	const parts = [pr + (state === "merged" ? " merged" : state === "closed" ? " closed" : ""), checks].filter(Boolean);
+	const bad = checks === "checks ✗" || state === "closed";
+	const noPr = s.lane === "commit" ? "committed" : s.lane === "push" ? "pushed" : "shipped";
+	return {
+		text: parts.join(" · ") || noPr,
+		cls: bad ? "bad" : "ok"
+	};
+}
+var LEAD_KINDS = /* @__PURE__ */ new Set([
+	"plan",
+	"release",
+	"check_failed",
+	"conflict"
+]);
+function waitingActions(w, can) {
+	const a = new Set(w.actions || []);
+	const out = [];
+	const open = (title) => {
+		if (can.row && (a.has("open") || LEAD_KINDS.has(w.kind))) out.push({
+			key: "open",
+			label: LEAD_KINDS.has(w.kind) ? "Open the Thread ↗" : "Open ↗",
+			primary: false,
+			title
+		});
+	};
+	if (w.kind === "plan") {
+		const n = w.preview?.pieces?.length || 0;
+		if (a.has("approve") && can.run) out.push({
+			key: "approve",
+			label: n ? "Start " + n + (n === 1 ? " worker" : " workers") : "Approve the plan",
+			primary: true,
+			title: "MindFlock starts one worker per piece, each fenced to its paths"
+		});
+		open("Read the plan in the lead's Thread tab — edit a piece there");
+		return out;
+	}
+	if (w.kind === "release") {
+		if (a.has("release") && can.run) for (const c of releaseChoices(w.preview?.lane)) out.push({
+			key: c.merge ? "release_merge" : "release",
+			label: c.label,
+			primary: c.primary,
+			title: c.title
+		});
+		open("The lead's Thread has the PR's title, body and the merged diff");
+		return out;
+	}
+	if (w.kind === "lead_gone") {
+		if (a.has("cancel_group") && can.run) out.push({
+			key: "cancel_group",
+			label: "Cancel the group",
+			primary: true,
+			title: "Stop the group — its sessions and branches are kept"
+		});
+		return out;
+	}
+	if (w.kind === "check_failed") {
+		if (a.has("retry_check") && can.run) out.push({
+			key: "retry_check",
+			label: "Run the check again",
+			primary: true
+		});
+		open();
+		return out;
+	}
+	if (a.has("retry") && can.run && can.task) out.push({
+		key: "retry",
+		label: "Retry",
+		primary: true
+	});
+	if (a.has("retry_fresh") && can.run && can.task) out.push({
+		key: "retry_fresh",
+		label: "Retry fresh",
+		primary: false,
+		title: "Start it again on a new branch; the old one is kept"
+	});
+	if (can.row) out.push({
+		key: "open",
+		label: w.kind === "conflict" ? "Open the Thread ↗" : "Open ↗",
+		primary: false
+	});
+	if (a.has("skip") && can.run && can.task) out.push({
+		key: "skip",
+		label: "Skip",
+		primary: false,
+		title: "Take it out of the group — its session and branch stay"
+	});
+	return out;
+}
+//#endregion
 //#region src/lib/flockActions.ts
 var import_react_dom = require_react_dom();
 var obj$2 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
@@ -30076,6 +31440,9 @@ function BellGlyph({ size = 15 }) {
 function notifFromEvent(env) {
 	const d = env.data || {};
 	switch (env.event) {
+		case "run.needs_you":
+		case "run.task_shipped":
+		case "run.finished": return runNote(env.event, d, runLookups);
 		case "session.created": return {
 			text: "created",
 			cls: "n-info"
@@ -30165,15 +31532,18 @@ function NotificationsBell() {
 	const [toggleState, setToggleState] = (0, import_react.useState)(notifState$1());
 	const btnRef = (0, import_react.useRef)(null);
 	const popRef = (0, import_react.useRef)(null);
+	useNotifyConfig();
 	(0, import_react.useEffect)(() => {
 		const bus = window.mindflock?.events;
 		if (!bus) return;
 		return bus.subscribe("*", (env) => {
 			const n = notifFromEvent(env);
 			if (!n) return;
+			if (n.rule && !ruleOn(n.rule)) return;
 			const seq = typeof env.seq === "number" ? env.seq : 0;
 			setNotifs((prev) => {
 				if (seq && prev.some((x) => x.seq === seq)) return prev;
+				if (n.dedupe && prev.some((x) => x.dedupe === n.dedupe)) return prev;
 				const next = [...prev, {
 					seq,
 					ts: env.ts || Date.now() / 1e3,
@@ -30346,11 +31716,19 @@ function NotificationsBell() {
 				children: [...notifs].reverse().map((n, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "notif-item " + n.cls + (n.ts > seenTs ? " unread" : ""),
 					"data-session": n.session,
-					onClick: () => jump(n.session),
+					onClick: () => {
+						if (n.lead) {
+							setOpen(false);
+							openThread(n.lead);
+						} else if (n.run) {
+							setOpen(false);
+							useUi.getState().openDialogFor("outbox", n.run);
+						} else jump(n.session);
+					},
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-sess",
-							children: (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (aliases[n.session] || n.session || "—")
+							children: n.run && !n.session ? "Outbox" : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (aliases[n.session] || n.session || "—")
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-text",
@@ -30628,6 +32006,15 @@ function EventToasts() {
 				duration: isResult ? 8e3 : 5e3
 			});
 		}));
+		for (const name of ["run.needs_you", "run.finished"]) unsubs.push(ev.subscribe(name, (env) => {
+			if (isReplay(env)) return;
+			const n = runNote(env.event, env.data, runLookups);
+			if (!n || !ruleOn(n.rule)) return;
+			notifyOnce("*run", "run", n.text, {
+				onClick: () => n.lead ? openThread(n.lead) : useUi.getState().openDialogFor("outbox", n.run || null),
+				duration: 8e3
+			});
+		}));
 		unsubs.push(ev.subscribe("session.deleted", (env) => {
 			dropActivity(env.session);
 			clearClarify(env.session);
@@ -30683,6 +32070,8 @@ function TopBar() {
 	const [version, setVersion] = (0, import_react.useState)(engineVersion);
 	const { data: testPlans } = useTestPlans();
 	const due = dueCount(testPlans?.plans || []);
+	const { data: outbox } = useOutbox();
+	const waiting = waitingCount(outbox);
 	const [mac] = (0, import_react.useState)(hasNativeWindowControls);
 	const [fullScreen, setFullScreen] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
@@ -30811,6 +32200,17 @@ function TopBar() {
 							title: "Intake — tickets, pull requests and issues waiting to become sessions (Alt+I)",
 							onClick: () => ui.openDialogFor("intake"),
 							children: "Intake"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							id: "outbox-btn",
+							className: "tb-item",
+							type: "button",
+							title: "Outbox — what's shipping, and what's waiting on you (Alt+O)",
+							onClick: () => ui.openDialogFor("outbox"),
+							children: ["Outbox", waiting > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "tb-count",
+								children: waiting
+							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							id: "verify-btn",
@@ -31296,93 +32696,82 @@ function PlaybookRowItems({ inst }) {
 	const title = inst.title;
 	const { data: config } = useConfig();
 	const { data: rows } = useInstances();
-	const railOrder = useUi((s) => s.railOrder);
-	const capable = mcpCapable(config?.caps, inst);
-	const [list, setList] = (0, import_react.useState)(null);
-	const [askOpen, setAskOpen] = (0, import_react.useState)(false);
-	(0, import_react.useEffect)(() => {
-		if (!capable) return;
-		let live = true;
-		fetchPlaybooks(title).then((l) => live && setList(l)).catch(() => live && setList([]));
-		return () => {
-			live = false;
-		};
-	}, [capable, title]);
-	const children = (0, import_react.useMemo)(() => liveChildren(title, rows || []), [title, rows]);
-	const model = (0, import_react.useMemo)(() => menuModel(list || [], children), [list, children]);
-	const targets = (0, import_react.useMemo)(() => askOpen ? askTargets(title, rows || [], railOrder, displayName) : [], [
-		askOpen,
-		title,
+	const [laneOpen, setLaneOpen] = (0, import_react.useState)(false);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const model = (0, import_react.useMemo)(() => shipMenuModel(inst, rows || [], config?.caps), [
+		inst,
 		rows,
-		railOrder
+		config?.caps
 	]);
-	if (!capable) return null;
-	const blocked = forkBlockReason(inst);
-	const askPb = (list || []).find((p) => p.args.some((a) => a.kind === "session" && a.required));
-	const button = (pb) => {
-		const why = blocked || (pb.available ? "" : pb.disabled_reason || "Not available right now");
-		const isAsk = pb === askPb;
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-			className: why ? "pb-row-off" : void 0,
+	if (isRemote(inst) || inst.pending) return null;
+	const name = displayName(title);
+	const run = (e) => {
+		const why = entryWhy(e);
+		if (why) {
+			toast(why, { duration: 5e3 });
+			return;
+		}
+		if (e.kind === "message") {
+			useUi.getState().threadOpen(title, { composeTo: title });
+			return;
+		}
+		if (busy) return;
+		setBusy(true);
+		runShipEntry(e, inst, name, model.current).then((said) => {
+			if (said) toast(said, { duration: 4500 });
+			refreshInstances();
+		}).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 })).finally(() => setBusy(false));
+	};
+	const button = (e, label, title2, extra = "") => {
+		const why = entryWhy(e);
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			className: (why ? "pb-row-off " : "") + extra || void 0,
 			"aria-disabled": why ? true : void 0,
-			"aria-expanded": isAsk ? askOpen : void 0,
-			title: why || pb.desc,
-			"data-playbook": pb.id,
+			title: why || title2,
+			"data-ship": e.kind === "lane" ? "lane-" + e.lane : e.kind,
+			onClick: (ev) => {
+				ev.stopPropagation();
+				run(e);
+			},
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: label })
+		}, e.kind + (e.kind === "lane" ? e.lane : ""));
+	};
+	const cur = model.current;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			"aria-expanded": laneOpen,
+			title: "How far MindFlock carries this session once its agent is done",
+			"data-ship": "lanes",
 			onClick: (e) => {
 				e.stopPropagation();
-				if (why) {
-					toast(why, { duration: 5e3 });
-					return;
-				}
-				if (isAsk) {
-					setAskOpen((v) => !v);
-					return;
-				}
-				pastePlaybook(title, pb);
+				setLaneOpen((v) => !v);
 			},
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [pb.label, pb.id === "wrapup" && model.workers ? ` (${model.workers.reported})` : ""] }), isAsk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+				"When it's done: ",
+				LANE_LABEL[cur.lane],
+				cur.askFirst && cur.lane !== "leave" ? ", asks first" : ""
+			] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "kbd",
-				children: askOpen ? "▾" : "›"
+				children: laneOpen ? "▾" : "›"
 			})]
-		}, pb.id);
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		list === null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			className: "pb-row-off",
-			"aria-disabled": true,
-			disabled: true,
-			children: "Work with other sessions…"
 		}),
-		model.general.map((pb) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Fragment, { children: [button(pb), pb === askPb && askOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		laneOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "pb-row-sub",
 			role: "group",
-			"aria-label": "Ask which session",
-			children: [targets.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "muted pb-row-none",
-				children: "No other sessions"
-			}), targets.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-				onClick: (e) => {
-					e.stopPropagation();
-					setAskOpen(false);
-					pastePlaybook(title, pb, { session: t.title });
-				},
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t.name }), t.rel && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "rel",
-					children: t.rel
-				})]
-			}, t.title))]
-		})] }, pb.id)),
-		model.workers?.items.map(button),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-			onClick: (e) => {
-				e.stopPropagation();
-				useUi.getState().threadOpen(title, { composeTo: title });
+			"aria-label": "When it's done",
+			children: model.lanes.map((e) => e.kind === "lane" ? button(e, e.label + (e.current ? " ✓" : ""), e.desc, e.current ? "on" : "") : e.kind === "ask" ? button(e, "Ask me before it ships" + (e.on ? " ✓" : ""), "Stop at the next step and show it in the Outbox first") : null)
+		}),
+		model.split.map((e) => button(e, "Split into parallel pieces…", "The agent proposes pieces with separate paths; you approve, MindFlock runs and merges them back")),
+		model.tail.map((e) => e.kind === "shipnow" ? button(e, "Ship it now", "Don't wait for the agent — take what's there through the lane now") : e.kind === "detach" ? button(e, "Move out of " + (model.group?.name || "the group"), "The group stops driving it; the session and its lane stay") : e.kind === "message" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			onClick: (ev) => {
+				ev.stopPropagation();
+				run(e);
 			},
 			children: ["Message…", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "kbd",
 				children: "Ctrl+K S"
 			})]
-		}),
+		}, "message") : null),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "menu-sep" })
 	] });
 }
@@ -31438,7 +32827,7 @@ var FLAT = {
 	stem: false
 };
 var NO_KIDS = [];
-var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScreen, dropCue, onDragState, onDropCue, onDropRow, nest = FLAT, kids = NO_KIDS, parentLive = false }) {
+var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScreen, dropCue, onDragState, onDropCue, onDropRow, nest = FLAT, kids = NO_KIDS, parentLive = false, runTask = null, leadRun = null }) {
 	const [expanded, setExpanded] = (0, import_react.useState)(false);
 	const strip = (0, import_react.useRef)(null);
 	const [editing, setEditing] = (0, import_react.useState)(false);
@@ -31464,7 +32853,13 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	};
 	const prSupport = hasPrSupport(caps);
 	const ideName = config?.ide_name || "Cursor";
-	const chip = chipState(inst);
+	const chip0 = chipState(inst);
+	const chip = runTask?.state === "integrated" ? {
+		...chip0,
+		label: "merged",
+		cls: "s-committed",
+		title: "Merged back into its lead's branch"
+	} : chip0;
 	const check = checkChip(inst);
 	const num = idx < 9 ? String(idx + 1) : "";
 	const label = sessionLabel(displayTitle(inst), inst.branch || "");
@@ -31483,12 +32878,20 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 		parentName: nameOf(inst.parent),
 		act: activity
 	}) : null;
-	const roll = kids.length && !pending ? rollup(kids, nameOf, effectiveActivity) : null;
-	const pchip = kids.length && !pending && !missing ? parentChip(inst, kids, nameOf, effectiveActivity, forkBlockReason(inst)) : null;
-	const answering = inFamily(inst, isWorker, kids.length) && activity === "clarify" && !missing && !paused;
-	const subline = !editing && (wline || roll || lineage);
+	const isLead = inst.run?.role === "lead" && !pending;
+	const lchip = isLead ? leadChip(leadRun) : null;
+	const lline = isLead ? leadLine(leadRun) : null;
+	const roll = kids.length && !pending && !isLead ? rollup(kids, nameOf, effectiveActivity) : null;
+	const pchip = kids.length && !pending && !missing && !isLead ? parentChip(inst, kids, nameOf, effectiveActivity, forkBlockReason(inst)) : null;
+	const ship = pending || isLead && lline ? null : shipLine(inst, {
+		act: activity,
+		task: runTask
+	});
+	const shipLane = !!inst.run || !!ship;
+	const answering = (inFamily(inst, isWorker, kids.length) || shipLane) && activity === "clarify" && !missing && !paused;
+	const subline = !editing && (ship || wline || roll || lline || lineage);
 	const [, tick] = (0, import_react.useReducer)((n) => n + 1, 0);
-	const counting = wline?.state === "working";
+	const counting = wline?.state === "working" || ship?.state === "working";
 	(0, import_react.useEffect)(() => {
 		if (!counting) return;
 		const t = window.setInterval(tick, 3e4);
@@ -31498,7 +32901,11 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	const agentWs = (0, import_react.useSyncExternalStore)(subscribeTermStates, (0, import_react.useCallback)(() => peekTerm(title, "agent")?.state, [title]));
 	const disconnected = inst.status === "running" && onScreen && agentWs === "disconnected";
 	const mapSeen = (0, import_react.useSyncExternalStore)(subscribeCodemapSeen, (0, import_react.useCallback)(() => codemapSeenAt(title), [title]));
-	const rz = caps.git ? redZoneChip(inst.redzone, mapSeen) : null;
+	const extra = railExtraChips(check, caps.git ? redZoneChip(inst.redzone, mapSeen) : null, {
+		integrated: runTask?.state === "integrated",
+		leadAsks: !!lchip || isLead && !!leadRun && RUN_DONE_STATES.has(leadRun.state)
+	});
+	const rz = extra.rz;
 	const act = async (fn, e) => {
 		e?.stopPropagation();
 		await fn();
@@ -31622,12 +33029,49 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 							].filter(Boolean).join("\n"),
 							children: shown
 						}),
-						!editing && wline && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						!editing && ship && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "lineage ship-line " + ship.cls,
+							title: [ship.title, wline ? wline.title : lineage ? lineage.title : ""].filter(Boolean).join("\n"),
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sl-lead",
+								children: ship.lead
+							}), ship.rest && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sl-rest" + (ship.restCls ? " " + ship.restCls : ""),
+								children: ship.rest
+							})]
+						}),
+						!editing && !ship && lline && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "lineage workers lead-line",
+							title: "Its group: " + (leadRun?.name || "") + "\nClick to open the Thread",
+							role: "button",
+							tabIndex: 0,
+							onClick: (e) => act(() => openThread(title), e),
+							onDoubleClick: (e) => e.stopPropagation(),
+							onKeyDown: (e) => {
+								if (e.key !== "Enter" && e.key !== " ") return;
+								e.preventDefault();
+								e.stopPropagation();
+								openThread(title);
+							},
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: lline.cls || void 0,
+								children: lline.text
+							}), lline.url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+								className: "lead-link",
+								href: lline.url,
+								target: "_blank",
+								rel: "noreferrer",
+								title: lline.url,
+								onClick: (e) => e.stopPropagation(),
+								children: " ↗"
+							})]
+						}),
+						!editing && !ship && !lline && wline && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "lineage " + wline.cls,
 							title: wline.title,
 							children: wline.text
 						}),
-						!editing && !wline && lineage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						!editing && !ship && !lline && !wline && lineage && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "lineage" + (lineage.spawned ? " spawned" : ""),
 							title: lineage.title,
 							children: lineage.text
@@ -31653,7 +33097,15 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 						})
 					]
 				}),
-				pchip?.kind === "wrap" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				lchip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "stagechip wrapchip leadchip",
+					title: lchip.title,
+					"aria-label": lchip.title,
+					onClick: (e) => act(() => openThread(title), e),
+					onDoubleClick: (e) => e.stopPropagation(),
+					children: lchip.label
+				}) : pchip?.kind === "wrap" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "stagechip " + pchip.cls,
 					title: pchip.title,
@@ -31670,10 +33122,10 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 					title: chip.title,
 					children: chip.label
 				}),
-				check && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "stagechip checkchip " + check.cls,
-					title: check.title,
-					children: check.label
+				extra.check && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "stagechip checkchip " + extra.check.cls,
+					title: extra.check.title,
+					children: extra.check.label
 				}),
 				rz && !pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -33035,6 +34487,314 @@ function FooterCustomize() {
 	});
 }
 //#endregion
+//#region src/components/sidebar/RunGroupHeader.tsx
+function RunGroupHeader({ group, repoPath }) {
+	const toggle = useUi((s) => s.toggleRunCollapsed);
+	const [menu, setMenu] = (0, import_react.useState)(null);
+	const more = (0, import_react.useRef)(null);
+	const cls = "device-group run-group-head" + (group.done ? " is-done" : "") + (group.paused ? " is-paused" : "") + (group.collapsed ? " is-folded" : "");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: cls,
+		"data-run": group.id,
+		title: groupTitle(group),
+		onClick: () => toggle(group.id),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "dev-caret",
+				children: group.collapsed ? "▸" : "▾"
+			}),
+			group.done && !group.cancelled && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "rg-done",
+				children: "✓"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "dev-name",
+				children: group.name
+			}),
+			group.lane && !group.done && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "rg-lane",
+				children: group.lane
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "rg-sp" }),
+			group.needs > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "dev-badge rg-needs",
+				title: group.needs + " waiting on you",
+				children: group.needs
+			}),
+			group.cancelled ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "dev-badge rg-paused rg-cancelled",
+				children: "cancelled"
+			}) : group.paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "dev-badge rg-paused",
+				children: "paused"
+			}) : group.waitingUsage && !group.done ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "dev-badge rg-usage",
+				children: "usage"
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "dev-badge rg-shipped" + (group.done && !group.cancelled ? " ok" : ""),
+				children: shippedBadge(group)
+			}),
+			group.failed > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "dev-badge rg-failed",
+				children: [group.failed, " failed"]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				ref: more,
+				type: "button",
+				className: "rg-more",
+				title: "Pause, add lines, start the next one, cancel…",
+				"aria-label": "Actions for " + group.name,
+				"aria-haspopup": "menu",
+				onClick: (e) => {
+					e.stopPropagation();
+					setMenu(menu ? null : more.current.getBoundingClientRect());
+				},
+				children: "⋯"
+			}),
+			menu && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunGroupMenu, {
+				group,
+				at: menu,
+				repoPath,
+				onClose: () => setMenu(null)
+			}), document.body)
+		]
+	});
+}
+function RunGroupMenu({ group, at, repoPath, onClose }) {
+	const ref = (0, import_react.useRef)(null);
+	const [mode, setMode] = (0, import_react.useState)("");
+	const [lines, setLines] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		const onDown = (e) => {
+			if (!ref.current?.contains(e.target)) onClose();
+		};
+		const onKey = (e) => {
+			if (e.key === "Escape") {
+				e.stopPropagation();
+				onClose();
+			}
+		};
+		document.addEventListener("mousedown", onDown);
+		document.addEventListener("keydown", onKey, true);
+		return () => {
+			document.removeEventListener("mousedown", onDown);
+			document.removeEventListener("keydown", onKey, true);
+		};
+	}, [onClose]);
+	const id = group.id;
+	const go = async (fn) => {
+		setBusy(true);
+		try {
+			await fn();
+		} finally {
+			setBusy(false);
+			onClose();
+		}
+	};
+	const addLines = async () => {
+		const text = lines.trim();
+		if (!text) return;
+		setBusy(true);
+		try {
+			const pv = await api("/api/runs/preview", { json: {
+				text,
+				repo_path: repoPath || ""
+			} });
+			const items = (pv?.items || []).filter((i) => !i.error);
+			const bad = (pv?.items || []).filter((i) => i.error);
+			if (!items.length) {
+				errorPop("Nothing to add", bad.map((i) => String(i.ref || i.id || "") + ": " + String(i.error)).join("\n") || "no lines");
+				return;
+			}
+			await api(runPath(id, "/tasks"), { json: { items: items.map((i) => i.kind === "ticket" ? {
+				kind: "ticket",
+				source: i.source,
+				id: i.id
+			} : {
+				kind: "task",
+				text: i.text
+			}) } });
+			toast("Added " + items.length + (items.length === 1 ? " line" : " lines") + " to " + group.name);
+			if (bad.length) errorPop("Some lines weren't added", bad.map((i) => String(i.ref || i.id || "") + ": " + String(i.error)).join("\n"));
+			onClose();
+		} catch (err) {
+			errorPop("Add lines failed", errMsg(err));
+		} finally {
+			setBusy(false);
+			refreshRuns();
+		}
+	};
+	const left = Math.max(8, Math.min(at.right - 260, window.innerWidth - 268));
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		ref,
+		className: "rg-menu",
+		role: "menu",
+		style: {
+			top: at.bottom + 4 + "px",
+			left: left + "px"
+		},
+		onClick: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "rg-menu-head",
+				children: group.name
+			}),
+			!group.done && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				role: "menuitem",
+				disabled: busy,
+				onClick: () => go(() => group.paused ? runAction("Resume", runPath(id, "/resume"), {}, group.name + " resumed") : runAction("Pause", runPath(id, "/pause"), { reason: "user" }, group.name + " paused — agents keep working; nothing new starts or ships")),
+				children: [group.paused ? "Resume" : "Pause", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rg-hint",
+					children: group.paused ? "start and ship again" : "agents keep working"
+				})]
+			}),
+			!group.done && (mode === "add" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rg-inline",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					className: "rg-lines",
+					rows: 3,
+					autoFocus: true,
+					placeholder: "One line per task, or ticket IDs",
+					value: lines,
+					onChange: (e) => setLines(e.target.value),
+					onKeyDown: (e) => {
+						if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+							e.preventDefault();
+							addLines();
+						}
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rg-inline-acts",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "rg-primary",
+						disabled: busy || !lines.trim(),
+						onClick: () => void addLines(),
+						children: "Add"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: () => setMode(""),
+						children: "Back"
+					})]
+				})]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				role: "menuitem",
+				disabled: busy,
+				onClick: () => setMode("add"),
+				children: "Add lines…"
+			})),
+			group.queued.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rg-menu-sec",
+				children: ["Queued · ", group.queued.length]
+			}), group.queued.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rg-qline",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rg-qtitle",
+						title: queuedTitle(t),
+						children: queuedTitle(t)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						disabled: busy,
+						title: "Start it now, past the at-a-time limit (once)",
+						onClick: () => go(() => runAction("Start now", taskPath(id, t.id, "start-now"), {}, "Starting " + queuedTitle(t))),
+						children: "Start now"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						disabled: busy,
+						title: "Take it out of the group — it never starts",
+						onClick: () => go(() => runAction("Remove", taskPath(id, t.id, "skip"), {}, "Removed " + queuedTitle(t))),
+						children: "Remove"
+					})
+				]
+			}, t.id))] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				role: "menuitem",
+				onClick: () => {
+					useUi.getState().openDialogFor("outbox", id);
+					onClose();
+				},
+				children: group.done ? "Summary" : "Open in the Outbox"
+			}),
+			!group.done && (mode === "cancel" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rg-inline rg-confirm",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Stop starting new work and stop shipping? Sessions and branches are kept." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rg-inline-acts",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "rg-danger",
+						disabled: busy,
+						onClick: () => go(() => cancelRun(id, group.name)),
+						children: "Cancel group"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: () => setMode(""),
+						children: "Keep going"
+					})]
+				})]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				role: "menuitem",
+				className: "rg-danger-item",
+				disabled: busy,
+				onClick: () => setMode("cancel"),
+				children: "Cancel…"
+			}))
+		]
+	});
+}
+function QueuedRow({ task, pos, groupName }) {
+	const title = queuedTitle(task);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+		className: "inst run-queued",
+		"data-queued": task.id,
+		title: title + "\nQueued in " + groupName + " — it starts as a slot frees up. Start it now or remove it from the group's ⋯ menu.",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "inst-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "idx" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dot queued" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "chevron q-spacer",
+					"aria-hidden": "true",
+					children: "›"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "meta has-lineage",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "title",
+						children: title
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "lineage rep-idle",
+						children: queuedLine(pos)
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "stagechip s-queued",
+					children: "queued"
+				})
+			]
+		})
+	});
+}
+function OwnHeader() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "device-group run-group-head run-own",
+		title: "Sessions not started in a group",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dev-caret" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "dev-name",
+			children: "On their own"
+		})]
+	});
+}
+//#endregion
 //#region src/components/dialogs/SetupDialog.tsx
 var DOCTOR_ICON = {
 	ok: "✓",
@@ -33467,7 +35227,17 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	const extKeys = (0, import_react.useMemo)(() => extBars.map((b) => b.key), [extBars]);
 	const listed = (0, import_react.useMemo)(() => instances.filter((i) => !isVerifySession(i.title)), [instances]);
 	const families = (0, import_react.useMemo)(() => childrenByParent(listed), [listed]);
-	const order = (0, import_react.useMemo)(() => placeNewWorkers(ui.order, listed.filter((i) => !i.device)), [ui.order, listed]);
+	const order = (0, import_react.useMemo)(() => placeNewRunMembers(placeNewWorkers(ui.order, listed.filter((i) => !i.device)), listed.filter((i) => !i.device)), [ui.order, listed]);
+	const { data: runsData } = useRuns();
+	const runs = runsData || [];
+	const runById = (0, import_react.useMemo)(() => new Map((runsData || []).map((r) => [r.id, r])), [runsData]);
+	const familyTaskOf = (0, import_react.useMemo)(() => {
+		const m = /* @__PURE__ */ new Map();
+		for (const r of runsData || []) if (r.policy?.grouping === "together" || r.split) {
+			for (const t of r.tasks || []) if (t.title) m.set(t.title, t);
+		}
+		return m;
+	}, [runsData]);
 	(0, import_react.useEffect)(() => {
 		if (order !== ui.order) ui.setOrder(order);
 	}, [order]);
@@ -33590,7 +35360,11 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		});
 		return railKeys.filter((k) => byKey.has(k)).map((k) => byKey.get(k));
 	};
-	const localRail = toRail(localRows, winFiltered);
+	const localSplit = splitRail(toRail(localRows, winFiltered), runs, {
+		collapsed: ui.collapsedRuns,
+		act: effectiveActivity,
+		filtering: !!ui.filter
+	});
 	const devRails = remoteDevs.map((dev) => {
 		const dkey = dev.device || dev.name;
 		return {
@@ -33598,7 +35372,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 			rail: toRail(byDev.get(dkey) || [], [])
 		};
 	});
-	const displayedKeys = grouped ? (ui.collapsedDevices.has("__self") ? [] : localRail.map((r) => r.key)).concat(...devRails.map(({ dkey, rail }) => ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key))) : localRail.map((r) => r.key);
+	const displayedKeys = grouped ? (ui.collapsedDevices.has("__self") ? [] : splitKeys(localSplit)).concat(...devRails.map(({ dkey, rail }) => ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key))) : splitKeys(localSplit);
 	const railSig = JSON.stringify(displayedKeys);
 	(0, import_react.useEffect)(() => {
 		useUi.getState().setRailOrder(displayedKeys);
@@ -33611,7 +35385,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		return n;
 	};
 	let rowIdx = -1;
-	const renderRail = (list) => {
+	const renderRail = (list, taskOf) => {
 		const nest = railNesting(list.map((r) => ({
 			key: r.key,
 			parent: r.inst?.parent
@@ -33627,6 +35401,8 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 				nest: stableNest(r.key, nest[i]),
 				kids: r.inst.device ? void 0 : families.get(r.key),
 				parentLive: !r.inst.device && !!parent && families.get(parent)?.includes(r.inst) === true,
+				runTask: taskOf?.get(r.key) ?? null,
+				leadRun: r.inst.run?.role === "lead" ? runById.get(r.inst.run.id) ?? null : null,
 				...rowProps
 			}, r.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WindowRowItem, {
 				row: r.win,
@@ -33637,6 +35413,24 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 			}, r.key);
 		});
 	};
+	const groupRepo = (entries) => entries.find((e) => e.inst?.folder)?.inst?.folder || "";
+	const renderLocal = () => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		localSplit.groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Fragment, { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunGroupHeader, {
+				group: g,
+				repoPath: groupRepo(g.entries)
+			}),
+			!g.collapsed && renderRail(g.entries, g.taskOf),
+			!g.collapsed && g.queued.map((t, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QueuedRow, {
+				task: t,
+				pos: i,
+				groupName: g.name
+			}, "q:" + t.id))
+		] }, "run:" + g.id)),
+		renderRail(localSplit.families, familyTaskOf),
+		localSplit.groups.length + localSplit.families.length > 0 && localSplit.own.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OwnHeader, {}),
+		renderRail(localSplit.own, familyTaskOf)
+	] });
 	const cap = viewCap(ui.viewMode);
 	const shownCount = listed.filter((i) => !ui.hidden.has(i.title)).length;
 	const countHead = isFinite(cap) && shownCount > cap ? `${cap} of ${shownCount} shown` : `${listed.length} session${listed.length === 1 ? "" : "s"}`;
@@ -33700,7 +35494,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 									showForget: false,
 									onToggle: () => ui.toggleDeviceCollapsed("__self")
 								}),
-								!ui.collapsedDevices.has("__self") && renderRail(localRail),
+								!ui.collapsedDevices.has("__self") && renderLocal(),
 								remoteDevs.map((dev, di) => {
 									const devRows = byDev.get(dev.device || dev.name) || [];
 									const dkey = dev.device || dev.name;
@@ -33738,7 +35532,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 										children: !collapsed && renderRail(devRails[di].rail)
 									}, dkey);
 								})
-							] }) : renderRail(localRail), ui.filter && !filtered.length && !winFiltered.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+							] }) : renderLocal(), ui.filter && !filtered.length && !winFiltered.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 								className: "filter-empty muted",
 								children: [
 									"No sessions match “",
@@ -36234,6 +38028,468 @@ function decidePrompt(worker, dialog, provider) {
 	return `Your MindFlock worker ${quoteTitle(worker)} is waiting on a prompt` + (q ? `: “${q}”.` : ".") + ` Look at it with ${toolName("read_output", provider)} (view screen) and answer it with ${toolName("answer_prompt", provider)} if you are sure that is safe for this task; otherwise leave it and tell me why.`;
 }
 //#endregion
+//#region src/components/grid/RunLeadPanel.tsx
+var nameOf$1 = (t) => displayName(t);
+function RunLeadPanel({ title, me, run, rows }) {
+	const myName = nameOf$1(title);
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [editing, setEditing] = (0, import_react.useState)(null);
+	const [form, setForm] = (0, import_react.useState)({
+		title: "",
+		prompt: "",
+		paths: ""
+	});
+	const [problems, setProblems] = (0, import_react.useState)([]);
+	const [asking, setAsking] = (0, import_react.useState)(false);
+	const [note, setNote] = (0, import_react.useState)("");
+	if (!run) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+		className: "thread-head",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", {
+			className: "thread-title",
+			children: [myName, "'s workers"]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "thread-sub",
+			children: "Loading its group…"
+		})]
+	});
+	const id = run.id;
+	const split = !!run.split;
+	const act = async (key, what, path, body, done) => {
+		if (busy) return false;
+		setBusy(key);
+		try {
+			return await runAction(what, runPath(id, path), body, done);
+		} finally {
+			setBusy("");
+		}
+	};
+	const pieces = run.plan?.pieces || [];
+	const plan = planRows(pieces);
+	const startEdit = (i) => {
+		setEditing(i);
+		setProblems([]);
+		setForm({
+			title: plan[i].title,
+			prompt: plan[i].prompt,
+			paths: plan[i].paths.join(", ")
+		});
+	};
+	const saveEdit = async () => {
+		if (editing === null || busy) return;
+		setBusy("edit");
+		try {
+			await api(runPath(id, "/plan"), { json: {
+				pieces: editPlan(pieces, editing, form),
+				why: run.plan?.why || ""
+			} });
+			setEditing(null);
+			setProblems([]);
+			toast("Plan updated");
+		} catch (err) {
+			setProblems(err instanceof ApiError && err.status === 422 ? planProblems(err.body) : [errMsg(err)]);
+		} finally {
+			setBusy("");
+			refreshRuns();
+		}
+	};
+	const approve = () => act("approve", "Start the workers", "/plan/approve", {}, startWorkersLabel(plan.length).replace(/^Start/, "Starting") + " — each fenced to its paths").then((ok) => ok && void refreshInstances());
+	const reject = async () => {
+		if (await act("reject", "Ask for a different split", "/plan/reject", { note: note.trim() }, "Asked " + myName + " for a different split")) {
+			setAsking(false);
+			setNote("");
+		}
+	};
+	const card = releaseCard(run);
+	const outcome = releaseOutcome(run);
+	const lane = laneNote(me?.lane);
+	const pushOnly = run.policy?.lane === "push";
+	const release = (merge) => act(merge ? "merge" : "release", pushOnly ? "Push the branch" : "Open the PR", "/release", { merge_when_green: merge }, merge ? "Opening the PR — it merges once checks pass" : pushOnly ? "Pushing the branch" : "Opening the PR");
+	const reviewDiff = () => {
+		selectSession(title, { noKeyboard: true });
+		useUi.getState().setLastTab(title, "diff");
+	};
+	const showShip = [
+		"checking",
+		"release_ready",
+		"releasing",
+		"done",
+		"done_with_failures"
+	].includes(run.state);
+	const tasks = memberTasks(run);
+	const sub = leadSubline(run, myName);
+	const noTools = me?.mcp_attached === false && split && (run.state === "planning" || run.state === "plan_ready");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+			className: "thread-head",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", {
+					className: "thread-title",
+					children: [myName, "'s workers"]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "thread-sub rb-sub-line",
+					children: sub.map((p, i) => p.b ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", {
+						className: p.cls ? "th-" + p.cls : void 0,
+						children: p.text
+					}, i) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: p.cls ? "th-" + p.cls : void 0,
+						children: p.text
+					}, i))
+				}),
+				noTools && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "thread-sub th-bad rb-warn",
+					children: "Restart the lead to give it the MindFlock tools — it proposes the pieces with them."
+				})
+			]
+		}),
+		run.state === "plan_ready" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+			className: "thread-sec",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "thread-sec-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "thread-label",
+						children: ["Plan · ", plan.length]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "rb-note",
+						children: [
+							"proposed by ",
+							myName,
+							" · each piece may edit only its paths"
+						]
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rb-card rb-plan",
+				children: [
+					run.plan?.why && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "rb-why",
+						children: run.plan.why
+					}),
+					plan.map((p, i) => editing === i ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rb-piece-edit",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Name" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								value: form.title,
+								onChange: (e) => setForm({
+									...form,
+									title: e.target.value
+								})
+							})] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Prompt" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+								rows: 3,
+								value: form.prompt,
+								onChange: (e) => setForm({
+									...form,
+									prompt: e.target.value
+								})
+							})] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Only here" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								value: form.paths,
+								placeholder: "quickpay/auth/tokens*, quickpay/auth/tests/test_tokens.py",
+								onChange: (e) => setForm({
+									...form,
+									paths: e.target.value
+								})
+							})] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "rb-btns",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "th-btn primary",
+									disabled: !!busy,
+									onClick: () => void saveEdit(),
+									children: "Save"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "th-btn",
+									disabled: !!busy,
+									onClick: () => setEditing(null),
+									children: "Cancel"
+								})]
+							})
+						]
+					}, i) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rb-plan-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "rb-plan-main",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: p.title }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "rb-plan-prompt",
+									children: p.prompt
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "rb-only",
+									children: ["only here: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: p.pathsText || "—" })]
+								})
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn",
+							disabled: !!busy || editing !== null,
+							onClick: () => startEdit(i),
+							children: "Edit"
+						})]
+					}, i)),
+					problems.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "rb-problems",
+						children: problems.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: p }, i))
+					}),
+					asking ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rb-ask",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								value: note,
+								autoFocus: true,
+								placeholder: "What should " + myName + " change? (optional)",
+								onChange: (e) => setNote(e.target.value),
+								onKeyDown: (e) => {
+									if (e.key === "Enter") reject();
+									if (e.key === "Escape") setAsking(false);
+								}
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+								type: "button",
+								className: "th-btn primary",
+								disabled: !!busy,
+								onClick: () => void reject(),
+								children: ["Send to ", myName]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "th-btn",
+								onClick: () => setAsking(false),
+								children: "Cancel"
+							})
+						]
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rb-btns",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn primary",
+							disabled: !!busy || editing !== null || !plan.length,
+							title: "MindFlock starts one worker per piece, forked from the lead's last commit, each fenced to its paths",
+							onClick: () => void approve(),
+							children: startWorkersLabel(plan.length)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn",
+							disabled: !!busy,
+							onClick: () => setAsking(true),
+							children: "Ask for a different split"
+						})]
+					})
+				]
+			})]
+		}),
+		showShip && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+			className: "thread-sec",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "thread-sec-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "thread-label",
+						children: "Ship · one PR"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+					lane && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rb-note",
+						children: lane
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rb-card rb-ship",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dl", {
+					className: "rb-grid",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Title" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", {
+							className: "rb-strong",
+							children: card.title
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Into" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", {
+							className: "rb-mono",
+							children: [card.into, card.stat && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "rb-stat",
+								children: [" · ", card.stat]
+							})]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Commits" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: card.commits }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Body" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: card.body }),
+						checkLine(run) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Check" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: checkLine(run) })] })
+					]
+				}), run.state === "checking" ? run.check?.state === "failed" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rb-btns",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "rb-status th-bad",
+							children: ["The check failed on the merged branch", run.check.summary ? ": " + run.check.summary : ""]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn",
+							onClick: reviewDiff,
+							children: "Review the diff"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn primary",
+							disabled: !!busy,
+							onClick: () => void act("check", "Run the check", "/check", {}, "Running the check again"),
+							children: "Run the check again"
+						})
+					]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "rb-btns",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rb-status",
+						children: "Running the check on the merged branch…"
+					})
+				}) : run.state === "release_ready" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rb-btns",
+					children: [releaseChoices(run.policy?.lane).map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "th-btn" + (c.primary ? " primary" : ""),
+						title: c.title,
+						disabled: !!busy,
+						onClick: () => void release(c.merge),
+						children: c.label
+					}, c.label)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "th-btn",
+						onClick: reviewDiff,
+						children: "Review the diff"
+					})]
+				}) : outcome ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rb-btns",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rb-status th-" + outcome.cls,
+							children: outcome.text
+						}),
+						outcome.url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+							className: "th-btn",
+							href: outcome.url,
+							target: "_blank",
+							rel: "noreferrer",
+							children: outcome.link
+						}),
+						run.release?.state === "handoff" && run.release.title && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn",
+							onClick: () => void copyText(run.release?.title || "").then((ok) => toast(ok ? "PR title copied" : "Couldn't copy")),
+							children: "Copy title"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn",
+							onClick: () => void copyText(run.release?.body || "").then((ok) => toast(ok ? "PR body copied" : "Couldn't copy")),
+							children: "Copy body"
+						})] }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "th-btn",
+							onClick: reviewDiff,
+							children: "Review the diff"
+						})
+					]
+				}) : null]
+			})]
+		}),
+		tasks.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+			className: "thread-sec",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "thread-sec-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "thread-label",
+						children: [
+							split ? "Pieces" : "Lines",
+							" · ",
+							tasks.length
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rb-note",
+						children: split ? "planned by the lead · started and merged by MindFlock" : "started and merged by MindFlock"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "thread-workers rb-pieces",
+				children: tasks.map((t) => {
+					const st = pieceStatus(t, myName);
+					const lbl = pieceLabel(t, run);
+					const row = rows.find((r) => r.title === t.title && !r.device);
+					const activity = row ? effectiveActivity(row) : "";
+					const commit = (t.commits || [])[0] || "";
+					const paths = pathsText(t.paths);
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "th-worker rb-piece is-" + st.cls,
+						"data-title": t.title,
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "th-w-head",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "th-dot " + st.cls,
+										"aria-hidden": "true"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+										type: "button",
+										className: "rb-pname",
+										disabled: !row,
+										title: row ? "Open " + nameOf$1(t.title) : "Not started yet",
+										onClick: () => selectSession(t.title),
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: lbl.name }), lbl.what && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [" — ", lbl.what] })]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "th-w-word " + st.cls,
+										children: st.word
+									}),
+									st.detail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "th-w-detail" + (st.cls === "ok" ? " th-ok" : ""),
+										children: st.detail
+									})
+								]
+							}),
+							(paths || commit) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "rb-piece-sub",
+								children: [
+									paths && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: ["only here: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: paths })] }),
+									paths && commit && " · ",
+									commit && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+										"“",
+										commit,
+										"”"
+									] })
+								]
+							}),
+							activity === "clarify" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "th-w-body",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
+									title: t.title,
+									activity,
+									variant: "thread",
+									onOpen: () => selectSession(t.title)
+								})
+							})
+						]
+					}, t.id);
+				})
+			})]
+		})
+	] });
+}
+//#endregion
 //#region src/components/grid/ThreadTab.tsx
 var THREAD_POLL_MS = 8e3;
 var threadCache = /* @__PURE__ */ new Map();
@@ -36248,6 +38504,8 @@ function ThreadTab({ title, active }) {
 	const rows = (0, import_react.useMemo)(() => rowsData ?? [], [rowsData]);
 	const me = rows.find((r) => r.title === title && !r.device);
 	const { parent, children } = (0, import_react.useMemo)(() => familyOf(title, rows), [title, rows]);
+	const leadOf = me?.run?.role === "lead" ? me.run : null;
+	const { data: leadRun } = useRun(leadOf?.id);
 	const [data, setData] = (0, import_react.useState)(threadCache.get(title) ?? null);
 	const [filter, setFilter] = (0, import_react.useState)("all");
 	const [loadErr, setLoadErr] = (0, import_react.useState)("");
@@ -36442,7 +38700,12 @@ function ThreadTab({ title, active }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "thread-scroll",
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", {
+				leadOf ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunLeadPanel, {
+					title,
+					me,
+					run: leadRun,
+					rows
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("header", {
 					className: "thread-head",
 					children: hasWorkers ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", {
 						className: "thread-title",
@@ -36518,7 +38781,7 @@ function ThreadTab({ title, active }) {
 						]
 					})] })
 				}),
-				hasWorkers && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				hasWorkers && !leadOf && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 					className: "thread-sec",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "thread-sec-head",
@@ -51712,64 +53975,30 @@ function AccountChip({ inst }) {
 	})] });
 }
 //#endregion
-//#region src/components/grid/PlaybookMenu.tsx
-var lastList = /* @__PURE__ */ new Map();
-function PlaybookMenu({ title, anchor, initialSub, onClose }) {
+//#region src/components/grid/ShipMenu.tsx
+function ShipMenu({ title, anchor, onClose }) {
 	const { data: rows } = useInstances();
-	const railOrder = useUi((s) => s.railOrder);
+	const { data: config } = useConfig();
 	const name = useUi((s) => s.aliases[title]) || title;
-	const [list, setList] = (0, import_react.useState)(lastList.get(title) ?? null);
-	const [err, setErr] = (0, import_react.useState)("");
-	const [sel, setSel] = (0, import_react.useState)(0);
-	const [askOpen, setAskOpen] = (0, import_react.useState)(false);
-	const [askSel, setAskSel] = (0, import_react.useState)(0);
+	const inst = (rows || []).find((r) => r.title === title && !r.device);
+	const model = (0, import_react.useMemo)(() => shipMenuModel(inst || {
+		provider: "",
+		program: "",
+		mcp_attached: null,
+		activity: ""
+	}, rows || [], config?.caps), [
+		inst,
+		rows,
+		config?.caps
+	]);
+	const entries = (0, import_react.useMemo)(() => shipEntries(model), [model]);
+	const [sel, setSel] = (0, import_react.useState)(() => Math.max(0, entries.findIndex((e) => e.kind === "lane" && e.current)));
+	const [busy, setBusy] = (0, import_react.useState)(false);
 	const menuRef = (0, import_react.useRef)(null);
-	const subRef = (0, import_react.useRef)(null);
-	const askItemRef = (0, import_react.useRef)(null);
 	const onCloseRef = (0, import_react.useRef)(onClose);
 	onCloseRef.current = onClose;
 	const uid = (0, import_react.useId)();
 	const itemId = (i) => uid + "-item-" + i;
-	const sessId = (i) => uid + "-sess-" + i;
-	(0, import_react.useEffect)(() => {
-		let live = true;
-		fetchPlaybooks(title).then((l) => {
-			if (!live) return;
-			lastList.set(title, l);
-			setList(l);
-			setErr("");
-		}).catch((e) => {
-			if (live) setErr(errMsg(e));
-		});
-		return () => {
-			live = false;
-		};
-	}, [title]);
-	const children = (0, import_react.useMemo)(() => liveChildren(title, rows || []), [title, rows]);
-	const model = (0, import_react.useMemo)(() => menuModel(list || [], children), [list, children]);
-	const entries = (0, import_react.useMemo)(() => [
-		...model.general.map((pb) => ({
-			kind: "playbook",
-			pb
-		})),
-		...(model.workers?.items || []).map((pb) => ({
-			kind: "playbook",
-			pb
-		})),
-		{ kind: "message" }
-	], [model]);
-	const askPb = (list || []).find((p) => p.args.some((a) => a.kind === "session" && a.required));
-	const targets = (0, import_react.useMemo)(() => askTargets(title, rows || [], railOrder, displayName), [
-		title,
-		rows,
-		railOrder
-	]);
-	(0, import_react.useEffect)(() => {
-		if (initialSub !== "ask" || !askPb || !askPb.available) return;
-		const i = entries.findIndex((e) => e.kind === "playbook" && e.pb.id === askPb.id);
-		if (i >= 0) setSel(i);
-		setAskOpen(true);
-	}, [initialSub, !!askPb]);
 	(0, import_react.useEffect)(() => {
 		menuRef.current?.focus({ preventScroll: true });
 	}, []);
@@ -51777,26 +54006,25 @@ function PlaybookMenu({ title, anchor, initialSub, onClose }) {
 		const m = menuRef.current;
 		if (!m) return;
 		const r = anchor.getBoundingClientRect();
-		const top = Math.round(r.bottom + 6);
-		m.style.top = top + "px";
-		m.style.maxHeight = Math.max(160, window.innerHeight - top - 12) + "px";
+		m.style.maxHeight = "none";
+		const natural = m.scrollHeight;
+		const below = window.innerHeight - r.bottom - 18;
+		const above = r.top - 18;
+		if (natural > below && above > below) {
+			const h = Math.min(natural, above);
+			m.style.top = Math.max(8, Math.round(r.top - 6 - h)) + "px";
+			m.style.maxHeight = h + "px";
+		} else {
+			const top = Math.round(r.bottom + 6);
+			m.style.top = top + "px";
+			m.style.maxHeight = Math.max(160, window.innerHeight - top - 12) + "px";
+		}
 		let left = r.right - m.offsetWidth + 10;
 		left = Math.min(left, window.innerWidth - m.offsetWidth - 8);
 		m.style.left = Math.max(8, left) + "px";
-		const s = subRef.current;
-		const item = askItemRef.current;
-		if (s && item) {
-			const mr = m.getBoundingClientRect();
-			const ir = item.getBoundingClientRect();
-			let sl = mr.right + 4;
-			if (sl + s.offsetWidth > window.innerWidth - 8) sl = mr.left - s.offsetWidth - 4;
-			s.style.left = Math.max(8, sl) + "px";
-			const st = Math.min(ir.top - 6, window.innerHeight - s.offsetHeight - 8);
-			s.style.top = Math.max(8, st) + "px";
-		}
 	});
 	(0, import_react.useEffect)(() => {
-		const inside = (t) => t instanceof Node && (!!menuRef.current?.contains(t) || !!subRef.current?.contains(t) || anchor.contains(t));
+		const inside = (t) => t instanceof Node && (!!menuRef.current?.contains(t) || anchor.contains(t));
 		const onDown = (e) => {
 			if (!inside(e.target)) onCloseRef.current(false);
 		};
@@ -51816,28 +54044,23 @@ function PlaybookMenu({ title, anchor, initialSub, onClose }) {
 	const close = (refocus = false) => onCloseRef.current(refocus);
 	const activate = (e) => {
 		if (!e) return;
+		const why = entryWhy(e);
+		if (why) {
+			toast(why, { duration: 5e3 });
+			return;
+		}
 		if (e.kind === "message") {
 			useUi.getState().threadOpen(title, { composeTo: title });
 			close();
 			return;
 		}
-		const pb = e.pb;
-		if (!pb.available) {
-			toast(pb.disabled_reason || "Not available right now", { duration: 5e3 });
-			return;
-		}
-		if (pb === askPb) {
-			setAskOpen(true);
-			setAskSel(0);
-			return;
-		}
+		if (!inst || busy) return;
+		setBusy(true);
 		close();
-		pastePlaybook(title, pb);
-	};
-	const ask = (t) => {
-		if (!t || !askPb) return;
-		close();
-		pastePlaybook(title, askPb, { session: t.title });
+		runShipEntry(e, inst, name, model.current).then((said) => {
+			if (said) toast(said, { duration: 4500 });
+			refreshInstances();
+		}).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 })).finally(() => setBusy(false));
 	};
 	const onKeyDown = (e) => {
 		if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -51846,28 +54069,6 @@ function PlaybookMenu({ title, anchor, initialSub, onClose }) {
 			e.preventDefault();
 			e.stopPropagation();
 		};
-		if (askOpen) {
-			if (k === "ArrowDown") {
-				handled();
-				setAskSel((i) => Math.min(targets.length - 1, i + 1));
-			} else if (k === "ArrowUp") {
-				handled();
-				setAskSel((i) => Math.max(0, i - 1));
-			} else if (k === "Enter" || k === "ArrowRight") {
-				handled();
-				ask(targets[askSel]);
-			} else if (k === "Escape" || k === "ArrowLeft") {
-				handled();
-				setAskOpen(false);
-			} else if (/^[1-9]$/.test(k)) {
-				const t = targets.find((x) => x.slot === k);
-				if (t) {
-					handled();
-					ask(t);
-				}
-			}
-			return;
-		}
 		if (k === "ArrowDown") {
 			handled();
 			setSel((i) => (i + 1) % entries.length);
@@ -51877,17 +54078,11 @@ function PlaybookMenu({ title, anchor, initialSub, onClose }) {
 		} else if (k === "Enter") {
 			handled();
 			activate(entries[sel]);
-		} else if (k === "ArrowRight") {
-			const e0 = entries[sel];
-			if (e0?.kind === "playbook" && e0.pb === askPb) {
-				handled();
-				activate(e0);
-			}
 		} else if (k === "Escape") {
 			handled();
 			close(true);
 		} else if (k.length === 1 && /[a-z]/i.test(k)) {
-			const i = entries.findIndex((x) => x.kind === "playbook" && letterOf(x.pb) === k.toUpperCase());
+			const i = entries.findIndex((x) => entryKey(x) === k.toUpperCase());
 			if (i >= 0) {
 				handled();
 				setSel(i);
@@ -51895,82 +54090,74 @@ function PlaybookMenu({ title, anchor, initialSub, onClose }) {
 			}
 		}
 	};
-	const item = (e, i) => {
-		const cls = "pb-item" + (i === sel ? " sel" : "");
-		if (e.kind === "message") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+	const item = (e) => {
+		const i = entries.indexOf(e);
+		const why = entryWhy(e);
+		let label = "";
+		let desc = "";
+		let key = entryKey(e);
+		switch (e.kind) {
+			case "lane":
+				label = e.label + (e.current ? " ✓" : "");
+				desc = e.desc + (e.current ? " — this session's lane now" : "");
+				break;
+			case "ask":
+				label = "Ask me before it ships" + (e.on ? " ✓" : "");
+				desc = "Stop at the next step and show it in the Outbox first";
+				break;
+			case "split":
+				label = "Split into parallel pieces…";
+				desc = "The agent proposes pieces with separate paths; you approve, MindFlock runs and merges them back";
+				break;
+			case "shipnow":
+				label = "Ship it now";
+				desc = "Don't wait for the agent — take what's there through the lane now";
+				break;
+			case "detach":
+				label = "Move out of " + (model.group?.name || "the group");
+				desc = "The group stops driving it; the session and its lane stay";
+				break;
+			case "message":
+				label = "Message…";
+				desc = "Write to a session yourself, in the Thread tab";
+				key = "Ctrl+K S";
+		}
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: itemId(i),
-			className: cls,
-			role: "menuitem",
+			className: "pb-item" + (i === sel ? " sel" : "") + (why ? " off" : ""),
+			role: e.kind === "lane" ? "menuitemradio" : e.kind === "ask" ? "menuitemcheckbox" : "menuitem",
+			"aria-checked": e.kind === "lane" ? e.current : e.kind === "ask" ? e.on : void 0,
 			tabIndex: -1,
+			"aria-disabled": why ? true : void 0,
+			title: why || void 0,
+			"data-ship": e.kind === "lane" ? "lane-" + e.lane : e.kind,
 			onMouseMove: () => setSel(i),
 			onClick: () => activate(e),
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "pb-name",
-					children: "Message…"
+					children: label
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "pb-key",
-					children: "Ctrl+K S"
+					children: key
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "pb-desc",
-					children: "Write to a session yourself, in the Thread tab"
+					className: "pb-desc" + (why ? " pb-why" : ""),
+					children: why || desc
 				})
 			]
-		}, "message");
-		const pb = e.pb;
-		const isAsk = pb === askPb;
-		const off = !pb.available;
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			ref: isAsk ? askItemRef : void 0,
-			id: itemId(i),
-			className: cls + (off ? " off" : "") + (isAsk && askOpen ? " sub-open" : ""),
-			role: "menuitem",
-			tabIndex: -1,
-			"aria-disabled": off || void 0,
-			"aria-haspopup": isAsk || void 0,
-			title: off ? pb.disabled_reason || void 0 : void 0,
-			"data-playbook": pb.id,
-			onMouseMove: () => {
-				setSel(i);
-				if (askOpen && !isAsk) setAskOpen(false);
-			},
-			onClick: () => activate(e),
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "pb-name",
-					children: [pb.label, pb.id === "wrapup" && model.workers && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "pb-cnt",
-						children: model.workers.reported
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "pb-key",
-					children: letterOf(pb)
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "pb-desc" + (off ? " pb-why" : ""),
-					children: off ? pb.disabled_reason || "Not available right now" : pb.desc
-				}),
-				isAsk && !off && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "pb-caret",
-					"aria-hidden": "true",
-					children: "›"
-				})
-			]
-		}, pb.id);
+		}, e.kind + (e.kind === "lane" ? e.lane : ""));
 	};
-	const nGeneral = model.general.length;
-	const nWorkers = model.workers?.items.length || 0;
-	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "playbook-menu",
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "ship-menu",
 		className: "pb-menu",
 		role: "menu",
-		"aria-label": `Work with other sessions — ${name}`,
+		"aria-label": `Ship & split — ${name}`,
 		tabIndex: -1,
 		ref: menuRef,
-		"aria-activedescendant": askOpen && askPb ? targets.length ? sessId(askSel) : void 0 : itemId(sel),
+		"aria-activedescendant": itemId(sel),
+		"aria-busy": busy || void 0,
 		style: {
 			top: 0,
 			left: 0
@@ -51980,92 +54167,42 @@ function PlaybookMenu({ title, anchor, initialSub, onClose }) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pb-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Work with other sessions" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ship & split" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "muted",
 					children: ["→ ", name]
 				})]
 			}),
-			!list && !err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "pb-note muted",
-				children: "Loading…"
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pb-sec",
+				children: "When it's done"
 			}),
-			err && !list && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "pb-note pb-err",
-				children: ["Couldn't load the playbooks: ", err]
+			model.lanes.map(item),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pb-sec",
+				children: "Split"
 			}),
-			entries.slice(0, nGeneral).map((e, i) => item(e, i)),
-			model.workers && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			model.split.map(item),
+			model.group ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pb-sec",
 				children: [
-					name,
-					"'s workers · ",
-					model.workers.count
+					model.group.name,
+					" · ",
+					model.group.count
 				]
-			}),
-			entries.slice(nGeneral, nGeneral + nWorkers).map((e, i) => item(e, nGeneral + i)),
-			!model.workers && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "pb-sep" }),
-			item(entries[entries.length - 1], entries.length - 1),
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "pb-sep" }),
+			model.tail.map(item),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pb-foot",
 				children: [
-					"Pastes the prompt into ",
-					name,
-					"'s input. Add the task, press Enter — nothing runs until you do. Also in the row ",
+					"Every item acts right away — nothing is pasted into the agent. The ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏩" }),
+					" button and the row ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "›" }),
-					" menu and the palette."
+					" menu show the same lane."
 				]
 			})
 		]
-	}), askOpen && askPb && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pb-sub",
-		role: "menu",
-		"aria-label": "Ask which session",
-		ref: subRef,
-		style: {
-			top: 0,
-			left: 0
-		},
-		onMouseDown: (e) => {
-			e.preventDefault();
-			e.stopPropagation();
-		},
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "pb-sub-head muted",
-				children: [name, " asks…"]
-			}),
-			targets.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "pb-note muted",
-				children: "No other sessions to ask"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "pb-sub-list",
-				children: targets.map((t, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					id: sessId(i),
-					className: "pb-sess" + (i === askSel ? " hot" : ""),
-					role: "menuitem",
-					tabIndex: -1,
-					onMouseMove: () => setAskSel(i),
-					onClick: () => ask(t),
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "slot",
-							children: t.slot
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "pb-dot " + (t.activity || "offline") }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "nm",
-							children: t.name
-						}),
-						t.rel && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "rel",
-							children: t.rel
-						})
-					]
-				}, t.title))
-			})
-		]
-	})] }), document.body);
+	}), document.body);
 }
 //#endregion
 //#region src/components/grid/Pane.tsx
@@ -52082,6 +54219,9 @@ function paneTab(t, git) {
 	if (!BODY_TABS.has(t)) return "agent";
 	if (GIT_TABS.has(t) && !git) return "agent";
 	return t;
+}
+function shipShown(inst) {
+	return !isRemote(inst) && !inst.pending;
 }
 var FORK_ICON = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 	width: "12",
@@ -52130,7 +54270,7 @@ function Pane({ inst, drag, dragging }) {
 	const family = familyOf(title, allRows ?? []);
 	const threadOpened = useUi((s) => s.threadComposeTarget?.title === title);
 	const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
-	const threadShown = threadTabShown(!!family.parent || family.children.length > 0, threadOpened || lastTab === "thread");
+	const threadShown = threadTabShown(!!family.parent || family.children.length > 0 || inst.run?.role === "lead", threadOpened || lastTab === "thread");
 	const badge = threadBadge(family.children, threadSeen, effectiveActivity);
 	const newestReport = newestReportTs(family.children);
 	const playbookMenu = useUi((s) => s.playbookMenu?.title === title ? s.playbookMenu : null);
@@ -52364,7 +54504,7 @@ function Pane({ inst, drag, dragging }) {
 			drag.commit();
 		}
 	};
-	const forkGone = missing || loading || !mcpCapable(caps, inst) || !!forkBlockReason(inst);
+	const forkGone = missing || loading || !shipShown(inst);
 	(0, import_react.useEffect)(() => {
 		if (playbookMenu && forkGone) useUi.getState().setPlaybookMenu(null);
 	}, [playbookMenu, forkGone]);
@@ -52501,8 +54641,7 @@ function Pane({ inst, drag, dragging }) {
 	const budget = inst.budget;
 	const ds = inst.workspace_missing ? null : inst.diff_stat;
 	const hasDiffStat = !!(ds && (ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0);
-	const forkShown = mcpCapable(caps, inst);
-	const forkBlocked = forkShown ? forkBlockReason(inst) : "";
+	const forkShown = shipShown(inst);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		ref: paneRef,
 		className: "pane" + (focused ? " focused" : "") + (dragging ? " dragging" : ""),
@@ -52674,18 +54813,13 @@ function Pane({ inst, drag, dragging }) {
 						children: [
 							forkShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								ref: setForkEl,
-								className: "act playbooks" + (playbookMenu ? " open" : "") + (forkBlocked ? " is-blocked" : ""),
+								className: "act playbooks" + (playbookMenu ? " open" : ""),
 								type: "button",
 								"aria-haspopup": "menu",
 								"aria-expanded": !!playbookMenu,
-								"aria-disabled": forkBlocked ? true : void 0,
-								title: forkBlocked || "Work with other sessions — split across workers, ask, review, hand off (Ctrl+K F)",
+								title: "Ship & split — how far MindFlock carries this session, split it, message (Ctrl+K F)",
 								onClick: (e) => {
 									e.stopPropagation();
-									if (forkBlocked) {
-										toast(forkBlocked, { duration: 5e3 });
-										return;
-									}
 									useUi.getState().setPlaybookMenu(playbookMenu ? null : { title });
 								},
 								children: FORK_ICON
@@ -52877,10 +55011,9 @@ function Pane({ inst, drag, dragging }) {
 					})
 				]
 			}),
-			playbookMenu && forkShown && !forkBlocked && forkEl && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlaybookMenu, {
+			playbookMenu && forkShown && forkEl && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShipMenu, {
 				title,
 				anchor: forkEl,
-				initialSub: playbookMenu.sub ?? null,
 				onClose: (refocus) => {
 					const ui = useUi.getState();
 					if (ui.playbookMenu?.title === title) ui.setPlaybookMenu(null);
@@ -53727,6 +55860,11 @@ function CommandPalette({ host }) {
 			hint: "Ctrl+N",
 			run: () => ui.openDialogFor("new-session")
 		});
+		acts.push({
+			label: "Start several sessions…",
+			hint: "one per line",
+			run: () => ui.openNewWith("")
+		});
 		const { rows } = orderedInstances(instances$1(), ui.order);
 		for (const inst of rows) {
 			const name = ui.aliases[inst.title] || inst.title;
@@ -53754,33 +55892,47 @@ function CommandPalette({ host }) {
 				run: () => focusQueueInput(t)
 			});
 			const inst = rows.find((r) => r.title === t);
-			if (inst && mcpCapable(caps, inst)) {
+			if (inst && !inst.device && !inst.pending && !t.includes("::")) {
+				const cur = laneChoice(inst);
+				const ship = (lane) => async () => {
+					try {
+						await setLane(t, lane, cur.askFirst);
+						toast(`${ui.aliases[t] || t} → ${LANE_LABEL[lane]}`, { duration: 4e3 });
+						refreshInstances();
+					} catch (err) {
+						toast(`${t}: ${errMsg(err)}`, { duration: 6e3 });
+					}
+				};
 				acts.push({
-					label: `Split across workers… — ${t}`,
-					hint: "pastes the prompt",
-					run: () => void runPlaybook(t, "split")
+					label: `Ship: open a PR when done — ${t}`,
+					hint: cur.lane === "pr" ? "its lane now" : "lane",
+					run: () => void ship("pr")()
 				});
 				acts.push({
-					label: `Ask a session… — ${t}`,
-					hint: "pastes the prompt",
-					run: () => openPlaybookMenu(t, "ask")
+					label: `Ship: commit when done — ${t}`,
+					hint: cur.lane === "commit" ? "its lane now" : "lane",
+					run: () => void ship("commit")()
 				});
-				if (liveChildren(t, rows).length) {
-					acts.push({
-						label: `Check on workers — ${t}`,
-						hint: "pastes the prompt",
-						run: () => void runPlaybook(t, "workers")
-					});
-					acts.push({
-						label: `Wrap up workers — ${t}`,
-						hint: "pastes the prompt",
-						run: () => void runPlaybook(t, "wrapup")
-					});
-				}
+				const why = splitBlockReason(caps, inst);
 				acts.push({
-					label: `Work with other sessions… — ${t}`,
+					label: `Split into parallel pieces… — ${t}`,
+					hint: why ? teamRunCaps(caps).split ? "unavailable" : "needs a newer server" : "starts a split",
+					run: () => {
+						if (why) {
+							toast(why, { duration: 5e3 });
+							return;
+						}
+						const name = ui.aliases[t] || t;
+						startSplitOf(inst, name, cur.lane === "leave" ? "pr" : cur.lane, cur.askFirst).then(() => {
+							ui.threadOpen(t);
+							toast(`${name} is proposing the pieces — approve the plan in its Thread tab`, { duration: 5e3 });
+						}).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 }));
+					}
+				});
+				acts.push({
+					label: `Ship & split… — ${t}`,
 					hint: "Ctrl+K F",
-					run: () => openPlaybookMenu(t)
+					run: () => openShipMenu(t)
 				});
 			}
 			acts.push({
@@ -53860,6 +56012,11 @@ function CommandPalette({ host }) {
 			label: "Intake: Auto-start",
 			hint: "what starts on its own",
 			run: () => ui.openDialogFor("intake", "autostart")
+		});
+		acts.push({
+			label: "Outbox — what's shipping, and what's waiting on you",
+			hint: "Alt+O",
+			run: () => ui.openDialogFor("outbox")
 		});
 		acts.push({
 			label: "Verify — what's waiting on you",
@@ -54744,41 +56901,697 @@ function NewTicketPane() {
 }
 //#endregion
 //#region src/components/dialogs/SplitCheck.tsx
-function SplitCheck({ id, split, onSplit, gate, text }) {
-	const on = split && gate.ok;
-	const sug = gate.ok ? splitSuggestion(text) : null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "nf-split" + (gate.ok ? "" : " disabled"),
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "check" + (gate.ok ? "" : " disabled"),
-			title: gate.ok ? "The agent forks one worker session per independent piece of the task, waits for their reports, then merges them. Works with the CLIs that get the MindFlock tools." : gate.reason,
+function SplitCheck({ id, split, onSplit, gate, shapeReason, text }) {
+	const why = gate.ok ? shapeReason : gate.reason;
+	const ok = !why;
+	const on = split && ok;
+	const sug = ok ? splitSuggestion(text) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "nf-split" + (ok ? "" : " disabled"),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "check" + (ok ? "" : " disabled"),
+			title: ok ? "MindFlock starts a lead session that proposes the pieces, each with its own paths. You approve the split; MindFlock starts the workers and merges them back." : why,
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 					type: "checkbox",
 					id,
 					checked: on,
-					disabled: !gate.ok,
+					disabled: !ok,
 					onChange: (e) => onSplit(e.target.checked)
 				}),
-				"Split across workers",
+				"Split a big line into parallel pieces first",
 				sug && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "nf-split-pill",
 					title: "Your sentence lists separate pieces. Nothing is ticked for you.",
 					children: suggestionPill(sug)
 				}),
-				!gate.ok && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				why && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "muted",
 					children: [
 						" (",
-						gate.reason,
+						why,
 						")"
 					]
 				})
 			]
-		}), on && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "nf-git-nudge nf-split-nudge",
-			children: "The agent commits shared groundwork, starts one worker session per independent piece, waits for their reports, then merges. Workers appear under it in the rail. Runs in a new worktree. Each spawn asks your permission unless this agent skips permissions — answer from the rail."
-		})]
+		})
+	});
+}
+//#endregion
+//#region src/lib/runStart.ts
+var TICKET_TOKEN = /^(?:[A-Za-z][A-Za-z0-9]{0,15}-\d+|#\d+|[\w.-]+\/[\w.-]+#\d+|https?:\/\/\S+)$/;
+function isTicketToken(tok) {
+	return TICKET_TOKEN.test(tok.trim());
+}
+function localItems(text) {
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const raw of String(text || "").split(/\r?\n/)) {
+		const line = raw.trim();
+		if (!line) continue;
+		const toks = line.split(/[\s,]+/).filter(Boolean);
+		if (toks.length && toks.every(isTicketToken)) for (const t of toks) {
+			const k = t.toLowerCase();
+			if (seen.has(k)) continue;
+			seen.add(k);
+			out.push({
+				kind: "ticket",
+				ref: t
+			});
+		}
+		else out.push({
+			kind: "task",
+			text: line
+		});
+	}
+	return out;
+}
+function isListMode(items) {
+	return items.length >= 2 || items.some((i) => i.kind === "ticket");
+}
+function splitApplies(items) {
+	return items.length === 1 && items[0].kind === "task";
+}
+function splitShapeReason(items) {
+	if (!items.length) return "";
+	if (items.length > 1) return "one line only — this is a list of " + items.length;
+	return items[0].kind === "ticket" ? "a ticket starts as itself" : "";
+}
+function itemRows(local, preview, repoLabel, sourceLabel = (k) => k) {
+	if (preview) return preview.items.map((it, i) => {
+		if (it.kind === "ticket") {
+			const ref = String(it.ref || it.id || "");
+			return {
+				key: "t" + i + ":" + ref,
+				kind: "ticket",
+				ref,
+				title: String(it.title || ""),
+				where: it.source ? sourceLabel(it.source) : "",
+				error: it.error ? String(it.error) : "",
+				pending: false,
+				token: ref
+			};
+		}
+		const text = String(it.text || "");
+		return {
+			key: "k" + i + ":" + text,
+			kind: "task",
+			ref: "",
+			title: text,
+			where: String(it.repo || repoLabel),
+			error: it.error ? String(it.error) : "",
+			pending: false,
+			token: text
+		};
+	});
+	return local.map((it, i) => it.kind === "ticket" ? {
+		key: "t" + i + ":" + it.ref,
+		kind: "ticket",
+		ref: it.ref,
+		title: "",
+		where: "",
+		error: "",
+		pending: true,
+		token: it.ref
+	} : {
+		key: "k" + i + ":" + it.text,
+		kind: "task",
+		ref: "",
+		title: it.text,
+		where: repoLabel,
+		error: "",
+		pending: false,
+		token: it.text
+	});
+}
+function removeItem(text, row) {
+	const lines = String(text || "").split(/\r?\n/);
+	const want = row.token.trim();
+	if (row.kind === "task") {
+		const i = lines.findIndex((l) => l.trim() === want);
+		if (i >= 0) lines.splice(i, 1);
+		return lines.join("\n");
+	}
+	const low = want.toLowerCase();
+	for (let i = 0; i < lines.length; i++) {
+		const toks = lines[i].split(/([\s,]+)/);
+		const j = toks.findIndex((t) => t.toLowerCase() === low);
+		if (j < 0) continue;
+		toks.splice(j, 1);
+		const next = toks.join("").replace(/^[\s,]+|[\s,]+$/g, "").replace(/\s*,\s*,\s*/g, ", ").replace(/ {2,}/g, " ");
+		if (next) lines[i] = next;
+		else lines.splice(i, 1);
+		break;
+	}
+	return lines.join("\n");
+}
+function fallbackName(items) {
+	const task = items.find((i) => i.kind === "task");
+	if (task) {
+		const words = task.text.split(/\s+/).slice(0, 4).join(" ");
+		return words.length > 40 ? words.slice(0, 40).trimEnd() : words;
+	}
+	const pre = items.map((i) => i.kind === "ticket" ? i.ref : "").map((r) => (/^([A-Za-z][A-Za-z0-9]*)-\d+$/.exec(r) || [])[1] || "");
+	if (pre.length && pre[0] && pre.every((p) => p.toLowerCase() === pre[0].toLowerCase())) return pre[0].toUpperCase() + " tickets";
+	return "Batch";
+}
+function startTogetherText(tickets) {
+	return tickets.map((t) => {
+		const id = String(t.id ?? "").trim();
+		const slug = String(t.slug || "").trim();
+		if (id && isTicketToken(id)) return id;
+		if (slug && isTicketToken(slug)) return slug;
+		if (t.url) return String(t.url);
+		return slug || id;
+	}).join(" ");
+}
+var CONCURRENCY_MIN = 1;
+var CONCURRENCY_MAX = 8;
+var CONCURRENCY_DEFAULT = 3;
+function clampConcurrency(n) {
+	if (!Number.isFinite(n)) return CONCURRENCY_DEFAULT;
+	return Math.min(CONCURRENCY_MAX, Math.max(CONCURRENCY_MIN, Math.round(n)));
+}
+function requestItems(preview) {
+	return preview.items.filter((it) => !it.error).map((it) => it.kind === "ticket" ? {
+		kind: "ticket",
+		source: String(it.source || ""),
+		id: String(it.id || it.ref || "")
+	} : {
+		kind: "task",
+		text: String(it.text || "")
+	});
+}
+function oneForAllLane(lane) {
+	return lane === "leave" ? "commit" : lane;
+}
+function runBody(o) {
+	const together = o.split || o.grouping === "together";
+	const lane = together ? oneForAllLane(o.lane) : o.lane;
+	return {
+		name: o.name.trim(),
+		items: o.items,
+		policy: {
+			lane,
+			ask_first: !together && lane !== "leave" && o.askFirst,
+			grouping: o.split ? "together" : o.grouping,
+			release: "ask"
+		},
+		concurrency: clampConcurrency(o.concurrency),
+		program: o.program.trim(),
+		repo_path: o.repoPath.trim(),
+		split: o.split
+	};
+}
+function defaultLaneFor(batch, serverDefault, fasttrackDepth) {
+	if (!batch) return "leave";
+	return laneDefault(serverDefault || fasttrackDepth);
+}
+function startLabel(n, split) {
+	if (split) return "Start the lead";
+	if (n >= 2) return `Start ${n} sessions`;
+	return "Create session";
+}
+function summarySentence(o) {
+	const asks = !(o.split || o.n >= 2 && o.grouping === "together") && o.lane !== "leave" && o.askFirst ? " Before the first commit it stops and asks you in the Outbox." : "";
+	if (o.split) return {
+		lead: "One lead session in a new worktree. Its agent proposes pieces with separate paths; you approve the split in its Thread tab, then MindFlock starts the workers, fences each to its paths and merges them back.",
+		tail: (o.lane === "pr" ? "Then it opens one PR — after you say go." : o.lane === "merge" ? "Then it opens one PR and merges it once checks pass — after you say go." : o.lane === "push" ? "Then the merged branch is pushed — after you say go." : "The merged branch waits for you; nothing is pushed.") + asks
+	};
+	if (o.n >= 2) {
+		const c = clampConcurrency(o.concurrency);
+		const count = c >= o.n ? `${o.n} sessions, all at once.` : `${o.n} sessions, ${c} at a time.`;
+		if (o.grouping === "together") {
+			const [l, t] = {
+				leave: [" Each one is committed as it finishes and merged into one shared branch.", "Nothing is pushed."],
+				commit: [" Each one is committed as it finishes and merged into one shared branch.", "Nothing is pushed."],
+				push: [" Each one is committed as it finishes and merged into one shared branch, which is pushed once all are in.", "No PR is opened."],
+				pr: [" Each one is committed as it finishes and merged into one shared branch; when all are in and the tests pass, MindFlock opens one PR.", "It asks you before it opens it."],
+				merge: [" Each one is committed as it finishes and merged into one shared branch; when all are in and the tests pass, MindFlock opens one PR and merges it once checks pass.", "It asks you before it opens it."]
+			}[o.lane];
+			return {
+				lead: count + l,
+				tail: t + asks
+			};
+		}
+		const [l, t] = {
+			leave: [" Each one stops when its agent does — nothing is committed.", "You'll see each in the rail."],
+			commit: [" Each one is committed with a message written from its diff once its agent stops and your hooks pass.", "Nothing is pushed."],
+			push: [" Each one is committed with a message written from its diff and pushed once its agent stops and your hooks pass.", "No PRs are opened."],
+			pr: [" Each one is committed with a message written from its diff, pushed and opened as its own PR once its agent stops and your hooks pass.", "Nothing merges; you'll see each PR in the Outbox."],
+			merge: [" Each one is committed with a message written from its diff, pushed, opened as its own PR and merged once its checks pass.", "You'll see each PR in the Outbox."]
+		}[o.lane];
+		return {
+			lead: count + l,
+			tail: t + asks
+		};
+	}
+	if (o.lane === "leave") return null;
+	const [l, t] = {
+		commit: ["When its agent stops and your hooks pass, MindFlock commits it with a message written from its diff.", "Nothing is pushed."],
+		push: ["When its agent stops and your hooks pass, MindFlock commits it with a message written from its diff and pushes it.", "No PR is opened."],
+		pr: ["When its agent stops and your hooks pass, MindFlock commits it with a message written from its diff, pushes it and opens a PR.", "Nothing merges."],
+		merge: ["When its agent stops and your hooks pass, MindFlock commits it, pushes it, opens a PR and merges it once checks pass.", ""]
+	}[o.lane];
+	return {
+		lead: l,
+		tail: (t + asks).trim()
+	};
+}
+var BROWSE_VALUE = "\0browse";
+function runRepoOptions(repoPath, suggestions, leaf = (p) => p.replace(/\/+$/, "").split("/").pop() || p) {
+	const out = [];
+	if (!suggestions.some((s) => s.path === repoPath)) out.push({
+		value: repoPath,
+		label: leaf(repoPath) || repoPath || "—"
+	});
+	for (const s of suggestions) out.push({
+		value: s.path,
+		label: s.name || leaf(s.path)
+	});
+	out.push({
+		value: BROWSE_VALUE,
+		label: "Browse…"
+	});
+	return out;
+}
+//#endregion
+//#region src/components/dialogs/NewList.tsx
+var PREVIEW_DEBOUNCE_MS = 300;
+function prettySource(key) {
+	const k = String(key || "");
+	const i = k.indexOf("-");
+	const head = i > 0 ? k.slice(0, i) : k;
+	const rest = i > 0 ? k.slice(i + 1) : "";
+	const cap = head.charAt(0).toUpperCase() + head.slice(1);
+	return rest ? cap + " · " + rest : cap;
+}
+function useRunDraft(o) {
+	const { open, text, repoPath, program } = o;
+	const items = (0, import_react.useMemo)(() => localItems(text), [text]);
+	const listMode = isListMode(items);
+	const oneTask = splitApplies(items);
+	const asked = text.trim();
+	const [preview, setPreview] = (0, import_react.useState)(null);
+	const [laneChoice, setLaneChoice] = (0, import_react.useState)(null);
+	const [askFirst, setAskFirst] = (0, import_react.useState)(false);
+	const [groupingRaw, setGrouping] = (0, import_react.useState)("each");
+	const togetherOk = o.togetherOk === true;
+	const grouping = togetherOk ? groupingRaw : "each";
+	const [concurrency, setConcurrencyRaw] = (0, import_react.useState)(CONCURRENCY_DEFAULT);
+	const [name, setNameRaw] = (0, import_react.useState)("");
+	const nameTouched = (0, import_react.useRef)(false);
+	const [starting, setStarting] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		setPreview(null);
+		setLaneChoice(null);
+		setAskFirst(false);
+		setGrouping("each");
+		setConcurrencyRaw(CONCURRENCY_DEFAULT);
+		setNameRaw("");
+		nameTouched.current = false;
+		setStarting(false);
+	}, [open]);
+	const ask = (0, import_react.useCallback)(async (t, repo) => api("/api/runs/preview", { json: {
+		text: t,
+		repo_path: repo,
+		program
+	} }), [program]);
+	(0, import_react.useEffect)(() => {
+		if (!open || !listMode || !asked) return;
+		if (preview && preview.asked === asked && preview.repo === repoPath) return;
+		let live = true;
+		const timer = window.setTimeout(async () => {
+			try {
+				const data = await ask(asked, repoPath);
+				if (live) setPreview({
+					asked,
+					repo: repoPath,
+					data,
+					error: ""
+				});
+			} catch (err) {
+				if (live) setPreview({
+					asked,
+					repo: repoPath,
+					data: null,
+					error: errMsg(err)
+				});
+			}
+		}, PREVIEW_DEBOUNCE_MS);
+		return () => {
+			live = false;
+			window.clearTimeout(timer);
+		};
+	}, [
+		open,
+		listMode,
+		asked,
+		repoPath,
+		ask
+	]);
+	const fresh = preview && preview.asked === asked && preview.repo === repoPath ? preview : null;
+	(0, import_react.useEffect)(() => {
+		if (nameTouched.current || !listMode) return;
+		const sug = fresh?.data?.name_suggestion || "";
+		if (sug) setNameRaw(sug);
+		else setNameRaw((cur) => cur || fallbackName(items));
+	}, [
+		fresh?.data?.name_suggestion,
+		listMode,
+		items
+	]);
+	const repoLabel = repoPath.replace(/\/+$/, "").split("/").pop() || "";
+	const rows = (0, import_react.useMemo)(() => listMode ? itemRows(items, fresh?.data ?? null, repoLabel, prettySource) : [], [
+		listMode,
+		items,
+		fresh,
+		repoLabel
+	]);
+	const oneForAll = o.split && oneTask || grouping === "together" && (rows.length || items.length) >= 2;
+	const chosen = laneChoice ?? defaultLaneFor(listMode || o.split && oneTask, fresh?.data?.lane_default, o.fasttrackDepth);
+	const lane = oneForAll ? oneForAllLane(chosen) : chosen;
+	const start = async ({ split }) => {
+		if (starting) return {
+			ok: false,
+			error: ""
+		};
+		setStarting(true);
+		try {
+			let data = fresh?.data ?? null;
+			if (!data) try {
+				data = await ask(asked, repoPath);
+				setPreview({
+					asked,
+					repo: repoPath,
+					data,
+					error: ""
+				});
+			} catch (err) {
+				return {
+					ok: false,
+					error: "Couldn't read the list: " + errMsg(err)
+				};
+			}
+			const bad = data.items.filter((i) => i.error);
+			if (bad.length) return {
+				ok: false,
+				error: `${bad.map((b) => b.ref || b.id || b.text || "?").join(", ")} couldn't be found — remove ${bad.length === 1 ? "it" : "them"} (✕) or fix the ID first.`
+			};
+			const req = requestItems(data);
+			if (!req.length) return {
+				ok: false,
+				error: "Nothing to start — type a line or a ticket ID."
+			};
+			const body = runBody({
+				name: name || fallbackName(items),
+				items: req,
+				lane,
+				askFirst,
+				grouping: req.length >= 2 ? grouping : "each",
+				concurrency,
+				program,
+				repoPath,
+				split
+			});
+			try {
+				return {
+					ok: true,
+					body,
+					run: (await api("/api/runs", { json: body }))?.run ?? null
+				};
+			} catch (err) {
+				return {
+					ok: false,
+					error: errMsg(err)
+				};
+			}
+		} finally {
+			setStarting(false);
+		}
+	};
+	return {
+		items,
+		listMode,
+		oneTask,
+		rows,
+		count: rows.length || items.length,
+		previewError: listMode && fresh?.error ? fresh.error : "",
+		warnings: fresh?.data?.warnings || [],
+		lane,
+		setLane: setLaneChoice,
+		askFirst: oneForAll ? false : askFirst,
+		setAskFirst,
+		grouping,
+		setGrouping,
+		togetherOk,
+		oneForAll,
+		concurrency,
+		setConcurrency: (n) => setConcurrencyRaw(clampConcurrency(n)),
+		name,
+		setName: (n) => {
+			nameTouched.current = true;
+			setNameRaw(n);
+		},
+		starting,
+		start
+	};
+}
+function RunItems({ rows, onRemove }) {
+	if (!rows.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "rt-items",
+		role: "list",
+		"aria-label": "What will start",
+		children: rows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			role: "listitem",
+			className: "rt-item rt-" + r.kind + (r.error ? " rt-err" : "") + (r.pending ? " rt-pending" : ""),
+			title: r.error || void 0,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rt-kind",
+					children: r.kind === "ticket" ? "TICKET" : "TASK"
+				}),
+				r.kind === "ticket" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rt-ref",
+					children: r.ref
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rt-title",
+					children: r.error ? r.error : r.pending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "looking it up…"
+					}) : r.title
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rt-where",
+					children: r.where
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "rt-x",
+					"aria-label": "Remove " + (r.ref || r.title),
+					title: "Take this one out of the list",
+					onClick: () => onRemove(r),
+					children: "✕"
+				})
+			]
+		}, r.key))
+	});
+}
+function Seg({ value, options, onChange, label, id }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "rt-seg",
+		role: "group",
+		"aria-label": label,
+		id,
+		children: options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: o.v === value ? "on" : void 0,
+			"aria-pressed": o.v === value,
+			title: o.title,
+			disabled: o.disabled || void 0,
+			onClick: () => onChange(o.v),
+			children: o.label
+		}, o.v))
+	});
+}
+var LANE_TITLES = {
+	leave: "MindFlock doesn't commit anything — you take it from there",
+	commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
+	push: "Commit and push once the agent stops and your hooks pass",
+	pr: "Commit, push and open a PR once the agent stops and your hooks pass",
+	merge: "…and merge the PR once its checks pass"
+};
+function RunOptions({ draft, n, split, splitBox, repoPicker }) {
+	const many = n >= 2 && !split;
+	const oneForAll = split || n >= 2 && draft.grouping === "together";
+	const laneOpts = LANE_CHOICES.map((l) => ({
+		v: l,
+		label: LANE_LABEL[l],
+		title: oneForAll && l === "leave" ? "One PR for all commits each line into the group's branch — Commit keeps it all on this machine" : LANE_TITLES[l],
+		disabled: oneForAll && l === "leave"
+	}));
+	if (draft.lane === "push") laneOpts.splice(2, 0, {
+		v: "push",
+		label: LANE_LABEL.push,
+		title: LANE_TITLES.push,
+		disabled: false
+	});
+	const sum = summarySentence({
+		n,
+		concurrency: draft.concurrency,
+		lane: draft.lane,
+		askFirst: draft.askFirst,
+		grouping: draft.grouping,
+		split
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "rt-opts",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rt-row rt-row-top",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rt-label",
+					children: many ? "When each is done" : "When it's done"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rt-ctl",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+						id: "new-lane",
+						label: many ? "When each is done" : "When it's done",
+						value: draft.lane,
+						options: laneOpts,
+						onChange: draft.setLane
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "check rt-ask" + (draft.lane === "leave" || oneForAll ? " disabled" : ""),
+						title: oneForAll ? "One PR for all always asks you before the one PR — its lines are committed into the group's branch as they finish" : draft.lane === "leave" ? "Nothing ships while it's “Leave it”" : "Stop one step before the first commit and show it in the Outbox first",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "new-ask-first",
+							checked: !oneForAll && draft.lane !== "leave" && draft.askFirst,
+							disabled: draft.lane === "leave" || oneForAll,
+							onChange: (e) => draft.setAskFirst(e.target.checked)
+						}), "Ask me before it ships"]
+					})]
+				})]
+			}),
+			many && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rt-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rt-label",
+						children: "PRs"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rt-ctl",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+							id: "new-grouping",
+							label: "PRs",
+							value: draft.grouping,
+							options: [{
+								v: "each",
+								label: "One per line"
+							}, {
+								v: "together",
+								label: "One for all",
+								disabled: !draft.togetherOk,
+								title: draft.togetherOk ? "Merge them into one branch first, then open one PR" : SERVER_NO_TOGETHER
+							}],
+							onChange: draft.setGrouping
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rt-hint",
+							children: draft.togetherOk ? "one-for-all merges them into one branch first" : SERVER_NO_TOGETHER
+						})]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rt-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rt-label",
+						children: "At a time"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rt-ctl",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "rt-step",
+							role: "group",
+							"aria-label": "At a time",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									"aria-label": "Fewer at a time",
+									disabled: draft.concurrency <= CONCURRENCY_MIN,
+									onClick: () => draft.setConcurrency(draft.concurrency - 1),
+									children: "−"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									id: "new-concurrency",
+									"aria-live": "polite",
+									children: draft.concurrency
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									"aria-label": "More at a time",
+									disabled: draft.concurrency >= CONCURRENCY_MAX,
+									onClick: () => draft.setConcurrency(draft.concurrency + 1),
+									children: "+"
+								})
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rt-hint",
+							children: "the rest wait in the group, not in your grid"
+						})]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rt-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rt-label",
+						children: "Group as"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rt-ctl",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							id: "new-group-name",
+							className: "rt-name",
+							type: "text",
+							value: draft.name,
+							maxLength: 60,
+							spellCheck: false,
+							autoComplete: "off",
+							onChange: (e) => draft.setName(e.target.value)
+						}), repoPicker && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rt-hint",
+							children: "tasks start in"
+						}), repoPicker] })]
+					})]
+				})
+			] }),
+			split && repoPicker && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "rt-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "rt-label",
+					children: "Starts in"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "rt-ctl",
+					children: [repoPicker, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "rt-hint",
+						children: "the lead gets a new worktree there"
+					})]
+				})]
+			}),
+			splitBox,
+			sum && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "rt-sum",
+				"aria-live": "polite",
+				children: [
+					sum.lead,
+					" ",
+					sum.tail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: sum.tail
+					})
+				]
+			})
+		]
 	});
 }
 //#endregion
@@ -55027,7 +57840,7 @@ function NewSessionDialog() {
 	const [initRepo, setInitRepo] = (0, import_react.useState)(false);
 	const [planFirst, setPlanFirst] = (0, import_react.useState)(false);
 	const [split, setSplit] = (0, import_react.useState)(false);
-	const splitMovedMode = (0, import_react.useRef)(false);
+	const [runBrowse, setRunBrowse] = (0, import_react.useState)(false);
 	const [error, setError] = (0, import_react.useState)("");
 	const [advancedOpen, setAdvancedOpen] = (0, import_react.useState)(true);
 	const [launchOpen, setLaunchOpen] = (0, import_react.useState)(false);
@@ -55090,7 +57903,7 @@ function NewSessionDialog() {
 		setError("");
 		setPrompt("");
 		setLaunchArgs("");
-		setDescribe("");
+		setDescribe(useUi.getState().takeNewPrefill());
 		setDescribing(false);
 		setDescribeSlow(false);
 		setPlanNote("");
@@ -55105,7 +57918,6 @@ function NewSessionDialog() {
 		setInitRepo(false);
 		setPlanFirst(false);
 		setSplit(false);
-		splitMovedMode.current = false;
 		setAdvancedOpen(true);
 		setLaunchOpen(false);
 		setPromptOpen(false);
@@ -55257,21 +58069,60 @@ function NewSessionDialog() {
 		providers
 	]);
 	const { data: config } = useConfig();
-	const mcpOk = (0, import_react.useMemo)(() => splitGate(config?.caps, canonAgent(program)), [
+	const mcpOk = (0, import_react.useMemo)(() => teamRunCaps(config?.caps).split ? splitGate(config?.caps, canonAgent(program)) : {
+		ok: false,
+		reason: SERVER_NO_SPLIT
+	}, [
 		config?.caps,
 		canonAgent,
 		program
 	]);
-	const splitOn = split && mcpOk.ok;
-	const toggleSplit = (on) => {
-		setSplit(on);
-		if (on && inPlace && !provision) {
-			setInPlace(false);
-			splitMovedMode.current = true;
-		} else if (!on && splitMovedMode.current) {
-			splitMovedMode.current = false;
-			if (!inPlace && !provision) setInPlace(true);
+	const togetherOk = teamRunCaps(config?.caps).together;
+	const draft = useRunDraft({
+		open,
+		text: describe,
+		repoPath,
+		program: canonAgent(program),
+		fasttrackDepth: config?.fasttrack_depth,
+		split: page === 1 && split && mcpOk.ok,
+		togetherOk
+	});
+	const splitOn = page === 1 && split && mcpOk.ok && draft.oneTask;
+	const runMode = page === 1 && (draft.listMode || splitOn);
+	const toggleSplit = (on) => setSplit(on);
+	(0, import_react.useEffect)(() => {
+		if (!open) setRunBrowse(false);
+	}, [open]);
+	const runBrowseRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const el = runBrowseRef.current;
+		if (runBrowse && el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
+	}, [runBrowse]);
+	const laneAtPress = (0, import_react.useRef)({
+		lane: "leave",
+		askFirst: false
+	});
+	laneAtPress.current = {
+		lane: draft.lane,
+		askFirst: draft.askFirst
+	};
+	const laneNeedsWorktree = draft.lane !== "leave";
+	const startRun = async () => {
+		setPlanError("");
+		const r = await draft.start({ split: splitOn });
+		if (!r.ok) {
+			if (r.error) setPlanError(r.error);
+			return;
 		}
+		const n = Array.isArray(r.body.items) ? r.body.items.length : 0;
+		const name = String(r.body.name || "");
+		closeDialog();
+		refreshInstances();
+		if (splitOn) toast(`Starting the lead${name ? " for “" + name + "”" : ""} — its plan shows in its Thread tab`, { duration: 6e3 });
+		else if (n >= 2) {
+			const c = Math.min(n, draft.concurrency);
+			toast(`Started “${name}” — ${n} sessions, ${c === n ? "all at once" : c + " at a time"} · ${LANE_LABEL[draft.lane]}`, { duration: 6e3 });
+		} else toast("Starting it — the session appears in the rail", { duration: 4e3 });
 	};
 	const setAccount = (id) => {
 		setProfileId(id);
@@ -55326,7 +58177,7 @@ function NewSessionDialog() {
 		});
 		if (a.title) setTitle(a.title);
 		setPrompt(a.prompt || "");
-		setInPlace(planInPlace(a) && !splitOn);
+		setInPlace(planInPlace(a));
 		setInitRepo(!!a.init_repo);
 		planFolderDo({
 			t: "answer",
@@ -55539,9 +58390,10 @@ function NewSessionDialog() {
 			body.init_repo = p.initRepo;
 			body.in_place = p.inPlace;
 		}
-		return withSplit(body, splitOn);
+		return body;
 	};
 	const postCreate = async (body) => {
+		const { lane, askFirst } = laneAtPress.current;
 		setError("Creating…");
 		const guess = addPendingSession(body.title || "untitled");
 		closeDialog();
@@ -55551,6 +58403,7 @@ function NewSessionDialog() {
 			clearStaleAlias(inst.title);
 			await refreshInstances();
 			selectSession(inst.title);
+			if (lane !== "leave") setLaneWhenReady(inst.title, lane, askFirst);
 		} catch (err) {
 			failPendingSession(guess);
 			failCreate(err.message);
@@ -55563,6 +58416,10 @@ function NewSessionDialog() {
 		}
 	};
 	const submit = async () => {
+		if (runMode) {
+			startRun();
+			return;
+		}
 		const held = submitHoldReason(submitArmAt.current, Date.now());
 		if (held) {
 			setError(held);
@@ -55584,7 +58441,7 @@ function NewSessionDialog() {
 			title,
 			repoPath,
 			prompt,
-			inPlace,
+			inPlace: inPlace && !laneNeedsWorktree,
 			initRepo,
 			provisioned: provision
 		}));
@@ -55656,26 +58513,30 @@ function NewSessionDialog() {
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 								className: "nt-head",
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "What do you want to work on?" })
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "What do you want to work on? One thing per line, or ticket IDs" })
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "nf-describe-row",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
 									id: "new-describe-text",
 									ref: describeRef,
-									type: "text",
+									rows: Math.min(8, Math.max(3, describe.split("\n").length)),
 									value: describe,
 									maxLength: DESCRIBE_MAX_CHARS,
 									autoComplete: "off",
 									spellCheck: false,
 									readOnly: describing,
-									placeholder: "e.g. fix the login bug in acme-api",
+									placeholder: "e.g. fix the login bug in acme-api\n— or one per line: PAY-412 PAY-415, a task, another task",
 									onChange: (e) => {
 										setDescribe(e.target.value);
 										setPlanError("");
 									},
 									onKeyDown: (e) => {
 										if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
+										if (e.shiftKey || runMode) {
+											e.stopPropagation();
+											return;
+										}
 										e.preventDefault();
 										e.stopPropagation();
 										runDescribe("fill");
@@ -55688,22 +58549,95 @@ function NewSessionDialog() {
 									children: "Cancel"
 								})]
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
-								id: "new-split",
-								split,
-								onSplit: toggleSplit,
-								gate: mcpOk,
-								text: describe
+							draft.listMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunItems, {
+								rows: draft.rows,
+								onRemove: (row) => {
+									setDescribe((d) => removeItem(d, row));
+									setPlanError("");
+								}
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							draft.listMode && draft.previewError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "rt-note error",
+								"aria-live": "polite",
+								children: ["Couldn't read the list: ", draft.previewError]
+							}),
+							draft.listMode && draft.warnings.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "rt-note",
+								children: w
+							}, w)),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RunOptions, {
+								draft,
+								n: draft.listMode ? draft.count : 1,
+								split: splitOn,
+								repoPicker: runMode && (splitOn || draft.items.some((i) => i.kind === "task")) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "rt-repo-pick",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+										id: "new-run-repo",
+										className: "rt-repo",
+										value: runBrowse ? BROWSE_VALUE : repoPath,
+										title: repoPath + " — each gets its own worktree there",
+										onChange: (e) => {
+											if (e.target.value === BROWSE_VALUE) {
+												setRunBrowse(true);
+												return;
+											}
+											setRunBrowse(false);
+											folderDo({
+												t: "user-set",
+												path: e.target.value
+											});
+										},
+										children: runRepoOptions(repoPath, suggestions, leafName).map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+											value: o.value,
+											children: o.label
+										}, o.value))
+									})
+								}) : null,
+								splitBox: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
+									id: "new-split",
+									split,
+									onSplit: toggleSplit,
+									gate: mcpOk,
+									shapeReason: splitShapeReason(draft.items),
+									text: describe
+								})
+							}),
+							runMode && runBrowse && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "rt-browse",
+								"data-run-browse": "",
+								ref: runBrowseRef,
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "rt-browse-head",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Pick the folder the tasks start in" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "rt-browse-done",
+										onClick: () => setRunBrowse(false),
+										children: "Done"
+									})]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
+									initialPath: repoPath || homePath || "",
+									selected: repoPath,
+									onSelect: (p) => folderDo({
+										t: "user-set",
+										path: p
+									}),
+									onPick: (p) => {
+										folderDo({
+											t: "user-set",
+											path: p
+										});
+										setRunBrowse(false);
+									}
+								})]
+							}),
+							!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 								className: "nf-describe-help",
 								children: [
 									"Your coding CLI reads this and works out which folder to use, what to call the session, and what to tell the agent first.",
 									" ",
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Nothing is created until you pick one of the buttons below." })
 								]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 								className: "nf-describe-eg",
 								children: [
 									"Also understood:",
@@ -55712,7 +58646,7 @@ function NewSessionDialog() {
 									" · ",
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "add metrics to billing, in a worktree" })
 								]
-							}),
+							})] }),
 							planNoteShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 								className: "nf-describe-note",
 								"aria-live": "polite",
@@ -56081,7 +59015,7 @@ function NewSessionDialog() {
 													type: "radio",
 													name: "new-workspace-mode",
 													id: "new-worktree",
-													checked: !inPlace && !provisionOn,
+													checked: (!inPlace || laneNeedsWorktree) && !provisionOn,
 													onChange: () => {
 														setInPlace(false);
 														setProvision(false);
@@ -56102,21 +59036,18 @@ function NewSessionDialog() {
 													type: "radio",
 													name: "new-workspace-mode",
 													id: "new-in-place",
-													checked: inPlace,
+													checked: inPlace && !laneNeedsWorktree,
+													disabled: laneNeedsWorktree,
 													onChange: () => {
 														setInPlace(true);
 														setProvision(false);
-														if (split) {
-															setSplit(false);
-															splitMovedMode.current = false;
-														}
 													}
 												}),
 												"Work directly in this folder",
 												" ",
 												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 													className: "muted",
-													children: "(no worktree — edits the original; multiple sessions can share it)"
+													children: laneNeedsWorktree ? "(not with a lane — it commits for this session, so it gets its own worktree)" : "(no worktree — edits the original; multiple sessions can share it)"
 												})
 											]
 										}),
@@ -56227,101 +59158,91 @@ function NewSessionDialog() {
 								children: "— sent to the agent at launch"
 							})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "nf-advanced-body",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "preset-row",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-												id: "new-preset",
-												title: "Prompt presets — pick one to fill the prompt below (editable after)",
-												value: presetValue,
-												onChange: (e) => {
-													setPresetValue(e.target.value);
-													const p = findPreset(e.target.value);
-													if (p) setPrompt(p.prompt);
-												},
-												children: [
-													/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-														value: "",
-														children: "Preset…"
-													}),
-													BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
-														label: "Built-in",
-														children: BUILTIN_PRESETS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-															value: "b:" + p.name,
-															title: p.prompt,
-															children: p.name
-														}, "b:" + p.name))
-													}),
-													savedPresets.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
-														label: "Saved",
-														children: savedPresets.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-															value: "u:" + p.name,
-															title: p.prompt,
-															children: p.name
-														}, "u:" + p.name))
-													})
-												]
-											}),
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												id: "preset-save",
-												title: "Save current prompt as preset…",
-												onClick: savePreset,
-												children: "Save…"
-											}),
-											presetValue.startsWith("u:") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-												type: "button",
-												id: "preset-del",
-												title: "Delete the selected saved preset",
-												onClick: () => {
-													const p = findPreset(presetValue);
-													if (!p) return;
-													const list = loadUserPresets().filter((q) => q.name !== p.name);
-													saveUserPresets(list);
-													setSavedPresets(list);
-													setPresetValue("");
-												},
-												children: "✕"
-											})
-										]
-									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-										id: "new-prompt",
-										rows: 2,
-										autoComplete: "off",
-										spellCheck: false,
-										placeholder: "What should the agent do first? Leave blank if you don’t want to kick anything off just yet.",
-										value: prompt,
-										onChange: (e) => setPrompt(e.target.value)
-									})] }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-										className: "check" + (planOk ? "" : " disabled"),
-										id: "new-plan-first-row",
-										title: planOk ? "The agent first lists every file it intends to create, modify or delete, with a one-line intent for each, then waits for your go-ahead. Open the session's Map tab to see that plan and its blast radius, red-zone anything it shouldn't touch, and press Go." : "Only a CLI that can declare a plan gets the Map's plan review and Go button — pick Claude for Plan first.",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-												type: "checkbox",
-												id: "new-plan-first",
-												checked: planFirst && planOk,
-												disabled: !planOk,
-												onChange: (e) => setPlanFirst(e.target.checked)
-											}),
-											"Plan first",
-											" ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "muted",
-												children: !planOk ? "(needs a CLI with plan support — Claude)" : prompt.trim() ? "(list files + intent, then wait for Go on the Map tab)" : "(takes effect with a prompt)"
-											})
-										]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SplitCheck, {
-										id: "new-split-prompt",
-										split,
-										onSplit: toggleSplit,
-										gate: mcpOk,
-										text: prompt || describe
-									})
-								]
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "preset-row",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+											id: "new-preset",
+											title: "Prompt presets — pick one to fill the prompt below (editable after)",
+											value: presetValue,
+											onChange: (e) => {
+												setPresetValue(e.target.value);
+												const p = findPreset(e.target.value);
+												if (p) setPrompt(p.prompt);
+											},
+											children: [
+												/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+													value: "",
+													children: "Preset…"
+												}),
+												BUILTIN_PRESETS.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+													label: "Built-in",
+													children: BUILTIN_PRESETS.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+														value: "b:" + p.name,
+														title: p.prompt,
+														children: p.name
+													}, "b:" + p.name))
+												}),
+												savedPresets.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("optgroup", {
+													label: "Saved",
+													children: savedPresets.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+														value: "u:" + p.name,
+														title: p.prompt,
+														children: p.name
+													}, "u:" + p.name))
+												})
+											]
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											id: "preset-save",
+											title: "Save current prompt as preset…",
+											onClick: savePreset,
+											children: "Save…"
+										}),
+										presetValue.startsWith("u:") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+											type: "button",
+											id: "preset-del",
+											title: "Delete the selected saved preset",
+											onClick: () => {
+												const p = findPreset(presetValue);
+												if (!p) return;
+												const list = loadUserPresets().filter((q) => q.name !== p.name);
+												saveUserPresets(list);
+												setSavedPresets(list);
+												setPresetValue("");
+											},
+											children: "✕"
+										})
+									]
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+									id: "new-prompt",
+									rows: 2,
+									autoComplete: "off",
+									spellCheck: false,
+									placeholder: "What should the agent do first? Leave blank if you don’t want to kick anything off just yet.",
+									value: prompt,
+									onChange: (e) => setPrompt(e.target.value)
+								})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+									className: "check" + (planOk ? "" : " disabled"),
+									id: "new-plan-first-row",
+									title: planOk ? "The agent first lists every file it intends to create, modify or delete, with a one-line intent for each, then waits for your go-ahead. Open the session's Map tab to see that plan and its blast radius, red-zone anything it shouldn't touch, and press Go." : "Only a CLI that can declare a plan gets the Map's plan review and Go button — pick Claude for Plan first.",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+											type: "checkbox",
+											id: "new-plan-first",
+											checked: planFirst && planOk,
+											disabled: !planOk,
+											onChange: (e) => setPlanFirst(e.target.checked)
+										}),
+										"Plan first",
+										" ",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "muted",
+											children: !planOk ? "(needs a CLI with plan support — Claude)" : prompt.trim() ? "(list files + intent, then wait for Go on the Map tab)" : "(takes effect with a prompt)"
+										})
+									]
+								})]
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -56385,8 +59306,14 @@ function NewSessionDialog() {
 							id: "new-describe-go",
 							disabled: describing,
 							"aria-busy": describing || void 0,
-							title: "Work out the folder, name and first instruction, then show them to you so you can change anything before the session is created.",
-							onClick: () => void runDescribe("fill"),
+							title: runMode ? "Review is for one session. A list (or a split) starts from the rows and choices above." : "Work out the folder, name and first instruction, then show them to you so you can change anything before the session is created.",
+							onClick: () => {
+								if (runMode) {
+									setPlanError(splitOn ? "A split's lead is set up by MindFlock — untick Split to review one session's details." : "Review details is for one session — check the rows above and start them from here.");
+									return;
+								}
+								runDescribe("fill");
+							},
 							children: describing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "btn-spin",
@@ -56397,7 +59324,7 @@ function NewSessionDialog() {
 							] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 								"Review details first",
 								" ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "nf-key",
 									"aria-hidden": "true",
 									children: "↵"
@@ -56407,10 +59334,11 @@ function NewSessionDialog() {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							id: "new-describe-start",
-							disabled: describing,
-							title: "Create the session right now from what you typed, without showing you the details first.",
-							onClick: startNow,
-							children: "Create session"
+							disabled: describing || draft.starting,
+							"aria-busy": draft.starting || void 0,
+							title: runMode ? "Start them now. MindFlock queues the rest, ships each one as chosen above, and shows what needs you in the Outbox." : "Create the session right now from what you typed, without showing you the details first.",
+							onClick: runMode ? () => void startRun() : startNow,
+							children: draft.starting ? "Starting…" : startLabel(draft.listMode ? draft.count : 1, splitOn)
 						})
 					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -57060,7 +59988,7 @@ function WorkListPanel({ label, onRefresh, note, hint, children, rowId, refreshI
 		]
 	});
 }
-function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligible, eligibleLabel, reasons, actionLabel, onStart, failPrefix, linkTitle, agents, configuredAgent, configuredDepth, configuredEffort, workspace, onReopen, actionExtra, drawer }) {
+function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligible, eligibleLabel, reasons, actionLabel, onStart, failPrefix, linkTitle, agents, configuredAgent, configuredDepth, configuredEffort, workspace, onReopen, actionExtra, drawer, pick }) {
 	const [state, setState] = (0, import_react.useState)("idle");
 	const [reopening, setReopening] = (0, import_react.useState)("idle");
 	const canReopen = !!workspace && !!onReopen && !hasSession;
@@ -57072,22 +60000,33 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, eligibl
 	const effortCap = effortCaps ? effortCaps[effortProvider] : void 0;
 	const effortUsable = supportsEffort(effortCap);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pr-open-item",
+		className: "pr-open-item" + (pick?.checked ? " picked" : ""),
 		title: tooltip,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pr-open-main",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-					href: url || "#",
-					target: "_blank",
-					rel: "noopener noreferrer",
-					className: "pr-open-ref",
-					title: linkTitle || "Open " + reference + " on GitHub",
-					children: reference
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "pr-open-title",
-					children: title || ""
-				})]
+				children: [
+					pick && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						className: "ik-pick",
+						checked: pick.checked,
+						"aria-label": "Pick " + reference + " to start together",
+						title: "Pick to start together with other tickets",
+						onChange: (e) => pick.onChange(e.target.checked)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+						href: url || "#",
+						target: "_blank",
+						rel: "noopener noreferrer",
+						className: "pr-open-ref",
+						title: linkTitle || "Open " + reference + " on GitHub",
+						children: reference
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pr-open-title",
+						children: title || ""
+					})
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pr-open-meta",
@@ -57835,6 +60774,14 @@ function AssignedTickets({ agents, sourceAgents, defaultAgent, sourceDepths, sou
 	});
 	const [shown, setShown] = (0, import_react.useState)(loadShownBuckets);
 	const [mineOnly, setMineOnly] = (0, import_react.useState)(loadMineOnly);
+	const [picked, setPicked] = (0, import_react.useState)(() => /* @__PURE__ */ new Map());
+	const pickKey = (t) => t.source + ":" + t.id;
+	const setPick = (t, on) => setPicked((m) => {
+		const next = new Map(m);
+		if (on) next.set(pickKey(t), t);
+		else next.delete(pickKey(t));
+		return next;
+	});
 	const filter = useListFilter("tk-tickets-filter", "Filter by ticket, title, source, state, or assignee…  ( Ctrl+F )");
 	const openBuckets = useToggleSet(BUCKETS_OPEN_LS_KEY, false, (v) => v.includes("::"));
 	const openSources = useToggleSet(SOURCES_CLOSED_LS_KEY, true);
@@ -57892,7 +60839,7 @@ function AssignedTickets({ agents, sourceAgents, defaultAgent, sourceDepths, sou
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Begin work" }),
 		" starts any ticket by hand."
 	] });
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkListPanel, {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
 		label: hasOthers ? "Ticket queue" : "Assigned tickets",
 		onRefresh: load,
 		note,
@@ -57966,7 +60913,7 @@ function AssignedTickets({ agents, sourceAgents, defaultAgent, sourceDepths, sou
 			] }) : null,
 			ingestSummary
 		] }),
-		children: error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		children: [error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "repo-empty",
 			children: error
 		}) : tickets === null ? null : !visible.length && buckets.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -58006,7 +60953,11 @@ function AssignedTickets({ agents, sourceAgents, defaultAgent, sourceDepths, sou
 						configuredAgent: sourceAgents[t.source] || defaultAgent,
 						configuredDepth: sourceDepths[t.source] || "",
 						configuredEffort: sourceEfforts[t.source] || "",
-						onStarted: relistTickets
+						onStarted: relistTickets,
+						pick: {
+							checked: picked.has(pickKey(t)),
+							onChange: (on) => setPick(t, on)
+						}
 					}, t.source + ":" + t.id))
 				}, key);
 			});
@@ -58041,13 +60992,44 @@ function AssignedTickets({ agents, sourceAgents, defaultAgent, sourceDepths, sou
 				onToggle: () => openSources.toggle(src),
 				children: buckets
 			}, src);
-		})
+		}), picked.size > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ik-pickbar",
+			role: "region",
+			"aria-label": "Picked tickets",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+					picked.size,
+					" ticket",
+					picked.size === 1 ? "" : "s",
+					" ·",
+					" "
+				] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					id: "tk-start-together",
+					className: "ik-pick-go",
+					onClick: () => {
+						const text = startTogetherText([...picked.values()]);
+						setPicked(/* @__PURE__ */ new Map());
+						useUi.getState().openNewWith(text);
+					},
+					children: "Start together…"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => setPicked(/* @__PURE__ */ new Map()),
+					children: "Clear"
+				})
+			]
+		})]
 	});
 }
-function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, configuredEffort, onStarted }) {
+function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, configuredEffort, onStarted, pick }) {
 	const [merging, setMerging] = (0, import_react.useState)(false);
 	const canMerge = t.merge_ready !== false && all.some((o) => o.source === t.source && String(o.id) !== String(t.id));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkItemRow, {
+		pick,
 		agents,
 		configuredAgent,
 		configuredDepth,
@@ -64751,6 +67733,650 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	});
 }
 //#endregion
+//#region src/components/outbox/OutboxDialog.tsx
+function openSession(title, tab) {
+	selectSession(title);
+	if (tab) useUi.getState().setLastTab(title, tab);
+	useUi.getState().closeDialog();
+}
+function OutboxDialog() {
+	const open = useUi((s) => s.openDialog === "outbox");
+	const target = useUi((s) => s.dialogTarget);
+	const closeDialog = useUi((s) => s.closeDialog);
+	const aliases = useUi((s) => s.aliases);
+	const [tab, setTab] = (0, import_react.useState)("all");
+	const { data, error, isFetching } = useOutbox();
+	const { data: instances = [] } = useInstances();
+	const { data: runs } = useRuns();
+	const folds = useToggleSet("mf_outbox_folded", true);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		setTab(target || "all");
+		refreshRuns();
+	}, [open, target]);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const onKey = (e) => {
+			if (e.key === "Escape") {
+				closeDialog();
+				e.preventDefault();
+			}
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [open, closeDialog]);
+	const byTitle = (0, import_react.useMemo)(() => new Map(instances.map((i) => [i.title, i])), [instances]);
+	const rowOf = (t) => byTitle.get(t);
+	const runName = (id) => runs?.find((r) => r.id === id)?.name || "";
+	if (!open) return null;
+	const tabs = outboxTabs(data, rowOf, runName);
+	if (tab !== "all" && !tabs.some((t) => t.key === tab)) tabs.push({
+		key: tab,
+		label: tab === "own" ? "On their own" : runName(tab) || "Group",
+		count: 0
+	});
+	const view = viewFor(data, tab, rowOf);
+	const total = viewCount(view);
+	const groupLabel = (it) => {
+		if (tab !== "all") return "";
+		const id = it.run?.id || (it.title ? rowOf(it.title)?.run?.id : "") || "";
+		return id ? it.run?.name || rowOf(it.title || "")?.run?.name || runName(id) : "";
+	};
+	const shown = (t) => aliases[t] || t;
+	const section = (key, name, count, detail, body) => count > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
+		name,
+		count,
+		detail,
+		heading: true,
+		open: folds.isOpen(key),
+		onToggle: () => folds.toggle(key),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "pr-open-list",
+			children: body
+		})
+	}, key) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		id: "outbox-dialog",
+		className: "modal",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "outbox-title",
+		onClick: (e) => {
+			if (e.target === e.currentTarget) closeDialog();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "outbox-panel",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ws-head",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+							id: "outbox-title",
+							children: "Outbox"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ik-subtitle",
+							children: "What's shipping, and what's waiting on you"
+						}),
+						isFetching && data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ob-fetch",
+							children: "refreshing…"
+						}) : null,
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "outbox-close",
+							onClick: closeDialog,
+							children: "Close"
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
+					id: "outbox-tabs",
+					"aria-label": "Outbox groups",
+					children: tabs.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "ik-tab" + (tab === t.key ? " active" : ""),
+						"data-outbox-tab": t.key,
+						"aria-current": tab === t.key ? "page" : void 0,
+						onClick: () => setTab(t.key),
+						children: [t.label, t.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ik-tab-count",
+							children: t.count
+						})]
+					}, t.key))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					id: "outbox-body",
+					children: data === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "repo-empty",
+						children: "This MindFlock server has no Outbox yet — update it, then sessions you start together (and any session with a lane) show up here."
+					}) : error && !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "repo-empty",
+						children: ["Could not load the Outbox: ", errMsg(error)]
+					}) : !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "repo-empty",
+						children: "Loading…"
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ik-groups ob-groups",
+						children: [
+							total === 0 && !view.summaries.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "repo-empty",
+								children: "Nothing is shipping and nothing is waiting on you. Give a session a lane — or start several together from New — and it shows up here on its way out."
+							}),
+							tab !== "all" && view.summaries.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SummaryCard, { s }, "sum:" + s.run)),
+							section("waiting", "Waiting on you", view.waiting.length, "answer or approve — nothing else needs you", view.waiting.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WaitingRow, {
+								w,
+								row: w.title ? rowOf(w.title) : void 0,
+								shown,
+								group: groupLabel(w),
+								runInfo: w.run?.id ? runs?.find((r) => r.id === w.run.id) : void 0
+							}, "w:" + (w.key || w.title) + ":" + w.kind))),
+							section("shipping", "Shipping now", view.shipping.length, "MindFlock is doing these — no action", view.shipping.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShippingRow, {
+								s,
+								row: rowOf(s.title),
+								shown,
+								group: groupLabel(s)
+							}, "s:" + (s.key || s.title)))),
+							section("shipped", "Shipped today", view.shipped.length, "", view.shipped.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShippedRow, {
+								s,
+								row: rowOf(s.title),
+								shown,
+								group: groupLabel(s)
+							}, "d:" + (s.key || s.title)))),
+							section("queued", "Queued", view.queued.length, "they start as slots free", view.queued.map((q) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QueuedItem, {
+								q,
+								group: tab === "all" ? q.run.name || runName(q.run.id) : ""
+							}, "q:" + q.run.id + ":" + q.run.task))),
+							tab === "all" && view.summaries.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SummaryCard, { s }, "sum:" + s.run))
+						]
+					})
+				})
+			]
+		})
+	});
+}
+function RowMain({ title, text, shown, row }) {
+	const about = text || row?.last_prompt || "";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-main",
+		children: [row ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "pr-open-ref ob-ref",
+			title: "Open " + title,
+			onClick: () => openSession(title),
+			children: shown(title)
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "pr-open-ref ob-ref",
+			children: shown(title)
+		}), about && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "pr-open-title",
+			children: about
+		})]
+	});
+}
+function doWaitAction(key, w, runId, taskId) {
+	switch (key) {
+		case "retry": return runAction("Retry", taskPath(runId, taskId, "retry"), { fresh: false }, "Retrying " + w.title);
+		case "retry_fresh": return runAction("Retry fresh", taskPath(runId, taskId, "retry"), { fresh: true }, "Retrying " + w.title + " on a fresh branch");
+		case "skip": return runAction("Skip", taskPath(runId, taskId, "skip"), {}, "Skipped " + w.title);
+		case "approve": return runAction("Start the workers", runPath(runId, "/plan/approve"), {}, "Starting the workers — each fenced to its paths");
+		case "release": return runAction("Open the PR", runPath(runId, "/release"), { merge_when_green: false }, "Releasing the group");
+		case "release_merge": return runAction("Open the PR", runPath(runId, "/release"), { merge_when_green: true }, "Opening the PR — it merges once checks pass");
+		case "retry_check": return runAction("Run the check", runPath(runId, "/check"), {}, "Running the check again");
+		case "cancel_group": return cancelRun(runId, w.run?.name || "");
+		default: return Promise.resolve(false);
+	}
+}
+function WaitingRow({ w, row, shown, group, runInfo }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const chip = waitingChip(w);
+	const runId = w.run?.id || row?.run?.id || "";
+	const taskId = w.run?.task || row?.run?.task || "";
+	const run = async (fn) => {
+		setBusy(true);
+		try {
+			await fn();
+		} finally {
+			setBusy(false);
+		}
+	};
+	const escalation = w.kind !== "prompt" && w.kind !== "approve";
+	if (w.kind === "budget") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BudgetRow, {
+		w,
+		runInfo
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-item ob-item ob-" + (escalation ? "escalation" : w.kind),
+		"data-outbox-row": w.title,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
+				title: w.title,
+				text: w.text,
+				shown,
+				row
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pr-open-meta",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pr-open-chip" + (chip.cls ? " " + chip.cls : ""),
+						children: escalation ? escalationText(chip.text) : chip.text
+					}),
+					w.kind === "approve" && statText(w.preview) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: statText(w.preview) }),
+					group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: group })
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-start",
+				children: w.kind === "approve" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ApproveButtons, {
+					w,
+					busy,
+					setBusy,
+					hasRow: !!row
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ob-acts",
+					children: waitingActions(w, {
+						row: !!row,
+						run: !!runId,
+						task: !!taskId
+					}).map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: a.primary ? "btn-primary pr-review-btn" : "test-btn",
+						disabled: busy && a.key !== "open",
+						title: a.title,
+						onClick: () => {
+							if (a.key === "open") {
+								const lead = w.kind === "conflict" ? row?.parent || w.title : w.title;
+								openSession(LEAD_KINDS.has(w.kind) ? lead : w.title, LEAD_KINDS.has(w.kind) ? "thread" : void 0);
+								return;
+							}
+							run(() => doWaitAction(a.key, w, runId, taskId));
+						},
+						children: a.label
+					}, a.key))
+				})
+			}),
+			w.kind === "prompt" && row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-drawer",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
+					title: w.title,
+					activity: effectiveActivity(row),
+					variant: "thread",
+					onOpen: () => openSession(w.title)
+				})
+			}),
+			w.kind === "approve" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-drawer",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ApprovePreview, {
+					w,
+					row
+				})
+			}),
+			w.kind === "plan" && (w.preview?.pieces?.length || 0) > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-drawer",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ob-card ob-plan",
+					children: w.preview.pieces.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ob-plan-piece",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: p.title }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "ob-only",
+							children: ["only here: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: (p.paths || []).join(", ") || "—" })]
+						})]
+					}, i))
+				})
+			}),
+			w.kind === "release" && w.preview && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-drawer",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ob-card",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ob-kv",
+						children: [
+							w.preview.pr_title && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ob-k",
+								children: "PR title"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ob-pr-title",
+								children: w.preview.pr_title
+							})] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ob-k",
+								children: "Into"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "ob-mono",
+								children: [(w.preview.base || "base") + " ← " + (w.preview.branch || w.title), statText(w.preview) ? " · " + statText(w.preview) : ""]
+							})
+						]
+					})
+				})
+			})
+		]
+	});
+}
+function BudgetRow({ w, runInfo }) {
+	const runId = w.run?.id || "";
+	const name = w.run?.name || runInfo?.name || "The group";
+	const budget = Number(runInfo?.budget_usd) || 0;
+	const spent = Number(runInfo?.cost_usd) || 0;
+	const [usd, setUsd] = (0, import_react.useState)(() => String(suggestedBudget(budget, spent)));
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const amount = Number(usd);
+	const valid = Number.isFinite(amount) && amount > spent;
+	const go = async (fn) => {
+		setBusy(true);
+		try {
+			await fn();
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-item ob-item ob-escalation ob-budget",
+		"data-outbox-row": "budget:" + runId,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pr-open-main",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pr-open-ref ob-ref",
+					children: name
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "pr-open-title",
+					children: [w.reason || "the group's budget is used up", budget ? " — spent $" + spent.toFixed(2) + " of $" + budget.toFixed(2) : ""]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pr-open-meta",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pr-open-chip bad",
+					children: "paused — budget"
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-item-start",
+				children: [(w.actions || []).includes("raise_budget") && runId && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "ob-usd",
+					children: ["$", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "number",
+						min: 0,
+						step: "any",
+						"aria-label": "New budget in dollars",
+						value: usd,
+						disabled: busy,
+						onChange: (e) => setUsd(e.target.value),
+						onKeyDown: (e) => {
+							if (e.key === "Enter" && valid) go(() => raiseBudget(runId, amount, name));
+						}
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "btn-primary pr-review-btn",
+					disabled: busy || !valid,
+					title: valid ? "Raise the budget and resume the group" : "More than it has spent ($" + spent.toFixed(2) + ")",
+					onClick: () => go(() => raiseBudget(runId, amount, name)),
+					children: ["Raise to $", valid ? amount : "…"]
+				})] }), (w.actions || []).includes("stop") && runId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy,
+					title: "Cancel the group — nothing new starts or ships; sessions and branches stay",
+					onClick: () => go(() => cancelRun(runId, name)),
+					children: "Stop"
+				})]
+			})
+		]
+	});
+}
+var editedMessage = /* @__PURE__ */ new Map();
+function ApproveButtons({ w, busy, setBusy, hasRow }) {
+	const verb = shipVerb(w.step);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [hasRow && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn",
+		title: "Open its Diff tab",
+		onClick: () => openSession(w.title, "diff"),
+		children: "Diff"
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "btn-primary pr-review-btn ob-ship",
+		disabled: busy,
+		title: verb + " now, with the message and title shown below",
+		onClick: async () => {
+			setBusy(true);
+			const msg = editedMessage.get(approvalKey(w));
+			try {
+				await instApi(w.title, "/ship-now", { json: msg ? { commit_message: msg } : {} });
+				toast(verb + ": " + w.title);
+				editedMessage.delete(approvalKey(w));
+			} catch (err) {
+				errorPop(verb + " failed — " + w.title, errMsg(err));
+			} finally {
+				setBusy(false);
+				refreshRuns();
+				refreshInstances();
+			}
+		},
+		children: verb
+	})] });
+}
+function ApprovePreview({ w, row }) {
+	const p = w.preview || null;
+	const [editing, setEditing] = (0, import_react.useState)(false);
+	const editKey = approvalKey(w);
+	const [msg, setMsg] = (0, import_react.useState)(() => editedMessage.get(editKey) ?? p?.commit_message ?? "");
+	const lane = w.lane || (row ? laneOf(row)?.target : "") || "";
+	const canEdit = (w.actions || []).includes("edit_message") && (w.step || "commit") === "commit";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "ob-card",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ob-kv",
+			children: [
+				(p?.commit_message || msg || canEdit) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Message" }), editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					className: "ob-msg-edit",
+					value: msg,
+					autoFocus: true,
+					rows: Math.min(8, Math.max(2, msg.split("\n").length)),
+					spellCheck: false,
+					"aria-label": "Commit message",
+					title: "Enter for a new line; Ctrl+Enter (or click away) to keep it; Escape to undo",
+					onChange: (e) => setMsg(e.target.value),
+					onBlur: () => {
+						setEditing(false);
+						if (msg.trim() && msg !== p?.commit_message) editedMessage.set(editKey, msg.trim());
+						else editedMessage.delete(editKey);
+					},
+					onKeyDown: (e) => {
+						if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) e.target.blur();
+						if (e.key === "Escape") {
+							e.stopPropagation();
+							setMsg(p?.commit_message || "");
+							editedMessage.delete(editKey);
+							setEditing(false);
+						}
+					}
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "ob-mono",
+					children: [messageHead(msg) || /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "written from the diff when it commits"
+					}), canEdit && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike ob-edit",
+						onClick: () => setEditing(true),
+						children: "edit"
+					})]
+				})] }),
+				p?.pr_title && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "PR title" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ob-pr-title",
+					children: p.pr_title
+				})] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Then" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: thenText(w.step, lane) })
+			]
+		})
+	});
+}
+function ShippingRow({ s, row, shown, group }) {
+	const reported = row?.last_report && String(row.last_report.status).toLowerCase() === "done";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-item ob-item ob-shipping",
+		"data-outbox-row": s.title,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
+				title: s.title,
+				text: s.text,
+				shown,
+				row
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pr-open-meta",
+				children: [
+					reported && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pr-open-chip ok",
+						children: "reported done"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: s.note || (s.step === "integrate" ? "merging back…" : s.step ? s.step.replace("_", " ") + "…" : "on its way") }),
+					group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: group })
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-start",
+				children: row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					onClick: () => openSession(s.title),
+					children: "Open ↗"
+				})
+			})
+		]
+	});
+}
+function ShippedRow({ s, row, shown, group }) {
+	const chip = shippedChip(s);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-item ob-item ob-shipped",
+		"data-outbox-row": s.title,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
+				title: s.title,
+				text: s.text,
+				shown,
+				row
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pr-open-meta",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pr-open-chip " + chip.cls,
+						children: chip.text
+					}),
+					s.commit_subject && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+						"“",
+						s.commit_subject,
+						"”",
+						s.files ? " · " + s.files + (s.files === 1 ? " file" : " files") : ""
+					] }),
+					group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: group })
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-item-start",
+				children: [s.pr_url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					onClick: () => window.open(s.pr_url, "_blank"),
+					children: "Review ↗"
+				}), s.verify ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn ob-verify",
+					title: "Its checklist is waiting in Verify",
+					onClick: () => useUi.getState().openDialogFor("verify"),
+					children: "Verify →"
+				}) : null]
+			})
+		]
+	});
+}
+function QueuedItem({ q, group }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const id = q.run.id;
+	const task = q.run.task || "";
+	const go = async (what, verb, done) => {
+		setBusy(true);
+		try {
+			await runAction(what, taskPath(id, task, verb), {}, done);
+		} finally {
+			setBusy(false);
+		}
+	};
+	const label = q.text || q.ref || "queued line";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-item ob-item ob-queued",
+		"data-outbox-row": task,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pr-open-main",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pr-open-ref ob-ref",
+					children: q.ref || "task"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pr-open-title",
+					children: q.text || ""
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pr-open-meta",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "waits for a free slot" }), group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: group })]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-item-start",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy || !task,
+					title: "Start it now, past the at-a-time limit (once)",
+					onClick: () => go("Start now", "start-now", "Starting " + label),
+					children: "Start now"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy || !task,
+					title: "Take it out of the group — it never starts",
+					onClick: () => go("Remove", "skip", "Removed " + label),
+					children: "Remove"
+				})]
+			})
+		]
+	});
+}
+function SummaryCard({ s }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ob-card ob-summary",
+		"data-outbox-summary": s.run,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ob-summary-head",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: s.name }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ik-group-detail",
+					children: s.state === "cancelled" ? "cancelled" : "finished"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					onClick: async () => {
+						if (await copyText(s.text_md)) toast("Copied the summary as Markdown");
+					},
+					children: "Copy as Markdown"
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+			className: "ob-summary-md",
+			children: s.text_md
+		})]
+	});
+}
+//#endregion
 //#region src/lib/rowSelection.ts
 function selectedInOrder(selected, allKeys) {
 	return allKeys.filter((k) => selected.has(k));
@@ -69461,6 +73087,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewSessionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsDialog, { onOpenSysLogsPane: () => toggleSpecial("syslogs") }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IntakeDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OutboxDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommitDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MakePrDialog, {}),

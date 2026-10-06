@@ -6,13 +6,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useConfig, useExtensions } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { runCommand } from "../../extensions/host";
+import { focusQueueInput } from "../../lib/playbooks";
 import {
-  focusQueueInput,
-  liveChildren,
-  mcpCapable,
-  openPlaybookMenu,
-  runPlaybook,
-} from "../../lib/playbooks";
+  LANE_LABEL,
+  laneChoice,
+  openShipMenu,
+  setLane,
+  splitBlockReason,
+  teamRunCaps,
+  startSplitOf,
+  type Lane,
+} from "../../lib/laneActions";
+import { errMsg } from "../../lib/format";
+import { toast } from "../../lib/toast";
+import { refreshInstances } from "../../state/queries";
 import type { KeymapHost } from "../../lib/keymap";
 import {
   commitSession,
@@ -82,6 +89,13 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     const ideName = config?.ide_name || "Cursor";
     const acts: PaletteAction[] = [];
     acts.push({ label: "New session…", hint: "Ctrl+N", run: () => ui.openDialogFor("new-session") });
+    // The same dialog: its box takes one thing per line, or ticket IDs, and
+    // turns into the list the moment it holds two.
+    acts.push({
+      label: "Start several sessions…",
+      hint: "one per line",
+      run: () => ui.openNewWith(""),
+    });
     const { rows } = orderedInstances(instances(), ui.order);
     for (const inst of rows) {
       const name = ui.aliases[inst.title] || inst.title;
@@ -100,38 +114,52 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         run: () => ui.threadOpen(t, { composeTo: t }),
       });
       acts.push({ label: `Queue prompt… — ${t}`, hint: "auto-run", run: () => focusQueueInput(t) });
-      // Agent teams: the fork-icon menu's playbooks, for a CLI that gets the
-      // MindFlock tools. Each pastes its prompt for you to send; the worker
-      // ones only while the session has workers (the server would omit them).
+      // Ship & split: the pane menu's lanes and split, each acting at once
+      // through the server — nothing is pasted into the agent. Local rows only
+      // (another device's group and split routes aren't forwarded).
       const inst = rows.find((r) => r.title === t);
-      if (inst && mcpCapable(caps, inst)) {
+      if (inst && !inst.device && !inst.pending && !t.includes("::")) {
+        const cur = laneChoice(inst);
+        const ship = (lane: Lane) => async () => {
+          try {
+            await setLane(t, lane, cur.askFirst);
+            toast(`${ui.aliases[t] || t} → ${LANE_LABEL[lane]}`, { duration: 4000 });
+            refreshInstances();
+          } catch (err) {
+            toast(`${t}: ${errMsg(err)}`, { duration: 6000 });
+          }
+        };
         acts.push({
-          label: `Split across workers… — ${t}`,
-          hint: "pastes the prompt",
-          run: () => void runPlaybook(t, "split"),
+          label: `Ship: open a PR when done — ${t}`,
+          hint: cur.lane === "pr" ? "its lane now" : "lane",
+          run: () => void ship("pr")(),
         });
         acts.push({
-          label: `Ask a session… — ${t}`,
-          hint: "pastes the prompt",
-          run: () => openPlaybookMenu(t, "ask"),
+          label: `Ship: commit when done — ${t}`,
+          hint: cur.lane === "commit" ? "its lane now" : "lane",
+          run: () => void ship("commit")(),
         });
-        if (liveChildren(t, rows).length) {
-          acts.push({
-            label: `Check on workers — ${t}`,
-            hint: "pastes the prompt",
-            run: () => void runPlaybook(t, "workers"),
-          });
-          acts.push({
-            label: `Wrap up workers — ${t}`,
-            hint: "pastes the prompt",
-            run: () => void runPlaybook(t, "wrapup"),
-          });
-        }
+        const why = splitBlockReason(caps, inst);
         acts.push({
-          label: `Work with other sessions… — ${t}`,
-          hint: "Ctrl+K F",
-          run: () => openPlaybookMenu(t),
+          label: `Split into parallel pieces… — ${t}`,
+          hint: why ? (teamRunCaps(caps).split ? "unavailable" : "needs a newer server") : "starts a split",
+          run: () => {
+            if (why) {
+              toast(why, { duration: 5000 });
+              return;
+            }
+            const name = ui.aliases[t] || t;
+            startSplitOf(inst, name, cur.lane === "leave" ? "pr" : cur.lane, cur.askFirst)
+              .then(() => {
+                ui.threadOpen(t);
+                toast(`${name} is proposing the pieces — approve the plan in its Thread tab`, {
+                  duration: 5000,
+                });
+              })
+              .catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6000 }));
+          },
         });
+        acts.push({ label: `Ship & split… — ${t}`, hint: "Ctrl+K F", run: () => openShipMenu(t) });
       }
       acts.push({ label: `Thread — ${t}`, hint: "Ctrl+K T", run: () => ui.threadOpen(t) });
       if (caps.git) {
@@ -172,6 +200,12 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       label: "Intake: Auto-start",
       hint: "what starts on its own",
       run: () => ui.openDialogFor("intake", "autostart"),
+    });
+    // The middle of the arc: what is on its way out, and what is waiting on you.
+    acts.push({
+      label: "Outbox — what's shipping, and what's waiting on you",
+      hint: "Alt+O",
+      run: () => ui.openDialogFor("outbox"),
     });
     // The other half of the same arc, so it sits with the Intake entries rather
     // than down among the settings screens.

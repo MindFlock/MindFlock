@@ -75,9 +75,11 @@ def test_the_tab_sits_after_queue_and_only_for_a_family(js):
     assert in_bundle(
         'className: "thread-tab" + (tab === "thread" ? " active" : "")', pane
     )
-    # Shown for a session with a parent or workers, or opened on purpose.
+    # Shown for a session with a parent or workers, a group's lead (its plan
+    # and its one PR live there before any worker exists), or opened on purpose.
     assert in_bundle(
-        'threadTabShown(!!family.parent || family.children.length > 0, threadOpened || lastTab === "thread")',
+        'threadTabShown(!!family.parent || family.children.length > 0 || inst.run?.role === "lead", '
+        'threadOpened || lastTab === "thread")',
         pane,
     )
     assert "threadShown && " in pane

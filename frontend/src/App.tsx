@@ -25,6 +25,7 @@ import { ShortcutsSheet } from "./components/palette/ShortcutsSheet";
 import { NewSessionDialog } from "./components/dialogs/NewSessionDialog";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { IntakeDialog } from "./components/intake/IntakeDialog";
+import { OutboxDialog } from "./components/outbox/OutboxDialog";
 import { VerifyDialog } from "./components/dialogs/VerifyDialog";
 import { CommitDialog } from "./components/dialogs/CommitDialog";
 import { MakePrDialog } from "./components/dialogs/MakePrDialog";
@@ -264,6 +265,7 @@ export default function App() {
       <NewSessionDialog />
       <SettingsDialog onOpenSysLogsPane={() => toggleSpecial("syslogs")} />
       <IntakeDialog />
+      <OutboxDialog />
       <VerifyDialog />
       <CommitDialog />
       <MakePrDialog />

@@ -40,6 +40,8 @@ short-TTL probe memo they share. Helper logic lives in focused modules under
     events           the event bus behind /api/events
     git_ops          git primitives (branch/sha/dirty/origin probes, caches)
     ide_launch       launching the configured IDE on a folder
+    lanes            ship lanes: how far a session is carried (the /fast-track
+                     body, /lane, /ship-now), the row's lane, copy windows
     lineage          parent/child sessions: chain walks, spawn limits, base_ref
     thread           a session's family thread (members, spawn records, the
                      mail between them) and the row's last_report
@@ -57,9 +59,14 @@ short-TTL probe memo they share. Helper logic lives in focused modules under
                      blocked/breached/tampered events, the row summary
     remote           tailnet multi-device discovery + proxying
     repo_picker      ranked repo suggestions for the New Session folder field
+    outbox           what is waiting on you / shipping / shipped / queued
+    session_create   the create route's body (POST /api/instances)
     session_stats    token/cost telemetry + transcript history rendering
     snapshot         per-session JSON descriptors (labels, diff stat)
     system_logs      log-tail sources for Settings → System logs
+    team_runs        team runs: the record store, goal parser, pure planner
+    team_run_driver  team runs: the loop, reconcile, effects, run.* events,
+                     the operations behind /api/runs*
     terminal         PTY/tmux attach plumbing shared by the websockets
     uploads          pasted/dropped file storage + retention
     usage_api        per-provider usage descriptors for /api/usage
@@ -121,6 +128,9 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 from backend.web.core import aliases as _aliases
 from backend.web.core import auth as _auth
 from backend.web.core import autopilot as _autopilot
+from backend.web.core import lanes as _lanes
+from backend.web.core import team_runs as _team_runs
+from backend.web.core import team_run_driver as _team_run_driver
 from backend.web.core import code_map as _code_map
 from backend.web.core import code_outline as _code_outline
 from backend.web.core import commit_message as _commit_message
@@ -147,6 +157,8 @@ from backend.web.core import find_query as _find_query
 from backend.web.core import pane_find as _pane_find
 from backend.web.core import pane_scroll_find as _pane_scroll_find
 from backend.web.core import session_plan as _session_plan
+from backend.web.core import session_create as _session_create
+from backend.web.core import ship_status as _ship_status
 from backend.web.core import agent_io as _agent_io
 from backend.web.core import lineage as _lineage
 from backend.web.core import thread as _thread
@@ -479,6 +491,13 @@ async def lifespan(app: FastAPI):
     # unattended and resumes them the moment usage returns after an outage).
     _register_task(_prompt_queue_drain_loop())
     _register_task(_autopilot_loop())
+    # Team runs: start queued work as slots free up, carry each member along
+    # its lane (through the autopilot above), surface what needs you. Off
+    # under pytest like the red-zone loop — ENGINE is the developer's real
+    # state there.
+    if _team_run_loop_enabled():
+        _team_run_driver.subscribe()
+        _register_task(_team_run_driver.run_loop())
     # So the autopilot driver, which runs its blocking half in worker threads, can
     # still start an edge watcher (asyncio.create_task needs the loop).
     _live_stage.set_loop(asyncio.get_running_loop())
@@ -559,6 +578,12 @@ async def lifespan(app: FastAPI):
         for _t in _BG_TASKS:
             _t.cancel()
         _BG_TASKS.clear()
+        # Hand back this server's team-run leases: a restart drives (and
+        # reconciles) its runs on the first pass instead of waiting out them.
+        try:
+            _team_runs.release_leases(_SERVER_BOOT_ID)
+        except Exception:  # noqa: BLE001
+            pass
         # Close the remote-proxy HTTP session (owned by backend.web.core.remote).
         try:
             await _remote.shutdown()
@@ -776,6 +801,13 @@ _EVENT_SNAPSHOT_LOCK = threading.Lock()
 # stop settles one tick (~4s) later than it used to.
 _SETTLE_ACTIVITIES = frozenset({"idle", "clarify", "limit"})
 _ACTIVITY_SETTLE_SECONDS = 3.0
+#: Stages that are TRANSIENT by nature (the commit's hooks running): a move
+#: INTO one is held this long before it is announced, so a commit whose hooks
+#: re-run (agent→precommit→agent→precommit→committed in a second — four bell
+#: rows in the live run) announces only its net change. Short: only the
+#: "hooks running" chip waits for it; every other stage is instant.
+_TRANSIENT_STAGES = frozenset({"precommit"})
+_STAGE_SETTLE_SECONDS = 2.0
 
 # Boot quiet window: for this long after process start (a restart re-execs, so
 # this is also "after every restart") the *_changed diff events are swallowed —
@@ -854,6 +886,22 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
                 snap["pending_activity"] = pending
             # else: settled — snap keeps the new activity and the diff below
             # emits the transition.
+        # A move INTO a transient stage parks like a settling activity; a
+        # flicker back out of it (or on through it) within the window announces
+        # only the net change. Suppressed HERE, at the one emitter, so the
+        # bell, toasts, ntfy and hooks all see the same single event.
+        if (
+            prev is not None
+            and stage != prev.get("stage")
+            and stage in _TRANSIENT_STAGES
+        ):
+            pending = prev.get("pending_stage")
+            if pending is None or pending[0] != stage:
+                snap["stage"] = prev.get("stage")
+                snap["pending_stage"] = (stage, now)
+            elif now - pending[1] < _STAGE_SETTLE_SECONDS:
+                snap["stage"] = prev.get("stage")
+                snap["pending_stage"] = pending
         # When the ANNOUNCED activity was adopted. Deliberately not
         # agent_state's ``state_since`` (when the raw reading changed): the
         # dwell below must measure how long we have been telling people this,
@@ -870,7 +918,7 @@ def _emit_state_changes(title: str, status: str, activity: str, stage: str) -> N
         for field, event, new in (
             ("status", "session.status_changed", status),
             ("activity", "session.activity_changed", snap["activity"]),
-            ("stage", "session.stage_changed", stage),
+            ("stage", "session.stage_changed", snap["stage"]),
         ):
             old = prev.get(field)
             if old != new:
@@ -1392,6 +1440,23 @@ def _forget_mcp_run_file(title: str) -> None:
 
 
 _SESSION_REMOVED_HOOKS.append(_forget_mcp_run_file)
+
+
+def _disarm_removed_session(title: str) -> None:
+    """Forget a removed session's autopilot run (its lane).
+
+    The store is keyed by TITLE and titles come straight back, so a record
+    must leave with its session. ``autopilot.prune`` only drops a record once
+    it is older than ``ARM_GRACE_S`` (the intake grace), which meant a session
+    deleted within 30 minutes of being armed handed its target, attempt
+    counters and halt reason to whichever session took the name next — a
+    recreated ``untitled-2`` would commit and open a PR nobody asked it to.
+    Intake still arms BEFORE its session exists; this only runs for a session
+    that existed and is gone."""
+    _autopilot.disarm(title)
+
+
+_SESSION_REMOVED_HOOKS.append(_disarm_removed_session)
 
 
 def _orphan_children(title: str) -> list:
@@ -2522,6 +2587,53 @@ def _autopilot_dto(title: str):
     return _autopilot.dto(title)
 
 
+def _run_member(title: str):
+    """``title``'s entry in the team-run index — only when the live session
+    IS that member (its incarnation), never a later session that merely
+    reused the title of a finished group's member."""
+    try:
+        member = _team_runs.title_index().get(title)
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
+    if not member:
+        return None
+    inc = float(member.get("incarnation") or 0.0)
+    inst = ENGINE.instances.get(title)
+    if inc and inst is not None:
+        created = _created_epoch(inst)
+        if created is not None and abs(float(created) - inc) > 1.0:
+            return None
+    return member
+
+
+def _row_lane(title: str):
+    """The row's ``lane`` block (see :func:`core.lanes.lane_of`), or None.
+
+    A team run's member shows its group's lane even while nothing is armed on
+    it — a "leave it" lane arms nothing at all, and a paused group holds its
+    members' autopilot — so the rail never loses the line it leads with."""
+    lane = _lanes.lane_dto(title)
+    if lane is not None:
+        return lane
+    member = _run_member(title)
+    if not member or not member.get("lane"):
+        return None
+    return {
+        "target": member["lane"],
+        "ask_first": bool(member.get("ask_first")),
+        "owner": title,
+    }
+
+
+def _row_run(title: str):
+    """The row's ``run`` block — ``{id, name, task, role, grouping}`` for a
+    session a team run owns — or None."""
+    member = _run_member(title)
+    if not member:
+        return None
+    return {k: member[k] for k in ("id", "name", "task", "role", "grouping")}
+
+
 def _fasttrack_depth() -> str:
     """The configured default rung for the fast-track button.
 
@@ -2812,6 +2924,7 @@ async def _autopilot_step(title: str) -> None:
         await asyncio.to_thread(_autopilot_wait, title, rec, snap, detail, now)
         return
     if action == "done":
+        await asyncio.to_thread(_autopilot_draft_for_approval, title, wt, rec)
         await asyncio.to_thread(_autopilot_finish, title)
         return
     if action == "stop":
@@ -2901,6 +3014,41 @@ def _autopilot_halt(title: str, reason: str) -> None:
     _emit_autopilot(title)
 
 
+def _autopilot_draft_for_approval(title: str, wt: str, rec: dict) -> None:
+    """A run about to park for "ask me first" BEFORE its commit gets the exact
+    commit message now — written from the diff, as the commit itself would be —
+    so the Outbox card shows what will be committed, not "written from the diff
+    when it commits". Unless the card's message is edited, ship-now commits
+    exactly this text. A person's own message is never replaced; a failure
+    leaves the card as it was (the commit still writes one)."""
+    try:
+        if (
+            not rec.get("ask_first")
+            or _autopilot.normalize_depth(rec.get("depth")) != "agent"
+        ):
+            return
+        if _lanes.normalize_lane(rec.get("lane")) in ("", "leave"):
+            return
+        human = (
+            str(rec.get("message") or "").strip()
+            and not rec.get("message_auto")
+            and not rec.get("message_written")
+        )
+        if human or not wt or not _is_dirty(wt):
+            return
+        written = _autopilot_written_message(title, wt, rec)
+        if written:
+            _autopilot.update(
+                title,
+                message=written,
+                message_auto=False,
+                message_written=True,
+                message_drafted=True,
+            )
+    except Exception:  # noqa: BLE001 — a draft is never worth failing a run
+        pass
+
+
 def _autopilot_finish(title: str) -> None:
     _autopilot.finish(title)
     _emit_autopilot(title)
@@ -2955,7 +3103,13 @@ async def _autopilot_act(title, wt, rec, snap, action, detail) -> None:
             fields["step"] = "push"
         elif action == "make_pr":
             base = detail.get("base") or ""
-            resp = await instance_make_pr(title, {"base": base} if base else {})
+            pr_args = {"base": base} if base else {}
+            # A title / body written for this run (a team run's one PR, with a
+            # section per piece) — otherwise both come from the commits.
+            for key in ("title", "body"):
+                if rec.get("pr_" + key):
+                    pr_args[key] = rec["pr_" + key]
+            resp = await instance_make_pr(title, pr_args)
             if resp.status_code >= 400:
                 await asyncio.to_thread(_autopilot_halt, title, _resp_error(resp))
                 return
@@ -3104,7 +3258,9 @@ def _autopilot_written_message(title: str, wt: str, rec: dict) -> str:
     # asked to be, which is real context. The ⏩ button's own placeholder ("Work on
     # ft-session") is not, so rec["message"] is only borrowed for intake sources.
     hint = str(rec.get("item") or "")
-    if rec.get("source") in ("tix", "pr", "iss"):
+    # A team run's task line is the same kind of context: what the work was
+    # asked to be, written by a human.
+    if rec.get("source") in ("tix", "pr", "iss", "run"):
         named = str(rec.get("message") or "").strip()
         if named and named != hint:
             hint = ("%s — %s" % (hint, named)) if hint else named
@@ -3146,6 +3302,9 @@ def _autopilot_commit(title, wt, rec, detail, fields) -> bool:
             msg = written
             fields["message"] = written
             fields["message_auto"] = False
+            # Written from THIS diff: reused by a retry of this commit, never
+            # carried into a later arm as a human's sentence.
+            fields["message_written"] = True
     if not msg:
         # GENERATE one rather than halting. Arming on a CLEAN tree is the natural
         # way to use this — arm the session, let the agent work — and the route
@@ -3214,6 +3373,7 @@ def _publish_autopilot(title: str) -> None:
         for row in rows:
             if row.get("title") == title:
                 row["autopilot"] = _autopilot_dto(title)
+                row["lane"] = _row_lane(title)
                 _events.patch_session_snapshot(title, row)
                 return
     except Exception:  # noqa: BLE001
@@ -5462,11 +5622,15 @@ def _build_instances_snapshot() -> list:
     # iterating the live dict races ("changed size during iteration").
     insts = list(ENGINE.instances.values())
     if len(insts) <= 1:
-        return [_session_snapshot(i, queues) for i in insts]
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=min(8, len(insts)), thread_name_prefix="session-probe"
-    ) as ex:
-        return list(ex.map(lambda i: _session_snapshot(i, queues), insts))
+        rows = [_session_snapshot(i, queues) for i in insts]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(8, len(insts)), thread_name_prefix="session-probe"
+        ) as ex:
+            rows = list(ex.map(lambda i: _session_snapshot(i, queues), insts))
+    # A copy window shows the lane of the window that drives its branch.
+    _lanes.fill_duplicates(rows)
+    return rows
 
 
 def _fresh_lineage(rows: list) -> None:
@@ -5513,6 +5677,7 @@ def list_instances() -> JSONResponse:
         _session_snapshot_cheap(i, queues, by_title.get(i.Title))
         for i in list(ENGINE.instances.values())
     ]
+    _lanes.fill_duplicates(snap)
     return JSONResponse(snap + _remote.merged_instances() + _pending_rows())
 
 
@@ -5748,6 +5913,16 @@ async def _find_index_loop() -> None:
         except Exception:  # noqa: BLE001 — the loop must never die
             pass
         await asyncio.sleep(_FIND_INDEX_INTERVAL)
+
+
+#: Test seam, like _RED_ZONE_LOOP_ENABLED: None = on except under pytest.
+_TEAM_RUN_LOOP_ENABLED: Optional[bool] = None
+
+
+def _team_run_loop_enabled() -> bool:
+    if _TEAM_RUN_LOOP_ENABLED is not None:
+        return bool(_TEAM_RUN_LOOP_ENABLED)
+    return not _restart._under_pytest()
 
 
 def _red_zone_loop_enabled() -> bool:
@@ -6079,6 +6254,8 @@ def _capabilities() -> dict:
     no github -> Make PR / Merge hand the user a prefilled compare page
     instead of opening the PR themselves (they never fail outright).
     ``agent_mcp`` is the one non-boolean: see :func:`_agent_mcp_caps`.
+    ``team_runs`` says which team-run shapes the routes accept yet
+    (``{"split", "together"}``, from ``core.team_runs.CAPABILITIES``).
     Probed per-request (cheap) so installing/connecting takes effect on the
     next page load without a server restart.
     """
@@ -6088,6 +6265,7 @@ def _capabilities() -> dict:
         "ticketing": _ticketing_connected(),
         "github": _github_pr_available(),
         "agent_mcp": _agent_mcp_caps(),
+        "team_runs": dict(_team_runs.CAPABILITIES),
     }
 
 
@@ -6213,11 +6391,14 @@ def _source_intake_depth(source_id: str) -> str:
     try:
         from backend.config import settings as _settings
 
-        for src in _settings.load_settings().ticketing.sources:
-            if (
-                getattr(src, "id", "") == source_id
-                or getattr(src, "provider", "") == source_id
-            ):
+        sources = list(_settings.load_settings().ticketing.sources)
+        # An exact source key first: two sources may share a provider, and a
+        # provider match on the first must not answer for the second.
+        for src in sources:
+            if getattr(src, "id", "") == source_id:
+                return _cap_source_depth(getattr(src, "depth", ""))
+        for src in sources:
+            if getattr(src, "provider", "") == source_id:
                 return _cap_source_depth(getattr(src, "depth", ""))
     except Exception:  # noqa: BLE001
         pass
@@ -6243,7 +6424,7 @@ def _repo_intake_depth(repo: str, kind: str) -> str:
 
 
 def _arm_intake_autopilot(
-    title: str, depth: str, source: str, item: str, message: str = ""
+    title: str, depth: str, source: str, item: str, message: str = "", by: str = "user"
 ) -> None:
     """Arm the autopilot for a session an intake start is about to create.
 
@@ -6270,9 +6451,129 @@ def _arm_intake_autopilot(
             message_auto=bool(message),
             retryable=_precommit_retry_hooks(),
             boot=_SERVER_BOOT_ID,
+            # An agent's spawn_ticket_session(autopilot=...) is the AGENT's
+            # choice (it may change it again), never mistaken for the user's.
+            by=by,
         )
     except Exception:  # noqa: BLE001 — never fail a launch over the autopilot
         pass
+
+
+#: The longest orchestrator ``note`` an intake start accepts.
+_INTAKE_NOTE_MAX = 4000
+
+
+async def _intake_lineage(payload: dict):
+    """The lineage an agent asks for when it starts an intake item as its own
+    worker (the MindFlock MCP's ``spawn_ticket_session``) →
+    ``(lineage, None)`` or ``(None, error_response)``.
+
+    ``lineage`` is ``{"parent", "spawned", "report_back", "note"}``. A payload
+    that names none of them gets the all-empty lineage, and the start behaves
+    exactly as it always did — the Intake panel sends none of them.
+
+    Validated the way ``POST /api/instances`` validates the same fields:
+    ``spawned`` and ``report_back`` strictly boolean (``spawned`` unlocks
+    agent-driven deletion, so a string "false" must not read as True),
+    ``parent`` a live session that is not over budget, and the spawn limits
+    checked NOW, so the caller gets its 409 naming the knob instead of a 202
+    and a failed background start. They are checked once more under the
+    registry lock when the launch claims the title
+    (:func:`_intake_claim_error`)."""
+    parent = str(payload.get("parent", "") or "").strip()
+    spawned = payload.get("spawned", False)
+    if spawned is None:
+        spawned = False
+    if not isinstance(spawned, bool):
+        return None, JSONResponse(
+            {"error": "spawned must be a boolean"}, status_code=400
+        )
+    report_back = payload.get("report_back", False)
+    if report_back is None:
+        report_back = False
+    if not isinstance(report_back, bool):
+        return None, JSONResponse(
+            {"error": "report_back must be a boolean"}, status_code=400
+        )
+    note = payload.get("note", "") or ""
+    if not isinstance(note, str):
+        return None, JSONResponse({"error": "note must be a string"}, status_code=400)
+    note = note.strip()
+    if len(note) > _INTAKE_NOTE_MAX:
+        return None, JSONResponse(
+            {"error": "note is longer than %d characters" % _INTAKE_NOTE_MAX},
+            status_code=400,
+        )
+    if parent:
+        if parent not in ENGINE.instances:
+            return None, JSONResponse(
+                {"error": "unknown parent session: %s" % parent}, status_code=400
+            )
+        if await asyncio.to_thread(_budget_locked, parent):
+            return None, JSONResponse(
+                {
+                    "error": "parent session %s is over budget — raise its budget "
+                    "before it spawns more sessions" % parent,
+                    "budget_locked": True,
+                },
+                status_code=409,
+            )
+    if parent or spawned:
+        limit_err = _lineage.spawn_limit_error(ENGINE.instances, parent, spawned)
+        if limit_err:
+            return None, JSONResponse({"error": limit_err}, status_code=409)
+    lineage = {
+        "parent": parent,
+        "spawned": spawned,
+        "report_back": report_back,
+        "note": note,
+    }
+    return lineage, None
+
+
+def _intake_claim_error(lineage: dict) -> Optional[str]:
+    """Why an intake start's background launch may not claim its title after
+    all — its parent went away, or a concurrent spawn took the last slot — or
+    None. Called with ``ENGINE.lock`` held, like the create route's re-check."""
+    parent = lineage.get("parent") or ""
+    spawned = bool(lineage.get("spawned"))
+    if not parent and not spawned:
+        return None
+    if parent and parent not in ENGINE.instances:
+        return "parent session %s is gone" % parent
+    return _lineage.spawn_limit_error(ENGINE.instances, parent, spawned)
+
+
+def _intake_prompt_tail(lineage: dict, title: str, program: str):
+    """What an agent-spawned intake start appends to its prompt →
+    ``(text, report_back, reason)``.
+
+    The orchestrator's ``note`` (scoping the worker: "only the API half"), then
+    the MCP's report-back footer — the same text ``spawn_session`` appends —
+    when the caller asked for it, has a parent to report to, and the worker's
+    CLI will actually get a ``report_result`` tool. ``reason`` says why there is
+    no footer when one was asked for."""
+    parent = lineage.get("parent") or ""
+    text = ""
+    if lineage.get("note"):
+        text += "\n\n## Note from session %s\n\n%s" % (
+            parent or "outside the flock",
+            lineage["note"],
+        )
+    if not lineage.get("report_back"):
+        return text, False, ""
+    if not parent:
+        return text, False, "no parent to report to"
+    why = _mcp_unattachable(program)
+    if why is not None:
+        return text, False, why
+    from backend.mcp.tools import report_footer
+
+    try:
+        provider = providers.resolve(program or "").name
+    except Exception:  # noqa: BLE001
+        provider = ""
+    return text + report_footer(title, parent, provider), True, ""
 
 
 def _no_git_response() -> JSONResponse:
@@ -6886,579 +7187,11 @@ def _provider_plans(prov) -> bool:
 async def create_instance(payload: dict) -> JSONResponse:
     """Create a session and Start it in the background (returns 202 immediately).
 
-    Accepted ``payload`` keys:
-
-    * ``title`` — session name (also the ENGINE.instances key). Blank quick-
-      launches an auto-numbered ``untitled`` / ``untitled-N``. For a provisioned
-      session a title that is itself a branch path (``feature/sc-123/foo``,
-      matching ``^[A-Za-z0-9._/-]+$``) is used verbatim as ``new_branch`` and the
-      title becomes its last segment.
-    * ``program`` — agent CLI to launch (defaults to the engine default).
-    * ``provisioned`` — provisioned mode (git base-clone + per-session worktree/
-      clone); requires git and either a configured ``[repository].url`` or a
-      chosen ``repo_path``.
-    * ``workspace_strategy`` — ``"worktree"`` (default) or ``"clone"``.
-    * ``story_id`` — ticket id; seeds a default title/branch when the title is
-      blank.
-    * ``prompt`` — initial prompt (held in the prompt queue instead of seeded
-      directly when the worktree declares a setup pass, so it survives setup,
-      or when the CLI takes no prompt argument). The 202 body's
-      ``prompt_delivery`` says which: ``seeded`` / ``queued`` / ``none``.
-    * ``repo_path`` — a user-chosen local repo to base the session on.
-    * ``in_place`` — run directly in ``repo_path`` (no worktree); forced on for a
-      non-git folder. Ignored in provisioned mode.
-    * ``init_repo`` — ``git init`` an empty folder first (plus an initial commit).
-      Combines with ``in_place``: init the folder and then work directly in it.
-    * ``launch_args`` — per-session agent flags; absent means inherit the global
-      default, present (even ``[]``) means use exactly these.
-    * ``extra_launch_args`` — flags ADDED to the global default (ignored when
-      ``launch_args`` is present).
-    * ``profile_id`` — auth profile the agent runs under; absent/blank means
-      inherit the global default profile, ``"default"`` pins the CLI's own
-      ambient login, anything else must name a configured profile.
-    * ``profile_model`` — this session's model override of the profile's own
-      model pin (e.g. an OpenRouter model id); blank keeps the pin.
-    * ``plan_first`` — append the plan-first instruction to ``prompt``: the
-      agent lists every file it intends to touch (a ``mindflock-plan`` block)
-      and waits for Go before editing. The repo's red zones are named in the
-      prompt either way.
-    * ``parent`` — title of a LIVE local session this one works for (an
-      orchestrator agent spawning a worker); 400 ``unknown parent session``
-      otherwise, 409 when the parent is over budget.
-    * ``spawned`` — boolean (strict): an agent, not a human, created this
-      session. Only settable here, never afterwards; it is what lets an agent
-      later delete the session.
-    * ``base_ref`` — plain worktree sessions only (400 for provisioned or
-      in-place): cut the new branch from this commit-ish of ``repo_path``
-      instead of its HEAD; 400 when it names no commit. ``repo_path`` stays the
-      canonical repo, so cleanup never depends on where the ref came from.
-    * ``base_branch`` — with ``base_ref``: the branch recorded as the session's
-      diff/stage base (default: ``base_ref`` itself when it is a local branch,
-      else the repo's current branch).
-    * ``playbook`` — ``"split"`` (the New dialog's "Split across workers"):
-      decorate ``prompt`` with the split playbook (the task stays its first
-      line; idempotent) so the agent splits it across worker sessions through
-      its MindFlock tools. Forces a worktree (``in_place`` is ignored). 400
-      for any other playbook, an empty prompt, a non-git folder, or a CLI
-      that doesn't get the MindFlock tools (attach off or unsupported). The
-      session records it (``Playbook``, the row's ``playbook``): it is an
-      orchestrator from its first prompt, before its first worker exists.
-
-    Spawn limits, checked under the registry lock as the title is claimed (409
-    naming the knob): a ``parent`` keeps at most ``MINDFLOCK_MAX_CHILDREN``
-    (8) live children and the new session's depth (root = 0) at most
-    ``MINDFLOCK_MAX_SPAWN_DEPTH`` (3); a ``spawned`` session keeps the live
-    total of spawned sessions at most ``MINDFLOCK_MAX_SPAWNED`` (24). The env
-    knobs are read per request.
-
-    The three creation modes are provisioned, plain-worktree, and in-place. A
-    409 is returned when the title already exists; the instance registers as
-    Loading and its real Start (worktree/clone + provisioning + tmux) runs in a
-    background task, so a failure is surfaced via a ``session.create_failed``
-    event rather than in the 202 response. ``session.created`` carries
-    ``parent`` / ``spawned`` in its data when set.
+    The whole of it lives in :func:`core.session_create.create` (accepted keys,
+    the three creation modes, lineage and spawn limits, the claim under the
+    registry lock) so a team run creates its sessions through the same code.
     """
-    payload = payload or {}
-    title = (payload.get("title", "") or "").strip()
-    program = (payload.get("program", "") or "").strip() or ENGINE.default_program()
-
-    # --- Optional provisioned mode --------------------------------------------
-    is_provisioned = bool(payload.get("provisioned", False))
-    workspace_strategy = (payload.get("workspace_strategy") or "worktree").strip()
-    story_id = str(payload.get("story_id", "") or "").strip()
-    prompt = payload.get("prompt", "") or ""
-    repo_path = str(payload.get("repo_path", "") or "")
-    new_branch = ""
-    # Per-session launch flags (e.g. --dangerously-skip-permissions for just
-    # this session), appended after the provider's own saved defaults every time
-    # this session's agent (re)starts. The New dialog pre-fills this field with
-    # the global default and always sends the key, so what arrives IS the
-    # session's flags — a default the user toggled off is honored, not
-    # re-applied. When the key is ABSENT (other creators / API callers), we pass
-    # None so the session inherits the global default (Settings → Coding CLI).
-    # Validated with the same rules as provider-level saved args so a malformed
-    # payload never reaches the shell command builder.
-    if "launch_args" in payload:
-        try:
-            launch_args = provider_config.validate_launch_args(
-                payload.get("launch_args") or []
-            )
-        except ValueError as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-    elif "extra_launch_args" in payload:
-        # ADDITIVE flags (the MCP's spawn_session): the user's configured
-        # defaults for this CLI stay, these are appended — an orchestrator
-        # adding "--model x" must not strip a worker's skip-permissions.
-        try:
-            extra = provider_config.validate_launch_args(
-                payload.get("extra_launch_args") or []
-            )
-        except ValueError as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-        launch_args = _instance.merge_launch_args(
-            _instance.provider_default_launch_args(program), extra
-        )
-    else:
-        launch_args = None  # not specified -> inherit the global default
-
-    # Auth profile pin. Rejecting an unknown id HERE beats a session that
-    # launches half-authenticated and only fails when the CLI does.
-    profile_id = str(payload.get("profile_id", "") or "").strip()
-    err = _profile_id_error(profile_id)
-    if err:
-        return JSONResponse({"error": err}, status_code=400)
-    profile_model = str(payload.get("profile_model", "") or "").strip()
-    err = _profile_model_error(profile_model)
-    if err:
-        return JSONResponse({"error": err}, status_code=400)
-
-    # Lineage. ``parent`` names the live session this one works for (an
-    # orchestrator spawning a worker); ``spawned`` marks an agent-made session
-    # and is only ever set here. Both are checked again under the registry lock
-    # below, with the spawn limits, at the moment the title is claimed.
-    parent = str(payload.get("parent", "") or "").strip()
-    spawned = payload.get("spawned", False)
-    if spawned is None:
-        spawned = False
-    if not isinstance(spawned, bool):
-        # Strict on purpose: "spawned" unlocks agent-driven deletion, so a
-        # string "false" must not read as True.
-        return JSONResponse({"error": "spawned must be a boolean"}, status_code=400)
-    if parent and parent not in ENGINE.instances:
-        return JSONResponse(
-            {"error": "unknown parent session: %s" % parent}, status_code=400
-        )
-    if parent and await asyncio.to_thread(_budget_locked, parent):
-        return JSONResponse(
-            {
-                "error": "parent session %s is over budget — raise its budget "
-                "before it spawns more sessions" % parent,
-                "budget_locked": True,
-            },
-            status_code=409,
-        )
-    # Split across workers: the agent fans the task out through its own
-    # MindFlock tools, so it must GET them (attach on, a CLI that attaches)
-    # and must have a task. Workers fork from its commits, so it runs in a
-    # worktree of its own — never in place.
-    playbook = payload.get("playbook")
-    if playbook is not None and playbook != "":
-        if playbook != "split":
-            return JSONResponse(
-                {"error": 'playbook must be "split" (got %r)' % (playbook,)},
-                status_code=400,
-            )
-        reason = _mcp_unattachable(program)
-        if reason is not None:
-            return JSONResponse(
-                {
-                    "error": "Split across workers needs the MindFlock tools: %s"
-                    % reason
-                },
-                status_code=400,
-            )
-        if not str(prompt).strip():
-            return JSONResponse(
-                {"error": "Split across workers needs a task: describe what to split"},
-                status_code=400,
-            )
-    split = playbook == "split"
-    # Fork point: cut the worktree from this commit-ish instead of the repo's
-    # HEAD (a worker forking from its orchestrator's commit), recording
-    # ``base_branch`` as the session's diff base. Plain worktree sessions only.
-    base_ref = str(payload.get("base_ref", "") or "").strip()
-    base_branch = str(payload.get("base_branch", "") or "").strip()
-    if (base_ref or base_branch) and is_provisioned:
-        return JSONResponse(
-            {
-                "error": "base_ref is only supported for plain worktree sessions "
-                "(not provisioned)"
-            },
-            status_code=400,
-        )
-
-    if is_provisioned:
-        # Provisioning is all git (base clone + worktree/clone per session).
-        if not git_available():
-            return JSONResponse(
-                {
-                    "error": "provisioned mode needs git installed — install git, "
-                    "or start a plain session (any folder works)"
-                },
-                status_code=400,
-            )
-        # Provisioning works for the configured [repository].url OR any local
-        # repo the user picked (repo_path). Only the no-repo-chosen flow needs
-        # the config to resolve.
-        if not repo_path and not provisioning.provisioning_available():
-            return JSONResponse(
-                {
-                    "error": "provisioned mode needs a configured repository "
-                    "(config.toml [repository].url) or a chosen local repo"
-                },
-                status_code=400,
-            )
-        if workspace_strategy not in ("worktree", "clone"):
-            return JSONResponse(
-                {"error": "workspace_strategy must be 'worktree' or 'clone'"},
-                status_code=400,
-            )
-        # If the Name field is itself a full branch (e.g. a Shortcut ticket
-        # branch like "feature/sc-17436/grafana-dashboard-…"), use it verbatim
-        # as the branch and set the session name to just its last segment.
-        if title and "/" in title and re.match(r"^[A-Za-z0-9._/-]+$", title):
-            new_branch = title.strip("/")
-            title = new_branch.split("/")[-1]
-        else:
-            # Default the title from the story id when one is given.
-            if not title and story_id:
-                title = "sc-%s" % story_id
-            if title:
-                # Deterministic branch: feature/sc-<id>/<slug> with a story,
-                # else mindflock/<title>.
-                new_branch = provisioning.branch_name_for(story_id or None, title)
-
-    # Whether WE invented this name. A title the caller typed is theirs and a
-    # collision is theirs to hear about; one we generated is ours to make unique,
-    # which is what the numbering below is for — and what the claim further down
-    # has to keep doing rather than answering 409 for a request in which nobody
-    # typed a name at all.
-    auto_title = not title
-    if not title:
-        # Quick launch: an empty Name starts an "untitled" session, numbered to
-        # stay unique (titles key ENGINE.instances).
-        title = _free_untitled()
-        # Provisioned sessions derive their branch from the title; the empty
-        # title skipped that above, so derive it from the generated one.
-        if is_provisioned and not new_branch:
-            new_branch = provisioning.branch_name_for(story_id or None, title)
-    if title in ENGINE.instances:
-        return JSONResponse(
-            {"error": "instance %s already exists" % title}, status_code=409
-        )
-
-    # --- Sessions based off a user-chosen local repo --------------------------
-    # Without this, plain sessions would default to the server's own cwd (the
-    # mindflock repo). The session still uses CS's isolated-worktree model — the
-    # worktree is created off the picked repo's HEAD on a fresh branch. A
-    # provisioned session with a chosen repo runs the SAME provisioning
-    # (setup commands / cache env) against that repo (universal flow).
-    plain_path = "."
-    provision_repo = ""
-    in_place = False
-    git_enabled = True
-    if repo_path or not is_provisioned:
-        in_place = (
-            bool(payload.get("in_place", False)) and not is_provisioned and not split
-        )
-        # Combinable with in_place, deliberately: "git init this folder, then work
-        # directly in it" is the natural way to start a brand-new project, and
-        # suppressing the init for in-place sessions silently dropped the tick and
-        # handed the user a git-less session in the folder they had just asked to
-        # make a repo of. _prepare_plain_repo inits + makes the initial commit, so
-        # the in-place session comes up on a real branch with git features on.
-        # The pair that genuinely cannot coexist is in_place and provisioning
-        # (a separate worktree/clone), which the line above already enforces.
-        init_repo = bool(payload.get("init_repo", False))
-        try:
-            plain_path, git_enabled = await asyncio.to_thread(
-                _prepare_plain_repo, repo_path, init_repo
-            )
-        except ValueError as err:
-            return JSONResponse({"error": str(err)}, status_code=400)
-        # A non-git folder has no HEAD to fork a worktree from and can't be
-        # provisioned — run it in-place, with git features simply disabled.
-        if not git_enabled:
-            if is_provisioned:
-                return JSONResponse(
-                    {
-                        "error": "provisioning needs a git repo — pick a git repo, or "
-                        "tick 'Create a git repo in this folder' in Advanced"
-                    },
-                    status_code=400,
-                )
-            if split:
-                return JSONResponse(
-                    {
-                        "error": "Split across workers needs a git repo — workers "
-                        "fork from its commits; pick a git repo, or tick 'Create "
-                        "a git repo in this folder' in Advanced"
-                    },
-                    status_code=400,
-                )
-            in_place = True
-        if is_provisioned:
-            provision_repo = plain_path
-    if base_ref or base_branch:
-        # An in-place session runs ON the folder's checkout — there is no new
-        # branch to cut from anywhere.
-        if in_place:
-            return JSONResponse(
-                {
-                    "error": "base_ref is only supported for plain worktree sessions "
-                    "(not in-place)"
-                },
-                status_code=400,
-            )
-        err = await asyncio.to_thread(
-            _lineage.base_ref_error, plain_path, base_ref, base_branch
-        )
-        if err:
-            return JSONResponse({"error": err}, status_code=400)
-        # The engine refuses to cut a base_ref branch whose name is taken (a
-        # closed or paused namesake keeps its branch) — say so NOW, as a 409,
-        # rather than 202 and an asynchronous create_failed nobody reads.
-        if base_ref:
-            err = await asyncio.to_thread(
-                _lineage.branch_taken_error, plain_path, _session_branch_name(title)
-            )
-            if err:
-                return JSONResponse({"error": err}, status_code=409)
-    # The provisioned twin: a closed session keeps its worktree (holding the
-    # deterministic branch) or its clone (at a deterministic path) — say so as
-    # a 409 now, not a create_failed later or a silently adopted old clone.
-    if is_provisioned and new_branch:
-        err = await asyncio.to_thread(
-            provisioning.provisioned_branch_taken_error,
-            workspace_strategy,
-            new_branch,
-            provision_repo,
-        )
-        if err:
-            return JSONResponse({"error": err}, status_code=409)
-
-    # Red zones + plan-first: the launch prompt names the repo's zones and, when
-    # the New Session "Plan first" box was ticked, asks for a file plan before
-    # any edit. Keyed off the folder the session is cut from — its repo
-    # identity is the future worktree's (same origin).
-    if split:
-        # First, so the task stays the prompt's first line (the pane pins it)
-        # and the zone / plan-first notes follow the split instructions.
-        try:
-            prompt = _playbooks.decorate_prompt(
-                "split", prompt, {"provider": providers.resolve(program).name}
-            )
-        except _playbooks.PlaybookError as perr:
-            return JSONResponse({"error": str(perr)}, status_code=400)
-    if prompt:
-
-        def _decorate(p=prompt, local=bool(repo_path or not is_provisioned)):
-            dirs = [plain_path] if local else _repo_url_workdirs("")
-            return _red_zone_prompt(p, program, dirs, bool(payload.get("plan_first")))
-
-        prompt = await asyncio.to_thread(_decorate)
-    inst = session.NewInstance(
-        session.InstanceOptions(
-            title=title,
-            path=plain_path,
-            program=program,
-            provisioned=is_provisioned,
-            workspace_strategy=workspace_strategy,
-            provision_repo=provision_repo,
-            new_branch=new_branch,
-            prompt=prompt,
-            launch_args=launch_args,
-            in_place=in_place,
-            profile_id=profile_id,
-            profile_model=profile_model,
-            base_ref=base_ref,
-            base_branch=base_branch,
-            parent=parent,
-            spawned=spawned,
-            playbook="split" if split else "",
-        )
-    )
-    # O4: every session gets a deterministic dev-server port block, injected
-    # into the agent's tmux env at launch (PORT / MINDFLOCK_PORT_BASE).
-    inst.ExtraEnv = _ports.env_for(title)
-
-    # O2: per-worktree setup (repo-committed .mindflock.toml [workspace]).
-    # Plain worktree sessions only — provisioned workspaces run their own
-    # setup, and in-place sessions share the repo dir (deps already there).
-    setup_cfg = None
-    if git_enabled and not is_provisioned and not in_place:
-        setup_cfg = _wt_setup.load_config(plain_path)
-    # Start does the heavy lifting (git worktree/clone + provisioning + tmux),
-    # which can take minutes on the first worktree run (one-time base clone +
-    # uv sync). Register the instance as "loading" and run Start in the
-    # background so the create request returns immediately and the session shows
-    # as provisioning in the grid instead of freezing the dialog on "Creating…".
-    inst.SetStatus(Loading)
-    # THE TITLE IS CLAIMED UNDER THE LOCK, AND RE-CHECKED THERE. The 409 above
-    # is a read with no claim, and everything between it and here can await —
-    # `_prepare_plain_repo` alone is a whole thread hop — so two creates for one
-    # title (two tabs, a stale row, the same Run pressed twice) both passed the
-    # gate and the second overwrote the first's record. Nothing then owned the
-    # first session: its tmux and its worktree carried on, invisible, and the
-    # next attempt at that title died in Start with "tmux session already
-    # exists". That is where the orphan verify sessions come from, and it is why
-    # this re-check is not merely defensive.
-    with ENGINE.lock:
-        if title in ENGINE.instances:
-            # A NAME WE INVENTED IS OURS TO RE-INVENT. The numbering above ran
-            # before the thread hop, so two quick launches inside that window
-            # both derived "untitled" and the second would have been refused —
-            # a hard error for a request in which the user typed nothing at all.
-            # Provisioned sessions are excluded because their BRANCH is derived
-            # from the title too, and re-naming here would leave the two saying
-            # different things.
-            if auto_title and not is_provisioned:
-                title = _free_untitled()
-                inst.Title = title
-            else:
-                return JSONResponse(
-                    {"error": "instance %s already exists" % title}, status_code=409
-                )
-        # Lineage, re-checked where it counts: the parent may have gone while
-        # the repo was prepared, and the spawn caps only hold if the count and
-        # the claim happen under one lock (two concurrent spawns must not both
-        # squeeze under the last slot).
-        if parent and parent not in ENGINE.instances:
-            return JSONResponse(
-                {"error": "unknown parent session: %s" % parent}, status_code=400
-            )
-        limit_err = _lineage.spawn_limit_error(ENGINE.instances, parent, spawned)
-        if limit_err:
-            return JSONResponse({"error": limit_err}, status_code=409)
-        ENGINE.instances[title] = inst
-
-    # How the initial prompt reaches the agent: seeded at launch (the CLI takes
-    # a prompt argument, or the provisioned launcher types it in), or held in
-    # the prompt queue and typed once the agent is idle. A plain session on a
-    # CLI with no prompt argument (a custom script, aider, goose, …) has no
-    # launch-time seed at all — without the queue its task silently vanished.
-    prompt_delivery = "seeded" if prompt else "none"
-    hold_prompt = bool(prompt) and (
-        (setup_cfg is not None and setup_cfg.has_setup)
-        or (not is_provisioned and not _provider_seeds_prompt(program))
-    )
-    if hold_prompt:
-        # Hold the initial prompt until setup succeeds: deliver it via the
-        # prompt queue (drained only once setup is ok + the agent is idle)
-        # instead of seeding the agent CLI directly. A failed setup keeps
-        # the prompt visible in the queue rather than losing it.
-        #
-        # AFTER the claim above, not before: a create that loses the race must
-        # not leave its prompt in the winner's queue, which is a real prompt
-        # sent to a real agent by a request that answered 409.
-        try:
-            inst.Prompt = ""
-            _prompt_queue.enqueue(title, prompt)
-            _prompt_queue.set_flags(title, enabled=True)
-            prompt_delivery = "queued"
-        except Exception as err:  # noqa: BLE001
-            # A FULL OR UNWRITABLE QUEUE MUST NOT COST THE SESSION. Both calls
-            # can raise (`prompt_queue._save` re-raises, and `enqueue` refuses a
-            # full queue), and this is the one window where an exception is
-            # unrecoverable: the title is claimed and `_bg_start` has not been
-            # scheduled yet, so the session would sit in the list as Loading for
-            # ever. Fall back to seeding the prompt the ordinary way — it loses
-            # the "hold it until setup succeeds" guarantee, which is a smaller
-            # loss than the session.
-            inst.Prompt = prompt
-            if log.ErrorLog is not None:
-                log.ErrorLog.Printf(
-                    "queueing the initial prompt for %s failed (%v) — seeding it "
-                    "directly instead",
-                    title,
-                    err,
-                )
-    # What this session was asked to do, for its spawn record in the parent's
-    # Thread — the queue path above clears inst.Prompt.
-    _thread.note_seed(title, _created_epoch(inst), prompt)
-    _mark_onboarded()  # first-ever session ends first-run; setup card won't auto-show again
-    # Remember the folder this session chose so the NEXT New Session dialog opens
-    # on it and the repo suggestions rank it first — the second session in a repo
-    # should not be another walk down the folder tree. "." is the server's own
-    # cwd (a provisioned session with no chosen repo), which the user never
-    # picked, so it isn't worth remembering.
-    if plain_path and plain_path != ".":
-        try:
-            from backend.config import settings as _settings
-
-            _settings.update_settings(general={"last_repo_path": plain_path})
-        except Exception:  # noqa: BLE001 — a convenience hint never fails a create
-            pass
-
-    async def _bg_start() -> None:
-        try:
-            await asyncio.to_thread(inst.Start, True)
-            ENGINE.save()
-            if setup_cfg is not None and setup_cfg.has_setup:
-                try:
-                    _wt_setup.start_setup(
-                        title, plain_path, inst.GetWorktreePath(), setup_cfg
-                    )
-                except Exception:  # noqa: BLE001 — setup is best-effort
-                    pass
-        except Exception as err:  # noqa: BLE001
-            if log.ErrorLog is not None:
-                log.ErrorLog.Printf("failed to create instance %s: %v", title, err)
-            # ONLY OUR OWN RECORD, and only OUR failure to report — see
-            # :func:`_drop_failed_start`. A title that now belongs to a live
-            # session must not be popped (that is how an orphan is minted) and
-            # must not be reported (stamping "the verify session couldn't start"
-            # on a plan whose agent is working is worse than saying nothing).
-            # A title nobody owns is still ours to report: the session was
-            # deleted while it provisioned, and the checklist waiting on it has
-            # to hear that rather than sit in ``running`` until prune.
-            if not _drop_failed_start(title, inst):
-                return
-            # ...and if a CHECKLIST was waiting on this session, tell the
-            # checklist. `POST /run` answered 202 long before this point and
-            # stamped the plan `running`, so without this the row goes on saying
-            # an agent is checking something for the thirty seconds until
-            # `prune` releases it — and then reverts with the reason recorded
-            # nowhere. See `test_plans.fail_run`.
-            try:
-                pid = _test_plans.find_by_run_session(title)
-                if pid:
-                    _test_plans.fail_run(pid, title, str(err))
-            except Exception:  # noqa: BLE001 — never mask the create failure
-                pass
-            # Surface the failure to watchers (UI toast, `mindflock events`,
-            # the CLI's create poll) — a session silently vanishing from the
-            # list is the worst failure mode.
-            _note_create_failure(title, str(err))
-            _events.BUS.emit(
-                "session.create_failed", session=title, data={"error": str(err)}
-            )
-
-    # Tracked in _BG_TASKS so lifespan teardown cancels it (an untracked task
-    # can also be GC'd mid-flight).
-    _register_task(_bg_start())
-    # Seed the *_changed diff snapshot with the initial state so the first real
-    # transition (loading->running etc.) emits instead of being swallowed (F6).
-    _seed_event_snapshot(title)
-    created_data = {
-        "program": program,
-        "provisioned": is_provisioned,
-    }
-    if parent:
-        created_data["parent"] = parent
-    if spawned:
-        created_data["spawned"] = True
-    _events.BUS.emit(
-        "session.created",
-        session=title,
-        new="loading",
-        data=created_data,
-    )
-    body = _instance_json(inst)
-    body["prompt_delivery"] = prompt_delivery
-    # An account with no route for this agent runs the session on the CLI's own
-    # login. The New dialog says so at selection time; API and CLI callers had
-    # no way to hear it at all, and a session quietly launching as the wrong
-    # identity is the one outcome this feature cannot be silent about.
-    try:
-        from backend.providers import auth_profiles
-
-        note = auth_profiles.unsupported_note(program or "", profile_id)
-        if note:
-            body["note"] = note
-    except Exception:  # noqa: BLE001 — the note is enrichment only
-        pass
-    return JSONResponse(body, status_code=202)
+    return await _session_create.create(payload)
 
 
 @app.get("/api/create_failures")
@@ -10931,6 +10664,31 @@ async def instance_suggest_commit_message(
     return JSONResponse({"message": message})
 
 
+@app.get("/api/instances/{title}/ship-status")
+async def instance_ship_status(title: str, tail: int = 0) -> JSONResponse:
+    """The commit / push facts a caller of ``/commit`` and ``/push-branch``
+    polls to learn whether its step finished — see
+    :mod:`backend.web.core.ship_status`.
+
+    Those two routes type into the session's shell and return at once, so
+    "did my commit land" is only answerable by looking: the commit one-liner's
+    exit status and when it was written, the commit lock, ``HEAD`` against the
+    local ``origin/<branch>`` ref, and — with ``?tail=N`` (≤ 200) — the last
+    ``N`` lines of the shell pane, which is where a failed hook or a refused
+    push says why. Local git only (no network), so it is cheap to poll."""
+    if not git_available():
+        return _no_git_response()
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    wt = inst.GetWorktreePath()
+    if not wt or not os.path.isdir(wt):
+        return JSONResponse({"error": "workspace not ready"}, status_code=409)
+    lines = max(0, min(int(tail or 0), _ship_status.MAX_TAIL_LINES))
+    doc = await asyncio.to_thread(_ship_status.snapshot, inst, title, wt, lines)
+    return JSONResponse(doc)
+
+
 @app.get("/api/instances/{title}/stage")
 async def instance_stage(title: str) -> JSONResponse:
     """ONE session's row, recomputed right now and published through.
@@ -11288,6 +11046,10 @@ async def instance_branches(title: str) -> JSONResponse:
 # message ends with. Kept in one place because it is asserted verbatim in the
 # tests and quoted in the docs: both rungs are optional and either one fixes it.
 _PR_REMEDY = "add a GitHub token in Intake → Pull requests, or install the GitHub CLI"
+#: Caps on make-pr's optional title / body overrides (GitHub's own body limit
+#: is 65536 characters).
+_PR_TITLE_MAX = 256
+_PR_BODY_MAX = 60000
 
 
 def _pr_browser_fallback(wt: str, base: str, branch: str) -> JSONResponse:
@@ -11297,16 +11059,21 @@ def _pr_browser_fallback(wt: str, base: str, branch: str) -> JSONResponse:
     is always plain ``git push``), and the PR is one click away on the compare
     page GitHub prefills from the branch — so this is a handoff, not a failure,
     and the UI renders it as a link rather than a red toast."""
+    url = _remote_url.compare_url(_github_pr.origin_url(wt), base, branch)
+    # Only promise the compare link when there IS one (a non-GitHub origin
+    # has none: the branch is pushed, and the PR is opened on its host).
+    tail = (
+        ". The compare link opens a pull request prefilled from this branch."
+        if url
+        else ". The branch is pushed — open the pull request on its host."
+    )
     return JSONResponse(
         {
             "ok": False,
-            "compare_url": _remote_url.compare_url(
-                _github_pr.origin_url(wt), base, branch
-            ),
+            "compare_url": url,
             "message": "MindFlock could not open the pull request for you — "
             + _PR_REMEDY
-            + ". The compare link opens a pull request prefilled from this "
-            "branch.",
+            + tail,
         }
     )
 
@@ -11324,7 +11091,12 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
 
     ``payload.base`` (the branch chosen in the Make-PR dialog) wins over every
     other source; blank/absent falls through to the configured default and then
-    the session's fork-point (the prior behaviour)."""
+    the session's fork-point (the prior behaviour).
+
+    ``payload.title`` / ``payload.body`` (optional strings, capped at 256 /
+    60000 chars) replace the commit-derived title / body on both the gh and
+    the REST rung; the half not given still comes from the commits. The
+    MindFlock MCP's ``ship_session`` sends a worker's report as the body."""
     if not git_available():
         return _no_git_response()
     inst, err = _inst_or_404(title)
@@ -11354,10 +11126,36 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
     gate = await _red_zone_gate(inst, wt, payload, branch)
     if gate is not None:
         return gate
+    # Optional title / body overrides (the MindFlock MCP passes a worker's
+    # report as the body). Absent, both come from the branch's commits, as
+    # before. Strings only — they go to gh as single argv items, never a shell.
+    pr_title = (payload or {}).get("title") or ""
+    pr_body = (payload or {}).get("body") or ""
+    if not isinstance(pr_title, str) or not isinstance(pr_body, str):
+        return JSONResponse(
+            {"error": "title and body must be strings"}, status_code=400
+        )
+    pr_title = pr_title.strip()[:_PR_TITLE_MAX]
+    pr_body = pr_body.strip()[:_PR_BODY_MAX]
 
     def _do_gh():
+        argv = ["gh", "pr", "create", "--base", base, "--head", branch]
+        if pr_title or pr_body:
+            # gh's --fill can't be mixed with an explicit body, so fill the
+            # other half the same way the REST rung does.
+            filled = _github_pr._fill(wt, base, branch)
+            if filled is None:
+                return 1, "no commits between %s and %s" % (base, branch)
+            argv += [
+                "--title",
+                pr_title or filled[0],
+                "--body",
+                pr_body or filled[1],
+            ]
+        else:
+            argv.append("--fill")
         cp = _run_capped(
-            ["gh", "pr", "create", "--base", base, "--head", branch, "--fill"],
+            argv,
             cwd=wt,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -11373,7 +11171,8 @@ async def instance_make_pr(title: str, payload: Optional[dict] = None) -> JSONRe
         if rc == 0 and out:
             url = out.splitlines()[-1]
     else:
-        res = await _github_pr.create_pr(wt, base, branch)
+        overrides = {k: v for k, v in (("title", pr_title), ("body", pr_body)) if v}
+        res = await _github_pr.create_pr(wt, base, branch, **overrides)
         if res.unavailable:
             # No gh AND no token: hand the browser the prefilled compare page
             # rather than telling the user to go install something.
@@ -11552,54 +11351,44 @@ async def instance_fast_track(
             {"error": "the agent rung is for intake — this session already exists"},
             status_code=400,
         )
-    msg = str(body.get("message") or "").strip()
-    # Whether ``msg`` is a placeholder rather than a sentence someone chose, which
-    # is what lets the commit step replace it with a model-written one (see
-    # _autopilot_commit).
-    msg_auto = False
-    if not msg:
-        # An intake-armed run already carries the ticket / PR / issue NAME as its
-        # message. Re-arming with ⏩ used to overwrite that with a generated
-        # "Work on <slug>", throwing away the one genuinely descriptive subject
-        # available. Prefer it — and carry its placeholder flag across, or
-        # re-arming would freeze a placeholder into the commit.
-        prev = _autopilot.get(title) or {}
-        msg = str(prev.get("message") or "").strip()
-        msg_auto = bool(msg) and bool(prev.get("message_auto"))
-    if not msg:
-        # Only adopt the on-disk message when a FAILED attempt is pending — the
-        # same rule GET /commit-message applies. Reusing it unconditionally meant a
-        # message left by unrelated work became the subject of whatever was armed
-        # next.
-        msg = await asyncio.to_thread(_pending_commit_message, wt)
-    if not msg and await asyncio.to_thread(_is_dirty, wt):
-        # The ⏩ button presses with no message, and `.mindflock_commit_msg` only
-        # exists once something has committed THROUGH MindFlock — so the single most
-        # common press ("I have work, carry it to a PR") used to be rejected
-        # outright. Generate a subject instead of refusing: a chain that halts
-        # because nobody typed a sentence is worse than an honest default one, and
-        # the user can always amend it afterwards.
-        #
-        # Note this stays the CHEAP default rather than asking a model here. Arming
-        # is arm-and-wait: the agent may work for another twenty minutes, so a
-        # message written from the tree as it looks right now would describe a diff
-        # that no longer exists by the time the commit happens — and the press must
-        # not wait ~10s on a CLI either. The real message is written at commit time.
-        msg = await asyncio.to_thread(_autopilot_default_message, inst, wt)
-        msg_auto = bool(msg)
-    rec = await asyncio.to_thread(
-        lambda: _autopilot.arm(
-            title,
-            depth,
-            source="session",
-            message=msg,
-            message_auto=msg_auto,
-            base=str(body.get("base") or ""),
-            branch=_current_branch(wt) or "",
-            retryable=_precommit_retry_hooks(),
-            boot=_SERVER_BOOT_ID,
+    lane = _lanes.lane_of_depth(depth)
+    refused = await asyncio.to_thread(_lane_refusal, title, lane)
+    if refused is not None:
+        return refused
+    by = _lane_chooser(body.get("by"))
+    # The compatible alias never LOWERS a guard: an "ask me before it ships"
+    # someone chose stays on (unticking it is a /lane call with ask_first).
+    prev = await asyncio.to_thread(_autopilot.get, title)
+    ask_first = bool(prev.get("ask_first")) if prev else None
+    try:
+        held, ask_first = await asyncio.to_thread(
+            _team_run_driver.user_lane, title, lane, ask_first
         )
-    )
+    except _team_run_driver.RunError as err:
+        return JSONResponse({"error": err.message}, status_code=err.status)
+    if held:
+        return JSONResponse(
+            {
+                "error": "its group is paused — the lane is kept and armed on resume",
+                "held": True,
+            },
+            status_code=409,
+        )
+    # The lane machinery owns the arm (message rules included) — this route is
+    # its oldest caller and stays as the compatible alias of POST /lane.
+    try:
+        rec = await asyncio.to_thread(
+            lambda: _lanes.arm_session(
+                title,
+                lane,
+                ask_first=bool(ask_first),
+                message=str(body.get("message") or ""),
+                base=str(body.get("base") or ""),
+                by=by,
+            )
+        )
+    except _lanes.LaneError as err:
+        return JSONResponse({"error": err.message}, status_code=err.status)
     if rec is None:
         return JSONResponse({"error": "could not arm fast-track"}, status_code=500)
     # Cheap: no probes, no network. Arming changes a field in a JSON file, so the
@@ -11608,6 +11397,176 @@ async def instance_fast_track(
     # settle its toggle without a follow-up read.
     _publish_autopilot(title)
     return JSONResponse({"ok": True, "autopilot": _autopilot_dto(title)})
+
+
+@app.post("/api/instances/{title}/lane")
+async def instance_set_lane(title: str, payload: Optional[dict] = None) -> JSONResponse:
+    """Choose this session's ship lane: ``{"lane": "leave"|"commit"|"push"|
+    "pr"|"merge", "ask_first": bool}`` → ``{"ok", "lane", "autopilot"}``.
+
+    The lane is carried out by the autopilot (``core.lanes``): arm-and-wait,
+    exactly like ``/fast-track``, which stays as its compatible alias.
+    ``leave`` disarms (``lane`` comes back null). ``ask_first`` holds the run
+    one rung short of its first outward step and parks it in the Outbox for
+    your go (``POST /ship-now``)."""
+    if not git_available():
+        return _no_git_response()
+    body = payload or {}
+    lane = _lanes.normalize_lane(body.get("lane"))
+    if not lane:
+        return JSONResponse(
+            {"error": "unknown lane — pick one of: " + ", ".join(_lanes.LANES)},
+            status_code=400,
+        )
+    ask_first = body.get("ask_first", False)
+    if not isinstance(ask_first, bool):
+        return JSONResponse({"error": "ask_first must be a boolean"}, status_code=400)
+    refused = await asyncio.to_thread(_lane_refusal, title, lane)
+    if refused is not None:
+        return refused
+    try:
+        held, _ask = await asyncio.to_thread(
+            _team_run_driver.user_lane, title, lane, ask_first
+        )
+    except _team_run_driver.RunError as err:
+        return JSONResponse({"error": err.message}, status_code=err.status)
+    if held:
+        # A paused group's member: the choice is on the task and is armed on
+        # resume — nothing ships while the group is paused.
+        return JSONResponse(
+            {
+                "ok": True,
+                "held": True,
+                "lane": _row_lane(title),
+                "autopilot": _autopilot_dto(title),
+            }
+        )
+    try:
+        await asyncio.to_thread(
+            lambda: _lanes.arm_session(
+                title,
+                lane,
+                ask_first=ask_first,
+                message=str(body.get("message") or ""),
+                base=str(body.get("base") or ""),
+                by=_lane_chooser(body.get("by")),
+            )
+        )
+    except _lanes.LaneError as err:
+        return JSONResponse({"error": err.message}, status_code=err.status)
+    _publish_autopilot(title)
+    return JSONResponse(
+        {
+            "ok": True,
+            "lane": _lanes.lane_dto(title),
+            "autopilot": _autopilot_dto(title),
+        }
+    )
+
+
+def _lane_chooser(raw) -> str:
+    """Who is choosing a lane: ``"agent:<title>"`` when the MindFlock MCP says
+    so for a live session (its ``set_autopilot``), else the user."""
+    by = str(raw or "").strip()
+    if by.startswith("agent:") and by[len("agent:") :] in ENGINE.instances:
+        return by
+    return "user"
+
+
+def _lane_refusal(title: str, lane: str, ship: bool = False):
+    """409 when ``title`` is a COPY window of a branch another window drives:
+    arming it would put two drivers on one tree. "Leave it" (which only
+    disarms) is always allowed. None = go ahead."""
+    if lane == "leave" and not ship:
+        return None
+    try:
+        sharer = _lanes.shared_checkout(title)
+    except Exception:  # noqa: BLE001
+        sharer = ""
+    if sharer:
+        return JSONResponse(
+            {
+                "error": "%s works in this same folder — a lane here would commit "
+                "both sessions' work as one; start this session in its own "
+                "worktree to give it a lane" % sharer,
+                "shared_with": sharer,
+            },
+            status_code=409,
+        )
+    try:
+        driver = _lanes.branch_driver(title)
+    except Exception:  # noqa: BLE001 — no answer: do not block
+        driver = ""
+    if not driver:
+        return None
+    return JSONResponse(
+        {
+            "error": "%s drives this branch — set its lane or ship it from that "
+            "window (a copy window is never armed)" % driver,
+            "driver": driver,
+        },
+        status_code=409,
+    )
+
+
+#: Why ``ship-now`` refuses, by the agent's activity: shipping now would take
+#: half-finished work (or answer a dialog by committing under it).
+_SHIP_NOW_BLOCKED = {
+    "working": "the agent is mid-turn — stop it first",
+    "clarify": "the agent is waiting on a prompt — answer it first",
+    "limit": "the agent stopped at its usage limit — its work may be unfinished",
+}
+
+
+@app.post("/api/instances/{title}/ship-now")
+async def instance_ship_now(title: str, payload: Optional[dict] = None) -> JSONResponse:
+    """Ship what is there now: arm the session's lane (or ``{"lane": ...}``)
+    WITHOUT the idle dwell and without "ask first" — the approval behind the
+    Outbox's Commit / Open the PR (``{"commit_message": ...}`` commits the
+    card's edited message as written), and "take what's there now" from the
+    pane menu. 409 while the agent is mid-turn."""
+    if not git_available():
+        return _no_git_response()
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    try:
+        wt = inst.GetWorktreePath()
+    except Exception:  # noqa: BLE001
+        wt = ""
+    if not wt:
+        return JSONResponse({"error": "workspace not ready"}, status_code=409)
+    activity = await asyncio.to_thread(_agent_activity, inst, title)
+    if activity in _SHIP_NOW_BLOCKED:
+        return JSONResponse(
+            {"error": _SHIP_NOW_BLOCKED[activity], "activity": activity},
+            status_code=409,
+        )
+    body = payload or {}
+    message = body.get("commit_message", "")
+    if not isinstance(message, str):
+        return JSONResponse(
+            {"error": "commit_message must be a string"}, status_code=400
+        )
+    refused = await asyncio.to_thread(_lane_refusal, title, "", True)
+    if refused is not None:
+        return refused
+    try:
+        await asyncio.to_thread(_team_run_driver.user_lane, title, "", None, True)
+    except _team_run_driver.RunError as err:
+        return JSONResponse({"error": err.message}, status_code=err.status)
+    try:
+        await asyncio.to_thread(
+            lambda: _lanes.ship_now(
+                title, str(body.get("lane") or ""), message=message.strip()[:5000]
+            )
+        )
+    except _lanes.LaneError as err:
+        return JSONResponse({"error": err.message}, status_code=err.status)
+    _publish_autopilot(title)
+    return JSONResponse(
+        {"ok": True, "lane": _lanes.lane_dto(title), "autopilot": _autopilot_dto(title)}
+    )
 
 
 @app.delete("/api/instances/{title}/fast-track")
@@ -11621,6 +11580,272 @@ async def instance_fast_track_cancel(title: str) -> JSONResponse:
     stopped = await asyncio.to_thread(_autopilot.disarm, title)
     _publish_autopilot(title)
     return JSONResponse({"ok": True, "stopped": bool(stopped)})
+
+
+# --- Team runs: "work on these together" (core.team_runs) -----------------
+# The record and the pure planner live in core.team_runs; the loop, the side
+# effects and the operations below live in core.team_run_driver. A run never
+# commits, pushes or opens a PR itself — it arms each member's lane, and the
+# autopilot above carries it out. See docs/team-runs.md.
+
+
+def _run_error(err) -> JSONResponse:
+    body = {"error": err.message}
+    body.update(getattr(err, "extra", {}) or {})
+    return JSONResponse(body, status_code=err.status)
+
+
+@app.post("/api/runs/preview")
+async def runs_preview(payload: Optional[dict] = None) -> JSONResponse:
+    """Parse a goal into items — ``{"text", "repo_path", "program"}`` →
+    ``{"items", "name_suggestion", "lane_default", "warnings"}``. No side
+    effects. A ticket that does not resolve comes back with an ``error`` and
+    is never silently turned into a task."""
+    body = payload or {}
+    text = body.get("text")
+    if not isinstance(text, str):
+        return JSONResponse({"error": "text must be a string"}, status_code=400)
+    out = await _team_run_driver.preview(
+        text[:20000], str(body.get("repo_path") or ""), str(body.get("program") or "")
+    )
+    return JSONResponse(out)
+
+
+@app.post("/api/runs")
+async def runs_create(payload: Optional[dict] = None) -> JSONResponse:
+    """Create a group and start it → ``201 {"run": RunDTO, "warnings"}``.
+
+    ``{"name", "items": [{"kind": "ticket", "source", "id"} | {"kind": "task",
+    "text"}], "policy": {"lane", "ask_first", "grouping", "release"},
+    "concurrency", "program", "repo_path", "budget_usd", "split"}``. An item
+    whose session already exists is adopted (a warning), not a 409."""
+    if not git_available():
+        return _no_git_response()
+    try:
+        run, warnings = await _team_run_driver.create_run(payload or {})
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"run": run, "warnings": warnings}, status_code=201)
+
+
+@app.get("/api/runs")
+def runs_list(active: int = 0) -> JSONResponse:
+    """``{"runs": [RunSummary]}``, newest first (``?active=1``: unfinished)."""
+    runs = _team_runs.list_runs(include_finished=not active)
+    return JSONResponse({"runs": [_team_runs.summary_dto(r) for r in runs]})
+
+
+@app.get("/api/runs/{run_id}")
+async def runs_get(
+    run_id: str, wait: float = 0.0, until: str = "change", rev: int = -1
+) -> JSONResponse:
+    """``{"run": RunDTO}``. With ``wait`` (seconds, ≤60) it long-polls until
+    ``until`` holds — ``change`` (``rev`` moved past the given one),
+    ``needs_you`` or ``done`` — and adds ``"reason"`` (that, or ``timeout``)."""
+    try:
+        if wait and wait > 0:
+            if until not in ("change", "needs_you", "done"):
+                return JSONResponse(
+                    {"error": "until must be change, needs_you or done"},
+                    status_code=400,
+                )
+            return JSONResponse(
+                await _team_run_driver.wait_run(run_id, until, rev, wait)
+            )
+        run = await asyncio.to_thread(_team_run_driver.get_dto, run_id)
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"run": run})
+
+
+@app.post("/api/runs/{run_id}/pause")
+def runs_pause(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
+    """Hold the group: nothing new starts and nothing ships; agents keep
+    working. ``{"reason": "user"}`` → ``{"run": RunSummary}``."""
+    try:
+        summary = _team_run_driver.pause(
+            run_id, str((payload or {}).get("reason") or "user")
+        )
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"run": summary})
+
+
+@app.post("/api/runs/{run_id}/resume")
+def runs_resume(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
+    """Re-arm what the pause held. ``{"budget_usd": N}`` raises the budget in
+    the same click (the Outbox's "Raise to $N"). → ``{"run": RunSummary}``."""
+    try:
+        summary = _team_run_driver.resume(run_id, (payload or {}).get("budget_usd"))
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"run": summary})
+
+
+@app.post("/api/runs/{run_id}/cancel")
+def runs_cancel(run_id: str) -> JSONResponse:
+    """Stop starting new work and stop shipping. Sessions and branches are
+    kept; queued tickets go back to ingestion. → ``{"run", "kept_sessions"}``."""
+    try:
+        summary, kept = _team_run_driver.cancel(run_id)
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"run": summary, "kept_sessions": kept})
+
+
+@app.post("/api/runs/{run_id}/tasks")
+async def runs_add_tasks(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
+    """Add lines to a group: ``{"items": [...]}`` (as at create) →
+    ``{"run": RunDTO}``."""
+    try:
+        run = await _team_run_driver.add_tasks(run_id, (payload or {}).get("items"))
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"run": run})
+
+
+@app.post("/api/runs/{run_id}/tasks/{task_id}/retry")
+def runs_task_retry(
+    run_id: str, task_id: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Retry a failed task, or one waiting on you: ``{"fresh": false}``
+    re-arms (or re-creates) it; ``fresh: true`` starts ``<title>-2`` on a new
+    branch and keeps the old one. 409 for any other state."""
+    fresh = (payload or {}).get("fresh", False)
+    if not isinstance(fresh, bool):
+        return JSONResponse({"error": "fresh must be a boolean"}, status_code=400)
+    try:
+        task = _team_run_driver.retry(run_id, task_id, fresh)
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"task": task})
+
+
+@app.post("/api/runs/{run_id}/tasks/{task_id}/start-now")
+def runs_task_start_now(run_id: str, task_id: str) -> JSONResponse:
+    """Start a queued task on the next pass, past the concurrency cap once."""
+    try:
+        task = _team_run_driver.start_now(run_id, task_id)
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"task": task})
+
+
+@app.post("/api/runs/{run_id}/tasks/{task_id}/skip")
+def runs_task_skip(run_id: str, task_id: str) -> JSONResponse:
+    """Remove a queued task, or detach a running one (its session stays and
+    its lane is unchanged)."""
+    try:
+        task = _team_run_driver.skip(run_id, task_id)
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"task": task})
+
+
+@app.post("/api/runs/{run_id}/adopt")
+def runs_adopt(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
+    """Add a live session to the group: ``{"title"}`` → ``{"task": Task}``;
+    409 ``branch already in group <name>`` when a group owns its branch."""
+    try:
+        task = _team_run_driver.adopt(run_id, str((payload or {}).get("title") or ""))
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"task": task})
+
+
+@app.post("/api/runs/{run_id}/plan")
+async def runs_plan(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
+    """A split's plan — the lead proposes it through its MCP tools, or you
+    edit it: ``{"pieces": [{"title", "prompt", "paths": [...]}], "why",
+    "from"?}`` → ``{"plan", "problems": []}``. 422 with ``problems`` (two
+    pieces sharing a file, a piece wholly in a red zone, too many pieces…);
+    409 when ``from`` is a session other than the lead, when the group is
+    not a split or its plan is already approved."""
+    try:
+        out = await asyncio.to_thread(
+            _team_run_driver.propose_plan, run_id, payload or {}
+        )
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse(out)
+
+
+@app.post("/api/runs/{run_id}/plan/approve")
+def runs_plan_approve(run_id: str) -> JSONResponse:
+    """Approve a split's plan: MindFlock starts every piece as a worker of the
+    lead, forked from its HEAD and fenced to its paths. → ``{"run": RunDTO}``;
+    409 without a proposed plan, or while the lead has uncommitted changes."""
+    try:
+        run = _team_run_driver.approve_plan(run_id)
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"run": run})
+
+
+@app.post("/api/runs/{run_id}/plan/reject")
+async def runs_plan_reject(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
+    """ "Ask for a different split": ``{"note"?}`` is passed to the lead, which
+    proposes again. → ``{"run": RunDTO}``."""
+    try:
+        run = await _team_run_driver.reject_plan(
+            run_id, str((payload or {}).get("note") or "")
+        )
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"run": run})
+
+
+@app.post("/api/runs/{run_id}/integrated")
+def runs_integrated(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
+    """The lead merged a member by hand (it resolved a conflict):
+    ``{"task_id", "head_sha", "from"?}`` → ``{"ok", "verified"}``. The server
+    re-checks ancestry; ``verified: false`` keeps it in the merge queue."""
+    body = payload or {}
+    try:
+        out = _team_run_driver.report_integrated(
+            run_id,
+            str(body.get("task_id") or ""),
+            str(body.get("head_sha") or ""),
+            body.get("from") or "",
+        )
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse(out)
+
+
+@app.post("/api/runs/{run_id}/check")
+def runs_check(run_id: str) -> JSONResponse:
+    """Run the check on a one-for-all group's merged branch again (409 unless
+    it is checking). → ``{"run": RunDTO}``."""
+    try:
+        run = _team_run_driver.recheck(run_id)
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"run": run})
+
+
+@app.post("/api/runs/{run_id}/release")
+def runs_release(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
+    """Release a one-for-all group: open its ONE PR (title and body built
+    from the pieces), or ``{"merge_when_green": true}`` to merge it once
+    checks pass. Allowed only in ``release_ready``. → ``{"run": RunSummary}``."""
+    merge = (payload or {}).get("merge_when_green", False)
+    if not isinstance(merge, bool):
+        return JSONResponse(
+            {"error": "merge_when_green must be a boolean"}, status_code=400
+        )
+    try:
+        summary = _team_run_driver.release(run_id, merge)
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"run": summary})
+
+
+@app.get("/api/outbox")
+async def outbox(group: str = "all") -> JSONResponse:
+    """What is waiting on you, shipping, shipped today and queued — for every
+    session, de-duplicated on (repo, branch). ``?group=<run id>|own|all``."""
+    return JSONResponse(await asyncio.to_thread(_team_run_driver.outbox, group))
 
 
 # --- Forced PR review (Intake → Pull requests) ----------------------------------
@@ -11991,174 +12216,25 @@ async def ticket_force_start(payload: dict) -> JSONResponse:
         effort_override = _start_effort_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
-
-    # Row first, provider fetch second (see the PR endpoint above). The panel's
-    # cached list is the title's source: ticket slugs are provider-defined
-    # (Shortcut hardcodes sc-<id>), so deriving one here would be a second
-    # implementation waiting to drift.
-    early = _cached_session_title(
-        _ASSIGNED_TICKETS_CACHE,
-        "tickets",
-        lambda t: t.get("source") == source and str(t.get("id")) == ticket_id,
-    )
-    if early:
-        if early in ENGINE.instances or _pending_has(early):
-            return JSONResponse(
-                {
-                    "error": "session %s already exists — close it to re-run" % early,
-                    "title": early,
-                },
-                status_code=409,
-            )
-        _pending_add(early, "tix")
-
+    # An agent starting the ticket as its own worker (parent / spawned /
+    # report_back / note); all-empty for the Intake panel.
+    lineage, lin_err = await _intake_lineage(payload)
+    if lin_err is not None:
+        return lin_err
+    # The launch itself lives in core.ticket_start so a team run starts its
+    # ticket tasks through the very same code.
     try:
-        story = await _ticket_start.find_ticket(source, ticket_id)
-    except LookupError as err:
-        _pending_drop(early)
-        return JSONResponse({"error": str(err)}, status_code=404)
-    except Exception as err:  # noqa: BLE001
-        _pending_drop(early)
-        return JSONResponse({"error": str(err)}, status_code=502)
-
-    # A per-start choice outranks the source's card. Stamped onto the story
-    # because that is the field every launch path already consults first.
-    if agent_override:
-        story.agent = agent_override
-
-    title = _ticket_start.session_title(story)
-    if title != early:
-        _pending_drop(early)  # stale cache entry — keep only the real title
-        if title in ENGINE.instances or _pending_has(title):
-            return JSONResponse(
-                {
-                    "error": "session %s already exists — close it to re-run" % title,
-                    "title": title,
-                },
-                status_code=409,
-            )
-    # The branch is known now, so the row can read as the ticket it is rather
-    # than a bare slug (add() keeps the original `since`).
-    _pending_add(
-        title,
-        "tix",
-        branch=_ticket_start.branch_for(story),
-        workspace_strategy=_ticket_start.workspace_mode(),
-    )
-    _arm_intake_autopilot(
-        title,
-        depth_override or _source_intake_depth(source),
-        "tix",
-        str(getattr(story, "id", "") or ticket_id),
-        message=str(getattr(story, "name", "") or ""),
-    )
-
-    async def _bg_start() -> None:
-        # Same shape as the pipeline's SessionRunner.run, but against THIS
-        # server's engine so the session shows up in the grid without a
-        # reload. The engine owns provisioning (inside Instance.Start), so
-        # unlike the PR path there is no pre-provision step.
-        marked = False
-        try:
-            prompt = _ticket_start.build_prompt(story)
-            branch = _ticket_start.branch_for(story)
-            # A previous run of this ticket may have left a worktree holding the
-            # branch: the session is long gone (nothing blocked the button) but
-            # git still refuses to check the branch out twice. Reclaim it when
-            # nothing owns it and it holds no work — otherwise the provisioning
-            # error stands, unchanged.
-            await asyncio.to_thread(
-                _worktree_reclaim.reclaim_for_launch,
-                getattr(story, "repo_url", "") or "",
-                branch,
-            )
-            # In-flight ledger marker BEFORE the slow launch, so a running
-            # pipeline's scans treat the ticket as taken (orchestrator guard).
-            _ticket_start.record_started(story)
-            marked = True
-            # The ticket's source may pin its own agent CLI; empty falls back to
-            # this app's default program. Resolved before the options because
-            # this start's effort has to be translated into THAT CLI's spelling.
-            program = _ticket_start.agent_for(story) or ENGINE.default_program()
-            # This start's own rung wins; the source's default is what applies
-            # when the row did not pick one. Resolved here rather than in
-            # `_start_effort_override` because the source is only knowable once
-            # the story is — and an explicit choice on the row must be able to
-            # ask for LESS thinking than the queue's default, not just more.
-            level = effort_override or _ticket_start.effort_for(story)
-            prompt = _provider_effort.decorate_prompt(prompt, program, level)
-            # Red zones + the repo's Plan-first flag (worktree not cut yet:
-            # key off the source repo's local checkout / base clone).
-            prompt = await asyncio.to_thread(
-                lambda p=prompt: _red_zone_prompt(
-                    p,
-                    program,
-                    _repo_url_workdirs(getattr(story, "repo_url", "") or ""),
-                    None,
-                )
-            )
-            inst = session.NewInstance(
-                session.InstanceOptions(
-                    title=title,
-                    path=".",
-                    program=program,
-                    provisioned=True,
-                    workspace_strategy=_ticket_start.workspace_mode(),
-                    new_branch=branch,
-                    prompt=prompt,
-                    provision_repo_url=getattr(story, "repo_url", "") or "",
-                    launch_args=_start_launch_args(program, level),
-                )
-            )
-            inst.ExtraEnv = _ports.env_for(title)
-            inst.SetStatus(Loading)
-            with ENGINE.lock:
-                ENGINE.instances[title] = inst
-            _seed_event_snapshot(title)
-            _events.BUS.emit(
-                "session.created",
-                session=title,
-                new="loading",
-                data={
-                    "program": inst.Program,
-                    "provisioned": True,
-                    "ticket": str(story.id),
-                },
-            )
-            try:
-                await asyncio.to_thread(inst.Start, True)
-                ENGINE.save()
-            except Exception:
-                # By identity: this task may be the loser of a re-start, and
-                # popping by name would delete the LIVE session's record.
-                _drop_failed_start(title, inst)
-                raise
-            # Terminal ledger entry so auto ingestion doesn't run it again.
-            _ticket_start.record_result(story, branch=branch)
-            await _ticket_start.download_attachments(inst, story)
-            # …and move the ticket on its board, if its source asked for that.
-            # After the launch, like the attachments above: the state means "a
-            # session is working on this", which only became true just now.
-            moved = await _ticket_start.move_to_start_state(story)
-            if moved and log.InfoLog is not None:
-                log.InfoLog.Printf(
-                    "ticket %s moved to its source's start state (%s)", title, moved
-                )
-            if log.InfoLog is not None:
-                log.InfoLog.Printf("forced ticket session %s live", title)
-        except Exception as err:  # noqa: BLE001
-            if marked:
-                _ticket_start.record_result(story, error=str(err))
-            if log.ErrorLog is not None:
-                log.ErrorLog.Printf("forced ticket session %s failed: %v", title, err)
-            _events.BUS.emit(
-                "session.create_failed", session=title, data={"error": str(err)}
-            )
-        finally:
-            _pending_drop(title)
-
-    _register_task(_bg_start())
-    return JSONResponse({"started": True, "title": title}, status_code=202)
+        body = await _ticket_start.launch(
+            source,
+            ticket_id,
+            depth=depth_override,
+            agent=agent_override,
+            effort=effort_override,
+            lineage=lineage,
+        )
+    except _ticket_start.LaunchError as err:
+        return JSONResponse(err.body, status_code=err.status)
+    return JSONResponse(body, status_code=202)
 
 
 # --- Ticket merge (Intake → Tickets) --------------------------------------

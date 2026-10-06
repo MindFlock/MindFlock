@@ -4,6 +4,7 @@
 import type { Instance } from "../../api/types";
 import { relTime } from "../../lib/format";
 import { effectiveActivity } from "../../lib/stage";
+import { laneOf } from "../../lib/agentMessages";
 
 /** Arrange `keys` by the saved drag order: known keys in saved order first,
  * then keys the order has never seen, in the order given. The one ordering
@@ -244,6 +245,40 @@ export function placeNewWorkers(
   return order;
 }
 
+/** The saved order with every never-placed GROUP member (ship lanes: a session
+ * the server started for a run) slotted after the last member of its group.
+ *
+ * The rail draws a group's members under its header whatever the saved order
+ * says, so this only decides their order WITHIN the group — and keeps a member
+ * where it belongs once the group's header is gone. The server starts a group's
+ * lines over minutes as slots free up; each would otherwise file at the very
+ * bottom of the saved order, under whatever was created in between. Same rules
+ * as `placeNewWorkers`: only titles the order has never held (a drag owns the
+ * rest), merged with the live list rather than replacing the order, and
+ * `saved` itself back when there is nothing to place. Members created together
+ * keep the server's order; the first member of a group stays where it lands. */
+export function placeNewRunMembers(
+  saved: string[],
+  live: Array<{ title: string; run?: { id: string } | null }>
+): string[] {
+  const seen = new Set(saved);
+  const fresh = live.filter((r) => r.run?.id && !seen.has(r.title));
+  if (!fresh.length) return saved;
+  const runOf = new Map(live.map((r) => [r.title, r.run?.id || ""]));
+  let order = saved.concat(live.map((r) => r.title).filter((t) => !seen.has(t)));
+  const placed = new Set<string>();
+  for (const r of fresh) {
+    const rest = order.filter((t) => t !== r.title);
+    let at = -1;
+    rest.forEach((t, i) => {
+      if (runOf.get(t) === r.run!.id && (seen.has(t) || placed.has(t))) at = i;
+    });
+    placed.add(r.title);
+    if (at >= 0) order = orderWithAfter(order, r.title, rest[at]);
+  }
+  return order;
+}
+
 export const SEARCH_MIN = 6;
 
 /** Match only the session's own identifiers — name, alias, branch. NOT repo
@@ -290,8 +325,12 @@ export function attentionItems(instances: Instance[]): AttentionItem[] {
       items.push({ p: 1, title: inst.title, reason: "worktree setup failed" });
     else if (inst.check && inst.check.state === "failed" && !(inst.check as { stale?: boolean }).stale)
       items.push({ p: 2, title: inst.title, reason: "checks failing" });
-    else if (inst.stage === "pushed")
-      items.push({ p: 3, title: inst.title, reason: "pushed — ready for PR" });
+    else if (inst.stage === "pushed") {
+      // A session whose lane STOPS at push is finished there, by your own
+      // choice — "ready for PR" would nag about a PR you said you didn't want.
+      if (laneOf(inst)?.target !== "push")
+        items.push({ p: 3, title: inst.title, reason: "pushed — ready for PR" });
+    }
     else if (act === "idle" && Number(inst.activity_since) > 0) {
       // Wedged-session watchdog: calm-looking but sitting on unfinished work.
       //

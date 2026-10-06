@@ -138,6 +138,8 @@ def test_clear_sweeps_unprotected_idle_only(monkeypatch, tmp_path):
     active.mkdir()
 
     monkeypatch.setattr(server, "_workspace_roots", lambda: [str(managed)])
+    # The sweep resolves ~/.mindflock/worktrees: never the real one under pytest.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     # Neutralise editor/trust side effects — the test only asserts deletion.
     monkeypatch.setattr(server, "_close_cursor_window", lambda p: None)
     monkeypatch.setattr(server, "_remove_trust_entry", lambda p: None)

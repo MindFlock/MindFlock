@@ -9,9 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Work on several things at once: team runs.** Give MindFlock a few ticket
+  IDs and task lines — from your own Claude with the new `start_team_run`
+  MCP tool, or `POST /api/runs` — and it starts one session per item, keeps
+  at most N running with the rest queued, carries each one as far as you said
+  (leave it, commit, push, a PR each, or merge when green), and surfaces only
+  what needs you. The server does the plumbing deterministically: queueing,
+  create retries with backoff, a fixed nudge for an agent that went quiet
+  (twice, only after its work was corroborated), the failed hook handed back
+  to the agent before anything escalates, a budget pause, holding new starts
+  while a CLI is out of usage, and restart safety (it never adopts a stranger
+  that reused a title and never double-spawns when the branch is still
+  there). Tickets that are queued are reserved in the ingestion ledger so the
+  pipeline never picks them up too. `get_run`, `list_runs`, `wait_for_run`
+  and `control_run` (pause, resume, cancel, retry, start now, skip) round it
+  out; the sessions belong to MindFlock, not to the agent that asked. See
+  [docs/team-runs.md](docs/team-runs.md).
+
+- **Ship lanes.** Any session can be given a lane — how far MindFlock carries
+  it once its agent is done — with `POST /api/instances/{title}/lane`, plus
+  "ask me before it ships", which parks it one rung short of its first push
+  (or of the commit) until you approve with `POST …/ship-now` (also "ship what
+  is there now", no 30-second wait). Lanes are the fast-track autopilot
+  underneath, so every guard still applies. Every row carries `lane` and
+  `run`; a copy window shows the lane of the window that drives its branch.
+  The rail's status line now leads with the lane: `→ PR · working 12m`,
+  `⇡ opening PR`, `✓ PR #318 · checks ✓`.
+
+- **`GET /api/outbox`**: what is waiting on you (a prompt, an approval, a
+  group's escalation with its next action), what is shipping, what shipped
+  today and what is queued — for every session, one row per branch.
+  New events `run.changed`, `run.needs_you`, `run.task_shipped`,
+  `run.finished`, and notification rules "A group needs you" and "A group
+  finishes" (on) and "A group member ships" (off).
+
 - **Agents can talk to each other, and an orchestrator can run a team of
   workers.** Every Claude Code and Codex session MindFlock starts now gets
-  the MindFlock MCP server, which gives the agent 14 tools over the rest of
+  the MindFlock MCP server, which gives the agent 23 tools over the rest of
   the flock. An agent can list the other sessions, read a session's last
   reply or screen, look at its diff, and message it. An orchestrator can
   spawn worker sessions that fork from its own commit, wait for their
@@ -28,6 +62,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Codex) and never edits your own CLI config. Messaging, spawning, answering
   and killing still ask for permission unless the session skips
   permissions. See [docs/mcp.md](docs/mcp.md).
+
+- **Agents can ship work, and start tickets as workers.** Four more MindFlock
+  MCP tools. `ship_session` commits, pushes, opens a PR or merges a session's
+  work right now, through the same Commit / Push / Make PR / Merge buttons you
+  use: the commit message is written from the diff, the PR body is the
+  worker's own report (what changed, the tests it ran, open issues), and the
+  result carries the PR link. Finished steps are skipped, so calling it again
+  picks up where it stopped, and a blocked pre-commit hook or a refused push
+  comes back with the shell's own output. It won't ship a session whose agent
+  is still working; `set_autopilot` arms the fast-track autopilot for that
+  instead, so the session ships itself when its turn ends. `list_tickets`
+  shows the Intake ticket list, and `spawn_ticket_session` starts a ticket
+  exactly as **Begin work** does, as the agent's own worker that reports back.
+  Merging always needs an explicit `confirm_merge`, a session can't merge its
+  own PR under the default scope, and none of the shipping tools are
+  pre-approved. See [docs/mcp.md](docs/mcp.md#list_tickets).
+
+- **Make PR can take a title and body**, and **`GET
+  /api/instances/{title}/ship-status`** reports whether a commit or push
+  typed into a session's shell has finished (and why it failed). **Ticket
+  starts can name a parent session** (`parent`, `spawned`, `report_back`,
+  `note` on `POST /api/tickets/start`), with the same spawn limits as any
+  other agent-spawned session. See [docs/web-api.md](docs/web-api.md).
 
 - **Messages between sessions arrive once, at the right moment.** A message is
   typed into the recipient only when it is stably idle and its agent still
@@ -97,6 +154,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each line as its own turn.
 
 ### Fixed
+
+- **A deleted session no longer hands its fast-track run to the next session
+  with the same name.** A run armed less than 30 minutes before the delete
+  survived it, and a recreated `untitled-2` (or the same ticket started again)
+  inherited its target and halt reason. Every way a session leaves — delete,
+  close, a failed start — now disarms it.
+- **Two ticket sources on the same provider each get their own fast-track
+  rung.** The pipeline looked the rung up by provider, so a second Jira
+  project ran at the first one's depth.
 
 - **The CLI works when the server's access-token gate is on.** `mindflock ls`,
   `new`, `rm` and the other session commands now send the token

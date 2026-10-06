@@ -180,6 +180,6 @@ class TestLaunchPathsPreflightTheReclaim:
 
         from backend.web import server
 
-        for fn in (server.ticket_force_start, server.github_issue_force_start):
+        for fn in (server._ticket_start.launch, server.github_issue_force_start):
             src = inspect.getsource(fn)
             assert "_worktree_reclaim.reclaim_for_launch" in src, fn.__name__

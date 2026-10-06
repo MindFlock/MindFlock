@@ -85,6 +85,17 @@ TOOL_NAMES = (
     "answer_prompt",
     "kill_session",
     "set_parent",
+    "list_tickets",
+    "spawn_ticket_session",
+    "ship_session",
+    "set_autopilot",
+    "start_team_run",
+    "get_run",
+    "list_runs",
+    "wait_for_run",
+    "control_run",
+    "propose_run_plan",
+    "report_integrated",
 )
 
 #: First line of a launch prompt decorated with ``split`` — also how

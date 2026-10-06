@@ -197,23 +197,35 @@ def _assistant_dir() -> str:
 
 def store_path() -> str:
     """The zone store JSON file."""
+    from backend.config.home_guard import guard
+
     env = os.environ.get("MINDFLOCK_RED_ZONES_FILE")
     if env:
-        return env
+        return guard(env, "red-zone store")
     return os.path.join(_config_dir(), "red_zones.json")
 
 
 def guard_dir() -> str:
     """The directory holding per-root guard files (what the hook reads)."""
-    return os.environ.get(
-        "MINDFLOCK_RED_ZONE_DIR", os.path.join(_assistant_dir(), ".red-zones")
+    from backend.config.home_guard import guard
+
+    return guard(
+        os.environ.get(
+            "MINDFLOCK_RED_ZONE_DIR", os.path.join(_assistant_dir(), ".red-zones")
+        ),
+        "red-zone guard dir",
     )
 
 
 def feed_dir() -> str:
     """The directory holding per-session tool-feed ``.jsonl`` files."""
-    return os.environ.get(
-        "MINDFLOCK_TOOL_FEED_DIR", os.path.join(_assistant_dir(), ".tool-feed")
+    from backend.config.home_guard import guard
+
+    return guard(
+        os.environ.get(
+            "MINDFLOCK_TOOL_FEED_DIR", os.path.join(_assistant_dir(), ".tool-feed")
+        ),
+        "tool-feed dir",
     )
 
 

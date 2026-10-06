@@ -249,10 +249,16 @@ def test_strip_gate_includes_the_created_playbook():
         "return isWorker || kids > 0 || !!row.playbook;", _fn(js, "inFamily")
     )
     flat = squash(js)
+    # Ship lanes widened the rail gate on purpose: a session MindFlock is
+    # carrying (a group member, or one with a lane) is handed off like a
+    # worker, so its prompt gets the strip too. inFamily itself is unchanged,
+    # and a loner with no group and no lane still gets none
+    # (frontend/src/__tests__/runs.test.ts pins both).
     assert (
-        'const answering = inFamily(inst, isWorker, kids.length) && activity === "clarify" '
-        "&& !missing && !paused;"
+        "const answering = (inFamily(inst, isWorker, kids.length) || shipLane) "
+        '&& activity === "clarify" && !missing && !paused;'
     ) in flat
+    assert "const shipLane = !!inst.run || !!ship;" in flat
     assert (
         "return inFamily(inst, !!parent, families.get(title)?.length ?? 0) ? { parent } : null;"
         in flat

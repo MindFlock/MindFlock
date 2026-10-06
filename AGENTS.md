@@ -29,7 +29,7 @@ REST API with a token, then to a browser URL).
 | `backend/providers/` | Per-CLI launch/resume/classification/usage; add a CLI with a TOML, no Python |
 | `backend/web/` | FastAPI server (`server.py` = routes + loops only; helpers in `core/`, one module per concern — see server.py's docstring map), `addons/`, `static/` (no-build frontend) |
 | `backend/ticket_ingestion/` | Ticket/PR ingestion pipeline (Shortcut/Jira/Linear/GitHub Issues/Asana) |
-| `backend/mcp/` | MindFlock MCP stdio server (stdlib only): 14 agent-to-agent tools over the HTTP API, identity, scope policy. Auto-attached per launch by `providers/mcp_attach.py`; mailbox + lineage live in `web/core/` |
+| `backend/mcp/` | MindFlock MCP stdio server (stdlib only): 25 agent-to-agent tools over the HTTP API, identity, scope policy. Auto-attached per launch by `providers/mcp_attach.py`; mailbox + lineage live in `web/core/` |
 | `docs/` | architecture, session-engine, web-api, web-ui, providers, extensions, configuration, cli, mcp, development, ingestion-pipeline |
 
 ## Conventions

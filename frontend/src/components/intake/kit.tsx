@@ -393,6 +393,7 @@ export function WorkItemRow({
   onReopen,
   actionExtra,
   drawer,
+  pick,
 }: {
   reference: string;
   url?: string;
@@ -450,6 +451,9 @@ export function WorkItemRow({
    * nested overlay that traps focus in the wrong layer. What needs confirming
    * gets confirmed here, in the app's own paint, next to the row it is about. */
   drawer?: React.ReactNode;
+  /** A tick box before the reference, for picking several rows to start
+   * together (Tickets → "Start together…"). Absent = no box. */
+  pick?: { checked: boolean; onChange(on: boolean): void };
 }) {
   const [state, setState] = useState<"idle" | "starting" | "started">("idle");
   // Independent of `state`: reopening and starting are different actions on the
@@ -474,8 +478,18 @@ export function WorkItemRow({
   const effortCap = effortCaps ? effortCaps[effortProvider] : undefined;
   const effortUsable = supportsEffort(effortCap);
   return (
-    <div className="pr-open-item" title={tooltip}>
+    <div className={"pr-open-item" + (pick?.checked ? " picked" : "")} title={tooltip}>
       <div className="pr-open-main">
+        {pick && (
+          <input
+            type="checkbox"
+            className="ik-pick"
+            checked={pick.checked}
+            aria-label={"Pick " + reference + " to start together"}
+            title="Pick to start together with other tickets"
+            onChange={(e) => pick.onChange(e.target.checked)}
+          />
+        )}
         <a
           href={url || "#"}
           target="_blank"

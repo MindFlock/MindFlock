@@ -1,7 +1,8 @@
-/* "Work with other sessions": the pane head's fork-icon button and the menu it
-   opens (PlaybookMenu.tsx), plus the playbook rows in the sidebar row's ›
-   menu. Written against the theme tokens only, so light mode and every
-   surface set need nothing of their own beyond the shadow (theme-light.css). */
+/* "Ship & split": the pane head's fork-icon button and the menu it opens
+   (ShipMenu.tsx), plus the same lane choices in the sidebar row's › menu
+   (PlaybookRowItems.tsx). Written against the theme tokens only, so light
+   mode and every surface set need nothing of their own beyond the shadow
+   (theme-light.css). */
 
 /* The fork-icon button: first in .head-tail, icon-only like its neighbours
    (history, copy-all). A CONTROL, not a status chip — the rule that hides
@@ -28,21 +29,9 @@
   border-color: var(--accent);
 }
 
-/* Blocked (a permission dialog up, or the agent launched without the tools):
-   still hoverable, so the tooltip can say why; a click says it too. */
-.pane-head .act.playbooks.is-blocked {
-  opacity: 0.45;
-  cursor: help;
-}
-
-.pane-head .act.playbooks.is-blocked:hover {
-  border-color: var(--border);
-}
-
 /* ---- The menu -------------------------------------------------------------- */
 
-.pb-menu,
-.pb-sub {
+.pb-menu {
   position: fixed;
   z-index: 3000;
   box-sizing: border-box;
@@ -53,9 +42,6 @@
   padding: 6px;
   font-size: 12.5px;
   color: var(--text);
-}
-
-.pb-menu {
   width: 340px;
   max-width: calc(100vw - 16px);
   overflow-y: auto;
@@ -84,7 +70,7 @@
   text-overflow: ellipsis;
 }
 
-/* "api's workers · 3" */
+/* "When it's done", "Split", "Q4 payments · 6" */
 .pb-menu .pb-sec {
   padding: 8px 8px 3px;
   font-size: 10px;
@@ -125,14 +111,6 @@
   min-width: 0;
 }
 
-/* "1 of 3 reported" beside Wrap up workers. */
-.pb-menu .pb-cnt {
-  margin-left: 6px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--muted);
-}
-
 .pb-menu .pb-key {
   grid-row: 1 / 2;
   grid-column: 2;
@@ -150,21 +128,11 @@
 }
 
 .pb-menu .pb-item.sel .pb-desc,
-.pb-menu .pb-item.sel .pb-key,
-.pb-menu .pb-item.sel .pb-cnt,
-.pb-menu .pb-item.sel .pb-caret {
+.pb-menu .pb-item.sel .pb-key {
   color: rgba(255, 255, 255, 0.82);
 }
 
-/* Ask a session…'s submenu caret. */
-.pb-menu .pb-caret {
-  position: absolute;
-  right: 8px;
-  bottom: 7px;
-  color: var(--muted);
-}
-
-/* Not available for this session right now: the server's reason replaces the
+/* Not available for this session right now: the reason replaces the
    description, so it is read where the description would have been. */
 .pb-menu .pb-item.off {
   cursor: default;
@@ -176,15 +144,6 @@
 
 .pb-menu .pb-item.off .pb-why {
   font-style: italic;
-}
-
-.pb-menu .pb-note {
-  padding: 6px 8px;
-  font-size: 11.5px;
-}
-
-.pb-menu .pb-err {
-  color: var(--red);
 }
 
 .pb-menu .pb-foot {
@@ -200,88 +159,10 @@
   color: var(--text);
 }
 
-/* ---- Ask a session › ------------------------------------------------------- */
-
-.pb-sub {
-  width: 250px;
-  max-height: min(420px, calc(100vh - 16px));
-  display: flex;
-  flex-direction: column;
-}
-
-.pb-sub .pb-sub-head {
-  padding: 4px 8px 6px;
-  font-size: 11px;
-}
-
-.pb-sub .pb-sub-list {
-  overflow-y: auto;
-}
-
-.pb-sub .pb-note {
-  padding: 6px 8px;
-  font-size: 11.5px;
-}
-
-.pb-sub .pb-sess {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border-radius: 7px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.pb-sub .pb-sess.hot {
-  background: var(--panel-2);
-}
-
-.pb-sub .slot {
-  flex: none;
-  width: 14px;
-  text-align: right;
-  font-size: 10.5px;
-  color: var(--muted);
-}
-
-.pb-sub .nm {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pb-sub .rel {
-  flex: none;
-  margin-left: auto;
-  font-size: 10.5px;
-  color: var(--muted);
-}
-
-/* The asked session's activity, in the rail's dot colours. */
-.pb-dot {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--muted);
-}
-
-.pb-dot.working {
-  background: var(--accent);
-}
-
-.pb-dot.idle {
-  background: var(--green);
-}
-
-.pb-dot.clarify,
-.pb-dot.limit {
-  background: var(--gold);
-}
-
 /* ---- The sidebar row's › menu group --------------------------------------- */
 
+/* The lanes, unfolded in place under "When it's done: …" (the row menu is an
+   inline list, not a popover). */
 .inst-actions .pb-row-sub {
   display: flex;
   flex-direction: column;
@@ -294,14 +175,9 @@
   padding: 4px 10px;
 }
 
-.inst-actions .pb-row-none {
-  padding: 4px 10px;
-  font-size: 11px;
-}
-
-.inst-actions .pb-row-sub .rel {
-  font-size: 10.5px;
-  color: var(--muted);
+.inst-actions .pb-row-sub button.on {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .inst-actions button.pb-row-off {

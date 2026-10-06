@@ -112,6 +112,7 @@ import time
 from typing import Callable, Dict, List, Optional
 
 from backend.config.config import GetConfigDir
+from backend.config.home_guard import guard
 from backend.web.core import commit_message as _commit_message
 
 __all__ = [
@@ -458,7 +459,7 @@ def store_path() -> str:
     """
     env = os.environ.get("MINDFLOCK_TEST_PLANS_FILE")
     if env:
-        return env
+        return guard(env, "test-plan store")
     return os.path.join(GetConfigDir(), _FileName)
 
 

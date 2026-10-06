@@ -1,0 +1,250 @@
+/* The Outbox: Intake's shell, a third time.
+ *
+ * The frame mirrors #intake-panel / #verify-panel and everything inside it is
+ * the shared kit — `.ws-head`, `.ik-subtitle`, `.ik-tab`, `.ik-groups`,
+ * `.tk-bucket`, `.pr-open-item`, `.pr-open-chip`, `.btn-primary`, `.test-btn`.
+ * Imported after VerifyDialog.css so the few rules that reach into those
+ * shared classes win the equal-specificity ties. What has no counterpart
+ * there lives under `ob-`. */
+
+#outbox-panel {
+  width: 820px;
+  max-width: 94vw;
+  min-height: min(420px, 84vh);
+  max-height: min(86vh, 800px);
+  padding: 18px 22px 20px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#outbox-panel .ws-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+#outbox-panel .ws-head h2 {
+  margin: 0;
+  font-size: 14.5px;
+}
+
+#outbox-panel .ob-fetch {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+#outbox-tabs {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+#outbox-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 4px 0 0;
+}
+
+.ob-groups {
+  gap: 12px;
+}
+
+.ob-groups .ik-group-body {
+  padding-top: 8px;
+}
+
+/* A session's name is a button that opens it — styled as the kit's link-ref. */
+.pr-open-item .ob-ref {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button.pr-open-ref.ob-ref:hover {
+  text-decoration: underline;
+}
+
+span.pr-open-ref.ob-ref {
+  cursor: default;
+}
+
+/* Chip tones the kit doesn't have: gold for "its agent is asking", red for an
+   escalation or failed checks. */
+.pr-open-chip.warn {
+  color: var(--gold);
+  border-color: color-mix(in srgb, var(--gold) 60%, transparent);
+}
+
+.pr-open-chip.bad {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+/* The action column: buttons hug their labels and stack right-aligned. */
+.ob-item .ik-item-start {
+  align-items: flex-end;
+}
+
+.ob-item .ik-item-start .test-btn {
+  white-space: nowrap;
+}
+
+/* Every non-approval row's buttons: ONE horizontal row, right-aligned, the
+   primary first (Retry · Open ↗ · Skip) — never a stacked column. */
+.ob-item .ik-item-start .ob-acts {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+
+.ob-item .ik-item-start .ob-acts .pr-review-btn {
+  align-self: center;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* A plan waiting for your OK: each piece and its fence. */
+.ob-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ob-plan-piece {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.ob-plan-piece .ob-only {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ob-item .ik-item-start .ob-ship {
+  min-width: 124px;
+  padding: 7px 14px;
+  font-size: 13px;
+}
+
+/* The answer strip sits under the row, full width, inside the card. */
+.ob-item .ik-item-drawer .flock-answer.fa-thread {
+  margin: 8px 0 0;
+}
+
+/* The approval preview: the exact message and title that will leave the
+   machine, BEFORE anything is pushed. */
+.ob-card {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg);
+}
+
+.ob-kv {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 4px 12px;
+  font-size: 12.5px;
+  align-items: baseline;
+}
+
+.ob-kv > span:nth-child(odd) {
+  color: var(--muted);
+}
+
+.ob-mono,
+.ob-msg-edit {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ob-msg-edit {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--accent);
+  background: var(--panel);
+  color: var(--text);
+  /* A textarea: a commit message keeps its body. */
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.ob-edit {
+  margin-left: 8px;
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.ob-pr-title {
+  font-weight: 600;
+}
+
+/* A finished group's summary card. */
+.ob-summary {
+  background: var(--panel-2);
+}
+
+.ob-summary-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ob-summary-head b {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.ob-summary-head .test-btn {
+  margin-left: auto;
+}
+
+.ob-summary-md {
+  margin: 8px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+/* A budget item's "Raise to $N": the amount is typed inline. */
+.ob-usd {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ob-usd input {
+  width: 64px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+}

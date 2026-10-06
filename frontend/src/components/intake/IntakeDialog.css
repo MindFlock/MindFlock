@@ -747,3 +747,53 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* --- Start together (Tickets) -----------------------------------------------
+   A tick before each ticket's ref, and — once one is ticked — a bar stuck to
+   the bottom of the dialog's scroll: "3 tickets · Start together…", which
+   opens New in list mode with them in its box. Two classes deep: the list
+   sits in a .set-row, whose `input[type=…]` rules outrank a single class. */
+.pr-open-main input.ik-pick {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex: none;
+  align-self: center;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.pr-open-item.picked {
+  border-color: var(--accent);
+}
+
+.ik-groups .ik-pickbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+}
+
+.ik-pickbar .ik-pick-go {
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.ik-pickbar .linklike {
+  margin-left: auto;
+}

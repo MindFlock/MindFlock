@@ -41,7 +41,16 @@ import { useFileDropTextarea } from "../../lib/fileDropTextarea";
 import { FlagChips, tokenize } from "./FlagChips";
 import { NewTicketPane } from "./NewTicketPane";
 import { SplitCheck } from "./SplitCheck";
-import { splitGate, withSplit } from "../../lib/playbooks";
+import { RunItems, RunOptions, useRunDraft } from "./NewList";
+import { splitGate } from "../../lib/playbooks";
+import {
+  SERVER_NO_SPLIT,
+  LANE_LABEL,
+  setLaneWhenReady,
+  teamRunCaps,
+  type Lane,
+} from "../../lib/laneActions";
+import { BROWSE_VALUE, removeItem, runRepoOptions, splitShapeReason, startLabel } from "../../lib/runStart";
 
 /** The two things New makes. Session is the landing tab and stays that way:
  * it is the hot path (name → Enter), and a tab strip that makes the common
@@ -747,13 +756,12 @@ export function NewSessionDialog() {
   // means to touch (with intent) and wait — the Map tab turns that list into
   // ghost tiles and blast arms you can red-zone before a single edit.
   const [planFirst, setPlanFirst] = useState(false);
-  // Split across workers: the create carries `playbook: "split"` and the agent
-  // forks one worker per independent piece with its MindFlock tools. One state
-  // for both boxes (Describe page, Prompt fold). `splitMovedMode` remembers
-  // that ticking it moved "Work directly in this folder" to New worktree, so
-  // unticking can move it back. A mode the user picked stays as they set it.
+  // "Split a big line into parallel pieces first" (page 1 only): the start
+  // becomes a split run — MindFlock creates the lead, the lead proposes the
+  // pieces, the server starts and merges them. See SplitCheck.
   const [split, setSplit] = useState(false);
-  const splitMovedMode = useRef(false);
+  /** The list mode's "tasks start in" browser is open (page 1). */
+  const [runBrowse, setRunBrowse] = useState(false);
   const [error, setError] = useState("");
   // "Git & workspace" starts OPEN — hiding those choices behind a click had
   // people launch with the wrong strategy rather than discover it, and they
@@ -863,7 +871,7 @@ export function NewSessionDialog() {
   const selectedProfile = (authProfiles?.profiles || []).find((p) => p.id === profileId);
   const launchDefaults = useRef<Record<string, string>>({});
   const titleRef = useRef<HTMLInputElement | null>(null);
-  const describeRef = useRef<HTMLInputElement | null>(null);
+  const describeRef = useRef<HTMLTextAreaElement | null>(null);
   // #new-repo-path, so a landed plan can put the caret on the one field most
   // likely to be wrong — and, because focusing scrolls, actually on screen.
   const repoRef = useRef<HTMLInputElement | null>(null);
@@ -938,7 +946,9 @@ export function NewSessionDialog() {
     // next — `strategy` is the standing counter-example — and a leaked note is
     // worse than a leaked field: it is a sentence about a folder the form is no
     // longer showing.
-    setDescribe("");
+    // Intake's "Start together…" hands its ticked tickets over as the box's
+    // text, once; every other opening starts empty.
+    setDescribe(useUi.getState().takeNewPrefill());
     setDescribing(false);
     setDescribeSlow(false);
     setPlanNote("");
@@ -974,7 +984,6 @@ export function NewSessionDialog() {
     setInitRepo(false);
     setPlanFirst(false);
     setSplit(false);
-    splitMovedMode.current = false;
     // Matches the initial state, and has to be set here too: this reset runs
     // on EVERY open, so a useState default alone left the fold shut from the
     // second open onward.
@@ -1248,23 +1257,75 @@ export function NewSessionDialog() {
    * "off": the box stays usable and the server's 400 is the backstop. */
   const { data: config } = useConfig();
   const mcpOk = useMemo(
-    () => splitGate(config?.caps, canonAgent(program)),
+    () =>
+      teamRunCaps(config?.caps).split
+        ? splitGate(config?.caps, canonAgent(program))
+        : { ok: false, reason: SERVER_NO_SPLIT },
     [config?.caps, canonAgent, program]
   );
-  const splitOn = split && mcpOk.ok;
+  const togetherOk = teamRunCaps(config?.caps).together;
 
-  /** Tick or untick Split across workers. Workers fork from a branch, so a
-   * tick moves "Work directly in this folder" to New worktree, and an untick
-   * moves it back only if the tick moved it. */
-  const toggleSplit = (on: boolean) => {
-    setSplit(on);
-    if (on && inPlace && !provision) {
-      setInPlace(false);
-      splitMovedMode.current = true;
-    } else if (!on && splitMovedMode.current) {
-      splitMovedMode.current = false;
-      if (!inPlace && !provision) setInPlace(true);
+  /** The box read as a list (list mode), and every choice about how the
+   * things in it ship. One plain line leaves all of it on its defaults and the
+   * single-session flow below runs exactly as it always has. */
+  const draft = useRunDraft({
+    open,
+    text: describe,
+    repoPath,
+    program: canonAgent(program),
+    fasttrackDepth: config?.fasttrack_depth,
+    split: page === 1 && split && mcpOk.ok,
+    togetherOk,
+  });
+  /** A split run: one task line, the box ticked, an agent with the tools. */
+  const splitOn = page === 1 && split && mcpOk.ok && draft.oneTask;
+  /** Page 1 starts a RUN (POST /api/runs) rather than one session: a list,
+   * any ticket, or a split. */
+  const runMode = page === 1 && (draft.listMode || splitOn);
+  const toggleSplit = (on: boolean) => setSplit(on);
+  useEffect(() => {
+    if (!open) setRunBrowse(false);
+  }, [open]);
+  // The browser opens under the choices, below the fold of the dialog's
+  // body: bring it on screen, once, as it opens.
+  const runBrowseRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = runBrowseRef.current;
+    if (runBrowse && el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
+  }, [runBrowse]);
+  const laneAtPress = useRef<{ lane: Lane; askFirst: boolean }>({ lane: "leave", askFirst: false });
+  laneAtPress.current = { lane: draft.lane, askFirst: draft.askFirst };
+  // A lane COMMITS for this session: it never drives a checkout other
+  // sessions share (two in-place sessions on main had one approval card, and
+  // approving it committed both sessions' files). With a lane, the session
+  // gets its own worktree.
+  const laneNeedsWorktree = draft.lane !== "leave";
+
+  /** Page 1's start in run mode: POST /api/runs, and the dialog closes only
+   * once the server has taken it — a refusal ("one-for-all needs a single
+   * repository") has to land beside the choices it is about. */
+  const startRun = async () => {
+    setPlanError("");
+    const r = await draft.start({ split: splitOn });
+    if (!r.ok) {
+      if (r.error) setPlanError(r.error);
+      return;
     }
+    const n = Array.isArray(r.body.items) ? r.body.items.length : 0;
+    const name = String(r.body.name || "");
+    closeDialog();
+    refreshInstances();
+    if (splitOn)
+      toast(`Starting the lead${name ? " for “" + name + "”" : ""} — its plan shows in its Thread tab`, {
+        duration: 6000,
+      });
+    else if (n >= 2) {
+      const c = Math.min(n, draft.concurrency);
+      toast(
+        `Started “${name}” — ${n} sessions, ${c === n ? "all at once" : c + " at a time"} · ${LANE_LABEL[draft.lane]}`,
+        { duration: 6000 }
+      );
+    } else toast("Starting it — the session appears in the rail", { duration: 4000 });
   };
 
   /** Picking an account steers the Agent field: with an OpenRouter (or any
@@ -1369,9 +1430,7 @@ export function NewSessionDialog() {
     // instruction to erase the name the user typed before reaching for the box.
     if (a.title) setTitle(a.title);
     setPrompt(a.prompt || "");
-    // A ticked Split keeps its worktree: the sentence's "in this folder"
-    // guess doesn't override a box the user ticked.
-    setInPlace(planInPlace(a) && !splitOn);
+    setInPlace(planInPlace(a));
     setInitRepo(!!a.init_repo);
     // The whole folder, existing or not: the gate reads the "does it need
     // making" half of it and the note reads the path. Keeping a path only for a
@@ -1778,7 +1837,7 @@ export function NewSessionDialog() {
       body.init_repo = p.initRepo;
       body.in_place = p.inPlace;
     }
-    return withSplit(body, splitOn);
+    return body;
   };
 
   /** POST the create, and own everything that follows it.
@@ -1792,6 +1851,10 @@ export function NewSessionDialog() {
    * values, so it passes the answer's own fields and this function cannot tell
    * the two apart. */
   const postCreate = async (body: Record<string, unknown>) => {
+    // The lane picked on page 1 ("When it's done"), as it stood at the press.
+    // Read through a ref: an immediate start reaches here after a model turn,
+    // from a closure that is several renders old.
+    const { lane, askFirst } = laneAtPress.current;
     setError("Creating…");
     // Close NOW with an optimistic "provisioning" row — the POST can take
     // seconds; on failure the dialog re-opens with fields and error intact.
@@ -1809,6 +1872,8 @@ export function NewSessionDialog() {
       clearStaleAlias(inst.title);
       await refreshInstances();
       selectSession(inst.title);
+      // Arming waits for the worktree; it never holds the dialog.
+      if (lane !== "leave") void setLaneWhenReady(inst.title, lane, askFirst);
     } catch (err) {
       failPendingSession(guess);
       failCreate((err as Error).message);
@@ -1831,6 +1896,10 @@ export function NewSessionDialog() {
   };
 
   const submit = async () => {
+    if (runMode) {
+      void startRun();
+      return;
+    }
     const held = submitHoldReason(submitArmAt.current, Date.now());
     if (held) {
       // First, and — like the guards below — before the optimistic close:
@@ -1873,7 +1942,7 @@ export function NewSessionDialog() {
         title,
         repoPath,
         prompt,
-        inPlace,
+        inPlace: inPlace && !laneNeedsWorktree,
         initRepo,
         provisioned: provision,
       })
@@ -1960,13 +2029,17 @@ export function NewSessionDialog() {
                 submitted, and looking like a form would say otherwise. */}
             <div id="new-describe" className="new-templates nf-describe">
               <div className="nt-head">
-                <span>What do you want to work on?</span>
+                <span>What do you want to work on? One thing per line, or ticket IDs</span>
               </div>
               <div className="nf-describe-row">
-                <input
+                {/* A textarea, so a list can be typed or pasted: three lines
+                    tall, growing to eight. Enter keeps its old meaning for one
+                    plain line ("read this"); Shift+Enter starts another line,
+                    and once the box holds a list Enter does too. */}
+                <textarea
                   id="new-describe-text"
                   ref={describeRef}
-                  type="text"
+                  rows={Math.min(8, Math.max(3, describe.split("\n").length))}
                   value={describe}
                   maxLength={DESCRIBE_MAX_CHARS}
                   autoComplete="off"
@@ -1976,7 +2049,7 @@ export function NewSessionDialog() {
                   // Enter was pressed and the sentence would stop being
                   // selectable while the user waits to see what it produced.
                   readOnly={describing}
-                  placeholder="e.g. fix the login bug in acme-api"
+                  placeholder={"e.g. fix the login bug in acme-api\n— or one per line: PAY-412 PAY-415, a task, another task"}
                   onChange={(e) => {
                     setDescribe(e.target.value);
                     // Typing is what clears the refusal: whatever it objected to
@@ -1986,6 +2059,11 @@ export function NewSessionDialog() {
                   }}
                   onKeyDown={(e) => {
                     if (e.key !== "Enter" || e.ctrlKey || e.metaKey) return;
+                    // A new line: Shift+Enter always, plain Enter in a list.
+                    if (e.shiftKey || runMode) {
+                      e.stopPropagation();
+                      return;
+                    }
                     // Enter here means "read this", never "create a session". This
                     // input sits inside <form id="new-form" onSubmit={submit}>, so
                     // without the preventDefault a sentence nobody has resolved
@@ -2015,13 +2093,95 @@ export function NewSessionDialog() {
                   away skips. This says what the sentence is for, and that
                   reading it costs nothing, which is the fact that makes the
                   button row below safe to experiment with. */}
-              <SplitCheck
-                id="new-split"
-                split={split}
-                onSplit={toggleSplit}
-                gate={mcpOk}
-                text={describe}
+              {draft.listMode && (
+                <RunItems
+                  rows={draft.rows}
+                  onRemove={(row) => {
+                    setDescribe((d) => removeItem(d, row));
+                    setPlanError("");
+                  }}
+                />
+              )}
+              {draft.listMode && draft.previewError && (
+                <p className="rt-note error" aria-live="polite">
+                  Couldn't read the list: {draft.previewError}
+                </p>
+              )}
+              {draft.listMode &&
+                draft.warnings.map((w) => (
+                  <p key={w} className="rt-note">
+                    {w}
+                  </p>
+                ))}
+              <RunOptions
+                draft={draft}
+                n={draft.listMode ? draft.count : 1}
+                split={splitOn}
+                repoPicker={
+                  runMode && (splitOn || draft.items.some((i) => i.kind === "task")) ? (
+                    // Typed tasks and a split's lead need a folder; tickets
+                    // bring their own (the source's repo).
+                    <span className="rt-repo-pick">
+                      <select
+                        id="new-run-repo"
+                        className="rt-repo"
+                        value={runBrowse ? BROWSE_VALUE : repoPath}
+                        title={repoPath + " — each gets its own worktree there"}
+                        onChange={(e) => {
+                          // "Browse…" opens the folder browser right here, so
+                          // ANY folder can be the one — not only a suggestion.
+                          if (e.target.value === BROWSE_VALUE) {
+                            setRunBrowse(true);
+                            return;
+                          }
+                          setRunBrowse(false);
+                          folderDo({ t: "user-set", path: e.target.value });
+                        }}
+                      >
+                        {runRepoOptions(repoPath, suggestions, leafName).map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  ) : null
+                }
+                splitBox={
+                  <SplitCheck
+                    id="new-split"
+                    split={split}
+                    onSplit={toggleSplit}
+                    gate={mcpOk}
+                    shapeReason={splitShapeReason(draft.items)}
+                    text={describe}
+                  />
+                }
               />
+              {runMode && runBrowse && (
+                // The list's "tasks start in" → Browse…: the same inline
+                // folder browser the Folder field uses (inline: Electron has
+                // no browser dialogs). Picking a folder fills the picker.
+                <div className="rt-browse" data-run-browse="" ref={runBrowseRef}>
+                  <div className="rt-browse-head">
+                    <span>Pick the folder the tasks start in</span>
+                    <button type="button" className="rt-browse-done" onClick={() => setRunBrowse(false)}>
+                      Done
+                    </button>
+                  </div>
+                  <FolderBrowser
+                    initialPath={repoPath || homePath || ""}
+                    selected={repoPath}
+                    onSelect={(p) => folderDo({ t: "user-set", path: p })}
+                    onPick={(p) => {
+                      folderDo({ t: "user-set", path: p });
+                      setRunBrowse(false);
+                    }}
+                  />
+                </div>
+              )}
+              {!runMode && (
+              <>
               <p className="nf-describe-help">
                 Your coding CLI reads this and works out which folder to use, what
                 to call the session, and what to tell the agent first.{" "}
@@ -2038,6 +2198,8 @@ export function NewSessionDialog() {
                 {" · "}
                 <code>add metrics to billing, in a worktree</code>
               </p>
+              </>
+              )}
               {planNoteShown && (
                 <p className="nf-describe-note" aria-live="polite">
                   {planNoteShown}
@@ -2552,7 +2714,7 @@ export function NewSessionDialog() {
                       type="radio"
                       name="new-workspace-mode"
                       id="new-worktree"
-                      checked={!inPlace && !provisionOn}
+                      checked={(!inPlace || laneNeedsWorktree) && !provisionOn}
                       onChange={() => {
                         setInPlace(false);
                         setProvision(false);
@@ -2569,22 +2731,18 @@ export function NewSessionDialog() {
                       type="radio"
                       name="new-workspace-mode"
                       id="new-in-place"
-                      checked={inPlace}
+                      checked={inPlace && !laneNeedsWorktree}
+                      disabled={laneNeedsWorktree}
                       onChange={() => {
                         setInPlace(true);
                         setProvision(false);
-                        // Workers can't fork from a folder edited in place, so
-                        // picking this mode unticks Split across workers.
-                        if (split) {
-                          setSplit(false);
-                          splitMovedMode.current = false;
-                        }
                       }}
                     />
                     Work directly in this folder{" "}
                     <span className="muted">
-                      (no worktree — edits the original; multiple sessions can share
-                      it)
+                      {laneNeedsWorktree
+                        ? "(not with a lane — it commits for this session, so it gets its own worktree)"
+                        : "(no worktree — edits the original; multiple sessions can share it)"}
                     </span>
                   </label>
                   {offerProvision && (
@@ -2793,13 +2951,6 @@ export function NewSessionDialog() {
                         : "(takes effect with a prompt)"}
                   </span>
                 </label>
-                <SplitCheck
-                  id="new-split-prompt"
-                  split={split}
-                  onSplit={toggleSplit}
-                  gate={mcpOk}
-                  text={prompt || describe}
-                />
               </div>
             </details>
   
@@ -2885,8 +3036,24 @@ export function NewSessionDialog() {
                 // describeBlockReason instead and get the sentence.
                 disabled={describing}
                 aria-busy={describing || undefined}
-                title="Work out the folder, name and first instruction, then show them to you so you can change anything before the session is created."
-                onClick={() => void runDescribe("fill")}
+                title={
+                  runMode
+                    ? "Review is for one session. A list (or a split) starts from the rows and choices above."
+                    : "Work out the folder, name and first instruction, then show them to you so you can change anything before the session is created."
+                }
+                onClick={() => {
+                  if (runMode) {
+                    // Said, not silently ignored — and not disabled, which
+                    // would leave a grey button that won't say why.
+                    setPlanError(
+                      splitOn
+                        ? "A split's lead is set up by MindFlock — untick Split to review one session's details."
+                        : "Review details is for one session — check the rows above and start them from here."
+                    );
+                    return;
+                  }
+                  void runDescribe("fill");
+                }}
               >
                 {describing ? (
                   <>
@@ -2902,10 +3069,13 @@ export function NewSessionDialog() {
                     Review details first{" "}
                     {/* What Enter does, shown rather than described. The
                         sentence that used to say it in words sat in the header
-                        and explained the wrong page. */}
-                    <span className="nf-key" aria-hidden="true">
-                      ↵
-                    </span>
+                        and explained the wrong page. In a list Enter is a new
+                        line, so the hint goes. */}
+                    {!runMode && (
+                      <span className="nf-key" aria-hidden="true">
+                        ↵
+                      </span>
+                    )}
                   </>
                 )}
               </button>
@@ -2920,11 +3090,18 @@ export function NewSessionDialog() {
               <button
                 type="button"
                 id="new-describe-start"
-                disabled={describing}
-                title="Create the session right now from what you typed, without showing you the details first."
-                onClick={startNow}
+                disabled={describing || draft.starting}
+                aria-busy={draft.starting || undefined}
+                title={
+                  runMode
+                    ? "Start them now. MindFlock queues the rest, ships each one as chosen above, and shows what needs you in the Outbox."
+                    : "Create the session right now from what you typed, without showing you the details first."
+                }
+                onClick={runMode ? () => void startRun() : startNow}
               >
-                Create session
+                {draft.starting
+                  ? "Starting…"
+                  : startLabel(draft.listMode ? draft.count : 1, splitOn)}
               </button>
             </>
           ) : (

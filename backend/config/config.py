@@ -187,7 +187,11 @@ def GetConfigDir() -> str:
     home_dir = _user_home_dir()
     if home_dir is None:
         raise OSError("failed to get config home directory: $HOME is not defined")
-    return os.path.join(home_dir, _CONFIG_DIR_NAME)
+    from backend.config.home_guard import guard
+
+    # Under pytest a $HOME that was never redirected raises RealHomeStoreError
+    # (an OSError, so LoadState/LoadConfig fall back to their defaults).
+    return guard(os.path.join(home_dir, _CONFIG_DIR_NAME), "config dir")
 
 
 def _user_home_dir() -> Optional[str]:

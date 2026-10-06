@@ -41,11 +41,22 @@ import {
 import { toast } from "../../lib/toast";
 import { peekTerm, subscribeTermStates } from "../../lib/terminals";
 import { codemapSeenAt, redZoneChip, subscribeCodemapSeen } from "../../lib/codemapSeen";
-import { inFamily, lineageMark, parentChip, rollup, workerLine } from "../../lib/agentMessages";
+import {
+  inFamily,
+  lineageMark,
+  parentChip,
+  rollup,
+  shipLine,
+  workerLine,
+  type ShipTask,
+} from "../../lib/agentMessages";
 import { openThread, pasteWrapup } from "../../lib/flockActions";
 import { forkBlockReason } from "../../lib/playbooks";
 import { isEditingTarget } from "../../lib/keymap";
 import { AnswerStrip, type AnswerStripHandle } from "../AnswerStrip";
+import { leadChip, leadLine, railExtraChips } from "../../lib/splitRun";
+import { RUN_DONE_STATES, type RunInfo } from "../../lib/runs";
+import type { RunDTO } from "../../api/types";
 import { PlaybookRowItems } from "./PlaybookRowItems";
 
 /** How long a click on the selected row waits for a second click before it
@@ -109,6 +120,10 @@ interface Props {
   kids?: Instance[];
   /** This row's `parent` is a live session on this rail. */
   parentLive?: boolean;
+  /** Its group's view of this session (ship lanes): escalations, approvals. */
+  runTask?: ShipTask | null;
+  /** The group this session LEADS (a split, or one-for-all), when it does. */
+  leadRun?: RunInfo | null;
 }
 
 export const SidebarRow = memo(function SidebarRow({
@@ -122,6 +137,8 @@ export const SidebarRow = memo(function SidebarRow({
   nest = FLAT,
   kids = NO_KIDS,
   parentLive = false,
+  runTask = null,
+  leadRun = null,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
   const strip = useRef<AnswerStripHandle | null>(null);
@@ -155,7 +172,13 @@ export const SidebarRow = memo(function SidebarRow({
   // the browser), but say so on hover instead of failing after the click.
   const prSupport = hasPrSupport(caps);
   const ideName = config?.ide_name || "Cursor";
-  const chip = chipState(inst);
+  // A one-for-all / split piece that MindFlock merged back into its lead's
+  // branch: that is its stage now, whatever its own branch says ("committed").
+  const chip0 = chipState(inst);
+  const chip =
+    runTask?.state === "integrated"
+      ? { ...chip0, label: "merged", cls: "s-committed", title: "Merged back into its lead's branch" }
+      : chip0;
   const check = checkChip(inst);
   const num = idx < 9 ? String(idx + 1) : "";
   // Ticket/PR/issue sessions read as "(tix) add-dark-mode/sc-12345" instead of
@@ -184,24 +207,39 @@ export const SidebarRow = memo(function SidebarRow({
   const wline = isWorker
     ? workerLine(inst, { nested, parentName: nameOf(inst.parent!), act: activity })
     : null;
-  const roll = kids.length && !pending ? rollup(kids, nameOf, effectiveActivity) : null;
+  // A group's LEAD (a split, or one for all): MindFlock merges its workers back
+  // itself, so the row says how the group is going ("3 of 3 merged back") and
+  // its chip asks for the one click that is yours (`→ PR?`, `plan?`) — never
+  // the paste-the-wrap-up chip of a hand-run family.
+  const isLead = inst.run?.role === "lead" && !pending;
+  const lchip = isLead ? leadChip(leadRun) : null;
+  const lline = isLead ? leadLine(leadRun as RunDTO | null) : null;
+  const roll = kids.length && !pending && !isLead ? rollup(kids, nameOf, effectiveActivity) : null;
   // "wrap up" is a one-click paste into this session: never offered as one
   // when it can't take a paste (no tools this launch) — the fork button's rule.
   const pchip =
-    kids.length && !pending && !missing
+    kids.length && !pending && !missing && !isLead
       ? parentChip(inst, kids, nameOf, effectiveActivity, forkBlockReason(inst))
       : null;
+  // Ship lanes: how far MindFlock carries this session ("→ PR · working 12m",
+  // "⇡ opening PR", "✓ PR #318 · checks ✓"). It takes the status line's slot —
+  // the worker line / lineage it replaces rides in its tooltip — so a session
+  // in a group reads the same whether or not it is also in a family.
+  const ship = pending || (isLead && lline) ? null : shipLine(inst, { act: activity, task: runTask });
+  // A session MindFlock is carrying (a group member, or one with a lane) is
+  // one you have handed off: its prompt gets the strip like a family's does.
+  const shipLane = !!inst.run || !!ship;
   // The answer strip: a family member stuck on a dialog gets that dialog's own
   // buttons under its row (the orchestrator's spawn_session permission
   // prompts land here too — from its very first one, via its playbook). Keys
   // 1–9 press them while the ROW has focus.
   const answering =
-    inFamily(inst, isWorker, kids.length) && activity === "clarify" && !missing && !paused;
-  const subline = !editing && (wline || roll || lineage);
+    (inFamily(inst, isWorker, kids.length) || shipLane) && activity === "clarify" && !missing && !paused;
+  const subline = !editing && (ship || wline || roll || lline || lineage);
   // "working · 6m" counts up by itself: a busy worker's row data can sit
   // unchanged between polls, and memo would freeze the minutes.
   const [, tick] = useReducer((n: number) => n + 1, 0);
-  const counting = wline?.state === "working";
+  const counting = wline?.state === "working" || ship?.state === "working";
   useEffect(() => {
     if (!counting) return;
     const t = window.setInterval(tick, 30_000);
@@ -223,7 +261,13 @@ export const SidebarRow = memo(function SidebarRow({
     subscribeCodemapSeen,
     useCallback(() => codemapSeenAt(title), [title])
   );
-  const rz = caps.git ? redZoneChip(inst.redzone, mapSeen) : null;
+  // A merged-back piece / a lead asking for its release keeps ONE chip.
+  const extra = railExtraChips(check, caps.git ? redZoneChip(inst.redzone, mapSeen) : null, {
+    integrated: runTask?.state === "integrated",
+    // A finished group's lead says how it ended on its line; its chips go quiet.
+    leadAsks: !!lchip || (isLead && !!leadRun && RUN_DONE_STATES.has(leadRun.state)),
+  });
+  const rz = extra.rz;
 
   const act = async (fn: () => void | Promise<void>, e?: MouseEvent) => {
     e?.stopPropagation();
@@ -371,12 +415,53 @@ export const SidebarRow = memo(function SidebarRow({
               {shown}
             </span>
           )}
-          {!editing && wline && (
+          {!editing && ship && (
+            <span
+              className={"lineage ship-line " + ship.cls}
+              title={[ship.title, wline ? wline.title : lineage ? lineage.title : ""].filter(Boolean).join("\n")}
+            >
+              <span className="sl-lead">{ship.lead}</span>
+              {ship.rest && (
+                <span className={"sl-rest" + (ship.restCls ? " " + ship.restCls : "")}>{ship.rest}</span>
+              )}
+            </span>
+          )}
+          {!editing && !ship && lline && (
+            <span
+              className={"lineage workers lead-line"}
+              title={"Its group: " + (leadRun?.name || "") + "\nClick to open the Thread"}
+              role="button"
+              tabIndex={0}
+              onClick={(e) => act(() => openThread(title), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                e.stopPropagation();
+                openThread(title);
+              }}
+            >
+              <span className={lline.cls || undefined}>{lline.text}</span>
+              {lline.url && (
+                <a
+                  className="lead-link"
+                  href={lline.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={lline.url}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {" ↗"}
+                </a>
+              )}
+            </span>
+          )}
+          {!editing && !ship && !lline && wline && (
             <span className={"lineage " + wline.cls} title={wline.title}>
               {wline.text}
             </span>
           )}
-          {!editing && !wline && lineage && (
+          {!editing && !ship && !lline && !wline && lineage && (
             <span
               className={"lineage" + (lineage.spawned ? " spawned" : "")}
               title={lineage.title}
@@ -411,7 +496,18 @@ export const SidebarRow = memo(function SidebarRow({
             </span>
           )}
         </span>
-        {pchip?.kind === "wrap" ? (
+        {lchip ? (
+          <button
+            type="button"
+            className="stagechip wrapchip leadchip"
+            title={lchip.title}
+            aria-label={lchip.title}
+            onClick={(e) => act(() => openThread(title), e)}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            {lchip.label}
+          </button>
+        ) : pchip?.kind === "wrap" ? (
           <button
             type="button"
             className={"stagechip " + pchip.cls}
@@ -429,9 +525,9 @@ export const SidebarRow = memo(function SidebarRow({
         ) : (
           <span className={"stagechip " + chip.cls} title={chip.title}>{chip.label}</span>
         )}
-        {check && (
-          <span className={"stagechip checkchip " + check.cls} title={check.title}>
-            {check.label}
+        {extra.check && (
+          <span className={"stagechip checkchip " + extra.check.cls} title={extra.check.title}>
+            {extra.check.label}
           </span>
         )}
         {rz && !pending && (

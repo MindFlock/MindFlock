@@ -33,8 +33,8 @@ import { ThreadTab } from "./ThreadTab";
 import { CodeMapTab } from "./CodeMapTab";
 import { SessionUsageChip } from "../usage/SessionUsageChip";
 import { AccountChip } from "./AccountChip";
-import { PlaybookMenu } from "./PlaybookMenu";
-import { forkBlockReason, mcpCapable } from "../../lib/playbooks";
+import { ShipMenu } from "./ShipMenu";
+import { isRemote } from "../../lib/playbooks";
 import { familyOf, newestReportTs, threadBadge, threadTabShown } from "../../lib/thread";
 import { effectiveActivity } from "../../lib/stage";
 
@@ -59,6 +59,13 @@ function paneTab(t: string, git: boolean): Tab {
 
 /** The fork icon (two branches joining) of the "Work with other sessions"
  * button. */
+/** Whether a row gets the Ship & split button: a local, created session.
+ * Another device's row is out — only /api/instances/<dev::…> is forwarded,
+ * so the group and split routes would 404 there. */
+function shipShown(inst: Pick<Instance, "title"> & Partial<Pick<Instance, "device" | "pending">>): boolean {
+  return !isRemote(inst) && !inst.pending;
+}
+
 const FORK_ICON = (
   <svg
     width="12"
@@ -109,14 +116,16 @@ export function Pane({
   const family = familyOf(title, allRows ?? []);
   const threadOpened = useUi((s) => s.threadComposeTarget?.title === title);
   const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
+  // A group's lead always has one: its plan and its one PR live there, from
+  // before its first worker exists.
   const threadShown = threadTabShown(
-    !!family.parent || family.children.length > 0,
+    !!family.parent || family.children.length > 0 || inst.run?.role === "lead",
     threadOpened || lastTab === "thread"
   );
   const badge = threadBadge(family.children, threadSeen, effectiveActivity);
   const newestReport = newestReportTs(family.children);
-  // This pane's fork-icon menu, when it is the one open (Ctrl+K F opens it
-  // from anywhere, so it lives in the store rather than here).
+  // This pane's Ship & split menu, when it is the one open (Ctrl+K F / L
+  // open it from anywhere, so it lives in the store rather than here).
   const playbookMenu = useUi((s) => (s.playbookMenu?.title === title ? s.playbookMenu : null));
   // State, not a ref: the menu measures itself against the button, and a menu
   // opened in the same frame the pane mounts must re-render once it exists.
@@ -442,9 +451,9 @@ export function Pane({
     },
   };
 
-  // A menu whose button has gone (the agent hit a permission dialog, the pane
-  // lost its workspace) closes rather than waiting to reappear later.
-  const forkGone = missing || loading || !mcpCapable(caps, inst) || !!forkBlockReason(inst);
+  // A menu whose button has gone (the pane lost its workspace, or is still
+  // loading) closes rather than waiting to reappear later.
+  const forkGone = missing || loading || !shipShown(inst);
   useEffect(() => {
     if (playbookMenu && forkGone) useUi.getState().setPlaybookMenu(null);
   }, [playbookMenu, forkGone]);
@@ -556,10 +565,10 @@ export function Pane({
   const budget = inst.budget;
   const ds = inst.workspace_missing ? null : inst.diff_stat;
   const hasDiffStat = !!(ds && ((ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0));
-  // "Work with other sessions": only on a CLI that gets the MindFlock tools,
-  // and blocked (with the reason) while this launch can't take a playbook.
-  const forkShown = mcpCapable(caps, inst);
-  const forkBlocked = forkShown ? forkBlockReason(inst) : "";
+  // "Ship & split": every local session. Its lane items are plain server
+  // calls that work for any CLI; only Split needs the MindFlock tools, and
+  // the menu says so on that item rather than hiding the whole button.
+  const forkShown = shipShown(inst);
 
   return (
     <section
@@ -736,23 +745,13 @@ export function Pane({
         {forkShown && (
           <button
             ref={setForkEl}
-            className={
-              "act playbooks" + (playbookMenu ? " open" : "") + (forkBlocked ? " is-blocked" : "")
-            }
+            className={"act playbooks" + (playbookMenu ? " open" : "")}
             type="button"
             aria-haspopup="menu"
             aria-expanded={!!playbookMenu}
-            aria-disabled={forkBlocked ? true : undefined}
-            title={
-              forkBlocked ||
-              "Work with other sessions — split across workers, ask, review, hand off (Ctrl+K F)"
-            }
+            title="Ship & split — how far MindFlock carries this session, split it, message (Ctrl+K F)"
             onClick={(e) => {
               e.stopPropagation();
-              if (forkBlocked) {
-                toast(forkBlocked, { duration: 5000 });
-                return;
-              }
               useUi.getState().setPlaybookMenu(playbookMenu ? null : { title });
             }}
           >
@@ -946,18 +945,17 @@ export function Pane({
         )}
         {budget?.locked && <BudgetLock title={title} budget={budget} />}
       </div>
-      {playbookMenu && forkShown && !forkBlocked && forkEl && (
-        <PlaybookMenu
+      {playbookMenu && forkShown && forkEl && (
+        <ShipMenu
           title={title}
           anchor={forkEl}
-          initialSub={playbookMenu.sub ?? null}
           onClose={(refocus) => {
             const ui = useUi.getState();
             if (ui.playbookMenu?.title === title) ui.setPlaybookMenu(null);
             // Esc hands the keyboard back to the terminal the menu took it
-            // from. Nothing else does: a paste focuses the terminal itself,
-            // Message… hands it to the Thread composer, and an outside click
-            // has put it wherever the user clicked.
+            // from. Nothing else does: Message… hands it to the Thread
+            // composer, and an outside click has put it wherever the user
+            // clicked.
             if (refocus) setTimeout(() => focusTerm(title), 0);
           }}
         />

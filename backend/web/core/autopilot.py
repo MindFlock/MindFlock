@@ -53,6 +53,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from backend.config.config import GetConfigDir
+from backend.config.home_guard import guard
 
 __all__ = [
     "autopilot_path",
@@ -94,6 +95,12 @@ DEPTHS = DEPTH_ORDER[1:]
 #: and merging is the one step in the ladder that cannot be undone. Merge stays
 #: available per item.
 SOURCE_DEPTHS = tuple(d for d in DEPTHS if d != "merge")
+
+#: Where an armed run came from: the ⏩ button / a lane ("session"), an
+#: intake ticket / PR / issue, or a server-driven team run ("run").
+SOURCES = ("session", "tix", "pr", "iss", "run")
+#: Lane names (core.lanes) a record may carry; "leave" is the agent rung.
+LANE_NAMES = ("leave", "commit", "push", "pr", "merge")
 
 DEPTH_LABELS = {
     "off": "Off",
@@ -175,13 +182,15 @@ def autopilot_path() -> str:
     """
     env = os.environ.get("MINDFLOCK_AUTOPILOT_FILE")
     if env:
-        return env
+        return guard(env, "autopilot store")
     return os.path.join(GetConfigDir(), _FileName)
 
 
 # On-disk shape::
 #   {"<title>": {"depth": "pr", "state": "running"|"halted"|"done",
-#                "step": "agent", "reason": "", "source": "session"|"tix"|"pr"|"iss",
+#                "step": "agent", "reason": "",
+#                "source": "session"|"tix"|"pr"|"iss"|"run",
+#                "lane": "pr", "ask_first": false,
 #                "item": "sc-123", "message": "commit subject",
 #                "message_auto": false,
 #                "base": "", "branch": "", "retryable": ["gitnexus-index"],
@@ -227,6 +236,18 @@ def _blank() -> dict:
         # produces one for every wait; without a home for it the UI had to guess.
         "note": "",
         "source": "session",
+        # The LANE this record carries out (see core.lanes): how far the session
+        # was asked to go, which is ``depth`` except when "ask me before it
+        # ships" holds the run one rung short of its first outward step — then
+        # ``depth`` is that held rung and ``lane`` the target the approval
+        # raises it to. "" for a record armed before lanes existed (its lane is
+        # its depth). Facts the driver never reads; the ladder is unchanged.
+        "lane": "",
+        "ask_first": False,
+        # WHO chose this lane: "user" (a person, through the UI) or
+        # "agent:<title>" (an agent's MCP set_autopilot). An agent may never
+        # raise — or lift "ask first" on — a lane its user chose.
+        "by": "user",
         "item": "",
         "message": "",
         # Whether ``message`` is a PLACEHOLDER this server invented (the "Work on
@@ -235,9 +256,23 @@ def _blank() -> dict:
         # model-written message — an intake ticket's own title is the best subject
         # available and must survive.
         "message_auto": False,
+        # Whether ``message`` was WRITTEN BY A MODEL from a diff at commit time
+        # (kept so a pre-commit retry commits the same sentence). It is nobody's
+        # words for the NEXT piece of work: a re-arm never carries it over as if
+        # a human had typed it.
+        "message_written": False,
+        # A message DRAFTED for an "ask me first" approval card (written from
+        # the diff when the run parked for your go): the card shows it, and —
+        # unless you edit it — that exact text is what gets committed.
+        "message_drafted": False,
         # The PR this run opened, so the UI can bring it up exactly once — the same
         # courtesy the manual "Make PR" button does.
         "url": "",
+        # A PR title / body somebody wrote for this run (a team run's one PR,
+        # built from its pieces). Empty = the make-PR step fills them from the
+        # branch's commits, as it always has.
+        "pr_title": "",
+        "pr_body": "",
         "base": "",
         "branch": "",
         "retryable": [],
@@ -303,11 +338,20 @@ def _normalize(entry) -> dict:
     e["reason"] = str(entry.get("reason", "") or "")
     e["note"] = str(entry.get("note", "") or "")
     src = str(entry.get("source", "") or "session")
-    e["source"] = src if src in ("session", "tix", "pr", "iss") else "session"
+    e["source"] = src if src in SOURCES else "session"
+    lane = str(entry.get("lane", "") or "").strip().lower()
+    e["lane"] = lane if lane in LANE_NAMES else ""
+    e["ask_first"] = bool(entry.get("ask_first", False))
+    by = str(entry.get("by", "") or "user")
+    e["by"] = by if by == "user" or by.startswith("agent:") else "user"
     e["item"] = str(entry.get("item", "") or "")
     e["message"] = str(entry.get("message", "") or "")
     e["message_auto"] = bool(entry.get("message_auto", False))
+    e["message_written"] = bool(entry.get("message_written", False))
+    e["message_drafted"] = bool(entry.get("message_drafted", False))
     e["url"] = str(entry.get("url", "") or "")
+    e["pr_title"] = str(entry.get("pr_title", "") or "")[:256]
+    e["pr_body"] = str(entry.get("pr_body", "") or "")[:60000]
     e["base"] = str(entry.get("base", "") or "")
     e["branch"] = str(entry.get("branch", "") or "")
     raw = entry.get("retryable")
@@ -536,6 +580,15 @@ def _interrupt_action(rec: dict, snap: dict) -> Tuple[str, dict]:
     if int(rec.get("commits") or 0) == 0:
         return "commit", {"skip": list(rec.get("skipped") or [])}
 
+    if "index.lock" in step:
+        # git's lock, held for a moment by another git process — a transient
+        # collision, not a failing hook. Retry it like the first attempt; a
+        # lock that outlives every attempt is a stale one a person must remove.
+        if int(rec.get("commits") or 0) < MAX_COMMIT_ATTEMPTS:
+            return "commit", {"skip": list(rec.get("skipped") or [])}
+        return "stop", {
+            "reason": "git's index.lock is stuck — another git process holds it"
+        }
     if not hook:
         # No parseable hook id (a raw git hook, or the pane scrolled away).
         # Guessing from the display name is not possible — pre-commit's `name:`
@@ -728,6 +781,9 @@ def arm(
     retryable: Optional[List[str]] = None,
     boot: str = "",
     now: Optional[float] = None,
+    lane: str = "",
+    ask_first: bool = False,
+    by: str = "user",
 ) -> Optional[dict]:
     """Record a target depth for ``title``, replacing any previous run.
 
@@ -749,9 +805,10 @@ def arm(
             "depth": d,
             "state": "running",
             "step": "",
-            "source": (
-                source if source in ("session", "tix", "pr", "iss") else "session"
-            ),
+            "source": source if source in SOURCES else "session",
+            "lane": lane if lane in LANE_NAMES else "",
+            "ask_first": bool(ask_first),
+            "by": by if by == "user" or str(by).startswith("agent:") else "user",
             "item": str(item or ""),
             "message": str(message or ""),
             "message_auto": bool(message_auto),

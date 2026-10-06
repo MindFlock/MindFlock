@@ -297,8 +297,12 @@ def test_suggest_returns_the_cleaned_answer(repo, monkeypatch):
     argv, kw = calls[0]
     assert argv[0] == "claude" and "-p" in argv
     assert "@@ diff @@" in argv[-1]
-    # It asks, it does not edit: the CLI runs with stdin closed, in the worktree.
-    assert kw["cwd"] == str(repo)
+    # It asks, it does not edit: the CLI runs with stdin closed — and NOT in
+    # the worktree: there its transcript became the session's newest one, so
+    # the session's last turn showed the generator (live L5). The diff is in
+    # the prompt.
+    assert kw["cwd"] != str(repo) and kw["cwd"] == cm.neutral_cwd()
+    assert not kw["cwd"].startswith(str(repo))
     assert kw["stdin"] is subprocess.DEVNULL
 
 

@@ -1,130 +1,148 @@
-/** The sidebar row's › menu group for agent teams: the same playbooks as the
- * pane's fork-icon menu (Split across workers…, Ask a session…, and with
- * workers Check on workers / Wrap up workers), then Message…. Rendered only
- * for a CLI that gets the MindFlock tools, between the git items and Rename.
+/** The sidebar row's › menu group for Ship & split: the same items as the
+ * pane's fork-icon menu (lib/laneActions.shipMenuModel), acting the same way
+ * (runShipEntry) — "When it's done: Open a PR ›" unfolds the lanes in place
+ * (the row menu is an inline list, not a popover), then Split into parallel
+ * pieces…, Ship it now, Move out of the group for a member, and Message….
+ * Rendered for every local session, between the git items and Rename.
  *
- * The row menu is an inline list rather than a popover, so "Ask a session…"
- * unfolds its session picker in place instead of opening a submenu. */
+ * Nothing here pastes into the agent: each item is a server call. */
 
-import { Fragment, useEffect, useMemo, useState } from "react";
-import type { Instance, Playbook } from "../../api/types";
-import { useConfig, useInstances } from "../../state/queries";
+import { useMemo, useState } from "react";
+import type { Instance } from "../../api/types";
+import { refreshInstances, useConfig, useInstances } from "../../state/queries";
 import { displayName, useUi } from "../../state/store";
 import {
-  askTargets,
-  fetchPlaybooks,
-  forkBlockReason,
-  liveChildren,
-  mcpCapable,
-  menuModel,
-  pastePlaybook,
-} from "../../lib/playbooks";
+  LANE_LABEL,
+  entryWhy,
+  runShipEntry,
+  shipMenuModel,
+  type ShipEntry,
+} from "../../lib/laneActions";
+import { isRemote } from "../../lib/playbooks";
+import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
 
 export function PlaybookRowItems({ inst }: { inst: Instance }) {
   const title = inst.title;
   const { data: config } = useConfig();
   const { data: rows } = useInstances();
-  const railOrder = useUi((s) => s.railOrder);
-  // Another device's session gets none: mcpCapable is false for a remote row.
-  const capable = mcpCapable(config?.caps, inst);
-  const [list, setList] = useState<Playbook[] | null>(null);
-  const [askOpen, setAskOpen] = useState(false);
-
-  useEffect(() => {
-    if (!capable) return;
-    let live = true;
-    fetchPlaybooks(title)
-      .then((l) => live && setList(l))
-      .catch(() => live && setList([]));
-    return () => {
-      live = false;
-    };
-  }, [capable, title]);
-
-  const children = useMemo(() => liveChildren(title, rows || []), [title, rows]);
-  const model = useMemo(() => menuModel(list || [], children), [list, children]);
-  const targets = useMemo(
-    () => (askOpen ? askTargets(title, rows || [], railOrder, displayName) : []),
-    [askOpen, title, rows, railOrder]
+  const [laneOpen, setLaneOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const model = useMemo(
+    () => shipMenuModel(inst, rows || [], config?.caps),
+    [inst, rows, config?.caps]
   );
 
-  if (!capable) return null;
-  const blocked = forkBlockReason(inst);
-  const askPb = (list || []).find((p) => p.args.some((a) => a.kind === "session" && a.required));
+  // Another device's session gets none: its group and split routes aren't
+  // forwarded. A row still being created has nothing to arm yet.
+  if (isRemote(inst) || inst.pending) return null;
+  const name = displayName(title);
 
-  const button = (pb: Playbook) => {
-    const why = blocked || (pb.available ? "" : pb.disabled_reason || "Not available right now");
-    const isAsk = pb === askPb;
+  const run = (e: ShipEntry) => {
+    const why = entryWhy(e);
+    if (why) {
+      toast(why, { duration: 5000 });
+      return;
+    }
+    if (e.kind === "message") {
+      useUi.getState().threadOpen(title, { composeTo: title });
+      return;
+    }
+    if (busy) return;
+    setBusy(true);
+    runShipEntry(e, inst, name, model.current)
+      .then((said) => {
+        if (said) toast(said, { duration: 4500 });
+        refreshInstances();
+      })
+      .catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6000 }))
+      .finally(() => setBusy(false));
+  };
+
+  const button = (e: ShipEntry, label: string, title2: string, extra = "") => {
+    const why = entryWhy(e);
     return (
       <button
-        key={pb.id}
-        className={why ? "pb-row-off" : undefined}
+        key={e.kind + (e.kind === "lane" ? e.lane : "")}
+        className={(why ? "pb-row-off " : "") + extra || undefined}
         aria-disabled={why ? true : undefined}
-        aria-expanded={isAsk ? askOpen : undefined}
-        title={why || pb.desc}
-        data-playbook={pb.id}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (why) {
-            toast(why, { duration: 5000 });
-            return;
-          }
-          if (isAsk) {
-            setAskOpen((v) => !v);
-            return;
-          }
-          void pastePlaybook(title, pb);
+        title={why || title2}
+        data-ship={e.kind === "lane" ? "lane-" + e.lane : e.kind}
+        onClick={(ev) => {
+          ev.stopPropagation();
+          run(e);
         }}
       >
-        <span>
-          {pb.label}
-          {pb.id === "wrapup" && model.workers ? ` (${model.workers.reported})` : ""}
-        </span>
-        {isAsk && <span className="kbd">{askOpen ? "▾" : "›"}</span>}
+        <span>{label}</span>
       </button>
     );
   };
 
+  const cur = model.current;
   return (
     <>
-      {list === null && (
-        <button className="pb-row-off" aria-disabled disabled>
-          Work with other sessions…
-        </button>
-      )}
-      {model.general.map((pb) => (
-        <Fragment key={pb.id}>
-          {button(pb)}
-          {pb === askPb && askOpen && (
-            <div className="pb-row-sub" role="group" aria-label="Ask which session">
-              {targets.length === 0 && <span className="muted pb-row-none">No other sessions</span>}
-              {targets.map((t) => (
-                <button
-                  key={t.title}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setAskOpen(false);
-                    void pastePlaybook(title, pb, { session: t.title });
-                  }}
-                >
-                  <span>{t.name}</span>
-                  {t.rel && <span className="rel">{t.rel}</span>}
-                </button>
-              ))}
-            </div>
-          )}
-        </Fragment>
-      ))}
-      {model.workers?.items.map(button)}
       <button
+        aria-expanded={laneOpen}
+        title="How far MindFlock carries this session once its agent is done"
+        data-ship="lanes"
         onClick={(e) => {
           e.stopPropagation();
-          useUi.getState().threadOpen(title, { composeTo: title });
+          setLaneOpen((v) => !v);
         }}
       >
-        Message…<span className="kbd">Ctrl+K S</span>
+        <span>
+          When it's done: {LANE_LABEL[cur.lane]}
+          {cur.askFirst && cur.lane !== "leave" ? ", asks first" : ""}
+        </span>
+        <span className="kbd">{laneOpen ? "▾" : "›"}</span>
       </button>
+      {laneOpen && (
+        <div className="pb-row-sub" role="group" aria-label="When it's done">
+          {model.lanes.map((e) =>
+            e.kind === "lane"
+              ? button(e, e.label + (e.current ? " ✓" : ""), e.desc, e.current ? "on" : "")
+              : e.kind === "ask"
+                ? button(
+                    e,
+                    "Ask me before it ships" + (e.on ? " ✓" : ""),
+                    "Stop at the next step and show it in the Outbox first"
+                  )
+                : null
+          )}
+        </div>
+      )}
+      {model.split.map((e) =>
+        button(
+          e,
+          "Split into parallel pieces…",
+          "The agent proposes pieces with separate paths; you approve, MindFlock runs and merges them back"
+        )
+      )}
+      {model.tail.map((e) =>
+        e.kind === "shipnow" ? (
+          button(
+            e,
+            "Ship it now",
+            "Don't wait for the agent — take what's there through the lane now"
+          )
+        ) : e.kind === "detach" ? (
+          button(
+            e,
+            "Move out of " + (model.group?.name || "the group"),
+            "The group stops driving it; the session and its lane stay"
+          )
+        ) : e.kind === "message" ? (
+          <button
+            key="message"
+            onClick={(ev) => {
+              ev.stopPropagation();
+              run(e);
+            }}
+          >
+            Message…<span className="kbd">Ctrl+K S</span>
+          </button>
+        ) : null
+      )}
       <div className="menu-sep" />
     </>
   );

@@ -38,6 +38,7 @@ import time
 from typing import Dict, List, Optional
 
 from backend.config.config import GetConfigDir
+from backend.config.home_guard import guard
 
 __all__ = [
     "queue_path",
@@ -72,7 +73,7 @@ def queue_path() -> str:
     """
     env = os.environ.get("MINDFLOCK_PROMPT_QUEUE_FILE")
     if env:
-        return env
+        return guard(env, "prompt queue")
     return os.path.join(GetConfigDir(), _FileName)
 
 

@@ -1823,6 +1823,10 @@ def _parse_failed_step(text: str) -> Optional[str]:
         if _COMMIT_PLUMBING_RE.search(s) or _SHELL_PROMPT_RE.search(s):
             continue
         tail.append(s)
+    # git's own lock, not a hook. Joined without separators: a narrow pane
+    # wraps the long path, and the phrase must still match across the wrap.
+    if _INDEX_LOCK_RE.search("".join(tail)):
+        return INDEX_LOCK_STEP
     last = next((s for s in reversed(tail) if _ERRORISH_RE.search(s)), None)
     if last is None:
         last = next(
@@ -1837,6 +1841,13 @@ def _parse_failed_step(text: str) -> Optional[str]:
         return None
     return last if len(last) <= 80 else last[:77] + "..."
 
+
+#: What :func:`_parse_failed_step` names a commit that died on git's own
+#: ``index.lock`` — another git process (very often MindFlock's own status
+#: poll) held the index for a moment. Not a hook, and nothing the agent can fix:
+#: the autopilot retries it, and only a lock that never clears halts.
+INDEX_LOCK_STEP = "git's index.lock (another git process held it)"
+_INDEX_LOCK_RE = re.compile(r"index\.lock'?:\s*File exists", re.IGNORECASE)
 
 _HOOK_ID_RE = re.compile(r"^\s*-\s*hook id:\s*(\S+)\s*$")
 _HOOK_FAILED_RE = re.compile(r"^(.*?)\.{3,}.*\bFailed\s*$")

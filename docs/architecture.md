@@ -343,16 +343,21 @@ prunes workspaces untouched for 3 days. See
 ### MindFlock MCP (`backend/mcp`, `providers/mcp_attach.py`)
 
 A stdlib-only Model Context Protocol server, `python -P -m backend.mcp` or
-`mindflock mcp`, that gives an agent 14 tools over the rest of the flock:
+`mindflock mcp`, that gives an agent 25 tools over the rest of the flock:
 list and inspect sessions, read their output and diffs, message them, spawn
-workers, wait for them, answer their dialogs, and close or delete them. It
-runs as a **child of the agent CLI**, not of the web server, and is a thin
-client of the HTTP API (`backend/client.py`, bearer token included), so it
-holds no engine state and everything it does shows in the UI.
+workers (or start tickets as workers), wait for them, answer their dialogs,
+ship their work (commit, push, PR, merge, or arm the autopilot), close
+or delete them, and start and steer server-driven team runs. It runs as a **child of the agent CLI**, not of the web
+server, and is a thin client of the HTTP API (`backend/client.py`, bearer
+token included), so it holds no engine state and everything it does shows in
+the UI.
 
 - **Wiring.** `protocol.py` handles JSON-RPC over stdio: tool calls run on
   worker threads, with cancellation and progress. `tools.py` holds the
-  schemas and handlers.
+  schemas and handlers; `ship.py` the ship and ticket tools, which drive the
+  same commit / push / PR / merge / fast-track / ticket-start routes the UI
+  uses; `runs.py` the team-run tools over `/api/runs*` (see
+  [team-runs.md](team-runs.md)).
 - **Identity.** `identity.py` works out which session the server runs in:
   `MINDFLOCK_SESSION_TITLE`, else the tmux pane. An auto-attached server that
   can't confirm its session fails closed to `readonly`.

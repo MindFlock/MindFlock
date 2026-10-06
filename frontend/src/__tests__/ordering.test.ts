@@ -195,6 +195,22 @@ describe("attentionItems", () => {
     expect(items[0].snippet).toBe("help?");
   });
 
+  it("never says 'ready for PR' about a session whose lane stops at push", () => {
+    const items = attentionItems([
+      inst({ title: "lane-push", activity: "idle", stage: "pushed", lane: { target: "push", ask_first: false } }),
+      inst({
+        title: "ft-push",
+        activity: "idle",
+        stage: "pushed",
+        autopilot: { depth: "push", state: "done", step: "push" } as Instance["autopilot"],
+      }),
+      inst({ title: "lane-pr", activity: "idle", stage: "pushed", lane: { target: "pr", ask_first: false } }),
+      inst({ title: "no-lane", activity: "idle", stage: "pushed" }),
+    ]);
+    expect(items.map((i) => i.title)).toEqual(["lane-pr", "no-lane"]);
+    expect(items.every((i) => i.reason === "pushed — ready for PR")).toBe(true);
+  });
+
   it("skips paused and missing sessions", () => {
     const items = attentionItems([
       inst({ title: "p", status: "paused", activity: "clarify" }),

@@ -1549,7 +1549,9 @@ def settings_path() -> Path:
     """
     env = os.environ.get("MINDFLOCK_SETTINGS_FILE")
     if env:
-        return Path(env)
+        from backend.config.home_guard import guard
+
+        return Path(guard(env, "settings store"))
     return Path(GetConfigDir()) / SettingsFileName
 
 

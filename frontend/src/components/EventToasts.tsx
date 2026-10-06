@@ -23,6 +23,9 @@ import {
 import { selectSession } from "../lib/sessionActions";
 import { toast, type ToastOpts } from "../lib/toast";
 import { messageToastText, type MessageEventData } from "../lib/agentMessages";
+import { runNote } from "../lib/runs";
+import { openThread } from "../lib/flockActions";
+import { ruleOn, runLookups } from "../state/runs";
 
 const BASE_TITLE = document.title || "MindFlock";
 const clarifyUnseen = new Set<string>(); // clarify sessions not yet looked at
@@ -396,6 +399,25 @@ export function EventToasts() {
         );
       })
     );
+    // Ship lanes: a group that needs you, or has finished. At most ONE run
+    // toast per 30s across every group (one notifyOnce key) — a group's lines
+    // tend to finish together, and the bell keeps every row anyway. Same rule
+    // switches as the bell; never for a replayed backlog; a line that merely
+    // shipped is bell-only (its rule is off for push/desktop by default).
+    for (const name of ["run.needs_you", "run.finished"]) {
+      unsubs.push(
+        ev.subscribe(name, (env) => {
+          if (isReplay(env)) return;
+          const n = runNote(env.event, env.data, runLookups);
+          if (!n || !ruleOn(n.rule)) return;
+          notifyOnce("*run", "run", n.text, {
+            // A plan / the one PR: their click is on the lead's Thread tab.
+            onClick: () => (n.lead ? openThread(n.lead) : useUi.getState().openDialogFor("outbox", n.run || null)),
+            duration: 8000,
+          });
+        })
+      );
+    }
     unsubs.push(
       ev.subscribe("session.deleted", (env) => {
         dropActivity(env.session);

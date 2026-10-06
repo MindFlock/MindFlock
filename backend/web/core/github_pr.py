@@ -305,12 +305,18 @@ def _fill(wt: str, base: str, head: str) -> Optional[tuple[str, str]]:
 # --------------------------------------------------------------------------- #
 # Operations
 # --------------------------------------------------------------------------- #
-async def create_pr(wt: str, base: str, head: str) -> PRResult:
+async def create_pr(
+    wt: str, base: str, head: str, title: str = "", body: str = ""
+) -> PRResult:
     """Open a PR from ``head`` into ``base`` over REST.
 
     ``head`` is sent unqualified (``feat/x``, not ``owner:feat/x``): MindFlock
     pushes branches to the session's own origin, so the head always lives in
     the same repo the PR is opened against.
+
+    ``title`` / ``body``, when given, replace the commit-derived ones (the
+    MindFlock MCP passes a worker's report as the body); a branch with no
+    commits beyond the base is refused either way.
     """
     ref = repo_ref(wt)
     if ref is None:
@@ -324,7 +330,8 @@ async def create_pr(wt: str, base: str, head: str) -> PRResult:
         # Same wording GitHub itself uses, so the route's "nothing to PR"
         # mapping fires whether the failure came from git or from the API.
         return PRResult(error="No commits between {} and {}".format(base, head))
-    title, body = filled
+    title = (title or "").strip() or filled[0]
+    body = (body or "").strip() or filled[1]
 
     status, data = await _request(
         "POST",

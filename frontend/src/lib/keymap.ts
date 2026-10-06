@@ -33,7 +33,7 @@ import {
   selectSession,
   undoLastClose,
 } from "./sessionActions";
-import { openPlaybookMenu } from "./playbooks";
+import { openShipMenu } from "./laneActions";
 import { toast } from "./toast";
 import { useUi, type DialogName } from "../state/store";
 
@@ -138,6 +138,9 @@ const MODAL_DIALOG_NAMES: DialogName[] = [
   // The Intake reads like a page, not a popover, and its per-card Remove buttons make
   // a stray Delete genuinely dangerous behind it.
   "intake",
+  // The Outbox: Commit / Retry / Skip buttons on rows about OTHER sessions — a
+  // stray Delete or Ctrl+W must never end the focused one behind it.
+  "outbox",
   // Same shape as Intake: a full-page surface with per-plan Delete buttons, and
   // nothing about it suggests the session behind is still taking keystrokes.
   "verify",
@@ -156,15 +159,16 @@ const MODAL_DOM_IDS = [
   "rename-dialog",
   "device-dialog",
   "intake-dialog",
+  "outbox-dialog",
   "verify-dialog",
   "red-zones-dialog",
   // The take-a-break screen owns the whole window and holds the keyboard on
   // its own buttons; a Delete meant for the card must not reach the session
   // running behind it.
   "break-screen",
-  // The fork-icon menu holds the keyboard for its arrows and letters; a
+  // The Ship & split menu holds the keyboard for its arrows and letters; a
   // Delete or Ctrl+W pressed at it must not end the session it hangs from.
-  "playbook-menu",
+  "ship-menu",
 ];
 export function modalOpen(): boolean {
   const open = useUi.getState().openDialog;
@@ -309,12 +313,14 @@ export const CHORDS: Record<string, ChordEntry> = {
       useUi.getState().setLastTab(t, "map");
     },
   },
-  // Agent teams (MindFlock MCP). Message… opens the Thread composer addressed
-  // to the focused session — what you type there goes in as YOU, never through
-  // the agents' mailbox. Ctrl+K F is the pane's fork-icon menu (the named
-  // prompts, pasted for you to send), Ctrl+K T the Thread itself.
+  // Ship & split. Message… opens the Thread composer addressed to the
+  // focused session — what you type there goes in as YOU, never through the
+  // agents' mailbox. Ctrl+K F is the pane's Ship & split menu (lanes, split,
+  // ship now — each acts at once, nothing is pasted), Ctrl+K L the same menu
+  // landed on the session's lane, Ctrl+K T the Thread itself.
   s: { desc: "Message…", run: (t) => useUi.getState().threadOpen(t, { composeTo: t }) },
-  f: { desc: "Work with other sessions…", run: (t) => openPlaybookMenu(t) },
+  f: { desc: "Ship & split…", run: (t) => openShipMenu(t) },
+  l: { desc: "When it's done… (lane)", run: (t) => openShipMenu(t, "lane") },
   t: { desc: "Thread — workers and messages", run: (t) => useUi.getState().threadOpen(t) },
 };
 
@@ -426,6 +432,17 @@ export const KEYMAP: KeymapEntry[] = [
     // someone meant for a text field or a terminal.
     when: () => !isEditingTarget(document.activeElement),
     run: () => useUi.getState().openDialogFor("intake"),
+  },
+  {
+    // The Outbox sits between Intake and Verify on the top bar, and its key
+    // between theirs: Alt+O, guarded the same way (Option+O types ø on macOS).
+    // Not a Ctrl+K chord — Ctrl+K O already opens the IDE.
+    key: "o",
+    alt: true,
+    id: "outbox",
+    help: ["Navigation", "Alt+O", "Outbox — what's shipping, and what's waiting on you"],
+    when: () => !isEditingTarget(document.activeElement),
+    run: () => useUi.getState().openDialogFor("outbox"),
   },
   {
     // Alt for the same reasons as Alt+I next door — Ctrl+V is paste and always

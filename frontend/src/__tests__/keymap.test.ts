@@ -121,8 +121,30 @@ describe("a newer chord whose letter an older rebinding took", () => {
   });
 });
 
+describe("Alt+O opens the Outbox", () => {
+  it("is bound, on the sheet, and taken by nothing else", () => {
+    const o = byId("outbox");
+    expect(o).toMatchObject({ key: "o", alt: true });
+    expect(o.help?.[1]).toBe("Alt+O");
+    const combo = defaultCombosFor("outbox")[0];
+    const clash = KEYMAP.filter((e) => e !== o && e.key.toLowerCase() === "o" && sameCombo(combo, { key: e.key, mod: e.mod, shift: e.shift, alt: e.alt }));
+    expect(clash).toEqual([]);
+    // Not a Ctrl+K chord: O there is still "Open / focus IDE".
+    expect(chordForKey("o")).toBe("o");
+  });
+
+  it("guards like Alt+I: it never eats a keystroke meant for a text field", () => {
+    expect(typeof byId("outbox").when).toBe("function");
+  });
+});
+
 describe("modalOpen", () => {
   afterEach(() => useUi.getState().closeDialog());
+
+  it("counts the Outbox: its Commit / Retry / Skip rows are about OTHER sessions", () => {
+    useUi.getState().openDialogFor("outbox");
+    expect(modalOpen()).toBe(true);
+  });
 
   it("counts the Red zones dialog: Delete on a zone's × or Ctrl+W in its input must not close the session behind", () => {
     // The store slot answers before any DOM lookup, so this runs without a DOM.

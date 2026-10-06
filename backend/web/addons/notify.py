@@ -194,6 +194,54 @@ NOTIFY_RULES: List[dict] = [
         "tags": ["zzz"],
     },
     {
+        # Team runs (core.team_run_driver is the ONE emitter): an escalation
+        # the RUN originated — stalled after two nudges, hooks failed twice, a
+        # blocked report, a session gone after a restart, the budget spent.
+        # Each fires once per (run, task, reason, incarnation). A dialog is
+        # NOT re-announced here: needs_input already fired for that session.
+        # The emitter writes the whole sentence into ``detail`` ("Q4
+        # payments: PAY-421 hooks failed twice").
+        "id": "run_needs_you",
+        "label": "A group needs you",
+        "event": "run.needs_you",
+        "old": None,
+        "new": None,
+        "title": "A group needs you",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 4,
+        "tags": ["raising_hand"],
+    },
+    {
+        # Once per group, when its last task is done (persisted, so a restart
+        # never repeats it; a group that finished while the server was down
+        # announces once after the boot quiet window).
+        "id": "run_finished",
+        "label": "A group finishes",
+        "event": "run.finished",
+        "old": None,
+        "new": None,
+        "title": "A group finished",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 3,
+        "tags": ["checkered_flag"],
+    },
+    {
+        # Opt-in: every member that reaches its lane. The Outbox and the bell
+        # already show these; a push per PR is ambient, not actionable.
+        "id": "run_task_shipped",
+        "label": "A group member ships",
+        "event": "run.task_shipped",
+        "old": None,
+        "new": None,
+        "title": "Shipped",
+        "body": "{detail}",
+        "default_enabled": False,
+        "priority": 2,
+        "tags": ["package"],
+    },
+    {
         # Opt-in (noisy): the commit hit the pre-commit lock — hooks are running
         # (stage -> "precommit"). See server._session_stage.
         "id": "precommit_running",

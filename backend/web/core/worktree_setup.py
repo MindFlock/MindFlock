@@ -367,6 +367,15 @@ def start_check(title: str, wt_path: str, command: str) -> bool:
         return False
     if is_running(wt_path, "check"):
         return False
+    # The status and log files are MindFlock's, never the branch's: exclude
+    # them BEFORE writing them (a plain worktree may not have the exclude
+    # yet, and the diff probe's `git add -N .` would otherwise mark them).
+    try:
+        from backend import workspace_setup as _ws
+
+        _ws.exclude_artifacts(wt_path)
+    except Exception:  # noqa: BLE001 — best-effort
+        pass
     status = {
         "state": "running",
         "rc": None,

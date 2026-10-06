@@ -4,8 +4,8 @@
  * mount, filter, bulk bar, device-grouped session list, and the footer
  * (view modes + count + customize + shortcuts). */
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { Instance } from "../../api/types";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import type { Instance, RunTask } from "../../api/types";
 import { api } from "../../api/client";
 import { refreshInstances, useDevices, useInstances } from "../../state/queries";
 import { useUi, windowKey, type ViewMode } from "../../state/store";
@@ -25,13 +25,18 @@ import {
   movedRailOrder,
   orderedInstances,
   orderedKeys,
+  placeNewRunMembers,
   placeNewWorkers,
   railNesting,
   sameNest,
   SEARCH_MIN,
   type NestInfo,
 } from "./ordering";
-import { childrenByParent } from "../../lib/agentMessages";
+import { childrenByParent, type ShipTask } from "../../lib/agentMessages";
+import { effectiveActivity } from "../../lib/stage";
+import { splitKeys, splitRail } from "../../lib/runs";
+import { useRuns } from "../../state/runs";
+import { OwnHeader, QueuedRow, RunGroupHeader } from "./RunGroupHeader";
 import { computeVisible } from "../grid/layout";
 import { useDoctorWarn } from "../dialogs/SetupDialog";
 import { isVerifySession } from "../dialogs/verify";
@@ -80,10 +85,30 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // at once (no bottom-then-jump), persisted by the effect below; workers
   // the order already holds are never moved again — a drag owns them.
   const families = useMemo(() => childrenByParent(listed), [listed]);
+  // …and the same for a group's members (ship lanes), which the server starts
+  // over minutes as slots free up: each lands after the last of its group.
   const order = useMemo(
-    () => placeNewWorkers(ui.order, listed.filter((i) => !i.device)),
+    () =>
+      placeNewRunMembers(
+        placeNewWorkers(ui.order, listed.filter((i) => !i.device)),
+        listed.filter((i) => !i.device)
+      ),
     [ui.order, listed]
   );
+  // Sessions started together (ship lanes): their runs, for the group headers
+  // and the lines still queued. Empty on a server without runs — the rail is
+  // then exactly what it was.
+  const { data: runsData } = useRuns();
+  const runs = runsData || [];
+  const runById = useMemo(() => new Map((runsData || []).map((r) => [r.id, r])), [runsData]);
+  // A split / one-for-all group draws as a family (no header), so its members'
+  // run view ("✓ merged back", "! conflict") comes from here instead.
+  const familyTaskOf = useMemo(() => {
+    const m = new Map<string, RunTask>();
+    for (const r of runsData || [])
+      if (r.policy?.grouping === "together" || r.split) for (const t of r.tasks || []) if (t.title) m.set(t.title, t);
+    return m;
+  }, [runsData]);
   useEffect(() => {
     if (order !== ui.order) ui.setOrder(order);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -250,6 +275,15 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // Windows are local by definition, so under device grouping they ride in
   // this device's section; a remote group holds sessions only.
   const localRail = toRail(localRows, winFiltered);
+  // Ship lanes: this device's rail split into run groups (each under its
+  // header, folded or not) and the rest ("On their own"). Re-sequencing only —
+  // the same entries, so the published keys below are still exactly what is
+  // rendered, and a folded group leaves them the way a folded device does.
+  const localSplit = splitRail(localRail, runs, {
+    collapsed: ui.collapsedRuns,
+    act: effectiveActivity,
+    filtering: !!ui.filter,
+  });
   const devRails = remoteDevs.map((dev) => {
     const dkey = (dev as { device?: string }).device || dev.name;
     return { dkey, rail: toRail(byDev.get(dkey) || [], []) };
@@ -260,12 +294,12 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // instead of re-deriving it, so a number can never point at a row the
   // badge doesn't show.
   const displayedKeys: string[] = grouped
-    ? (ui.collapsedDevices.has("__self") ? [] : localRail.map((r) => r.key)).concat(
+    ? (ui.collapsedDevices.has("__self") ? [] : splitKeys(localSplit)).concat(
         ...devRails.map(({ dkey, rail }) =>
           ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key)
         )
       )
-    : localRail.map((r) => r.key);
+    : splitKeys(localSplit);
   // Keyed by content: the array is rebuilt every render, and the store's
   // setRailOrder already no-ops on equal rows.
   const railSig = JSON.stringify(displayedKeys);
@@ -288,7 +322,10 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // parent (or a sibling) on screen. It is paint only: `list` — and with it
   // rowIdx, the published railOrder above and every drop target — is used
   // exactly as given.
-  const renderRail = (list: Array<{ key: string; inst?: Instance; win?: WindowRow }>) => {
+  const renderRail = (
+    list: Array<{ key: string; inst?: Instance; win?: WindowRow }>,
+    taskOf?: Map<string, ShipTask>
+  ) => {
     const nest = railNesting(list.map((r) => ({ key: r.key, parent: r.inst?.parent })));
     return list.map((r, i) => {
       rowIdx += 1;
@@ -303,6 +340,8 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
           nest={stableNest(r.key, nest[i])}
           kids={r.inst.device ? undefined : families.get(r.key)}
           parentLive={!r.inst.device && !!parent && families.get(parent)?.includes(r.inst) === true}
+          runTask={taskOf?.get(r.key) ?? null}
+          leadRun={r.inst.run?.role === "lead" ? runById.get(r.inst.run.id) ?? null : null}
           {...rowProps}
         />
       ) : (
@@ -317,6 +356,30 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
       );
     });
   };
+
+  // This device's rail: each run group's header, its rows (unless folded) and
+  // its queued lines, then "On their own" (only under a group) and the rest.
+  // Rendered in exactly splitKeys' sequence, so rowIdx === the published
+  // railOrder position. Headers and queued lines don't touch rowIdx.
+  const groupRepo = (entries: Array<{ inst?: Instance }>) =>
+    entries.find((e) => e.inst?.folder)?.inst?.folder || "";
+  const renderLocal = () => (
+    <>
+      {localSplit.groups.map((g) => (
+        <Fragment key={"run:" + g.id}>
+          <RunGroupHeader group={g} repoPath={groupRepo(g.entries)} />
+          {!g.collapsed && renderRail(g.entries, g.taskOf)}
+          {!g.collapsed &&
+            g.queued.map((t, i) => <QueuedRow key={"q:" + t.id} task={t} pos={i} groupName={g.name} />)}
+        </Fragment>
+      ))}
+      {/* A one-for-all / split family (its lead + workers) is a group in its
+          own right: never filed under "On their own". */}
+      {renderRail(localSplit.families, familyTaskOf)}
+      {localSplit.groups.length + localSplit.families.length > 0 && localSplit.own.length > 0 && <OwnHeader />}
+      {renderRail(localSplit.own, familyTaskOf)}
+    </>
+  );
 
   const cap = viewCap(ui.viewMode);
   // Counted off `listed`, not `instances`: the footer says how many sessions
@@ -393,7 +456,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                       showForget={false}
                       onToggle={() => ui.toggleDeviceCollapsed("__self")}
                     />
-                    {!ui.collapsedDevices.has("__self") && renderRail(localRail)}
+                    {!ui.collapsedDevices.has("__self") && renderLocal()}
                     {remoteDevs.map((dev, di) => {
                       const devRows =
                         byDev.get((dev as { device?: string }).device || dev.name) || [];
@@ -446,7 +509,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                     })}
                   </>
                 ) : (
-                  renderRail(localRail)
+                  renderLocal()
                 )}
                 {ui.filter && !filtered.length && !winFiltered.length && (
                   <li className="filter-empty muted">No sessions match “{ui.filter}”</li>

@@ -908,6 +908,9 @@ def test_the_force_start_route_moves_the_ticket_after_the_launch():
 
     from backend.web import server
 
-    src = inspect.getsource(server.ticket_force_start)
+    # The route's launch lives in ticket_start.launch (shared with team runs);
+    # the route must still go through it.
+    assert "_ticket_start.launch(" in inspect.getsource(server.ticket_force_start)
+    src = inspect.getsource(server._ticket_start.launch)
     assert "move_to_start_state" in src
     assert src.index("inst.Start") < src.index("move_to_start_state")
