@@ -27432,6 +27432,17 @@ function runNote(event, data, info = {}) {
 		default: return null;
 	}
 }
+function groupLanding(runId, runs, rows) {
+	if (!runId) return null;
+	const live = (rows || []).filter((r) => !r.device);
+	const has = (t) => !!t && live.some((r) => r.title === t);
+	const lead = (runs || []).find((r) => r.id === runId)?.lead?.title || "";
+	if (has(lead)) return { lead };
+	const mine = live.filter((r) => r.run?.id === runId);
+	const byRole = mine.find((r) => r.run?.role === "lead");
+	if (byRole) return { lead: byRole.title };
+	return mine.length ? { row: mine[0].title } : null;
+}
 //#endregion
 //#region src/state/runs.ts
 var RUNS_LIVE_MS = 5e3;
@@ -31173,6 +31184,12 @@ function summaryFor(data, runId) {
 	const s = (data?.summaries || []).find((x) => x.run === runId);
 	return s && String(s.text_md || "").trim() ? s : null;
 }
+function summaryText(data, runId, run) {
+	const kept = summaryFor(data, runId);
+	if (kept) return kept.text_md;
+	const own = String(run?.summary?.text_md || "");
+	return own.trim() ? own : "";
+}
 function shipVerb(step) {
 	switch (String(step || "")) {
 		case "push": return "Push";
@@ -31707,6 +31724,15 @@ function revealGroup(runId) {
 	return true;
 }
 //#endregion
+//#region src/lib/showGroup.ts
+function showGroup(runId) {
+	if (!runId || revealGroup(runId)) return;
+	const to = groupLanding(runId, queryClient.getQueryData(["runs"]), queryClient.getQueryData(["instances"]));
+	if (!to) return;
+	if ("lead" in to) openThread(to.lead);
+	else selectSession(to.row);
+}
+//#endregion
 //#region src/components/NotificationsBell.tsx
 var NOTIF_CAP = 100;
 var NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -32067,11 +32093,11 @@ function NotificationsBell() {
 								setFlash(row.key);
 							} else {
 								setOpen(false);
-								revealGroup(n.run);
+								showGroup(n.run);
 							}
 						} else if (n.run) {
 							setOpen(false);
-							revealGroup(n.run);
+							showGroup(n.run);
 						} else jump(n.session);
 					},
 					children: [
@@ -32342,7 +32368,7 @@ function EventToasts() {
 				onClick: () => {
 					if (n.lead) openThread(n.lead);
 					else if (env.event === "run.needs_you") document.dispatchEvent(new CustomEvent("mf-open-bell", { detail: { title: String(env.data?.title || "") || (n.run ? "run:" + n.run : "") } }));
-					else revealGroup(n.run);
+					else showGroup(n.run);
 				},
 				duration: 8e3
 			});
@@ -34876,7 +34902,10 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 	const [lines, setLines] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const { data: outbox } = useOutbox();
-	const summary = group.done ? summaryFor(outbox, group.id) : null;
+	const kept = group.done ? summaryFor(outbox, group.id) : null;
+	const { data: record, isFetched: recordRead } = useRun(group.done && !kept ? group.id : null);
+	const summary = group.done ? summaryText(outbox, group.id, record) : "";
+	const looking = group.done && !summary && !kept && !recordRead;
 	(0, import_react.useEffect)(() => {
 		const onDown = (e) => {
 			if (!ref.current?.contains(e.target)) onClose();
@@ -35030,10 +35059,10 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 				role: "menuitem",
 				className: "rg-copy-summary",
 				disabled: !summary,
-				title: summary ? "Copy what this group did, as Markdown" : "No summary for this group yet — MindFlock writes one when a group finishes",
+				title: summary ? "Copy what this group did, as Markdown" : looking ? "Looking for this group's summary…" : "MindFlock has no summary for this group",
 				onClick: async () => {
 					if (!summary) return;
-					toast(await copyText(summary.text_md) ? "Copied the summary as Markdown" : "Couldn't copy the summary");
+					toast(await copyText(summary) ? "Copied the summary as Markdown" : "Couldn't copy the summary");
 					onClose();
 				},
 				children: ["Copy summary", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -38545,6 +38574,14 @@ function RunLeadPanel({ title, me, run, rows }) {
 	].includes(run.state);
 	const tasks = memberTasks(run);
 	const sub = leadSubline(run, myName);
+	const finished = RUN_DONE_STATES.has(run.state);
+	const summary = finished ? summaryText(null, id, run) : "";
+	const pieceAct = (t, verb) => {
+		if (busy) return;
+		setBusy(verb + ":" + t.id);
+		const name = pieceLabel(t, run).name;
+		runAction(verb === "skip" ? "Remove" : "Start now", taskPath(id, t.id, verb), {}, (verb === "skip" ? "Removed " : "Starting ") + name).finally(() => setBusy(""));
+	};
 	const noTools = me?.mcp_attached === false && split && (run.state === "planning" || run.state === "plan_ready");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
@@ -38568,6 +38605,20 @@ function RunLeadPanel({ title, me, run, rows }) {
 					className: "thread-sub th-bad rb-warn",
 					"data-stray": "",
 					children: [run.stray?.paths?.length ? "Changes no piece owns in " + myName + "'s folder: " + run.stray.paths.slice(0, 4).join(", ") + (run.stray.paths.length > 4 ? " (+" + (run.stray.paths.length - 4) + " more)" : "") + " — no piece's commit takes them; commit or discard them yourself." : "", run.stray?.commits?.length ? " A commit no piece made is on the group's branch (" + run.stray.commits.slice(0, 3).map((c) => c.slice(0, 9)).join(", ") + ") — it ships with the PR unless you undo it." : ""]
+				}),
+				finished && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "thread-head-btns",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "th-btn rb-copy-summary",
+						disabled: !summary,
+						title: summary ? "Copy what this group did, as Markdown" : "MindFlock has no summary for this group",
+						onClick: async () => {
+							if (!summary) return;
+							toast(await copyText(summary) ? "Copied the summary as Markdown" : "Couldn't copy the summary");
+						},
+						children: "Copy summary"
+					})
 				}),
 				noTools && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "thread-sub th-bad rb-warn",
@@ -38946,7 +38997,22 @@ function RunLeadPanel({ title, me, run, rows }) {
 									st.detail && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 										className: "th-w-detail" + (st.cls === "ok" ? " th-ok" : ""),
 										children: st.detail
-									})
+									}),
+									t.state === "queued" && !finished && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "th-btn rb-start-now",
+										disabled: !!busy,
+										title: "Start it now, past the at-a-time limit (once)",
+										onClick: () => pieceAct(t, "start-now"),
+										children: "Start now"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "th-btn rb-remove",
+										disabled: !!busy,
+										title: "Take it out of the group — it never starts",
+										onClick: () => pieceAct(t, "skip"),
+										children: "Remove"
+									})] })
 								]
 							}),
 							(paths || commit) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {

@@ -1267,8 +1267,9 @@ needs you surfaced. The server keeps one record per run
 has an Outbox: the route feeds the bell's waiting list. The bell renders
 `waiting` in its **Needs attention** list (merged with the per-session
 attention rows, so there is one badge), and a finished group's header ⋯ menu
-copies its entry from `summaries` (**Copy summary**). Nothing else in the UI
-reads it; `shipping`, `shipped` and `queued` are there for other clients (a
+copies its entry from `summaries` (**Copy summary**; a group finished more
+than a week ago, or a split's lead Thread, reads `summary.text_md` from
+`GET /api/runs/{id}` instead). Nothing else in the UI reads it; `shipping`, `shipped` and `queued` are there for other clients (a
 group's queued lines reach the UI through `GET /api/runs`).
 
 | Method | Path | Behavior |

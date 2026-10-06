@@ -174,7 +174,10 @@ action (Retry, Retry fresh, Skip, Open, Raise budget).
 There is no separate log beside it. A group's own controls live on its rail
 header's ⋯ menu: its queued lines (Start now / Remove), Pause, Add lines,
 Cancel, and once it has finished **Copy summary** (the group's summary as
-Markdown). What is shipping shows on each row's status line.
+Markdown). A split or one-for-all group has no header (it is a family under
+its lead): its lead's Thread tab carries Start now / Remove on a queued piece
+and, once it has finished, **Copy summary**. What is shipping shows on each
+row's status line.
 
 Controls (routes, or `control_run` from the MCP): **Pause** (nothing new starts,
 merges or ships — not even a session whose create was already under way, nor
@@ -242,7 +245,9 @@ opened", or "N merged into one branch, nothing pushed", never "N PRs". Rules: `r
 `run_finished` (on), `run_task_shipped` (off). In the web UI a `run.needs_you`
 toast opens the lead's Thread when the group has a lead and the bell
 otherwise; a `run.finished` toast reveals the group's header on the rail
-(scrolled into view and pulsed once).
+(scrolled into view and pulsed once), and for a group with no header (a split
+or one-for-all group, a group of one) opens its lead's Thread, else a member
+row still open.
 
 ## One PR for all
 

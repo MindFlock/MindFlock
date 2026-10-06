@@ -1006,10 +1006,11 @@ export interface TestPlansResponse {
   live_branch: string;
 }
 
-// --- Team runs and the Outbox (SPEC §5) --------------------------------------
+// --- Team runs and GET /api/outbox (SPEC §5) ---------------------------------
 //
 // A "run" is the server's object for sessions started together; on screen it is
-// only ever a group header and the Outbox's tabs. Every field the UI reads is
+// only ever a group header (plus the bell's waiting rows and the header's Copy
+// summary), or for a split / one-for-all group its lead's Thread tab. Every field the UI reads is
 // optional beyond the identity: the routes are new, and a server that predates
 // one of them must degrade to "no groups", never to a crash.
 
@@ -1185,6 +1186,9 @@ export interface RunDTO extends RunSummary {
   origin?: RunOrigin | null;
   /** Same folder: changes (and commits) in the lead's folder no piece owns. */
   stray?: { paths: string[]; commits: string[] } | null;
+  /** Written when the group finishes: what it did, as Markdown. The run keeps
+   * it; `GET /api/outbox` carries it only for SUMMARY_DAYS (7). */
+  summary?: { text_md?: string } | null;
 }
 
 export interface OutboxRunRef {

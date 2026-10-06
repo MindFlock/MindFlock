@@ -334,3 +334,27 @@ export function runNote(
       return null;
   }
 }
+
+/** Where a group event lands when the group has no header on the rail.
+ *
+ * A split or one-for-all group never gets one (it is a family under its lead),
+ * nor does a group of one, nor a finished group whose rows were all closed. Its
+ * finish toast / bell row then goes to the lead's Thread tab (`lead`) when the
+ * lead is still on the rail — that is where its pieces, its release and its
+ * "Copy summary" live — else to any member row still open (`row`); null when
+ * nothing of the group is left to show. */
+export function groupLanding(
+  runId: string | null | undefined,
+  runs: readonly RunInfo[] | null | undefined,
+  rows: readonly Instance[] | null | undefined
+): { lead: string } | { row: string } | null {
+  if (!runId) return null;
+  const live = (rows || []).filter((r) => !r.device);
+  const has = (t: string) => !!t && live.some((r) => r.title === t);
+  const lead = (runs || []).find((r) => r.id === runId)?.lead?.title || "";
+  if (has(lead)) return { lead };
+  const mine = live.filter((r) => r.run?.id === runId);
+  const byRole = mine.find((r) => r.run?.role === "lead");
+  if (byRole) return { lead: byRole.title };
+  return mine.length ? { row: mine[0].title } : null;
+}

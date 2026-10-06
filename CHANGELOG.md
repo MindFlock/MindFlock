@@ -179,10 +179,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **The Outbox is gone as a place.** What waited on you is in the bell; a
     finished group's summary is **Copy summary** in its rail header's ⋯
     menu; a group's queued lines (Start now / Remove) are in that same
-    menu; the *Shipped today* log is dropped (a session's PR and checks stay
-    on its row). `Alt+O` and the palette's Outbox entry are gone, and a
-    rebind saved for `Alt+O` is dropped on load. A group's row in the bell,
-    or its *finished* toast, scrolls to the group's header and pulses it.
+    menu. A split or one-for-all group has no header, so both live on its
+    lead's Thread tab. The *Shipped today* log is dropped (a session's PR
+    and checks stay on its row). `Alt+O` and the palette's Outbox entry are
+    gone, and a rebind saved for `Alt+O` is dropped on load. A group's row in
+    the bell, or its *finished* toast, scrolls to the group's header and
+    pulses it, or opens the lead's Thread for a group with no header.
   - **Customize is a dialog with two tabs: Sidebar and Prompts.** The
     footer's **Customize** opens it. Sidebar says when each bar has
     something to show; Prompts pastes a saved prompt into the selected
@@ -222,7 +224,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `alert()` show in a bottom-right card.
 
   The API is unchanged: `GET /api/outbox` still serves every group; the UI
-  reads only `waiting` (the bell) and `summaries` (Copy summary). See
+  reads only `waiting` (the bell) and `summaries` (Copy summary; an older
+  group's comes from `GET /api/runs/{id}`). See
   [docs/web-ui.md](docs/web-ui.md#customize).
 
 - **Launch flags are merged as flag/value pairs.** When per-session flags

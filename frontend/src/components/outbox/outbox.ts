@@ -4,7 +4,8 @@
  *
  * One `GET /api/outbox?group=all` feeds the bell's waiting rows
  * (`needsAttention` merges them into the bell's one list) and a finished
- * group's summary, which its rail header's ⋯ menu copies (`summaryFor`).
+ * group's summary, which its rail header's ⋯ menu — or, for a split /
+ * one-for-all group, its lead's Thread tab — copies (`summaryText`).
  *
  * Rows are de-duplicated on `key` — the server's `(repo, branch)` — because the
  * owner runs two windows on one branch ("foo" + "foo-copy"): one branch's PR is
@@ -35,6 +36,21 @@ export function summaryFor(data: OutboxResponse | null | undefined, runId: strin
   if (!runId) return null;
   const s = (data?.summaries || []).find((x) => x.run === runId);
   return s && String(s.text_md || "").trim() ? s : null;
+}
+
+/** The Markdown a finished group's "Copy summary" copies: the summary
+ * `GET /api/outbox` holds (its last week of finished groups), else the one the
+ * run record keeps (`GET /api/runs/{id}` → `run.summary.text_md`, no age
+ * limit). "" when neither has one. */
+export function summaryText(
+  data: OutboxResponse | null | undefined,
+  runId: string,
+  run?: { summary?: { text_md?: string } | null } | null
+): string {
+  const kept = summaryFor(data, runId);
+  if (kept) return kept.text_md;
+  const own = String(run?.summary?.text_md || "");
+  return own.trim() ? own : "";
 }
 
 /** The button that carries an approved ship one step, named for that step. */

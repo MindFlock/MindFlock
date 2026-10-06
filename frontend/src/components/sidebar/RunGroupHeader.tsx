@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { RunTask } from "../../api/types";
 import { api } from "../../api/client";
-import { refreshRuns, useOutbox } from "../../state/runs";
+import { refreshRuns, useOutbox, useRun } from "../../state/runs";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { copyText } from "../../lib/clipboard";
@@ -24,7 +24,7 @@ import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
 import { groupTitle, queuedLine, queuedTitle, shippedBadge, type RunGroup } from "../../lib/runs";
 import { cancelRun, runAction as runAct, runPath, taskPath } from "../../lib/runsApi";
-import { summaryFor } from "../outbox/outbox";
+import { summaryFor, summaryText } from "../outbox/outbox";
 
 export function RunGroupHeader({ group, repoPath }: { group: RunGroup; repoPath?: string }) {
   const toggle = useUi((s) => s.toggleRunCollapsed);
@@ -100,8 +100,12 @@ function RunGroupMenu({
   const [lines, setLines] = useState("");
   const [busy, setBusy] = useState(false);
   // A finished group's summary — the same cached query the bell keeps warm.
+  // It holds only the last week's: an older group's comes from its own record.
   const { data: outbox } = useOutbox();
-  const summary = group.done ? summaryFor(outbox, group.id) : null;
+  const kept = group.done ? summaryFor(outbox, group.id) : null;
+  const { data: record, isFetched: recordRead } = useRun(group.done && !kept ? group.id : null);
+  const summary = group.done ? summaryText(outbox, group.id, record) : "";
+  const looking = group.done && !summary && !kept && !recordRead;
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       if (!ref.current?.contains(e.target as Node)) onClose();
@@ -257,11 +261,13 @@ function RunGroupMenu({
           title={
             summary
               ? "Copy what this group did, as Markdown"
-              : "No summary for this group yet — MindFlock writes one when a group finishes"
+              : looking
+                ? "Looking for this group's summary…"
+                : "MindFlock has no summary for this group"
           }
           onClick={async () => {
             if (!summary) return;
-            toast((await copyText(summary.text_md)) ? "Copied the summary as Markdown" : "Couldn't copy the summary");
+            toast((await copyText(summary)) ? "Copied the summary as Markdown" : "Couldn't copy the summary");
             onClose();
           }}
         >

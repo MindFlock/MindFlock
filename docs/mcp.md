@@ -887,7 +887,8 @@ them as an ordinary group in the rail, with every row's status line leading
 with its lane. Whatever the group needs from them — an ask-first approval, a
 stuck line, a budget pause, the plan or the release — waits in MindFlock's
 bell; the group's own controls (queued lines, Pause, Cancel, and a finished
-group's **Copy summary**) are on its rail header's ⋯ menu.
+group's **Copy summary**) are on its rail header's ⋯ menu, or on its lead's
+Thread tab for a split or one-for-all group.
 
 ### `get_run`
 

@@ -30,7 +30,9 @@ Four entries left the bar:
 
 - **Outbox** is gone as a place. What waited on you is in the bell; a finished
   group's summary is **Copy summary** in its header's ⋯ menu; a group's queued
-  lines are in that same menu (see [Team runs on the rail](#team-runs-on-the-rail)).
+  lines are in that same menu — or, for a split or one-for-all group (which has
+  no header), on its lead's Thread tab (see
+  [Team runs on the rail](#team-runs-on-the-rail)).
 - **Prompts** is Customize's **Prompts** tab (see
   [Saved prompts](#saved-prompts)).
 - **Recent** is the **Recently closed (n)** link under the session list (see
@@ -1043,7 +1045,8 @@ pre-commit hooks* rather than the raw stage key, and an auto-sent prompt says
 group's name; clicking one opens the lead's Thread when the group has a lead,
 scrolls to its Needs attention row when it is waiting on you, and otherwise
 closes the bell and reveals the group's header on the rail (scrolled into view,
-one pulse; see [Team runs on the rail](#team-runs-on-the-rail)). *No
+one pulse) — or, for a group with no header, opens its lead's Thread (see
+[Team runs on the rail](#team-runs-on-the-rail)). *No
 notifications yet.* shows only when
 both lists are empty.
 
@@ -2181,13 +2184,15 @@ Customize holds what is optional. Set-and-forget configuration stays in
 [Settings](#settings-), and anything that needs you is in the bell.
 
 There is no Outbox. It used to be a third tab, a read-only log of outbound
-work; each thing it held now has one home elsewhere:
+work; each thing it held now lives elsewhere:
 
 - what waits on you (answers, ask-first approvals, escalations, a lead's plan
   or PR) — the bell's **Needs attention** (see [Notifications](#notifications-));
 - a group's queued lines (**Start now** / **Remove**) — the group header's ⋯
-  menu (below);
-- a finished group's summary — **Copy summary** in that same menu;
+  menu (below); for a split or one-for-all group, which has no header, the
+  same buttons sit on each queued piece in its lead's Thread tab;
+- a finished group's summary — **Copy summary** in that same menu, or at the
+  top of the lead's Thread tab for a split or one-for-all group;
 - what is shipping — each row's own status line (`⇡ opening PR`, below).
 
 The *Shipped today* log is gone; a session's PR and checks stay on its row.
@@ -2200,11 +2205,16 @@ many need you; a click folds the group, and **⋯** on hover has Pause / Resume,
 Add lines…, the queued lines (**Start now** / **Remove**) and Cancel… (an
 inline confirm; sessions and branches are kept). Once the group has finished,
 the menu has **Copy summary** instead: it copies the group's summary as
-Markdown (*Copied the summary as Markdown*), and is disabled — its tooltip
-says why — until the server has written one. The header is `li.run-group-head`
-with `data-run` set to the group's id.
+Markdown (*Copied the summary as Markdown*). The bell's cached copy covers a
+week of finished groups; an older one is read from the group's own record
+(`GET /api/runs/{id}`), and the item is disabled — *MindFlock has no summary
+for this group* — only when neither has one. The header is
+`li.run-group-head` with `data-run` set to the group's id.
 A header appears only for a group of two or more, and **On their own** only
-under at least one header. Queued lines are dim, with a hollow dot and no
+under at least one header. A split or one-for-all group never gets one: it is
+a family under its lead, and its lead's Thread tab holds what the header's ⋯
+would — **Start now** / **Remove** on a queued piece and, once finished,
+**Copy summary**. Queued lines are dim, with a hollow dot and no
 number. Headers and queued lines are never rail keys: Alt+N numbering skips
 them, and a folded group's rows leave the numbering like a folded device's.
 
@@ -2221,10 +2231,13 @@ bell** is clickable and opens the bell on that session's row.
 and each line that shipped, under the group's name. Clicking one opens the
 lead's Thread when the group has a lead; otherwise an escalation scrolls to its
 **Needs attention** row, and a finish or shipped row (or an escalation already
-answered) closes the bell and reveals the group: its rail header scrolls into
-view and pulses once. A group whose header is gone (pruned, or filtered off the
-rail) just closes the bell. A `run.needs_you` toast opens the lead's Thread,
-else the bell, and a `run.finished` toast reveals the group's header. Rows
+answered) closes the bell and shows the group where it lives: its rail header
+scrolls into view and pulses once. A group with no header — a split or
+one-for-all group, a group of one, or one whose header was pruned or filtered
+off the rail — opens its lead's Thread instead, else selects a member row
+still open; with nothing of the group left it just closes the bell. A
+`run.needs_you` toast opens the lead's Thread, else the bell, and a
+`run.finished` toast shows the group the same way. Rows
 obey the `run_needs_you` / `run_finished` switches in Settings → Notifications,
 and a prompt is never announced twice (the session's own "needs your input" row
 covers it). At most one group toast per 30 seconds.

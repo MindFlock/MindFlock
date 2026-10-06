@@ -12,8 +12,9 @@
  * Other surfaces open it with a DOM event, `mf-open-bell` (detail.title
  * optional: scroll that session's row into view and flash it) — the rail's
  * "— open the bell" lines and run toasts. A waiting row that navigates closes
- * it with `mf-close-bell`. A group's history row reveals the group's header on
- * the rail (lib/revealGroup.ts). */
+ * it with `mf-close-bell`. A group's history row shows the group where it
+ * lives (lib/showGroup.ts): its header on the rail, else — a split or
+ * one-for-all group has none — its lead's Thread tab. */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -30,7 +31,7 @@ import { runNote } from "../lib/runs";
 import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../state/runs";
 import { needsAttention } from "./outbox/outbox";
 import { WaitingRow } from "./outbox/WaitingRow";
-import { revealGroup } from "../lib/revealGroup";
+import { showGroup } from "../lib/showGroup";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -477,14 +478,15 @@ export function NotificationsBell() {
                         } else {
                           // Answered already: show the group where it lives.
                           setOpen(false);
-                          revealGroup(n.run);
+                          showGroup(n.run);
                         }
                       } else if (n.run) {
                         // A group's row shows the group where it lives: its
                         // header on the rail (its ⋯ holds the summary, the
-                        // queued lines, Pause and Cancel).
+                        // queued lines, Pause and Cancel), else its lead's
+                        // Thread tab (a split / one-for-all group).
                         setOpen(false);
-                        revealGroup(n.run);
+                        showGroup(n.run);
                       } else jump(n.session);
                     }}
                   >

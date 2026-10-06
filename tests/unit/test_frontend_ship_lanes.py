@@ -203,22 +203,43 @@ def test_the_bell_still_reads_the_waiting_list_from_one_response():
 
 def test_a_finished_groups_menu_copies_its_summary():
     """The summary card's one job, moved to the group header's ⋯: copy the
-    group's Markdown. Disabled (with a reason) until the server has one; an
+    group's Markdown. `/api/outbox` keeps a summary for a week, the header
+    stays while any member is open — so an older group's comes from its own
+    run record, and a missing one never claims it is "not yet" written. An
     unfinished group has no such item — its queued lines, Pause and Cancel are
     already in that menu, and what waits on you is the bell's."""
     js = _js()
     menu = squash(_fn(js, "RunGroupMenu"))
-    assert "const summary = group.done ? summaryFor(outbox, group.id) : null;" in menu
+    assert "summaryFor(outbox, group.id)" in menu
+    assert "useRun(group.done && !kept ? group.id : null)" in menu
+    assert "summaryText(outbox, group.id, record)" in menu
     assert "group.done && " in menu and '"Copy summary"' in menu
     assert "disabled: !summary" in menu
-    assert "copyText(summary.text_md)" in menu
+    assert "copyText(summary)" in menu
     assert '"Copied the summary as Markdown"' in menu
-    assert "No summary for this group yet" in menu
+    assert '"MindFlock has no summary for this group"' in menu
+    assert "No summary for this group yet" not in js
     # Queued lines keep their Start now / Remove here.
     assert 'taskPath(id, t.id, "start-now")' in menu
     assert 'taskPath(id, t.id, "skip")' in menu
     find = squash(_fn(js, "summaryFor"))
     assert "x.run === runId" in find
+    text = squash(_fn(js, "summaryText"))
+    assert "run?.summary?.text_md" in text
+
+
+def test_a_headerless_groups_menu_items_live_on_its_leads_thread():
+    """A split / one-for-all group is a family under its lead — no rail
+    header, so no ⋯. Its lead's Thread holds what that menu would: Start now
+    / Remove on a queued piece, Copy summary once it has finished."""
+    js = _js()
+    panel = squash(_fn(js, "RunLeadPanel"))
+    assert "taskPath(id, t.id, verb)" in panel
+    assert '"start-now"' in panel and '"skip"' in panel
+    assert '"Start now"' in panel and '"Remove"' in panel
+    assert "summaryText(null, id, run)" in panel
+    assert '"Copy summary"' in panel
+    assert '"Copied the summary as Markdown"' in panel
 
 
 def test_a_prompt_row_reuses_the_answer_strip_and_an_approval_shows_the_message_first():
@@ -315,6 +336,8 @@ def test_new_source_files_have_no_native_dialog_calls():
         "components/customize/SidebarBarsPicker.tsx",
         "components/sidebar/RunGroupHeader.tsx",
         "lib/revealGroup.ts",
+        "lib/showGroup.ts",
+        "components/grid/RunLeadPanel.tsx",
         "lib/runs.ts",
         "state/runs.ts",
     ):

@@ -117,11 +117,12 @@ def test_the_bell_hosts_the_waiting_rows_and_drops_its_toggle():
     assert "Needs attention" in src
     # Every clarify row answers in place; only a family's can redirect.
     assert 'variant="bell"' in src
-    # A run toast that needs you opens the bell; a finished one reveals its
-    # group's header on the rail.
+    # A run toast that needs you opens the bell; a finished one shows its
+    # group where it lives (its rail header, else its lead's Thread).
     toasts = _src("components/EventToasts.tsx")
     assert 'new CustomEvent("mf-open-bell"' in toasts
-    assert "else revealGroup(n.run);" in toasts
+    assert "else showGroup(n.run);" in toasts
+    assert "revealGroup(" not in _code("components/EventToasts.tsx")
     assert 'openDialogFor("outbox"' not in _code("components/EventToasts.tsx")
 
 
@@ -144,11 +145,18 @@ def test_a_click_that_replaces_its_own_control_keeps_the_bell_open():
 def test_a_group_row_in_the_bell_reveals_its_header_on_the_rail():
     """No Outbox to open on a group: the bell's history row (and a needs-you
     row that was already answered) shows the group where it lives — its rail
-    header, scrolled to and flashed. A pruned group is a quiet no-op."""
+    header, scrolled to and flashed; a split / one-for-all group has no
+    header, so its lead's Thread (else a member row). Nothing left of the
+    group is a quiet no-op."""
     bell = _code("components/NotificationsBell.tsx")
     assert 'openDialogFor("outbox"' not in bell
-    assert bell.count("revealGroup(n.run);") == 2
+    assert bell.count("showGroup(n.run);") == 2
+    assert "revealGroup(" not in bell
     assert "openThread(n.lead);" in bell
+    show = _code("lib/showGroup.ts")
+    assert "if (!runId || revealGroup(runId)) return;" in show
+    assert 'if ("lead" in to) openThread(to.lead);' in show
+    assert "else selectSession(to.row);" in show
     reveal = _code("lib/revealGroup.ts")
     assert (
         'document.querySelectorAll<HTMLElement>("li.run-group-head[data-run]")'
@@ -196,7 +204,9 @@ def test_no_native_dialog_calls_in_the_new_or_edited_files():
         "components/palette/CommandPalette.tsx",
         "lib/keymap.ts",
         "lib/revealGroup.ts",
+        "lib/showGroup.ts",
         "components/sidebar/RunGroupHeader.tsx",
+        "components/grid/RunLeadPanel.tsx",
         "App.tsx",
     ):
         code = _code(rel)
