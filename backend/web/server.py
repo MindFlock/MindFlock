@@ -11801,12 +11801,43 @@ async def runs_plan(run_id: str, payload: Optional[dict] = None) -> JSONResponse
 
 
 @app.post("/api/runs/{run_id}/plan/approve")
-def runs_plan_approve(run_id: str) -> JSONResponse:
-    """Approve a split's plan: MindFlock starts every piece as a worker of the
-    lead, forked from its HEAD and fenced to its paths. → ``{"run": RunDTO}``;
-    409 without a proposed plan, or while the lead has uncommitted changes."""
+async def runs_plan_approve(
+    run_id: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """Approve a split's plan: ``{"mode": "worktrees" | "same_folder"}``
+    (default ``worktrees``), recorded on the run. ``worktrees``: every piece
+    a worker of the lead in its own worktree, forked from its HEAD, fenced to
+    its paths and merged back — a lead that works directly in its folder (or
+    sits on its trunk) first gets a NEW lead of its own, started from its
+    last commit (the original is never merged into, switched or pushed).
+    ``same_folder``: every piece an extra agent in the lead's own folder,
+    fenced to its paths per session; MindFlock commits each piece's paths
+    when it is done (one commit per piece, nothing to merge).
+    → ``{"run": RunDTO}``; 400 for another mode; 409 without a proposed
+    plan, while the lead (or, for a new lead, the original) has uncommitted
+    changes (``code: "lead_dirty"`` / ``"origin_dirty"``), or — same folder
+    — while the lead's folder is on its trunk (``code: "trunk"``: start a
+    branch there first, ``POST /lead/branch``)."""
+    mode = (payload or {}).get("mode") or ""
+    if not isinstance(mode, str):
+        return JSONResponse({"error": "mode must be a string"}, status_code=400)
     try:
-        run = _team_run_driver.approve_plan(run_id)
+        run = await _team_run_driver.approve(run_id, mode)
+    except _team_run_driver.RunError as err:
+        return _run_error(err)
+    return JSONResponse({"run": run})
+
+
+@app.post("/api/runs/{run_id}/lead/branch")
+def runs_lead_branch(run_id: str) -> JSONResponse:
+    """ "Start a branch here first" — a split whose lead's folder is on its
+    trunk, before "in this folder": ``git switch -c <prefix><lead>-split``
+    in that folder (only on this click; uncommitted changes come along) and
+    the group's branch is the new one. → ``{"run": RunDTO}``; 409 once the
+    pieces started, when the lead is already on its own branch, or mid git
+    operation."""
+    try:
+        run = _team_run_driver.lead_branch(run_id)
     except _team_run_driver.RunError as err:
         return _run_error(err)
     return JSONResponse({"run": run})

@@ -23,10 +23,13 @@ import { selectSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
 import { copyText } from "../../lib/clipboard";
 import { runAction, runPath } from "../../lib/runsApi";
+import { errorPop } from "../../lib/errorPop";
 import {
   editPlan,
   laneNote,
   leadSubline,
+  modeChoices,
+  startedText,
   memberTasks,
   pathsText,
   pieceLabel,
@@ -39,6 +42,7 @@ import {
   releaseOutcome,
   startWorkersLabel,
 } from "../../lib/splitRun";
+import type { SplitMode } from "../../api/types";
 import { AnswerStrip } from "../AnswerStrip";
 
 const nameOf = (t: string) => displayName(t);
@@ -61,6 +65,8 @@ export function RunLeadPanel({
   const [problems, setProblems] = useState<string[]>([]);
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
+  // Where the pieces run — picked on the plan card, separate worktrees first.
+  const [mode, setMode] = useState<Exclude<SplitMode, "">>("worktrees");
 
   if (!run) {
     return (
@@ -115,14 +121,41 @@ export function RunLeadPanel({
       void refreshRuns();
     }
   };
-  const approve = () =>
-    act(
-      "approve",
-      "Start the workers",
-      "/plan/approve",
-      {},
-      startWorkersLabel(plan.length).replace(/^Start/, "Starting") + " — each fenced to its paths",
-    ).then((ok) => ok && void refreshInstances());
+  const choices = modeChoices(run, myName);
+  const chosen = choices.find((c) => c.mode === mode) || choices[0];
+  const approve = async () => {
+    if (busy) return;
+    setBusy("approve");
+    try {
+      const res = await api<{ run?: RunDTO }>(runPath(id, "/plan/approve"), { json: { mode } });
+      const lead = res?.run?.lead?.title || "";
+      if (res?.run?.origin && lead && lead !== title) {
+        // Separate worktrees for a lead that works in its own folder (or on
+        // its trunk): the pieces got a NEW lead — its Thread is the group's.
+        toast(
+          startedText(plan.length, "worktrees", myName) +
+            " under " +
+            nameOf(lead) +
+            ", a new lead from " +
+            myName +
+            "'s last commit — " +
+            myName +
+            " is left as it is",
+          { duration: 7000 },
+        );
+        useUi.getState().threadOpen(lead);
+      } else toast(startedText(plan.length, mode, myName));
+    } catch (err) {
+      errorPop("Start the workers failed", errMsg(err));
+    } finally {
+      setBusy("");
+      void refreshRuns();
+      void refreshInstances();
+    }
+  };
+  // "Start a branch here first": only on this click, in the lead's folder.
+  const startBranch = () =>
+    act("branch", "Start a branch here", "/lead/branch", {}, "Started a branch in " + myName + "'s folder");
   const reject = async () => {
     const ok = await act(
       "reject",
@@ -177,6 +210,23 @@ export function RunLeadPanel({
             ),
           )}
         </p>
+        {run.mode === "same_folder" && !!(run.stray?.paths?.length || run.stray?.commits?.length) && (
+          <p className="thread-sub th-bad rb-warn" data-stray="">
+            {run.stray?.paths?.length
+              ? "Changes no piece owns in " +
+                myName +
+                "'s folder: " +
+                run.stray.paths.slice(0, 4).join(", ") +
+                (run.stray.paths.length > 4 ? " (+" + (run.stray.paths.length - 4) + " more)" : "") +
+                " — no piece's commit takes them; commit or discard them yourself."
+              : ""}
+            {run.stray?.commits?.length
+              ? " A commit no piece made is on the group's branch (" +
+                run.stray.commits.slice(0, 3).map((c) => c.slice(0, 9)).join(", ") +
+                ") — it ships with the PR unless you undo it."
+              : ""}
+          </p>
+        )}
         {noTools && (
           <p className="thread-sub th-bad rb-warn">
             Restart the lead to give it the MindFlock tools — it proposes the pieces with them.
@@ -252,6 +302,35 @@ export function RunLeadPanel({
                 ))}
               </ul>
             )}
+            <fieldset className="rb-modes" disabled={!!busy || editing !== null}>
+              <legend>Where the pieces run</legend>
+              {choices.map((c) => (
+                <label key={c.mode} className={"rb-mode" + (mode === c.mode ? " on" : "")} data-mode={c.mode}>
+                  <input
+                    type="radio"
+                    name={"rb-mode-" + id}
+                    value={c.mode}
+                    checked={mode === c.mode}
+                    onChange={() => setMode(c.mode)}
+                  />
+                  <span className="rb-mode-text">
+                    <b>{c.label}</b>
+                    <span className="rb-mode-hint">{c.hint}</span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+            {chosen.blocked && (
+              <div className="rb-btns rb-mode-block">
+                <span className="rb-status th-bad">{chosen.blocked}.</span>
+                <button type="button" className="th-btn primary" disabled={!!busy} onClick={() => void startBranch()}>
+                  Start a branch here first
+                </button>
+                <button type="button" className="th-btn" disabled={!!busy} onClick={() => setMode("worktrees")}>
+                  Use separate worktrees
+                </button>
+              </div>
+            )}
             {asking ? (
               <div className="rb-ask">
                 <input
@@ -276,8 +355,8 @@ export function RunLeadPanel({
                 <button
                   type="button"
                   className="th-btn primary"
-                  disabled={!!busy || editing !== null || !plan.length}
-                  title="MindFlock starts one worker per piece, forked from the lead's last commit, each fenced to its paths"
+                  disabled={!!busy || editing !== null || !plan.length || !!chosen.blocked}
+                  title={chosen.hint}
                   onClick={() => void approve()}
                 >
                   {startWorkersLabel(plan.length)}
@@ -418,12 +497,16 @@ export function RunLeadPanel({
             </span>
             <span className="th-sp" />
             <span className="rb-note">
-              {split ? "planned by the lead · started and merged by MindFlock" : "started and merged by MindFlock"}
+              {run.mode === "same_folder"
+                ? "planned by the lead · started and committed by MindFlock, in " + myName + "'s folder"
+                : split
+                  ? "planned by the lead · started and merged by MindFlock"
+                  : "started and merged by MindFlock"}
             </span>
           </div>
           <div className="thread-workers rb-pieces">
             {tasks.map((t) => {
-              const st = pieceStatus(t, myName);
+              const st = pieceStatus(t, myName, run.mode);
               const lbl = pieceLabel(t, run);
               const row = rows.find((r) => r.title === t.title && !r.device);
               const activity = row ? effectiveActivity(row) : "";

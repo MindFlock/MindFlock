@@ -509,15 +509,22 @@ class TestTheSplitEndToEnd:
         assert env.created == []
         (item,) = pq.snapshot()["mine"]["items"]
         assert "Split this task into parallel pieces" in item["text"]
-        # Never a session sitting on its own base branch (nothing to merge
-        # into but the trunk), one already leading, or an unknown one.
+        # A session sitting on its own base branch PLANS the split now (the
+        # plan card then offers separate worktrees under a new lead, or its
+        # folder once it is on a branch) — its brief says to commit nothing
+        # on the trunk, and its own lane is left alone.
         on_base = str(env.tmp / "wt" / "trunk")
         _git(env.repo, "worktree", "add", "-q", "-b", "trunkish", on_base, "main")
         env.instances["trunk"] = _WtInst(
             "trunk", on_base, "trunkish", env.repo, base_branch="trunkish"
         )
+        trunk_run = _split(env, repo_path="", lead="trunk")
+        assert trunk_run["lead"]["trunk"] is True
+        assert trunk_run["lead"]["in_place"] is False
+        (item,) = pq.snapshot()["trunk"]["items"]
+        assert "You are on trunkish, the trunk: commit nothing here" in item["text"]
+        # Never one already leading, or an unknown one.
         for title, status, words in (
-            ("trunk", 409, "merges its pieces into the lead's own branch"),
             ("mine", 409, "already in group"),
             ("nope", 404, "instance not found"),
         ):

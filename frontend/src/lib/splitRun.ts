@@ -11,7 +11,7 @@
  *
  * No DOM, no store, so every sentence is unit-tested in node. */
 
-import type { PlanPiece, RunDTO, RunTask } from "../api/types";
+import type { PlanPiece, RunDTO, RunTask, SplitMode } from "../api/types";
 import { LANE_HEAD } from "./agentMessages";
 
 /** A group whose lines merge back into one branch (a split, or "one for all"). */
@@ -74,10 +74,20 @@ export interface PieceStatus {
   detail: string;
 }
 
-/** Where one piece is, from its task. */
-export function pieceStatus(t: RunTask, leadName: string): PieceStatus {
+/** A split whose pieces run in the lead's own folder (no merge). */
+export function isSameFolder(run: Pick<RunDTO, "mode"> | null | undefined): boolean {
+  return run?.mode === "same_folder";
+}
+
+/** Where one piece is, from its task. `mode` = the run's: a same-folder
+ * piece is committed by MindFlock, never merged back. */
+export function pieceStatus(t: RunTask, leadName: string, mode?: SplitMode): PieceStatus {
   const tests = testsLabel(t.tests);
   const files = (t.conflict?.files || []).join(", ");
+  if (mode === "same_folder") {
+    if (t.state === "integrated") return { word: "committed ✓", cls: "ok", detail: tests };
+    if (t.state === "integrating") return { word: "committing…", cls: "work", detail: "" };
+  }
   switch (t.state) {
     case "integrated":
       return { word: "merged back ✓", cls: "ok", detail: tests };
@@ -154,7 +164,22 @@ export function leadSubline(run: RunDTO, leadName: string): SubPart[] {
     : [{ text: plural(n, "line") + ", one PR", b: true }];
   const merged = tasks.filter((t) => t.state === "integrated").length;
   const live = tasks.filter((t) => !["cancelled", "skipped", "failed"].includes(t.state)).length;
-  if (merged) {
+  if (isSameFolder(run)) {
+    // In the lead's own folder: MindFlock commits each piece's paths.
+    parts.push({ text: " in " + leadName + "'s folder · " });
+    if (merged) {
+      parts.push({
+        text: merged === live && merged > 1 ? "all " + merged + " committed" : merged + " of " + live + " committed",
+        cls: "ok",
+      });
+      parts.push({ text: " on " });
+      parts.push({ text: branch || "the lead's branch", b: true });
+    } else {
+      parts.push({ text: "each piece is committed on " });
+      parts.push({ text: branch || "the lead's branch", b: true });
+      parts.push({ text: " as it finishes" });
+    }
+  } else if (merged) {
     parts.push({ text: " · " });
     parts.push({
       text: merged === live && merged > 1 ? "all " + merged + " merged back" : merged + " of " + live + " merged back",
@@ -194,6 +219,61 @@ export function leadSubline(run: RunDTO, leadName: string): SubPart[] {
 }
 
 // --- The plan card (plan_ready) ---------------------------------------------------
+
+export interface ModeChoice {
+  mode: "worktrees" | "same_folder";
+  label: string;
+  /** The one short line that says what it trades. */
+  hint: string;
+  /** Why it can't be picked as things stand ("" = it can). */
+  blocked: string;
+}
+
+/** The plan card's "where do the pieces run" choice. A lead that works
+ * directly in its folder, or sits on its trunk, is never merged into:
+ * separate worktrees get a lead of their own (`<lead>-split`, from its last
+ * commit), and its folder needs a branch of its own first. */
+export function modeChoices(
+  run: Pick<RunDTO, "lead">,
+  leadName: string
+): ModeChoice[] {
+  const lead = run.lead || { title: "" };
+  const branch = lead.branch || "";
+  const own = !lead.in_place && !lead.trunk;
+  return [
+    {
+      mode: "worktrees",
+      label: "In separate worktrees (merge back) — default",
+      hint: own
+        ? "Each piece in its own worktree, merged back into " + (branch || leadName + "'s branch") + "; conflicts go to " + leadName + "."
+        : "MindFlock starts " +
+          leadName +
+          "-split from " +
+          leadName +
+          "'s last commit and merges the pieces there — " +
+          leadName +
+          " itself is left as it is.",
+      blocked: "",
+    },
+    {
+      mode: "same_folder",
+      label: "In this folder (no merge)",
+      hint:
+        "Each piece runs in " +
+        leadName +
+        "'s folder; MindFlock commits each piece's paths as it finishes — nothing to merge, no per-piece undo.",
+      blocked: lead.trunk ? leadName + " is on " + (branch || "its trunk") + " — the pieces would commit onto it" : "",
+    },
+  ];
+}
+
+/** The toast once the workers start. */
+export function startedText(n: number, mode: "worktrees" | "same_folder", leadName: string): string {
+  const w = startWorkersLabel(n).replace(/^Start/, "Starting");
+  return mode === "same_folder"
+    ? w + " in " + leadName + "'s folder — each fenced to its paths"
+    : w + " — each fenced to its paths";
+}
 
 export interface PlanRow {
   title: string;
@@ -277,7 +357,11 @@ export function releaseCard(run: RunDTO): ReleaseCard {
     into: base + " ← " + (branch || "its branch"),
     stat,
     commits:
-      (split ? "one per piece, kept as written" : "one per line, kept as written") +
+      (isSameFolder(run)
+        ? "one per piece, committed by MindFlock with only its paths"
+        : split
+          ? "one per piece, kept as written"
+          : "one per line, kept as written") +
       (fixes ? " + " + plural(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
     body: split
       ? "a section per piece: what changed, the tests it ran"
@@ -286,7 +370,7 @@ export function releaseCard(run: RunDTO): ReleaseCard {
 }
 
 /** The check row of the ship card — always said, including "none". */
-export function checkLine(run: Pick<RunDTO, "check">): string {
+export function checkLine(run: Pick<RunDTO, "check"> & Partial<Pick<RunDTO, "mode">>): string {
   const c = run.check;
   const cmd = c?.command ? "`" + c.command + "`" : "the check";
   switch (c?.state) {
@@ -301,7 +385,7 @@ export function checkLine(run: Pick<RunDTO, "check">): string {
     case "fixing":
       return cmd + " failed — the lead is fixing it";
     case "pending":
-      return "runs once every piece is merged back";
+      return isSameFolder(run) ? "runs once every piece is committed" : "runs once every piece is merged back";
     default:
       return "";
   }
@@ -508,7 +592,7 @@ export function leadLine(
     return { text: "resolving a conflict", cls: "needs" };
   if (!live) return null;
   return {
-    text: merged + " of " + live + " merged back",
+    text: merged + " of " + live + (isSameFolder(run) ? " committed" : " merged back"),
     cls: merged === live ? "ok" : "",
   };
 }

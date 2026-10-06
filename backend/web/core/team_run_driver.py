@@ -241,7 +241,7 @@ def observe(run: dict, now: float, boot: bool = False) -> dict:
                 o["worked"] = srv._agent_state.worked_at(title) is not None
             except Exception:  # noqa: BLE001
                 o["worked"] = False
-            if t["base_sha"] and _runs.is_together(run):
+            if t["base_sha"] and _runs.is_together(run) and not _runs.same_folder(run):
                 # Its own commits beyond the commit it was cut from, and a
                 # clean tree: "done" needs no event (see the planner).
                 try:
@@ -282,10 +282,32 @@ def observe(run: dict, now: float, boot: bool = False) -> dict:
     if _runs.is_together(run) and run.get("lead"):
         lo = _observe_lead(run, now, rows, pending, instances, records, failures)
         out["lead"] = lo
+        if _runs.same_folder(run):
+            if lo.get("wt") and lo.get("ready"):
+                out["sf"] = _observe_sf(run, lo["wt"], tasks)
+                for t in run["tasks"]:
+                    if t["state"] == "integrating" and t["id"] in tasks:
+                        tasks[t["id"]].update(_observe_sf_report(run, t))
+            return out
         for t in run["tasks"]:
             if t["state"] == "integrating" and t["id"] in tasks:
                 tasks[t["id"]].update(_observe_merge(run, t, lo))
     return out
+
+
+def _observe_sf_report(run: dict, t: dict) -> dict:
+    """A same-folder piece's full report (for its commit body and the PR)."""
+    try:
+        from backend.web.core import mailbox as _mailbox
+
+        msg = _mailbox.last_result(
+            run["lead"]["title"], t["title"], since=float(t["started_at"] or 0.0) - 5.0
+        )
+        if msg:
+            return {"report_text": str(msg.get("text") or "")}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
 
 
 def _observe_lead(run, now, rows, pending, instances, records, failures) -> dict:
@@ -412,7 +434,12 @@ def _human_message(rec: Optional[dict]) -> str:
 
 
 def _arm(run: dict, t: dict) -> None:
-    """Arm (or re-arm) the task's lane — the autopilot's one record for it."""
+    """Arm (or re-arm) the task's lane — the autopilot's one record for it.
+    Never for a same-folder piece: the autopilot commits EVERYTHING dirty in
+    its folder, which is every piece's work — MindFlock commits each piece's
+    own paths itself (:func:`_sf_commit`)."""
+    if _runs.same_folder(run) and t["kind"] == "piece":
+        return
     lane = _runs.task_lane(run, t)
     # A message a PERSON wrote (the Outbox approval's edited message, armed by
     # ship-now as message_auto=False) survives a re-arm — after a failed
@@ -816,6 +843,27 @@ async def _start_member(run: dict, t: dict) -> Tuple[Tuple[str, dict], str]:
         )
     else:
         prompt = (t["text"] or "").strip() + "\n\n" + _runs.run_brief(run, provider)
+    if _runs.same_folder(run):
+        # Same folder: an extra agent IN the lead's folder (in place, like a
+        # copy window) — no worktree, no branch of its own, nothing to merge.
+        payload = {
+            "title": t["title"],
+            "program": _program(run),
+            "repo_path": wt,
+            "in_place": True,
+            "prompt": prompt,
+            "parent": lead["title"],
+            "spawned": True,
+        }
+        try:
+            status, body = await srv._session_create.create_result(payload)
+        except Exception as err:  # noqa: BLE001
+            status, body = 500, {"error": str(err)}
+        if status == 202:
+            return ("started", {"created_at": body.get("created_at")}), head
+        if status == 409 and "already exists" in str(body.get("error") or ""):
+            return ("rename", {}), ""
+        return ("failed", {"error": str(body.get("error") or status)}), ""
     # A plain worktree of the repository HOLDING the lead's worktree — the
     # lead's ``Path`` is not it for a provisioned (ticket) lead, whose Path is
     # the server's cwd: there the lead's HEAD names no commit at all.
@@ -943,7 +991,17 @@ async def _fence(run_id: str, task_id: str, now: float) -> None:
     if t is None or t["fenced"] or not t["title"]:
         return
     added, problems = [], []
-    for pattern in t["paths"]:
+    if _runs.same_folder(run):
+        # A folder several agents share: the worktree's green zones would
+        # fence them ALL to the union of their paths. Each piece gets its
+        # OWN fence instead (keyed by its tmux session, which the guard hook
+        # resolves from its own pane at fire time), plus "MindFlock commits
+        # for you" (git add / commit / stash / … refused).
+        _inst, wt = _lead_wt(run)
+        if not wt:
+            return
+        added, problems = await asyncio.to_thread(_sf_fence, run, t, wt)
+    for pattern in [] if _runs.same_folder(run) else t["paths"]:
         resp = await srv.instance_red_zones_add(
             t["title"],
             {
@@ -995,6 +1053,258 @@ async def _fence(run_id: str, task_id: str, now: float) -> None:
                 )
 
     await asyncio.to_thread(_store)
+
+
+def _tmux_of(title: str) -> str:
+    from backend.session.tmux import tmux as _tmux
+
+    return _tmux.to_mindflock_tmux_name(title)
+
+
+def _sf_fence(run: dict, t: dict, wt: str) -> Tuple[List[str], List[str]]:
+    """Fence one same-folder piece to its paths (its session only) and
+    re-write the folder's guard file before returning."""
+    srv = _server()
+    added, problems = srv._red_zones.set_session_fence(
+        wt,
+        _tmux_of(t["title"]),
+        t["paths"],
+        name="only here (%s)" % run["name"][:40],
+        owner="run:" + run["id"],
+        no_commit=True,
+    )
+    try:
+        srv._red_zones.sync_guard(os.path.realpath(wt), lroot=wt)
+    except Exception as err:  # noqa: BLE001
+        problems.append("the guard could not be written (%s)" % err)
+    return added, problems
+
+
+def _unfence(run_id: str, task_id: str) -> None:
+    """A same-folder piece is done (or gone): its fence in the shared folder
+    goes, so the folder is the lead's again."""
+    srv = _server()
+    run = _runs.load(run_id)
+    t = _runs.task_by_id(run, task_id) if run else None
+    if t is None or not t["fenced"]:
+        return
+    _inst, wt = _lead_wt(run)
+    if wt and t["title"]:
+        srv._red_zones.drop_session_fence(wt, _tmux_of(t["title"]))
+        try:
+            srv._red_zones.sync_guard(os.path.realpath(wt), lroot=wt)
+        except Exception:  # noqa: BLE001 — the monitor's tick re-syncs it
+            pass
+    with _runs.edit(run_id) as r:
+        tk = _runs.task_by_id(r, task_id) if r else None
+        if tk is not None:
+            tk["fenced"] = False
+
+
+def _unfence_all(run: dict) -> None:
+    """Every fence a same-folder group set (its cancel, its end)."""
+    srv = _server()
+    _inst, wt = _lead_wt(run)
+    if not wt:
+        return
+    if srv._red_zones.drop_session_fence(wt, owner="run:" + run["id"]):
+        try:
+            srv._red_zones.sync_guard(os.path.realpath(wt), lroot=wt)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _sf_settle_fences(run_id: str) -> None:
+    """A finished same-folder group leaves no fence behind in the folder."""
+    with _runs.edit(run_id) as r:
+        if r is None:
+            return
+        _unfence_all(r)
+        for t in r["tasks"]:
+            t["fenced"] = False
+
+
+#: One commit at a time per shared folder (``realpath`` → lock).
+_SF_LOCKS: Dict[str, threading.Lock] = {}
+_SF_LOCKS_GUARD = threading.Lock()
+
+
+def _sf_lock(wt: str) -> threading.Lock:
+    key = os.path.realpath(wt)
+    with _SF_LOCKS_GUARD:
+        lock = _SF_LOCKS.get(key)
+        if lock is None:
+            lock = _SF_LOCKS[key] = threading.Lock()
+        return lock
+
+
+def _sf_message(run: dict, t: dict, files: List[str]) -> str:
+    """A same-folder piece's commit message, from its own report (or its
+    line), naming its paths, with the trailer that makes it this piece's."""
+    rep = t.get("report") or {}
+    summary = str(rep.get("summary") or "").strip()
+    label = _runs.member_label(run, t)
+    first = summary.splitlines()[0].strip() if summary else ""
+    if not first:
+        first = (
+            (t["text"] or label).strip().splitlines()[0]
+            if (t["text"] or label)
+            else label
+        )
+    subject = first if len(first) <= 72 else first[:71].rstrip() + "…"
+    body = []
+    if summary and summary != first:
+        body.append(summary)
+    tests = _runs.tests_line(t.get("report_text") or "") or str(
+        rep.get("details") or ""
+    )
+    if tests and "Tests:" in tests:
+        body.append(tests.strip()[:300])
+    shown = ", ".join(files[:12]) + (
+        " (+%d more)" % (len(files) - 12) if len(files) > 12 else ""
+    )
+    body.append("Piece %r of the split %r: %s" % (label, run["name"], shown))
+    return (
+        subject
+        + "\n\n"
+        + "\n\n".join(body)
+        + "\n\n"
+        + _runs.sf_trailer(run["id"], t["id"])
+        + "\n"
+    )
+
+
+def _sf_commit(run_id: str, task_id: str, now: float) -> None:
+    """Commit ONE same-folder piece: exactly its changed paths, nothing else
+    (:func:`git_merge.commit_paths` — plumbing, the tree untouched), under
+    the folder's lock. Verified on the next pass by its trailer commit."""
+    run = _runs.load(run_id)
+    t = _runs.task_by_id(run, task_id) if run else None
+    if t is None or t["state"] != "integrating":
+        return
+    _inst, wt = _lead_wt(run)
+    if not wt:
+        return
+    res_paths, _errs = _runs._compile_paths(t["paths"])
+    with _sf_lock(wt):
+        changed = _git_merge.changed_paths(wt)
+        if changed is None:
+            return
+        mine = [f for f in changed if _runs._hits(res_paths, f)]
+        if not mine:
+            return  # the next pass decides (its own commits, or gone)
+        res = _git_merge.commit_paths(
+            wt,
+            mine,
+            _sf_message(run, t, mine),
+            expect_head=_git_merge.rev_parse(wt, "HEAD"),
+        )
+    with _runs.edit(run_id) as r:
+        tk = _runs.task_by_id(r, task_id) if r else None
+        if tk is None or tk["state"] != "integrating":
+            return
+        label = _runs.member_label(r, tk)
+        if res["result"] == "committed":
+            tk["merge_errors"] = 0
+            _runs.log_event(
+                r,
+                now,
+                "merged",
+                tk["id"],
+                "committed %s (%d file%s) as %s"
+                % (
+                    label,
+                    len(mine),
+                    "" if len(mine) == 1 else "s",
+                    str(res["sha"])[:9],
+                ),
+            )
+            return
+        if res["result"] in ("moved", "nothing"):
+            return  # HEAD moved under it / nothing left: next pass
+        tk["merge_errors"] += 1
+        _runs.log_event(
+            r, now, "note", tk["id"], "commit failed: %s" % res.get("error")
+        )
+        if tk["merge_errors"] >= _runs.MAX_MERGE_ERRORS:
+            _runs.apply(
+                r,
+                _runs._to(
+                    tk,
+                    "needs_you",
+                    "blocked",
+                    "MindFlock could not commit it: %s — commit %s by hand, then "
+                    "Retry" % (res.get("error") or "?", ", ".join(mine[:4])),
+                ),
+                now,
+            )
+
+
+def _observe_sf(run: dict, wt: str, tasks: Dict[str, dict]) -> dict:
+    """A same-folder group's folder as the planner needs it: each piece's
+    changed paths (``sf_own``), its trailer commit (``sf_commit``), commits
+    MindFlock did not make (``foreign``, with the pieces whose paths they
+    touch), and changes no piece owns (``stray``). Heals an index a commit
+    left half-refreshed (a restart between the commit and the re-read)."""
+    sf = run.get("sf") or {}
+    base = sf.get("base") or ""
+    _git_merge.heal_index(wt)
+    changed = _git_merge.changed_paths(wt)
+    commits = _git_merge.commits_since(wt, base) if base else []
+    pieces = [t for t in run["tasks"] if t["kind"] == "piece"]
+    res = {t["id"]: _runs._compile_paths(t["paths"])[0] for t in pieces}
+    out: dict = {}
+    trailer = _runs.SF_TRAILER + ": %s/" % run["id"]
+    found: Dict[str, List[dict]] = {}
+    foreign = []
+    for c in commits or []:
+        tid = ""
+        for line in str(c.get("body") or "").splitlines():
+            if line.startswith(trailer):
+                tid = line[len(trailer) :].strip()
+        if tid:
+            found.setdefault(tid, []).append(c)
+            continue
+        files = list(c.get("files") or [])
+        owners = [
+            tid2 for tid2, r in res.items() if any(_runs._hits(r, f) for f in files)
+        ]
+        outside = [f for f in files if not any(_runs._hits(r, f) for r in res.values())]
+        foreign.append(
+            {
+                "sha": c["sha"],
+                "subject": c.get("subject") or "",
+                "pieces": owners,
+                "outside": outside,
+            }
+        )
+    out["foreign"] = foreign
+    if changed is not None:
+        baseline = set(sf.get("baseline") or [])
+        out["stray"] = [
+            f
+            for f in changed
+            if f not in baseline
+            and not f.startswith(".mindflock")
+            and not any(_runs._hits(r, f) for r in res.values())
+        ]
+    for t in pieces:
+        o = tasks.get(t["id"])
+        if o is None:
+            continue
+        if changed is not None:
+            o["sf_read"] = True
+            o["sf_own"] = [f for f in changed if _runs._hits(res[t["id"]], f)]
+        got = found.get(t["id"]) or []
+        if got:
+            o["sf_commit"] = got[-1]["sha"]
+            o["commits"] = [c.get("subject") or "" for c in got]
+        elif t["self_commits"]:
+            by_sha = {c["sha"]: c for c in commits or []}
+            o["commits"] = [
+                by_sha[x].get("subject") or "" for x in t["self_commits"] if x in by_sha
+            ]
+    return out
 
 
 async def _merge(run_id: str, task_id: str, now: float) -> None:
@@ -1673,6 +1983,37 @@ def _run_ask(run: dict):
             "check_failed",
             "the check failed on the merged branch",
         )
+    sf = run.get("sf") or {}
+    stray = list(sf.get("stray") or [])
+    stray_commits = list(sf.get("stray_commits") or [])
+    if (
+        _runs.same_folder(run)
+        and (stray or stray_commits)
+        and state not in (_runs.RUN_FINISHED)
+    ):
+        import hashlib
+
+        key = hashlib.sha1(
+            "\0".join(sorted(stray) + stray_commits).encode("utf-8", "replace")
+        ).hexdigest()[:12]
+        parts = []
+        if stray:
+            parts.append(
+                "changes no piece owns in %s's folder: %s%s — commit or discard "
+                "them yourself (no piece's commit takes them)"
+                % (
+                    lead,
+                    ", ".join(stray[:4]),
+                    " (+%d more)" % (len(stray) - 4) if len(stray) > 4 else "",
+                )
+            )
+        if stray_commits:
+            parts.append(
+                "a commit no piece made is on the group's branch (%s) — it ships "
+                "with the PR unless you undo it"
+                % ", ".join(c[:9] for c in stray_commits[:3])
+            )
+        return ("%s:stray:%s" % (run["id"], key), "stray", "; ".join(parts))
     return None
 
 
@@ -1697,7 +2038,9 @@ _SIDE_EFFECTS = (
     "nudge",
     "fix",
     "fence",
+    "unfence",
     "merge",
+    "sf_commit",
     "check_start",
     "check_fix",
     "release_prepare",
@@ -1764,6 +2107,8 @@ async def step_run(run_id: str, boot: bool = False) -> None:
         if not await asyncio.to_thread(_runs.claim_lease, run_id, owner, now):
             return  # another live server drives this run; this one only reads
         if run["state"] in _runs.RUN_FINISHED:
+            if _runs.same_folder(run) and any(t["fenced"] for t in run["tasks"]):
+                await asyncio.to_thread(_sf_settle_fences, run_id)
             await asyncio.to_thread(_announce, run_id, boot, False)
             return
         standing = _standing_keys(run) if boot else None
@@ -1796,6 +2141,11 @@ async def step_run(run_id: str, boot: bool = False) -> None:
                 elif op == "merge":
                     await _merge(run_id, e["task"], now)
                     wake()  # verify it without waiting a whole interval
+                elif op == "sf_commit":
+                    await asyncio.to_thread(_sf_commit, run_id, e["task"], now)
+                    wake()
+                elif op == "unfence":
+                    await asyncio.to_thread(_unfence, run_id, e["task"])
                 elif op == "check_start":
                     await asyncio.to_thread(_check_start, run_id, now)
                 elif op == "check_fix":
@@ -2326,8 +2676,10 @@ async def create_run(payload: dict) -> Tuple[dict, List[str]]:
             raise RunError("split needs exactly one line")
     elif lead_title:
         raise RunError("lead is only for a split")
+    lead_fit = None
     if lead_title:
         lead_inst, lead_repo = await asyncio.to_thread(_lead_candidate, lead_title)
+        lead_fit = await asyncio.to_thread(_lead_fit, lead_inst)
         # The lead's repository wins: its pieces are worktrees of the repo its
         # commits live in, whatever folder the request named.
         repo_root = lead_repo
@@ -2411,7 +2763,7 @@ async def create_run(payload: dict) -> Tuple[dict, List[str]]:
     run = await asyncio.to_thread(_store)
     if together:
         try:
-            run = await _start_lead(run, lead_inst)
+            run = await _start_lead(run, lead_inst, lead_fit)
         except RunError:
             # No group after all: hand back every ticket it reserved, or the
             # ledger keeps them "in flight" with no session and no run.
@@ -2440,38 +2792,50 @@ def _max_pieces() -> int:
     return _lineage.limit(_lineage.MAX_CHILDREN_ENV, _lineage.DEFAULT_MAX_CHILDREN)
 
 
+def _lead_fit(inst) -> dict:
+    """Whether ``inst`` can take a split's merges ITSELF: its own worktree
+    (not in place) on its own branch (not its base, not a trunk, not
+    detached). ``{"in_place", "trunk", "branch", "wt"}`` — read live."""
+    srv = _server()
+    try:
+        wt = inst.GetWorktreePath() or ""
+    except Exception:  # noqa: BLE001
+        wt = ""
+    branch = (srv._current_branch(wt) if wt else "") or ""
+    if not branch and not getattr(inst, "InPlace", False):
+        branch = getattr(inst, "Branch", "") or ""
+    base = ""
+    try:
+        base = srv._session_base_branch(inst) or ""
+    except Exception:  # noqa: BLE001
+        pass
+    trunk = not branch or branch == base or branch.lower() in _autopilot.TRUNK_BRANCHES
+    return {
+        "in_place": bool(getattr(inst, "InPlace", False)),
+        "trunk": bool(trunk),
+        "branch": branch,
+        "base": base,
+        "wt": wt,
+    }
+
+
 def _lead_candidate(title: str):
     """An existing session that may lead a split → ``(instance, repo path)``.
-    It needs its own worktree on its own branch: the pieces fork from its
-    commit and merge back into it."""
+    Any session in a git folder: one with its own worktree on its own branch
+    takes the merges itself; one that works directly in its folder (in place)
+    or sits on its base/trunk branch plans the split, and the plan card then
+    offers separate worktrees (MindFlock starts a NEW lead from its last
+    commit — it is never merged into) or its own folder (no merge)."""
     srv = _server()
     inst = srv.ENGINE.instances.get(title)
     if inst is None:
         raise RunError("instance not found: %s" % title, 404)
-    if getattr(inst, "InPlace", False):
-        raise RunError(
-            "%s works directly in its folder — a split needs a session with its "
-            "own worktree (start one from the New dialog)" % title,
-            409,
-        )
     try:
         wt = inst.GetWorktreePath() or ""
     except Exception:  # noqa: BLE001
         wt = ""
     if not wt:
         raise RunError("workspace not ready", 409)
-    branch = srv._current_branch(wt) or getattr(inst, "Branch", "") or ""
-    base = ""
-    try:
-        base = srv._session_base_branch(inst) or ""
-    except Exception:  # noqa: BLE001
-        pass
-    if not branch or branch == base or branch.lower() in _autopilot.TRUNK_BRANCHES:
-        raise RunError(
-            "%s is on %s — a split merges its pieces into the lead's own branch"
-            % (title, branch or "no branch"),
-            409,
-        )
     owned = _runs.owner_of_title(title)
     if owned:
         raise RunError("%s is already in group %s" % (title, owned[0]["name"]), 409)
@@ -2484,7 +2848,7 @@ def _lead_candidate(title: str):
     return inst, repo
 
 
-async def _start_lead(run: dict, existing=None) -> dict:
+async def _start_lead(run: dict, existing=None, fit: Optional[dict] = None) -> dict:
     """Give a one-for-all group (or a split) its LEAD: the session whose
     branch every member merges into and whose agent resolves conflicts. A
     split's lead proposes the plan. ``existing`` — an adopted live session
@@ -2495,19 +2859,24 @@ async def _start_lead(run: dict, existing=None) -> dict:
     provider = _provider(_program(run))
     if existing is not None:
         title = str(existing.Title)
-        try:
-            wt = existing.GetWorktreePath() or ""
-            branch = srv._current_branch(wt) or existing.Branch
-        except Exception:  # noqa: BLE001
+        fit = fit or await asyncio.to_thread(_lead_fit, existing)
+        branch = fit.get("branch") or ""
+        if not branch and not fit.get("in_place"):
             branch = getattr(existing, "Branch", "") or ""
+        own = not (fit.get("in_place") or fit.get("trunk"))
         # The adopted session's OWN lane stops here: the group ships it once,
         # at the release. Left armed, it would push (and PR) the groundwork
         # before any plan is approved — and a running record keeps the lead
-        # "busy" forever, so no piece could ever merge.
-        disarmed = await asyncio.to_thread(_autopilot.disarm, title)
+        # "busy" forever, so no piece could ever merge. A session that only
+        # PLANS (in place, or on its trunk) keeps its lane until you pick
+        # "in this folder" — split into separate worktrees, it is untouched.
+        disarmed = await asyncio.to_thread(_autopilot.disarm, title) if own else False
+        brief_run = dict(
+            run, lead={"trunk": bool(fit.get("trunk")), "branch": branch or ""}
+        )
         brief = "Split this task into parallel pieces for MindFlock:\n\n%s\n\n%s" % (
             run["goal"],
-            _runs.lead_brief(run, _max_pieces(), provider),
+            _runs.lead_brief(brief_run, _max_pieces(), provider),
         )
         await asyncio.to_thread(_prompt_queue.enqueue, title, brief)
         lead = {
@@ -2517,6 +2886,8 @@ async def _start_lead(run: dict, existing=None) -> dict:
             "adopted": True,
             "started_at": now,
             "briefed": True,
+            "in_place": bool(fit.get("in_place")),
+            "trunk": bool(fit.get("trunk")),
         }
         note = (
             "%s's own lane was turned off — the group ships it once, at the "
@@ -2707,6 +3078,10 @@ def cancel(run_id: str) -> Tuple[dict, List[str]]:
                 )
             if run["state"] == "releasing" and run.get("lead"):
                 _disarm(run["lead"]["title"])
+            if _runs.same_folder(run):
+                _unfence_all(run)
+                for t in run["tasks"]:
+                    t["fenced"] = False
             if run.get("lead") and run["lead"]["title"] in srv.ENGINE.instances:
                 kept.append(run["lead"]["title"])
             run["state"] = "cancelled"
@@ -3218,11 +3593,148 @@ def propose_plan(run_id: str, payload: dict) -> dict:
     return {"plan": _runs.run_dto(out)["plan"], "problems": []}
 
 
-def approve_plan(run_id: str) -> dict:
-    """``POST /api/runs/{id}/plan/approve``: create the pieces (children of the
-    lead, forked from its HEAD, fenced to their paths) and start them all."""
+def _mode(mode) -> str:
+    mode = str(mode or "").strip() or "worktrees"
+    if mode not in _runs.SPLIT_MODES:
+        raise RunError("mode must be one of: %s" % ", ".join(_runs.SPLIT_MODES), 400)
+    return mode
+
+
+async def approve(run_id: str, mode: str = "") -> dict:
+    """``POST /api/runs/{id}/plan/approve {mode}`` — the plan card's one
+    click. ``worktrees`` (the default): every piece in its own worktree,
+    merged back into the lead's branch; a lead that works directly in its
+    folder (or sits on its trunk) first gets a NEW lead of its own, started
+    from its last commit (:func:`_start_own_lead`). ``same_folder``: every
+    piece an extra agent in the lead's own folder, no merge."""
+    mode = _mode(mode)
+    run = await asyncio.to_thread(_need, run_id)
+    _need_split(run)
+    plan = run.get("plan")
+    if run["state"] != "plan_ready" or not plan or plan["state"] != "proposed":
+        raise RunError("this group has no plan to approve (%s)" % run["state"], 409)
+    if mode == "worktrees" and not run.get("origin"):
+        inst, _wt = _lead_wt(run)
+        if inst is None:
+            raise RunError("the lead session is not there", 409)
+        fit = await asyncio.to_thread(_lead_fit, inst)
+        if fit["in_place"] or fit["trunk"]:
+            await _start_own_lead(run_id, fit)
+    return await asyncio.to_thread(approve_plan, run_id, mode)
+
+
+def _own_lead_title(origin: str, repo: str) -> str:
+    """``<origin>-split``, numbered past every title (and session branch)
+    already taken."""
+    taken = _taken_titles(repo)
+    base = (origin or "split")[:40].rstrip("-") or "split"
+    title = base + "-split"
+    n = 2
+    while title in taken:
+        title = "%s-split-%d" % (base, n)
+        n += 1
+    return title
+
+
+async def _start_own_lead(run_id: str, fit: dict) -> None:
+    """Separate worktrees for a split whose lead works directly in its folder
+    (or sits on its trunk): MindFlock starts a NEW lead — a plain worktree of
+    the same repository on a fresh branch, cut from the original session's
+    last commit — and the group runs on it. The original session, its
+    checkout, branch, index and uncommitted files are never touched: never
+    merged into, switched or pushed. Its uncommitted changes would not be in
+    the split, so they are refused here (commit them first)."""
+    srv = _server()
+    run = await asyncio.to_thread(_need, run_id)
+    origin = (run.get("lead") or {}).get("title") or ""
+    wt = fit.get("wt") or ""
+    if not origin or not wt:
+        raise RunError("the lead session is not there", 409)
+    await asyncio.to_thread(_tidy_artifacts, wt)
+    dirty = await asyncio.to_thread(_git_merge.tracked_dirty, wt)
+    if dirty:
+        raise RunError(
+            "%s has uncommitted changes — they would not be in the split (the "
+            "pieces start from its last commit): commit them first" % origin,
+            409,
+            code="origin_dirty",
+        )
+    head = await asyncio.to_thread(_git_merge.rev_parse, wt, "HEAD")
+    repo = await asyncio.to_thread(_git_merge.repo_of, wt)
+    if not head or not repo:
+        raise RunError("could not read %s's last commit" % origin, 409)
+    title = await asyncio.to_thread(_own_lead_title, origin, repo)
+    base_branch = fit.get("base") or fit.get("branch") or ""
+    payload = {
+        "title": title,
+        "program": _program(run),
+        "repo_path": repo,
+        "prompt": _runs.integrator_brief(run, _provider(_program(run))),
+        "base_ref": head,
+        "base_branch": base_branch,
+    }
+    try:
+        status, body = await srv._session_create.create_result(payload)
+    except Exception as err:  # noqa: BLE001
+        status, body = 500, {"error": str(err)}
+    if status != 202:
+        raise RunError(
+            "MindFlock could not start a lead for the pieces: %s"
+            % (body.get("error") or status),
+            status if 400 <= status < 500 else 500,
+        )
+    now = time.time()
+
+    def _store() -> None:
+        with _runs.edit(run_id) as r:
+            if r is None:
+                return
+            r["origin"] = {
+                "title": origin,
+                "branch": fit.get("branch") or "",
+                "head": head,
+                "in_place": bool(fit.get("in_place")),
+                "trunk": bool(fit.get("trunk")),
+            }
+            r["repo_root"] = repo
+            r["lead"] = {
+                "title": title,
+                "branch": str(body.get("branch") or ""),
+                "base_branch": base_branch,
+                "incarnation": float(body.get("created_at") or 0.0),
+                "adopted": False,
+                "started_at": now,
+                "briefed": True,
+            }
+            _runs.log_event(
+                r,
+                now,
+                "lead",
+                text="%s %s — MindFlock started %s from its last commit to take "
+                "the pieces; %s is left as it is"
+                % (
+                    origin,
+                    (
+                        "works directly in its folder"
+                        if fit.get("in_place")
+                        else "is on %s" % (fit.get("branch") or "no branch")
+                    ),
+                    title,
+                    origin,
+                ),
+            )
+
+    await asyncio.to_thread(_store)
+
+
+def approve_plan(run_id: str, mode: str = "worktrees") -> dict:
+    """Approve a split's plan: create the pieces (children of the lead,
+    fenced to their paths) and start them all — each in its own worktree
+    forked from the lead's HEAD (``worktrees``), or as extra agents in the
+    lead's own folder (``same_folder``)."""
     srv = _server()
     now = time.time()
+    mode = _mode(mode)
     with _runs.edit(run_id) as run:
         if run is None:
             raise RunError("no such group: %s" % run_id, 404)
@@ -3230,24 +3742,85 @@ def approve_plan(run_id: str) -> dict:
         plan = run.get("plan")
         if run["state"] != "plan_ready" or not plan or plan["state"] != "proposed":
             raise RunError("this group has no plan to approve (%s)" % run["state"], 409)
-        _inst, wt = _lead_wt(run)
-        if not wt:
-            raise RunError("the lead session is not there", 409)
-        _tidy_artifacts(wt)
-        if _git_merge.tracked_dirty(wt):
-            raise RunError(
-                "the lead has uncommitted changes — commit its groundwork first "
-                "(workers fork from its last commit)",
-                409,
-            )
-        head = _git_merge.rev_parse(wt, "HEAD")
-        # The pieces' branches are cut in the repository holding the lead's
-        # worktree (a ticket lead's is MindFlock's base clone, not its Path).
-        repo = _git_merge.repo_of(wt) or run["repo_root"]
-        run["repo_root"] = repo
+        inst, wt = _lead_wt(run)
+        origin = run.get("origin")
+        sf_fields = None
+        if mode == "worktrees" and origin and origin.get("head"):
+            # A lead MindFlock started for the pieces, from the original
+            # session's last commit (its worktree may still be provisioning).
+            head = origin["head"]
+            repo = run["repo_root"]
+        else:
+            if inst is None or not wt:
+                raise RunError("the lead session is not there", 409)
+            fit = _lead_fit(inst)
+            title = run["lead"]["title"]
+            if mode == "worktrees" and (fit["in_place"] or fit["trunk"]):
+                raise RunError(
+                    "%s %s — approve it from the plan card (MindFlock starts a "
+                    "lead of its own for the pieces)"
+                    % (
+                        title,
+                        (
+                            "works directly in its folder"
+                            if fit["in_place"]
+                            else "is on " + (fit["branch"] or "no branch")
+                        ),
+                    ),
+                    409,
+                    code="needs_lead",
+                )
+            if mode == "same_folder" and fit["trunk"]:
+                raise RunError(
+                    "%s is on %s — the pieces would commit onto it. Start a branch "
+                    "here first, or run them in separate worktrees"
+                    % (title, fit["branch"] or "no branch"),
+                    409,
+                    code="trunk",
+                    branch=fit["branch"],
+                )
+            _tidy_artifacts(wt)
+            if _git_merge.tracked_dirty(wt):
+                raise RunError(
+                    "the lead has uncommitted changes — commit its groundwork first "
+                    + (
+                        "(MindFlock commits each piece's paths in this folder: "
+                        "they would mix)"
+                        if mode == "same_folder"
+                        else "(workers fork from its last commit)"
+                    ),
+                    409,
+                    code="lead_dirty",
+                )
+            head = _git_merge.rev_parse(wt, "HEAD")
+            if mode == "same_folder":
+                # The pieces work IN the lead's folder: their "repository"
+                # is that folder (in-place sessions), and the group's branch
+                # is the one checked out there now.
+                repo = wt
+                run["lead"]["branch"] = fit["branch"]
+                changed = _git_merge.changed_paths(wt) or []
+                sf_fields = {
+                    "base": head,
+                    "baseline": changed[:500],
+                    "seen_foreign": [],
+                    "stray": [],
+                    "stray_commits": [],
+                }
+                # Now the lead: its own lane stops (the group ships it once).
+                _autopilot.disarm(title)
+            else:
+                # The pieces' branches are cut in the repository holding the
+                # lead's worktree (a ticket lead's is MindFlock's base clone).
+                repo = _git_merge.repo_of(wt) or run["repo_root"]
+        run["repo_root"] = repo if mode == "worktrees" else run["repo_root"]
         lead = run["lead"]["title"]
-        base = lead[: -len("-lead")] if lead.endswith("-lead") else lead
-        titles = _runs.piece_titles(base, plan["pieces"], _taken_titles(repo))
+        base = _runs.lead_base(lead)
+        titles = _runs.piece_titles(
+            base,
+            plan["pieces"],
+            _taken_titles(repo if mode == "worktrees" else ""),
+        )
         tasks = []
         for i, (p, title) in enumerate(zip(plan["pieces"], titles), 1):
             tasks.append(
@@ -3264,6 +3837,9 @@ def approve_plan(run_id: str) -> dict:
                 )
             )
         run["tasks"] = tasks
+        run["mode"] = mode
+        if sf_fields is not None:
+            run["sf"] = _runs._normalize_sf(sf_fields)
         run["concurrency"] = max(1, min(_runs.MAX_CONCURRENCY, len(tasks)))
         _runs.apply(
             run,
@@ -3275,7 +3851,84 @@ def approve_plan(run_id: str) -> dict:
             now,
         )
         _runs.log_event(
-            run, now, "approved", text="you started %d workers" % len(tasks)
+            run,
+            now,
+            "approved",
+            text="you started %d workers %s"
+            % (
+                len(tasks),
+                (
+                    "in %s's folder (no merge)" % lead
+                    if mode == "same_folder"
+                    else "in separate worktrees"
+                ),
+            ),
+        )
+        out = run
+    _changed(out)
+    return _runs.run_dto(out, srv.ENGINE.instances)
+
+
+def lead_branch(run_id: str) -> dict:
+    """``POST /api/runs/{id}/lead/branch`` — "Start a branch here first": the
+    lead's folder is on its trunk, and "in this folder" would commit the
+    pieces onto it. Only on your click: ``git switch -c <prefix><lead>-split``
+    in that folder (its uncommitted changes come along), and the group's
+    branch is the new one."""
+    srv = _server()
+    now = time.time()
+    with _runs.edit(run_id) as run:
+        if run is None:
+            raise RunError("no such group: %s" % run_id, 404)
+        _need_split(run)
+        if run["state"] not in ("planning", "plan_ready"):
+            raise RunError("the pieces already started (%s)" % run["state"], 409)
+        inst, wt = _lead_wt(run)
+        if inst is None or not wt:
+            raise RunError("the lead session is not there", 409)
+        fit = _lead_fit(inst)
+        title = run["lead"]["title"]
+        if not fit["trunk"]:
+            raise RunError(
+                "%s is already on its own branch (%s)" % (title, fit["branch"]), 409
+            )
+        if _git_merge.operation_in_progress(wt) or _git_merge.merge_in_progress(wt):
+            raise RunError(
+                "%s's folder is in the middle of a git operation" % title, 409
+            )
+        existing = set()
+        try:
+            cp = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    wt,
+                    "for-each-ref",
+                    "--format=%(refname:short)",
+                    "refs/heads",
+                ],
+                capture_output=True,
+                timeout=20,
+            )
+            existing = set((cp.stdout or b"").decode("utf-8", "replace").split())
+        except (OSError, subprocess.SubprocessError):
+            pass
+        stem = srv._session_branch_name(title + "-split") or (title + "-split")
+        branch, n = stem, 2
+        while branch in existing:
+            branch = "%s-%d" % (stem, n)
+            n += 1
+        err = _git_merge.switch_new_branch(wt, branch)
+        if err:
+            raise RunError("could not start a branch: %s" % err, 409)
+        run["lead"]["branch"] = branch
+        run["lead"]["trunk"] = False
+        _runs.log_event(
+            run,
+            now,
+            "lead",
+            text="you started branch %s in %s's folder (from %s)"
+            % (branch, title, fit["branch"] or "a detached HEAD"),
         )
         out = run
     _changed(out)

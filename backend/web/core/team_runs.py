@@ -294,6 +294,35 @@ MAX_CHECK_FIXES = 2
 #: After a check-fix hand-off: the lead idle this long → re-run the check.
 CHECK_FIX_IDLE_S = 60.0
 MIN_PIECES = 2
+#: How a split's pieces run, chosen on the plan card and recorded on the run
+#: (``run["mode"]``, "" until the plan is approved):
+#: ``worktrees`` — each piece in its own worktree, merged back into the
+#: lead's branch (the default); ``same_folder`` — every piece an extra agent
+#: in the LEAD's own folder, fenced to its paths, and MindFlock commits each
+#: piece's paths itself when it is done (nothing to merge).
+SPLIT_MODES = ("worktrees", "same_folder")
+#: The trailer on a commit MindFlock made for a same-folder piece: the
+#: record of which piece a commit is — after a restart, by the branch's
+#: history alone (never by anyone's word).
+SF_TRAILER = "MindFlock-Piece"
+#: A same-folder piece's brief (instead of PIECE_BRIEF).
+PIECE_SF_BRIEF = (
+    '---\nThis is one piece of the MindFlock split "{name}" (lead: {lead}). '
+    "Other pieces work in this same folder at the same time. Change only "
+    "files under: {paths} — nothing else is yours, not even tests or "
+    "lockfiles outside them. Don't run git add, commit, stash, reset or "
+    "switch branches: MindFlock commits exactly your paths when you are "
+    'done. When it is done and tested, call {report}(status="done", '
+    'summary=<what changed, 1-3 lines>, details="Tests: <command> — '
+    "<result>\"). Don't push, open pull requests or start sessions."
+)
+#: Added to the brief of a lead that sits on the trunk (an in-place session
+#: on main, say): the pieces start from its last commit, which must not be a
+#: commit the split put on the trunk.
+LEAD_TRUNK_CLAUSE = (
+    " You are on {branch}, the trunk: commit nothing here — put any shared "
+    "groundwork into one of the pieces."
+)
 
 _LOCK = threading.RLock()
 _INDEX_TTL_S = 1.0
@@ -465,6 +494,11 @@ def _normalize_task(t) -> dict:
         "blocked_since": _f(t.get("blocked_since")),
         # Green zones ("only here") applied to the piece's worktree.
         "fenced": bool(t.get("fenced")),
+        # Same folder: commits the piece made ITSELF (against its brief)
+        # whose files are all its own — kept as its commits, never mixed.
+        "self_commits": [
+            str(c) for c in (t.get("self_commits") or []) if isinstance(c, str)
+        ][:20],
     }
 
 
@@ -521,6 +555,45 @@ def _normalize_lead(d) -> Optional[dict]:
         "started_at": _f(d.get("started_at")),
         "missing_since": _f(d.get("missing_since")),
         "briefed": bool(d.get("briefed")),
+        # A lead that works directly in its folder (in place), or sits on
+        # its base/trunk branch: it can plan a split, but "separate
+        # worktrees" gives the pieces a NEW lead of their own (run.origin).
+        "in_place": bool(d.get("in_place")),
+        "trunk": bool(d.get("trunk")),
+    }
+
+
+def _normalize_origin(d) -> Optional[dict]:
+    """The session the user split when the run had to start its own lead
+    (an in-place or trunk session, split into separate worktrees): it
+    planned, and is never merged into, switched or pushed."""
+    if not isinstance(d, dict) or not _s(d.get("title")):
+        return None
+    return {
+        "title": _s(d.get("title")),
+        "branch": _s(d.get("branch")),
+        "head": _s(d.get("head")),
+        "in_place": bool(d.get("in_place")),
+        "trunk": bool(d.get("trunk")),
+    }
+
+
+def _normalize_sf(d) -> dict:
+    """A same-folder split's facts: the commit the pieces started from, the
+    paths already dirty then (never anyone's stray), foreign commits already
+    judged, and the stray paths / commits standing now."""
+    d = d if isinstance(d, dict) else {}
+
+    def _strs(key, cap):
+        return [str(x) for x in (d.get(key) or []) if isinstance(x, str)][:cap]
+
+    return {
+        "base": _s(d.get("base")),
+        "baseline": _strs("baseline", 500),
+        "seen_foreign": _strs("seen_foreign", 200),
+        "stray": _strs("stray", 50),
+        "stray_commits": _strs("stray_commits", 20),
+        "stray_at": _f(d.get("stray_at")),
     }
 
 
@@ -608,6 +681,10 @@ def _normalize(d) -> dict:
         # A split's one line: what the lead is asked to cut into pieces.
         "goal": _s(d.get("goal"))[:4000],
         "lead": _normalize_lead(d.get("lead")),
+        # How the pieces run ("" until the plan is approved; see SPLIT_MODES).
+        "mode": _s(d.get("mode")) if _s(d.get("mode")) in SPLIT_MODES else "",
+        "origin": _normalize_origin(d.get("origin")),
+        "sf": _normalize_sf(d.get("sf")),
         "plan": _normalize_plan(d.get("plan")),
         "tasks": [_normalize_task(t) for t in (d.get("tasks") or [])],
         "check": _normalize_check(d.get("check")),
@@ -1110,10 +1187,15 @@ def run_brief(run: dict, provider: str = "") -> str:
 
 
 def lead_brief(run: dict, max_pieces: int, provider: str = "") -> str:
-    """The split lead's brief (appended to its task)."""
-    return LEAD_BRIEF.format(
+    """The split lead's brief (appended to its task). A lead on its trunk is
+    also told to commit nothing there."""
+    out = LEAD_BRIEF.format(
         name=run["name"][:60], run=run["id"], max=max_pieces, **tools_for(provider)
     )
+    lead = run.get("lead") or {}
+    if lead.get("trunk"):
+        out += LEAD_TRUNK_CLAUSE.format(branch=lead.get("branch") or "the trunk")
+    return out
 
 
 def integrator_brief(run: dict, provider: str = "") -> str:
@@ -1126,9 +1208,30 @@ def integrator_brief(run: dict, provider: str = "") -> str:
 def piece_brief(run: dict, paths: Iterable[str], provider: str = "") -> str:
     lead = (run.get("lead") or {}).get("title") or "the lead"
     shown = ", ".join("`%s`" % p for p in list(paths)[:8]) or "(none)"
-    return PIECE_BRIEF.format(
+    tmpl = PIECE_SF_BRIEF if same_folder(run) else PIECE_BRIEF
+    return tmpl.format(
         name=run["name"][:60], lead=lead, paths=shown, **tools_for(provider)
     )
+
+
+def same_folder(run: dict) -> bool:
+    """A split whose pieces run in the lead's own folder (no merge)."""
+    return bool(run.get("split")) and run.get("mode") == "same_folder"
+
+
+def lead_base(title: str) -> str:
+    """The name a split's pieces are titled after: the lead's, without the
+    ``-lead`` (or a started lead's ``-split``) suffix MindFlock gave it."""
+    for suffix in ("-lead", "-split"):
+        if title.endswith(suffix) and len(title) > len(suffix):
+            return title[: -len(suffix)]
+    m = re.match(r"^(.+)-split-\d+$", title)
+    return m.group(1) if m else title
+
+
+def sf_trailer(run_id: str, task_id: str) -> str:
+    """The trailer line on a same-folder piece's commit."""
+    return "%s: %s/%s" % (SF_TRAILER, run_id, task_id)
 
 
 # --------------------------------------------------------------------------- #
@@ -1369,7 +1472,7 @@ def member_label(run: dict, t: dict) -> str:
 
 def _piece_title(run: dict, t: dict) -> str:
     lead = (run.get("lead") or {}).get("title") or ""
-    base = lead[: -len("-lead")] if lead.endswith("-lead") else lead
+    base = lead_base(lead) if lead else ""
     title = t["title"]
     if base and title.startswith(base + "-"):
         return title[len(base) + 1 :]
@@ -1627,6 +1730,8 @@ def run_dto(run: dict, live_titles: Optional[Iterable[str]] = None) -> dict:
             "concurrency",
             "budget_usd",
             "split",
+            "mode",
+            "origin",
             "lead",
             "plan",
             "check",
@@ -1642,6 +1747,11 @@ def run_dto(run: dict, live_titles: Optional[Iterable[str]] = None) -> dict:
     out["tasks"] = [
         task_dto(t, bool(t["title"]) and t["title"] in live) for t in run["tasks"]
     ]
+    sf = run.get("sf") or {}
+    out["stray"] = {
+        "paths": list(sf.get("stray") or []),
+        "commits": list(sf.get("stray_commits") or []),
+    }
     out["counts"] = counts(run)
     out["cost_usd"] = run_cost(run)
     out["rev"] = run["rev"]
@@ -1885,8 +1995,15 @@ def plan_actions(run: dict, obs: dict, now: float) -> List[dict]:
         acts.extend(lead_acts)
         if any(a["op"] == "abort" for a in lead_acts):
             return acts
+    sf = same_folder(run)
+    if sf:
+        acts.extend(_plan_sf_foreign(run, obs.get("sf") or {}, now))
     for t in run["tasks"]:
         if is_terminal(t):
+            if sf and t["fenced"] and t["kind"] == "piece":
+                # Its paths are committed (or it left): its fence in the
+                # shared folder goes, so the folder is the lead's again.
+                acts.append(_act("unfence", t))
             continue
         if together and t["state"] == "integrating":
             continue  # the merge queue's, below
@@ -2126,7 +2243,12 @@ def _plan_task(run: dict, t: dict, o: dict, now: float, boot: bool) -> List[dict
     # wait forever on a tree that is already committed. Done = a done report
     # or a turn that ended, on a clean tree with commits beyond its base.
     waiting_on_you = st == "needs_you" and t["reason"] not in ("stuck", "prompt")
-    if is_together(run) and not waiting_on_you:
+    if same_folder(run) and t["kind"] == "piece":
+        if not waiting_on_you:
+            done = _sf_done(t, o, now, activity, report if fresh_report else None)
+            if done:
+                return acts + done
+    elif is_together(run) and not waiting_on_you:
         rep = report if fresh_report else (t.get("report") or {})
         said_done = _s((rep or {}).get("status")).lower() == "done"
         ended = float(o.get("turn_ended_at") or 0.0) >= float(t["started_at"] or 0.0)
@@ -2163,6 +2285,13 @@ def _plan_task(run: dict, t: dict, o: dict, now: float, boot: bool) -> List[dict
         "budget",
     ):
         return acts  # waits for Retry / Skip (or a done report, above)
+
+    if same_folder(run) and t["kind"] == "piece":
+        # No autopilot record drives a same-folder piece — MindFlock commits
+        # its paths itself once it is done (above): only the stuck clock.
+        if st == "needs_you" and t["reason"] == "stuck" and progressed:
+            return acts + [_to(t, "working")]
+        return acts + _plan_stuck(t, o, now, activity, progress_at, nudge_seen)
 
     # --- leave lane: done is the CLI's own "turn ended" (or a done report) --
     if lane == "leave" and rec is not None and not t["held"]:
@@ -2267,6 +2396,206 @@ def _plan_task(run: dict, t: dict, o: dict, now: float, boot: bool) -> List[dict
             )
         ]
     return acts
+
+
+def _sf_done(
+    t: dict, o: dict, now: float, activity: str, fresh: Optional[dict]
+) -> List[dict]:
+    """A same-folder piece that is DONE → into MindFlock's commit queue
+    (``integrating``); ``[]`` while it is not. Done = its own "done" report,
+    or a turn that ended / a quiet minute idle after it worked — either way
+    idle, with changes under its paths (or commits of its own, attributed).
+    A "done" with nothing under its paths is said, never committed empty."""
+    if activity != "idle":
+        return []
+    rep = fresh if fresh is not None else (t.get("report") or {})
+    said_done = _s((rep or {}).get("status")).lower() == "done"
+    own = list(o.get("sf_own") or [])
+    mine = list(t.get("self_commits") or [])
+    idle_for = now - float(o.get("activity_since") or now)
+    ended = float(o.get("turn_ended_at") or 0.0) >= float(t["started_at"] or 0.0)
+    worked = bool(t["worked"] or o.get("worked"))
+    quiet = idle_for >= DONE_QUIET_S and (ended or worked)
+    if not (said_done or quiet):
+        return []
+    if own or mine:
+        return [_to(t, "integrating", ready_at=now)]
+    if said_done:
+        return [
+            _to(
+                t,
+                "needs_you",
+                "blocked",
+                "it said it was done, but nothing under its paths changed — "
+                "Retry to ask it again, or Skip it",
+            )
+        ]
+    return []
+
+
+def _plan_sf_foreign(run: dict, so: dict, now: float) -> List[dict]:
+    """Same folder: judge every commit on the lead's branch MindFlock did not
+    make (no piece trailer) once — a piece committing against its brief.
+    One piece's paths only → kept as that piece's commit; anything else
+    (several pieces' files, files no piece owns) can't be split per piece
+    → the pieces involved need you. Plus the stray paths: changes no piece
+    owns, standing in the shared folder."""
+    out: List[dict] = []
+    sf = run.get("sf") or {}
+    seen = set(sf.get("seen_foreign") or [])
+    judged: List[str] = []
+    stray_commits = list(sf.get("stray_commits") or [])
+    by_id = {t["id"]: t for t in run["tasks"]}
+    for c in so.get("foreign") or []:
+        sha = _s(c.get("sha"))
+        if not sha or sha in seen:
+            continue
+        judged.append(sha)
+        pieces = [p for p in (c.get("pieces") or []) if p in by_id]
+        outside = [str(f) for f in (c.get("outside") or [])]
+        short = sha[:9]
+        subject = _s(c.get("subject"))[:80]
+        if len(pieces) == 1 and not outside:
+            t = by_id[pieces[0]]
+            out.append(
+                _act(
+                    "seen",
+                    t,
+                    fields={"self_commits": list(t["self_commits"]) + [sha]},
+                )
+            )
+            out.append(
+                _act(
+                    "log",
+                    t,
+                    text="it committed by itself (%s %s) — only its own files, "
+                    "kept as its commit" % (short, subject),
+                )
+            )
+            continue
+        if not pieces:
+            stray_commits.append(sha)
+            continue
+        names = ", ".join(by_id[p]["title"] or p for p in pieces)
+        why = (
+            "a commit MindFlock didn't make (%s %s) holds the work of %s%s — it "
+            "can't be split per piece: keep it as it is (Retry) or undo it, "
+            "then Retry"
+            % (
+                short,
+                subject,
+                names,
+                (
+                    (" and files no piece owns (%s)" % ", ".join(outside[:3]))
+                    if outside
+                    else ""
+                ),
+            )
+        )
+        for p in pieces:
+            t = by_id[p]
+            if t["state"] in TERMINAL:
+                continue
+            out.append(_act("disarm", t))
+            out.append(_to(t, "needs_you", "blocked", why))
+    stray = sorted(str(x) for x in (so.get("stray") or []))[:50]
+    fields: dict = {}
+    if judged:
+        fields["seen_foreign"] = list(sf.get("seen_foreign") or []) + judged
+    if stray_commits != list(sf.get("stray_commits") or []):
+        fields["stray_commits"] = stray_commits[-20:]
+    if "stray" in so and stray != list(sf.get("stray") or []):
+        fields["stray"] = stray
+        fields["stray_at"] = now if stray else 0.0
+    if fields:
+        out.append(_act("run", sf=fields))
+    return out
+
+
+def _plan_sf_commits(run: dict, lo: dict, tobs: dict, now: float) -> List[dict]:
+    """Same folder: the commit queue — MindFlock commits each done piece's
+    paths, one piece per pass (one commit each), oldest first. A piece is
+    committed once its trailer commit is on the lead's branch (history, not
+    anyone's word)."""
+    out: List[dict] = []
+    remaining = []
+    for t in run["tasks"]:
+        if t["state"] != "integrating":
+            continue
+        o = tobs.get(t["id"]) or {}
+        sha = _s(o.get("sf_commit"))
+        own = list(o.get("sf_own") or [])
+        if sha or (not own and t["self_commits"]):
+            commits = list(o.get("commits") or []) or list(t["commits"])
+            report_text = _s(o.get("report_text")) or t["report_text"]
+            out.append(
+                _to(
+                    t,
+                    "integrated",
+                    merged_at=now,
+                    finished_at=now,
+                    merged_sha=sha or t["self_commits"][-1],
+                    head_sha=sha or t["self_commits"][-1],
+                    commits=commits,
+                    report_text=report_text,
+                    tests=tests_line(report_text) or t["tests"],
+                    blocked_since=0.0,
+                )
+            )
+        elif not own and o.get("sf_read"):
+            out.append(
+                _to(
+                    t,
+                    "needs_you",
+                    "blocked",
+                    "its changes are gone from the folder before MindFlock could "
+                    "commit them — Retry to ask it again, or Skip it",
+                )
+            )
+        else:
+            remaining.append(t)
+    if not remaining:
+        return out
+    remaining.sort(key=lambda t: (t["ready_at"] or 0.0, t["id"]))
+    t = remaining[0]
+    why = _sf_blocker(run, lo)
+    if not why and lo.get("ready"):
+        if t["blocked_since"]:
+            out.append(_act("seen", t, fields={"blocked_since": 0.0}))
+        out.append(_act("sf_commit", t))
+        return out
+    out.extend(_blocked(t, why, now))
+    return out
+
+
+def _sf_blocker(run: dict, lo: dict) -> str:
+    """Why MindFlock cannot commit a piece into the lead's folder right now
+    (``""`` = it can, or it is only a moment away)."""
+    lead = run.get("lead") or {}
+    title = lead.get("title") or "the lead"
+    pinned = lead.get("branch") or ""
+    if not lo.get("present"):
+        if lo.get("pending"):
+            return ""
+        return "the group's lead %s is gone — bring it back or cancel the group" % (
+            title
+        )
+    if lo.get("ready") and not lo.get("on_branch", True):
+        return "%s is on %s, not the group's branch %s — check out %s, then Retry" % (
+            title,
+            _s(lo.get("live_branch")) or "a detached HEAD",
+            pinned,
+            pinned,
+        )
+    if lo.get("merging") or lo.get("operation"):
+        return (
+            "%s's folder is in the middle of a %s — finish or abort it, then Retry"
+            % (
+                title,
+                _s(lo.get("operation")) or "merge",
+            )
+        )
+    return ""
 
 
 def _stale_run_record(o: dict, created) -> bool:
@@ -2492,7 +2821,10 @@ def _plan_integration(run: dict, obs: dict, now: float, acts: List[dict]) -> Lis
     if run["paused"] or any(a["op"] == "pause" for a in acts):
         return out  # paused: nothing merges, checks or ships
     if state == "running":
-        out.extend(_plan_merges(run, lo, tobs, now))
+        if same_folder(run):
+            out.extend(_plan_sf_commits(run, lo, tobs, now))
+        else:
+            out.extend(_plan_merges(run, lo, tobs, now))
         moving = {a["task"]: a["state"] for a in acts + out if a["op"] == "state"}
         final = [moving.get(t["id"], t["state"]) for t in run["tasks"]]
         planned = not run.get("split") or (run.get("plan") or {}).get("state") == (
@@ -2874,6 +3206,8 @@ def apply(run: dict, action: dict, now: float) -> Optional[Tuple[str, str]]:
             run["lead"] = _normalize_lead(dict(run["lead"], **action["lead"]))
         if isinstance(action.get("plan"), dict) and run.get("plan"):
             run["plan"] = _normalize_plan(dict(run["plan"], **action["plan"]))
+        if isinstance(action.get("sf"), dict):
+            run["sf"] = _normalize_sf(dict(run.get("sf") or {}, **action["sf"]))
         return None
     if op == "abort":
         detail = _s(action.get("detail"))

@@ -933,10 +933,18 @@ them against the lead worktree's `git ls-files` and red zones — no two pieces
 may share a file, a piece may not sit wholly in a red zone, at most
 `MINDFLOCK_MAX_CHILDREN`, no two globs that can match one new path — and
 answers `{ok: false, problems: [{piece, error}]}` to fix, or `{ok: true}`. The user then approves the plan in one
-click (the lead's Thread tab, or the Outbox), and MindFlock starts every piece
-as a worker of the lead (forked from its last commit, fenced to its paths),
-commits each, merges it back and runs the check. Commit shared groundwork
-before proposing. See [team-runs.md](team-runs.md#splitting-one-task).
+click (the lead's Thread tab, or the Outbox) and picks where the pieces run —
+the lead cannot approve (there is no MCP tool for it). **In separate
+worktrees** (the default): every piece a worker of the lead, forked from its
+last commit, fenced to its paths, committed, merged back, then the check; a
+lead that works directly in its folder or sits on its trunk is not merged
+into — MindFlock starts a new lead (`<lead>-split`) from its last commit and
+the group runs on that one. **In this folder**: every piece an extra agent in
+the lead's own folder, fenced to its paths per session, and MindFlock commits
+each piece's paths itself (one commit per piece, nothing to merge); the
+lead's folder must be on its own branch. Commit shared groundwork before
+proposing — unless you are on the trunk (your brief says so): then put it
+into a piece. See [team-runs.md](team-runs.md#splitting-one-task).
 
 ### `report_integrated`
 

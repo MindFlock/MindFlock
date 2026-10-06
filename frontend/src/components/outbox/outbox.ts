@@ -167,6 +167,7 @@ export function waitingChip(w: OutboxWaiting): { text: string; cls: string } {
   if (w.kind === "plan") return { text: w.reason || "the lead proposed the pieces — approve them", cls: "warn" };
   if (w.kind === "release") return { text: w.reason || "one PR is ready to open", cls: "" };
   if (w.kind === "check_failed") return { text: w.reason || "the check failed on the merged branch", cls: "bad" };
+  if (w.kind === "stray") return { text: w.reason || "changes no piece owns in the lead's folder", cls: "warn" };
   if (w.kind === "approve")
     return {
       text: "ready to " + shipVerb(w.step).toLowerCase().replace("open the pr", "open the PR") + " — you asked to see it first",
@@ -214,7 +215,7 @@ export function shippedChip(s: OutboxShipped): { text: string; cls: string } {
 
 /** A group-level row (its title is the group's lead): the plan to approve,
  * the one PR to open, the check that failed on the merged branch. */
-export const LEAD_KINDS: ReadonlySet<string> = new Set(["plan", "release", "check_failed", "conflict"]);
+export const LEAD_KINDS: ReadonlySet<string> = new Set(["plan", "release", "check_failed", "conflict", "stray"]);
 
 export interface WaitAction {
   key:

@@ -42,6 +42,11 @@ __all__ = [
     "operation_in_progress",
     "recover_interrupted",
     "repo_of",
+    "changed_paths",
+    "commits_since",
+    "commit_paths",
+    "heal_index",
+    "switch_new_branch",
 ]
 
 _GIT_TIMEOUT_S = 120
@@ -375,3 +380,245 @@ def merge_into(
                 os.unlink(marker)
             except OSError:
                 pass
+
+
+# --------------------------------------------------------------------------- #
+# Same folder: several agents share ONE checkout, and MindFlock commits each
+# piece's paths itself. Nothing here may touch a file in the worktree: the
+# other pieces are editing it while a commit is written.
+# --------------------------------------------------------------------------- #
+def _literal_env() -> dict:
+    """Paths are passed as LITERAL pathspecs (a file named ``a[1].py`` is
+    that file, never a glob)."""
+    env = dict(os.environ)
+    env.update(_ENV)
+    env["GIT_LITERAL_PATHSPECS"] = "1"
+    return env
+
+
+def _git_env(path: str, args, env: dict, timeout: int = _GIT_TIMEOUT_S, data=None):
+    try:
+        return subprocess.run(
+            ["git", "-C", path, *args],
+            capture_output=True,
+            timeout=timeout,
+            env=env,
+            input=data,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def changed_paths(path: str) -> Optional[List[str]]:
+    """Every path with an uncommitted change at ``path`` — tracked (staged or
+    not, deleted included) and untracked files one by one — or None when git
+    cannot tell. Read without optional locks: it must never collide with an
+    agent's own git command in the same folder."""
+    cp = _git(
+        path,
+        "--no-optional-locks",
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--no-renames",
+        timeout=60,
+    )
+    if cp is None or cp.returncode != 0:
+        return None
+    out: List[str] = []
+    for entry in (cp.stdout or b"").decode("utf-8", "replace").split("\0"):
+        if len(entry) > 3 and entry[2] == " ":
+            out.append(entry[3:])
+    return out
+
+
+def _files_of(path: str, sha: str) -> List[str]:
+    cp = _git(
+        path,
+        "diff-tree",
+        "--no-commit-id",
+        "--name-only",
+        "-r",
+        "-z",
+        "--no-renames",
+        "--root",
+        sha,
+        timeout=30,
+    )
+    if cp is None or cp.returncode != 0:
+        return []
+    return [f for f in (cp.stdout or b"").decode("utf-8", "replace").split("\0") if f]
+
+
+def commits_since(path: str, base: str, head: str = "HEAD", limit: int = 50):
+    """``base..head``'s own commits (merges left out), oldest first, each
+    ``{"sha", "subject", "body", "files"}`` — or None when git cannot tell."""
+    if not base:
+        return []
+    cp = _git(
+        path,
+        "log",
+        "--no-merges",
+        "--reverse",
+        "-n",
+        str(int(limit)),
+        "--format=%H%x1f%s%x1f%b%x1e",
+        "%s..%s" % (base, head),
+        timeout=30,
+    )
+    if cp is None or cp.returncode != 0:
+        return None
+    out = []
+    for rec in (cp.stdout or b"").decode("utf-8", "replace").split("\x1e"):
+        parts = rec.strip("\n").split("\x1f")
+        if len(parts) < 3 or not parts[0].strip():
+            continue
+        sha = parts[0].strip()
+        out.append(
+            {
+                "sha": sha,
+                "subject": parts[1],
+                "body": parts[2],
+                "files": _files_of(path, sha),
+            }
+        )
+    return out
+
+
+def commit_paths(
+    path: str, files: List[str], message: str, expect_head: str = ""
+) -> Dict[str, object]:
+    """Commit EXACTLY ``files`` (as they are in the working tree now) on top
+    of HEAD at ``path`` — and nothing else, whatever is staged or changed
+    beside them.
+
+    Plumbing, never ``git commit``: a temporary index read from HEAD takes
+    the files, ``write-tree`` / ``commit-tree`` make the commit, and
+    ``update-ref HEAD <new> <old>`` moves the branch only if HEAD is still
+    the commit it was built on. The working tree is never touched and no
+    commit hook runs (a hook that stashes "unstaged" changes would pull the
+    other pieces' edits out from under them mid-turn). The real index is
+    then re-read for those paths only, so they show clean.
+
+    → ``{"result": "committed"|"nothing"|"moved"|"error", "sha", "error"}``."""
+    files = [f for f in dict.fromkeys(files or []) if f]
+    if not files:
+        return {"result": "nothing", "sha": "", "error": ""}
+    head = rev_parse(path, "HEAD")
+    if not head:
+        return {"result": "error", "sha": "", "error": "no HEAD to commit on"}
+    if expect_head and head != expect_head:
+        return {"result": "moved", "sha": "", "error": "HEAD moved"}
+    cp = _git(path, "rev-parse", "--absolute-git-dir", timeout=20)
+    gitdir = _out(cp) if cp is not None and cp.returncode == 0 else ""
+    if not gitdir:
+        return {"result": "error", "sha": "", "error": "not a git checkout"}
+    index = os.path.join(gitdir, "mindflock-piece-index-%d" % os.getpid())
+    env = _literal_env()
+    tmp_env = dict(env, GIT_INDEX_FILE=index)
+    try:
+        cp = _git_env(path, ["read-tree", head], tmp_env, timeout=60)
+        if cp is None or cp.returncode != 0:
+            return {"result": "error", "sha": "", "error": _err(cp)}
+        data = "\0".join(files).encode("utf-8") + b"\0"
+        cp = _git_env(
+            path,
+            [
+                "add",
+                "-A",
+                "--ignore-errors",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            ],
+            tmp_env,
+            timeout=120,
+            data=data,
+        )
+        if cp is None:
+            return {"result": "error", "sha": "", "error": "git could not run"}
+        cp = _git_env(path, ["write-tree"], tmp_env, timeout=60)
+        tree = _out(cp) if cp is not None and cp.returncode == 0 else ""
+        if not tree:
+            return {"result": "error", "sha": "", "error": _err(cp)}
+        if tree == rev_parse(path, "HEAD^{tree}"):
+            return {"result": "nothing", "sha": "", "error": ""}
+        cp = _git_env(
+            path,
+            ["commit-tree", tree, "-p", head, "-F", "-"],
+            env,
+            timeout=60,
+            data=(message or "Commit").encode("utf-8"),
+        )
+        sha = _out(cp) if cp is not None and cp.returncode == 0 else ""
+        if not sha:
+            return {"result": "error", "sha": "", "error": _err(cp)}
+        cp = _git_env(
+            path,
+            ["update-ref", "-m", "mindflock: commit a piece", "HEAD", sha, head],
+            env,
+            timeout=30,
+        )
+        if cp is None or cp.returncode != 0:
+            return {"result": "moved", "sha": "", "error": _err(cp)}
+    finally:
+        for p in (index, index + ".lock"):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    # The real index still holds the old blobs for these paths: re-read them
+    # from the new HEAD (best-effort — heal_index catches a miss).
+    _git_env(
+        path,
+        ["reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"],
+        env,
+        timeout=60,
+        data="\0".join(files).encode("utf-8") + b"\0",
+    )
+    return {"result": "committed", "sha": sha, "error": ""}
+
+
+def heal_index(path: str) -> List[str]:
+    """Re-read from HEAD the index entries that differ from HEAD while the
+    file itself does NOT (the leftover of a piece commit whose index refresh
+    was interrupted). Those entries carry nothing: resetting them loses no
+    one's work. Returns the healed paths."""
+    cached = _git(
+        path, "--no-optional-locks", "diff", "--cached", "--name-only", "-z", timeout=30
+    )
+    if cached is None or cached.returncode != 0:
+        return []
+    staged = [
+        f for f in (cached.stdout or b"").decode("utf-8", "replace").split("\0") if f
+    ]
+    if not staged:
+        return []
+    live = _git(
+        path, "--no-optional-locks", "diff", "HEAD", "--name-only", "-z", timeout=30
+    )
+    if live is None or live.returncode != 0:
+        return []
+    differ = {
+        f for f in (live.stdout or b"").decode("utf-8", "replace").split("\0") if f
+    }
+    stale = [f for f in staged if f not in differ]
+    if not stale:
+        return []
+    _git_env(
+        path,
+        ["reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"],
+        _literal_env(),
+        timeout=60,
+        data="\0".join(stale).encode("utf-8") + b"\0",
+    )
+    return stale
+
+
+def switch_new_branch(path: str, branch: str) -> str:
+    """``git switch -c branch`` at ``path`` (uncommitted changes come along).
+    Returns ``""`` on success, else git's sentence."""
+    cp = _git(path, "switch", "-c", branch, timeout=60)
+    if cp is None or cp.returncode != 0:
+        return _err(cp) or "git could not switch"
+    return ""

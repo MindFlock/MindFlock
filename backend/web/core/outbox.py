@@ -50,6 +50,9 @@ WAITING_ACTIONS = {
     "release": ["release", "open"],
     "check_failed": ["open", "retry_check"],
     "lead_gone": ["cancel_group"],
+    # A same-folder split: changes (or a commit) in the lead's folder that no
+    # piece owns — yours to commit, discard or undo.
+    "stray": ["open"],
 }
 #: The step the autopilot is on, as the Outbox names it.
 _STEP = {
@@ -474,6 +477,33 @@ def _run_ask(run: dict, now: float = 0.0) -> Optional[dict]:
             % (chk.get("summary") or chk.get("command") or "see its log"),
             preview=None,
             actions=list(WAITING_ACTIONS["check_failed"]),
+        )
+    sf = run.get("sf") or {}
+    stray = list(sf.get("stray") or [])
+    stray_commits = list(sf.get("stray_commits") or [])
+    if (
+        _runs.same_folder(run)
+        and (stray or stray_commits)
+        and state not in _runs.RUN_FINISHED
+    ):
+        parts = []
+        if stray:
+            parts.append(
+                "changes no piece owns in %s's folder (%s) — commit or discard "
+                "them yourself" % (lead or "the lead", ", ".join(stray[:4]))
+            )
+        if stray_commits:
+            parts.append(
+                "a commit no piece made is on the group's branch (%s)"
+                % ", ".join(c[:9] for c in stray_commits[:3])
+            )
+        return dict(
+            base,
+            key="run::%s::stray" % run["id"],
+            kind="stray",
+            reason="; ".join(parts),
+            preview={"paths": stray[:20], "commits": stray_commits[:5]},
+            actions=list(WAITING_ACTIONS["stray"]),
         )
     return None
 

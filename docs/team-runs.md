@@ -324,18 +324,28 @@ one-for-all group whose lines come from the lead's plan:
 1. The lead gets the task plus a server-owned brief: read the code, commit
    shared groundwork, and **propose** 2–8 pieces with
    `propose_run_plan(run_id, pieces=[{title, prompt, paths}], why)` — never
-   spawn sessions. The group waits in `planning`.
+   spawn sessions. The group waits in `planning`. A lead on its trunk is
+   told to commit nothing there (shared groundwork goes into a piece).
 2. The server **validates** the plan against the lead worktree's
    `git ls-files` and red zones: no two pieces may share a file (nor a new
    literal path one names and the other's globs cover, nor two globs that
    can match one new path), a piece may not sit
    wholly in a red zone, at most `MINDFLOCK_MAX_CHILDREN` pieces. Problems go
    back to the lead to fix (`422`); a good plan is `plan_ready`.
-3. **You approve** — one click: *Start N workers* on the plan card in the
-   lead's Thread (each piece with its prompt and an `only here:` chip; Edit
-   is inline), or *Approve* in the Outbox. *Ask for a different split* sends
-   it back with your note. Approval refuses a lead with uncommitted changes:
-   workers fork from its last commit.
+3. **You approve** — one click on the plan card in the lead's Thread (each
+   piece with its prompt and an `only here:` chip; Edit is inline), or
+   *Approve* in the Outbox (separate worktrees). The card asks **where the
+   pieces run** — one short line each:
+   - **In separate worktrees (merge back)** — the default. Each piece in its
+     own worktree, merged back into the lead's branch; conflicts go to the
+     lead.
+   - **In this folder (no merge)** — each piece an extra agent in the lead's
+     own folder; MindFlock commits each piece's paths when it is done. No
+     worktree to set up, nothing to merge; no per-piece undo.
+
+   *Ask for a different split* sends it back with your note. Approval
+   refuses a lead with uncommitted changes: the pieces start from its last
+   commit (and, in its folder, they would mix with them).
 4. The server starts every piece at once as a worker of the lead and
    **fences** each to its paths — worktree green zones ("edit only here"),
    the red/green-zone guard enforcing them; tests and lockfiles stay
@@ -343,9 +353,90 @@ one-for-all group whose lines come from the lead's plan:
    so nothing it changed before is exempted (those are breaches); a piece
    none of whose paths could be fenced stops shipping and needs you.
    *Split into parallel pieces…* on a session turns that session's own
-   fast-track off: the group ships it once, at the release.
+   fast-track off: the group ships it once, at the release (a session that
+   only plans — in place, or on its trunk — keeps its own until you pick
+   "in this folder"; split into separate worktrees, it is never touched).
 5. From there it is the one-for-all path above: committed, merged back one at
    a time, conflicts to the lead, the check, and your release.
+
+### Any session can split
+
+*Split into parallel pieces…* works on every session in a git folder — also
+one that **works directly in its folder** (in place, your own checkout) or
+sits on its **base/trunk branch** (`main`, say). Such a session plans the
+split like any lead; what happens at approval depends on where the pieces
+run:
+
+- **Separate worktrees.** Merging the pieces into your checkout (or onto
+  `main`) is exactly what a split must not do, so MindFlock starts a **new
+  lead** for them: `<session>-split` (numbered when taken), a plain worktree
+  of the same repository on a fresh branch (`<branch prefix><session>-split`)
+  cut from the original session's **last commit**, with the integration
+  brief. The group runs on it — the pieces fork from it and merge back into
+  it, its branch is the one PR — and it is a normal session in the rail, in
+  the group. The original session keeps running and is **never** merged
+  into, switched or pushed: its branch, HEAD, index, worktree and
+  uncommitted files stay exactly as they were (`run.origin` records it).
+  Its uncommitted tracked changes would not be in the split, so approval
+  refuses them first: "commit them first" (409 `origin_dirty`). Its own
+  fast-track is left alone (it was never the group's lead).
+- **In this folder.** The session itself is the lead and the pieces work in
+  its folder. That folder must be on its **own** branch: on `main` (any
+  trunk, or detached) the card offers **Start a branch here first** —
+  `git switch -c <branch prefix><session>-split` in that folder, only on
+  your click (`POST /api/runs/{id}/lead/branch`; uncommitted changes come
+  along) — or separate worktrees. MindFlock never commits to a trunk on its
+  own (409 `trunk`).
+
+### In this folder (no merge)
+
+`mode: "same_folder"` on the approval (`run.mode`). Every piece is an extra
+agent session **in the lead's own folder** (in place, like a copy window,
+`parent` = the lead) — no worktree, no branch, no merge:
+
+- **Fenced per session.** A worktree's green zones fence *every* session in
+  it (the guard file is per folder), which would let each piece edit every
+  other piece's paths. So each piece gets its own fence instead: the zone
+  store keeps `worktrees[<folder>].sessions[<tmux session>]`, the folder's
+  guard file carries them as `sessions`, and the guard hook — which already
+  resolves the session that fired it from its own pane (`tmux display -t
+  $TMUX_PANE`, never the focused window) — uses its own entry as its green
+  scope: only its paths are writable (no test or lockfile companions in a
+  shared folder), and `git add / commit / stash / reset / switch / merge /
+  rebase / cherry-pick / revert / am / push` are refused ("MindFlock commits
+  exactly your paths"). The other pieces' paths are *siblings*: the
+  git-status backstop never blames a piece for a file another piece is
+  writing at the same moment. The lead (and any window of yours) has no
+  entry and is not fenced. A CLI without the guard hook gets the brief only
+  — the post-hoc checks below still hold.
+- **MindFlock commits, one piece at a time.** A piece is done on its own
+  "done" report, or idle a quiet minute after a turn that ended — with
+  changes under its paths. Then, under a per-folder lock and one piece per
+  pass, MindFlock commits **exactly** that piece's changed paths: a temporary
+  index read from HEAD takes them, `write-tree` / `commit-tree` make the
+  commit, and `update-ref HEAD <new> <old>` moves the branch only if HEAD
+  did not move meanwhile. The working tree is never touched, the other
+  pieces' edits (staged or not) stay where they are, and **no commit hook
+  runs** — a hook that stashes "unstaged" changes would pull the other
+  pieces' work out from under them mid-turn; the group's check
+  (`check_command`) runs on the whole branch before the release. One commit
+  per piece: its subject is the piece's report, its body names the paths,
+  and its trailer `MindFlock-Piece: <run>/<task>` is how MindFlock knows the
+  piece is committed — from the branch's history, after a restart too.
+- **A piece that commits by itself** (against its brief, e.g. a CLI with no
+  guard hook): a commit whose files are all that piece's is kept as its
+  commit; one that mixes pieces' files (or adds files no piece owns) cannot
+  be split per piece — every piece in it needs you ("keep it as it is
+  (Retry) or undo it"). A "done" with nothing under its paths is said, never
+  committed empty.
+- **Changes no piece owns** (a file outside every piece's paths that was not
+  already dirty at approval) are never put in a piece's commit: the group
+  says so once (Outbox `stray`), and the release refuses a tracked one —
+  commit or discard it yourself.
+- **Release** = the lead's branch, one PR (one commit per piece), exactly as
+  above. **No per-piece undo**: the pieces share one branch with no merge
+  commit to revert as a unit — undo a piece by reverting its commit by hand.
+  Two pieces touching one file cannot happen (the plan's disjoint-paths rule).
 
 **The lead's repository is its worktree's**, never its `Path`. A ticket
 session (the ingestion pipeline, Intake *Begin work*) is created with
@@ -373,7 +464,8 @@ its Thread says "Restart the lead to give it the MindFlock tools".
 | Driver, reconcile, operations | `backend/web/core/team_run_driver.py` (loop registered in the lifespan, off under pytest) |
 | Outbox | `backend/web/core/outbox.py` |
 | Starting sessions | `backend/web/core/ticket_start.py` (`launch`), `backend/web/core/session_create.py` |
-| Merge-back | `backend/web/core/git_merge.py` (merge, ancestry, subjects, diff stat) |
+| Merge-back / same-folder commits | `backend/web/core/git_merge.py` (merge, ancestry, subjects, diff stat; `commit_paths`, `changed_paths`, `commits_since`) |
+| Per-session fences | `backend/config/red_zones.py` (`set_session_fence`, guard `sessions`), the hook's `_mf_session_view` (`backend/providers/_tool_hook_src.py`) |
 | MCP tools | `backend/mcp/runs.py` (incl. the lead's `propose_run_plan`, `report_integrated`) |
 | Store | `~/.mindflock/runs/` (`MINDFLOCK_RUNS_DIR`) |
-| Tests | `tests/unit/test_team_runs_*.py` (incl. `_split`), `test_team_run_driver.py`, `test_team_run_split_driver.py`, `test_team_run_ticket_lead.py`, `test_team_run_events.py`, `test_git_merge.py`, `test_outbox.py`, `test_lanes.py`, `test_mcp_team_runs.py` |
+| Tests | `tests/unit/test_team_runs_*.py` (incl. `_split`), `test_team_run_driver.py`, `test_team_run_split_driver.py`, `test_team_run_split_modes.py`, `test_team_run_ticket_lead.py`, `test_team_run_events.py`, `test_git_merge.py`, `test_outbox.py`, `test_lanes.py`, `test_mcp_team_runs.py` |

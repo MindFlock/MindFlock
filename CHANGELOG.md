@@ -26,6 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out; the sessions belong to MindFlock, not to the agent that asked. See
   [docs/team-runs.md](docs/team-runs.md).
 
+- **Split any session — and choose where the pieces run.** *Split into
+  parallel pieces…* now works on a session that works directly in its folder
+  or sits on `main`: it plans the split, and the plan card asks where the
+  pieces run. **In separate worktrees (merge back)** stays the default — for
+  such a session MindFlock starts a new lead (`<session>-split`, a fresh
+  branch from its last commit) and the original is never merged into,
+  switched or pushed (uncommitted changes there are not in the split, and it
+  says so). **In this folder (no merge)** runs every piece as an extra agent
+  in the lead's own folder, each fenced to its own paths (per session: the
+  guard hook resolves which agent fired it), and MindFlock commits each
+  piece's paths itself when it is done — one commit per piece, nothing else
+  in it, never a commit hook in the middle of the others' edits. A piece
+  that commits by itself, or a change no piece owns, is caught and said; a
+  folder on `main` offers **Start a branch here first**. API:
+  `POST /api/runs/{id}/plan/approve {mode}`, `POST /api/runs/{id}/lead/branch`.
+  See [docs/team-runs.md](docs/team-runs.md#splitting-one-task).
+
 - **Fast-track is one control under one name.** The ⏩ button in each pane
   head now says where the session is going (**⏩ off**, **⏩ Commit**,
   **⏩ PR**, **⏩ Merge**, with a small **?** when it asks first) and a click

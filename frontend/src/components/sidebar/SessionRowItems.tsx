@@ -88,7 +88,7 @@ export function SessionRowItems({ inst }: { inst: Instance }) {
           aria-disabled={splitWhy ? true : undefined}
           title={
             splitWhy ||
-            "The agent proposes pieces with separate paths; you approve, MindFlock runs and merges them back"
+            "The agent proposes pieces with separate paths; you approve them and pick where they run — separate worktrees merged back, or this folder"
           }
           onClick={act(splitWhy, () => splitSession(inst, name))}
         >

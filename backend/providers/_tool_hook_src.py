@@ -24,7 +24,35 @@ mid-flight takes effect on the very next tool call.
 # a build heals a hook of an OLDER revision and leaves a NEWER one alone, so
 # two MindFlock builds on one worktree (the uv-tool copy + a dev server)
 # converge instead of rewriting settings.local.json every tick.
-_MF_HOOK_REV = 3
+_MF_HOOK_REV = 4
+
+# The firing session's tmux name, set by ``_mf_tool_hook`` for this one fire
+# (the hook process handles exactly one tool call). Per-session fences in a
+# shared folder (a same-folder split's pieces) are looked up by it.
+_MF_SESSION = ""
+
+# A per-session fence that says "MindFlock commits for you" refuses these git
+# subcommands: each one moves the shared index, HEAD or branch under the
+# other agents working in the same folder.
+_MF_SHARED_GIT = (
+    "add",
+    "commit",
+    "stash",
+    "reset",
+    "switch",
+    "merge",
+    "rebase",
+    "cherry-pick",
+    "revert",
+    "am",
+    "push",
+)
+
+_MF_SHARED_GIT_REASON = (
+    "MindFlock: other agents share this folder, and MindFlock commits exactly "
+    "your paths when you report done. Don't run `git {sub}` here — leave the "
+    "changes in the tree."
+)
 
 # Deny-reason template. MUST stay byte-identical to
 # ``backend.config.red_zones._DENY_REASON_TMPL`` — ``test_tool_hook`` asserts the
@@ -256,7 +284,36 @@ def _mf_load_guard(path):
             g = json.load(f)
     except Exception:
         return None
-    return g if isinstance(g, dict) else None
+    return _mf_session_view(g) if isinstance(g, dict) else None
+
+
+def _mf_session_view(g):
+    """The guard as THIS session sees it. A folder several agents share can
+    fence each one to its own paths (``sessions``, keyed by the sanitized
+    tmux name): the firing session's entry becomes its green scope — no
+    companions, nothing outside its paths — and the other entries become
+    ``siblings`` (paths another agent is working on right now: the backstop
+    never blames this session for them). A session with no entry sees the
+    folder's own zones unchanged."""
+    import re
+
+    sess = g.get("sessions")
+    if not isinstance(sess, dict) or not sess:
+        return g
+    me = re.sub(r"[^A-Za-z0-9_.-]", "_", _MF_SESSION or "")
+    mine = sess.get(me) if me else None
+    if not isinstance(mine, dict) or not mine.get("green_rules"):
+        return g
+    v = dict(g)
+    v["green_rules"] = list(mine.get("green_rules") or [])
+    v["companions"] = []
+    sib = []
+    for k, x in sess.items():
+        if k != me and isinstance(x, dict):
+            sib.extend(x.get("green_rules") or [])
+    v["siblings"] = sib
+    v["no_commit"] = bool(mine.get("no_commit"))
+    return v
 
 
 def _mf_find_guard(abs_path, cache):
@@ -1007,6 +1064,46 @@ def _mf_git_subcmd(args):
     return None
 
 
+def _mf_git_subs(cmd, depth=0):
+    """Every git SUBCOMMAND a shell command runs (``git -C x commit`` →
+    commit), seen through wrappers, ``sh -c`` / ``eval`` and separators."""
+    import os
+
+    found = set()
+    try:
+        tokens = _mf_tokenize(cmd)
+    except Exception:
+        return found
+    for c in _mf_simple_cmds(tokens):
+        argv = []
+        i = 0
+        while i < len(c):
+            if _mf_is_redir(c[i]):
+                i += 2
+                continue
+            argv.append(c[i])
+            i += 1
+        argv = _mf_unwrap(argv)
+        if not argv:
+            continue
+        prog = os.path.basename(argv[0])
+        args = argv[1:]
+        if prog in ("bash", "sh", "dash", "zsh"):
+            script = _mf_dash_c_script(args)
+            if script is not None and depth < 3:
+                found |= _mf_git_subs(script, depth + 1)
+            continue
+        if prog == "eval":
+            if depth < 3:
+                found |= _mf_git_subs(" ".join(args), depth + 1)
+            continue
+        if prog == "git":
+            sub = _mf_git_subcmd(args)
+            if sub:
+                found.add(sub)
+    return found
+
+
 def _mf_is_push_cmd(cmd, depth=0):
     """Whether a shell command's simple commands include ``git … push``,
     ``gh pr create`` or ``gh pr merge`` — seen through env assignments,
@@ -1470,6 +1567,10 @@ def _mf_backstop_post(guard, tuid, out=None):
                     continue
                 if v == "outside" and _mf_green_inside(key, guard):
                     continue  # a submodule whose inside the scope covers
+                if v == "outside" and _mf_rule_hit(
+                    guard.get("siblings"), key, guard.get("ci")
+                ):
+                    continue  # another agent in this shared folder owns it
                 seen.add(key)
                 if v == "blocked":
                     hit = _mf_match_rel(key, rules, guard.get("ci")) or {}
@@ -1491,6 +1592,10 @@ def _mf_backstop_post(guard, tuid, out=None):
                 if key in pre_u or _mf_generated(key.rstrip("/")):
                     continue
                 if _mf_classify(key.rstrip("/"), None, guard) == "outside":
+                    if _mf_rule_hit(
+                        guard.get("siblings"), key.rstrip("/"), guard.get("ci")
+                    ):
+                        continue
                     arts.append(key)
             if arts and out is not None:
                 out["artifact"] = arts[:50]
@@ -1918,6 +2023,17 @@ def _mf_pre_deny(kind, writes, tool, cwd, proj, extra, cache, s=""):
                             "reason": _MF_PROTECT_REASON.format(rel=mk),
                         },
                     )
+            if g.get("no_commit"):
+                bad = sorted(_mf_git_subs(cmd) & set(_MF_SHARED_GIT))
+                if bad:
+                    reason = _MF_SHARED_GIT_REASON.format(sub=bad[0])
+                    return reason, {
+                        "path": "git " + bad[0],
+                        "pattern": None,
+                        "name": "",
+                        "zone_id": None,
+                        "reason": reason,
+                    }
             tags = {}
             w, _r, ok = _bash_targets(cmd, cwd, tags=tags)
             if not ok:
@@ -1970,6 +2086,8 @@ def _mf_tool_hook(p, s, ev):
     prints at most one JSON object to stdout."""
     import os
 
+    global _MF_SESSION
+    _MF_SESSION = s if isinstance(s, str) else ""
     try:
         if not isinstance(p, dict):
             return

@@ -1092,6 +1092,24 @@ export interface RunLead {
   incarnation?: number;
   adopted?: boolean;
   row_present?: boolean;
+  /** The lead works directly in its folder (an in-place session). */
+  in_place?: boolean;
+  /** The lead sits on its base/trunk branch (or a detached HEAD). */
+  trunk?: boolean;
+}
+
+/** Where a split's pieces run (`""` until the plan is approved). */
+export type SplitMode = "" | "worktrees" | "same_folder";
+
+/** The session a split was started from when MindFlock had to start a lead
+ * of its own for the pieces (it worked in its folder, or sat on its trunk):
+ * never merged into, switched or pushed. */
+export interface RunOrigin {
+  title: string;
+  branch?: string;
+  head?: string;
+  in_place?: boolean;
+  trunk?: boolean;
 }
 
 export interface PlanPiece {
@@ -1162,6 +1180,11 @@ export interface RunDTO extends RunSummary {
   plan?: RunPlan | null;
   check?: RunCheck | null;
   release?: RunRelease | null;
+  /** Where the pieces run, chosen on the plan card. */
+  mode?: SplitMode;
+  origin?: RunOrigin | null;
+  /** Same folder: changes (and commits) in the lead's folder no piece owns. */
+  stray?: { paths: string[]; commits: string[] } | null;
 }
 
 export interface OutboxRunRef {

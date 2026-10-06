@@ -558,8 +558,10 @@ class RunTools:
         return {
             "ok": True,
             "problems": [],
-            "note": "proposed %d pieces — your user approves them; MindFlock then "
-            "starts, fences and merges the workers. Wait; do not spawn sessions." % n,
+            "note": "proposed %d pieces — your user approves them and picks where "
+            "they run (separate worktrees, or your folder); MindFlock then starts, "
+            "fences and commits or merges the workers. Wait; do not spawn "
+            "sessions." % n,
         }
 
     def report_integrated(self, args: dict, ctx: ToolContext) -> dict:

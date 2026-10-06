@@ -447,3 +447,48 @@ def test_a_new_session_with_fast_track_gets_its_own_worktree():
     assert "inPlace: inPlace && !laneNeedsWorktree" in js
     assert "turns fast-track off — it commits for this session" in js
     assert "not with a lane" not in js
+
+
+def test_the_plan_card_asks_where_the_pieces_run():
+    """Split modes: the plan card offers "In separate worktrees (merge back)"
+    (default) and "In this folder (no merge)", one short line each, posts the
+    choice as ``{mode}``, and — for a lead on its trunk — offers the explicit
+    "Start a branch here first" (POST /lead/branch) or separate worktrees,
+    inline (Electron has no browser dialogs). The words are the one-name
+    vocabulary: no lane / ship on the card."""
+    js = _js()
+    panel = squash(_fn(js, "RunLeadPanel"))
+    for s in (
+        "json: { mode }",
+        '"/lead/branch"',
+        '"Start a branch here first"',
+        '"Use separate worktrees"',
+        '"Where the pieces run"',
+        "rb-modes",
+        'type: "radio"',
+        "threadOpen(lead)",
+    ):
+        assert s in panel, s
+    modes = squash(_fn(js, "modeChoices"))
+    for s in (
+        '"In separate worktrees (merge back) — default"',
+        '"In this folder (no merge)"',
+        "no per-piece undo.",
+        "the pieces would commit onto it",
+    ):
+        assert s in modes, s
+    for body in (panel, modes):
+        for absent in ("window.prompt", "prompt(", "confirm(", "alert("):
+            assert absent not in body, absent
+    for absent in ("lane", "Ship", "ship"):
+        assert absent not in modes, absent
+    assert ".rb-mode.on" in _css()
+
+
+def test_a_same_folder_piece_is_committed_not_merged_back():
+    js = _js()
+    st = squash(_fn(js, "pieceStatus"))
+    assert 'mode === "same_folder"' in st and '"committed ✓"' in st
+    assert '"committing…"' in st
+    panel = squash(_fn(js, "RunLeadPanel"))
+    assert "pieceStatus(t, myName, run.mode)" in panel

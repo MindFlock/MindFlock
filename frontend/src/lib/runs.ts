@@ -260,6 +260,7 @@ const LEAD_ASKS: Record<string, string> = {
   release: "one PR is ready to open",
   check_failed: "the check failed on the merged branch",
   lead_gone: "its lead is gone — nothing can merge or ship",
+  stray: "changes no piece owns in the lead's folder — commit or discard them yourself",
 };
 
 const num = (v: unknown) => Number(v) || 0;
@@ -285,7 +286,7 @@ export function runNote(
         const lead = str(d.title) || str(d.session);
         return {
           text: name + ": " + (str(d.text) || LEAD_ASKS[reason]),
-          cls: reason === "check_failed" || reason === "lead_gone" ? "n-warn" : "n-info",
+          cls: reason === "check_failed" || reason === "lead_gone" || reason === "stray" ? "n-warn" : "n-info",
           run,
           // The server's own announce key names the ROUND (plan round 2, a
           // new release head, a later check failure): each is a new ask.

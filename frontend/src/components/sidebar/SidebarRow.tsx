@@ -177,7 +177,9 @@ export const SidebarRow = memo(function SidebarRow({
   const chip0 = chipState(inst);
   const chip =
     runTask?.state === "integrated"
-      ? { ...chip0, label: "merged", cls: "s-committed", title: "Merged back into its lead's branch" }
+      ? runTask.sameFolder
+        ? { ...chip0, label: "committed", cls: "s-committed", title: "MindFlock committed its paths on its lead's branch" }
+        : { ...chip0, label: "merged", cls: "s-committed", title: "Merged back into its lead's branch" }
       : chip0;
   const check = checkChip(inst);
   const num = idx < 9 ? String(idx + 1) : "";

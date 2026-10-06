@@ -414,6 +414,9 @@ export interface ShipTask {
   reason?: string;
   /** Set while a merge-back conflict is handed to the lead. */
   conflict?: { files: string[] } | null;
+  /** A piece of a split run IN its lead's folder: MindFlock commits it,
+   * nothing is merged back. */
+  sameFolder?: boolean;
 }
 
 /** How the lane names itself at the head of the line. */
@@ -574,6 +577,10 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
 
   // A one-for-all / split line merges back into its lead's branch: that IS
   // its outcome (its own lane is only "commit"), so say so before the lane.
+  if (tstate === "integrated" && task?.sameFolder)
+    return line("✓ committed", "", "rep-done", "shipped", "MindFlock committed its paths on its lead's branch.");
+  if (tstate === "integrating" && task?.sameFolder)
+    return line("⇡ committing", "", "rep-ship", "shipping", "MindFlock is committing its paths on its lead's branch.");
   if (tstate === "integrated") return line("✓ merged back", "", "rep-done", "shipped", "Merged back into its lead's branch.");
   if (tstate === "integrating" && (reason === "conflict" || !!task?.conflict))
     return line(

@@ -391,3 +391,67 @@ describe("the ship card's check row (live L6)", () => {
     expect(S.checkLine({ check: { state: "ok", command: "pytest", tests: 7 } } as never)).toBe("`pytest` passed (7 tests)");
   });
 });
+
+describe("where the pieces run (the plan card's mode choice)", () => {
+  it("offers separate worktrees first, then this folder, one short line each", () => {
+    const c = S.modeChoices(run({ state: "plan_ready" }), "auth-lead");
+    expect(c.map((x) => x.mode)).toEqual(["worktrees", "same_folder"]);
+    expect(c[0].label).toBe("In separate worktrees (merge back) — default");
+    expect(c[1].label).toBe("In this folder (no merge)");
+    expect(c[0].hint).toBe("Each piece in its own worktree, merged back into run/auth-cleanup; conflicts go to auth-lead.");
+    expect(c[1].hint).toMatch(/runs in auth-lead's folder; MindFlock commits each piece's paths .* no per-piece undo\.$/);
+    expect(c.every((x) => x.blocked === "")).toBe(true);
+    // One vocabulary: no "lane" / "ship" words on the card.
+    for (const x of c) expect(x.label + x.hint).not.toMatch(/\blane|\bship/i);
+  });
+
+  it("an in-place or trunk lead: worktrees get a new lead, this folder needs a branch first", () => {
+    const inPlace = S.modeChoices(run({ lead: { title: "mine", branch: "feat", in_place: true } }), "mine");
+    expect(inPlace[0].hint).toBe(
+      "MindFlock starts mine-split from mine's last commit and merges the pieces there — mine itself is left as it is.",
+    );
+    expect(inPlace[1].blocked).toBe("");
+    const trunk = S.modeChoices(run({ lead: { title: "mine", branch: "main", in_place: true, trunk: true } }), "mine");
+    expect(trunk[1].blocked).toBe("mine is on main — the pieces would commit onto it");
+    expect(trunk[0].blocked).toBe("");
+  });
+
+  it("a same-folder group says committed, never merged back", () => {
+    const sf = run({ mode: "same_folder", tasks: [piece("a", "integrated"), piece("b", "integrating"), piece("c", "working")] });
+    expect(S.pieceStatus(sf.tasks[0], "lead", sf.mode).word).toBe("committed ✓");
+    expect(S.pieceStatus(sf.tasks[1], "lead", sf.mode).word).toBe("committing…");
+    expect(S.pieceStatus(sf.tasks[0], "lead").word).toBe("merged back ✓");
+    expect(S.leadLine(sf)).toEqual({ text: "1 of 3 committed", cls: "" });
+    expect(text(S.leadSubline(sf, "lead"))).toBe(
+      "Split into 3 pieces with separate paths in lead's folder · 1 of 3 committed on run/auth-cleanup",
+    );
+    expect(S.releaseCard(sf).commits).toBe("one per piece, committed by MindFlock with only its paths");
+    expect(S.checkLine({ check: { state: "pending" }, mode: "same_folder" } as never)).toBe(
+      "runs once every piece is committed",
+    );
+    expect(S.startedText(2, "same_folder", "lead")).toBe("Starting 2 workers in lead's folder — each fenced to its paths");
+  });
+
+  it("the plan card posts the mode, and offers the branch action inline", () => {
+    expect(leadPanelSrc).toContain('json: { mode }');
+    expect(leadPanelSrc).toContain('"/lead/branch"');
+    expect(leadPanelSrc).toContain("Start a branch here first");
+    expect(leadPanelSrc).toContain("Use separate worktrees");
+    expect(leadPanelSrc).not.toMatch(/window\.(prompt|confirm|alert)|\balert\(/);
+  });
+
+  it("the Outbox's stray row opens the lead's Thread", () => {
+    const w: OutboxWaiting = { title: "lead", kind: "stray", reason: "changes no piece owns", actions: ["open"] };
+    expect(waitingChip(w)).toEqual({ text: "changes no piece owns", cls: "warn" });
+    expect(waitingActions(w, { row: true, run: true, task: false }).map((a) => a.key)).toEqual(["open"]);
+  });
+});
+
+describe("a same-folder piece on the rail", () => {
+  it("reads committed / committing, never merged back", () => {
+    const row = { title: "q-tokens", run: { id: "r", name: "x", task: "t1", role: "piece", grouping: "together" } } as unknown as Instance;
+    expect(shipLine(row, { act: "idle", task: { state: "integrated", sameFolder: true } })!.lead).toBe("✓ committed");
+    expect(shipLine(row, { act: "idle", task: { state: "integrating", sameFolder: true } })!.lead).toBe("⇡ committing");
+    expect(shipLine(row, { act: "idle", task: { state: "integrated" } })!.lead).toBe("✓ merged back");
+  });
+});

@@ -27172,6 +27172,8 @@ function shipLine(row, opts = {}) {
 	if (tstate === "needs_you" && reason && reason !== "prompt" && reason !== "approve") return line("! " + escalationText(reason), " — open the Outbox", "rep-blocked", "escalated", "MindFlock stopped and needs you: " + escalationText(reason) + ".");
 	if (tstate === "failed") return line("! failed", reason ? " — " + escalationText(reason) : " — open the Outbox", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
 	if (ap && ap.state === "halted") return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
+	if (tstate === "integrated" && task?.sameFolder) return line("✓ committed", "", "rep-done", "shipped", "MindFlock committed its paths on its lead's branch.");
+	if (tstate === "integrating" && task?.sameFolder) return line("⇡ committing", "", "rep-ship", "shipping", "MindFlock is committing its paths on its lead's branch.");
 	if (tstate === "integrated") return line("✓ merged back", "", "rep-done", "shipped", "Merged back into its lead's branch.");
 	if (tstate === "integrating" && (reason === "conflict" || !!task?.conflict)) return line("! conflict", " — open the Thread", "rep-ask", "shipping", "Merging it back conflicted — its lead is resolving it; the lead's Thread shows where it is.");
 	if (tstate === "integrating") return line("⇄ merging", "", "rep-ship", "shipping", "MindFlock is merging it back into its lead's branch.");
@@ -27336,7 +27338,8 @@ var LEAD_ASKS = {
 	plan: "the lead proposed the pieces — approve them",
 	release: "one PR is ready to open",
 	check_failed: "the check failed on the merged branch",
-	lead_gone: "its lead is gone — nothing can merge or ship"
+	lead_gone: "its lead is gone — nothing can merge or ship",
+	stray: "changes no piece owns in the lead's folder — commit or discard them yourself"
 };
 var num$3 = (v) => Number(v) || 0;
 var str$3 = (v) => v == null ? "" : String(v);
@@ -27353,7 +27356,7 @@ function runNote(event, data, info = {}) {
 				const lead = str$3(d.title) || str$3(d.session);
 				return {
 					text: name + ": " + (str$3(d.text) || LEAD_ASKS[reason]),
-					cls: reason === "check_failed" || reason === "lead_gone" ? "n-warn" : "n-info",
+					cls: reason === "check_failed" || reason === "lead_gone" || reason === "stray" ? "n-warn" : "n-info",
 					run,
 					dedupe: d.key ? "needs:" + str$3(d.key) : [
 						"needs",
@@ -30168,9 +30171,24 @@ function pieceLabel(t, run) {
 function pathsText(paths) {
 	return (paths || []).filter(Boolean).join(", ");
 }
-function pieceStatus(t, leadName) {
+function isSameFolder(run) {
+	return run?.mode === "same_folder";
+}
+function pieceStatus(t, leadName, mode) {
 	const tests = testsLabel(t.tests);
 	const files = (t.conflict?.files || []).join(", ");
+	if (mode === "same_folder") {
+		if (t.state === "integrated") return {
+			word: "committed ✓",
+			cls: "ok",
+			detail: tests
+		};
+		if (t.state === "integrating") return {
+			word: "committing…",
+			cls: "work",
+			detail: ""
+		};
+	}
 	switch (t.state) {
 		case "integrated": return {
 			word: "merged back ✓",
@@ -30266,7 +30284,27 @@ function leadSubline(run, leadName) {
 		"skipped",
 		"failed"
 	].includes(t.state)).length;
-	if (merged) {
+	if (isSameFolder(run)) {
+		parts.push({ text: " in " + leadName + "'s folder · " });
+		if (merged) {
+			parts.push({
+				text: merged === live && merged > 1 ? "all " + merged + " committed" : merged + " of " + live + " committed",
+				cls: "ok"
+			});
+			parts.push({ text: " on " });
+			parts.push({
+				text: branch || "the lead's branch",
+				b: true
+			});
+		} else {
+			parts.push({ text: "each piece is committed on " });
+			parts.push({
+				text: branch || "the lead's branch",
+				b: true
+			});
+			parts.push({ text: " as it finishes" });
+		}
+	} else if (merged) {
 		parts.push({ text: " · " });
 		parts.push({
 			text: merged === live && merged > 1 ? "all " + merged + " merged back" : merged + " of " + live + " merged back",
@@ -30307,6 +30345,25 @@ function leadSubline(run, leadName) {
 		cls: "bad"
 	});
 	return parts;
+}
+function modeChoices(run, leadName) {
+	const lead = run.lead || { title: "" };
+	const branch = lead.branch || "";
+	return [{
+		mode: "worktrees",
+		label: "In separate worktrees (merge back) — default",
+		hint: !lead.in_place && !lead.trunk ? "Each piece in its own worktree, merged back into " + (branch || leadName + "'s branch") + "; conflicts go to " + leadName + "." : "MindFlock starts " + leadName + "-split from " + leadName + "'s last commit and merges the pieces there — " + leadName + " itself is left as it is.",
+		blocked: ""
+	}, {
+		mode: "same_folder",
+		label: "In this folder (no merge)",
+		hint: "Each piece runs in " + leadName + "'s folder; MindFlock commits each piece's paths as it finishes — nothing to merge, no per-piece undo.",
+		blocked: lead.trunk ? leadName + " is on " + (branch || "its trunk") + " — the pieces would commit onto it" : ""
+	}];
+}
+function startedText(n, mode, leadName) {
+	const w = startWorkersLabel(n).replace(/^Start/, "Starting");
+	return mode === "same_folder" ? w + " in " + leadName + "'s folder — each fenced to its paths" : w + " — each fenced to its paths";
 }
 function planRows(pieces) {
 	return (pieces || []).map((p) => ({
@@ -30350,7 +30407,7 @@ function releaseCard(run) {
 		title: r.title || run.name,
 		into: base + " ← " + (branch || "its branch"),
 		stat,
-		commits: (split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$5(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
+		commits: (isSameFolder(run) ? "one per piece, committed by MindFlock with only its paths" : split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$5(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
 		body: split ? "a section per piece: what changed, the tests it ran" : "a section per line: what changed, the tests it ran"
 	};
 }
@@ -30363,7 +30420,7 @@ function checkLine(run) {
 		case "failed": return cmd + " failed" + (c.summary ? ": " + c.summary : "");
 		case "running": return cmd + " is running on the merged branch…";
 		case "fixing": return cmd + " failed — the lead is fixing it";
-		case "pending": return "runs once every piece is merged back";
+		case "pending": return isSameFolder(run) ? "runs once every piece is committed" : "runs once every piece is merged back";
 		default: return "";
 	}
 }
@@ -30533,7 +30590,7 @@ function leadLine(run) {
 	};
 	if (!live) return null;
 	return {
-		text: merged + " of " + live + " merged back",
+		text: merged + " of " + live + (isSameFolder(run) ? " committed" : " merged back"),
 		cls: merged === live ? "ok" : ""
 	};
 }
@@ -30661,6 +30718,10 @@ function waitingChip(w) {
 		text: w.reason || "the check failed on the merged branch",
 		cls: "bad"
 	};
+	if (w.kind === "stray") return {
+		text: w.reason || "changes no piece owns in the lead's folder",
+		cls: "warn"
+	};
 	if (w.kind === "approve") return {
 		text: "ready to " + shipVerb(w.step).toLowerCase().replace("open the pr", "open the PR") + " — you asked to see it first",
 		cls: ""
@@ -30702,7 +30763,8 @@ var LEAD_KINDS = /* @__PURE__ */ new Set([
 	"plan",
 	"release",
 	"check_failed",
-	"conflict"
+	"conflict",
+	"stray"
 ]);
 function waitingActions(w, can) {
 	const a = new Set(w.actions || []);
@@ -32652,7 +32714,7 @@ function SessionRowItems({ inst }) {
 			"data-row": "split",
 			className: splitWhy ? "pb-row-off" : void 0,
 			"aria-disabled": splitWhy ? true : void 0,
-			title: splitWhy || "The agent proposes pieces with separate paths; you approve, MindFlock runs and merges them back",
+			title: splitWhy || "The agent proposes pieces with separate paths; you approve them and pick where they run — separate worktrees merged back, or this folder",
 			onClick: act(splitWhy, () => splitSession(inst, name)),
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Split into parallel pieces…" })
 		}),
@@ -32758,7 +32820,12 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, onScree
 	const prSupport = hasPrSupport(caps);
 	const ideName = config?.ide_name || "Cursor";
 	const chip0 = chipState(inst);
-	const chip = runTask?.state === "integrated" ? {
+	const chip = runTask?.state === "integrated" ? runTask.sameFolder ? {
+		...chip0,
+		label: "committed",
+		cls: "s-committed",
+		title: "MindFlock committed its paths on its lead's branch"
+	} : {
 		...chip0,
 		label: "merged",
 		cls: "s-committed",
@@ -35138,7 +35205,10 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	const familyTaskOf = (0, import_react.useMemo)(() => {
 		const m = /* @__PURE__ */ new Map();
 		for (const r of runsData || []) if (r.policy?.grouping === "together" || r.split) {
-			for (const t of r.tasks || []) if (t.title) m.set(t.title, t);
+			for (const t of r.tasks || []) if (t.title) m.set(t.title, r.mode === "same_folder" ? {
+				...t,
+				sameFolder: true
+			} : t);
 		}
 		return m;
 	}, [runsData]);
@@ -37946,6 +38016,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 	const [problems, setProblems] = (0, import_react.useState)([]);
 	const [asking, setAsking] = (0, import_react.useState)(false);
 	const [note, setNote] = (0, import_react.useState)("");
+	const [mode, setMode] = (0, import_react.useState)("worktrees");
 	if (!run) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
 		className: "thread-head",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", {
@@ -37996,7 +38067,27 @@ function RunLeadPanel({ title, me, run, rows }) {
 			refreshRuns();
 		}
 	};
-	const approve = () => act("approve", "Start the workers", "/plan/approve", {}, startWorkersLabel(plan.length).replace(/^Start/, "Starting") + " — each fenced to its paths").then((ok) => ok && void refreshInstances());
+	const choices = modeChoices(run, myName);
+	const chosen = choices.find((c) => c.mode === mode) || choices[0];
+	const approve = async () => {
+		if (busy) return;
+		setBusy("approve");
+		try {
+			const res = await api(runPath(id, "/plan/approve"), { json: { mode } });
+			const lead = res?.run?.lead?.title || "";
+			if (res?.run?.origin && lead && lead !== title) {
+				toast(startedText(plan.length, "worktrees", myName) + " under " + nameOf$1(lead) + ", a new lead from " + myName + "'s last commit — " + myName + " is left as it is", { duration: 7e3 });
+				useUi.getState().threadOpen(lead);
+			} else toast(startedText(plan.length, mode, myName));
+		} catch (err) {
+			errorPop("Start the workers failed", errMsg(err));
+		} finally {
+			setBusy("");
+			refreshRuns();
+			refreshInstances();
+		}
+	};
+	const startBranch = () => act("branch", "Start a branch here", "/lead/branch", {}, "Started a branch in " + myName + "'s folder");
 	const reject = async () => {
 		if (await act("reject", "Ask for a different split", "/plan/reject", { note: note.trim() }, "Asked " + myName + " for a different split")) {
 			setAsking(false);
@@ -38039,6 +38130,11 @@ function RunLeadPanel({ title, me, run, rows }) {
 						className: p.cls ? "th-" + p.cls : void 0,
 						children: p.text
 					}, i))
+				}),
+				run.mode === "same_folder" && !!(run.stray?.paths?.length || run.stray?.commits?.length) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "thread-sub th-bad rb-warn",
+					"data-stray": "",
+					children: [run.stray?.paths?.length ? "Changes no piece owns in " + myName + "'s folder: " + run.stray.paths.slice(0, 4).join(", ") + (run.stray.paths.length > 4 ? " (+" + (run.stray.paths.length - 4) + " more)" : "") + " — no piece's commit takes them; commit or discard them yourself." : "", run.stray?.commits?.length ? " A commit no piece made is on the group's branch (" + run.stray.commits.slice(0, 3).map((c) => c.slice(0, 9)).join(", ") + ") — it ships with the PR unless you undo it." : ""]
 				}),
 				noTools && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "thread-sub th-bad rb-warn",
@@ -38142,6 +38238,50 @@ function RunLeadPanel({ title, me, run, rows }) {
 						className: "rb-problems",
 						children: problems.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: p }, i))
 					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
+						className: "rb-modes",
+						disabled: !!busy || editing !== null,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", { children: "Where the pieces run" }), choices.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "rb-mode" + (mode === c.mode ? " on" : ""),
+							"data-mode": c.mode,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "radio",
+								name: "rb-mode-" + id,
+								value: c.mode,
+								checked: mode === c.mode,
+								onChange: () => setMode(c.mode)
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "rb-mode-text",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: c.label }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "rb-mode-hint",
+									children: c.hint
+								})]
+							})]
+						}, c.mode))]
+					}),
+					chosen.blocked && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "rb-btns rb-mode-block",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "rb-status th-bad",
+								children: [chosen.blocked, "."]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "th-btn primary",
+								disabled: !!busy,
+								onClick: () => void startBranch(),
+								children: "Start a branch here first"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "th-btn",
+								disabled: !!busy,
+								onClick: () => setMode("worktrees"),
+								children: "Use separate worktrees"
+							})
+						]
+					}),
 					asking ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "rb-ask",
 						children: [
@@ -38174,8 +38314,8 @@ function RunLeadPanel({ title, me, run, rows }) {
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "th-btn primary",
-							disabled: !!busy || editing !== null || !plan.length,
-							title: "MindFlock starts one worker per piece, forked from the lead's last commit, each fenced to its paths",
+							disabled: !!busy || editing !== null || !plan.length || !!chosen.blocked,
+							title: chosen.hint,
 							onClick: () => void approve(),
 							children: startWorkersLabel(plan.length)
 						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -38334,13 +38474,13 @@ function RunLeadPanel({ title, me, run, rows }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "rb-note",
-						children: split ? "planned by the lead · started and merged by MindFlock" : "started and merged by MindFlock"
+						children: run.mode === "same_folder" ? "planned by the lead · started and committed by MindFlock, in " + myName + "'s folder" : split ? "planned by the lead · started and merged by MindFlock" : "started and merged by MindFlock"
 					})
 				]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "thread-workers rb-pieces",
 				children: tasks.map((t) => {
-					const st = pieceStatus(t, myName);
+					const st = pieceStatus(t, myName, run.mode);
 					const lbl = pieceLabel(t, run);
 					const row = rows.find((r) => r.title === t.title && !r.device);
 					const activity = row ? effectiveActivity(row) : "";

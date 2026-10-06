@@ -701,6 +701,66 @@
   margin-top: 10px;
 }
 
+/* Where the pieces run: two radio rows, one short line each. */
+.thread-root .rb-modes {
+  margin: 10px 0 0;
+  padding: 8px 0 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.thread-root .rb-modes legend {
+  padding: 0;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.thread-root .rb-mode {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.thread-root .rb-mode.on {
+  border-color: rgba(var(--accent-rgb), 0.7);
+  background: rgba(var(--accent-rgb), 0.07);
+}
+
+.thread-root .rb-mode input {
+  margin: 3px 0 0;
+  flex: none;
+}
+
+.thread-root .rb-mode-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.thread-root .rb-mode-hint {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.thread-root .rb-plan .rb-mode-block {
+  margin-top: 8px;
+}
+
 .thread-root .rb-piece-edit {
   display: flex;
   flex-direction: column;

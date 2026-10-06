@@ -104,9 +104,11 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // A split / one-for-all group draws as a family (no header), so its members'
   // run view ("✓ merged back", "! conflict") comes from here instead.
   const familyTaskOf = useMemo(() => {
-    const m = new Map<string, RunTask>();
+    const m = new Map<string, RunTask & { sameFolder?: boolean }>();
     for (const r of runsData || [])
-      if (r.policy?.grouping === "together" || r.split) for (const t of r.tasks || []) if (t.title) m.set(t.title, t);
+      if (r.policy?.grouping === "together" || r.split)
+        for (const t of r.tasks || [])
+          if (t.title) m.set(t.title, r.mode === "same_folder" ? { ...t, sameFolder: true } : t);
     return m;
   }, [runsData]);
   useEffect(() => {
