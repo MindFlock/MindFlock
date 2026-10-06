@@ -42,4 +42,21 @@ describe("notifFromEvent", () => {
     expect(n?.text).toContain("finished");
     expect(n?.cls).toBe("n-done");
   });
+
+  it("says a stage change as what happened, not as an arrow", () => {
+    const say = (stage: string) => notifFromEvent(env({ event: "session.stage_changed", new: stage }))?.text;
+    expect(say("committed")).toBe("committed");
+    expect(say("pushed")).toBe("pushed");
+    expect(say("pr")).toBe("opened a PR");
+    expect(say("merged")).toBe("merged");
+    expect(say("interrupt")).toBe("pre-commit failed");
+    expect(say("precommit")).toBe("running pre-commit hooks");
+    // Anything else reads as the raw value — never "stage → …".
+    expect(say("agent")).toBe("agent");
+  });
+
+  it("says a drained queue prompt as sent, with what is left", () => {
+    const n = notifFromEvent(env({ event: "session.prompt_sent", data: { remaining: 2 } }));
+    expect(n?.text).toBe("sent the next queued prompt (2 left)");
+  });
 });

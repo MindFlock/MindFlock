@@ -228,8 +228,8 @@ NOTIFY_RULES: List[dict] = [
         "tags": ["checkered_flag"],
     },
     {
-        # Opt-in: every member that reaches its lane. The Outbox and the bell
-        # already show these; a push per PR is ambient, not actionable.
+        # Opt-in: every member that reaches its lane. Its rail row and the
+        # bell already show these; a push per PR is ambient, not actionable.
         "id": "run_task_shipped",
         "label": "A group member ships",
         "event": "run.task_shipped",

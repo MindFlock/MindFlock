@@ -794,3 +794,40 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* InlineConfirm (useSettings.tsx): the "are you sure?" a guarded Settings
+   action draws under itself, because the desktop app has no native confirm.
+   A tinted box in the warning colour so it reads as a question the app is
+   asking, not as one more hint; the go-ahead is the red verb, Cancel stays the
+   plain button (and holds focus). */
+.set-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+
+.set-confirm-text {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.set-confirm-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.set-confirm .set-confirm-yes {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+}
+
+.set-confirm .set-confirm-yes:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}

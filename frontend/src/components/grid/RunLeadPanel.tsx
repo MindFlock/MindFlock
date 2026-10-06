@@ -9,10 +9,14 @@
  * merged branch, and opens the ONE PR when you say so. Nothing here pastes a
  * prompt into an agent, and nothing asks through a browser dialog (Electron
  * has none): editing a piece and the note for a different split are inline
- * rows. The sentences are lib/splitRun.ts. */
+ * rows. The sentences are lib/splitRun.ts.
+ *
+ * Such a group has no header on the rail (it is a family under its lead), so
+ * this panel is also its home for what a header's ⋯ holds: a queued piece's
+ * Start now / Remove, and a finished group's "Copy summary". */
 
 import { useState } from "react";
-import type { Instance, PlanPiece, RunDTO } from "../../api/types";
+import type { Instance, PlanPiece, RunDTO, RunTask } from "../../api/types";
 import { api, ApiError } from "../../api/client";
 import { displayName, useUi } from "../../state/store";
 import { refreshRuns } from "../../state/runs";
@@ -22,7 +26,9 @@ import { errMsg } from "../../lib/format";
 import { selectSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
 import { copyText } from "../../lib/clipboard";
-import { runAction, runPath } from "../../lib/runsApi";
+import { runAction, runPath, taskPath } from "../../lib/runsApi";
+import { RUN_DONE_STATES } from "../../lib/runs";
+import { summaryText } from "../outbox/outbox";
 import { errorPop } from "../../lib/errorPop";
 import {
   editPlan,
@@ -191,6 +197,20 @@ export function RunLeadPanel({
 
   const tasks = memberTasks(run);
   const sub = leadSubline(run, myName);
+  const finished = RUN_DONE_STATES.has(run.state);
+  // The run record keeps its summary for as long as it keeps the run.
+  const summary = finished ? summaryText(null, id, run) : "";
+  const pieceAct = (t: RunTask, verb: "start-now" | "skip") => {
+    if (busy) return;
+    setBusy(verb + ":" + t.id);
+    const name = pieceLabel(t, run).name;
+    void runAction(
+      verb === "skip" ? "Remove" : "Start now",
+      taskPath(id, t.id, verb),
+      {},
+      (verb === "skip" ? "Removed " : "Starting ") + name,
+    ).finally(() => setBusy(""));
+  };
   const noTools = me?.mcp_attached === false && split && (run.state === "planning" || run.state === "plan_ready");
 
   return (
@@ -226,6 +246,22 @@ export function RunLeadPanel({
                 ") — it ships with the PR unless you undo it."
               : ""}
           </p>
+        )}
+        {finished && (
+          <div className="thread-head-btns">
+            <button
+              type="button"
+              className="th-btn rb-copy-summary"
+              disabled={!summary}
+              title={summary ? "Copy what this group did, as Markdown" : "MindFlock has no summary for this group"}
+              onClick={async () => {
+                if (!summary) return;
+                toast((await copyText(summary)) ? "Copied the summary as Markdown" : "Couldn't copy the summary");
+              }}
+            >
+              Copy summary
+            </button>
+          </div>
         )}
         {noTools && (
           <p className="thread-sub th-bad rb-warn">
@@ -530,6 +566,28 @@ export function RunLeadPanel({
                     <span className={"th-w-word " + st.cls}>{st.word}</span>
                     {st.detail && (
                       <span className={"th-w-detail" + (st.cls === "ok" ? " th-ok" : "")}>{st.detail}</span>
+                    )}
+                    {t.state === "queued" && !finished && (
+                      <>
+                        <button
+                          type="button"
+                          className="th-btn rb-start-now"
+                          disabled={!!busy}
+                          title="Start it now, past the at-a-time limit (once)"
+                          onClick={() => pieceAct(t, "start-now")}
+                        >
+                          Start now
+                        </button>
+                        <button
+                          type="button"
+                          className="th-btn rb-remove"
+                          disabled={!!busy}
+                          title="Take it out of the group — it never starts"
+                          onClick={() => pieceAct(t, "skip")}
+                        >
+                          Remove
+                        </button>
+                      </>
                     )}
                   </div>
                   {(paths || commit) && (

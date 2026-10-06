@@ -117,6 +117,140 @@ export function IssuesTab({ gotoTab }: TabProps) {
         ...[...byRepo.keys()].filter((r) => !repos.includes(r)),
       ];
 
+  const sourceList = (
+    <RepoSourceList
+      key="sources"
+      surface="issue"
+      label="Repositories"
+      repos={repos}
+      overrides={overrides}
+      onSave={(list, next, msg) =>
+        saveGithub({ issue_repos: list, issue_repo_settings: next }, msg)
+      }
+      defaults={{
+        agent: String(gh.issue_agent || agentChoices.fallback || ""),
+        baseBranch: "",
+        minAge: gh.issue_min_age_minutes == null ? "" : String(gh.issue_min_age_minutes),
+        skipAuthors: String(skipAuthors),
+        // Verify's field, blank here for the same reason baseBranch is: this
+        // surface does not render it, so there is nothing to seed.
+        liveBranch: "",
+      }}
+      listId="gh-issue-repos-list"
+      addId="gh-issue-repo-add-btn"
+      addLabel="+ Add repository"
+      emptyText="No repositories yet — add one below to start handling new issues."
+      hint={
+        <>
+          Each card is one repository, with its own agent CLI and filters. Blank fields
+          inherit the tab defaults under <strong>Advanced options</strong>. This list is
+          separate from PR review's — a repo can be on either, or both.
+        </>
+      }
+    />
+  );
+
+  const workList = (
+    <WorkListPanel
+      key="work"
+      label="Open issues"
+      onRefresh={loadOpenIssues}
+      note={issuesNote}
+      rowId="gh-open-issues-row"
+      refreshId="gh-issues-refresh"
+      noteId="gh-issues-note"
+      listId="gh-issues-list"
+      toolbarExtra={issues && issues.length ? filter.control : undefined}
+      hint={
+        <>
+          Every open issue on your watched repositories, grouped by repository, with why
+          auto handling has or hasn't picked it up. <strong>Start work</strong> spins up a session for that issue right
+          now, bypassing the age / already-handled filters.
+        </>
+      }
+    >
+      {issuesError ? (
+        <div className="repo-empty">{issuesError}</div>
+      ) : issues === null ? null : !issuesRepos.length ? (
+        <div className="repo-empty">Add a repository to see its open issues.</div>
+      ) : !issues.length ? (
+        <div className="repo-empty">No open issues on the watched repositories.</div>
+      ) : !groupOrder.length ? (
+        <div className="repo-empty">No open issue matches “{filter.query}”.</div>
+      ) : (
+        groupOrder.map((repo) => {
+          const rows = byRepo.get(repo) || [];
+          const body = !rows.length ? (
+            <div className="repo-empty">No open issues in this repository.</div>
+          ) : (
+                rows.map((i) => (
+                  <WorkItemRow
+                    key={(i.repo || "") + i.number}
+                    reference={"#" + i.number}
+                    url={i.url}
+                    title={i.title}
+                    tooltip={
+                      (i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?")
+                    }
+                    meta={`by ${i.author || "?"} · ${ageText(i.created_at)}`}
+                    hasSession={i.has_session}
+                    eligible={i.eligible}
+                    eligibleLabel="queued for auto handling"
+                    reasons={i.reasons}
+                    actionLabel="Start work"
+                    failPrefix="Start work failed"
+                    workspace={i.workspace}
+                    onReopen={async () => {
+                      const title = await reopenIntakeItem({
+                        kind: "issues",
+                        repo: i.repo,
+                        number: i.number,
+                      });
+                      setTimeout(relistIssues, 5000);
+                      return title;
+                    }}
+                    agents={agentChoices.names}
+                    configuredAgent={
+                      overrides[repo]?.agent ||
+                      String(gh.issue_agent || agentChoices.fallback || "")
+                    }
+                    configuredDepth={overrides[repo]?.depth || ""}
+                    onStart={async ({ agent, depth, effort }) => {
+                      const r = await api<{ title?: string }>("/api/github/issues/start", {
+                        json: {
+                          repo: i.repo,
+                          number: i.number,
+                          ...(agent ? { agent } : {}),
+                          ...(depth ? { depth } : {}),
+                          ...(effort ? { effort } : {}),
+                        },
+                      });
+                      // The server already has a provisioning row for it: pull it now
+                      // instead of leaving the sidebar blank until the next poll.
+                      refreshInstances();
+                      setTimeout(relistIssues, 5000);
+                      return "Issue session " + (r?.title || "");
+                    }}
+                  />
+                ))
+          );
+          return (
+            <WorkGroup
+              key={repo}
+              heading
+              name={repo}
+              count={rows.length}
+              open={groups.isOpen(repo)}
+              onToggle={() => groups.toggle(repo)}
+            >
+              {body}
+            </WorkGroup>
+          );
+        })
+      )}
+    </WorkListPanel>
+  );
+
   return (
     <>
       <div className="caps-gate" data-caps-gate="git">
@@ -161,133 +295,13 @@ export function IssuesTab({ gotoTab }: TabProps) {
         note={n ? undefined : "Add a repository below and this starts handling its new issues"}
       />
 
-      <RepoSourceList
-        surface="issue"
-        label="Repositories"
-        repos={repos}
-        overrides={overrides}
-        onSave={(list, next, msg) =>
-          saveGithub({ issue_repos: list, issue_repo_settings: next }, msg)
-        }
-        defaults={{
-          agent: String(gh.issue_agent || agentChoices.fallback || ""),
-          baseBranch: "",
-          minAge: gh.issue_min_age_minutes == null ? "" : String(gh.issue_min_age_minutes),
-          skipAuthors: String(skipAuthors),
-          // Verify's field, blank here for the same reason baseBranch is: this
-          // surface does not render it, so there is nothing to seed.
-          liveBranch: "",
-        }}
-        listId="gh-issue-repos-list"
-        addId="gh-issue-repo-add-btn"
-        addLabel="+ Add repository"
-        emptyText="No repositories yet — add one below to start handling new issues."
-        hint={
-          <>
-            Each card is one repository, with its own agent CLI and filters. Blank fields
-            inherit the tab defaults under <strong>Advanced options</strong>. This list is
-            separate from PR review's — a repo can be on either, or both.
-          </>
-        }
-      />
-
-      <WorkListPanel
-        label="Open issues"
-        onRefresh={loadOpenIssues}
-        note={issuesNote}
-        rowId="gh-open-issues-row"
-        refreshId="gh-issues-refresh"
-        noteId="gh-issues-note"
-        listId="gh-issues-list"
-        toolbarExtra={issues && issues.length ? filter.control : undefined}
-        hint={
-          <>
-            Every open issue on the repositories above, grouped by repository, with why
-            auto handling has or hasn't picked it up. <strong>Start work</strong> spins up a session for that issue right
-            now, bypassing the age / already-handled filters.
-          </>
-        }
-      >
-        {issuesError ? (
-          <div className="repo-empty">{issuesError}</div>
-        ) : issues === null ? null : !issuesRepos.length ? (
-          <div className="repo-empty">Add a repository above to see its open issues.</div>
-        ) : !issues.length ? (
-          <div className="repo-empty">No open issues on the watched repositories.</div>
-        ) : !groupOrder.length ? (
-          <div className="repo-empty">No open issue matches “{filter.query}”.</div>
-        ) : (
-          groupOrder.map((repo) => {
-            const rows = byRepo.get(repo) || [];
-            const body = !rows.length ? (
-              <div className="repo-empty">No open issues in this repository.</div>
-            ) : (
-                  rows.map((i) => (
-                    <WorkItemRow
-                      key={(i.repo || "") + i.number}
-                      reference={"#" + i.number}
-                      url={i.url}
-                      title={i.title}
-                      tooltip={
-                        (i.repo || "") + "#" + i.number + " — " + (i.title || "") + "\nby " + (i.author || "?")
-                      }
-                      meta={`by ${i.author || "?"} · ${ageText(i.created_at)}`}
-                      hasSession={i.has_session}
-                      eligible={i.eligible}
-                      eligibleLabel="queued for auto handling"
-                      reasons={i.reasons}
-                      actionLabel="Start work"
-                      failPrefix="Start work failed"
-                      workspace={i.workspace}
-                      onReopen={async () => {
-                        const title = await reopenIntakeItem({
-                          kind: "issues",
-                          repo: i.repo,
-                          number: i.number,
-                        });
-                        setTimeout(relistIssues, 5000);
-                        return title;
-                      }}
-                      agents={agentChoices.names}
-                      configuredAgent={
-                        overrides[repo]?.agent ||
-                        String(gh.issue_agent || agentChoices.fallback || "")
-                      }
-                      configuredDepth={overrides[repo]?.depth || ""}
-                      onStart={async ({ agent, depth, effort }) => {
-                        const r = await api<{ title?: string }>("/api/github/issues/start", {
-                          json: {
-                            repo: i.repo,
-                            number: i.number,
-                            ...(agent ? { agent } : {}),
-                            ...(depth ? { depth } : {}),
-                            ...(effort ? { effort } : {}),
-                          },
-                        });
-                        // The server already has a provisioning row for it: pull it now
-                        // instead of leaving the sidebar blank until the next poll.
-                        refreshInstances();
-                        setTimeout(relistIssues, 5000);
-                        return "Issue session " + (r?.title || "");
-                      }}
-                    />
-                  ))
-            );
-            return (
-              <WorkGroup
-                key={repo}
-                heading
-                name={repo}
-                count={rows.length}
-                open={groups.isOpen(repo)}
-                onToggle={() => groups.toggle(repo)}
-              >
-                {body}
-              </WorkGroup>
-            );
-          })
-        )}
-      </WorkListPanel>
+      {/* WORK FIRST once a repository is watched — the same anatomy as the
+          Tickets and Pull requests tabs. */}
+      {/* A KEYED pair, not two fragments: the order flips the moment the
+          first repository is saved, and position-matched children would
+          remount both — collapsing the card you are still configuring and
+          dropping its focus mid-edit. Keys let React move them instead. */}
+      {n ? [workList, sourceList] : [sourceList, workList]}
 
       <details className="pr-advanced">
         <summary>Advanced options</summary>

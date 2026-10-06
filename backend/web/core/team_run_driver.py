@@ -444,7 +444,7 @@ def _arm(run: dict, t: dict) -> None:
     if _runs.same_folder(run) and t["kind"] == "piece":
         return
     lane = _runs.task_lane(run, t)
-    # A message a PERSON wrote (the Outbox approval's edited message, armed by
+    # A message a PERSON wrote (the bell approval's edited message, armed by
     # ship-now as message_auto=False) survives a re-arm — after a failed
     # commit's fix, a resume (the pause stashed it on the task), a retry.
     # Otherwise the task line is the placeholder, replaced at commit time by

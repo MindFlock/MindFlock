@@ -252,10 +252,10 @@ export function pruneMessage(r: PruneResult): string {
   );
 }
 
-/** The second confirmation, when some candidates hold uncommitted work. OK takes
- * everything; Cancel takes only the clean ones — so "remove all unused
- * worktrees" can be answered honestly instead of silently doing the destructive
- * half of it. */
+/** The second confirmation, when some candidates hold uncommitted work. Its
+ * answers (see `dirtyChoices`) are "all of them" or "only the clean ones" — so
+ * "remove all unused worktrees" can be answered honestly instead of silently
+ * doing the destructive half of it. */
 export function dirtyMessage(r: PruneResult): string {
   const dirty = r.candidates.filter((c) => c.dirty);
   const clean = r.candidates.length - dirty.length;
@@ -273,9 +273,18 @@ export function dirtyMessage(r: PruneResult): string {
     `Include the ${dirty.length} ${plural(dirty.length, "worktree")} with ` +
     `uncommitted changes?\n\n` +
     previewList(dirty.map((c) => c.name)) +
-    `\n\nOK — delete all ${r.candidates.length}.\n` +
-    `Cancel — delete only the ${clean} that ${plural(clean, "is", "are")} clean.`
+    `\n\nDelete all ${r.candidates.length} — or only the ${clean} that ` +
+    `${plural(clean, "is", "are")} clean.`
   );
+}
+
+/** The button labels that answer `dirtyMessage`. `clean` is null when every
+ * candidate is dirty: then the only answers are "delete anyway" and "cancel". */
+export function dirtyChoices(r: PruneResult): { all: string; clean: string | null } {
+  const dirty = r.candidates.filter((c) => c.dirty).length;
+  const clean = r.candidates.length - dirty;
+  if (!clean) return { all: "Delete anyway", clean: null };
+  return { all: `Delete all ${r.candidates.length}`, clean: `Only the ${clean} clean` };
 }
 
 /** What actually happened, for the toast. */

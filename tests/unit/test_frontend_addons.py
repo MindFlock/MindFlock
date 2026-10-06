@@ -51,12 +51,20 @@ def test_templates_module_wiring():
     # edit loads a template back into the form; starters seed the empty state
     assert "formApi = {" in js and "fill(t)" in js
     assert "STARTERS" in js
-    # send a recipe's prompt to a running session (reuses the /send endpoint),
-    # including a broadcast to all running sessions
-    assert "populateSend" in js
-    assert '"/send"' in js
-    assert "All running sessions" in js
-    assert 'target === "*"' in js
+    # a template only STARTS a session: the old "or send prompt to" row (and
+    # its broadcast) is gone — pasting into running sessions is Customize →
+    # Prompts' job, and the intro points there
+    for gone in (
+        "populateSend",
+        "sendPromptTo",
+        "mft-send-row",
+        '"/send"',
+        "All running sessions",
+    ):
+        assert gone not in js, gone
+    assert "use Customize → Prompts" in js
+    # ...and the paste-into-all now lives in the bundle's Prompts panel
+    assert "All running sessions" in _js("/app.js")
     # duplicate = fork a recipe into a new, distinctly-named one
     assert '"-copy"' in js
     # progressive filter box, shown only past a threshold (like the session filter)

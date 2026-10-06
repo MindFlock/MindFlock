@@ -7,6 +7,15 @@ import { useServerRestart } from "../useServerRestart";
 import { api } from "../../../api/client";
 import type { ScreenProps } from "../SettingsDialog";
 
+/** Whether this viewer is on Windows: a Windows browser (the UA says so even
+ * when the server runs inside WSL), or the desktop shell on win32 — read off
+ * the same preload bridge lib/shell reads, since it exports no platform getter. */
+function onWindows(): boolean {
+  if (typeof navigator !== "undefined" && /Windows/.test(navigator.userAgent || "")) return true;
+  if (typeof window === "undefined") return false;
+  return (window as unknown as { mfshell?: { platform?: string } }).mfshell?.platform === "win32";
+}
+
 export function Advanced(_: ScreenProps) {
   const s = useSettings();
   const mode = String(s.get("engine", "mode") ?? "");
@@ -14,6 +23,14 @@ export function Advanced(_: ScreenProps) {
   // which is ON — so only an explicit stored `false` unchecks this.
   const engineSessions = s.get("engine", "enabled") !== false;
   const { restarting, timedOut, restart } = useServerRestart();
+  // Platform's two fields only mean something on Windows. Shown there, or
+  // anywhere they already hold a value (a config carried over from a Windows
+  // box must stay visible to be cleared) — and nowhere else, where a heading
+  // that says "(Windows / WSL only)" was a section telling you to skip it.
+  const showPlatform =
+    onWindows() ||
+    !!String(s.get("platform", "wsl_distro") ?? "").trim() ||
+    !!String(s.get("platform", "wt_command") ?? "").trim();
   return (
     <>
       <h3 className="set-section-title">Engine</h3>
@@ -52,21 +69,25 @@ export function Advanced(_: ScreenProps) {
         </select>
       </label>
       <EngineUpdate />
-      <h3 className="set-section-title">
-        Platform <span className="set-hint">(Windows / WSL only)</span>
-      </h3>
-      <label className="set-row">
-        <span className="set-label">WSL distro</span>
-        <SettingField group="platform" field="wsl_distro" placeholder="(your default distro)" />
-        <span className="set-hint">
-          Name used for `wsl.exe -d &lt;distro&gt;`. Leave empty to use your default distro —
-          the one the Windows installer put MindFlock in (`wsl -l -v` lists them).
-        </span>
-      </label>
-      <label className="set-row">
-        <span className="set-label">Windows Terminal command</span>
-        <SettingField group="platform" field="wt_command" placeholder="wt.exe" />
-      </label>
+      {showPlatform && (
+        <>
+          <h3 className="set-section-title">
+            Platform <span className="set-hint">(Windows / WSL only)</span>
+          </h3>
+          <label className="set-row">
+            <span className="set-label">WSL distro</span>
+            <SettingField group="platform" field="wsl_distro" placeholder="(your default distro)" />
+            <span className="set-hint">
+              Name used for `wsl.exe -d &lt;distro&gt;`. Leave empty to use your default distro —
+              the one the Windows installer put MindFlock in (`wsl -l -v` lists them).
+            </span>
+          </label>
+          <label className="set-row">
+            <span className="set-label">Windows Terminal command</span>
+            <SettingField group="platform" field="wt_command" placeholder="wt.exe" />
+          </label>
+        </>
+      )}
       <h3 className="set-section-title">Server</h3>
       <p className="set-hint">
         Restarts the server process, then reloads this window once it answers again — so both

@@ -44,12 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   See [docs/team-runs.md](docs/team-runs.md#splitting-one-task).
 
 - **Fast-track is one control under one name.** The ⏩ button in each pane
-  head now says where the session is going (**⏩ off**, **⏩ Commit**,
-  **⏩ PR**, **⏩ Merge**, with a small **?** when it asks first) and a click
-  opens a picker: Off, Commit, Push, Open a PR, Merge when green, and **Ask me
-  before it ships**, which parks the session one step short of its first
-  outward step until you approve it in the Outbox. The same choices appear in
-  the New dialog (**Fast-track to** / **Fast-track each to**) and
+  head now says where the session is going (**⏩ Commit**, **⏩ PR**,
+  **⏩ Merge**, with a small **?** when it asks first; just **⏩** while
+  Off) and a click opens a picker: Off, Commit, Push, Open a PR, Merge when
+  green, and **Ask me before it ships**, which parks the session one step
+  short of its first outward step until you approve it in the bell. The same
+  choices appear in the New dialog (**Fast-track to** / **Fast-track each to**) and
   the Commit dialog (**Then fast-track to**); `Ctrl+K F`, the row's › menu
   and the palette open the ⏩ picker. **Split into parallel pieces…** and
   **Move out of a group** are row › menu actions of their own. The rail's
@@ -165,6 +165,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   See [docs/web-api.md](docs/web-api.md).
 
 ### Changed
+
+- **A calmer first run, one place for what needs you.** The surface shows
+  the daily loop and keeps everything else one click away, each feature
+  under one name and in one home.
+  - **The bell is the one list of what waits on you.** Its *Needs attention*
+    list now holds what the Outbox's *Waiting on you* held: ask-first
+    approvals with the commit message (editable) and PR title, a group's
+    stuck lines (Retry / Retry fresh / Skip), budget pauses (Raise / Stop),
+    and a group's plan and release with **Open the Thread ↗**. Every agent
+    question gets its answer buttons there, one badge counts it all, and
+    the rail's *— open the bell* lines open it on that row.
+  - **The Outbox is gone as a place.** What waited on you is in the bell; a
+    finished group's summary is **Copy summary** in its rail header's ⋯
+    menu; a group's queued lines (Start now / Remove) are in that same
+    menu. A split or one-for-all group has no header, so both live on its
+    lead's Thread tab. The *Shipped today* log is dropped (a session's PR
+    and checks stay on its row). `Alt+O` and the palette's Outbox entry are
+    gone, and a rebind saved for `Alt+O` is dropped on load. A group's row in
+    the bell, or its *finished* toast, scrolls to the group's header and
+    pulses it, or opens the lead's Thread for a group with no header.
+  - **Customize is a dialog with two tabs: Sidebar and Prompts.** The
+    footer's **Customize** opens it. Sidebar says when each bar has
+    something to show; Prompts pastes a saved prompt into the selected
+    session, another running one or all of them (the templates manager's
+    send row is gone: a template only starts a session).
+  - **A shorter top bar**: New, Intake, Verify (always, with its due
+    badge) and Settings, plus a magnifier for the command palette. Recently
+    closed is a *Recently closed (n)* link under the session list.
+  - **The sidebar bars carry the Intake tabs' names** (Tickets, Pull
+    requests, Issues), and each label opens its tab. View is one select,
+    and the first run has no welcome hint.
+  - **A pane is named like its row**, and its header is quieter: the next
+    step is outlined until it is your move, ⏩ is just the glyph while Off,
+    **−** hides the window (✕ always ends or closes), Copy all moved into
+    History, the `clarify` chip reads *question*, and narrow panes compact
+    so a 2×2 grid fits on a laptop.
+  - **One welcome at a time**: a five-slide tour over the grid's *Get set
+    up* card, with GitHub and Shortcut tests folded as optional. The Setup
+    modal opens by itself only once sessions exist.
+  - **New opens on one box.** Fast-track and Split fold under *Options ·
+    Fast-track: Off*, the Ticket tab appears once a tracker is connected,
+    and *Saved prompt…* saves inline.
+  - **Intake and Verify open on the work**, with sources below it. Intake's
+    pickers use the one Fast-track ladder (*Agent only* is gone; a stored
+    `agent` reads Off), say *Default (…)*, and fold behind a row's
+    **Options**.
+  - **The command palette lists commands first**, then a *Focus:* row per
+    session named like its rail row. It gains *Customize…*, *Prompts…* and
+    *Assistant instructions…* (the Assistant bar is now *Chat · Todo*; the
+    instructions also open from *Instructions* in its chat window), and says
+    *Make PR* and *Merge PR*.
+  - **Settings' nav is grouped** under Agents, Code, This device and
+    Troubleshooting. Every screen key and label is unchanged.
+  - **Confirms that did nothing in the desktop app now work**: Merge PR,
+    Push anyway, Clean up, Delete + wipe, Recently closed's bulk actions, and
+    Security's and Accounts' confirms are in-app, and failures that used to
+    `alert()` show in a bottom-right card.
+
+  The API is unchanged: `GET /api/outbox` still serves every group; the UI
+  reads only `waiting` (the bell) and `summaries` (Copy summary; an older
+  group's comes from `GET /api/runs/{id}`). See
+  [docs/web-ui.md](docs/web-ui.md#customize).
 
 - **Launch flags are merged as flag/value pairs.** When per-session flags
   meet the defaults (an intake effort level, an agent's added flags), a pair

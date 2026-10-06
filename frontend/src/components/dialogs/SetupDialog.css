@@ -112,6 +112,28 @@
   margin: 6px 0 0;
 }
 
+/* Step ②'s optional tests (GitHub, Shortcut token), folded under the one test
+   a first session needs. A quiet disclosure, not another button row. */
+.setup-optional {
+  margin: 2px 0 4px;
+}
+
+.setup-optional>summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  width: fit-content;
+}
+
+.setup-optional>summary:hover {
+  color: var(--text);
+}
+
+.setup-optional[open]>summary {
+  margin-bottom: 8px;
+}
+
 button.linklike {
   background: none;
   border: none;

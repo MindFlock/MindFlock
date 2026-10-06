@@ -122,7 +122,7 @@ export function Ide(_: ScreenProps) {
                   json: { enabled: want },
                 });
                 setAutoAdopt(!!r?.enabled);
-                toast(r?.enabled ? "Cursor auto-adopt on" : "Cursor auto-adopt off");
+                toast(r?.enabled ? "IDE auto-adopt on" : "IDE auto-adopt off");
               } catch {
                 setAutoAdopt(!want); // revert on failure
                 toast("Auto-adopt toggle failed");

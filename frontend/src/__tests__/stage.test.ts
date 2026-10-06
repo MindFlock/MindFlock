@@ -40,7 +40,11 @@ describe("chipState (persistent status chip)", () => {
 
   it("reflects live activity, then falls back to the workflow stage", () => {
     expect(chipState(inst({ title: "a1", activity: "working" })).label).toBe("running");
-    expect(chipState(inst({ title: "a2", activity: "clarify" })).label).toBe("clarify");
+    // The chip says "question"; the activity value and the class stay "clarify".
+    const ask = chipState(inst({ title: "a2", activity: "clarify" }));
+    expect(ask.label).toBe("question");
+    expect(ask.cls).toBe("s-clarify");
+    expect(ask.title).toContain("answer it in its pane or from the bell");
     const lim = chipState(inst({ title: "a2b", activity: "limit" }));
     expect(lim.label).toBe("limit");
     expect(lim.cls).toBe("s-limit");

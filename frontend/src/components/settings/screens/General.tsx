@@ -21,6 +21,9 @@ import type { ScreenProps } from "../SettingsDialog";
 export function General(_: ScreenProps) {
   return (
     <>
+      {/* First, because it is the part of General a newcomer came for — and
+          the part an old hand never needs to scroll past to reach budgets. */}
+      <GettingStarted />
       <h3 className="set-section-title">General</h3>
       <label
         className="set-row"
@@ -34,22 +37,29 @@ export function General(_: ScreenProps) {
       </label>
       <label
         className="set-row"
-        title="Your estimate of how much API-equivalent usage your plan allows per rolling window (e.g. per 5h on Anthropic plans). Powers the header's '% left' — leave 0 to show only the reset countdown."
+        title="Your estimate of how much API-equivalent usage your plan allows per rolling window (e.g. per 5h on Anthropic plans). Powers the '% left' in the sidebar's Usage bar — leave 0 to show only the reset countdown."
       >
         <span className="set-label">Plan window budget (≈USD per window, 0 = off)</span>
         <SettingField group="general" field="window_budget_usd" type="number" placeholder="0" />
         <span className="set-hint">
-          Subscription plans only — the '% left' estimate in the top bar is measured against
-          this. Not billed dollars.
+          Subscription plans only — the '% left' estimate in the sidebar's Usage bar is
+          measured against this. Not billed dollars.
         </span>
       </label>
       <ResumeOnUsageResetRow />
-      <AgentMcpRows />
       <ScrollSpeedRow />
       <ReduceMotionRow />
       <TakeABreakRow />
       <IdleFlockRow />
-      <GettingStarted />
+      {/* Folded: it is on by default and the people who tune it know it is
+          here. Two rows of orchestration vocabulary in the middle of General
+          were the first thing a newcomer had to read past. */}
+      <details className="pr-advanced agent-mcp-fold">
+        <summary>Agent orchestration (MindFlock MCP)</summary>
+        <div className="pr-advanced-body">
+          <AgentMcpRows />
+        </div>
+      </details>
     </>
   );
 }
@@ -209,7 +219,7 @@ function GettingStarted() {
         <div className="onboarding-action-text">
           <span className="set-label">Welcome walkthrough</span>
           <span className="set-hint">
-            A guided tour of sessions, the sidebar, and connecting your accounts.
+            A short tour: sessions and the grid, shipping, and where work comes from (Intake, Verify, Customize).
           </span>
         </div>
         <button

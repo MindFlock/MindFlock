@@ -1,6 +1,7 @@
 """Ship lanes, UI part 2 (SPEC §7.C.2-3, §8): structural checks on the shipped
 bundle for the rail's run group headers, queued lines and lane-first status
-lines, the Outbox (top-bar entry, Alt+O, dialog) and the bell's run rows.
+lines and their ⋯ menu (queued lines, Copy summary), the bell's waiting rows
+and its run rows — and that the Outbox, dropped as a place, is ABSENT.
 
 The wording and the grouping arithmetic are unit-tested in
 frontend/src/__tests__/{lanes,runs,outbox}.test.ts (runs.test.ts also
@@ -129,62 +130,116 @@ def test_every_lane_row_leads_with_its_lane():
     for phrase in (
         '"? needs your answer"',
         '"⇡ " + (',
-        '" — open the Outbox"',
+        '" — open the bell"',
         '" · working "',
         '", asks first"',
     ):
         assert phrase in body, phrase
     assert '"opening PR"' in body
+    assert "Outbox" not in body, "what waits on you is the bell's"
 
 
-# --- The Outbox ------------------------------------------------------------------
+# --- No Outbox: the bell and the group header ------------------------------------
 
 
-def test_the_outbox_sits_between_intake_and_verify_with_a_waiting_badge():
+def test_the_top_bar_carries_only_the_daily_loop():
+    """The Outbox, Prompts and Recent buttons are gone (dropped, Customize, the
+    session list); Verify always shows; the palette is the last item, after
+    Settings."""
     js = _js()
     top = squash(_fn(js, "TopBar"))
-    i, o, v = (
+    for gone in ('"outbox-btn"', '"prompts-btn"', '"recent-btn"'):
+        assert gone not in top, gone
+    i, v, s_, p = (
         top.index('id: "intake-btn"'),
-        top.index('id: "outbox-btn"'),
         top.index('id: "verify-btn"'),
+        top.index('id: "settings-btn"'),
+        top.index('id: "palette-btn"'),
     )
-    assert i < o < v
-    # Hidden at zero — a "0" reads as "nothing to do" while it is still loading.
-    assert (
-        'waiting > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "tb-count", children: waiting })'
-        in top
-        or ("waiting > 0 &&" in top and '"tb-count"' in top)
-    )
-    assert "const waiting = waitingCount(outbox);" in top
+    assert i < v < s_ < p
+    assert 'title: "Command palette — Ctrl+P / ⌘P"' in top
+    assert "waitingCount" not in top and "useOutbox" not in top
+    # Always rendered: no earn-its-slot gate, no per-device memory of one.
+    assert "showVerify" not in top and "mf_tb_verify" not in _js()
 
 
-def test_alt_o_opens_the_outbox_and_is_on_the_shortcuts_sheet():
-    flat = squash(_js())
-    assert 'key: "o", alt: true, id: "outbox",' in flat
-    assert (
-        'help: [ "Navigation", "Alt+O", "Outbox — what\'s shipping, and what\'s waiting on you" ]'
-        in flat
-    )
-    assert 'run: () => useUi.getState().openDialogFor("outbox")' in flat
-    # A modal: Delete / Ctrl+W must not end the session behind it.
-    assert '"outbox-dialog"' in flat
+def test_the_outbox_is_gone_from_every_door():
+    """No tab, no dialog, no shortcut, no palette entry, no word on screen."""
+    js = _js()
+    flat = squash(js)
+    for gone in (
+        '"outbox-btn"',
+        "Customize → Outbox",
+        "Open in the Outbox",
+        'label: "Outbox"',
+        '"Alt+O"',
+        "Outbox — what's on its way out",
+        'openDialogFor("outbox"',
+        '"outbox-dialog"',
+        '"outbox-panel"',
+        '"Shipped today"',
+        "function OutboxPanel(",
+        "function outboxTabs(",
+        "function SummaryCard(",
+        "function QueuedItem(",
+    ):
+        assert gone not in flat, gone
+    # Every "Outbox" left in the bundle is the route's name or a source path in
+    # a region marker — never a word the user reads.
+    for m in re.finditer(r"Outbox", js):
+        line = js[js.rfind("\n", 0, m.start()) + 1 : js.find("\n", m.start())]
+        assert re.search(r"fetchOutbox|useOutbox", line), line
+    # A modal: Delete / Ctrl+W must not end the session behind Customize.
+    assert '"customize-dialog"' in flat
 
 
-def test_the_outbox_reads_one_response_and_renders_the_four_sections():
+def test_the_bell_still_reads_the_waiting_list_from_one_response():
     js = _js()
     assert '"/api/outbox?group=all"' in js
-    body = squash(_fn(js, "OutboxDialog"))
-    for heading in (
-        '"Waiting on you"',
-        '"Shipping now"',
-        '"Shipped today"',
-        '"Queued"',
-    ):
-        assert heading in body, heading
-    assert '"answer or approve — nothing else needs you"' in body
-    assert '"MindFlock is doing these — no action"' in body
-    assert "outboxTabs(data, rowOf, runName)" in body
-    assert "viewFor(data, tab, rowOf)" in body
+    bell = squash(_fn(js, "NotificationsBell"))
+    assert "needsAttention(attentionItems(instances), outbox?.groups?.waiting)" in bell
+    assert '"mf-open-bell"' in js
+
+
+def test_a_finished_groups_menu_copies_its_summary():
+    """The summary card's one job, moved to the group header's ⋯: copy the
+    group's Markdown. `/api/outbox` keeps a summary for a week, the header
+    stays while any member is open — so an older group's comes from its own
+    run record, and a missing one never claims it is "not yet" written. An
+    unfinished group has no such item — its queued lines, Pause and Cancel are
+    already in that menu, and what waits on you is the bell's."""
+    js = _js()
+    menu = squash(_fn(js, "RunGroupMenu"))
+    assert "summaryFor(outbox, group.id)" in menu
+    assert "useRun(group.done && !kept ? group.id : null)" in menu
+    assert "summaryText(outbox, group.id, record)" in menu
+    assert "group.done && " in menu and '"Copy summary"' in menu
+    assert "disabled: !summary" in menu
+    assert "copyText(summary)" in menu
+    assert '"Copied the summary as Markdown"' in menu
+    assert '"MindFlock has no summary for this group"' in menu
+    assert "No summary for this group yet" not in js
+    # Queued lines keep their Start now / Remove here.
+    assert 'taskPath(id, t.id, "start-now")' in menu
+    assert 'taskPath(id, t.id, "skip")' in menu
+    find = squash(_fn(js, "summaryFor"))
+    assert "x.run === runId" in find
+    text = squash(_fn(js, "summaryText"))
+    assert "run?.summary?.text_md" in text
+
+
+def test_a_headerless_groups_menu_items_live_on_its_leads_thread():
+    """A split / one-for-all group is a family under its lead — no rail
+    header, so no ⋯. Its lead's Thread holds what that menu would: Start now
+    / Remove on a queued piece, Copy summary once it has finished."""
+    js = _js()
+    panel = squash(_fn(js, "RunLeadPanel"))
+    assert "taskPath(id, t.id, verb)" in panel
+    assert '"start-now"' in panel and '"skip"' in panel
+    assert '"Start now"' in panel and '"Remove"' in panel
+    assert "summaryText(null, id, run)" in panel
+    assert '"Copy summary"' in panel
+    assert '"Copied the summary as Markdown"' in panel
 
 
 def test_a_prompt_row_reuses_the_answer_strip_and_an_approval_shows_the_message_first():
@@ -242,12 +297,11 @@ def test_no_native_dialogs_and_no_paste_playbooks_in_the_new_ui():
     """Electron has no window.prompt / confirm; ship lanes act, never paste."""
     js = _js()
     for name in (
-        "OutboxDialog",
+        "CustomizeDialog",
+        "SidebarBarsPicker",
         "WaitingRow",
         "ApproveButtons",
         "ApprovePreview",
-        "QueuedItem",
-        "SummaryCard",
         "RunGroupHeader",
         "RunGroupMenu",
         "QueuedRow",
@@ -276,9 +330,14 @@ def test_no_native_dialogs_and_no_paste_playbooks_in_the_new_ui():
 def test_new_source_files_have_no_native_dialog_calls():
     """Source-level twin of the above, comments stripped (they explain why)."""
     for rel in (
-        "components/outbox/OutboxDialog.tsx",
+        "components/outbox/WaitingRow.tsx",
         "components/outbox/outbox.ts",
+        "components/customize/CustomizeDialog.tsx",
+        "components/customize/SidebarBarsPicker.tsx",
         "components/sidebar/RunGroupHeader.tsx",
+        "lib/revealGroup.ts",
+        "lib/showGroup.ts",
+        "components/grid/RunLeadPanel.tsx",
         "lib/runs.ts",
         "state/runs.ts",
     ):

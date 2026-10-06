@@ -3,6 +3,7 @@ import type { Instance } from "../api/types";
 import {
   asUsageWindows,
   usageHeadline,
+  usageHeadParts,
   usageRows,
   fmtResetIn,
   isPlanMode,
@@ -50,6 +51,32 @@ describe("usageHeadline", () => {
   });
   it("drops the provider prefix when unknown/absent", () => {
     expect(usageHeadline(info({ tokens_cost: 1.5 }))).toBe("~$1.50");
+  });
+});
+
+describe("usageHeadParts", () => {
+  // The pane head renders these as separate spans so a narrow pane can hide
+  // the provider and the context fill; joined, they must read exactly like
+  // the headline every other surface shows.
+  const cases: Partial<Instance>[] = [
+    { provider: "codex", tokens_cost: 0.62, tokens_ctx: 128000, tokens_ctx_window: 200000 },
+    { provider: "claude", tokens_cost: 0 },
+    { tokens_cost: 1.5 },
+    { tokens_cost: 3, tokens_ctx: 5000, tokens_ctx_window: 100000 },
+  ];
+  it("joins back into usageHeadline, byte for byte", () => {
+    for (const c of cases) {
+      const { prov, cost, ctx } = usageHeadParts(info(c));
+      expect([prov, cost, ctx].filter(Boolean).join(" · ")).toBe(usageHeadline(info(c)));
+    }
+  });
+  it("always has a cost, and empty parts when there is nothing to say", () => {
+    expect(usageHeadParts(info({ tokens_cost: 1.5 }))).toEqual({ prov: "", cost: "~$1.50", ctx: "" });
+    expect(usageHeadParts(info({ provider: "codex", tokens_ctx: 128000, tokens_ctx_window: 200000 }))).toEqual({
+      prov: "Codex",
+      cost: "~$0",
+      ctx: "128k/200k",
+    });
   });
 });
 

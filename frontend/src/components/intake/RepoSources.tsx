@@ -335,7 +335,8 @@ export function RepoSourceList({
           cards.map((card) => {
             const o = ov[card.repo];
             const agent = o?.agent || "";
-            const depth = o?.depth || "";
+            // A stored "agent" rung is Off in the one ladder (see kit's ladderLabel).
+            const depth = o?.depth === "agent" ? "" : o?.depth || "";
             // What this repo measures "shipped" against, override first. Only
             // read on the verify surface, where it is both the summary line and
             // the live-branch placeholder — one expression so the two can never
@@ -627,17 +628,19 @@ export function RepoSourceList({
                         disabled={!card.repo}
                         onChange={(e) => patch(card.repo, "depth", e.target.value)}
                       >
-                        <option value="">Off — stop after the agent works</option>
-                        {SOURCE_DEPTHS.map((d) => (
+                        {/* One ladder: Off / Commit / Push / Open a PR, the
+                            words every Fast-track control uses. A stored
+                            "agent" is Off and reads as Off. */}
+                        <option value="">{DEPTH_LABELS.off}</option>
+                        {SOURCE_DEPTHS.filter((d) => d !== "agent").map((d) => (
                           <option key={d} value={d}>
                             {DEPTH_LABELS[d]}
                           </option>
                         ))}
                       </select>
                       <span className="set-hint">
-                        How far each item from this repo carries itself once the agent
-                        finishes: commit, push, open a PR. Merge is not offered for a whole
-                        repo — pick it on an individual row instead.
+                        How far each item goes after its agent finishes. Merge is per-item
+                        only — a repo default runs with nobody watching.
                       </span>
                     </label>
                     {surface === "pr" && (

@@ -98,7 +98,7 @@ class TestFindWorkspace:
     def test_an_unreadable_head_does_not_disqualify(
         self, tmp_path, no_closed, monkeypatch
     ):
-        # Not evidence of anything — and Recent… would reopen it regardless.
+        # Not evidence of anything — and Recently closed would reopen it regardless.
         folder = _repo_dir(tmp_path, "wt")
         no_closed.append(_closed("sc-1", folder))
         monkeypatch.setattr(reopen, "_head_branch", lambda path: "")

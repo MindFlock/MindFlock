@@ -36,7 +36,8 @@
  * — lives in a ⋯ menu.
  *
  * THE ANATOMY IS INTAKE'S, in Intake's order: an intro sentence, the master
- * switch, the SOURCES it watches, the work those sources produced, and a
+ * switch, the work the sources produced, the SOURCES it watches (these two
+ * swap while nothing is configured yet, so + Add leads), and a
  * `<details>` at the bottom for what you touch once. PullRequestsTab and
  * IssuesTab are laid out exactly this way, down to `.set-block-hint` and
  * `.pr-advanced`, and Verify is the fourth surface of the same kind — it should
@@ -1494,7 +1495,7 @@ function PlanRow({
       label: "Cancel run",
       title:
         "Stops the session and puts this plan back. Nothing it found is lost — " +
-        "the session is closed, not deleted, and Recent… reopens it.",
+        "the session is closed, not deleted, and Recently closed (under the session list) reopens it.",
       className: "test-btn vf-cancel",
       onSelect: () => void cancelRun(),
     });
@@ -3050,6 +3051,149 @@ export function VerifyDialog() {
     loaded: !!plansQ.data,
   });
 
+  // Work first once there is any: a tracked repo or a checklist. Before that,
+  // Sources (and its + Add) is the only thing there is to do.
+  const workFirst = (repoCfg.verify_repos || []).length > 0 || plans.length > 0;
+
+  const sources = (
+    <VerifySources key="sources" liveBranch={liveBranch} deployDelay={deployDelay} />
+  );
+  const checklists = (
+    <WorkListPanel
+      key="work"
+      label="Checklists"
+      onRefresh={() => void plansQ.refetch()}
+      note={note}
+      rowId="vf-plans-row"
+      refreshId="vf-plans-refresh"
+      noteId="vf-plans-note"
+      listId="vf-plans-list"
+      // FIND ONE, OR PICK SEVERAL. This list grows without bound — one
+      // checklist per session branch per repo — and until now the only
+      // way to a particular one was scrolling. The filter is Recently
+      // closed's, down to Ctrl+F and the token rule; the select-all box
+      // beside it applies to what the filter is SHOWING, which is what
+      // makes "find the sitecheck ones, run them all" a two-gesture job.
+      toolbarExtra={
+        plans.length ? (
+          <>
+            <SelectAllCheck
+              state={sel.allState}
+              onChange={sel.setAllVisible}
+              label="Select every checklist shown"
+            />
+            <DialogFilter
+              id="vf-plans-filter"
+              value={query}
+              onChange={setQuery}
+              placeholder="Filter by ticket, branch, repo, or what a step says…  ( Ctrl+F )"
+              onEscape={closeDialog}
+            />
+          </>
+        ) : undefined
+      }
+      // Dropped entirely when there is nothing to read it against: a
+      // line teaching what a step's lane means, printed over a list with
+      // no steps in it, is vocabulary a first-time reader has nowhere to
+      // spend.
+      hint={
+        plans.length ? (
+          <>
+            Steps marked <strong>you</strong> are the job — an agent settles the rest.
+          </>
+        ) : undefined
+      }
+    >
+      {error ? (
+        <div className="repo-empty">{error}</div>
+      ) : !plansQ.data ? null : !plans.length ? (
+        <VerifyEmpty liveBranch={liveBranch} />
+      ) : (
+        <>
+          {picked.length ? (
+            <BulkRowBar
+              count={picked.length}
+              hiddenCount={sel.hiddenCount}
+              noun="checklist"
+              onClear={sel.clear}
+            >
+              <button
+                type="button"
+                disabled={!runnable.length || bulk !== ""}
+                title={
+                  runnable.length
+                    ? "Start a verify session for each — minutes of a real agent apiece"
+                    : "None of the selected checklists is one an agent can run"
+                }
+                onClick={() =>
+                  void fanOut(runnable, "Started", (plan) =>
+                    api(planPath(plan.id) + "/run", { method: "POST", json: {} }),
+                  )
+                }
+              >
+                {/* The NUMBER, always: this is the one control here
+                    that spends a workspace and minutes of a billed
+                    agent per row, so "Run selected" over eight ticked
+                    boxes is not an informed press. Delete asks for
+                    confirmation instead, because it cannot be undone;
+                    a run can be cancelled from the row it starts. */}
+                {bulk === "Started"
+                  ? "Starting…"
+                  : "Run " +
+                    runnable.length +
+                    (runnable.length === picked.length
+                      ? ""
+                      : " of " + picked.length)}
+              </button>
+              <button
+                type="button"
+                className="danger"
+                disabled={bulk !== ""}
+                title="Delete the selected checklists and every answer recorded against them"
+                onClick={() => setConfirmBulk(true)}
+              >
+                {bulk === "Deleted" ? "Deleting…" : "Delete selected"}
+              </button>
+            </BulkRowBar>
+          ) : null}
+          {confirmBulk ? (
+            // Inline, not a native confirm(): this dialog is
+            // `aria-modal`, and a second window the app did not draw
+            // cannot say what is about to be destroyed. `previewList` is
+            // the same summary Recently closed shows before a wipe.
+            <ConfirmBox
+              title={
+                "Delete " +
+                picked.length +
+                (picked.length === 1 ? " checklist?" : " checklists?")
+              }
+              body={
+                "Their steps and every answer recorded against them go too. " +
+                "This cannot be undone.\n" +
+                previewList(picked.map(planName))
+              }
+              confirmLabel={"Delete " + picked.length}
+              busy={bulk !== ""}
+              onCancel={() => setConfirmBulk(false)}
+              onConfirm={() =>
+                void fanOut(picked, "Deleted", (plan) =>
+                  api(planPath(plan.id), { method: "DELETE" }),
+                )
+              }
+            />
+          ) : null}
+          {shown.length ? (
+            <PlanList plans={shown} liveBranch={liveBranch} selection={sel} />
+          ) : (
+            <p className="muted vf-nomatch">
+              No checklist matches “{query}”.
+            </p>
+          )}
+        </>
+      )}
+    </WorkListPanel>
+  );
+
   return (
     <SettingsCtx.Provider value={model}>
       <div
@@ -3095,12 +3239,13 @@ export function VerifyDialog() {
 
           <div id="verify-body">
             {/* INTAKE'S ANATOMY, in Intake's order: a sentence saying what the
-                automation does, the master switch, the SOURCES it watches, the
-                work those sources produced, and a fold at the bottom for what
-                you touch once. PullRequestsTab and IssuesTab are laid out
-                exactly this way, down to the class names — this is the fourth
-                surface of the same kind and it should not have to be learned
-                separately. */}
+                automation does, the master switch, the work those sources
+                produced, the SOURCES it watches, and a fold at the bottom for
+                what you touch once. Work leads once there is any to show (a
+                tracked repo or a checklist); before that the empty Sources
+                list and its + Add lead, exactly as on the Tickets, Pull
+                requests and Issues tabs — this is the fourth surface of the
+                same kind and it should not have to be learned separately. */}
             <p className="set-hint set-block-hint">
               MindFlock writes a checklist for every session branch pushed in the
               repositories below, and brings it here to be checked once that work
@@ -3108,139 +3253,9 @@ export function VerifyDialog() {
               settle; the rest are yours.
             </p>
             <VerifySwitch />
-            <VerifySources liveBranch={liveBranch} deployDelay={deployDelay} />
-            <WorkListPanel
-              label="Checklists"
-              onRefresh={() => void plansQ.refetch()}
-              note={note}
-              rowId="vf-plans-row"
-              refreshId="vf-plans-refresh"
-              noteId="vf-plans-note"
-              listId="vf-plans-list"
-              // FIND ONE, OR PICK SEVERAL. This list grows without bound — one
-              // checklist per session branch per repo — and until now the only
-              // way to a particular one was scrolling. The filter is Recently
-              // closed's, down to Ctrl+F and the token rule; the select-all box
-              // beside it applies to what the filter is SHOWING, which is what
-              // makes "find the sitecheck ones, run them all" a two-gesture job.
-              toolbarExtra={
-                plans.length ? (
-                  <>
-                    <SelectAllCheck
-                      state={sel.allState}
-                      onChange={sel.setAllVisible}
-                      label="Select every checklist shown"
-                    />
-                    <DialogFilter
-                      id="vf-plans-filter"
-                      value={query}
-                      onChange={setQuery}
-                      placeholder="Filter by ticket, branch, repo, or what a step says…  ( Ctrl+F )"
-                      onEscape={closeDialog}
-                    />
-                  </>
-                ) : undefined
-              }
-              // Dropped entirely when there is nothing to read it against: a
-              // line teaching what a step's lane means, printed over a list with
-              // no steps in it, is vocabulary a first-time reader has nowhere to
-              // spend.
-              hint={
-                plans.length ? (
-                  <>
-                    Steps marked <strong>you</strong> are the job — an agent settles the rest.
-                  </>
-                ) : undefined
-              }
-            >
-              {error ? (
-                <div className="repo-empty">{error}</div>
-              ) : !plansQ.data ? null : !plans.length ? (
-                <VerifyEmpty liveBranch={liveBranch} />
-              ) : (
-                <>
-                  {picked.length ? (
-                    <BulkRowBar
-                      count={picked.length}
-                      hiddenCount={sel.hiddenCount}
-                      noun="checklist"
-                      onClear={sel.clear}
-                    >
-                      <button
-                        type="button"
-                        disabled={!runnable.length || bulk !== ""}
-                        title={
-                          runnable.length
-                            ? "Start a verify session for each — minutes of a real agent apiece"
-                            : "None of the selected checklists is one an agent can run"
-                        }
-                        onClick={() =>
-                          void fanOut(runnable, "Started", (plan) =>
-                            api(planPath(plan.id) + "/run", { method: "POST", json: {} }),
-                          )
-                        }
-                      >
-                        {/* The NUMBER, always: this is the one control here
-                            that spends a workspace and minutes of a billed
-                            agent per row, so "Run selected" over eight ticked
-                            boxes is not an informed press. Delete asks for
-                            confirmation instead, because it cannot be undone;
-                            a run can be cancelled from the row it starts. */}
-                        {bulk === "Started"
-                          ? "Starting…"
-                          : "Run " +
-                            runnable.length +
-                            (runnable.length === picked.length
-                              ? ""
-                              : " of " + picked.length)}
-                      </button>
-                      <button
-                        type="button"
-                        className="danger"
-                        disabled={bulk !== ""}
-                        title="Delete the selected checklists and every answer recorded against them"
-                        onClick={() => setConfirmBulk(true)}
-                      >
-                        {bulk === "Deleted" ? "Deleting…" : "Delete selected"}
-                      </button>
-                    </BulkRowBar>
-                  ) : null}
-                  {confirmBulk ? (
-                    // Inline, not a native confirm(): this dialog is
-                    // `aria-modal`, and a second window the app did not draw
-                    // cannot say what is about to be destroyed. `previewList` is
-                    // the same summary Recently closed shows before a wipe.
-                    <ConfirmBox
-                      title={
-                        "Delete " +
-                        picked.length +
-                        (picked.length === 1 ? " checklist?" : " checklists?")
-                      }
-                      body={
-                        "Their steps and every answer recorded against them go too. " +
-                        "This cannot be undone.\n" +
-                        previewList(picked.map(planName))
-                      }
-                      confirmLabel={"Delete " + picked.length}
-                      busy={bulk !== ""}
-                      onCancel={() => setConfirmBulk(false)}
-                      onConfirm={() =>
-                        void fanOut(picked, "Deleted", (plan) =>
-                          api(planPath(plan.id), { method: "DELETE" }),
-                        )
-                      }
-                    />
-                  ) : null}
-                  {shown.length ? (
-                    <PlanList plans={shown} liveBranch={liveBranch} selection={sel} />
-                  ) : (
-                    <p className="muted vf-nomatch">
-                      No checklist matches “{query}”.
-                    </p>
-                  )}
-                </>
-              )}
-            </WorkListPanel>
+            {/* Keyed, so the swap MOVES the two instead of remounting them
+                (adding the first repo flips it mid-edit; see PullRequestsTab). */}
+            {workFirst ? [checklists, sources] : [sources, checklists]}
             <VerifyByHand
               candidates={targets}
               closed={closedNames}

@@ -10,8 +10,14 @@
  * It applies to exactly one task line — a list is already parallel — and to
  * an agent that gets the MindFlock tools (the lead proposes the plan with
  * them). It never ticks itself: a sentence that reads splittable gets a
- * "suggested · …" pill and the choice stays the user's. */
+ * "suggested · …" pill and the choice stays the user's.
+ *
+ * A server that cannot split at all gets no box: a greyed-out option whose only
+ * message is "update your server" is noise to everyone who never asked for it.
+ * Every other reason (the agent, the shape of the box) still draws the box
+ * disabled with that reason, because those are things the user can change. */
 
+import { SERVER_NO_SPLIT } from "../../lib/laneActions";
 import { splitSuggestion, suggestionPill } from "../../lib/playbooks";
 
 export function SplitCheck({
@@ -32,6 +38,7 @@ export function SplitCheck({
   /** The words the pill reads. */
   text: string;
 }) {
+  if (!gate.ok && gate.reason === SERVER_NO_SPLIT) return null;
   const why = gate.ok ? shapeReason : gate.reason;
   const ok = !why;
   const on = split && ok;

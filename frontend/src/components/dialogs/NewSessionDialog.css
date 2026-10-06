@@ -1402,6 +1402,47 @@
   margin-top: 12px;
 }
 
+/* One session's Options fold (RunOptions): the summary names the rung, so a
+   closed fold still says what a start will do. Same disclosure idiom as the
+   page-2 folds (.nf-advanced), quieter: no rule above it, no inset panel. */
+.rt-fold>summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+}
+
+.rt-fold>summary::-webkit-details-marker {
+  display: none;
+}
+
+.rt-fold>summary::before {
+  content: "▸";
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.12s ease;
+}
+
+.rt-fold[open]>summary::before {
+  transform: rotate(90deg);
+}
+
+.rt-fold>summary:hover {
+  color: var(--text);
+}
+
+.rt-fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin-top: 10px;
+}
+
 .rt-row {
   display: grid;
   grid-template-columns: 116px minmax(0, 1fr);
@@ -1563,4 +1604,59 @@
   font: inherit;
   font-size: 12px;
   padding: 2px 10px;
+}
+
+/* Page 2's Prompt fold: "Manage…" is a link to Customize → Prompts, not a
+   fourth pill. The id outranks contextPresets.css's `.preset-row button`. */
+.preset-row #preset-manage {
+  border: none;
+  background: none;
+  padding: 0 2px;
+  color: var(--accent);
+  text-decoration: underline;
+  align-self: center;
+}
+
+.preset-row #preset-manage:hover {
+  border: none;
+  filter: brightness(1.15);
+}
+
+/* "Save…" opens this inline name row under the select (Electron has no
+   window.prompt): name, Save, Cancel. */
+.preset-name-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.preset-name-row input {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.preset-name-row button {
+  flex: none;
+  border-radius: 7px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.preset-name-row button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.preset-name-row button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.preset-name-row .muted {
+  font-size: 11.5px;
 }

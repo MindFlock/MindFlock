@@ -1,7 +1,11 @@
 /** Top bar (port of the 030 partial + section 17's chrome wiring):
- * sidebar/theme cluster, notifications bell, the main menu (New / Recent
- * dropdown / Prompts / Command / Settings), centered wordmark, and the
- * Electron drag region.
+ * sidebar/theme cluster, notifications bell, the main menu (New / Intake /
+ * Verify / Settings, then the command palette as an icon), centered wordmark,
+ * and the Electron drag region.
+ *
+ * Only the daily loop is on the bar. Everything that waits on you is the
+ * bell's (one badge); saved prompts are a tab of Customize (the sidebar
+ * footer); Recently closed sits under the session list.
  *
  * On macOS the whole thing mirrors: the window shows the native traffic lights
  * top-left (electron/main.js `titleBarStyle: 'hidden'`), so the bar leaves room
@@ -13,8 +17,6 @@ import { useEffect, useState } from "react";
 import { useUi } from "../state/store";
 import { useTestPlans } from "../state/queries";
 import { dueCount } from "./dialogs/verify";
-import { useOutbox } from "../state/runs";
-import { waitingCount } from "./outbox/outbox";
 import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { redrawFavicon } from "./EventToasts";
@@ -46,10 +48,6 @@ export function TopBar() {
   // the thing you were not already looking at.
   const { data: testPlans } = useTestPlans();
   const due = dueCount(testPlans?.plans || []);
-  // The Outbox badge: the same query (and the same count helper) the dialog's
-  // "Waiting on you" section renders from, so the two can't disagree.
-  const { data: outbox } = useOutbox();
-  const waiting = waitingCount(outbox);
   // Evaluated once: the shell can't grow or lose its title bar mid-run.
   const [mac] = useState(hasNativeWindowControls);
   // macOS hides the traffic lights in fullscreen — stop reserving their room.
@@ -185,20 +183,6 @@ export function TopBar() {
           >
             Intake
           </button>
-          {/* The middle of the pipeline: Intake (in) → Outbox (out) → Verify
-              (checked). The count is what is WAITING ON YOU — a prompt to
-              answer or a ship you asked to see first — never what MindFlock is
-              merely busy with, and nothing at all on zero, like Verify's. */}
-          <button
-            id="outbox-btn"
-            className="tb-item"
-            type="button"
-            title="Outbox — what's shipping, and what's waiting on you (Alt+O)"
-            onClick={() => ui.openDialogFor("outbox")}
-          >
-            Outbox
-            {waiting > 0 && <span className="tb-count">{waiting}</span>}
-          </button>
           {/* Verify closes the loop Intake opens: work came in there, and this is
               where it comes back once it has actually shipped. The count is the
               whole reason it earns a slot on the bar — work that ships while you
@@ -225,38 +209,6 @@ export function TopBar() {
                 out. */}
             {due > 0 && <span className="tb-count">{due}</span>}
           </button>
-          {/* One page, so one button: the disk manager used to be the other
-              half of a dropdown here, and it is now the same list seen from the
-              other end (see RecentDialog). */}
-          <button
-            id="recent-btn"
-            className="tb-item"
-            type="button"
-            title="Recently closed — reopen closed work, or clear out what it left on disk"
-            onClick={() => ui.openDialogFor("recent")}
-          >
-            Recent
-          </button>
-          <button
-            id="prompts-btn"
-            className="tb-item"
-            type="button"
-            title="Prompt library — click a ready-made prompt to paste it into the selected session"
-            aria-label="Open prompt library"
-            onClick={() => ui.openDialogFor("prompts")}
-          >
-            Prompts
-          </button>
-          <button
-            id="palette-btn"
-            className="tb-item"
-            type="button"
-            title="Command palette — Ctrl+P / ⌘P"
-            aria-label="Open command palette"
-            onClick={() => ui.openDialogFor("palette")}
-          >
-            Command
-          </button>
           <button
             id="settings-btn"
             className="tb-item"
@@ -266,6 +218,31 @@ export function TopBar() {
             onClick={() => ui.openDialogFor("settings")}
           >
             Settings
+          </button>
+          {/* The palette last, as an icon: it reaches everything above (and the
+              rest), so it is the keyboard user's door, not one more word in the
+              row. Monochrome currentColor like #theme-btn — never an emoji. */}
+          <button
+            id="palette-btn"
+            className="tb-item"
+            type="button"
+            title="Command palette — Ctrl+P / ⌘P"
+            aria-label="Open command palette"
+            onClick={() => ui.openDialogFor("palette")}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="15"
+              height="15"
+              aria-hidden="true"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+            >
+              <circle cx="10.5" cy="10.5" r="6" />
+              <path d="M15 15l5 5" />
+            </svg>
           </button>
         </nav>
       </div>

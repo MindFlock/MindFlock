@@ -20,7 +20,7 @@ describe("shipLine: what the rail says about a session's lane", () => {
     expect(shipLine(row({ lane: lane("leave") }))).toBeNull();
     // …but a group member still gets a line (its group carries it).
     const m = shipLine(row({ lane: lane("leave"), run: { id: "r", name: "G", task: "t", role: "task", grouping: "each" } }));
-    expect(m?.lead).toBe("agent only");
+    expect(m?.lead).toBe("fast-track off");
   });
 
   it("leads with the lane while the agent works: → PR · working 12m", () => {
@@ -35,7 +35,8 @@ describe("shipLine: what the rail says about a session's lane", () => {
     const l = shipLine(row({ lane: lane("commit", true) }), { act: "idle" })!;
     expect(l.lead).toBe("→ commit, asks first");
     expect(l.rest).toBe(" · idle");
-    expect(l.title).toMatch(/Outbox before anything leaves this machine/);
+    expect(l.title).toMatch(/asks you first in the bell before anything leaves this machine/);
+    expect(l.title).not.toMatch(/Outbox/);
   });
 
   it("says ⇡ and the next outward step while MindFlock ships it", () => {
@@ -75,10 +76,10 @@ describe("shipLine: what the rail says about a session's lane", () => {
     expect(l.cls).toBe("rep-ask");
   });
 
-  it("says an escalation in red and points at the Outbox", () => {
+  it("says an escalation in red and points at the bell", () => {
     const l = shipLine(row({ lane: lane("pr") }), { task: { state: "needs_you", reason: "ship_halted" } })!;
     expect(l.lead).toBe("! hooks failed twice");
-    expect(l.rest).toBe(" — open the Outbox");
+    expect(l.rest).toBe(" — open the bell");
     expect(l.cls).toBe("rep-blocked");
     expect(l.state).toBe("escalated");
     // A prompt is not an escalation (the clarify line says it), and an
@@ -86,8 +87,13 @@ describe("shipLine: what the rail says about a session's lane", () => {
     expect(shipLine(row({ lane: lane("pr") }), { task: { state: "needs_you", reason: "prompt" } })!.state).not.toBe("escalated");
     const ok = shipLine(row({ lane: lane("commit", true) }), { task: { state: "needs_you", reason: "approve" } })!;
     expect(ok.lead).toBe("→ commit, asks first");
-    expect(ok.rest).toBe(" · ready — see the Outbox");
+    expect(ok.rest).toBe(" · ready — approve in the bell");
+    expect(ok.title).toMatch(/the bell shows the commit message and PR title before anything is pushed/);
     expect(ok.state).toBe("approve");
+    // A failed line with no reason points at the bell too.
+    expect(shipLine(row({ lane: lane("pr") }), { task: { state: "failed" } })!.rest).toBe(" — open the bell");
+    // The clarify line says where it can be answered.
+    expect(shipLine(row({ lane: lane("pr") }), { act: "clarify" })!.title).toMatch(/answer it here, in the bell, or in its pane/);
     // A fast-track that stopped is an escalation too.
     const halted = shipLine(row({ lane: lane("pr"), autopilot: ap({ state: "halted", reason: "no origin remote" }) }))!;
     expect(halted.lead).toBe("! fast-track stopped");

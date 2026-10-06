@@ -5,8 +5,8 @@ typed lines): MindFlock starts one session per item, at most ``concurrency`` at
 a time with the rest queued, carries each one along its ship LANE (leave /
 commit / push / PR / merge, :mod:`backend.web.core.lanes`), and surfaces only
 what needs a human. On screen there is no "run" noun — sessions say how far
-they go, a batch is a group header, and the Outbox lists what is shipping and
-what is waiting on you — but the server keeps a record, because that is what
+they go, a batch is a group header, the bell holds what is waiting on you and
+each row says what it is shipping — but the server keeps a record, because that is what
 gives deterministic spawning, queueing, retries and restart safety.
 
 This module is the record and the brain, and it is deliberately free of I/O
@@ -170,7 +170,7 @@ NEEDS_YOU_REASONS = (
 CAPABILITIES = {"split": True, "together": True}
 #: Escalations the RUN originates and therefore announces (once each). A
 #: dialog is not one — ``needs_input`` already fires for that session — and an
-#: approval is something you asked for, shown in the Outbox.
+#: approval is something you asked for, shown in the bell.
 ANNOUNCED_REASONS = frozenset(
     {"stuck", "blocked", "ship_halted", "conflict", "budget", "restart"}
 )
@@ -463,7 +463,7 @@ def _normalize_task(t) -> dict:
         "nudge_seen_at": _f(t.get("nudge_seen_at")),
         "report_seen": _f(t.get("report_seen")),
         "held": bool(t.get("held")),
-        # A commit message a PERSON wrote (the Outbox approval's edit), kept
+        # A commit message a PERSON wrote (the bell approval's edit), kept
         # here while a pause holds the member (its autopilot record is
         # disarmed then) so the resume commits it as written.
         "message": _s(t.get("message"))[:5000],
@@ -1708,7 +1708,7 @@ _TASK_DTO_KEYS = (
 
 def task_dto(task: dict, row_present: Optional[bool] = None) -> dict:
     out = {k: copy.deepcopy(task.get(k)) for k in _TASK_DTO_KEYS}
-    # The one-line "why" behind needs_you / failed, for the Outbox.
+    # The one-line "why" behind needs_you / failed, for the bell.
     out["detail"] = task.get("detail") or ""
     out["retry_at"] = task.get("retry_at") or 0.0
     out["flag"] = task.get("flag") or ""
@@ -2274,7 +2274,7 @@ def _plan_task(run: dict, t: dict, o: dict, now: float, boot: bool) -> List[dict
         ):
             return acts + [_act("disarm", t), _to(t, "integrating", ready_at=now)]
 
-    # A dialog: it waits on YOU (the rail strip / Outbox answer it; the run
+    # A dialog: it waits on YOU (the rail strip / the bell answer it; the run
     # never does). Not announced — needs_input already fired for it.
     if activity == "clarify":
         if st == "needs_you" and t["reason"] in ("prompt", "blocked", "restart"):

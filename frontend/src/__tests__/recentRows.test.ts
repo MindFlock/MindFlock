@@ -8,6 +8,7 @@
 import { describe, it, expect } from "vitest";
 import {
   dirNote,
+  dirtyChoices,
   dirtyMessage,
   entryLabel,
   nothingMessage,
@@ -209,8 +210,11 @@ describe("dirtyMessage", () => {
       })
     );
     expect(msg).toContain("dirty_3");
-    expect(msg).toContain("OK — delete all 3.");
-    expect(msg).toContain("Cancel — delete only the 2");
+    // Answered by buttons now, not a native confirm's OK / Cancel — the text
+    // names the two choices the buttons carry, never "OK" or "Cancel".
+    expect(msg).toContain("Delete all 3 — or only the 2 that are clean.");
+    expect(msg).not.toContain("OK —");
+    expect(msg).not.toContain("Cancel —");
   });
 
   it("asks plainly when every candidate holds uncommitted work", () => {
@@ -222,6 +226,32 @@ describe("dirtyMessage", () => {
     );
     expect(msg).toContain("Delete it anyway?");
     expect(msg).toContain("Committed work stays on the branch");
+  });
+});
+
+describe("dirtyChoices", () => {
+  it("labels all-or-only-the-clean when both kinds are present", () => {
+    const c = dirtyChoices(
+      result({
+        candidates: [
+          { name: "clean_1", path: "/w/1" },
+          { name: "clean_2", path: "/w/2" },
+          { name: "dirty_3", path: "/w/3", dirty: true },
+        ],
+        dirty_count: 1,
+      })
+    );
+    expect(c).toEqual({ all: "Delete all 3", clean: "Only the 2 clean" });
+  });
+
+  it("offers no clean-only answer when every candidate is dirty", () => {
+    const c = dirtyChoices(
+      result({
+        candidates: [{ name: "dirty_1", path: "/w/1", dirty: true }],
+        dirty_count: 1,
+      })
+    );
+    expect(c).toEqual({ all: "Delete anyway", clean: null });
   });
 });
 

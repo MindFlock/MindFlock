@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { errMsg } from "../../lib/format";
-import { SERVER_NO_TOGETHER, type Lane } from "../../lib/laneActions";
+import { LANE_LABEL, SERVER_NO_TOGETHER, type Lane } from "../../lib/laneActions";
 import { FastTrackChoice, Seg } from "./FastTrackChoice";
 import {
   CONCURRENCY_DEFAULT,
@@ -64,6 +64,10 @@ export interface RunDraft {
   warnings: string[];
   lane: Lane;
   setLane(l: Lane): void;
+  /** The rung this dialog starts on for what is on screen (Off for one
+   * session; Settings → Workspace's default for a batch) — `lane` until the
+   * user picks. */
+  defaultLane: Lane;
   askFirst: boolean;
   setAskFirst(on: boolean): void;
   grouping: Grouping;
@@ -256,6 +260,7 @@ export function useRunDraft(o: {
     warnings: fresh?.data?.warnings || [],
     lane,
     setLane: setLaneChoice,
+    defaultLane: defaultLaneFor(batch, o.fasttrackDefault),
     askFirst: oneForAll ? false : askFirst,
     setAskFirst,
     grouping,
@@ -318,9 +323,43 @@ export function RunItems({ rows, onRemove }: { rows: ItemRow[]; onRemove(row: It
   );
 }
 
+/** Is the New dialog's single-session Options fold remembered open? Per
+ * browser, and only ever a convenience: storage that throws reads as closed. */
+const OPTIONS_OPEN_KEY = "mf_new_options_open";
+
+function readOptionsOpen(): boolean {
+  try {
+    return localStorage.getItem(OPTIONS_OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberOptionsOpen(on: boolean) {
+  try {
+    localStorage.setItem(OPTIONS_OPEN_KEY, on ? "1" : "0");
+  } catch {
+    /* private window / blocked storage: the fold just starts closed */
+  }
+}
+
+/** The folded Options line: what a closed fold is holding, so nothing it hides
+ * is a surprise. */
+export function optionsSummary(lane: Lane, askFirst: boolean): string {
+  return "Options · Fast-track: " + LANE_LABEL[lane] + (askFirst ? ", asks first" : "");
+}
+
 /** Everything under the list: the fast-track (always), the batch rows (two or
  * more), the split box (passed in — it is shared with the single flow), and
- * the sentence that says what all of it means. */
+ * the sentence that says what all of it means.
+ *
+ * For ONE session (and a split, which is one line) all of that sits in a fold
+ * whose summary names the rung, closed by default: a first-time user's New is
+ * one box and three buttons, and the choices are a click away with their value
+ * already on screen. It opens by itself when the rung is not the default one
+ * (a pick carried over from a list, say), stays open while Split is ticked —
+ * the split's own rows live in it — and remembers being left open. A list
+ * renders unfolded: those rows ARE what a list is choosing. */
 export function RunOptions({
   draft,
   n,
@@ -339,6 +378,14 @@ export function RunOptions({
   repoPicker?: React.ReactNode;
 }) {
   const many = n >= 2 && !split;
+  const single = n < 2 && !split;
+  const offDefault = draft.lane !== draft.defaultLane;
+  const [foldOpen, setFoldOpen] = useState(readOptionsOpen);
+  // Opens (never closes) as the rung leaves the default, so a choice the user
+  // cannot see is never what a start sends; the summary would say it anyway.
+  useEffect(() => {
+    if (single && offDefault) setFoldOpen(true);
+  }, [single, offDefault]);
   const oneForAll = split || (n >= 2 && draft.grouping === "together");
   const sum = summarySentence({
     n,
@@ -348,8 +395,8 @@ export function RunOptions({
     grouping: draft.grouping,
     split,
   });
-  return (
-    <div className="rt-opts">
+  const body = (
+    <>
       <div className="rt-row rt-row-top">
         <span className="rt-label">{many ? "Fast-track each to" : "Fast-track to"}</span>
         <div className="rt-ctl">
@@ -468,6 +515,37 @@ export function RunOptions({
           {sum.lead} {sum.tail && <span className="muted">{sum.tail}</span>}
         </p>
       )}
+    </>
+  );
+  if (many) return <div className="rt-opts">{body}</div>;
+  // One <details> for a single line AND a split, so ticking Split (whose box is
+  // inside) does not remount the box out from under the click that ticked it.
+  return (
+    <div className="rt-opts">
+      <details
+        id="new-options"
+        className="rt-fold"
+        open={split || foldOpen}
+        onToggle={(e) => {
+          if (!split) setFoldOpen(e.currentTarget.open);
+        }}
+      >
+        <summary
+          title={split ? "Stays open while Split is ticked" : undefined}
+          onClick={(e) => {
+            // A split's rows live in here; closing it would hide what a
+            // start is about to do.
+            if (split) {
+              e.preventDefault();
+              return;
+            }
+            rememberOptionsOpen(!foldOpen);
+          }}
+        >
+          {optionsSummary(draft.lane, draft.askFirst)}
+        </summary>
+        <div className="rt-fold-body">{body}</div>
+      </details>
     </div>
   );
 }

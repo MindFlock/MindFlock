@@ -133,7 +133,6 @@ export function Notifications(_: ScreenProps) {
           ))
         )}
       </div>
-      <p className="set-hint">Also reachable from the bell in the sidebar header.</p>
       <Ntfy />
     </>
   );

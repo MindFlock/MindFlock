@@ -8,19 +8,23 @@
  *
  * The ⋯ menu acts through the runs API at once — never a `window.prompt` /
  * `confirm` (Electron has neither): "Add lines…" and "Cancel…" open inline
- * rows inside the menu. */
+ * rows inside the menu. It is the group's one home: its queued lines (Start
+ * now / Remove), Pause, Cancel and, once it has finished, "Copy summary" —
+ * what waits on you is the bell's. */
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { RunTask } from "../../api/types";
 import { api } from "../../api/client";
-import { refreshRuns } from "../../state/runs";
+import { refreshRuns, useOutbox, useRun } from "../../state/runs";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
+import { copyText } from "../../lib/clipboard";
 import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
 import { groupTitle, queuedLine, queuedTitle, shippedBadge, type RunGroup } from "../../lib/runs";
 import { cancelRun, runAction as runAct, runPath, taskPath } from "../../lib/runsApi";
+import { summaryFor, summaryText } from "../outbox/outbox";
 
 export function RunGroupHeader({ group, repoPath }: { group: RunGroup; repoPath?: string }) {
   const toggle = useUi((s) => s.toggleRunCollapsed);
@@ -95,6 +99,13 @@ function RunGroupMenu({
   const [mode, setMode] = useState<"" | "add" | "cancel">("");
   const [lines, setLines] = useState("");
   const [busy, setBusy] = useState(false);
+  // A finished group's summary — the same cached query the bell keeps warm.
+  // It holds only the last week's: an older group's comes from its own record.
+  const { data: outbox } = useOutbox();
+  const kept = group.done ? summaryFor(outbox, group.id) : null;
+  const { data: record, isFetched: recordRead } = useRun(group.done && !kept ? group.id : null);
+  const summary = group.done ? summaryText(outbox, group.id, record) : "";
+  const looking = group.done && !summary && !kept && !recordRead;
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
       if (!ref.current?.contains(e.target as Node)) onClose();
@@ -241,16 +252,29 @@ function RunGroupMenu({
           ))}
         </>
       )}
-      <button
-        type="button"
-        role="menuitem"
-        onClick={() => {
-          useUi.getState().openDialogFor("outbox", id);
-          onClose();
-        }}
-      >
-        {group.done ? "Summary" : "Open in the Outbox"}
-      </button>
+      {group.done && (
+        <button
+          type="button"
+          role="menuitem"
+          className="rg-copy-summary"
+          disabled={!summary}
+          title={
+            summary
+              ? "Copy what this group did, as Markdown"
+              : looking
+                ? "Looking for this group's summary…"
+                : "MindFlock has no summary for this group"
+          }
+          onClick={async () => {
+            if (!summary) return;
+            toast((await copyText(summary)) ? "Copied the summary as Markdown" : "Couldn't copy the summary");
+            onClose();
+          }}
+        >
+          Copy summary
+          <span className="rg-hint">as Markdown</span>
+        </button>
+      )}
       {!group.done &&
         (mode === "cancel" ? (
           <div className="rg-inline rg-confirm">

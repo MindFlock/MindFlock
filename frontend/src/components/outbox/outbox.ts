@@ -1,40 +1,19 @@
-/** The Outbox, as data — pure, so the tab arithmetic is unit-tested in node.
+/** What waits on you, as data — pure, so the bell's arithmetic is unit-tested
+ * in node. (The folder keeps its old name: `GET /api/outbox` is still the
+ * route these rows come from.)
  *
- * One `GET /api/outbox?group=all` feeds everything: the top-bar badge, the tab
- * strip and every section. The tabs filter that one response client-side, so a
- * tab's badge is the length of exactly the list the tab shows (the Intake rule:
- * badges count what the tab SHOWS) and can never disagree with it.
+ * One `GET /api/outbox?group=all` feeds the bell's waiting rows
+ * (`needsAttention` merges them into the bell's one list) and a finished
+ * group's summary, which its rail header's ⋯ menu — or, for a split /
+ * one-for-all group, its lead's Thread tab — copies (`summaryText`).
  *
  * Rows are de-duplicated on `key` — the server's `(repo, branch)` — because the
  * owner runs two windows on one branch ("foo" + "foo-copy"): one branch's PR is
  * one row, never two. */
 
-import type {
-  Instance,
-  OutboxQueued,
-  OutboxResponse,
-  OutboxShipped,
-  OutboxShipping,
-  OutboxSummary,
-  OutboxWaiting,
-} from "../../api/types";
+import type { OutboxResponse, OutboxSummary, OutboxWaiting } from "../../api/types";
 import { releaseChoices } from "../../lib/splitRun";
-
-export type OutboxTabKey = "all" | "own" | string;
-
-export interface OutboxView {
-  waiting: OutboxWaiting[];
-  shipping: OutboxShipping[];
-  shipped: OutboxShipped[];
-  queued: OutboxQueued[];
-  summaries: OutboxSummary[];
-}
-
-export interface OutboxTab {
-  key: OutboxTabKey;
-  label: string;
-  count: number;
-}
+import type { AttentionItem } from "../sidebar/ordering";
 
 type Keyed = { key?: string; title?: string };
 
@@ -51,80 +30,27 @@ export function dedupe<T extends Keyed>(list: readonly T[] | undefined): T[] {
   return out;
 }
 
-/** The group a row belongs to: its own `run`, else its session's (a shipping or
- * shipped row may carry only a title). "" = on its own. */
-export function runOf(
-  item: { run?: { id?: string } | null; title?: string },
-  rowOf: (title: string) => Instance | undefined
+/** A finished group's summary (the Markdown its header's "Copy summary"
+ * copies), or null when the server has none for it. */
+export function summaryFor(data: OutboxResponse | null | undefined, runId: string): OutboxSummary | null {
+  if (!runId) return null;
+  const s = (data?.summaries || []).find((x) => x.run === runId);
+  return s && String(s.text_md || "").trim() ? s : null;
+}
+
+/** The Markdown a finished group's "Copy summary" copies: the summary
+ * `GET /api/outbox` holds (its last week of finished groups), else the one the
+ * run record keeps (`GET /api/runs/{id}` → `run.summary.text_md`, no age
+ * limit). "" when neither has one. */
+export function summaryText(
+  data: OutboxResponse | null | undefined,
+  runId: string,
+  run?: { summary?: { text_md?: string } | null } | null
 ): string {
-  if (item.run?.id) return item.run.id;
-  if (item.title) return rowOf(item.title)?.run?.id || "";
-  return "";
-}
-
-/** Every section, de-duplicated, narrowed to one tab. */
-export function viewFor(
-  data: OutboxResponse | null | undefined,
-  tab: OutboxTabKey,
-  rowOf: (title: string) => Instance | undefined
-): OutboxView {
-  const g = data?.groups;
-  const keep = (it: { run?: { id?: string } | null; title?: string }) => {
-    if (tab === "all") return true;
-    const r = runOf(it, rowOf);
-    return tab === "own" ? !r : r === tab;
-  };
-  return {
-    waiting: dedupe(g?.waiting).filter(keep),
-    shipping: dedupe(g?.shipping).filter(keep),
-    shipped: dedupe(g?.shipped).filter(keep),
-    queued: (g?.queued || []).filter((q) => tab === "all" || (tab !== "own" && q.run?.id === tab)),
-    summaries: (data?.summaries || []).filter((s) => tab === "all" || s.run === tab),
-  };
-}
-
-/** How many rows a tab shows (summaries are cards, not rows). */
-export function viewCount(v: OutboxView): number {
-  return v.waiting.length + v.shipping.length + v.shipped.length + v.queued.length;
-}
-
-/** The top-bar badge: what's waiting on YOU, across every group. 0 hides it. */
-export function waitingCount(data: OutboxResponse | null | undefined): number {
-  if (!data) return 0;
-  if (data.groups?.waiting) return dedupe(data.groups.waiting).length;
-  return Number(data.counts?.waiting) || 0;
-}
-
-/** The tab strip: All · one tab per group with something in it · On their own.
- * A tab with nothing to show is left out (except All), and a group's name comes
- * from the rows themselves, falling back to `names` (the runs list). */
-export function outboxTabs(
-  data: OutboxResponse | null | undefined,
-  rowOf: (title: string) => Instance | undefined,
-  names: (id: string) => string = () => ""
-): OutboxTab[] {
-  const tabs: OutboxTab[] = [{ key: "all", label: "All", count: viewCount(viewFor(data, "all", rowOf)) }];
-  const g = data?.groups;
-  const order: string[] = [];
-  const label = new Map<string, string>();
-  const note = (id: string, name?: string) => {
-    if (!id) return;
-    if (!label.has(id)) order.push(id);
-    if (name || !label.get(id)) label.set(id, name || label.get(id) || "");
-  };
-  const all = [...(g?.waiting || []), ...(g?.shipping || []), ...(g?.shipped || [])];
-  for (const it of all) {
-    const id = runOf(it, rowOf);
-    note(id, it.run?.name || (it.title ? rowOf(it.title)?.run?.name : "") || "");
-  }
-  for (const q of g?.queued || []) note(q.run?.id || "", q.run?.name);
-  for (const id of order) {
-    const count = viewCount(viewFor(data, id, rowOf));
-    if (count) tabs.push({ key: id, label: label.get(id) || names(id) || "Group", count });
-  }
-  const own = viewCount(viewFor(data, "own", rowOf));
-  if (own && order.length) tabs.push({ key: "own", label: "On their own", count: own });
-  return tabs;
+  const kept = summaryFor(data, runId);
+  if (kept) return kept.text_md;
+  const own = String(run?.summary?.text_md || "");
+  return own.trim() ? own : "";
 }
 
 /** The button that carries an approved ship one step, named for that step. */
@@ -198,19 +124,6 @@ export function statText(p: { files?: number; add?: number; del?: number } | nul
   if (p.files) bits.push(p.files + (p.files === 1 ? " file" : " files"));
   if (p.add || p.del) bits.push("+" + (p.add || 0) + " −" + (p.del || 0));
   return bits.join(" ");
-}
-
-/** "PR #318 · checks ✓" for a shipped row. */
-export function shippedChip(s: OutboxShipped): { text: string; cls: string } {
-  const m = String(s.pr_url || "").match(/\/pull\/(\d+)/);
-  const pr = m ? "PR #" + m[1] : s.pr_url ? "PR" : "";
-  const state = String(s.pr_state || "").toLowerCase();
-  const checks = s.checks === "pass" || s.checks === "ok" ? "checks ✓" : s.checks === "fail" || s.checks === "failed" ? "checks ✗" : s.checks === "pending" ? "checks…" : "";
-  const parts = [pr + (state === "merged" ? " merged" : state === "closed" ? " closed" : ""), checks].filter(Boolean);
-  const bad = checks === "checks ✗" || state === "closed";
-  // No PR: say how far it went — a commit or push lane's row is not a PR.
-  const noPr = s.lane === "commit" ? "committed" : s.lane === "push" ? "pushed" : "shipped";
-  return { text: parts.join(" · ") || noPr, cls: bad ? "bad" : "ok" };
 }
 
 /** A group-level row (its title is the group's lead): the plan to approve,
@@ -292,4 +205,51 @@ export function waitingActions(
   if (a.has("skip") && can.run && can.task)
     out.push({ key: "skip", label: "Skip", primary: false, title: "Take it out of the group — its session and branch stay" });
   return out;
+}
+
+/** One row of the bell's "Needs attention" list: a session's attention item
+ * (an answer, a broken session, failing checks, ready for a PR) or a
+ * waiting item from `GET /api/outbox` (an approval, an escalation, a group's plan or budget). */
+export interface NeedsRow {
+  /** The session's title, or for a group-level item with none the server's
+   * own waiting key ("run::<id>", "run::<id>::<task>"; "run:<id>" if it sent
+   * none). Address a group's rows by `waiting.run.id`, never by this key. */
+  key: string;
+  title: string;
+  /** 0 answer · 1 approve / escalation · 2 broken · 3 checks failing · 4 ready. */
+  rank: number;
+  attn?: AttentionItem;
+  waiting?: OutboxWaiting;
+}
+
+/** The bell's ONE list of what waits on you: the sidebar's attention items
+ * merged with the server's waiting rows, one row per session. A session whose
+ * agent is asking keeps its answer row (the server's "prompt" item is that same
+ * question, so it is dropped); otherwise an approval or escalation outranks the
+ * session's other attention reasons. Ordered answer → approvals/escalations →
+ * broken → checks failing → ready, stable within a rank. */
+export function needsAttention(
+  attn: readonly AttentionItem[],
+  waiting: readonly OutboxWaiting[] | undefined
+): NeedsRow[] {
+  const rows = new Map<string, NeedsRow>();
+  for (const a of attn) {
+    if (!rows.has(a.title)) rows.set(a.title, { key: a.title, title: a.title, rank: a.p === 0 ? 0 : a.p + 1, attn: a });
+  }
+  for (const w of dedupe(waiting).filter((x) => x.kind !== "prompt")) {
+    // Only a row about a SESSION folds into that session's row. A group-level
+    // item with no session (a budget pause, a ticket line that never resolved,
+    // a lead-less ask) keeps the server's own key: one run can hold several,
+    // and each carries its own Retry / Skip / Raise budget.
+    if (w.title) {
+      const had = rows.get(w.title);
+      if (had && (had.rank === 0 || had.waiting)) continue;
+      rows.set(w.title, { key: w.title, title: w.title, rank: 1, waiting: w });
+      continue;
+    }
+    const key = w.key || "run:" + (w.run?.id || "") + (w.run?.task ? ":" + w.run.task : "");
+    if (rows.has(key)) continue;
+    rows.set(key, { key, title: "", rank: 1, waiting: w });
+  }
+  return [...rows.values()].sort((a, b) => a.rank - b.rank);
 }

@@ -212,8 +212,8 @@ CI) it exits 1 with ``attach needs a real terminal (running in a script? use
 ### `mindflock rm TITLE [--yes]`
 
 End a session on the running server (`DELETE /api/instances/{title}`). The
-**worktree stays on disk** — recover or wipe it from the web UI (Recent… /
-Disk…). Prompts `End session '<title>'? Its worktree is kept. [y/N]` unless
+**worktree stays on disk** — recover or wipe it from Recently closed, under the session list in the web
+UI. Prompts `End session '<title>'? Its worktree is kept. [y/N]` unless
 `--yes`/`-y` is passed (for scripts). `TITLE` may be any unambiguous prefix,
 exactly like `attach`; an unknown title prints ``no session named '<title>'
 (run `mindflock ls`)`` and exits 1.

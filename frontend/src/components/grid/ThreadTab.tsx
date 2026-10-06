@@ -371,8 +371,8 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
             <>
               <h2 className="thread-title">{myName}</h2>
               <p className="thread-sub">
-                No workers yet. Split a task across workers from the fork button, or write to {myName} below
-                — it is typed into its prompt as you.
+                No workers yet — use Split into parallel pieces… in the session's › menu. Or write to{" "}
+                {myName} below; it is typed into its prompt as you.
               </p>
             </>
           )}

@@ -133,7 +133,7 @@ def _still_holds(entry: dict, cache: dict | None = None) -> bool:
     feature branch long after the user switched that checkout back to main.
     Offering *that* as "this ticket's workspace" would be a lie the button acts
     on, so a definite mismatch disqualifies the entry. An unreadable HEAD does
-    not: it is not evidence of anything, and Recent… would still reopen it.
+    not: it is not evidence of anything, and Recently closed would still reopen it.
     """
     branch = str(entry.get("branch") or "")
     if not branch:

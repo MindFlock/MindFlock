@@ -415,6 +415,24 @@
   border-radius: 3px;
 }
 
+/* A lane line that is waiting on you ("! hooks failed twice", "approve?")
+   opens its row in the bell. */
+.inst .lineage.opens-bell {
+  cursor: pointer;
+}
+
+.inst .lineage.opens-bell:hover .sl-lead,
+.inst .lineage.opens-bell:focus-visible .sl-lead {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.inst .lineage.opens-bell:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
 .inst .lineage .needs {
   color: var(--gold);
   font-weight: 600;
@@ -524,6 +542,37 @@
   background: rgba(222, 97, 62, 0.14);
 }
 
+/* "Delete + wipe worktree", armed: the question and its two answers in place
+   of the item (the desktop app has no confirm()). */
+.inst-actions .wipe-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(222, 97, 62, 0.1);
+  font-size: 12px;
+}
+
+.inst-actions .wipe-q {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.inst-actions .wipe-acts {
+  display: flex;
+  gap: 6px;
+}
+
+.inst-actions .wipe-acts button {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+}
+
+.inst-actions .wipe-acts button.danger {
+  border-color: var(--red);
+}
+
 .inst-actions .menu-sep {
   height: 1px;
   background: var(--border);
@@ -607,34 +656,32 @@
 #view-modes {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
 #view-modes .vm-label {
   font-size: 11px;
   color: var(--muted);
-  margin-right: 2px;
 }
 
-#view-modes .vm {
+/* One quiet picker, not a row of five toggles: the view is set once and left. */
+#view-modes select {
   flex: 1;
+  min-width: 0;
   cursor: pointer;
+  font: inherit;
   font-size: 11px;
-  padding: 4px 0;
+  padding: 3px 6px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
 }
 
-#view-modes .vm:hover {
+#view-modes select:hover,
+#view-modes select:focus-visible {
   border-color: var(--accent);
-}
-
-#view-modes .vm.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  outline: none;
 }
 
 

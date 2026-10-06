@@ -152,9 +152,10 @@ def test_the_ship_and_split_menu_is_gone_everywhere(js):
         "Merge when checks pass",
     ):
         assert words not in js, words
-    # ship-now is the Outbox's approval and nothing else's.
+    # ship-now is the ask-first approval (the bell's waiting row) and nothing
+    # else's.
     assert js.count('"/ship-now"') == 1
-    assert '"/ship-now"' in _region(js, "src/components/outbox/OutboxDialog.tsx")
+    assert '"/ship-now"' in _region(js, "src/components/outbox/WaitingRow.tsx")
 
 
 def test_new_modules_never_call_a_dead_dialog(js):
@@ -325,6 +326,17 @@ def test_the_picker_holds_the_keyboard_like_a_modal(js):
     assert '"ship-menu"' not in ids
 
 
+def test_the_bell_holds_the_keyboard_like_a_modal(js):
+    """The waiting rows (Retry / Skip / Commit) live in the bell's popover; a Delete or Ctrl+W on one of its buttons ended the focused
+    session behind it until the popover joined the modal guard."""
+    keymap = _region(js, "src/lib/keymap.ts")
+    ids = keymap[keymap.find("MODAL_DOM_IDS = [") :]
+    ids = ids[: ids.find("];")]
+    assert '"notif-pop"' in ids
+    bell = _region(js, "src/components/NotificationsBell.tsx")
+    assert 'id: "notif-pop"' in bell
+
+
 def test_the_picker_survives_its_own_pane_head_scrolling(js):
     """Found with the screenshot harness: on a busy header (a running run's
     live step) a click on ⏩ scrolls the pane head sideways to show it, and
@@ -379,13 +391,15 @@ def test_row_menu_items(js):
 def test_palette_entries(js):
     palette = _region(js, "src/components/palette/CommandPalette.tsx")
     for label in (
-        'label: "Start several sessions…"',
         "label: `Fast-track… — ${t}`",
         "label: `Split into parallel pieces… — ${t}`",
         "label: `Thread — ${t}`",
     ):
         assert in_bundle(label, palette), label
-    assert 'run: () => ui.openNewWith("")' in palette
+    # "Start several sessions…" was New under a second name (its box takes a
+    # list on its own) — one action, one entry.
+    assert "Start several sessions…" not in palette
+    assert 'openNewWith("")' not in palette
     assert "run: () => openFastTrackMenu(t)" in palette
     # The two hard-wired lane entries and the menu entry are gone.
     assert "Ship:" not in palette and "Ship & split" not in palette

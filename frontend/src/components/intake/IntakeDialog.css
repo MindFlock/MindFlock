@@ -428,6 +428,41 @@
   align-items: center;
 }
 
+/* The folded state of those pickers: one muted line saying what Start will
+   use, and a quiet "Options" toggle at its end. Right-aligned like the button
+   under it, so the list's right edge stays one straight line. Muted rather than
+   `.linklike`'s accent + underline — a rarely-used override must not be the
+   loudest thing on every row. */
+.ik-item-start .ik-item-optline {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ik-item-start .ik-item-uses {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ik-item-start .ik-item-opts {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.ik-item-start .ik-item-opts:hover,
+.ik-item-start .ik-item-opts:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 /* Same quiet treatment as the CLI picker, and the same two-classes-deep
    specificity for the same reason (`.set-row select` is (0,1,1)). The floor is
    smaller because the labels are shorter and the two now share a row. */

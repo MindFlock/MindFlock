@@ -23,6 +23,23 @@ describe("defaultHiddenBars", () => {
   });
 });
 
+describe("SIDEBAR_BARS labels", () => {
+  it("names each automation bar after the Intake tab it opens", () => {
+    const label = (key: string) => SIDEBAR_BARS.find((b) => b.key === key)?.label;
+    expect(label("ingestion")).toBe("Tickets");
+    expect(label("pr-review")).toBe("Pull requests");
+    expect(label("issue-handling")).toBe("Issues");
+    // The rest keep their names.
+    expect(label("usage")).toBe("Usage");
+    expect(label("verify")).toBe("Verify");
+    expect(label("assistant")).toBe("Assistant");
+  });
+
+  it("keeps the owner's out-of-the-box set: Usage, Tickets and Assistant", () => {
+    expect(DEFAULT_VISIBLE_BARS).toEqual(["usage", "ingestion", "assistant"]);
+  });
+});
+
 describe("orderedSections", () => {
   it("returns the full default order for an empty saved order", () => {
     expect(orderedSections([])).toEqual(DEFAULT_SECTION_ORDER);

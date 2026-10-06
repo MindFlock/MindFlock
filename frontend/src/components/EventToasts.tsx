@@ -26,6 +26,7 @@ import { messageToastText, type MessageEventData } from "../lib/agentMessages";
 import { runNote } from "../lib/runs";
 import { openThread } from "../lib/flockActions";
 import { ruleOn, runLookups } from "../state/runs";
+import { showGroup } from "../lib/showGroup";
 
 const BASE_TITLE = document.title || "MindFlock";
 const clarifyUnseen = new Set<string>(); // clarify sessions not yet looked at
@@ -412,7 +413,21 @@ export function EventToasts() {
           if (!n || !ruleOn(n.rule)) return;
           notifyOnce("*run", "run", n.text, {
             // A plan / the one PR: their click is on the lead's Thread tab.
-            onClick: () => (n.lead ? openThread(n.lead) : useUi.getState().openDialogFor("outbox", n.run || null)),
+            // Anything else that needs you waits in the bell; a finished
+            // group is shown where it lives — its header on the rail, whose
+            // ⋯ copies the summary, else its lead's Thread tab.
+            onClick: () => {
+              if (n.lead) openThread(n.lead);
+              else if (env.event === "run.needs_you")
+                // A line's session, or the group's own row ("run:<id>") when
+                // the escalation names no session.
+                document.dispatchEvent(
+                  new CustomEvent("mf-open-bell", {
+                    detail: { title: String(env.data?.title || "") || (n.run ? "run:" + n.run : "") },
+                  })
+                );
+              else showGroup(n.run);
+            },
             duration: 8000,
           });
         })

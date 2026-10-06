@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   KEYMAP,
   comboLabel,
@@ -121,35 +121,99 @@ describe("a newer chord whose letter an older rebinding took", () => {
   });
 });
 
-describe("Alt+O opens the Outbox", () => {
-  it("is bound, on the sheet, and taken by nothing else", () => {
-    const o = byId("outbox");
-    expect(o).toMatchObject({ key: "o", alt: true });
-    expect(o.help?.[1]).toBe("Alt+O");
-    const combo = defaultCombosFor("outbox")[0];
-    const clash = KEYMAP.filter((e) => e !== o && e.key.toLowerCase() === "o" && sameCombo(combo, { key: e.key, mod: e.mod, shift: e.shift, alt: e.alt }));
-    expect(clash).toEqual([]);
-    // Not a Ctrl+K chord: O there is still "Open / focus IDE".
+describe("Alt+O is gone with the Outbox", () => {
+  it("binds nothing, and the sheet lists no Outbox", () => {
+    expect(KEYMAP.some((e) => e.id === "outbox")).toBe(false);
+    expect(KEYMAP.some((e) => e.help && /Outbox/.test(e.help[2]))).toBe(false);
+    expect(defaultCombosFor("outbox")).toEqual([]);
+    // Alt+O is free for a rebind again.
+    expect(comboProblem({ key: "o", alt: true }, "palette")).toBeNull();
+    // Not a Ctrl+K chord either: O there is still "Open / focus IDE".
     expect(chordForKey("o")).toBe("o");
   });
 
-  it("guards like Alt+I: it never eats a keystroke meant for a text field", () => {
-    expect(typeof byId("outbox").when).toBe("function");
+  it("drops a rebind saved for it in mf_keymap on load, and keeps the rest", async () => {
+    const g = globalThis as Record<string, unknown>;
+    const prev = g.localStorage;
+    let saved: string | null = JSON.stringify({
+      keys: { outbox: [{ key: "x", alt: true }], palette: [{ key: "j", mod: true }] },
+      chords: {},
+    });
+    g.localStorage = {
+      getItem: (k: string) => (k === "mf_keymap" ? saved : null),
+      setItem: (k: string, v: string) => {
+        if (k === "mf_keymap") saved = v;
+      },
+      removeItem: () => {},
+    };
+    try {
+      vi.resetModules();
+      const km = await import("../lib/keymap");
+      expect(km.getKeyOverride("outbox")).toBeUndefined();
+      expect(km.getKeyOverride("palette")).toEqual([{ key: "j", mod: true }]);
+      // Written back without it, so the next load starts clean.
+      expect(JSON.parse(saved || "{}").keys).toEqual({ palette: [{ key: "j", mod: true }] });
+      // Its old combo is not "already" anything.
+      expect(km.comboProblem({ key: "x", alt: true }, "verify")).toBeNull();
+    } finally {
+      if (prev === undefined) delete g.localStorage;
+      else g.localStorage = prev;
+      vi.resetModules();
+    }
   });
 });
 
 describe("modalOpen", () => {
   afterEach(() => useUi.getState().closeDialog());
 
-  it("counts the Outbox: its Commit / Retry / Skip rows are about OTHER sessions", () => {
-    useUi.getState().openDialogFor("outbox");
-    expect(modalOpen()).toBe(true);
+  it("counts Customize on either tab: its inputs are not the session behind", () => {
+    for (const name of ["customize", "prompts"] as const) {
+      useUi.getState().openDialogFor(name);
+      expect(modalOpen()).toBe(true);
+      useUi.getState().closeDialog();
+    }
   });
 
   it("counts the Red zones dialog: Delete on a zone's × or Ctrl+W in its input must not close the session behind", () => {
     // The store slot answers before any DOM lookup, so this runs without a DOM.
     useUi.getState().openDialogFor("red-zones");
     expect(modalOpen()).toBe(true);
+  });
+});
+
+describe("Delete / Ctrl+W never end the focused session from inside the bell", () => {
+  // The waiting rows (Retry / Skip / Commit) live in the bell's popover; its
+  // buttons are about OTHER sessions.
+  const g = globalThis as Record<string, unknown>;
+  const hadDoc = "document" in g;
+  const prevDoc = g.document;
+  afterEach(() => {
+    useUi.setState({ focused: null } as never);
+    if (hadDoc) g.document = prevDoc;
+    else delete g.document;
+  });
+  const withBell = (open: boolean) => {
+    const pop = { classList: { contains: () => false } };
+    g.document = {
+      activeElement: { tagName: "BUTTON", className: "attn-act", closest: () => null },
+      getElementById: (id: string) => (open && id === "notif-pop" ? pop : null),
+    };
+  };
+
+  it("the open bell counts as a modal", () => {
+    withBell(true);
+    expect(modalOpen()).toBe(true);
+    withBell(false);
+    expect(modalOpen()).toBe(false);
+  });
+
+  it("Delete and Ctrl+W stand down while the bell is open, and work again once it closes", () => {
+    useUi.setState({ focused: "sess-A" } as never);
+    withBell(true);
+    expect(aliasFor("close").when!()).toBe(false);
+    expect(byId("close").when!()).toBe(false);
+    withBell(false);
+    expect(aliasFor("close").when!()).toBe(true);
   });
 });
 

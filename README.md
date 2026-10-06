@@ -398,7 +398,7 @@ a feature race; those two change what your day looks like:
 On a fresh install you connect a tracker in the desktop app's top bar under
 **Intake → Tickets** (Alt+I) — **+ Add ticketing source** takes a token, plus the
 repo that source's tickets should land in — and flip that tab's **Automated
-ingestion** switch; the sidebar's **Ticket Ingestion** bar flips it too. From
+ingestion** switch; the sidebar's **Tickets** bar flips it too. From
 then on MindFlock polls for tickets assigned to you and turns each one into a
 real session: an isolated git worktree on its own `feature/…` branch with the
 agent already seeded with the ticket, appearing in the session grid within
@@ -656,8 +656,9 @@ every dependency and prints a platform-appropriate fix for anything missing.
 In the app, **+ New** creates a session (worktree + tmux + agent); click a
 session to type into its live terminal. Next to it in the top bar, **Intake**
 (Alt+I) is the surface you visit to see what came in — tickets, pull requests
-and issues — and start any of it by hand. The phone UI lives at `/m` (scan the
-startup QR).
+and issues — and start any of it by hand. The 🔔 bell is the one place
+anything waits on you: an agent's question, an ask-first approval, a group's
+stuck line or budget pause. The phone UI lives at `/m` (scan the startup QR).
 
 ### Terminal session control
 
@@ -685,7 +686,7 @@ Configure it from the app's **Intake** dialog (top bar, Alt+I), whose Tickets /
 Pull requests / Issues tabs save to `~/.mindflock/settings.json` (mode
 `0600`, never committed). No file editing needed. Add as many sources as you
 like, including two of the same provider (two Jira sites, say), each with its
-own credentials and target repo. Then flip the sidebar's **Ticket Ingestion**
+own credentials and target repo. Then flip the sidebar's **Tickets** bar
 switch; it stays off across restarts until you do, and stays on after.
 
 ```bash
@@ -698,7 +699,7 @@ advanced override): copy [`config.toml.example`](config.toml.example) to
 `env var → ~/.mindflock/settings.json → config.toml → default`, so the
 web UI, an environment variable, or the file all work.
 
-Or toggle it from the web UI sidebar (**Ticket Ingestion** bar), which runs
+Or toggle it from the web UI sidebar (**Tickets** bar), which runs
 it as a managed subprocess and tails its log. The pipeline is a singleton per
 directory (`.mindflock-pipeline.lock`); a second copy exits cleanly.
 
@@ -821,7 +822,7 @@ On macOS the desktop app additionally leaves `/Applications/MindFlock.app`,
 | [docs/configuration.md](docs/configuration.md) | `config.toml` reference, `~/.mindflock/` + `~/.mindflock-assistant/`, environment variables |
 | [docs/session-engine.md](docs/session-engine.md) | Instance lifecycle, git worktrees, tmux/PTY, provisioned mode |
 | [docs/cli.md](docs/cli.md) | `mindflock` CLI: serve, doctor, uninstall, mcp, and terminal session control (new/ls/attach/rm/open/events/msg/inbox) |
-| [docs/team-runs.md](docs/team-runs.md) | Team runs and fast-track: several tickets / task lines at once, each fast-tracked (commit, push, PR, merge) by the server; the Outbox; restart semantics |
+| [docs/team-runs.md](docs/team-runs.md) | Team runs and fast-track: several tickets / task lines at once, each fast-tracked (commit, push, PR, merge) by the server; what waits in the bell and what the group header holds; restart semantics |
 | [docs/mcp.md](docs/mcp.md) | The MindFlock MCP: agent-to-agent messaging and orchestration — auto-attach, the 25 tools, message delivery, lineage and spawn limits, scopes, a worked orchestrator example |
 | [docs/web-api.md](docs/web-api.md) | Complete HTTP + WebSocket API reference |
 | [docs/web-ui.md](docs/web-ui.md) | Frontend guide: grid, tabs, stages, shortcuts, mobile, addons |

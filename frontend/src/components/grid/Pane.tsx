@@ -1,7 +1,8 @@
 /** One session pane (port of app.js makePane, section 14): header with grip /
  * title / diff-stat context line / tabs / next-step / usage chip / state pill
- * / history + copy-all + hide (✕), the terminal hosts, Diff + Map + Queue
- * tabs, and the budget-lock overlay (Map is git-gated exactly like Diff).
+ * / history + hide (−), the terminal hosts, Diff + Map + Queue tabs, and the
+ * budget-lock overlay (Map is git-gated exactly like Diff). Copy-all lives in
+ * the history view's bar, one click past the history button.
  * Terminals are adopted from lib/terminals' registry so they never remount
  * with the pane. */
 
@@ -10,10 +11,10 @@ import type { Instance } from "../../api/types";
 import { instApi } from "../../api/client";
 import { refreshInstances, useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
-import { copyText } from "../../lib/clipboard";
 import { fmtUsd, displayBranch } from "../../lib/format";
 import { chipState, fastTrackStep, liveStep, nextStep, resetStep } from "../../lib/stage";
 import { cleanupMissing, selectSession } from "../../lib/sessionActions";
+import { sessionLabel } from "../../lib/sessionLabel";
 import {
   focusTerm,
   freezeTerm,
@@ -55,6 +56,10 @@ function paneTab(t: string, git: boolean): Tab {
   if (GIT_TABS.has(t) && !git) return "agent";
   return t as Tab;
 }
+
+/** The pane's − button. Hiding is not ending: ✕ means end/close everywhere
+ * else (the rail row, a special window's head), so this one wears a minus. */
+const HIDE_TITLE = "Hide window — the session keeps running (show it again from its row)";
 
 function queueRelTime(ms: number): string {
   const m = Math.ceil(ms / 60000);
@@ -172,7 +177,27 @@ export function Pane({
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const fitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const displayName = alias || title;
+  // The same name the rail row shows (alias, else the ticket/PR label, else
+  // the title), so a pane can be matched to its row by eye. The tooltip keeps
+  // the raw title and branch.
+  const label = sessionLabel(
+    (inst as unknown as { display_title?: string }).display_title || title,
+    inst.branch || ""
+  );
+  const displayName = alias || label.text;
+  const nameTip = (displayName !== title ? title + "  ·  " : "") + (inst.branch || title);
+  // The kind tag ("(tix) ") rides in its own span: a narrow head drops it
+  // (Pane.css) so the few characters that fit are the name, not the tag.
+  const kindTag = !alias && label.kind ? "(" + label.kind + ") " : "";
+  const titleText =
+    kindTag && displayName.startsWith(kindTag) ? (
+      <>
+        <span className="title-kind">{kindTag}</span>
+        {displayName.slice(kindTag.length)}
+      </>
+    ) : (
+      displayName
+    );
 
   // Adopt a registry terminal into a host div; re-runs safely on remount.
   const adopt = useCallback(
@@ -441,7 +466,7 @@ export function Pane({
       >
         <div className="pane-head" {...headDrag}>
           <span className="grip" title="Drag to move this window">⠿</span>
-          <span className="title">{displayName}</span>
+          <span className="title" title={nameTip}>{titleText}</span>
           <span className="stagechip s-missing" title="Workspace directory no longer exists">
             missing workspace
           </span>
@@ -451,13 +476,13 @@ export function Pane({
               className="act pane-close"
               type="button"
               aria-label="Hide window"
-              title="Hide this window (show it again from its sidebar row)"
+              title={HIDE_TITLE}
               onClick={(e) => {
                 e.stopPropagation();
                 useUi.getState().setHidden(title, true);
               }}
             >
-              ✕
+              −
             </button>
           </div>
         </div>
@@ -495,7 +520,7 @@ export function Pane({
       >
         <div className="pane-head" {...headDrag}>
           <span className="grip" title="Drag to move this window">⠿</span>
-          <span className="title">{displayName}</span>
+          <span className="title" title={nameTip}>{titleText}</span>
           <span className="branch">{inst.branch ? "(" + displayBranch(inst) + ")" : ""}</span>
           <span className="state">provisioning…</span>
           <div className="head-tail">
@@ -503,13 +528,13 @@ export function Pane({
               className="act pane-close"
               type="button"
               aria-label="Hide window"
-              title="Hide this window — provisioning keeps going (show it again from its sidebar row)"
+              title={HIDE_TITLE}
               onClick={(e) => {
                 e.stopPropagation();
                 useUi.getState().setHidden(title, true);
               }}
             >
-              ✕
+              −
             </button>
           </div>
         </div>
@@ -538,6 +563,24 @@ export function Pane({
   const budget = inst.budget;
   const ds = inst.workspace_missing ? null : inst.diff_stat;
   const hasDiffStat = !!(ds && ((ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0));
+  // The guided button only wears the accent when pressing it is the thing to
+  // do now: not while the agent is busy (working, asking, at its limit), and
+  // not a "Commit…" with nothing uncommitted to commit (files counts too: an
+  // empty or binary new file changes no lines). Quiet, it is still the same
+  // button, outlined. Hint and blocked steps keep their own look.
+  const act = effectiveActivity(inst);
+  const quiet =
+    !!ns &&
+    !ns.hint &&
+    !ns.disabled &&
+    (act === "working" ||
+      act === "clarify" ||
+      act === "limit" ||
+      (ns.label === "Commit…" &&
+        (ds?.uncommitted?.files || 0) +
+          (ds?.uncommitted?.additions || 0) +
+          (ds?.uncommitted?.deletions || 0) ===
+          0));
 
   return (
     <section
@@ -549,8 +592,8 @@ export function Pane({
     >
       <div className="pane-head" {...headDrag}>
         <span className="grip" title="Drag to move this window">⠿</span>
-        <span className="title" title={(alias ? title + "  ·  " : "") + (inst.branch || title)}>
-          {displayName}
+        <span className="title" title={nameTip}>
+          {titleText}
         </span>
         {hasDiffStat && <CtxLine inst={inst} />}
         <div className="tabs">
@@ -626,7 +669,8 @@ export function Pane({
               className={
                 "nextstep" +
                 (ns.hint ? " nextstep-hint" : "") +
-                (ns.disabled ? " nextstep-blocked" : "")
+                (ns.disabled ? " nextstep-blocked" : "") +
+                (quiet ? " nextstep-quiet" : "")
               }
               type="button"
               disabled={!!ns.disabled}
@@ -669,7 +713,9 @@ export function Pane({
                 useUi.getState().setFastTrackMenu(ftMenu ? null : { title });
               }}
             >
-              {ft.label}
+              {/* Off is just the glyph: a word there read as a second
+                  next step. The aria-label still says "Fast-track: off". */}
+              {ft.lane === "leave" && !ft.halted ? "⏩" : ft.label}
               {ft.askFirst && (
                 <span className="ft-ask" aria-hidden="true">
                   ?
@@ -692,7 +738,6 @@ export function Pane({
             >
               <span className="stepnow-dot" aria-hidden="true" />
               <span className="stepnow-text">{step.label}</span>
-              {step.target && <span className="stepnow-target">{step.target}</span>}
             </span>
           )}
           {rs && (
@@ -728,8 +773,9 @@ export function Pane({
         <AccountChip inst={inst} />
         <SessionUsageChip inst={inst} />
         <span className={"state" + (wsState !== "connected" ? " state-bad" : "")}>{wsState}</span>
-        {/* Pinned right even when the header scrolls: history, copy-all, close
-            stay reachable without scrolling to the end of a long header. */}
+        {/* Pinned right even when the header scrolls: history and hide stay
+            reachable without scrolling to the end of a long header. Copy-all
+            lives in the history view's bar. */}
         <div className="head-tail">
         <button
           className="act copyhist"
@@ -757,58 +803,16 @@ export function Pane({
           </svg>
         </button>
         <button
-          className="act copyhist"
-          type="button"
-          title="Copy this pane's whole history to the clipboard"
-          onClick={(e) => {
-            e.stopPropagation();
-            const which = tab === "shell" ? "shell" : "agent";
-            fetch(`/api/instances/${encodeURIComponent(title)}/history?pane=${which}`)
-              .then((r) => {
-                if (!r.ok)
-                  return r.text().then((t) => {
-                    throw new Error(t || "HTTP " + r.status);
-                  });
-                return r.text();
-              })
-              .then((text) => {
-                if (!text.trim()) {
-                  toast("No history to copy");
-                  return;
-                }
-                copyText(text).then((ok) =>
-                  toast(ok ? `Copied full ${which} history (${text.length} chars)` : "Copy failed")
-                );
-              })
-              .catch((err) => toast("History copy failed: " + (err as Error).message));
-          }}
-        >
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-            <rect x="8" y="2" width="8" height="4" rx="1" />
-          </svg>
-        </button>
-        <button
           className="act pane-close"
           type="button"
           aria-label="Hide window"
-          title="Hide this window — the session keeps running (show it again from its sidebar row)"
+          title={HIDE_TITLE}
           onClick={(e) => {
             e.stopPropagation();
             useUi.getState().setHidden(title, true);
           }}
         >
-          ✕
+          −
         </button>
         </div>
       </div>

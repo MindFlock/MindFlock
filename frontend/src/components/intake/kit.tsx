@@ -5,9 +5,14 @@
  * is MindFlock allowed to pick up?") and so all three have the same anatomy:
  *
  *   master switch  →  status line
- *   sources        →  one collapsible card per thing being watched, + Add
  *   work           →  the items those sources yielded, grouped by source,
  *                     each row saying why auto-pickup did or didn't take it
+ *   sources        →  one collapsible card per thing being watched, + Add
+ *   advanced       →  the tab-wide defaults, folded
+ *
+ * Work comes before sources once any source exists — the rows are the reason
+ * you open the tab, the cards are setup you revisit. With nothing configured
+ * there is no work to show, so the cards (and their + Add) lead instead.
  *
  * They used to be three dialects of that shape. Ticketing had the good one —
  * add/remove cards, each carrying its own credentials, repo and agent — while
@@ -34,12 +39,13 @@ import { selectSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
 import { errorPop } from "../../lib/errorPop";
 import { shortReason } from "../../lib/failureText";
-import { DEPTHS, DEPTH_LABELS } from "../../lib/autopilot";
+import { DEPTH_LABELS, SESSION_DEPTHS } from "../../lib/autopilot";
 import { searchTokens } from "../../lib/rowSearch";
 import { useUi } from "../../state/store";
 import { DialogFilter } from "../dialogs/DialogFilter";
 import {
   EFFORTS,
+  EFFORT_LABELS,
   effortOptionLabel,
   effortTitle,
   supportsEffort,
@@ -80,6 +86,19 @@ function workspaceNote(ws: ItemWorkspace): string {
     return when ? "session ended " + when : "session you ended";
   }
   return "workspace left on this machine";
+}
+
+/** A Fast-track rung in the words every Fast-track control uses.
+ *
+ * ONE LADDER. The pane's ⏩, the row › menu and New's Options all read Off /
+ * Commit / Push / Open a PR / Merge when green, and Intake used to add a sixth
+ * word of its own: "Agent only" (stop once the agent stops). That is what Off
+ * already does to a session — nothing after the agent — so a stored `agent`
+ * reads as Off here and is never offered. The server still accepts it; this is
+ * the vocabulary, not the config. */
+export function ladderLabel(depth?: string): string {
+  const d = !depth || depth === "agent" ? "off" : depth;
+  return DEPTH_LABELS[d] || d;
 }
 
 /** "3h old" / "20m old" / "2d old" — one implementation, three tabs. */
@@ -419,7 +438,7 @@ export function WorkItemRow({
    * source decides). */
   agents?: string[];
   /** What the empty choice resolves to — this row's source / repo card value,
-   * so "Configured" is never a mystery. */
+   * so "Default" is never a mystery. */
   configuredAgent?: string;
   /** What this row's source defaults its automation depth to, so the empty
    * choice names it. */
@@ -477,6 +496,34 @@ export function WorkItemRow({
   // reads as "assume it works" rather than disabling a working control.
   const effortCap = effortCaps ? effortCaps[effortProvider] : undefined;
   const effortUsable = supportsEffort(effortCap);
+  // The three pickers are a rarely-used override, and three dropdowns on every
+  // row of a long list were most of its noise. Folded behind "Options" until
+  // asked for — but never while one holds a pick, so a choice is never hidden.
+  const [optsOpen, setOptsOpen] = useState(false);
+  const picked = !!(agent || depth || (effortUsable && effort));
+  const showPicks = optsOpen || picked;
+  // What the empty choices resolve to, named once for the options and the
+  // collapsed line alike.
+  const defaultDepth = ladderLabel(configuredDepth);
+  const defaultIsOff = defaultDepth === DEPTH_LABELS.off;
+  const effortDefault = configuredEffort
+    ? effortOptionLabel(configuredEffort, effortCap)
+    : "";
+  // "claude · Fast-track: Off · default effort" — what Start will use, said in
+  // one line, with Fast-track named the way New's Options summary names it.
+  const uses = [
+    agent || configuredAgent || (agents && agents.length > 0 ? "app default" : ""),
+    "Fast-track: " + (depth ? ladderLabel(depth) : defaultDepth),
+    !effortUsable
+      ? ""
+      : effort
+        ? (EFFORT_LABELS[effort] || effort) + " effort"
+        : effortDefault
+          ? effortDefault + " effort"
+          : "default effort",
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <div className={"pr-open-item" + (pick?.checked ? " picked" : "")} title={tooltip}>
       <div className="pr-open-main">
@@ -591,9 +638,32 @@ export function WorkItemRow({
                   : "Reopen window"}
             </button>
           )}
-          {/* The two per-launch pickers share ONE line. `.ik-item-start` is a
+          {/* Collapsed, the row says what Start will use and offers the
+              pickers behind one quiet toggle. Once a picker holds a pick the
+              toggle goes: hiding a choice that will still be applied is how a
+              start ends up doing something nobody can see on screen. */}
+          {!picked && (
+            <div className="ik-item-optline">
+              {!showPicks && <span className="ik-item-uses">{uses}</span>}
+              <button
+                type="button"
+                className="linklike ik-item-opts"
+                aria-expanded={showPicks}
+                title={
+                  showPicks
+                    ? "Hide the per-start options"
+                    : "Pick a different CLI, Fast-track or effort for just this start"
+                }
+                onClick={() => setOptsOpen(!optsOpen)}
+              >
+                {showPicks ? "Hide options" : "Options"}
+              </button>
+            </div>
+          )}
+          {/* The per-launch pickers share ONE line. `.ik-item-start` is a
               column whose children are stretched to the widest, so a third
               stacked control would make every row in the list taller. */}
+          {showPicks && (
           <div className="ik-item-picks">
             {agents && agents.length > 0 && (
               <select
@@ -603,13 +673,13 @@ export function WorkItemRow({
                 disabled={state !== "idle"}
                 title={
                   "Coding CLI to run this one on — just this start, not the whole queue" +
-                  (configuredAgent ? " (configured: " + configuredAgent + ")" : "")
+                  (configuredAgent ? " (default: " + configuredAgent + ")" : "")
                 }
                 aria-label={"Coding CLI for " + reference}
                 onChange={(e) => setAgent(e.target.value)}
               >
                 <option value="">
-                  {"Configured (" + (configuredAgent || "app default") + ")"}
+                  {"Default (" + (configuredAgent || "app default") + ")"}
                 </option>
                 {agents.map((n) => (
                   <option key={n} value={n}>
@@ -625,7 +695,7 @@ export function WorkItemRow({
               disabled={state !== "idle"}
               title={
                 "Fast-track this one to — just this start, not the whole queue" +
-                (configuredDepth ? " (configured: " + DEPTH_LABELS[configuredDepth] + ")" : "")
+                " (default: " + defaultDepth + ")"
               }
               aria-label={"Fast-track " + reference + " to"}
               onChange={(e) => setDepth(e.target.value)}
@@ -633,11 +703,13 @@ export function WorkItemRow({
               {/* Always NAME what the empty choice resolves to. A bare
                   "Configured" made you open Settings to find out what pressing
                   Start would actually do; an unset source default means no
-                  autopilot at all, which is "Off" — worth saying out loud. */}
-              <option value="">
-                {"Configured (" + DEPTH_LABELS[configuredDepth || "off"] + ")"}
-              </option>
-              {DEPTHS.map((d) => (
+                  Fast-track at all, which is "Off" — worth saying out loud.
+                  The same five words as every other Fast-track control; an
+                  explicit Off is offered only when the default is something
+                  else (the start routes accept "off"). */}
+              <option value="">{"Default (" + defaultDepth + ")"}</option>
+              {!defaultIsOff && <option value="off">{DEPTH_LABELS.off}</option>}
+              {SESSION_DEPTHS.map((d) => (
                 <option key={d} value={d}>
                   {DEPTH_LABELS[d]}
                 </option>
@@ -663,8 +735,8 @@ export function WorkItemRow({
               <option value="">
                 {!effortUsable
                   ? "No effort (" + (effortProvider || "this CLI") + ")"
-                  : configuredEffort
-                    ? "Configured (" + effortOptionLabel(configuredEffort, effortCap) + ")"
+                  : effortDefault
+                    ? "Default (" + effortDefault + ")"
                     : "Default effort"}
               </option>
               {effortUsable &&
@@ -678,6 +750,7 @@ export function WorkItemRow({
                 ))}
             </select>
           </div>
+          )}
           <button
             type="button"
             className={

@@ -101,16 +101,22 @@ export function Extensions(_: ScreenProps) {
         </div>
       )}
 
-      <h3 className="set-section-title">Create an extension</h3>
-      <p className="set-hint">
-        Make a folder <code>~/.mindflock/extensions/&lt;id&gt;/</code> containing an{" "}
-        <code>extension.py</code> that exposes <code>build(ctx)</code> and returns an Addon whose{" "}
-        <code>extension()</code> declares the bar, commands and surfaces. Put the ES module and
-        its <code>style.css</code> in an optional <code>frontend/</code> folder next to it (served
-        at <code>/extensions/&lt;id&gt;/</code>). Extensions are discovered once at startup:
-        restart MindFlock to load a new one. The manifest and API reference is in{" "}
-        <code>docs/extensions.md</code>.
-      </p>
+      {/* Folded: authoring is for the few who write one, and a paragraph of
+          paths and module names under the switches read as part of using them. */}
+      <details className="pr-advanced ext-create-fold">
+        <summary>Create an extension</summary>
+        <div className="pr-advanced-body">
+          <p className="set-hint">
+            Make a folder <code>~/.mindflock/extensions/&lt;id&gt;/</code> containing an{" "}
+            <code>extension.py</code> that exposes <code>build(ctx)</code> and returns an Addon whose{" "}
+            <code>extension()</code> declares the bar, commands and surfaces. Put the ES module and
+            its <code>style.css</code> in an optional <code>frontend/</code> folder next to it (served
+            at <code>/extensions/&lt;id&gt;/</code>). Extensions are discovered once at startup:
+            restart MindFlock to load a new one. The manifest and API reference is in{" "}
+            <code>docs/extensions.md</code>.
+          </p>
+        </div>
+      </details>
     </>
   );
 }

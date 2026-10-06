@@ -36,7 +36,7 @@ this page uses both words, the API's where it names a field.
 
 Plus **Ask me before it ships**: the session stops one rung short of its first
 outward step (a Commit target before the commit, the others before the push)
-and waits in the Outbox; approving it (`POST /ship-now`) ships it at once. A
+and waits in the bell (🔔 → **Needs attention**); approving it (`POST /ship-now`) ships it at once. A
 commit lane that parks for approval has its message written from the diff
 right then: the card shows the exact message, and approving it unedited
 commits exactly that text. The card's size is what will be committed.
@@ -62,7 +62,7 @@ someone chose); every row carries `lane: {target, ask_first, owner, by}` —
   drives it (`owner`) and is never armed: `/lane`, `/fast-track` and
   `/ship-now` answer **409** on it (naming the driver; Off — `leave` — is
   always allowed).
-- `POST /ship-now` (the Outbox's approval) ships the lane the session's own
+- `POST /ship-now` (the bell's approval) ships the lane the session's own
   record holds — never the Settings fast-track default: a session with no
   lane of its own is refused (409).
 - A group's **lead** ships once, through the group's release, and a
@@ -87,7 +87,7 @@ of only ticket IDs is that many tickets), resolves each ticket against the
 Intake ticket list and then each configured source, and says which items
 already have a session. A ticket that resolves nowhere is an error on its row
 — never silently turned into a task. `POST /api/runs` starts it. See
-[web-api.md](web-api.md#team-runs-and-the-outbox).
+[web-api.md](web-api.md#team-runs).
 
 - **Tickets** start exactly like Intake's Begin work (`ticket_start.launch`):
   a provisioned session on the ticket's own branch, its source's agent CLI.
@@ -162,12 +162,22 @@ rule).
 
 ## What needs you
 
-Everything that does lands in the Outbox (`GET /api/outbox`): the
-sessions on a dialog (any session, grouped or not), ask-first lanes waiting
-for your go (with the commit message and diff stat), and a group's
-escalations — stuck after two nudges, hooks failed twice, a session gone
-after a restart, a create that failed after retries, the budget spent — each
-with its next action (Retry, Retry fresh, Skip, Open, Raise budget).
+Everything that does lands in the bell's **Needs attention** list — one
+badge, one list (the `waiting` group of `GET /api/outbox`, merged with the
+per-session attention rows): the sessions on a dialog (any session, grouped
+or not), ask-first lanes waiting for your go (with the commit message and
+diff stat, editable before you approve), and a group's escalations — stuck
+after two nudges, hooks failed twice, a session gone after a restart, a
+create that failed after retries, the budget spent — each with its next
+action (Retry, Retry fresh, Skip, Open, Raise budget).
+
+There is no separate log beside it. A group's own controls live on its rail
+header's ⋯ menu: its queued lines (Start now / Remove), Pause, Add lines,
+Cancel, and once it has finished **Copy summary** (the group's summary as
+Markdown). A split or one-for-all group has no header (it is a family under
+its lead): its lead's Thread tab carries Start now / Remove on a queued piece
+and, once it has finished, **Copy summary**. What is shipping shows on each
+row's status line.
 
 Controls (routes, or `control_run` from the MCP): **Pause** (nothing new starts,
 merges or ships — not even a session whose create was already under way, nor
@@ -216,8 +226,8 @@ updates.
   Per-session budgets still hold the autopilot as before.
 - **Duplicate windows** (`foo` + `foo-copy`) share one branch: ownership is
   keyed on `(repo, branch)`. Adopting a branch another group owns is refused;
-  the copy shows the owner's lane and is never armed; the Outbox lists the
-  branch once.
+  the copy shows the owner's lane and is never armed; `GET /api/outbox` and
+  the bell list the branch once.
 
 ## Notifications
 
@@ -232,7 +242,12 @@ pause), which the bell dedupes on.
 finished while the server was down, and says what the group did — a
 one-for-all group "one PR opened", "its branch was pushed; the PR was not
 opened", or "N merged into one branch, nothing pushed", never "N PRs". Rules: `run_needs_you` and
-`run_finished` (on), `run_task_shipped` (off).
+`run_finished` (on), `run_task_shipped` (off). In the web UI a `run.needs_you`
+toast opens the lead's Thread when the group has a lead and the bell
+otherwise; a `run.finished` toast reveals the group's header on the rail
+(scrolled into view and pulsed once), and for a group with no header (a split
+or one-for-all group, a group of one) opens its lead's Thread, else a member
+row still open.
 
 ## One PR for all
 
@@ -283,7 +298,7 @@ worked on in parallel but ship as **one** branch and one PR:
    credited only to the commit the check started on: a commit landing during
    (or after) it runs the check again. A failure
    goes back to the lead twice ("make the suite pass, commit, stop"), then to
-   you (Outbox → Run the check again).
+   you (the bell → Run the check again).
 6. **Release** — the ONE outward step, and yours: the lead's Thread shows the
    ship card (title, base ← branch with the diff, "one commit per piece, kept
    as written + N conflict fixes by the lead", the body). Its buttons follow
@@ -313,7 +328,7 @@ worked on in parallel but ship as **one** branch and one PR:
    pushed. `policy.release: "auto"` (API only) releases without the click.
 
 The lead's rail chip reads **`→ PR?`** while the release waits on you, and the
-Outbox lists it under Waiting on you.
+bell lists it under Needs attention.
 
 ## Splitting one task
 
@@ -334,7 +349,7 @@ one-for-all group whose lines come from the lead's plan:
    back to the lead to fix (`422`); a good plan is `plan_ready`.
 3. **You approve** — one click on the plan card in the lead's Thread (each
    piece with its prompt and an `only here:` chip; Edit is inline), or
-   *Approve* in the Outbox (separate worktrees). The card asks **where the
+   **Start N workers** in the bell (separate worktrees). The card asks **where the
    pieces run** — one short line each:
    - **In separate worktrees (merge back)** — the default. Each piece in its
      own worktree, merged back into the lead's branch; conflicts go to the
@@ -431,7 +446,7 @@ agent session **in the lead's own folder** (in place, like a copy window,
   committed empty.
 - **Changes no piece owns** (a file outside every piece's paths that was not
   already dirty at approval) are never put in a piece's commit: the group
-  says so once (Outbox `stray`). The release waits while the folder holds
+  says so once (a `stray` item in the bell). The release waits while the folder holds
   **any** change — tracked or untracked, stray or there since before the
   split: the lead's lane commits everything in its folder before it pushes,
   and a person's scratch never ships with the pieces. Commit it elsewhere,
@@ -465,7 +480,7 @@ its Thread says "Restart the lead to give it the MindFlock tools".
 | Lanes | `backend/web/core/lanes.py`; routes `/lane`, `/ship-now`, `/fast-track` |
 | Run record + planner (pure) | `backend/web/core/team_runs.py` |
 | Driver, reconcile, operations | `backend/web/core/team_run_driver.py` (loop registered in the lifespan, off under pytest) |
-| Outbox | `backend/web/core/outbox.py` |
+| Waiting list (`GET /api/outbox`) | `backend/web/core/outbox.py` |
 | Starting sessions | `backend/web/core/ticket_start.py` (`launch`), `backend/web/core/session_create.py` |
 | Merge-back / same-folder commits | `backend/web/core/git_merge.py` (merge, ancestry, subjects, diff stat; `commit_paths`, `changed_paths`, `commits_since`) |
 | Per-session fences | `backend/config/red_zones.py` (`set_session_fence`, guard `sessions`), the hook's `_mf_session_view` (`backend/providers/_tool_hook_src.py`) |

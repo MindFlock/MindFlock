@@ -1,15 +1,16 @@
-"""The Outbox: what is shipping, what shipped, and what is waiting on you.
+"""``GET /api/outbox``: what is shipping, what shipped, and what is waiting on you.
 
-Intake is what comes in, the Outbox is what goes out, Verify is what got
-checked. One place answers "what's waiting on me / what shipped" for EVERY
-session — a team run's members and the sessions you started on your own — so
-juggling several workstreams costs a glance, not a tour of the rail.
+One payload answers "what's waiting on me / what shipped" for EVERY session —
+a team run's members and the sessions you started on your own — so juggling
+several workstreams costs a glance, not a tour of the rail. (The module and
+the route keep the name of the web UI's old Outbox; the UI has no such place
+any more.)
 
 PURE: :func:`build` turns the instance rows (the ``/api/instances`` listing,
 with their ``autopilot`` / ``lane`` / ``run`` blocks), the run records, the
 autopilot store and the Verify plans into the payload ``GET /api/outbox``
 serves. Rows are de-duplicated on ``(repo, branch)``: duplicate windows share a
-branch (``foo`` + ``foo-copy``), and one branch's work is one Outbox row, named
+branch (``foo`` + ``foo-copy``), and one branch's work is one row, named
 after the window that drives it.
 
 Groups, in order:
@@ -23,6 +24,12 @@ Groups, in order:
 * ``shipped`` — today's commits, pushes and PRs, with checks and the Verify
   checklist when there is one.
 * ``queued`` — a run's tasks waiting for a free slot.
+
+The payload keeps all four groups. The web UI reads two things from it:
+``waiting`` renders in the bell's *Needs attention* list, merged with the
+per-session attention rows, so there is one place anything waits on you; and a
+finished group's rail header copies its entry from ``summaries`` ("Copy
+summary"). ``shipping``, ``shipped`` and ``queued`` are for other clients.
 """
 
 from __future__ import annotations
@@ -54,7 +61,7 @@ WAITING_ACTIONS = {
     # piece owns — yours to commit, discard or undo.
     "stray": ["open"],
 }
-#: The step the autopilot is on, as the Outbox names it.
+#: The step the autopilot is on, as a ``shipping`` row names it.
 _STEP = {
     "commit": "commit",
     "check": "check",
@@ -70,7 +77,7 @@ _STEP_NOTE = {
     "merge": "merging",
 }
 _CHECKS = {"ok": "pass", "failed": "fail", "pending": "pending", "none": "none"}
-#: Finished runs whose summary card stays in the Outbox.
+#: How long a finished run's summary stays in ``summaries``.
 SUMMARY_DAYS = 7
 
 

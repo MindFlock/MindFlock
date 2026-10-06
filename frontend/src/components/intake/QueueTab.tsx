@@ -199,8 +199,12 @@ function SectionBlock({
                     meta={[item.state, ageText(item.created_at), item.assignee]
                       .filter(Boolean)
                       .join(" · ")}
-                    eligible
-                    eligibleLabel="will auto-start"
+                    // Only a section that is ON will auto-start anything; a
+                    // paused or half-set-up one already says why above
+                    // (StalledNote), and a green "will auto-start" chip under
+                    // it would contradict that sentence on every row.
+                    eligible={s.state === "on"}
+                    eligibleLabel={s.state === "on" ? "will auto-start" : ""}
                     actionLabel="Start now"
                     failPrefix="Start failed"
                     agents={agents}
@@ -381,6 +385,12 @@ export function QueueTab({ gotoTab }: TabProps) {
         .filter((sec) => sec.items.length)
     : sections;
   const shownTotal = shownSections.reduce((n, sec) => n + sec.items.length, 0);
+  // Only the sections that are ON will start anything by themselves — the
+  // same rule as each row's chip. Counting the rest as "will auto-start" put
+  // a promise in the toolbar that every paused section's own note denied.
+  const autoTotal = sections
+    .filter((sec) => sec.state === "on")
+    .reduce((n, sec) => n + sec.items.length, 0);
 
   const refreshAll = () => {
     ticketsQ.refresh();
@@ -422,7 +432,9 @@ export function QueueTab({ gotoTab }: TabProps) {
               ? "Nothing waiting to start"
               : filter.active
                 ? shownTotal + " of " + total + " shown"
-                : total + (total === 1 ? " item will auto-start" : " items will auto-start")}
+                : autoTotal === total
+                  ? total + (total === 1 ? " item will auto-start" : " items will auto-start")
+                  : total + " waiting · " + autoTotal + " will auto-start"}
           </span>
         </div>
         <div className="ik-queue" id="ik-queue-list">

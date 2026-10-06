@@ -257,7 +257,7 @@ describe("the bell: run rows carry their group and their rule", () => {
   const env = (event: string, data: Record<string, unknown>) =>
     ({ seq: 1, event, session: "", old: null, new: null, ts: 1, data }) as never;
 
-  it("names the group from the cached runs, and opens the Outbox on it", () => {
+  it("names the group from the cached runs, and points at it", () => {
     queryClient.setQueryData(["runs"], [runInfo()]);
     const n = notifFromEvent(env("run.needs_you", { run: "r1", task: "t5", ref: "PAY-421", reason: "stuck" }))!;
     expect(n.text).toBe("Q4 payments: PAY-421 stalled twice — no diff, no report");

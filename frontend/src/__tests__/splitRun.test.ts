@@ -1,6 +1,6 @@
 /** Split and one-for-all groups (SPEC §3.4, §7.C.4): the lead's Thread tab
  * sentences, the plan card, the ship card, each piece's status, the rail's
- * `→ PR?` chip and lead line, the Outbox's group-level rows and their ONE
+ * `→ PR?` chip and lead line, the bell's group-level waiting rows and their ONE
  * horizontal row of buttons, the bell's rows, and the list mode's "Browse…"
  * for the folder tasks start in. */
 import { describe, it, expect } from "vitest";
@@ -269,7 +269,7 @@ describe("the rail", () => {
   });
 });
 
-describe("the Outbox's group-level rows", () => {
+describe("the bell's group-level waiting rows", () => {
   const w = (kind: string, actions: string[], extra: Partial<OutboxWaiting> = {}): OutboxWaiting => ({ title: "auth-cleanup-lead", kind, actions, ...extra });
   const can = { row: true, run: true, task: true };
 
@@ -338,7 +338,7 @@ describe("the Outbox's group-level rows", () => {
 });
 
 describe("the bell", () => {
-  it("plan and release rows open the lead's Thread; a failed check opens the Outbox", () => {
+  it("plan and release rows open the lead's Thread; a failed check points at its group", () => {
     const plan = runNote("run.needs_you", { run: "r_ac", name: "Auth cleanup", title: "auth-cleanup-lead", reason: "plan", round: 1 })!;
     expect(plan.text).toBe("Auth cleanup: the lead proposed the pieces — approve them");
     expect(plan.lead).toBe("auth-cleanup-lead");
@@ -440,7 +440,7 @@ describe("where the pieces run (the plan card's mode choice)", () => {
     expect(leadPanelSrc).not.toMatch(/window\.(prompt|confirm|alert)|\balert\(/);
   });
 
-  it("the Outbox's stray row opens the lead's Thread", () => {
+  it("the stray waiting row opens the lead's Thread", () => {
     const w: OutboxWaiting = { title: "lead", kind: "stray", reason: "changes no piece owns", actions: ["open"] };
     expect(waitingChip(w)).toEqual({ text: "changes no piece owns", cls: "warn" });
     expect(waitingActions(w, { row: true, run: true, task: false }).map((a) => a.key)).toEqual(["open"]);

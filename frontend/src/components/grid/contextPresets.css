@@ -82,21 +82,4 @@
   background: rgba(222, 97, 62, 0.12);
 }
 
-/* Inline "name this preset" editor (replaces the native prompt()). */
-.preset-row .preset-name-edit {
-  display: flex;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  align-items: stretch;
-}
-
-.preset-row .preset-name-edit.hidden {
-  display: none;
-}
-
-.preset-row .preset-name-edit input {
-  flex: 1;
-  min-width: 0;
-}
 

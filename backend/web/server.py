@@ -3043,7 +3043,7 @@ def _autopilot_halt(title: str, reason: str) -> None:
 def _autopilot_draft_for_approval(title: str, wt: str, rec: dict) -> None:
     """A run about to park for "ask me first" BEFORE its commit gets the exact
     commit message now — written from the diff, as the commit itself would be —
-    so the Outbox card shows what will be committed, not "written from the diff
+    so the bell's approval card shows what will be committed, not "written from the diff
     when it commits". Unless the card's message is edited, ship-now commits
     exactly this text. A person's own message is never replaced; a failure
     leaves the card as it was (the commit still writes one)."""
@@ -10340,7 +10340,7 @@ async def reopen_recently_closed(entry_id: str) -> JSONResponse:
 
 async def _reopen_closed_entry(entry_id: str) -> JSONResponse:
     """The reopen itself, callable from anywhere that identifies a closed
-    session — the Recent… dialog by entry id, and an intake row that found this
+    session — the Recently closed dialog by entry id, and an intake row that found this
     entry still holding its work (see :func:`intake_reopen`)."""
     from backend.session.instance import FromInstanceData
     from backend.session.storage import InstanceData
@@ -11437,7 +11437,7 @@ async def instance_set_lane(title: str, payload: Optional[dict] = None) -> JSONR
     The lane is carried out by the autopilot (``core.lanes``): arm-and-wait,
     exactly like ``/fast-track``, which stays as its compatible alias.
     ``leave`` disarms (``lane`` comes back null). ``ask_first`` holds the run
-    one rung short of its first outward step and parks it in the Outbox for
+    one rung short of its first outward step and parks it in the bell for
     your go (``POST /ship-now``)."""
     if not git_available():
         return _no_git_response()
@@ -11552,7 +11552,7 @@ _SHIP_NOW_BLOCKED = {
 async def instance_ship_now(title: str, payload: Optional[dict] = None) -> JSONResponse:
     """Ship what is there now: arm the session's lane (or ``{"lane": ...}``)
     WITHOUT the idle dwell and without "ask first" — the approval behind the
-    Outbox's Commit / Open the PR (``{"commit_message": ...}`` commits the
+    bell's Commit / Open the PR (``{"commit_message": ...}`` commits the
     card's edited message as written), and "take what's there now" from the
     pane menu. 409 while the agent is mid-turn."""
     if not git_available():
@@ -11704,7 +11704,7 @@ def runs_pause(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
 @app.post("/api/runs/{run_id}/resume")
 def runs_resume(run_id: str, payload: Optional[dict] = None) -> JSONResponse:
     """Re-arm what the pause held. ``{"budget_usd": N}`` raises the budget in
-    the same click (the Outbox's "Raise to $N"). → ``{"run": RunSummary}``."""
+    the same click (the bell's "Raise to $N"). → ``{"run": RunSummary}``."""
     try:
         summary = _team_run_driver.resume(run_id, (payload or {}).get("budget_usd"))
     except _team_run_driver.RunError as err:
@@ -13491,8 +13491,8 @@ async def fix_failed_test_plan_steps(
                 {
                     "error": "the last fix session's workspace is still holding "
                     "this branch and has uncommitted work in it (%s) — reopen it "
-                    "from Recent to finish or discard that work, then press Fix "
-                    "again" % held,
+                    "from Recently closed to finish or discard that work, then "
+                    "press Fix again" % held,
                     "worktree": held,
                 },
                 status_code=409,

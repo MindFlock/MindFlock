@@ -13,7 +13,7 @@ import { api } from "../../../api/client";
 import type { AuthProfile, AuthProfilesResponse } from "../../../api/types";
 import { toast } from "../../../lib/toast";
 import { refreshAuthProfiles, useAuthProfiles } from "../../../state/queries";
-import { SECRET_MASK } from "../useSettings";
+import { InlineConfirm, SECRET_MASK } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 
 const KINDS: Array<{ id: string; label: string; hint: string }> = [
@@ -63,6 +63,13 @@ export function Accounts(_: ScreenProps) {
   const [error, setError] = useState("");
   const [probes, setProbes] = useState<Record<string, OrProbe>>({});
   const [testing, setTesting] = useState<string>("");
+  // A removal the server refused because sessions still use the account: the
+  // save that was refused, held until someone answers the inline confirm below.
+  const [pendingForce, setPendingForce] = useState<{
+    next: AuthProfile[];
+    nextDefault?: string;
+    msg: string;
+  } | null>(null);
 
   useEffect(() => {
     setProfiles(data?.profiles || []);
@@ -72,6 +79,7 @@ export function Accounts(_: ScreenProps) {
 
   const save = async (next: AuthProfile[], nextDefault?: string, force?: boolean) => {
     setError("");
+    setPendingForce(null);
     try {
       const body: Record<string, unknown> = { profiles: next };
       if (nextDefault !== undefined) body.default_profile = nextDefault;
@@ -89,20 +97,15 @@ export function Accounts(_: ScreenProps) {
       // 409: sessions are still pinned to an account being removed. They would
       // silently fall back to the CLI's own login, so the server refuses until
       // someone has actually read the list — offer that decision here rather
-      // than reporting a dead end.
+      // than reporting a dead end. Inline, because the desktop app has no
+      // native confirm (see InlineConfirm).
       const msg = (err as Error).message || "";
       if (/still in use by/.test(msg)) {
-        if (
-          window.confirm(
-            msg.replace(/, or resend with force.*$/, "") +
-              ".\n\nRemove anyway? Those sessions will run on the CLI's own " +
-              "login until you give them a new account."
-          )
-        ) {
-          await save(next, nextDefault, true);
-          return;
-        }
-        setError("");
+        setPendingForce({
+          next,
+          nextDefault,
+          msg: msg.replace(/, or resend with force.*$/, ""),
+        });
         return;
       }
       setError(msg);
@@ -403,6 +406,24 @@ export function Accounts(_: ScreenProps) {
         </div>
       )}
 
+      {pendingForce && (
+        <InlineConfirm
+          id="acct-force-confirm"
+          title={pendingForce.msg + "."}
+          body="Remove it anyway? Those sessions will run on the CLI's own login until you give them a new account."
+          confirmLabel="Remove anyway"
+          onConfirm={() => {
+            const p = pendingForce;
+            setPendingForce(null);
+            void save(p.next, p.nextDefault, true);
+          }}
+          onCancel={() => {
+            // Nothing was saved: put the list back to what the server holds.
+            setPendingForce(null);
+            setProfiles(data?.profiles || []);
+          }}
+        />
+      )}
       {error && <p className="error">{error}</p>}
     </>
   );

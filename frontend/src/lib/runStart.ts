@@ -333,7 +333,7 @@ export function summarySentence(o: {
 }): { lead: string; tail: string } | null {
   const together = o.split || (o.n >= 2 && o.grouping === "together");
   const ask = !together && o.lane !== "leave" && o.askFirst;
-  const asks = ask ? " Before the first commit it stops and asks you in the Outbox." : "";
+  const asks = ask ? " Before the first commit it stops and asks you first, in the bell." : "";
   if (o.split) {
     const lead =
       "One lead session in a new worktree. Its agent proposes pieces with separate paths; you " +
@@ -394,11 +394,11 @@ export function summarySentence(o: {
       ],
       pr: [
         " Each one is committed with a message written from its diff, pushed and opened as its own PR once its agent stops and your hooks pass.",
-        "Nothing merges; you'll see each PR in the Outbox.",
+        "Nothing merges; each PR shows on its row.",
       ],
       merge: [
         " Each one is committed with a message written from its diff, pushed, opened as its own PR and merged once its checks pass.",
-        "You'll see each PR in the Outbox.",
+        "Each PR shows on its row.",
       ],
     };
     const [l, t] = body[o.lane];

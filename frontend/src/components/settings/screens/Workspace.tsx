@@ -23,9 +23,9 @@ export function Workspace({ gotoScreen }: ScreenProps) {
       </div>
       <p className="set-hint set-block-hint">
         Where MindFlock puts the working checkouts your <em>coding sessions</em> run in. Which
-        repo a session clones comes from its <strong>Ticketing source</strong> (each source
-        names its own repo) or the repo you pick when starting a manual session — so there's
-        nothing to set here per repo.
+        repo a session clones comes from its <strong>ticket source (Intake → Tickets)</strong>,
+        which names its own repo, or the repo you pick when starting a manual session — so
+        there's nothing to set here per repo.
       </p>
       <label className="set-row">
         <span className="set-label">Workspace dir</span>

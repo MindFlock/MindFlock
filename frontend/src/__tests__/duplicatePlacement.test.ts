@@ -26,6 +26,10 @@ vi.mock("../state/queries", async (orig) => {
   return { ...actual, refreshInstances: vi.fn(async () => {}) };
 });
 
+// A failed copy raises an error card (plain DOM); this env has no document.
+const errorPop = vi.fn();
+vi.mock("../lib/errorPop", () => ({ errorPop: (...args: unknown[]) => errorPop(...args) }));
+
 const { copySession } = await import("../lib/sessionActions");
 const { queryClient } = await import("../state/queries");
 const { useUi } = await import("../state/store");
@@ -142,10 +146,10 @@ describe("copySession placement", () => {
     instApi.mockImplementation(async () => {
       throw new Error("nope");
     });
-    // copySession alerts on failure; jsdom-free env has no alert.
-    (globalThis as Record<string, unknown>).alert = () => {};
-
     await copySession("beta");
+
+    // Said on an error card, not alert() (a silent no-op in the desktop app).
+    expect(errorPop).toHaveBeenCalledWith("Copy failed", "nope");
 
     // The pending row is dropped, and no ghost title is left in the order.
     expect(order()).not.toContain("beta-copy");

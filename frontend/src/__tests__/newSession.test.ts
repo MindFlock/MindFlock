@@ -26,6 +26,7 @@ import {
   type PlanFolder,
   type PlanRun,
 } from "../components/dialogs/NewSessionDialog";
+import { startLabel } from "../lib/runStart";
 
 /** Replays a sequence of gestures and answers the way the dialog dispatches
  * them, so each trace below reads in the order the user lived it. */
@@ -840,6 +841,12 @@ describe("immediateStartBlockReason — the one thing the fast path does not ski
     // Every numbered candidate came out of a walk of the real filesystem, so
     // this is the common case and it must cost no extra press.
     expect(immediateStartBlockReason({ ...missing, folderExists: true })).toBe("");
+  });
+
+  it("names the button by the label it actually wears", () => {
+    // The fast path's button reads "Create session" (startLabel); a sentence
+    // telling you to press a "Start session" nobody can find is a dead end.
+    expect(immediateStartBlockReason(missing)).toContain("press " + startLabel(1, false) + " again");
   });
 
   it("names something rather than nothing when the plan sent no label", () => {

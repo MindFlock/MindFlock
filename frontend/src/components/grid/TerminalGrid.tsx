@@ -209,7 +209,9 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
         (firstRun ? (
           <div id="empty" data-mode="setup">
             <div className="setup-card">
-              <h2>Welcome to MindFlock</h2>
+              {/* Not "Welcome": the tour opening over this card already says
+                  that, and one welcome at a time is plenty. */}
+              <h2>Get set up</h2>
               <p className="muted">Three steps to a running agent.</p>
               <div className="setup-body">
                 <SetupChecklist standalone />
@@ -225,7 +227,7 @@ export function TerminalGrid({ specialPanes }: { specialPanes: SpecialPaneDesc[]
           >
             {noneAtAll
               ? "No sessions yet — click here to create one. (Ctrl+N)"
-              : "All sessions hidden. Use a session's ⋯ menu to show one."}
+              : "All sessions hidden. Click a session's row in the sidebar to show it."}
           </div>
         ))}
     </main>

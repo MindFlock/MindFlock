@@ -865,7 +865,7 @@ it surfaces to the user.
 | `items` | required | ticket IDs or links (`PAY-412`, `sc-123`, a URL; a line of only IDs is that many tickets) and/or task lines, ≤50 |
 | `name` | suggested | the group's name |
 | `lane` | the user's fast-track setting — `leave` when they never set one (one-for-all: `commit`) | `leave` (no commit), `commit`, `push`, `pr` (a PR per item) or `merge` |
-| `ask_first` | false | stop before each item's first commit / push and wait for the user's go (the Outbox) |
+| `ask_first` | false | stop before each item's first commit / push and wait for the user's go (in MindFlock's bell) |
 | `grouping` | `each` | `together` (one PR for all) is not available yet |
 | `concurrency` | 3 | 1–8 at a time |
 | `program` | the tickets' / the default CLI | the agent CLI for every item |
@@ -884,7 +884,11 @@ session is added to the group, not restarted (a warning says so).
 your managed set, and don't report to you: you cannot answer, steer or kill
 them, so an orchestrator cannot override what the run decided. The user sees
 them as an ordinary group in the rail, with every row's status line leading
-with its lane.
+with its lane. Whatever the group needs from them — an ask-first approval, a
+stuck line, a budget pause, the plan or the release — waits in MindFlock's
+bell; the group's own controls (queued lines, Pause, Cancel, and a finished
+group's **Copy summary**) are on its rail header's ⋯ menu, or on its lead's
+Thread tab for a split or one-for-all group.
 
 ### `get_run`
 
@@ -921,7 +925,7 @@ you started, or one your user started, can be steered — never another
 agent's — and on a group **your user** started, `release` and `resume` are
 refused: the one outward step and lifting a pause (or the budget stop) are
 theirs. It never answers an agent's prompt: that stays the user's (the rail
-strip or the Outbox).
+strip or the bell).
 
 ### `propose_run_plan`
 
@@ -933,7 +937,7 @@ them against the lead worktree's `git ls-files` and red zones — no two pieces
 may share a file, a piece may not sit wholly in a red zone, at most
 `MINDFLOCK_MAX_CHILDREN`, no two globs that can match one new path — and
 answers `{ok: false, problems: [{piece, error}]}` to fix, or `{ok: true}`. The user then approves the plan in one
-click (the lead's Thread tab, or the Outbox) and picks where the pieces run —
+click (the lead's Thread tab, or the bell) and picks where the pieces run —
 the lead cannot approve (there is no MCP tool for it). **In separate
 worktrees** (the default): every piece a worker of the lead, forked from its
 last commit, fenced to its paths, committed, merged back, then the check; a
@@ -1223,7 +1227,7 @@ user's call.
 `set_autopilot` refuse a session that belongs to a team run (a member or a
 lead — MindFlock ships it with the group, and the user steers the group); a
 session whose lane the user set with "ask me before it ships" (only the user
-approves it, in the Outbox — `depth: "off"` is still allowed); and any depth
+approves it, in the bell — `depth: "off"` is still allowed); and any depth
 past a lane the user set (a lane an agent set — the row's `lane.by` is
 `agent:<title>` — it may change). `set_autopilot` records `by: "agent:<you>"`
 on the lane it arms.
