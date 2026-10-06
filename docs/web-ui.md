@@ -33,8 +33,8 @@ Four entries left the bar:
   lines are in that same menu — or, for a split or one-for-all group (which has
   no header), on its lead's Thread tab (see
   [Team runs on the rail](#team-runs-on-the-rail)).
-- **Prompts** is Customize's **Prompts** tab (see
-  [Saved prompts](#saved-prompts)).
+- **Prompts** is a sidebar bar, switched on in Customize like the Assistant
+  (see [Saved prompts](#saved-prompts)).
 - **Recent** is the **Recently closed (n)** link under the session list (see
   [Recently closed](#recently-closed)).
 - **Command** is the magnifier icon.
@@ -75,15 +75,17 @@ another session's agent spawned or adopted (see
 a status line under its name; the parent carries a roll-up of its workers. Above the list:
 **+ New** and a stack of **customizable bars** (see below) — the token/cost
 **Usage** readout (hidden while there are no sessions), the **Assistant** bar
-(**Chat** · **Todo**; the assistant's standing instructions open from
-**Instructions** in its chat window's head, or the palette's **Assistant
-instructions…**), the **Tickets** bar (pipeline on/off switch and state dot;
+(**Chat** · **Todo** · **Agent** — **Agent** opens the assistant's editable
+agent file, its standing instructions; the chat window's head has the same
+editor as **Agent file**, and so does the palette's **Assistant agent
+file…**), the **Prompts** bar (your saved prompts, one click from any
+session — see [Saved prompts](#saved-prompts)), the **Tickets** bar (pipeline on/off switch and state dot;
 it appears once a ticket source is connected), the **Pull requests** and
 **Issues** bars, the opt-in **Verify** bar, and one bar per extension. Under the
 list, a **Recently closed (n)** link shows once anything is closed (see
-[Recently closed](#recently-closed)). Below: **View [Auto ▾]** (one select —
-*Auto — fit every window*, 1, 2, 4 or 9 windows), the session count,
-**Customize** (see [Customize](#customize)) and **Shortcuts**. The command
+[Recently closed](#recently-closed)). Below: **View** **Auto** · **1** · **2** ·
+**4** · **9** (one button per grid size, the active one filled), the session
+count, **⚙ Customize** (see [Customize](#customize)) and **⌨ Shortcuts**. The command
 palette, Intake, Verify and Settings live in the top bar, not down here, and
 the desktop-notification on/off toggle lives in Settings → Notifications.
 Disk management is not a screen of its own any more: it is the same page as
@@ -92,18 +94,20 @@ Disk management is not a screen of its own any more: it is the same page as
 A first run keeps the sidebar quiet: there is no welcome hint (the tour and the
 grid's **Get set up** card do that job), and the Doctor warning chip stays down
 while that card is showing, because the card already lists the same checks. One
-dismissible hint remains in the footer: *Extra sidebar bars and your saved
-prompts live under Customize.*
+dismissible hint remains in the footer: *More sidebar bars — like Prompts —
+are under ⚙ Customize.*
 
 **Customizable bars** — the sidebar bars are movable and hideable, driven by a
 shared registry (`sidebar/barDefs.ts`: Usage, Tickets, Pull requests, Issues,
-Verify, Assistant). A **fresh install shows three** (`DEFAULT_VISIBLE_BARS`) —
+Verify, Assistant, Prompts). A **fresh install shows three** (`DEFAULT_VISIBLE_BARS`) —
 **Usage**, **Tickets** and **Assistant** — so the flagship ticket → session flow
 is reachable out of the box without being overwhelming; **Pull requests**,
-**Issues** and **Verify** start hidden. **Customize → Sidebar** toggles each bar
+**Issues**, **Verify** and **Prompts** start hidden. **Customize** toggles each bar
 on/off, and bars drag-to-reorder by their ⠿ grip (the session list is a fixed
 anchor bars can sit above or below, but which never itself moves). Order and the
-hidden set persist per browser (`localStorage`).
+hidden set persist per browser (`localStorage`). A bar added after you saved an
+order (Prompts — `LATE_BARS`) appears just above the session list rather than
+below it, and a hidden set saved before it existed leaves it visible.
 
 The three automation bars carry the **names of the Intake tabs they mirror**, so
 one feature has one name: **Tickets**, **Pull requests**, **Issues**. Each bar's
@@ -157,8 +161,8 @@ magnifier icon) opens a fuzzy-filtered palette over everything. Commands come
 first and the jump rows last: **New session…**, then the dialog openers — Open
 Intake (plus **Intake: Tickets** / **Intake: Pull requests** / **Intake:
 Issues**, so typing "issues" lands on that queue instead of on a dialog you then
-have to navigate), **Verify — check what shipped**, **Customize…**, **Prompts…** (*paste a saved prompt*), **Assistant
-instructions…**, **Recently closed…**, Open Settings / Doctor / Setup checklist,
+have to navigate), **Verify — check what shipped**, **Customize…**, **Prompts…** (*manage saved prompts*), **Assistant
+agent file…**, **Recently closed…**, Open Settings / Doctor / Setup checklist,
 Toggle sidebar, Keyboard shortcuts — then the focused session's verbs (Commit /
 Push / **Make PR** / **Merge PR** / Open in IDE, Rename…, Queue prompt… *runs
 when idle*, and Split… only where a split can actually start), then one
@@ -1548,21 +1552,24 @@ does, but nobody comes back for the directory.
 
 ## Saved prompts
 
-Saved prompts are text you reuse. They have two homes, one per job:
+Saved prompts are text you reuse — mostly to paste straight into a session.
+They have three doors, one job each:
 
-- **Customize → Prompts** manages them and pastes one — it is the one place
-  that puts text into sessions that are already running. The **Paste into**
-  picker at the top chooses where: the selected session (the default), any
-  other running session by the name its rail row shows, or **All running
-  sessions (n)** once two or more are running ("running" = status `running`
-  or started, but not paused; verify sessions are left out). Click a prompt
-  to paste it there (`POST /api/instances/{title}/send` with `submit: false`
-  and `dialog_safe: true`, once per session for *All*) — *nothing is sent
-  until you press Enter in that session*, in each for *All*, and a session
-  sitting on a permission or limit prompt is skipped rather than typed into
-  (the toast says how many it reached; any that failed get an error card). Add and delete live here too, and ⋮ previews a long one. Open
-  it from the palette's **Prompts…** (*paste a saved prompt*) or the sidebar
-  footer's **Customize**.
+- **The Prompts bar** (sidebar; switch it on in [Customize](#customize), like
+  the Assistant) is the daily one. Its head reads **Prompts → [target ▾]
+  Manage**; under it, one chip per prompt (yours first, then the built-ins).
+  The target is the selected session by default, any other running session by
+  the name its rail row shows, or **All running sessions (n)** once two or more
+  are running ("running" = status `running` or started, but not paused; verify
+  sessions are left out). Click a chip to paste it there
+  (`POST /api/instances/{title}/send` with `submit: false` and
+  `dialog_safe: true`, once per session for *All*) — *nothing is sent until you
+  press Enter in that session*, and a session sitting on a permission or limit
+  prompt is skipped rather than typed into. Hover a chip to read the prompt.
+- **The Prompts dialog** (`#prompts-dialog`, from the bar's **Manage**, the
+  palette's **Prompts…** or New's **Manage…**) adds and deletes them, previews
+  a long one (⋮), and pastes the same way with the same target picker. Both
+  surfaces use one paste path, `lib/promptPaste.ts`.
 - **New → page 2's Prompt fold** picks one as a new session's opening prompt.
   The **Saved prompt…** select sits beside the optional **Prompt** textarea
   (sent to the agent at launch). Built-ins ship for the common loops — *Fix
@@ -1571,11 +1578,12 @@ Saved prompts are text you reuse. They have two homes, one per job:
   inline row under the select — a name box with **Save** and **Cancel** (Enter
   saves; Esc cancels without closing the dialog) — rather than a browser
   `prompt()`, which the desktop app does not implement. ✕ deletes a saved one,
-  and **Manage…** opens Customize → Prompts. Picking one fills the textarea;
+  and **Manage…** opens the Prompts dialog. Picking one fills the textarea;
   edit freely before creating.
 
-Both read the same list: this browser's `localStorage` under
-`mindflock.prompt_presets` (`[{name, prompt}]`).
+All three read the same list: this browser's `localStorage` under
+`mindflock.prompt_presets` (`[{name, prompt}]`); a save anywhere repaints the
+bar (`mf-presets-changed`).
 
 ## First-run onboarding
 
@@ -1591,7 +1599,7 @@ persisted in `localStorage`):
   View picks how many panes show; the Assistant), **Shipping** (the pane's
   next-step button, ⏩ Fast-track, and the bell for anything waiting on you),
   **Where work comes from** (Intake, Verify for checking what you shipped, and
-  Customize for extra bars and saved prompts) and **You're all set** (hints, Replay tour, Doctor). The fourth
+  ⚙ Customize for more bars, like Prompts) and **You're all set** (hints, Replay tour, Doctor). The fourth
   slide carries **Set up now →**, which opens **Intake** on its Tickets tab
   (`LEGACY_SCREEN_TABS` decides that from the slide's `screen` key). The tour
   pauses behind Settings, Intake or Setup rather than ending, so closing one
@@ -2156,29 +2164,24 @@ Two consequences worth knowing:
 
 ## Customize
 
-**Extras you opt into.** The sidebar footer's **Customize** button (title
-*Sidebar bars and saved prompts*) opens one dialog, `#customize-dialog`
-(`components/customize/CustomizeDialog.tsx`), headed *Customize — Extras you
-can switch on*, with two tabs:
+**Which bars the sidebar shows.** The sidebar footer's **⚙ Customize** button
+(title *Choose which bars the sidebar shows — Prompts, Assistant, Tickets…*)
+opens `#customize-dialog` (`components/customize/CustomizeDialog.tsx`), headed
+*Customize — Choose what the sidebar shows*: *Show in the sidebar*, one checkbox
+per bar, built-in and extension, in sidebar order (the same `mf_hiddenbars` set
+the bars always used). Each built-in bar says when it has something to show —
+*What your sessions cost* (Usage); *Appears once a ticket source is connected*
+with an **Intake → Tickets** link (Tickets); *Appears once a repository is
+added* with **Intake → Pull requests** / **Intake → Issues** (Pull requests,
+Issues); *Appears once Verify tracks a repository or has a checklist* with
+**Open Verify** (the sidebar's Verify bar — the top bar's **Verify** button is
+always there); *Chat, a todo list, and its editable agent file* (Assistant);
+*Your saved prompts — click one to paste it into any session* with **Manage
+prompts** (Prompts); *From an extension* for an extension's bar. A last line
+says how to reorder: drag a bar's ⠿ grip in the sidebar.
 
-- **Sidebar** — *Show in the sidebar*: one checkbox per bar, built-in and
-  extension, in sidebar order (the same `mf_hiddenbars` set the bars always
-  used). Each built-in bar says when it has something to show — *What your
-  sessions cost* (Usage); *Appears once a ticket source is connected* with an
-  **Intake → Tickets** link (Tickets); *Appears once a repository is added*
-  with **Intake → Pull requests** / **Intake → Issues** (Pull requests,
-  Issues); *Appears once Verify tracks a repository or has a checklist* with
-  **Open Verify** (the sidebar's Verify bar — the top bar's **Verify** button
-  is always there); *Chat and a todo list with your personal assistant*
-  (Assistant); *From an extension* for an extension's bar. A last line says
-  how to reorder: drag a bar's ⠿ grip in the sidebar.
-- **Prompts** — your [saved prompts](#saved-prompts): pick a target (the
-  selected session, another running one, or all running sessions), click one
-  to paste it there (nothing is sent), add, delete, preview.
-
-The palette's **Customize…** and **Prompts…** and New's **Manage…** link land
-on the right tab. `Esc` closes the dialog unless something inside it (a prompt
-preview) handled the key first; a click on the backdrop closes it too.
+The palette's **Customize…** opens it too. `Esc` or a click on the backdrop
+closes it.
 
 Customize holds what is optional. Set-and-forget configuration stays in
 [Settings](#settings-), and anything that needs you is in the bell.
@@ -2883,7 +2886,7 @@ A few screens got quieter:
   ever *starts* a session — CLI, repo, workspace and an opening prompt; New
   page 2's **Templates** strip lists them and its **Manage…** opens the
   manager. To paste text into a session that is already running, use
-  [Customize → Prompts](#saved-prompts).
+  the [Prompts bar](#saved-prompts).
 - **System logs** — a grid pane tailing the server log (`GET /api/logs`,
   3 s poll).
 - **Terminal scroll speed** — 1–20 lines per wheel notch, applied live.

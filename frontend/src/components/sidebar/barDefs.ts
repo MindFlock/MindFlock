@@ -27,7 +27,16 @@ export const SIDEBAR_BARS: BarDef[] = [
   // here once it has actually shipped.
   { key: "verify", label: "Verify" },
   { key: "assistant", label: "Assistant" },
+  // Saved prompts, one click from any session. Last so a saved order from
+  // before it existed meets it right where the defaults put it (see LATE_BARS).
+  { key: "prompts", label: "Prompts" },
 ];
+
+/** Built-in bars added after people already had saved section orders. A
+ * saved order that never mentioned one gets it just above the session list
+ * (where the defaults put it), not tail-appended below the sessions where
+ * nothing suggests it exists — the rule extension bars already follow. */
+export const LATE_BARS = new Set(["prompts"]);
 
 /** Bars shown out of the box to a brand-new user. Tickets is in here because
  * ticket ingestion is the headline feature — connecting a tracker is the first
@@ -82,12 +91,16 @@ export function orderedSections(order: string[], extraKeys: string[] = []): stri
       seen.add(key);
     }
   }
+  const lateMissing: string[] = [];
   for (const key of DEFAULT_SECTION_ORDER) {
     if (!seen.has(key)) {
-      out.push(key);
+      // An empty saved order is "all defaults": nothing is late there.
+      if (order.length && LATE_BARS.has(key)) lateMissing.push(key);
+      else out.push(key);
       seen.add(key);
     }
   }
+  if (lateMissing.length) out.splice(out.indexOf(SESSIONS_KEY), 0, ...lateMissing);
   const missingExtras = extraKeys.filter((key) => {
     if (seen.has(key)) return false;
     seen.add(key);

@@ -1,4 +1,4 @@
-/** Assistant instructions editor (port of initAssistantAgentFile, section
+/** Assistant agent file editor (port of initAssistantAgentFile, section
  * 18): the personal assistant's standing instructions (its CLAUDE.md). */
 
 import { useEffect, useRef, useState } from "react";
@@ -56,7 +56,7 @@ export function AssistantAgentDialog() {
           ? "Saved — assistant restarted; reopen Chat to talk to it."
           : "Saved — applies the next time the assistant starts."
       );
-      toast(restart ? "Assistant instructions saved & restarted" : "Assistant instructions saved");
+      toast(restart ? "Agent file saved & assistant restarted" : "Agent file saved");
     } catch (err) {
       setStatus("Save failed: " + ((err as Error).message || ""));
     }
@@ -72,7 +72,7 @@ export function AssistantAgentDialog() {
     >
       <div id="assistant-agent-panel">
         <div className="ws-head">
-          <h2>Assistant instructions</h2>
+          <h2>Assistant agent file</h2>
           <button type="button" id="assistant-agent-close" onClick={closeDialog}>
             Close
           </button>

@@ -1,7 +1,6 @@
-/** Footer "Customize": the door to the Customize dialog (Sidebar · Prompts).
- * Sits between the session count and the shortcuts link. It used to
- * be a popover holding only the bar checklist; that list is now the dialog's
- * Sidebar tab (customize/SidebarBarsPicker.tsx), so this is a plain button. */
+/** Footer "⚙ Customize": the door to the Customize dialog (which bars the
+ * sidebar shows — customize/SidebarBarsPicker.tsx). Sits between the session
+ * count and the shortcuts link. */
 
 import { useUi } from "../../state/store";
 
@@ -13,10 +12,10 @@ export function FooterCustomize() {
         id="foot-customize-btn"
         type="button"
         className="foot-link"
-        title="Sidebar bars and saved prompts"
+        title="Choose which bars the sidebar shows — Prompts, Assistant, Tickets…"
         onClick={() => openDialogFor("customize")}
       >
-        Customize
+        ⚙ Customize
       </button>
     </div>
   );

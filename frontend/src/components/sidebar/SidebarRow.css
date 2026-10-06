@@ -656,32 +656,34 @@
 #view-modes {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 #view-modes .vm-label {
   font-size: 11px;
   color: var(--muted);
+  margin-right: 2px;
 }
 
-/* One quiet picker, not a row of five toggles: the view is set once and left. */
-#view-modes select {
+#view-modes .vm {
   flex: 1;
-  min-width: 0;
   cursor: pointer;
-  font: inherit;
   font-size: 11px;
-  padding: 3px 6px;
+  padding: 4px 0;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
 }
 
-#view-modes select:hover,
-#view-modes select:focus-visible {
+#view-modes .vm:hover {
   border-color: var(--accent);
-  outline: none;
+}
+
+#view-modes .vm.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 

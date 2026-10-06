@@ -1,29 +1,20 @@
-/** The Prompts tab of Customize (port of initPromptsTab, section 23): saved
- * TEXT, pasted into sessions that are already running (POST /send
- * submit:false — nothing is sent until you press Enter there). The target
- * picker chooses where: the focused session (default), any other running
- * session, or all of them. Add/delete saved prompts — the same store New's
- * "Saved prompt…" picker reads. Templates (a saved New-session setup) only
- * ever START a session; pasting into running ones is this panel's job alone.
- * The dialog shell (Close, Esc, backdrop) is Customize's; this panel only
- * claims Esc while its preview is open. */
+/** The Prompts dialog (port of initPromptsTab, section 23): where saved
+ * prompts are managed — read, add, delete — and, like the sidebar Prompts bar,
+ * pasted into a running session (POST /send submit:false — nothing is sent
+ * until you press Enter there). The daily door is the bar; this is "Manage".
+ * The target picker chooses where: the focused session (default), any other
+ * running session, or all of them. Same store New's "Saved prompt…" reads.
+ * Templates (a saved New-session setup) only ever START a session.
+ * Esc closes the ⋮ preview first, then the dialog. */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { instApi } from "../../api/client";
 import { useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
-import { errorPop } from "../../lib/errorPop";
 import { windowName } from "../../lib/windowName";
-import {
-  ALL_RUNNING,
-  pasteIntoAll,
-  pastedAllToast,
-  promptTargets,
-  resolveTarget,
-  runningTitles,
-} from "../../lib/promptTargets";
+import { ALL_RUNNING, promptTargets, resolveTarget, runningTitles } from "../../lib/promptTargets";
+import { pastePrompt as pasteInto } from "../../lib/promptPaste";
 import { BUILTIN_PRESETS, loadUserPresets, saveUserPresets, type Preset } from "../../lib/presets";
 
 export function PromptsPanel() {
@@ -58,7 +49,7 @@ export function PromptsPanel() {
   }, []);
 
   // First Esc closes the preview, not the dialog: claim it (preventDefault),
-  // which Customize's own Esc handler (on window, so it runs after this one)
+  // which the dialog's own Esc handler (on window, so it runs after this one)
   // reads as "handled".
   useEffect(() => {
     if (!pop) return;
@@ -80,56 +71,13 @@ export function PromptsPanel() {
   );
   const target = resolveTarget(picked, focused, options);
 
-  // One paste at a time: a second click while "All" is still fanning out
-  // would paste the text twice into every session.
-  const busy = useRef(false);
-  // Close Customize only if it is still the open dialog: the paste awaits the
-  // server (once per session for All), and a dialog opened meanwhile — the
-  // user pressed Esc and moved on — must not be the one this closes.
-  const closeIfStillOpen = () => {
-    if (useUi.getState().openDialog === "prompts") closeDialog();
-  };
-
+  // Close only if this is still the open dialog: the paste awaits the server
+  // (once per session for All), and a dialog opened meanwhile — the user
+  // pressed Esc and moved on — must not be the one this closes.
   const pastePrompt = async (prompt: string) => {
-    if (!target) {
-      toast("Choose a session to paste into first, then click a prompt");
-      return;
-    }
-    if (busy.current) return;
-    busy.current = true;
-    // dialog_safe: the server re-checks the agent live and refuses (409,
-    // nothing typed) when it sits on a permission/limit prompt, where typed
-    // text would ANSWER the dialog — the target may be a session you can't
-    // see. Same contract as every other UI paste (lib/flockActions.ts).
-    const send = (t: string) =>
-      instApi(t, "/send", { json: { text: prompt, submit: false, dialog_safe: true } });
-    try {
-      if (target === ALL_RUNNING) {
-        const titles = running.slice();
-        const { ok, failed } = await pasteIntoAll(titles, send);
-        if (failed.length) {
-          errorPop(
-            `Couldn't paste into ${failed.length} of ${titles.length} sessions`,
-            failed.map((f) => windowName(f.title) + ": " + f.error).join(" · ")
-          );
-        }
-        if (!ok.length) return;
-        toast(pastedAllToast(ok.length));
-        setPop(null);
-        closeIfStillOpen();
-        return;
-      }
-      try {
-        await send(target);
-        toast("Pasted into " + windowName(target));
-        setPop(null);
-        closeIfStillOpen();
-      } catch (err) {
-        toast("Paste failed: " + ((err as Error).message || ""));
-      }
-    } finally {
-      busy.current = false;
-    }
+    if (!(await pasteInto(target, running, prompt))) return;
+    setPop(null);
+    if (useUi.getState().openDialog === "prompts") closeDialog();
   };
 
   const addPrompt = () => {
@@ -249,9 +197,8 @@ export function PromptsPanel() {
         </label>
       </div>
       <p className="prompts-hint">
-        Choose where it goes, then click a prompt to paste it there — nothing is sent until you
-        press Enter in that session (in each, for all running sessions). Saved prompts also show
-        in New → Saved prompt.
+        Click a prompt to paste it into the chosen session — nothing is sent until you press Enter
+        there. The same prompts sit in the sidebar's Prompts bar and in New → Saved prompt.
       </p>
       <div id="prompts-list" ref={listRef}>
         {section("Built-in", BUILTIN_PRESETS, false, "b")}
@@ -291,6 +238,49 @@ export function PromptsPanel() {
           </div>,
           document.body
         )}
+    </div>
+  );
+}
+
+/** The modal shell: header, Close, Esc and backdrop. Opened by the Prompts
+ * bar's "Manage", New's "Manage…" and the palette. */
+export function PromptsDialog() {
+  const open = useUi((s) => s.openDialog === "prompts");
+  const closeDialog = useUi((s) => s.closeDialog);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      e.preventDefault();
+      closeDialog();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, closeDialog]);
+
+  if (!open) return null;
+  return (
+    <div
+      id="prompts-dialog"
+      className="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="prompts-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) closeDialog();
+      }}
+    >
+      <div id="prompts-dialog-panel">
+        <div className="ws-head">
+          <h2 id="prompts-title">Prompts</h2>
+          <span className="ik-subtitle">Saved text you paste into sessions</span>
+          <button type="button" id="prompts-close" onClick={closeDialog}>
+            Close
+          </button>
+        </div>
+        <PromptsPanel />
+      </div>
     </div>
   );
 }

@@ -182,8 +182,8 @@
   color: var(--red, #e55);
 }
 
-/* Prompts library — the Prompts tab of Customize. The frame (border, width,
-   height) is the dialog's; the panel fills the tab and only the list scrolls. */
+/* Prompts library — the Prompts dialog's body. The frame (border, width,
+   height) is the dialog's; the panel fills it and only the list scrolls. */
 #prompts-panel {
   flex: 1;
   min-height: 0;

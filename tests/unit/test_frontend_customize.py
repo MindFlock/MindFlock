@@ -27,33 +27,31 @@ def _code(rel: str) -> str:
     return re.sub(r"(?m)^\s*//[^\n]*|\s//[^\n]*", "", code)
 
 
-def test_customize_renders_for_its_two_dialog_names():
+def test_customize_is_the_sidebar_picker_and_prompts_is_its_own_dialog():
+    """Prompts left Customize: it is a sidebar bar (switched on in Customize,
+    like the Assistant) with its own Prompts dialog behind "Manage"."""
     src = _src("components/customize/CustomizeDialog.tsx")
-    assert 'if (name === "customize") return "sidebar";' in src
-    assert 'if (name === "prompts") return name;' in src
-    # Tabs ARE dialog names, so every existing caller lands on its tab.
-    for t in (
-        '{ key: "sidebar", label: "Sidebar", dialog: "customize" }',
-        '{ key: "prompts", label: "Prompts", dialog: "prompts" }',
-    ):
-        assert t in src, t
-    assert 'type CustomizeTab = "sidebar" | "prompts";' in src
+    assert 'useUi((s) => s.openDialog === "customize")' in src
     assert 'id="customize-dialog"' in src
     assert 'id="customize-close"' in src
-    assert 'nav id="customize-tabs"' in src
+    assert "<SidebarBarsPicker />" in src
+    assert "customize-tabs" not in src
+    assert "PromptsPanel" not in src
     code = _code("components/customize/CustomizeDialog.tsx")
     assert "Outbox" not in code and '"outbox"' not in code
-    assert "<PromptsPanel />" in src
-    assert "<SidebarBarsPicker />" in src
-    # Esc closes unless a child (the Prompts preview) claimed it first.
     assert "e.defaultPrevented" in src
-    # Mounted once, in place of the two old dialogs.
+    dialog = _src("components/dialogs/PromptsDialog.tsx")
+    assert "export function PromptsDialog()" in dialog
+    assert 'id="prompts-dialog"' in dialog
+    assert 'useUi((s) => s.openDialog === "prompts")' in dialog
+    assert "e.defaultPrevented" in dialog
     app = _code("App.tsx")
-    assert "<CustomizeDialog />" in app
-    assert "OutboxDialog" not in app and "PromptsDialog" not in app
+    assert "<CustomizeDialog />" in app and "<PromptsDialog />" in app
+    assert "OutboxDialog" not in app
+    keymap = _src("lib/keymap.ts")
+    assert '"prompts-dialog",' in keymap
     store = _src("state/store.ts")
     assert '| "customize"' in store
-    # The Outbox is no dialog at all any more.
     assert '| "outbox"' not in store
     assert not (_SRC / "components/outbox/OutboxDialog.tsx").exists()
 
@@ -72,13 +70,14 @@ def test_the_footer_customize_is_one_plain_button():
     src = _code("components/sidebar/FooterCustomize.tsx")
     assert 'id="foot-customize-btn"' in src
     assert 'onClick={() => openDialogFor("customize")}' in src
-    assert "⚙" not in src
+    assert "⚙ Customize" in src
     assert "foot-customize-menu" not in src
     assert "foot-customize-menu" not in _src("styles/regions.css")
     picker = _src("components/customize/SidebarBarsPicker.tsx")
     assert "orderedBars(barOrder, extBars)" in picker
     assert "toggleBarHidden(b.key)" in picker
     assert "Show in the sidebar" in picker
+    assert 'link: { label: "Manage prompts", dialog: "prompts" }' in picker
 
 
 def test_the_top_bar_has_no_outbox_prompts_or_recent_and_keeps_the_palette_title():
@@ -227,13 +226,13 @@ def test_the_palette_lists_commands_before_focus_rows():
     at = [src.index(x) for x in order]
     assert at == sorted(at), order
     for label in (
-        'label: "Prompts…", hint: "paste a saved prompt"',
-        'label: "Assistant instructions…"',
+        'label: "Prompts…", hint: "manage saved prompts"',
+        'label: "Assistant agent file…"',
         'label: "Recently closed…", hint: "reopen or clean up closed sessions"',
         "label: `Make PR — ${t}`",
         "label: `Merge PR — ${t}`",
         'label: "Verify — check what shipped"',
-        'label: "Customize…", hint: "sidebar bars, prompts"',
+        'label: "Customize…", hint: "choose sidebar bars"',
     ):
         assert label in src, label
     for gone in (
@@ -253,25 +252,34 @@ def test_the_palette_lists_commands_before_focus_rows():
 
 def test_saved_prompts_own_pasting_into_running_sessions():
     """Saved prompts is the ONE place that pastes text into running sessions
-    (the templates manager's send row is gone): a target picker — the focused
-    session, any other running one, or all of them — reusing the instances
-    query rather than a fetch of its own, and always submit:false."""
+    (the templates manager's send row is gone). Two surfaces — the sidebar
+    Prompts bar (the daily door) and the Prompts dialog (Manage) — share ONE
+    paste path, lib/promptPaste.ts, and one target picker model: the focused
+    session, any other running one, or all of them."""
+    paste = _code("lib/promptPaste.ts")
+    assert paste.count('"/send"') == 1
+    assert "submit: false, dialog_safe: true" in paste
+    assert "pasteIntoAll(titles, send)" in paste
+    assert "pastedAllToast(ok.length)" in paste
+    assert "errorPop(" in paste
+    assert "if (busy) return false;" in paste
+    for path in (
+        "components/dialogs/PromptsDialog.tsx",
+        "components/sidebar/PromptsBar.tsx",
+    ):
+        src = _code(path)
+        assert '"/send"' not in src, path
+        assert "useInstances()" in src and '"/api/instances"' not in src, path
+        assert "promptTargets(focused, running," in src, path
+    bar = _code("components/sidebar/PromptsBar.tsx")
+    assert 'id="prompts-bar-target"' in bar
+    assert "pastePrompt(target, running, p.prompt)" in bar
+    assert 'openDialogFor("prompts")' in bar
+    assert "PRESETS_CHANGED" in bar
+    assert 'case "prompts":' in _code("components/sidebar/SidebarBars.tsx")
     src = _code("components/dialogs/PromptsDialog.tsx")
     assert "<select" in src and 'id="prompts-target"' in src
-    assert "useInstances()" in src
-    assert '"/api/instances"' not in src
-    assert "promptTargets(focused, running," in src
-    assert "pasteIntoAll(titles, send)" in src
-    assert "pastedAllToast(ok.length)" in src
-    assert "errorPop(" in src
-    # ONE send for both paths: submit:false (nothing runs until your Enter)
-    # and dialog_safe (never type into a permission prompt you can't see)
-    assert src.count('"/send"') == 1
-    assert "submit: false, dialog_safe: true" in src
-    # a paste awaits the server, so it closes Customize only if still open,
-    # and a second click can't paste twice while All is fanning out
     assert 'useUi.getState().openDialog === "prompts"' in src
-    assert "if (busy.current) return;" in src
     lib = _src("lib/promptTargets.ts")
     assert "All running sessions (${running.length})" in lib
     assert "running.length >= 2" in lib

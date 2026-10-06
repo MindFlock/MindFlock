@@ -7,6 +7,8 @@
  * has already cleared e.currentTarget (it threw and blanked the app).
  */
 import promptsSrc from "../components/dialogs/PromptsDialog.tsx?raw";
+import pasteSrc from "../lib/promptPaste.ts?raw";
+import barSrc from "../components/sidebar/PromptsBar.tsx?raw";
 import { describe, it, expect } from "vitest";
 import {
   ALL_RUNNING,
@@ -118,13 +120,22 @@ describe("PromptsPanel source", () => {
   });
   it("sends submit:false + dialog_safe to every target and keeps the picker's id", () => {
     expect(src).toContain('id="prompts-target"');
-    expect(src.match(/"\/send"/g)?.length).toBe(1);
-    expect(src).toContain("submit: false, dialog_safe: true");
-    expect(src).toContain("pasteIntoAll(titles, send)");
-    expect(src).toContain("errorPop(");
+    // One paste path for the dialog AND the sidebar bar: lib/promptPaste.ts.
+    const paste = pasteSrc as string;
+    expect(paste.match(/"\/send"/g)?.length).toBe(1);
+    expect(paste).toContain("submit: false, dialog_safe: true");
+    expect(paste).toContain("pasteIntoAll(titles, send)");
+    expect(paste).toContain("errorPop(");
+    expect(src).not.toContain('"/send"');
+    expect(barSrc as string).not.toContain('"/send"');
+    expect(src).toContain("pastePrompt as pasteInto");
+    expect(barSrc as string).toContain("pastePrompt(target, running, p.prompt)");
   });
-  it("closes Customize only while it is still the open dialog", () => {
+  it("closes the Prompts dialog only while it is still the open dialog", () => {
     expect(src).toContain('useUi.getState().openDialog === "prompts"');
-    expect(src).not.toMatch(/\n\s*closeDialog\(\);/);
+    // In the panel (the paste path), never an unconditional close; the
+    // dialog shell's own Esc/Close below it may close freely.
+    const panel = src.slice(src.indexOf("export function PromptsPanel"), src.indexOf("export function PromptsDialog"));
+    expect(panel).not.toMatch(/\n\s*closeDialog\(\);/);
   });
 });
