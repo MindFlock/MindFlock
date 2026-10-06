@@ -2803,23 +2803,17 @@ p.set-hint {
   border-color: var(--accent);
 }
 
-/* Prompts bar: the Assistant bar's head (label · target · Manage) over a
-   wrap of one-click chips. The chip list caps its height and scrolls so a long
-   library never pushes the sessions off screen. */
+/* Prompts bar: ONE row — label · target · "Paste ▾". The prompts live in the
+   button's menu (PromptsMenu, styled with the ⏩ picker's .pb-menu), so the
+   bar is the same height however many prompts are saved. */
 #prompts-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-}
-
-#prompts-bar .pb-head {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
 }
 
 #prompts-bar .pb-label {
@@ -2848,34 +2842,31 @@ p.set-hint {
   text-overflow: ellipsis;
 }
 
-#prompts-bar .pb-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  /* Four whole rows of chips (22px + 5px gaps), then scroll. */
-  max-height: 104px;
-  overflow-y: auto;
+#prompts-bar .as-toggle {
+  flex: none;
+  white-space: nowrap;
 }
 
-#prompts-bar .pb-chip {
-  cursor: pointer;
-  font: inherit;
-  font-size: 11px;
-  max-width: 100%;
-  padding: 3px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
+#prompts-bar .as-toggle.active {
+  border-color: var(--accent);
+}
+
+/* The menu: narrower than the ⏩ picker (it hangs off a 260px sidebar), and
+   each prompt's text is a one-line preview under its name — hover shows it
+   whole. */
+.pb-menu.pm-menu {
+  width: 300px;
+}
+
+.pb-menu.pm-menu .pb-item {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pb-menu.pm-menu .pb-name,
+.pb-menu.pm-menu .pb-desc {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-#prompts-bar .pb-chip:hover,
-#prompts-bar .pb-chip:focus-visible {
-  border-color: var(--accent);
-  outline: none;
 }
 
 /* Generic addon bars (rendered by core/slots.js for auto-surfaced addons,

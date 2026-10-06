@@ -291,6 +291,30 @@ def test_saved_prompts_own_pasting_into_running_sessions():
         assert "currentTarget" not in upd, upd
 
 
+def test_prompts_bar_is_one_row_with_the_prompts_in_a_menu():
+    """The bar is ONE row (label · target · "Paste ▾") at any number of saved
+    prompts. Wrapping chips stacked one per line in the 260px sidebar (prompt
+    names are phrases) and took ~150px of the session list."""
+    bar = _code("components/sidebar/PromptsBar.tsx")
+    assert 'id="prompts-bar-menu"' in bar and "Paste ▾" in bar
+    assert 'aria-haspopup="menu"' in bar
+    assert "<PromptsMenu" in bar
+    # The old layout is gone, not just joined by the new one.
+    assert "pb-chip" not in bar and "prompts-bar-manage" not in bar
+    css = _src("components/sidebar/toolbars.css")
+    assert "pb-chip" not in css and "max-height: 104px" not in css
+    bar_rule = re.search(r"#prompts-bar \{(.*?)\}", css, flags=re.S).group(1)
+    assert "flex-direction: column" not in bar_rule
+    menu = _code("components/sidebar/PromptsMenu.tsx")
+    assert 'id="prompts-menu"' in menu and 'role="menu"' in menu
+    assert "createPortal(" in menu
+    assert "Manage prompts…" in menu
+    assert "onManage()" in menu and "onPick(e.preset)" in menu
+    assert '"/send"' not in menu, "the menu never pastes; the bar does"
+    # Arrows/Enter at the menu must not reach the session behind it.
+    assert '"prompts-menu",' in _src("lib/keymap.ts")
+
+
 def test_new_page_two_templates_strip_says_what_a_template_is():
     src = _src("components/dialogs/NewSessionDialog.tsx")
     assert '<span title="Saved New-session setups">Templates</span>' in src
