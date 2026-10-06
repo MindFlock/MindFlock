@@ -308,7 +308,10 @@ export function clearStaleAlias(title: string) {
 
 /** Optimistic "provisioning" row for create/duplicate (mirrors the server's
  * _unique_title numbering; a mismatch resolves on the next poll). */
-export function addPendingSession(base: string): string {
+export function addPendingSession(bare: string, device = ""): string {
+  // A session being started on another device waits in THAT device's group,
+  // under the namespaced title it will arrive with.
+  const base = device ? device + "::" + bare : bare;
   const taken = new Set(instances().map((i) => i.title));
   let title = base;
   if (taken.has(base)) {
@@ -317,7 +320,12 @@ export function addPendingSession(base: string): string {
     title = base + "-" + i;
   }
   clearStaleAlias(title);
-  const pending = { title, status: "loading", pending_create: true } as unknown as Instance;
+  const pending = {
+    title,
+    status: "loading",
+    pending_create: true,
+    ...(device ? { device, display_title: title.slice(device.length + 2) } : {}),
+  } as unknown as Instance;
   queryClient.setQueryData<Instance[]>(["instances"], (prev) => [...(prev || []), pending]);
   return title;
 }

@@ -5725,7 +5725,7 @@ def _fresh_lineage(rows: list) -> None:
 
 
 @app.get("/api/instances")
-def list_instances() -> JSONResponse:
+def list_instances(request: Request) -> JSONResponse:
     """Hot path: polled every ~4s by every client. Read-only on purpose — the
     side effects it used to fire live in :func:`_instances_tick` (always-on).
 
@@ -5742,12 +5742,16 @@ def list_instances() -> JSONResponse:
 
     Connected tailnet devices' sessions ride along, title-namespaced as
     ``<device>::<title>`` (cached by :func:`_remote.instances_loop` — no
-    network on this path)."""
+    network on this path). Another MindFlock asking (the remote header) gets
+    this device's OWN sessions only: the rows it mirrors belong to their own
+    devices, and handing them on is how two paired devices echoed each
+    other's sessions back as ``a::b::title``."""
+    remote = [] if _remote.from_remote(request) else _remote.merged_instances()
     cached = _events.sessions_snapshot()
     if time.time() - _SNAPSHOT_AT <= _INSTANCES_TICK_INTERVAL * 2.5:
         if {d.get("title") for d in cached} == set(ENGINE.instances.keys()):
             _fresh_lineage(cached)
-            return JSONResponse(cached + _remote.merged_instances() + _pending_rows())
+            return JSONResponse(cached + remote + _pending_rows())
     queues = _prompt_queue.snapshot()
     by_title = {d.get("title"): d for d in cached}
     snap = [
@@ -5755,7 +5759,7 @@ def list_instances() -> JSONResponse:
         for i in list(ENGINE.instances.values())
     ]
     _lanes.fill_duplicates(snap)
-    return JSONResponse(snap + _remote.merged_instances() + _pending_rows())
+    return JSONResponse(snap + remote + _pending_rows())
 
 
 # ---- Tailnet multi-device control (backend.web.core.remote) -------------- #

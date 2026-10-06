@@ -185,7 +185,13 @@ export function Pane({
     inst.branch || ""
   );
   const displayName = alias || label.text;
-  const nameTip = (displayName !== title ? title + "  ·  " : "") + (inst.branch || title);
+  // A session on another tailnet device says which one. Local sessions say
+  // nothing: a row only carries `device` once a second device is in play.
+  const deviceName = inst.device ? inst.device_label || inst.device : "";
+  const nameTip =
+    (displayName !== title ? title + "  ·  " : "") +
+    (inst.branch || title) +
+    (deviceName ? "  ·  on " + deviceName : "");
   // The kind tag ("(tix) ") rides in its own span: a narrow head drops it
   // (Pane.css) so the few characters that fit are the name, not the tag.
   const kindTag = !alias && label.kind ? "(" + label.kind + ") " : "";
@@ -595,6 +601,11 @@ export function Pane({
         <span className="title" title={nameTip}>
           {titleText}
         </span>
+        {deviceName && (
+          <span className="title-device" title={"Runs on " + deviceName}>
+            {deviceName}
+          </span>
+        )}
         {hasDiffStat && <CtxLine inst={inst} />}
         <div className="tabs">
           <button data-tab="agent" className={tab === "agent" ? "active" : ""} onClick={(e) => { e.stopPropagation(); showTab("agent"); }}>

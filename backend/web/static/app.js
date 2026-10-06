@@ -26633,7 +26633,8 @@ function clearStaleAlias(title) {
 	const ui = useUi.getState();
 	if (title && ui.aliases[title]) ui.setAlias(title, "");
 }
-function addPendingSession(base) {
+function addPendingSession(bare, device = "") {
+	const base = device ? device + "::" + bare : bare;
 	const taken = new Set(instances$1().map((i) => i.title));
 	let title = base;
 	if (taken.has(base)) {
@@ -26645,7 +26646,11 @@ function addPendingSession(base) {
 	const pending = {
 		title,
 		status: "loading",
-		pending_create: true
+		pending_create: true,
+		...device ? {
+			device,
+			display_title: title.slice(device.length + 2)
+		} : {}
 	};
 	queryClient.setQueryData(["instances"], (prev) => [...prev || [], pending]);
 	return title;
@@ -36122,7 +36127,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	}, [filtered]);
 	const hostCounts = (0, import_react.useMemo)(() => {
 		const m = /* @__PURE__ */ new Map();
-		const selfHost = (devices?.self)?.host || "";
+		const selfHost = devices?.self?.host || "";
 		if (selfHost) m.set(selfHost, 1);
 		for (const d of remoteDevs) m.set(d.host || "", (m.get(d.host || "") || 0) + 1);
 		return m;
@@ -36200,7 +36205,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		filtering: !!ui.filter
 	});
 	const devRails = remoteDevs.map((dev) => {
-		const dkey = dev.device || dev.name;
+		const dkey = dev.device;
 		return {
 			dkey,
 			rail: toRail(byDev.get(dkey) || [], [])
@@ -36313,7 +36318,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 							id: "instance-list",
 							children: [grouped ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceHeader, {
-									label: (devices?.self)?.host || "This device",
+									label: devices?.self?.host || "This device",
 									badge: String(localRows.length),
 									badgeOff: false,
 									collapsed: ui.collapsedDevices.has("__self"),
@@ -36323,8 +36328,8 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 								}),
 								!ui.collapsedDevices.has("__self") && renderLocal(),
 								remoteDevs.map((dev, di) => {
-									const devRows = byDev.get(dev.device || dev.name) || [];
-									const dkey = dev.device || dev.name;
+									const devRows = byDev.get(dev.device) || [];
+									const dkey = dev.device;
 									const collapsed = ui.collapsedDevices.has(dkey);
 									const d = dev;
 									let badge = "", badgeOff = false;
@@ -55853,7 +55858,8 @@ function Pane({ inst, drag, dragging }) {
 	const fitTimer = (0, import_react.useRef)(void 0);
 	const label = sessionLabel(inst.display_title || title, inst.branch || "");
 	const displayName = alias || label.text;
-	const nameTip = (displayName !== title ? title + "  ·  " : "") + (inst.branch || title);
+	const deviceName = inst.device ? inst.device_label || inst.device : "";
+	const nameTip = (displayName !== title ? title + "  ·  " : "") + (inst.branch || title) + (deviceName ? "  ·  on " + deviceName : "");
 	const kindTag = !alias && label.kind ? "(" + label.kind + ") " : "";
 	const titleText = kindTag && displayName.startsWith(kindTag) ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "title-kind",
@@ -56213,6 +56219,11 @@ function Pane({ inst, drag, dragging }) {
 						className: "title",
 						title: nameTip,
 						children: titleText
+					}),
+					deviceName && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "title-device",
+						title: "Runs on " + deviceName,
+						children: deviceName
 					}),
 					hasDiffStat && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CtxLine, { inst }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -57891,6 +57902,26 @@ function ShortcutsSheet() {
 	});
 }
 //#endregion
+//#region src/lib/devices.ts
+function devicePath(device, path) {
+	return device ? `/api/devices/${encodeURIComponent(device)}/fwd${path}` : path;
+}
+function deviceApi(device) {
+	return (path, opts) => api(devicePath(device, path), opts);
+}
+function deviceTitle(device, title) {
+	return device ? `${device}::${title}` : title;
+}
+function startableDevices(resp) {
+	return (resp?.devices || []).filter((d) => d.connected && !!d.device);
+}
+function deviceLabel(d, all, selfHost = "") {
+	const key = d.device;
+	const host = d.host || "";
+	if (!host) return key;
+	return host === selfHost || all.filter((o) => (o.host || "") === host).length > 1 ? key : host;
+}
+//#endregion
 //#region src/lib/fileDropTextarea.ts
 var TEXTAREA_DROP_CLASS = "ta-file-drop";
 function setControlledValue(ta, next) {
@@ -59293,6 +59324,7 @@ function folderReducer(s, a) {
 			undo: null,
 			touched: true
 		};
+		case "device": return { ...FOLDER_INIT };
 		case "browse-cancel": return {
 			path: s.undo ? s.undo.path : s.path,
 			browsing: false,
@@ -59451,6 +59483,67 @@ function NewSessionDialog() {
 	const [folder, folderDo] = (0, import_react.useReducer)(folderReducer, FOLDER_INIT);
 	const repoPath = folder.path;
 	const browserOpen = folder.browsing;
+	const { data: devicesResp } = useDevices();
+	const startable = (0, import_react.useMemo)(() => startableDevices(devicesResp), [devicesResp]);
+	const [devicePick, setDevicePick] = (0, import_react.useState)("");
+	const device = batch || !startable.some((d) => d.device === devicePick) ? "" : devicePick;
+	const dapi = (0, import_react.useMemo)(() => deviceApi(device), [device]);
+	const deviceRef = (0, import_react.useRef)(device);
+	deviceRef.current = device;
+	const loadedDevice = (0, import_react.useRef)(null);
+	const loadFor = (dev) => {
+		const dapi = deviceApi(dev);
+		let live = true;
+		const here = () => live && deviceRef.current === dev;
+		(async () => {
+			try {
+				const d = await dapi("/api/repos/suggest");
+				if (!here()) return;
+				const sug = d.suggestions || [];
+				setSuggestions(sug);
+				folderDo({
+					t: "suggested",
+					path: sug[0]?.path || ""
+				});
+			} catch {
+				if (here()) setSuggestions([]);
+			}
+		})();
+		(async () => {
+			const [cfgR, setR, tplR] = await Promise.allSettled([
+				dev ? dapi("/api/config") : refreshConfig().then(() => queryClient.getQueryData(["config"])),
+				dapi("/api/settings"),
+				dapi("/api/templates")
+			]);
+			if (!here()) return;
+			const cfg = cfgR.status === "fulfilled" ? cfgR.value : void 0;
+			setHomePath(cfg?.home || "");
+			folderDo({
+				t: "fallback",
+				path: cfg?.home || ""
+			});
+			setProvisioningAvailable(!!cfg?.provisioning_available);
+			let provs = [];
+			try {
+				provs = (await dapi("/api/providers/manage")).providers || [];
+			} catch {}
+			if (!here()) return;
+			setProviders(provs);
+			const prev = cfg?.default_program || "";
+			const lower = prev.toLowerCase();
+			const match = provs.find((p) => (p.name || "").toLowerCase() === lower || (p.aliases || []).some((a) => String(a).toLowerCase() === lower) || String(p.command || "").toLowerCase() === lower);
+			const agent = match ? match.name : prev;
+			setProgram(agent);
+			const raw = setR.status === "fulfilled" && setR.value?.settings?.coding_cli?.default_launch_args || {};
+			launchDefaults.current = {};
+			for (const k of Object.keys(raw)) launchDefaults.current[k.toLowerCase()] = String(raw[k] || "");
+			setLaunchArgs((launchDefaults.current[agent.trim().toLowerCase()] || "").trim());
+			setTemplates(tplR.status === "fulfilled" ? tplR.value?.templates || [] : []);
+		})();
+		return () => {
+			live = false;
+		};
+	};
 	(0, import_react.useEffect)(() => {
 		if (!open) {
 			cancelPlanRun(planRun.current);
@@ -59497,56 +59590,20 @@ function NewSessionDialog() {
 		setProfileModels({});
 		setSavedPresets(loadUserPresets());
 		setPresetName(null);
-		let live = true;
-		(async () => {
-			try {
-				const d = await api("/api/repos/suggest");
-				if (!live) return;
-				const sug = d.suggestions || [];
-				setSuggestions(sug);
-				folderDo({
-					t: "suggested",
-					path: sug[0]?.path || ""
-				});
-			} catch {
-				if (live) setSuggestions([]);
-			}
-		})();
-		(async () => {
-			const [cfgR, setR, tplR] = await Promise.allSettled([
-				refreshConfig().then(() => queryClient.getQueryData(["config"])),
-				api("/api/settings"),
-				api("/api/templates")
-			]);
-			if (!live) return;
-			const cfg = cfgR.status === "fulfilled" ? cfgR.value : void 0;
-			setHomePath(cfg?.home || "");
-			folderDo({
-				t: "fallback",
-				path: cfg?.home || ""
-			});
-			setProvisioningAvailable(!!cfg?.provisioning_available);
-			let provs = [];
-			try {
-				provs = (await api("/api/providers/manage")).providers || [];
-			} catch {}
-			if (!live) return;
-			setProviders(provs);
-			const prev = cfg?.default_program || "";
-			const lower = prev.toLowerCase();
-			const match = provs.find((p) => (p.name || "").toLowerCase() === lower || (p.aliases || []).some((a) => String(a).toLowerCase() === lower) || String(p.command || "").toLowerCase() === lower);
-			const agent = match ? match.name : prev;
-			setProgram(agent);
-			const raw = setR.status === "fulfilled" && setR.value?.settings?.coding_cli?.default_launch_args || {};
-			launchDefaults.current = {};
-			for (const k of Object.keys(raw)) launchDefaults.current[k.toLowerCase()] = String(raw[k] || "");
-			setLaunchArgs((launchDefaults.current[agent.trim().toLowerCase()] || "").trim());
-			setTemplates(tplR.status === "fulfilled" ? tplR.value?.templates || [] : []);
-		})();
-		return () => {
-			live = false;
-		};
+		loadedDevice.current = deviceRef.current;
+		return loadFor(deviceRef.current);
 	}, [open]);
+	(0, import_react.useEffect)(() => {
+		if (!open || loadedDevice.current === device) return;
+		loadedDevice.current = device;
+		folderDo({ t: "device" });
+		setSuggestions([]);
+		setSearch(null);
+		setFolderCheck(null);
+		setProfileId("");
+		setProfileModel("");
+		return loadFor(device);
+	}, [open, device]);
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		const el = page === 1 ? describeRef.current : titleRef.current;
@@ -59565,7 +59622,7 @@ function NewSessionDialog() {
 		let live = true;
 		const timer = window.setTimeout(async () => {
 			try {
-				const r = await api("/api/repos/check?path=" + encodeURIComponent(asked));
+				const r = await dapi("/api/repos/check?path=" + encodeURIComponent(asked));
 				if (live) setFolderCheck({
 					asked,
 					plain: !!r.exists && !!r.is_dir && !r.is_git
@@ -59578,7 +59635,11 @@ function NewSessionDialog() {
 			live = false;
 			window.clearTimeout(timer);
 		};
-	}, [open, repoPath]);
+	}, [
+		open,
+		repoPath,
+		dapi
+	]);
 	(0, import_react.useEffect)(() => {
 		const asked = repoPath.trim();
 		if (!open || looksLikePath(asked) || asked.length < SEARCH_MIN_CHARS) {
@@ -59588,7 +59649,7 @@ function NewSessionDialog() {
 		let live = true;
 		const timer = window.setTimeout(async () => {
 			try {
-				const r = await api("/api/repos/search?q=" + encodeURIComponent(asked));
+				const r = await dapi("/api/repos/search?q=" + encodeURIComponent(asked));
 				if (!live) return;
 				setSearch({
 					asked,
@@ -59605,7 +59666,11 @@ function NewSessionDialog() {
 			live = false;
 			window.clearTimeout(timer);
 		};
-	}, [open, repoPath]);
+	}, [
+		open,
+		repoPath,
+		dapi
+	]);
 	(0, import_react.useEffect)(() => {
 		const row = searchListRef.current?.querySelector("[aria-selected=\"true\"]");
 		if (row && typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "nearest" });
@@ -59635,13 +59700,17 @@ function NewSessionDialog() {
 		providers
 	]);
 	const { data: config } = useConfig();
-	const mcpOk = (0, import_react.useMemo)(() => teamRunCaps(config?.caps).split ? splitGate(config?.caps, canonAgent(program)) : {
+	const mcpOk = (0, import_react.useMemo)(() => device ? {
+		ok: false,
+		reason: "Auto-split only starts sessions on this device"
+	} : teamRunCaps(config?.caps).split ? splitGate(config?.caps, canonAgent(program)) : {
 		ok: false,
 		reason: SERVER_NO_SPLIT
 	}, [
 		config?.caps,
 		canonAgent,
-		program
+		program,
+		device
 	]);
 	const togetherOk = teamRunCaps(config?.caps).together;
 	const splitLimit = teamRunCaps(config?.caps).maxPieces;
@@ -59844,7 +59913,7 @@ function NewSessionDialog() {
 			if (planRun.current.seq === seq) setDescribeSlow(true);
 		}, DESCRIBE_SLOW_MS);
 		try {
-			const a = await api("/api/session-plan", {
+			const a = await dapi("/api/session-plan", {
 				json: { text: describe.trim().slice(0, DESCRIBE_MAX_CHARS) },
 				signal: ctl.signal
 			});
@@ -59986,10 +60055,15 @@ function NewSessionDialog() {
 	const postCreate = async (body) => {
 		const { lane, askFirst } = laneAtPress.current;
 		setError("Creating…");
-		const guess = addPendingSession(body.title || "untitled");
+		const target = deviceRef.current;
+		const guess = addPendingSession(body.title || "untitled", target);
 		closeDialog();
 		try {
-			const inst = await api("/api/instances", { json: body });
+			const made = await deviceApi(target)("/api/instances", { json: body });
+			const inst = {
+				...made,
+				title: deviceTitle(target, made.title)
+			};
 			planFolderDo({ t: "created" });
 			clearStaleAlias(inst.title);
 			await refreshInstances();
@@ -60099,9 +60173,31 @@ function NewSessionDialog() {
 					onTab: setTab,
 					onClose: closeDialog
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "nf-body",
-					children: page === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					children: [startable.length > 0 && !batch && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						id: "new-device-row",
+						className: "rt-row rt-row-top",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "rt-label",
+							children: "Runs on"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "rt-ctl",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+								id: "new-device",
+								value: device,
+								onChange: (e) => setDevicePick(e.target.value),
+								title: "The device the session lives on — its folders, its agents, its accounts",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "",
+									children: devicesResp?.self?.host ? devicesResp.self.host + " (this device)" : "This device"
+								}), startable.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: d.device,
+									children: deviceLabel(d, startable, devicesResp?.self?.host || "")
+								}, d.device))]
+							})
+						})]
+					}), page === 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						id: "new-describe",
 						className: "new-templates nf-describe",
 						children: [
@@ -60219,6 +60315,7 @@ function NewSessionDialog() {
 										children: "Done"
 									})]
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
+									device,
 									initialPath: repoPath || homePath || "",
 									selected: repoPath,
 									onSelect: (p) => folderDo({
@@ -60383,7 +60480,7 @@ function NewSessionDialog() {
 										}, p.name))]
 									})]
 								}),
-								(authProfiles?.profiles || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								!device && (authProfiles?.profiles || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 									className: "nf-agent",
 									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 										className: "nf-agent-head",
@@ -60569,6 +60666,7 @@ function NewSessionDialog() {
 							}, g.key))]
 						}),
 						browserOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FolderBrowser, {
+							device,
 							initialPath: folderPath || homePath || "",
 							selected: folderPath,
 							onSelect: (p) => folderDo({
@@ -60982,7 +61080,7 @@ function NewSessionDialog() {
 								})]
 							})]
 						})
-					] })
+					] })]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "modal-actions nf-actions",
@@ -61081,7 +61179,7 @@ function focusRowIndex(paths, leaving) {
 	const i = paths.indexOf(leaving);
 	return i >= 0 ? i : 0;
 }
-function FolderBrowser({ initialPath, selected, onSelect, onPick }) {
+function FolderBrowser({ device = "", initialPath, selected, onSelect, onPick }) {
 	const [data, setData] = (0, import_react.useState)(null);
 	const [error, setError] = (0, import_react.useState)("");
 	const [newFolder, setNewFolder] = (0, import_react.useState)(null);
@@ -61093,12 +61191,12 @@ function FolderBrowser({ initialPath, selected, onSelect, onPick }) {
 		setError("");
 		try {
 			const q = path ? "?path=" + encodeURIComponent(path) : "";
-			setData(await api("/api/browse" + q));
+			setData(await deviceApi(device)("/api/browse" + q));
 		} catch (err) {
 			leaving.current = null;
 			setError(err.message);
 		}
-	}, []);
+	}, [device]);
 	(0, import_react.useEffect)(() => {
 		load(initialPath);
 	}, []);
@@ -61120,7 +61218,7 @@ function FolderBrowser({ initialPath, selected, onSelect, onPick }) {
 		setError("");
 		setMaking(true);
 		try {
-			const r = await api("/api/mkdir", { json: {
+			const r = await deviceApi(device)("/api/mkdir", { json: {
 				path: data.path,
 				name
 			} });

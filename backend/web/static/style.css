@@ -5973,6 +5973,22 @@ p.set-hint {
   text-overflow: ellipsis;
 }
 
+/* Which tailnet device a remote session runs on — a quiet tag beside the
+   name, dropped first when the head is squeezed (the tooltip keeps it). */
+.pane-head .title-device {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
 .pane-head .grip {
   flex: none;
   color: var(--muted);
@@ -6640,6 +6656,10 @@ p.set-hint {
    kind tag (the rail row and the tooltip still carry the whole label). */
 @container (max-width: 440px) {
   .pane-head .title .title-kind {
+    display: none;
+  }
+
+  .pane-head .title-device {
     display: none;
   }
 }

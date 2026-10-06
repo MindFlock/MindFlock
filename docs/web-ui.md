@@ -2944,7 +2944,13 @@ A few screens got quieter:
 - **Remote devices** — when `general.remote_control` is on, other MindFlock
   servers on your tailnet appear as sidebar device groups
   (sessions namespaced `<device>::<title>`); pair/unpair via
-  `/api/devices/{device}/connect|disconnect`.
+  `/api/devices/{device}/connect|disconnect`. A remote session's pane head
+  carries its device's name as a small tag. New Session gains a **Runs on**
+  picker once another device is connected: the folder suggestions, Browse…,
+  the agent list and the create all answer from the chosen device, and the
+  session lands in that device's group. Accounts and Auto-split stay with this
+  device (each device signs in with its own logins); a batch from Intake
+  always starts here. With a single device there is no picker and no tag.
 - **Session templates** — save a New-session dialog configuration under a name
   and refill it later (templates addon, `/api/templates`). A template only
   ever *starts* a session — CLI, repo, workspace and an opening prompt; New

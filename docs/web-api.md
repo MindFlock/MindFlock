@@ -1403,7 +1403,15 @@ Detaching a socket never kills the tmux session.
 Multi-device control (gated by the `general.remote_control` setting): other
 MindFlock servers on your tailnet appear as device groups in the sidebar, their
 sessions namespaced `<device>::<title>`, and every per-session route proxies to
-the owning device.
+the owning device. Sessions are equal wherever they run: New Session's **Runs
+on** picker (shown once a second device is connected) starts one on any
+connected device through the forward below.
+
+Routing is **one hop**: a remote-flagged `GET /api/instances` (header
+`X-MindFlock-Remote`) lists only that device's own sessions, never the ones it
+mirrors, and a remote-flagged request is never proxied onward (400) — so two
+devices paired both ways don't echo each other's sessions back as
+`a::b::title`.
 
 | Method | Path | Behavior |
 |---|---|---|
@@ -1411,6 +1419,7 @@ the owning device.
 | GET | `/api/devices` | Tailnet devices running MindFlock + their connection state |
 | POST | `/api/devices/{device}/connect` | Pair with a device (token exchange, persisted in `~/.mindflock/remote_devices.json`) |
 | POST | `/api/devices/{device}/disconnect` | Drop the pairing |
+| * | `/api/devices/{device}/fwd/<path>` | Forward to that device with its stored token (502 when not connected). Allow-listed to what New Session asks: `GET /api/config`, `/api/settings`, `/api/templates`, `/api/providers`, `/api/providers/manage`, `/api/repos/suggest`, `/api/repos/search`, `/api/repos/check`, `/api/browse`; `POST /api/mkdir`, `/api/session-plan`, `/api/instances` — anything else 404s. A forwarded create refreshes that device's session list before answering, so the next `GET /api/instances` already carries `<device>::<title>` |
 
 ## Config, providers, usage, settings
 

@@ -151,6 +151,8 @@ export interface Instance {
   /** Present on rows proxied from another tailnet device (title is
    * "<device>::<title>"). */
   device?: string;
+  /** That device's hostname (falls back to `device`), for showing WHERE. */
+  device_label?: string;
   /** True for a force-started PR/issue/ticket the server has accepted but
    * whose session does not exist yet (it is still cloning). The row shows as
    * provisioning; there is nothing to act on until it becomes real. */
@@ -703,18 +705,30 @@ export interface AuthProfilesResponse {
   default_profile_locked?: boolean;
 }
 
+/** One other MindFlock server on the tailnet (GET /api/devices). */
 export interface Device {
-  name: string;
+  /** The MagicDNS label: the key a remote session's title is namespaced by
+   * (`<device>::<title>`) and the `<device>` in /api/devices/<device>/…. */
+  device: string;
   host: string;
   ip?: string;
   os?: string;
-  connected: boolean;
+  version?: string;
+  reachable?: boolean;
+  remote_control?: boolean;
+  auth?: boolean;
   has_token?: boolean;
+  needs_token?: boolean;
+  /** Paired, permitted and answering: sessions can be driven AND started there. */
+  connected: boolean;
+  error?: string;
+  sessions?: number;
   note?: string;
 }
 
 export interface DevicesResponse {
-  self: string | null;
+  self: { device: string; host: string; os?: string } | null;
+  remote_control?: boolean;
   devices: Device[];
 }
 
