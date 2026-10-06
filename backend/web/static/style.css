@@ -1064,6 +1064,18 @@ body #mf-winctl {
   cursor: pointer;
 }
 
+/* The four worded actions read at the wordmark's size; 11px (the icon-button
+   default above) made them look like fine print. By id so the palette icon,
+   which shares .tb-item, keeps its box. */
+#topbar #new-btn.tb-new,
+#topbar #intake-btn,
+#topbar #verify-btn,
+#topbar #settings-btn {
+  font-size: 13px;
+  height: 28px;
+  padding: 0 8px;
+}
+
 #topbar #new-btn.tb-new:hover {
   background: var(--panel-2);
   border-color: var(--border);

@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-click **Update engine** offer appears, and a check that genuinely could
   not run says so instead of claiming the engine is current.
 
+### Changed
+
+- **Larger top-bar labels.** New, Intake, Verify and Settings read at 13px,
+  the wordmark's size, instead of 11px.
+
 ## [0.6.0] - 2026-10-06
 
 ### Added
