@@ -87,6 +87,7 @@ __all__ = [
     "title_index",
     "task_ask_first",
     "lead_gone",
+    "local_origin_text",
     "finish_phrase",
     "archive_old",
     "parse_items",
@@ -564,6 +565,10 @@ def _normalize_release(d) -> dict:
         "del": max(0, _i(d.get("del"))),
         "commits": max(0, _i(d.get("commits"))),
         "conflict_fixes": max(0, _i(d.get("conflict_fixes"))),
+        # The lead's origin when it is a folder on this machine (a provisioned
+        # workspace cloned from a checkout with no forge remote): the release
+        # can only push there, and never claims a PR.
+        "local_origin": _s(d.get("local_origin"))[:1024],
         "detail": _s(d.get("detail"))[:600],
         "at": _f(d.get("at")),
     }
@@ -1700,6 +1705,11 @@ def summarize(run: dict, now: float) -> dict:
         )
         if rel.get("pr_url"):
             lines.append("- ✓ One PR: %s" % rel["pr_url"])
+        elif _s(rel.get("local_origin")) and rel.get("state") in ("handoff", "done"):
+            lines.append(
+                "- ⇡ pushed `%s` to `%s` — a folder on this machine, not a forge; "
+                "no PR was opened" % (lead, rel["local_origin"])
+            )
         elif rel.get("state") == "handoff":
             lines.append(
                 "- ⇡ pushed `%s` — open the PR: %s" % (lead, rel["compare_url"])
@@ -2612,6 +2622,14 @@ def _plan_integration(run: dict, obs: dict, now: float, acts: List[dict]) -> Lis
                     },
                 )
             )
+        elif (
+            rec.get("state") == "done"
+            and _s(rel.get("local_origin"))
+            and run["policy"]["lane"] in ("pr", "merge")
+        ):
+            # Pushed — into a folder on this machine. The PR the group asked
+            # for cannot be opened from there: a hand-off that says so.
+            out.append(_act("release_handoff", reason=local_origin_text(run)))
         elif rec.get("state") == "done":
             out.append(
                 _act(
@@ -2646,6 +2664,19 @@ def _plan_integration(run: dict, obs: dict, now: float, acts: List[dict]) -> Lis
     return out
 
 
+def local_origin_text(run: dict) -> str:
+    """What a release whose lead pushes into a FOLDER did — the truth, not a
+    PR: where the branch went, and that the PR is opened by hand on the
+    forge after pushing it there."""
+    rel = run.get("release") or {}
+    branch = _s(rel.get("branch")) or _s((run.get("lead") or {}).get("branch"))
+    return (
+        "pushed %s to %s — a folder on this machine, not GitHub, so no PR was "
+        "opened: push the branch to your forge and open the PR there"
+        % (branch or "the branch", _s(rel.get("local_origin")))
+    )
+
+
 def lead_gone(run: dict, now: float) -> str:
     """The sentence for a one-for-all group whose LEAD has been gone (not
     removed by you — that cancels the group — but lost, e.g. across a
@@ -2674,8 +2705,15 @@ def finish_phrase(run: dict, shipped: int) -> str:
     merged = sum(1 for t in run["tasks"] if t["state"] == "integrated")
     if rel.get("state") == "done" and _s(rel.get("pr_url")):
         return "one PR opened (%d merged into it)" % merged
+    if rel.get("state") == "handoff" and _s(rel.get("local_origin")):
+        return "its branch was pushed to a folder on this machine; no PR was opened"
     if rel.get("state") == "handoff":
         return "its branch was pushed; the PR was not opened — open it from the branch"
+    if rel.get("state") == "done" and _s(rel.get("local_origin")):
+        return (
+            "its branch was pushed to a folder on this machine (%d merged into it)"
+            % (merged)
+        )
     if rel.get("state") == "done":
         return "its branch was pushed (%d merged into it)" % merged
     return "%d merged into one branch, nothing pushed" % merged

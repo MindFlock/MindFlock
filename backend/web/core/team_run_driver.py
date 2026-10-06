@@ -269,9 +269,7 @@ def observe(run: dict, now: float, boot: bool = False) -> dict:
         if inst is None and title not in pending:
             stale = now - float(t["started_at"] or now) >= _runs.START_GRACE_S
             if boot or stale or t["state"] != "starting":
-                o["branch_exists"] = _branch_exists(
-                    t["repo_root"] or run["repo_root"], t["branch"]
-                )
+                o["branch_exists"] = _branch_exists(_task_repo(run, t), t["branch"])
         cost += o["cost"]
         tasks[t["id"]] = o
     out = {
@@ -724,11 +722,7 @@ async def _start(run_id: str, task_id: str, now: float) -> None:
             if kind == "rename":
                 tk["title"] = _runs.task_title(
                     tk["text"],
-                    _taken_titles(
-                        ""
-                        if tk["kind"] == "ticket"
-                        else tk["repo_root"] or r["repo_root"]
-                    ),
+                    _taken_titles("" if tk["kind"] == "ticket" else _task_repo(r, tk)),
                 )
                 _runs.log_event(r, now, "note", tk["id"], "renamed to " + tk["title"])
                 return
@@ -822,10 +816,14 @@ async def _start_member(run: dict, t: dict) -> Tuple[Tuple[str, dict], str]:
         )
     else:
         prompt = (t["text"] or "").strip() + "\n\n" + _runs.run_brief(run, provider)
+    # A plain worktree of the repository HOLDING the lead's worktree — the
+    # lead's ``Path`` is not it for a provisioned (ticket) lead, whose Path is
+    # the server's cwd: there the lead's HEAD names no commit at all.
+    repo = await asyncio.to_thread(_git_merge.repo_of, wt)
     payload = {
         "title": t["title"],
         "program": _program(run),
-        "repo_path": run["repo_root"] or getattr(inst, "Path", "") or "",
+        "repo_path": repo or run["repo_root"] or getattr(inst, "Path", "") or "",
         "prompt": prompt,
         "parent": lead["title"],
         "spawned": True,
@@ -898,6 +896,24 @@ def _lead_wt(run: dict) -> Tuple[object, str]:
         return inst, inst.GetWorktreePath() or ""
     except Exception:  # noqa: BLE001
         return inst, ""
+
+
+def _lead_repo(run: dict) -> str:
+    """The repository a one-for-all group's members live in: the one holding
+    the LEAD's worktree (:func:`git_merge.repo_of`) — they fork from its
+    commit and merge back into its branch, so their branches must be in the
+    same object store. ``run["repo_root"]`` only when the lead is not there
+    (a group recorded before this was derived stored the lead's ``Path``,
+    which for a ticket session is the server's cwd)."""
+    _inst, wt = _lead_wt(run)
+    return (_git_merge.repo_of(wt) if wt else "") or run["repo_root"]
+
+
+def _task_repo(run: dict, t: dict) -> str:
+    """Where ``t``'s session branch lives (for branch-taken probes)."""
+    if _runs.is_together(run) and run.get("lead"):
+        return _lead_repo(run)
+    return t["repo_root"] or run["repo_root"]
 
 
 async def _message_lead(run: dict, text: str) -> bool:
@@ -1229,11 +1245,26 @@ def _release_prepare(run_id: str, now: float) -> None:
                     "commits": commits,
                     "conflict_fixes": sum(1 for t in r["tasks"] if t["conflict_fixed"]),
                     "head_sha": _git_merge.rev_parse(wt, "HEAD"),
+                    "local_origin": _local_origin(wt),
                     "detail": "",
                 },
             },
             now,
         )
+
+
+def _local_origin(wt: str) -> str:
+    """``origin`` of the lead's worktree when it is a FOLDER on this machine
+    (``""`` otherwise). Provisioning clones from a local checkout, and a
+    checkout with no forge remote of its own leaves the workspace's origin
+    pointing at that folder: a push "succeeds" into it, and no PR can ever be
+    opened from it. The release says so instead of promising a PR."""
+    srv = _server()
+    try:
+        url = srv._github_pr.origin_url(wt) if wt else ""
+    except Exception:  # noqa: BLE001
+        return ""
+    return url if url and srv._remote_url.is_local_path(url) else ""
 
 
 def _merged_view(wt: str, t: dict) -> dict:
@@ -1294,7 +1325,12 @@ def _release_handoff(run_id: str, reason: str, now: float) -> None:
                 lead,
                 state="done",
                 reason="",
-                note="pushed — open the PR from the branch",
+                note=(
+                    "pushed to %s (a folder on this machine) — no PR"
+                    % rel["local_origin"]
+                    if rel.get("local_origin")
+                    else "pushed — open the PR from the branch"
+                ),
             )
 
 
@@ -1936,6 +1972,29 @@ def _repo_label(path_or_url: str) -> str:
     return base[:-4] if base.endswith(".git") else base
 
 
+def _repo_labels(repo_root: str) -> set:
+    """Every name ``repo_root`` answers to, lowercased: its folder, its
+    ``origin``, and — for MindFlock's ``_base_<repo>`` clone, which is where a
+    ticket lead's group lives — the clone source it records and the folder
+    name without the prefix. A ticket names its repository by URL; the group's
+    repository is a folder, and either spelling has to match."""
+    from backend.session import provisioned as _prov
+
+    out = {_repo_label(repo_root)}
+    try:
+        out.add(_repo_label(_server()._github_pr.origin_url(repo_root)))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        out.add(_repo_label(_prov.clone_source_of(repo_root)))
+    except Exception:  # noqa: BLE001
+        pass
+    name = os.path.basename(os.path.normpath(repo_root or ""))
+    if _prov.is_base_repo_dirname(name):
+        out.add(name[len(_prov.BASE_REPO_PREFIX) :])
+    return {x.lower() for x in out if x}
+
+
 def _live_titles() -> set:
     srv = _server()
     live = set(srv.ENGINE.instances)
@@ -2064,6 +2123,7 @@ async def _build_tasks(
     # A task line's session must not land on a branch a closed session left
     # behind (it would start on — and ship — those old commits).
     branch_taken = _branch_titles(repo_root) if repo_root else set()
+    ours = _repo_labels(repo_root) if together and repo_root else set()
     tasks: List[dict] = []
     adopted: List[dict] = []
     warnings: List[str] = []
@@ -2115,7 +2175,7 @@ async def _build_tasks(
         title = r["title"]
         if together:
             theirs = _repo_label(r.get("repo_url") or "")
-            if theirs and theirs != _repo_label(repo_root):
+            if theirs and theirs.lower() not in ours:
                 raise RunError(
                     "one-for-all needs a single repository — %s is in %s, not %s"
                     % (ref or tid, theirs, _repo_label(repo_root))
@@ -2258,7 +2318,9 @@ async def create_run(payload: dict) -> Tuple[dict, List[str]]:
         raise RunError("lead is only for a split")
     if lead_title:
         lead_inst, lead_repo = await asyncio.to_thread(_lead_candidate, lead_title)
-        repo_root = repo_root or lead_repo
+        # The lead's repository wins: its pieces are worktrees of the repo its
+        # commits live in, whatever folder the request named.
+        repo_root = lead_repo
         program = program or str(getattr(lead_inst, "Program", "") or "")
     if together and not repo_root:
         raise RunError("one-for-all needs a single repository")
@@ -2403,7 +2465,13 @@ def _lead_candidate(title: str):
     owned = _runs.owner_of_title(title)
     if owned:
         raise RunError("%s is already in group %s" % (title, owned[0]["name"]), 409)
-    return inst, str(getattr(inst, "Path", "") or "")
+    # The repository its pieces fork from is the one holding its worktree —
+    # never its ``Path``: a ticket session's is "." (the server's cwd), and
+    # its worktree hangs off MindFlock's base clone (or is its own clone).
+    repo = _git_merge.repo_of(wt)
+    if not repo:
+        raise RunError("could not read %s's repository" % title, 409)
+    return inst, repo
 
 
 async def _start_lead(run: dict, existing=None) -> dict:
@@ -2672,10 +2740,15 @@ async def add_tasks(run_id: str, items) -> dict:
     # A one-for-all line forks off the LEAD: same repository, never an
     # existing session adopted from elsewhere (its branch was not cut from
     # the lead, and merging it would drag an unrelated base into the PR).
+    repo = (
+        await asyncio.to_thread(_lead_repo, run)
+        if together and run.get("lead")
+        else run["repo_root"]
+    )
     tasks, adopted, warnings = await _build_tasks(
         items,
         run["policy"]["lane"],
-        run["repo_root"],
+        repo,
         exclude_run=run_id,
         together=together,
     )
@@ -2809,7 +2882,7 @@ def _retry_task(run: dict, t: dict, fresh: bool, now: float) -> None:
             % t["title"],
             409,
         )
-    repo = t["repo_root"] or run["repo_root"]
+    repo = _task_repo(run, t)
     if fresh:
         # A new title on a new branch; the old session and branch stay — but
         # the old session stops SHIPPING: left armed, its agent's later diff
@@ -3158,11 +3231,13 @@ def approve_plan(run_id: str) -> dict:
                 409,
             )
         head = _git_merge.rev_parse(wt, "HEAD")
+        # The pieces' branches are cut in the repository holding the lead's
+        # worktree (a ticket lead's is MindFlock's base clone, not its Path).
+        repo = _git_merge.repo_of(wt) or run["repo_root"]
+        run["repo_root"] = repo
         lead = run["lead"]["title"]
         base = lead[: -len("-lead")] if lead.endswith("-lead") else lead
-        titles = _runs.piece_titles(
-            base, plan["pieces"], _taken_titles(run["repo_root"])
-        )
+        titles = _runs.piece_titles(base, plan["pieces"], _taken_titles(repo))
         tasks = []
         for i, (p, title) in enumerate(zip(plan["pieces"], titles), 1):
             tasks.append(
@@ -3173,7 +3248,7 @@ def approve_plan(run_id: str) -> dict:
                         "text": p["prompt"],
                         "paths": p["paths"],
                         "title": title,
-                        "repo_root": run["repo_root"],
+                        "repo_root": repo,
                         "lane": "commit",
                     }
                 )
@@ -3450,6 +3525,13 @@ def release(run_id: str, merge_when_green: bool = False, auto: bool = False) -> 
             )
         if not refusal:
             lane = release_lane(run, merge_when_green)
+            # Asked live: a lead whose origin is a folder on this machine can
+            # only push there — no PR can be opened, so none is attempted
+            # (the release ends in a hand-off that names the folder).
+            _inst, wt = _lead_wt(run)
+            local = _local_origin(wt)
+            if local and lane != "push":
+                lane = "push"
             lead = (run.get("lead") or {}).get("title") or ""
             try:
                 _lanes.ship_now(lead, lane)
@@ -3464,6 +3546,7 @@ def release(run_id: str, merge_when_green: bool = False, auto: bool = False) -> 
                     "release": {
                         "state": "releasing",
                         "lane": lane,
+                        "local_origin": local,
                         "detail": "",
                         "at": now,
                     },

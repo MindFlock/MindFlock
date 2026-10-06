@@ -41,6 +41,7 @@ __all__ = [
     "current_branch",
     "operation_in_progress",
     "recover_interrupted",
+    "repo_of",
 ]
 
 _GIT_TIMEOUT_S = 120
@@ -88,6 +89,33 @@ def rev_parse(path: str, ref: str = "HEAD") -> str:
     if cp is None or cp.returncode != 0:
         return ""
     return _out(cp)
+
+
+def repo_of(path: str) -> str:
+    """The repository that HOLDS the worktree at ``path`` — its objects and
+    its branches — or ``""``.
+
+    That is the parent of ``--git-common-dir``: the main checkout of a linked
+    worktree, the checkout itself for a plain clone, and the git dir itself
+    for a bare repository. A session's ``Path`` is NOT that: a provisioned
+    session (every ticket session) is created with ``path="."`` — the
+    server's own cwd — and its worktree hangs off MindFlock's ``_base_<repo>``
+    clone (or is a clone of its own). A branch forked from such a session's
+    commit, and every probe of the branches beside it, has to happen here.
+    """
+    if not path or not os.path.isdir(path):
+        return ""
+    cp = _git(
+        path, "rev-parse", "--path-format=absolute", "--git-common-dir", timeout=20
+    )
+    if cp is None or cp.returncode != 0:
+        return ""
+    common = os.path.normpath(_out(cp))
+    if not common or not os.path.isdir(common):
+        return ""
+    if os.path.basename(common) == ".git":
+        return os.path.dirname(common)
+    return common
 
 
 def is_ancestor(path: str, sha: str, ref: str = "HEAD") -> Optional[bool]:

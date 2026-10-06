@@ -294,7 +294,14 @@ worked on in parallel but ship as **one** branch and one PR:
    check. No `gh` and no token: the branch is pushed and the card links
    GitHub's prefilled compare page (a non-GitHub origin has none: the card
    offers Copy title / Copy body); the lead's record is finished, not
-   left as a red ✗. The PR title is built from whole words — never a cut
+   left as a red ✗. A lead whose `origin` is a **folder on this machine** (a
+   provisioned workspace cloned from a checkout that has no forge remote of
+   its own) can only push there: the card says so before the click, offers
+   one button (*Push to the local folder*), the release arms `push` whatever
+   the lane, and it ends in a hand-off naming the folder — "pushed
+   `<branch>` to `<folder>`, a folder on this machine, not GitHub, so no PR
+   was opened" — with Copy title / Copy body, never a PR it did not open
+   (`release.local_origin`). The PR title is built from whole words — never a cut
    name or a literal "…". A group whose lane is `leave` or `commit`
    ends right after the check — the merged branch is the result, nothing is
    pushed. `policy.release: "auto"` (API only) releases without the click.
@@ -334,6 +341,20 @@ one-for-all group whose lines come from the lead's plan:
 5. From there it is the one-for-all path above: committed, merged back one at
    a time, conflicts to the lead, the check, and your release.
 
+**The lead's repository is its worktree's**, never its `Path`. A ticket
+session (the ingestion pipeline, Intake *Begin work*) is created with
+`path="."` — its `Path` is the server's cwd — and its worktree is a
+provisioned one. So the pieces' repository is read from the lead's worktree
+(`git rev-parse --git-common-dir`, `git_merge.repo_of`): MindFlock's
+`_base_<repo>` clone for a worktree-strategy lead, the lead's own clone for a
+clone-strategy one, the picked repo for a plain session. The pieces are plain
+worktrees of that repository, cut at the lead's HEAD, and merge back into the
+lead's own branch — a ticket lead stays on `feature/sc-<id>/…` and keeps its
+ticket-ledger entry. Branch-taken probes, the group's `repo_root`, and a
+one-for-all ticket line's same-repository check (which also accepts the base
+clone's origin, clone source and `_base_`-less name) all use it; a piece's
+rail row names the repository, not the `_base_` folder.
+
 A lead whose launch lost its MindFlock tools (after a restart) cannot propose:
 its Thread says "Restart the lead to give it the MindFlock tools".
 
@@ -349,4 +370,4 @@ its Thread says "Restart the lead to give it the MindFlock tools".
 | Merge-back | `backend/web/core/git_merge.py` (merge, ancestry, subjects, diff stat) |
 | MCP tools | `backend/mcp/runs.py` (incl. the lead's `propose_run_plan`, `report_integrated`) |
 | Store | `~/.mindflock/runs/` (`MINDFLOCK_RUNS_DIR`) |
-| Tests | `tests/unit/test_team_runs_*.py` (incl. `_split`), `test_team_run_driver.py`, `test_team_run_split_driver.py`, `test_team_run_events.py`, `test_git_merge.py`, `test_outbox.py`, `test_lanes.py`, `test_mcp_team_runs.py` |
+| Tests | `tests/unit/test_team_runs_*.py` (incl. `_split`), `test_team_run_driver.py`, `test_team_run_split_driver.py`, `test_team_run_ticket_lead.py`, `test_team_run_events.py`, `test_git_merge.py`, `test_outbox.py`, `test_lanes.py`, `test_mcp_team_runs.py` |

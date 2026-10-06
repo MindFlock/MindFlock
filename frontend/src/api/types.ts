@@ -1136,6 +1136,9 @@ export interface RunRelease {
   del?: number;
   commits?: number;
   conflict_fixes?: number;
+  /** The lead's origin when it is a folder on this machine: the release can
+   * only push there, and no PR is ever opened. */
+  local_origin?: string;
   detail?: string;
 }
 
@@ -1196,6 +1199,8 @@ export interface OutboxWaiting {
     check?: string;
     /** release: the group's lane (labels the buttons; "Open the PR" never merges). */
     lane?: string;
+    /** release: the lead's origin when it is a folder on this machine (push only, no PR). */
+    local_origin?: string | null;
   } | null;
   actions?: string[];
 }
