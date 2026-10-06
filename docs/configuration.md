@@ -167,7 +167,8 @@ log_level = "INFO"                # REQUIRED
 # refresh_branch every refresh_interval_seconds and publishes it back to
 # seed_path. The refresher runs inside ticket ingestion; `mindflock doctor`
 # (check `cache-seeds`) warns once a seed is older than 3 intervals (min 6h)
-# and says how far the refresher's checkout is behind refresh_branch. For
+# and says how far the refresher's checkout is behind refresh_branch. A
+# cycle is skipped (retried in 5 min) while Linux memory pressure is >= 10%. For
 # testmon, a stale seed means the FULL suite: testmon re-runs everything when
 # any installed package's minor version differs from the seed's (list volatile
 # deps under pytest's `testmon_ignore_dependencies` ini to exempt them).

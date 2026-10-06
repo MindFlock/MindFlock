@@ -565,7 +565,12 @@ tracks the cache's `refresh_branch`: each cycle it hard-resets to origin, runs
 the workspace setup commands, runs `refresh_command` (with the cache's `env`
 exported), and atomically publishes the resulting `workspace_path` artifact to
 `seed_path`. Failures are logged and the loop continues; cycle cadence is
-`refresh_interval_seconds` (default hourly).
+`refresh_interval_seconds` (default hourly). A refresh is background work, so
+a cycle is skipped while Linux memory pressure (PSI `some avg60` in
+`/proc/pressure/memory`) is at or above 10%, and retried after 5 minutes (or
+the interval, if shorter): starting another test run on a machine already
+busy with parallel sessions' suites only pushes everything into swap. Without
+PSI (macOS) the refresher runs every cycle.
 
 The canonical example is a `testmon` cache (`workspaces/_testmon_refresher`,
 artifact `.testmondata`, refresh command `pytest --testmon` with

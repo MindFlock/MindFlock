@@ -226,6 +226,97 @@ def test_run_forever_disabled_without_refresh_command(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# memory-pressure backoff
+# --------------------------------------------------------------------------- #
+_PSI_SAMPLE = (
+    "some avg10=50.45 avg60=18.71 avg300=33.57 total=511985145\n"
+    "full avg10=1.83 avg60=9.61 avg300=21.23 total=330241438\n"
+)
+
+
+def test_memory_pressure_reads_some_avg60(tmp_path, monkeypatch):
+    psi = tmp_path / "memory"
+    psi.write_text(_PSI_SAMPLE)
+    monkeypatch.setattr(cr, "_PSI_MEMORY_PATH", psi)
+    # "some", not "full" — and avg60, not avg10.
+    assert cr._memory_pressure() == 18.71
+
+
+@pytest.mark.parametrize("content", [None, "", "full avg60=5.0\n", "some avg60=x\n"])
+def test_memory_pressure_unavailable_is_none(tmp_path, monkeypatch, content):
+    psi = tmp_path / "memory"
+    if content is not None:
+        psi.write_text(content)
+    monkeypatch.setattr(cr, "_PSI_MEMORY_PATH", psi)
+    assert cr._memory_pressure() is None
+
+
+class _StopLoop(Exception):
+    pass
+
+
+def _loop_refresher(tmp_path, monkeypatch, pressures, interval=1800):
+    """A refresher whose loop runs until ``pressures`` is exhausted, recording
+    each refresh and each sleep instead of doing either."""
+    cfg = PipelineConfig(repo_url="git@x:o/r.git")
+    cache = CacheSeed(
+        name="testmon",
+        seed_path=tmp_path / "seed",
+        workspace_path=".testmondata",
+        refresh_command="true",
+        refresh_interval_seconds=interval,
+    )
+    r = cr.CacheRefresher(cfg, cache)
+    events: list = []
+    readings = iter(pressures)
+
+    def fake_pressure():
+        try:
+            return next(readings)
+        except StopIteration:
+            raise _StopLoop
+
+    async def fake_refresh():
+        events.append("refresh")
+
+    async def fake_sleep(seconds):
+        events.append(("sleep", seconds))
+
+    monkeypatch.setattr(cr, "_memory_pressure", fake_pressure)
+    monkeypatch.setattr(r, "_refresh_once", fake_refresh)
+    monkeypatch.setattr(cr.asyncio, "sleep", fake_sleep)
+    return r, events
+
+
+def test_run_forever_skips_cycle_under_memory_pressure(tmp_path, monkeypatch):
+    r, events = _loop_refresher(tmp_path, monkeypatch, [55.0, 2.0])
+    with pytest.raises(_StopLoop):
+        asyncio.run(r.run_forever())
+    # Starved: no refresh, short backoff. Recovered: refresh, full interval.
+    assert events == [
+        ("sleep", cr._PRESSURE_RETRY_SECONDS),
+        "refresh",
+        ("sleep", 1800),
+    ]
+
+
+def test_run_forever_backoff_never_exceeds_interval(tmp_path, monkeypatch):
+    r, events = _loop_refresher(tmp_path, monkeypatch, [55.0], interval=60)
+    with pytest.raises(_StopLoop):
+        asyncio.run(r.run_forever())
+    assert events == [("sleep", 60)]
+
+
+@pytest.mark.parametrize("pressure", [None, cr._PRESSURE_SKIP_THRESHOLD - 0.1])
+def test_run_forever_refreshes_without_pressure(tmp_path, monkeypatch, pressure):
+    # None = no PSI on this platform: behave exactly as before.
+    r, events = _loop_refresher(tmp_path, monkeypatch, [pressure])
+    with pytest.raises(_StopLoop):
+        asyncio.run(r.run_forever())
+    assert events == ["refresh", ("sleep", 1800)]
+
+
+# --------------------------------------------------------------------------- #
 # git plumbing: _check_run / _ensure_workspace / _sync_to_branch
 # --------------------------------------------------------------------------- #
 def _cmd_refresher(tmp_path):
