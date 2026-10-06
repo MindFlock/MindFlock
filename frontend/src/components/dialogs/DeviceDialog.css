@@ -90,9 +90,61 @@
   filter: brightness(1.1);
 }
 
+/* Pair-with-device card (same card style as #rename-form). */
+#device-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 420px;
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#device-form h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+#device-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#device-form #device-dialog-name {
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+#device-form input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+#device-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 #device-dialog .device-dialog-hint {
   font-size: 12px;
-  margin: 8px 0 0;
+  line-height: 1.5;
+  margin: 0;
+}
+
+#device-dialog .device-dialog-hint code {
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 #device-dialog .dialog-err {

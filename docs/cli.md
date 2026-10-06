@@ -19,13 +19,15 @@ mindflock doctor --fix      # offer to install/repair missing dependencies inter
 mindflock uninstall         # undo MindFlock's writes to your repos (see below)
 mindflock mcp               # the MindFlock MCP server on stdio (for an agent CLI to start)
 mindflock mcp --print-config  # how to register it with your own Claude Code / Codex
+mindflock token             # print this machine's access token (for sign-in / pairing)
 mindflock --version         # print the installed version
 ```
 
 `serve tailscale` binds all interfaces (0.0.0.0) — the port is reachable from
 your LAN as well as your tailnet — and auto-enables the access-token gate:
 unauthenticated clients get 401, and the token + QR code are printed in the
-startup banner. The default `serve` (local) binds 127.0.0.1 only.
+startup banner. `mindflock token` prints the same token later (it reads the
+settings store directly, so it works with no server running). The default `serve` (local) binds 127.0.0.1 only.
 
 ### `mindflock uninstall [--purge] [--keep-worktrees] [--dry-run] [--yes]`
 

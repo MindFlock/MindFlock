@@ -67802,7 +67802,7 @@ function Security(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "set-row",
-			title: "Whether opening MindFlock in a browser requires the access token from the startup banner.",
+			title: "Whether opening MindFlock in a browser requires this device's access token (shown below, or `mindflock token`).",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-label",
@@ -72497,27 +72497,27 @@ function DeviceDialog() {
 			},
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Connect to device" }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-					"Access token for ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						id: "device-dialog-name",
-						className: "muted",
-						children: device
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "password",
-						id: "device-token-input",
-						ref: inputRef,
-						autoComplete: "off",
-						spellCheck: false,
-						placeholder: "Token from that device's startup banner",
-						value: token,
-						onChange: (e) => setToken(e.target.value)
-					})
-				] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Access token for ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					id: "device-dialog-name",
+					children: device
+				})] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "password",
+					id: "device-token-input",
+					ref: inputRef,
+					autoComplete: "off",
+					spellCheck: false,
+					placeholder: "Paste the access token",
+					value: token,
+					onChange: (e) => setToken(e.target.value)
+				})] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "muted device-dialog-hint",
-					children: "The other device must have “Allow remote control” turned on in its Security settings."
+					children: [
+						"Find it on that device under Settings → Security (or run ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "mindflock token" }),
+						" ",
+						"there). That device also needs “Allow remote control” turned on."
+					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "modal-actions",

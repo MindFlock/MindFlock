@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`mindflock token`** prints this machine's access token, the one another
+  device's Connect dialog or the sign-in page asks for. It reads the settings
+  store directly, so it works with no server running.
+
 - **Settings → Agent orchestration.** The MindFlock MCP switch and scope moved
   out of General into their own screen under Agents, with the spawn limits
   beside them: sub-sessions per orchestrator, agent-spawned sessions in total,
@@ -269,6 +273,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each line as its own turn.
 
 ### Fixed
+
+- **Turning on Tailscale mode no longer locks the desktop app out of its own
+  server.** The access-token gate answered the app's window with the sign-in
+  page, and the token it asked for lived in Settings, behind that page; a
+  restart did not help. When the window lands on the sign-in page, the app now
+  reads the token where the server runs (inside WSL on Windows) and signs
+  itself in once; the cookie lasts a year. Connections that merely come from
+  this machine are still not trusted, since `tailscale serve` and SSH tunnels
+  arrive from 127.0.0.1 too.
+- **The Connect to device dialog is a proper card.** It rendered unstyled over
+  the page with a clipped placeholder. The sign-in page and the dialog now say
+  where the token is (Settings → Security, or `mindflock token`) instead of
+  pointing at a startup banner the desktop app never shows.
 
 - **A deleted session no longer hands its fast-track run to the next session
   with the same name.** A run armed less than 30 minutes before the delete

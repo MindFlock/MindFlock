@@ -1271,8 +1271,12 @@ endpoints and tolerate individual failures.
 ## Signing in
 
 When the server is exposed beyond localhost (tailscale mode) it requires the
-access token from the startup banner: a browser hits a small login page, or scan
-the banner QR (`/m?token=…`) to land signed in. See the API doc's
+access token (Settings → Security, `mindflock token`, or the startup banner): a
+browser hits a small login page, or scan the banner QR (`/m?token=…`) to land
+signed in. The desktop app signs itself in: when its window lands on the
+sign-in page it reads the token in the engine's environment (inside WSL on
+Windows) and reloads with `?token=`, so turning on Tailscale mode never locks
+it out of its own server. See the API doc's
 Authentication section. If the token leaks, regenerate it from Settings →
 **Security** (below).
 

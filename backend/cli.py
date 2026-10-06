@@ -375,6 +375,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print the Claude Code / Codex registration snippets and exit",
     )
 
+    sub.add_parser(
+        "token",
+        help="print this machine's access token (what another device or the sign-in page asks for)",
+        description=(
+            "Print the access token this machine's MindFlock server checks: "
+            "MINDFLOCK_AUTH_TOKEN when set, else the one persisted in "
+            "~/.mindflock/settings.json. Paste it into the sign-in page or "
+            'into another device\'s "Connect" dialog. Exits 1 when no token '
+            "has been created yet (the server makes one the first time the "
+            "access-token gate is on)."
+        ),
+    )
+
     uninstall = sub.add_parser(
         "uninstall",
         parents=[server_opts],
@@ -456,6 +469,20 @@ def _cmd_init(assume_yes: bool = False) -> int:
     from backend import init_wizard
 
     return init_wizard.run(assume_yes=assume_yes)
+
+
+def _cmd_token(out: Optional[TextIO] = None) -> int:
+    """``mindflock token``: print the local access token, or exit 1 without one."""
+    tok = client._read_token()
+    if not tok:
+        print(
+            "no access token yet — the server creates one the first time the "
+            "access-token gate is on (Tailscale mode, or Settings → Security)",
+            file=sys.stderr,
+        )
+        return 1
+    print(tok, file=out or sys.stdout)
+    return 0
 
 
 def _cmd_doctor(fix: bool = False) -> int:
@@ -1351,6 +1378,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         # server lazily per tool call, so it never goes through the
         # ServerNotFound handler below either.
         return _cmd_mcp(args)
+    if args.command == "token":
+        # Offline on purpose: it reads the same store the server does, so it
+        # works when the only thing in the way is the sign-in page itself
+        # (the desktop app runs this to sign in to its own server).
+        return _cmd_token()
     if args.command == "accounts":
         # Not a session command either: it prefers a running server but falls
         # back to the local settings store, so ServerNotFound is a routing
