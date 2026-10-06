@@ -140,15 +140,24 @@ def is_ancestor(path: str, sha: str, ref: str = "HEAD") -> Optional[bool]:
     return None
 
 
-def tracked_dirty(path: str) -> Optional[bool]:
+def tracked_dirty(path: str, intent_ok: bool = False) -> Optional[bool]:
     """Uncommitted changes to TRACKED files (staged or not). Untracked files
     do not count — an agent's scratch file never blocks a merge; git itself
-    refuses (as an ``error``) when one would be overwritten. None when git
-    cannot tell."""
+    refuses (as an ``error``) when one would be overwritten. With
+    ``intent_ok``, an intent-to-add entry (an untracked file MindFlock's diff
+    view marked with ``git add -N``) does not count either: it is still only
+    an untracked file to whoever owns the folder. None when git cannot
+    tell."""
     cp = _git(path, "status", "--porcelain", "--untracked-files=no", timeout=30)
     if cp is None or cp.returncode != 0:
         return None
-    return bool(_out(cp))
+    # Never ``_out`` here: its strip() eats the first line's leading space,
+    # which is half of the status code (" A" = intent-to-add).
+    raw = (cp.stdout or b"").decode("utf-8", "replace")
+    lines = [ln for ln in raw.splitlines() if ln.strip()]
+    if intent_ok:
+        lines = [ln for ln in lines if not ln.startswith(" A ")]
+    return bool(lines)
 
 
 def merge_in_progress(path: str) -> bool:

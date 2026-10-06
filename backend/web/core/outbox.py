@@ -434,8 +434,11 @@ def _run_ask(run: dict, now: float = 0.0) -> Optional[dict]:
     rel = run.get("release") or {}
     if state == "release_ready" and rel.get("state") in ("ready", "failed"):
         merged = sum(1 for t in run["tasks"] if t["state"] == "integrated")
-        reason = "%d merged into %s — one PR is ready to open" % (
+        # A same-folder split's pieces are committed on the branch, not merged.
+        into = "committed on" if _runs.same_folder(run) else "merged into"
+        reason = "%d %s %s — one PR is ready to open" % (
             merged,
+            into,
             rel.get("branch") or lead or "one branch",
         )
         local = str(rel.get("local_origin") or "")
@@ -443,9 +446,9 @@ def _run_ask(run: dict, now: float = 0.0) -> Optional[dict]:
             # The lead's origin is a folder on this machine: the release can
             # only push there — never promise a PR it cannot open.
             reason = (
-                "%d merged into %s — its origin is a folder on this machine "
+                "%d %s %s — its origin is a folder on this machine "
                 "(%s): releasing pushes there, no PR can be opened"
-                % (merged, rel.get("branch") or lead or "one branch", local)
+                % (merged, into, rel.get("branch") or lead or "one branch", local)
             )
         if rel.get("state") == "failed" and rel.get("detail"):
             reason = "the release stopped: %s" % rel["detail"]

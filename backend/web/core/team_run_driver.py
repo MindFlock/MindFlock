@@ -359,7 +359,10 @@ def _observe_lead(run, now, rows, pending, instances, records, failures) -> dict
     head = _git_merge.rev_parse(wt, "HEAD")
     lo["head"] = head
     _tidy_artifacts(wt)
-    lo["clean"] = None if (dirty := _git_merge.tracked_dirty(wt)) is None else not dirty
+    # A shared folder (same-folder split): an untracked file MindFlock's diff
+    # view marked intent-to-add is nobody's change to wait on.
+    dirty = _git_merge.tracked_dirty(wt, _runs.same_folder(run))
+    lo["clean"] = None if dirty is None else not dirty
     lo["merging"] = _git_merge.merge_in_progress(wt)
     lo["operation"] = _git_merge.operation_in_progress(wt)
     lo["ready"] = bool(head)
@@ -3651,7 +3654,10 @@ async def _start_own_lead(run_id: str, fit: dict) -> None:
     if not origin or not wt:
         raise RunError("the lead session is not there", 409)
     await asyncio.to_thread(_tidy_artifacts, wt)
-    dirty = await asyncio.to_thread(_git_merge.tracked_dirty, wt)
+    # Untracked files (also ones MindFlock's diff view marked intent-to-add)
+    # are the folder owner's scratch: not in the split either, but nothing to
+    # refuse over — the event log names them.
+    dirty = await asyncio.to_thread(_git_merge.tracked_dirty, wt, True)
     if dirty:
         raise RunError(
             "%s has uncommitted changes — they would not be in the split (the "
@@ -3663,6 +3669,7 @@ async def _start_own_lead(run_id: str, fit: dict) -> None:
     repo = await asyncio.to_thread(_git_merge.repo_of, wt)
     if not head or not repo:
         raise RunError("could not read %s's last commit" % origin, 409)
+    untracked = await asyncio.to_thread(_git_merge.changed_paths, wt) or []
     title = await asyncio.to_thread(_own_lead_title, origin, repo)
     base_branch = fit.get("base") or fit.get("branch") or ""
     payload = {
@@ -3689,6 +3696,20 @@ async def _start_own_lead(run_id: str, fit: dict) -> None:
         with _runs.edit(run_id) as r:
             if r is None:
                 return
+            if untracked:
+                _runs.log_event(
+                    r,
+                    now,
+                    "note",
+                    text="%d untracked file%s in %s %s not in the split (%s)"
+                    % (
+                        len(untracked),
+                        "" if len(untracked) == 1 else "s",
+                        origin,
+                        "is" if len(untracked) == 1 else "are",
+                        ", ".join(untracked[:4]),
+                    ),
+                )
             r["origin"] = {
                 "title": origin,
                 "branch": fit.get("branch") or "",
@@ -3780,7 +3801,7 @@ def approve_plan(run_id: str, mode: str = "worktrees") -> dict:
                     branch=fit["branch"],
                 )
             _tidy_artifacts(wt)
-            if _git_merge.tracked_dirty(wt):
+            if _git_merge.tracked_dirty(wt, mode == "same_folder"):
                 raise RunError(
                     "the lead has uncommitted changes — commit its groundwork first "
                     + (
@@ -4118,6 +4139,26 @@ def _release_refusal(run: dict, now: float) -> Tuple[str, bool]:
     op = _git_merge.operation_in_progress(wt)
     if op:
         return "%s is in the middle of a %s — finish it first" % (title, op), False
+    if _runs.same_folder(run):
+        # The release arms the lead's lane, whose commit step takes EVERY
+        # change in the folder — untracked files too. In a shared folder
+        # (often the person's own checkout) that is never the pieces' work:
+        # the release waits until the folder holds nothing but the branch.
+        left = _git_merge.changed_paths(wt)
+        if left is None:
+            return "could not read %s's folder" % title, False
+        if left:
+            return (
+                "%s's folder has changes no piece made (%s%s) — the release would "
+                "commit them into the PR: commit them elsewhere, discard them or "
+                "ignore them (.gitignore), then release"
+                % (
+                    title,
+                    ", ".join(left[:4]),
+                    " +%d more" % (len(left) - 4) if len(left) > 4 else "",
+                ),
+                False,
+            )
     dirty = _git_merge.tracked_dirty(wt)
     if dirty is None:
         return "could not read %s's worktree" % title, False

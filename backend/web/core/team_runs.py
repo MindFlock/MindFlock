@@ -1544,7 +1544,15 @@ def release_body(run: dict, base: str, branch: str) -> str:
     lead = (run.get("lead") or {}).get("title") or "the lead"
     plan = run.get("plan") or {}
     lines: List[str] = []
-    if run.get("split"):
+    if same_folder(run):
+        lines.append(
+            "Split into %d pieces with separate paths by %s, worked on side by side "
+            "in its folder; MindFlock committed each piece's paths on `%s` (one "
+            "commit per piece)." % (len(integrated), lead, branch or "the branch")
+        )
+        if plan.get("why"):
+            lines += ["", plan["why"].strip()]
+    elif run.get("split"):
         lines.append(
             "Split into %d pieces with separate paths by %s; each was merged back "
             "into `%s` by MindFlock." % (len(integrated), lead, branch or "the branch")
@@ -3024,6 +3032,20 @@ def lead_gone(run: dict, now: float) -> str:
     )
 
 
+def _finish_phrase_sf(rel: dict, n: int) -> str:
+    """:func:`finish_phrase` for a same-folder split (committed, not merged)."""
+    pieces = "%d piece%s" % (n, "" if n == 1 else "s")
+    if rel.get("state") == "done" and _s(rel.get("pr_url")):
+        return "one PR opened (%s, one commit each)" % pieces
+    if rel.get("state") == "handoff" and _s(rel.get("local_origin")):
+        return "its branch was pushed to a folder on this machine; no PR was opened"
+    if rel.get("state") == "handoff":
+        return "its branch was pushed; the PR was not opened — open it from the branch"
+    if rel.get("state") == "done":
+        return "its branch was pushed (%s, one commit each)" % pieces
+    return "%s committed on one branch, nothing pushed" % pieces
+
+
 def finish_phrase(run: dict, shipped: int) -> str:
     """What a finished group did, in a few words — for its notification. A
     one-for-all group ships ONE branch (one PR at most), never "N PRs"."""
@@ -3035,6 +3057,8 @@ def finish_phrase(run: dict, shipped: int) -> str:
         return "%d %s" % (shipped, noun)
     rel = run.get("release") or {}
     merged = sum(1 for t in run["tasks"] if t["state"] == "integrated")
+    if same_folder(run):
+        return _finish_phrase_sf(rel, merged)
     if rel.get("state") == "done" and _s(rel.get("pr_url")):
         return "one PR opened (%d merged into it)" % merged
     if rel.get("state") == "handoff" and _s(rel.get("local_origin")):

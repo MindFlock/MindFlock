@@ -431,8 +431,11 @@ agent session **in the lead's own folder** (in place, like a copy window,
   committed empty.
 - **Changes no piece owns** (a file outside every piece's paths that was not
   already dirty at approval) are never put in a piece's commit: the group
-  says so once (Outbox `stray`), and the release refuses a tracked one —
-  commit or discard it yourself.
+  says so once (Outbox `stray`). The release waits while the folder holds
+  **any** change — tracked or untracked, stray or there since before the
+  split: the lead's lane commits everything in its folder before it pushes,
+  and a person's scratch never ships with the pieces. Commit it elsewhere,
+  discard it or `.gitignore` it, then release.
 - **Release** = the lead's branch, one PR (one commit per piece), exactly as
   above. **No per-piece undo**: the pieces share one branch with no merge
   commit to revert as a unit — undo a piece by reverting its commit by hand.

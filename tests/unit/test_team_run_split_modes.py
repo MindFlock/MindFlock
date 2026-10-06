@@ -314,6 +314,10 @@ class TestOwnLeadForSeparateWorktrees:
         # index stay exactly as they are.
         _git(env.repo, "commit", "-qam", "my own work")
         _write(env.repo, "scratch.txt", "mine, untracked\n")
+        # MindFlock's own diff view marks untracked files intent-to-add in a
+        # session's folder: still only the owner's untracked scratch — named,
+        # never refused over.
+        _git(env.repo, "add", "-N", "scratch.txt")
         before = _snapshot(env.repo)
         head = before["head"]
         dto = asyncio.run(drv.approve(rid, "worktrees"))
@@ -324,6 +328,10 @@ class TestOwnLeadForSeparateWorktrees:
         assert p["title"] == "mine-split" and p["base_ref"] == head
         assert p["repo_path"] == env.repo and "parent" not in p
         assert dto["origin"]["title"] == "mine" and dto["origin"]["head"] == head
+        assert any(
+            "1 untracked file in mine is not in the split (scratch.txt)" in e["text"]
+            for e in dto["events"]
+        )
         new_wt = _wt(env, new)
         assert gm.rev_parse(new_wt, "HEAD") == head
         assert gm.current_branch(new_wt) == "mf/mine-split"
@@ -469,6 +477,11 @@ class TestSameFolder:
         assert all(t["fenced"] for t in r["tasks"])
 
     def test_one_commit_per_piece_with_only_its_paths_then_release(self, env):
+        # The person's own untracked scratch, marked intent-to-add by the
+        # diff view, sits in the folder throughout: never stray (it was there
+        # at approval), never in a commit, never blocking the release.
+        _write(env.repo, "scratch.txt", "mine\n")
+        _git(env.repo, "add", "-N", "scratch.txt")
         rid, lead, r = _sf_running(env)
         base = r["sf"]["base"]
         t1, t2 = [t["title"] for t in r["tasks"]]
@@ -491,7 +504,7 @@ class TestSameFolder:
         assert files == ["auth/tokens.py", "auth/tokens_new.py"]
         assert "MindFlock-Piece: %s/t1" % rid in body
         # The other piece's work is still in the tree, uncommitted, untouched.
-        assert gm.changed_paths(env.repo) == ["auth/session.py"]
+        assert gm.changed_paths(env.repo) == ["auth/session.py", "scratch.txt"]
         assert open(os.path.join(env.repo, "auth/session.py")).read() == "S = 2\n"
         # Its fence is gone; the other one's stays.
         r = _step(rid)
@@ -509,7 +522,25 @@ class TestSameFolder:
         assert r["state"] == "release_ready"
         rel = r["release"]
         assert rel["branch"] == "feat" and rel["commits"] == 2
-        assert gm.changed_paths(env.repo) == []
+        assert "MindFlock committed each piece's paths on `feat`" in rel["body"]
+        assert "merged back" not in rel["body"]
+        from backend.web.core import outbox as ob
+
+        assert "2 committed on feat" in ob._run_ask(r)["reason"]
+        assert (
+            tr.finish_phrase(r, 0) == "2 pieces committed on one branch, nothing pushed"
+        )
+        assert gm.changed_paths(env.repo) == ["scratch.txt"]
+        assert r["sf"]["stray"] == []
+        # The release would commit EVERY change in the folder (the lead's
+        # lane commits before it pushes): a person's untracked scratch never
+        # ships with the pieces — it waits, and says why.
+        with pytest.raises(drv.RunError) as err:
+            drv.release(rid)
+        assert "changes no piece made (scratch.txt)" in err.value.message
+        assert "would commit them into the PR" in err.value.message
+        _git(env.repo, "rm", "-q", "--cached", "scratch.txt")
+        os.unlink(os.path.join(env.repo, "scratch.txt"))
         drv.release(rid)
         assert ap.get(lead)["lane"] == "pr"
         assert rz.session_fences(env.repo) == {}
@@ -566,7 +597,7 @@ class TestSameFolder:
         assert r["state"] == "release_ready"
         with pytest.raises(drv.RunError) as err:
             drv.release(rid)
-        assert "uncommitted changes" in err.value.message
+        assert "changes no piece made (README.md)" in err.value.message
 
     def test_done_with_nothing_under_its_paths_is_said_not_committed(self, env):
         rid, _lead, r = _sf_running(env)
