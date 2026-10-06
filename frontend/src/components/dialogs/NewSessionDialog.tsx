@@ -20,7 +20,14 @@ import {
   queryClient,
   useAuthProfiles,
   useConfig,
+  useDevices,
 } from "../../state/queries";
+import {
+  deviceApi,
+  deviceLabel,
+  deviceTitle,
+  startableDevices,
+} from "../../lib/devices";
 import { useUi } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { errMsg } from "../../lib/format";
@@ -301,7 +308,11 @@ export type FolderAction =
    * deliberate finish, after which there is nothing left to undo. */
   | { t: "browse-commit"; path: string }
   /** Escape: put the field back the way the browser found it. */
-  | { t: "browse-cancel" };
+  | { t: "browse-cancel" }
+  /** The session will live on another device: a path from this one's disk
+   * (or the last device's) names nothing over there. Start blank, so the
+   * new device's own suggestion fills it. */
+  | { t: "device" };
 
 export const FOLDER_INIT: FolderState = {
   path: "",
@@ -360,6 +371,8 @@ export function folderReducer(s: FolderState, a: FolderAction): FolderState {
       return { ...s, path: a.path, touched: true };
     case "browse-commit":
       return { path: a.path, browsing: false, undo: null, touched: true };
+    case "device":
+      return { ...FOLDER_INIT };
     case "browse-cancel":
       // Restores the touched flag too, so a browse that came to nothing also
       // hands the field back to a suggestion still in flight.
@@ -923,6 +936,113 @@ export function NewSessionDialog() {
   const repoPath = folder.path;
   const browserOpen = folder.browsing;
 
+  // WHERE the session will live: "" is this device, anything else a connected
+  // tailnet device (sessions are equal wherever they run — the picker only
+  // shows up once a second device is there to pick). Kept across openings
+  // like the folder is. A batch from Intake always starts here: runs are
+  // driven by the server that starts them.
+  const { data: devicesResp } = useDevices();
+  const startable = useMemo(() => startableDevices(devicesResp), [devicesResp]);
+  const [devicePick, setDevicePick] = useState("");
+  const device =
+    batch || !startable.some((d) => d.device === devicePick) ? "" : devicePick;
+  const dapi = useMemo(() => deviceApi(device), [device]);
+  // Read by the loads, whose answers may land after the user picked another
+  // device: an answer about the old device's disk must not fill the form.
+  const deviceRef = useRef(device);
+  deviceRef.current = device;
+  const loadedDevice = useRef<string | null>(null);
+
+  /** Load what the form offers from the device the session will live on:
+   * folder suggestions, config (home, default agent), launch-flag defaults,
+   * templates and the agent list. Returns the cleanup that silences answers
+   * nobody is waiting for any more. */
+  const loadFor = (dev: string) => {
+    const dapi = deviceApi(dev);
+    let live = true;
+    const here = () => live && deviceRef.current === dev;
+    // The folder suggestions get a request of their own rather than a place in
+    // the barrier below, because the endpoint walks the filesystem: hundreds of
+    // listdir/stat probes under $HOME plus a git rev-parse per surviving
+    // candidate, which is milliseconds warm and seconds on a cold or
+    // network-mounted home. Behind the barrier that walk would hold the agent
+    // list, the launch flags and the templates hostage to it as well.
+    (async () => {
+      try {
+        const d = await dapi<{ suggestions?: RepoSuggestion[] }>("/api/repos/suggest");
+        if (!here()) return;
+        const sug = d.suggestions || [];
+        setSuggestions(sug);
+        // Start on the best-ranked one — normally the folder the last session
+        // used — so the common case needs no Browse trip at all. Unless the user
+        // has already said where they want to work: see folderReducer.
+        folderDo({ t: "suggested", path: sug[0]?.path || "" });
+      } catch {
+        // Suggestions are sugar. The field, the browser and Create all work
+        // without them, so a failed walk must not cost the dialog anything.
+        if (here()) setSuggestions([]);
+      }
+    })();
+    (async () => {
+      // Config, settings and templates all answer out of memory, so waiting for
+      // the slowest of the three costs the dialog nothing.
+      const [cfgR, setR, tplR] = await Promise.allSettled([
+        dev
+          ? dapi<Config>("/api/config")
+          : refreshConfig().then(() => queryClient.getQueryData<Config>(["config"])),
+        dapi<{ settings?: { coding_cli?: { default_launch_args?: Record<string, string> } } }>(
+          "/api/settings"
+        ),
+        dapi<{ templates?: Template[] }>("/api/templates"),
+      ]);
+      if (!here()) return;
+      const cfg = cfgR.status === "fulfilled" ? cfgR.value : undefined;
+      setHomePath(cfg?.home || "");
+      // $HOME is the fallback it always was: almost never what the user wants,
+      // but a place the browser can start from when the suggestions had nothing
+      // to offer (or failed, or are still walking).
+      folderDo({ t: "fallback", path: cfg?.home || "" });
+      setProvisioningAvailable(!!cfg?.provisioning_available);
+      let provs: Provider[] = [];
+      try {
+        const d = await dapi<{ providers?: Provider[] }>("/api/providers/manage");
+        provs = d.providers || [];
+      } catch {
+        /* providers are optional */
+      }
+      if (!here()) return;
+      setProviders(provs);
+      // Map the saved default (name / alias / raw command) to the provider NAME.
+      const prev = cfg?.default_program || "";
+      const lower = prev.toLowerCase();
+      const match = provs.find(
+        (p) =>
+          (p.name || "").toLowerCase() === lower ||
+          (p.aliases || []).some((a) => String(a).toLowerCase() === lower) ||
+          String(p.command || "").toLowerCase() === lower
+      );
+      const agent = match ? match.name : prev;
+      setProgram(agent);
+      // Per-provider default launch flags pre-fill the field so the default
+      // chips start ON; the field is sent explicitly, so toggling one off
+      // for this session is honored server-side.
+      const raw =
+        (setR.status === "fulfilled" && setR.value?.settings?.coding_cli?.default_launch_args) ||
+        {};
+      launchDefaults.current = {};
+      for (const k of Object.keys(raw))
+        launchDefaults.current[k.toLowerCase()] = String(raw[k] || "");
+      setLaunchArgs((launchDefaults.current[agent.trim().toLowerCase()] || "").trim());
+      setTemplates(tplR.status === "fulfilled" ? tplR.value?.templates || [] : []);
+    })();
+    return () => {
+      // Answers for a dialog that has since been closed (or closed and reopened)
+      // have nothing to say about this opening, and the suggestion walk is slow
+      // enough to still be running when that happens.
+      live = false;
+    };
+  };
+
   // Reset + load fresh data on every open (matches openDialog()) — except the
   // one open that is a failed create's own reopen.
   //
@@ -1027,86 +1147,26 @@ export function NewSessionDialog() {
     setProfileModels({});
     setSavedPresets(loadUserPresets());
     setPresetName(null);
-    let live = true;
-    // The folder suggestions get a request of their own rather than a place in
-    // the barrier below, because the endpoint walks the filesystem: hundreds of
-    // listdir/stat probes under $HOME plus a git rev-parse per surviving
-    // candidate, which is milliseconds warm and seconds on a cold or
-    // network-mounted home. Behind the barrier that walk would hold the agent
-    // list, the launch flags and the templates hostage to it as well.
-    (async () => {
-      try {
-        const d = await api<{ suggestions?: RepoSuggestion[] }>("/api/repos/suggest");
-        if (!live) return;
-        const sug = d.suggestions || [];
-        setSuggestions(sug);
-        // Start on the best-ranked one — normally the folder the last session
-        // used — so the common case needs no Browse trip at all. Unless the user
-        // has already said where they want to work: see folderReducer.
-        folderDo({ t: "suggested", path: sug[0]?.path || "" });
-      } catch {
-        // Suggestions are sugar. The field, the browser and Create all work
-        // without them, so a failed walk must not cost the dialog anything.
-        if (live) setSuggestions([]);
-      }
-    })();
-    (async () => {
-      // Config, settings and templates all answer out of memory, so waiting for
-      // the slowest of the three costs the dialog nothing.
-      const [cfgR, setR, tplR] = await Promise.allSettled([
-        refreshConfig().then(() => queryClient.getQueryData<Config>(["config"])),
-        api<{ settings?: { coding_cli?: { default_launch_args?: Record<string, string> } } }>(
-          "/api/settings"
-        ),
-        api<{ templates?: Template[] }>("/api/templates"),
-      ]);
-      if (!live) return;
-      const cfg = cfgR.status === "fulfilled" ? cfgR.value : undefined;
-      setHomePath(cfg?.home || "");
-      // $HOME is the fallback it always was: almost never what the user wants,
-      // but a place the browser can start from when the suggestions had nothing
-      // to offer (or failed, or are still walking).
-      folderDo({ t: "fallback", path: cfg?.home || "" });
-      setProvisioningAvailable(!!cfg?.provisioning_available);
-      let provs: Provider[] = [];
-      try {
-        const d = await api<{ providers?: Provider[] }>("/api/providers/manage");
-        provs = d.providers || [];
-      } catch {
-        /* providers are optional */
-      }
-      if (!live) return;
-      setProviders(provs);
-      // Map the saved default (name / alias / raw command) to the provider NAME.
-      const prev = cfg?.default_program || "";
-      const lower = prev.toLowerCase();
-      const match = provs.find(
-        (p) =>
-          (p.name || "").toLowerCase() === lower ||
-          (p.aliases || []).some((a) => String(a).toLowerCase() === lower) ||
-          String(p.command || "").toLowerCase() === lower
-      );
-      const agent = match ? match.name : prev;
-      setProgram(agent);
-      // Per-provider default launch flags pre-fill the field so the default
-      // chips start ON; the field is sent explicitly, so toggling one off
-      // for this session is honored server-side.
-      const raw =
-        (setR.status === "fulfilled" && setR.value?.settings?.coding_cli?.default_launch_args) ||
-        {};
-      launchDefaults.current = {};
-      for (const k of Object.keys(raw))
-        launchDefaults.current[k.toLowerCase()] = String(raw[k] || "");
-      setLaunchArgs((launchDefaults.current[agent.trim().toLowerCase()] || "").trim());
-      setTemplates(tplR.status === "fulfilled" ? tplR.value?.templates || [] : []);
-    })();
-    return () => {
-      // Answers for a dialog that has since been closed (or closed and reopened)
-      // have nothing to say about this opening, and the suggestion walk is slow
-      // enough to still be running when that happens.
-      live = false;
-    };
+    loadedDevice.current = deviceRef.current;
+    return loadFor(deviceRef.current);
   }, [open]);
+
+  // A different device picked while the dialog is open: its folders, its
+  // agents, its defaults. The opening's own load (above) covers the device
+  // the dialog opened on, which is what loadedDevice records.
+  useEffect(() => {
+    if (!open || loadedDevice.current === device) return;
+    loadedDevice.current = device;
+    folderDo({ t: "device" });
+    setSuggestions([]);
+    setSearch(null);
+    setFolderCheck(null);
+    // Accounts are this device's settings; the other device has its own.
+    setProfileId("");
+    setProfileModel("");
+    return loadFor(device);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, device]);
 
   // The opening focus belongs to the opening itself, not to the back of the
   // loads above: the dialog paints and is typeable the moment `open` flips, and
@@ -1159,7 +1219,7 @@ export function NewSessionDialog() {
     let live = true;
     const timer = window.setTimeout(async () => {
       try {
-        const r = await api<{ exists?: boolean; is_dir?: boolean; is_git?: boolean }>(
+        const r = await dapi<{ exists?: boolean; is_dir?: boolean; is_git?: boolean }>(
           "/api/repos/check?path=" + encodeURIComponent(asked)
         );
         if (live) setFolderCheck({ asked, plain: !!r.exists && !!r.is_dir && !r.is_git });
@@ -1174,7 +1234,7 @@ export function NewSessionDialog() {
       live = false;
       window.clearTimeout(timer);
     };
-  }, [open, repoPath]);
+  }, [open, repoPath, dapi]);
 
   // A NAME in the Folder field is a question — "where is the repo called api?"
   // — and only the server can answer it: the suggestion sweep above is depth-1
@@ -1193,7 +1253,7 @@ export function NewSessionDialog() {
     let live = true;
     const timer = window.setTimeout(async () => {
       try {
-        const r = await api<{ matches?: RepoSuggestion[]; truncated?: boolean; home?: string }>(
+        const r = await dapi<{ matches?: RepoSuggestion[]; truncated?: boolean; home?: string }>(
           "/api/repos/search?q=" + encodeURIComponent(asked)
         );
         if (!live) return;
@@ -1219,7 +1279,7 @@ export function NewSessionDialog() {
       live = false;
       window.clearTimeout(timer);
     };
-  }, [open, repoPath]);
+  }, [open, repoPath, dapi]);
 
   // The highlighted match has to be ON SCREEN, and only this can put it there.
   // The list is a short scroller (about five rows, see .nf-search-list) holding
@@ -1280,10 +1340,12 @@ export function NewSessionDialog() {
   const { data: config } = useConfig();
   const mcpOk = useMemo(
     () =>
-      teamRunCaps(config?.caps).split
-        ? splitGate(config?.caps, canonAgent(program))
-        : { ok: false, reason: SERVER_NO_SPLIT },
-    [config?.caps, canonAgent, program]
+      device
+        ? { ok: false, reason: "Auto-split only starts sessions on this device" }
+        : teamRunCaps(config?.caps).split
+          ? splitGate(config?.caps, canonAgent(program))
+          : { ok: false, reason: SERVER_NO_SPLIT },
+    [config?.caps, canonAgent, program, device]
   );
   const togetherOk = teamRunCaps(config?.caps).together;
   const splitLimit = teamRunCaps(config?.caps).maxPieces;
@@ -1648,7 +1710,7 @@ export function NewSessionDialog() {
       if (planRun.current.seq === seq) setDescribeSlow(true);
     }, DESCRIBE_SLOW_MS);
     try {
-      const a = await api<PlanAnswer>("/api/session-plan", {
+      const a = await dapi<PlanAnswer>("/api/session-plan", {
         json: { text: describe.trim().slice(0, DESCRIBE_MAX_CHARS) },
         signal: ctl.signal,
       });
@@ -1923,10 +1985,17 @@ export function NewSessionDialog() {
     setError("Creating…");
     // Close NOW with an optimistic "provisioning" row — the POST can take
     // seconds; on failure the dialog re-opens with fields and error intact.
-    const guess = addPendingSession((body.title as string) || "untitled");
+    // Where it was aimed at the press — the picker can move once the dialog
+    // has closed and reopened while this POST is still in flight.
+    const target = deviceRef.current;
+    const guess = addPendingSession((body.title as string) || "untitled", target);
     closeDialog();
     try {
-      const inst = await api<Instance>("/api/instances", { json: body });
+      // On another device the create is answered there, and the session joins
+      // this rail under its namespaced title (the server refreshes that
+      // device's list before answering, so the row is already in the poll).
+      const made = await deviceApi(target)<Instance>("/api/instances", { json: body });
+      const inst = { ...made, title: deviceTitle(target, made.title) };
       // The create came back 200, so the plan's folder is on disk now — and the
       // question about making it goes with it. A reopen deliberately KEEPS the
       // plan (see planFolderReducer), so without this the next opening would
@@ -2090,6 +2159,30 @@ export function NewSessionDialog() {
         <NewHead tab={shownTab} tabs={ticketingOk} onTab={setTab} onClose={closeDialog} />
 
         <div className="nf-body">
+          {startable.length > 0 && !batch && (
+            // Only once a second device is there to pick: with one device
+            // there is nothing to choose and nothing worth saying.
+            <div id="new-device-row" className="rt-row rt-row-top">
+              <span className="rt-label">Runs on</span>
+              <div className="rt-ctl">
+                <select
+                  id="new-device"
+                  value={device}
+                  onChange={(e) => setDevicePick(e.target.value)}
+                  title="The device the session lives on — its folders, its agents, its accounts"
+                >
+                  <option value="">
+                    {devicesResp?.self?.host ? devicesResp.self.host + " (this device)" : "This device"}
+                  </option>
+                  {startable.map((d) => (
+                    <option key={d.device} value={d.device}>
+                      {deviceLabel(d, startable, devicesResp?.self?.host || "")}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
           {page === 1 ? (
             <>
           {/* The one-sentence door, first in the body and above Templates
@@ -2263,6 +2356,7 @@ export function NewSessionDialog() {
                     </button>
                   </div>
                   <FolderBrowser
+                    device={device}
                     initialPath={repoPath || homePath || ""}
                     selected={repoPath}
                     onSelect={(p) => folderDo({ t: "user-set", path: p })}
@@ -2486,7 +2580,9 @@ export function NewSessionDialog() {
                   ))}
                 </select>
               </label>
-              {(authProfiles?.profiles || []).length > 0 && (
+              {/* Accounts are THIS device's logins; a session on another
+                  device signs in with that device's own. */}
+              {!device && (authProfiles?.profiles || []).length > 0 && (
                 <label className="nf-agent">
                   <span className="nf-agent-head">
                     Account
@@ -2737,6 +2833,7 @@ export function NewSessionDialog() {
   
             {browserOpen && (
               <FolderBrowser
+                device={device}
                 initialPath={folderPath || homePath || ""}
                 selected={folderPath}
                 onSelect={(p) => folderDo({ t: "browse-select", path: p })}
@@ -3379,11 +3476,15 @@ export function focusRowIndex(paths: string[], leaving: string): number {
  * row that was clicked. That is what makes the dialog's snapshot load-bearing:
  * see folderReducer for how Escape hands the field back. */
 function FolderBrowser({
+  device = "",
   initialPath,
   selected,
   onSelect,
   onPick,
 }: {
+  /** Whose disk is being browsed: "" here, else the tailnet device the
+   * session will be started on. */
+  device?: string;
   initialPath: string;
   /** The path the Folder field holds, so the highlight always matches the form
    * rather than a copy of the selection kept in here. */
@@ -3416,7 +3517,7 @@ function FolderBrowser({
     setError("");
     try {
       const q = path ? "?path=" + encodeURIComponent(path) : "";
-      setData(await api<BrowsePayload>("/api/browse" + q));
+      setData(await deviceApi(device)<BrowsePayload>("/api/browse" + q));
     } catch (err) {
       // A listing that never arrived leaves the old rows (and the row that has
       // focus) on screen, so it must also drop any pending handoff rather than
@@ -3424,7 +3525,7 @@ function FolderBrowser({
       leaving.current = null;
       setError((err as Error).message);
     }
-  }, []);
+  }, [device]);
 
   useEffect(() => {
     load(initialPath);
@@ -3475,7 +3576,7 @@ function FolderBrowser({
     setError("");
     setMaking(true);
     try {
-      const r = await api<{ path: string }>("/api/mkdir", {
+      const r = await deviceApi(device)<{ path: string }>("/api/mkdir", {
         json: { path: data.path, name },
       });
       setNewFolder(null);

@@ -211,7 +211,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   // collision (same rule as the vanilla renderer).
   const hostCounts = useMemo(() => {
     const m = new Map<string, number>();
-    const selfHost = (devices?.self as unknown as { host?: string } | null)?.host || "";
+    const selfHost = devices?.self?.host || "";
     if (selfHost) m.set(selfHost, 1);
     for (const d of remoteDevs) m.set(d.host || "", (m.get(d.host || "") || 0) + 1);
     return m;
@@ -324,7 +324,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     filtering: !!ui.filter,
   });
   const devRails = remoteDevs.map((dev) => {
-    const dkey = (dev as { device?: string }).device || dev.name;
+    const dkey = dev.device;
     return { dkey, rail: toRail(byDev.get(dkey) || [], []) };
   });
   // PUBLISH the rendered row order — grouping, collapse and filter applied,
@@ -483,7 +483,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                   <>
                     <DeviceHeader
                       label={
-                        ((devices?.self as unknown as { host?: string } | null)?.host ||
+                        (devices?.self?.host ||
                           "This device")
                       }
                       badge={String(localRows.length)}
@@ -496,8 +496,8 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                     {!ui.collapsedDevices.has("__self") && renderLocal()}
                     {remoteDevs.map((dev, di) => {
                       const devRows =
-                        byDev.get((dev as { device?: string }).device || dev.name) || [];
-                      const dkey = (dev as { device?: string }).device || dev.name;
+                        byDev.get(dev.device) || [];
+                      const dkey = dev.device;
                       const collapsed = ui.collapsedDevices.has(dkey);
                       const d = dev as unknown as Record<string, unknown>;
                       let badge = "",

@@ -30,6 +30,18 @@ Tailscale network. The moving parts:
   terminal, send, queue, diff, commit, push, PR — works on a remote session
   with no per-endpoint code.
 
+* **Starting sessions elsewhere.** A session started from this browser can
+  live on any connected device: ``/api/devices/<device>/fwd/<path>`` forwards
+  a short allow-list (:data:`_FWD_ALLOWED` — the folder/agent probes behind
+  the New Session dialog plus the create itself) to that device, so the
+  dialog browses the TARGET's filesystem and the session is born there, a
+  peer of the ones started on that device directly.
+
+* **One hop only.** A device answering a remote-flagged ``GET
+  /api/instances`` lists only its OWN sessions (never the ones it mirrors),
+  and a remote-flagged request is never proxied onward — otherwise two
+  paired devices would echo each other's sessions back as ``a::b::title``.
+
 Everything here is best-effort: discovery failures mark devices unreachable
 instead of raising, and a missing ``aiohttp``/``tailscale`` just means the
 device list stays empty.
@@ -466,6 +478,11 @@ def merged_instances() -> List[dict]:
         for inst in dev["instances"]:
             if not isinstance(inst, dict) or not inst.get("title"):
                 continue
+            # A row the device itself mirrors from a THIRD device (or from us)
+            # — an older peer still echoes them. Each device's sessions come
+            # from that device, once.
+            if inst.get("device") or is_remote_title(str(inst["title"])):
+                continue
             entry = dict(inst)
             entry["device"] = dev["key"]
             entry["device_label"] = dev["host"] or dev["key"]
@@ -574,6 +591,78 @@ def _split_proxy_path(path: str) -> Optional[Tuple[str, str]]:
     )
 
 
+_DEVICES_PREFIX = "/api/devices/"
+_FWD_SEG = "fwd/"
+
+# What ``/api/devices/<device>/fwd/…`` may reach on the target: exactly what
+# the New Session dialog asks while it is aimed at another device. Per-session
+# routes don't need it (they ride the namespaced title); settings writes,
+# token rotation, restarts … are deliberately not here.
+_FWD_ALLOWED = frozenset(
+    {
+        ("GET", "/api/config"),
+        ("GET", "/api/settings"),
+        ("GET", "/api/templates"),
+        ("GET", "/api/providers"),
+        ("GET", "/api/providers/manage"),
+        ("GET", "/api/repos/suggest"),
+        ("GET", "/api/repos/search"),
+        ("GET", "/api/repos/check"),
+        ("GET", "/api/browse"),
+        ("POST", "/api/mkdir"),
+        ("POST", "/api/session-plan"),
+        ("POST", "/api/instances"),
+    }
+)
+
+
+def _split_fwd_path(path: str) -> Optional[Tuple[str, str]]:
+    """``(device, target_path)`` for ``/api/devices/<device>/fwd/api/…``."""
+    if not path.startswith(_DEVICES_PREFIX):
+        return None
+    device, slash, rest = path[len(_DEVICES_PREFIX) :].partition("/")
+    if not device or not slash or not rest.startswith(_FWD_SEG):
+        return None
+    return device, rest[len(_FWD_SEG) - 1 :]
+
+
+def _has_remote_header(scope) -> bool:
+    return any(
+        k == REMOTE_HEADER.lower().encode() for k, _ in scope.get("headers") or []
+    )
+
+
+def from_remote(request) -> bool:
+    """True when ``request`` was sent by another MindFlock (not a browser)."""
+    try:
+        return REMOTE_HEADER in request.headers
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _refresh_before_done(send, dev: dict):
+    """Wrap ``send`` so a successful create re-reads ``dev``'s sessions BEFORE
+    the response finishes: the browser's next ``GET /api/instances`` then
+    already lists the new session, instead of waiting out the mirror poll."""
+    status = {"code": 0}
+
+    async def wrapped(msg) -> None:
+        if msg.get("type") == "http.response.start":
+            status["code"] = msg.get("status", 0)
+        elif (
+            msg.get("type") == "http.response.body"
+            and not msg.get("more_body")
+            and status["code"] == 200
+        ):
+            try:
+                await _fetch_instances(dev)
+            except Exception:  # noqa: BLE001 — the poll will catch up
+                pass
+        await send(msg)
+
+    return wrapped
+
+
 class RemoteProxyMiddleware:
     """Forward ``/api/instances/<device>::<title>/…`` (HTTP + websocket) to the
     device that owns the session. Mounted INSIDE the auth gate, so the local
@@ -586,10 +675,34 @@ class RemoteProxyMiddleware:
         if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
-        hit = _split_proxy_path(scope.get("path", ""))
-        if hit is None:
+        path = scope.get("path", "")
+        hit = _split_proxy_path(path)
+        fwd = None if hit else _split_fwd_path(path)
+        if hit is None and fwd is None:
             await self.app(scope, receive, send)
             return
+        if _has_remote_header(scope):
+            # One hop only: a device never relays another device's request.
+            await self._reject(
+                scope, receive, send, "remote requests are not relayed", 400
+            )
+            return
+        if fwd is not None:
+            method = scope.get("method", "GET") if scope["type"] == "http" else "WS"
+            if (method, fwd[1]) not in _FWD_ALLOWED:
+                await self._reject(
+                    scope,
+                    receive,
+                    send,
+                    "%s %s is not forwarded" % (method, fwd[1]),
+                    404,
+                )
+                return
+            hit = fwd
+            if method == "POST" and fwd[1] == "/api/instances":
+                dev = _DEVICES.get(fwd[0])
+                if dev is not None:
+                    send = _refresh_before_done(send, dev)
         device, target_path = hit
         dev = _DEVICES.get(device)
         if aiohttp is None or dev is None or not _connected(dev):
@@ -603,15 +716,19 @@ class RemoteProxyMiddleware:
             await self._proxy_ws(receive, send, dev, url)
 
     async def _reject_not_connected(self, scope, receive, send, device: str) -> None:
-        """Tell the caller the target device isn't reachable/paired: a 502 JSON
-        error for HTTP, or the accept-then-close handshake for a websocket (a WS
-        client can't read a close code without the connect frame arriving first).
-        """
+        """Tell the caller the target device isn't reachable/paired."""
+        await self._reject(
+            scope, receive, send, "device '%s' is not connected" % device, 502
+        )
+
+    async def _reject(self, scope, receive, send, message: str, status: int) -> None:
+        """A JSON error for HTTP, or the accept-then-close handshake for a
+        websocket (a WS client can't read a close code without the connect
+        frame arriving first)."""
         if scope["type"] == "http":
-            await JSONResponse(
-                {"error": "device '%s' is not connected" % device},
-                status_code=502,
-            )(scope, receive, send)
+            await JSONResponse({"error": message}, status_code=status)(
+                scope, receive, send
+            )
         else:
             try:
                 await receive()  # websocket.connect

@@ -310,3 +310,133 @@ def test_disconnect_forgets_token():
     assert r.status_code == 200
     assert remote.token_for("otherbox") == ""
     assert r.json()["devices"][0]["has_token"] is False
+
+
+# --------------------------------------------------------------------------- #
+# starting a session on another device (/api/devices/<dev>/fwd/…)
+# --------------------------------------------------------------------------- #
+def test_fwd_path_split():
+    assert remote._split_fwd_path("/api/devices/otherbox/fwd/api/repos/suggest") == (
+        "otherbox",
+        "/api/repos/suggest",
+    )
+    assert remote._split_fwd_path("/api/devices/otherbox/fwd/api/instances") == (
+        "otherbox",
+        "/api/instances",
+    )
+    # The pairing routes share the prefix and must never be taken for a forward.
+    assert remote._split_fwd_path("/api/devices/otherbox/connect") is None
+    assert remote._split_fwd_path("/api/devices/otherbox/fwdx/api/config") is None
+    assert remote._split_fwd_path("/api/devices") is None
+
+
+@pytest.fixture
+def _captured_proxy(monkeypatch):
+    """Record what the proxy would send instead of opening a socket."""
+    seen = []
+
+    async def fake_http(self, scope, receive, send, dev, url):
+        seen.append((scope["method"], dev["key"], url))
+        await remote.JSONResponse({"title": "made-there"})(scope, receive, send)
+
+    monkeypatch.setattr(remote.RemoteProxyMiddleware, "_proxy_http", fake_http)
+    monkeypatch.setattr(remote, "aiohttp", object())
+    remote._DEVICES["otherbox"] = _fake_device()
+    return seen
+
+
+def test_fwd_creates_on_the_chosen_device(_captured_proxy):
+    c = TestClient(server.app)
+    r = c.post("/api/devices/otherbox/fwd/api/instances", json={"title": "x"})
+    assert r.status_code == 200
+    assert r.json() == {"title": "made-there"}
+    assert _captured_proxy == [
+        ("POST", "otherbox", "http://100.1.2.3:8765/api/instances")
+    ]
+
+
+def test_fwd_keeps_the_query_string(_captured_proxy):
+    c = TestClient(server.app)
+    c.get("/api/devices/otherbox/fwd/api/repos/check?path=%7E%2Fcode")
+    assert (
+        _captured_proxy[0][2] == "http://100.1.2.3:8765/api/repos/check?path=%7E%2Fcode"
+    )
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("POST", "/api/settings"),  # a settings WRITE is not the dialog's
+        ("GET", "/api/auth/token"),
+        ("POST", "/api/server/restart"),
+        ("DELETE", "/api/instances"),
+    ],
+)
+def test_fwd_refuses_paths_outside_the_allow_list(_captured_proxy, method, path):
+    c = TestClient(server.app)
+    r = c.request(method, "/api/devices/otherbox/fwd" + path)
+    assert r.status_code == 404
+    assert _captured_proxy == []
+
+
+def test_fwd_to_unpaired_device_is_502():
+    c = TestClient(server.app)
+    r = c.get("/api/devices/ghost/fwd/api/config")
+    assert r.status_code == 502
+
+
+def test_remote_requests_are_never_relayed(_captured_proxy, monkeypatch):
+    # One hop only: a request another MindFlock sent us is not forwarded on,
+    # either by namespaced title or by the device forward.
+    monkeypatch.setattr(remote, "remote_control_enabled", lambda: True)
+    c = TestClient(server.app)
+    h = {remote.REMOTE_HEADER: "thirdbox"}
+    assert c.get("/api/instances/otherbox%3A%3At/queue", headers=h).status_code == 400
+    assert c.get("/api/devices/otherbox/fwd/api/config", headers=h).status_code == 400
+    assert _captured_proxy == []
+
+
+# --------------------------------------------------------------------------- #
+# no echo: each device's sessions come from that device, once
+# --------------------------------------------------------------------------- #
+def test_remote_caller_gets_only_local_sessions(monkeypatch):
+    monkeypatch.setattr(remote, "remote_control_enabled", lambda: True)
+    remote._DEVICES["otherbox"] = _fake_device(
+        instances_ok=True, instances=[{"title": "theirs"}]
+    )
+    c = TestClient(server.app)
+    browser = [i["title"] for i in c.get("/api/instances").json()]
+    peer = [
+        i["title"]
+        for i in c.get("/api/instances", headers={remote.REMOTE_HEADER: "x"}).json()
+    ]
+    assert "otherbox::theirs" in browser
+    assert not any("::" in t for t in peer)
+
+
+def test_merged_instances_drops_rows_a_peer_mirrors():
+    # An older peer still hands on what IT mirrors (including our own rows);
+    # those must not come back double-namespaced.
+    remote._DEVICES["otherbox"] = _fake_device(
+        instances_ok=True,
+        instances=[
+            {"title": "theirs"},
+            {"title": "me::mine", "device": "me"},
+            {"title": "third::x"},
+        ],
+    )
+    assert [i["title"] for i in remote.merged_instances()] == ["otherbox::theirs"]
+
+
+def test_fwd_create_refreshes_the_device_before_answering(_captured_proxy, monkeypatch):
+    fetched = []
+
+    async def fake_fetch(dev):
+        fetched.append(dev["key"])
+
+    monkeypatch.setattr(remote, "_fetch_instances", fake_fetch)
+    c = TestClient(server.app)
+    c.get("/api/devices/otherbox/fwd/api/config")
+    assert fetched == []  # only a create refreshes
+    c.post("/api/devices/otherbox/fwd/api/instances", json={"title": "x"})
+    assert fetched == ["otherbox"]
