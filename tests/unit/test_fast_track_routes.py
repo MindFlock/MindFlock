@@ -441,6 +441,27 @@ def test_a_junk_configured_depth_falls_back(monkeypatch):
     assert server._fasttrack_depth() == "pr"
 
 
+def test_the_one_default_can_be_off_and_config_reports_it(monkeypatch):
+    """Settings → Workspace "Fast-track goes as far as" seeds every new-session
+    picker, and Off is one of its answers. ``fasttrack_default`` says so on
+    /api/config; ``fasttrack_depth`` (what a depth-less /fast-track arms) can
+    never be off, so an "off" setting reads as the built-in PR there."""
+    from fastapi.testclient import TestClient
+
+    # The route reports the helper (the fake settings below are too thin for
+    # the rest of /api/config, so the wiring is checked on its own).
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(server, "_fasttrack_default", lambda: "off")
+        cfg = TestClient(server.app).get("/api/config").json()
+    assert cfg["fasttrack_default"] == "off"
+    _fake_settings(monkeypatch, depth="off")
+    assert server._fasttrack_default() == "off"
+    assert server._fasttrack_depth() == "pr"
+    for raw, want in (("", "pr"), ("merge", "merge"), ("push", "push"), ("junk", "pr")):
+        _fake_settings(monkeypatch, depth=raw)
+        assert server._fasttrack_default() == want, raw
+
+
 def test_source_defaults_cannot_choose_merge():
     """A per-source default applies to every future item with nobody watching."""
     assert server._cap_source_depth("merge") == "pr"

@@ -173,7 +173,7 @@ export function CommitDialog() {
           { message: m }
         );
     } catch (err) {
-      // A toast, never alert(): the desktop app doesn't implement it.
+      // A toast, never a native alert dialog: the desktop app has none.
       toast("Commit failed: " + errMsg(err), { duration: 7000 });
     }
     // One fresh read so the pill flips to "pre-commit" the moment the hooks start

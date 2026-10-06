@@ -350,7 +350,9 @@ def test_the_leads_thread_shows_plan_ship_card_and_pieces():
         '"Push the branch"',
     ):
         assert s in choices, s
-    assert '"Ship · one PR"' in panel or "Ship · one PR" in panel
+    # The release card is not a "Ship" anything (one name: fast-track).
+    assert '"Release · one PR"' in panel
+    assert "Ship · one PR" not in js
     assert '"planned by the lead · started and merged by MindFlock"' in panel
     # The Thread tab hands a run lead to the panel and drops the paste buttons.
     tab = squash(_fn(js, "ThreadTab"))
@@ -436,10 +438,12 @@ def test_a_finished_one_for_all_group_keeps_its_family_lines():
     assert "RUN_DONE_STATES.has(leadRun.state)" in row
 
 
-def test_a_new_session_with_a_lane_gets_its_own_worktree():
+def test_a_new_session_with_fast_track_gets_its_own_worktree():
     """Live L2: two single sessions with a lane were created IN PLACE on main;
-    one approval card committed both sessions' files. With a lane the New
-    dialog never sends in_place, and says why on the radio."""
+    one approval card committed both sessions' files. With fast-track on the
+    New dialog never sends in_place, and says why on the radio — which now
+    turns fast-track off rather than sitting disabled."""
     js = _js()
     assert "inPlace: inPlace && !laneNeedsWorktree" in js
-    assert "not with a lane — it commits for this session" in js
+    assert "turns fast-track off — it commits for this session" in js
+    assert "not with a lane" not in js
