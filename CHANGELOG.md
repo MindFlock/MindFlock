@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-06
+
 ### Fixed
 
 - **The desktop app offers engine updates when Tailscale mode is on.** Its
@@ -2476,7 +2478,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.7.0
 [0.6.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.6.0
 [0.5.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.5.0
 [0.4.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.4.0
