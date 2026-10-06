@@ -65482,6 +65482,420 @@ function Mobile(_) {
 	] });
 }
 //#endregion
+//#region src/components/settings/screens/PeerLinks.tsx
+var PERM_LABELS = [
+	["messages", "send messages"],
+	["diff", "see my diff"],
+	["read_file", "read my files"]
+];
+function peerErrText(e) {
+	return e instanceof Error ? e.message : String(e);
+}
+function PeerLinks(_) {
+	const s = useSettings();
+	const stored = s.get("peer", "enabled");
+	const on = stored === true || stored === "true";
+	const [st, setSt] = (0, import_react.useState)(null);
+	const [error, setError] = (0, import_react.useState)("");
+	const [invite, setInvite] = (0, import_react.useState)(null);
+	const [code, setCode] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			setSt(await api("/api/peer"));
+			setError("");
+		} catch (e) {
+			setError(peerErrText(e));
+		}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		load();
+	}, [load, on]);
+	const run = async (fn, ok) => {
+		setBusy(true);
+		try {
+			await fn();
+			if (ok) toast(ok);
+		} catch (e) {
+			toast(peerErrText(e));
+		}
+		setBusy(false);
+		load();
+	};
+	const createInvite = () => run(async () => {
+		setInvite(await api("/api/peer/invites", { json: {} }));
+	});
+	const join = () => run(async () => {
+		const link = await api("/api/peer/join", { json: { code: code.trim() } });
+		setCode("");
+		toast(`Paired with ${link.peer_name} — compare the SAS ${link.sas} with them`);
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Peer links"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "set-hint set-block-hint",
+			children: [
+				"Pair-code with another MindFlock user. You pair once with a one-time code, then each of you shares ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "one folder" }),
+				": an agent works in it inside a sandbox and talks to the other person's agent. Only that folder is ever exposed — see",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "docs/peer-link.md" }),
+				"."
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Peer links"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "peer-enabled",
+					checked: on,
+					onChange: (e) => s.saveField("peer", "enabled", e.target.checked)
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Your name"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "peer",
+					field: "display_name",
+					placeholder: "this computer's name"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "What your peer sees."
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Listen port"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "peer",
+					field: "listen_port",
+					placeholder: "8799"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "When you invite, your peer dials this port — it must be reachable from their machine (Tailscale recommended)."
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Advertise address"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "peer",
+					field: "advertise_host",
+					placeholder: "auto: Tailscale IP, else LAN IP"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "The address written into your invite codes — the one your peer dials."
+				})
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "set-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Extra egress hosts"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+					group: "peer",
+					field: "egress_allow",
+					placeholder: "e.g. pypi.org, .github.com"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Hosts the sandboxed agent may reach on 443, besides its own API. A leading dot allows subdomains."
+				})
+			]
+		}),
+		error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "error",
+			children: error
+		}),
+		on && st && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "peer-body",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					children: [
+						"Sandbox:",
+						" ",
+						st.sandbox.available ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "ready" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "error",
+							children: ["unavailable — ", st.sandbox.reason]
+						}),
+						st.fingerprint && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							" · ",
+							"identity ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: st.fingerprint })
+						] }),
+						" · ",
+						"listener ",
+						st.listen.listening ? "on" : "off",
+						" (",
+						st.listen.host,
+						":",
+						st.listen.port,
+						")"
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+					className: "set-subtitle",
+					children: "Invite"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "peer-invite",
+					disabled: busy,
+					onClick: createInvite,
+					children: "Create invite code"
+				}),
+				invite && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "set-row",
+					id: "peer-invite-code",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							readOnly: true,
+							value: invite.code,
+							onClick: (e) => e.target.select()
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							onClick: () => copyText(invite.code).then((ok) => toast(ok ? "Code copied" : "Copy failed")),
+							children: "Copy"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint",
+							children: [
+								"Single use, expires in ",
+								Math.round(invite.expires_in / 60),
+								" min. Your peer dials",
+								" ",
+								invite.host,
+								":",
+								invite.port,
+								"."
+							]
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+					className: "set-subtitle",
+					children: "Join"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "set-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						id: "peer-join-code",
+						placeholder: "paste a mfp1:… code",
+						value: code,
+						onChange: (e) => setCode(e.target.value)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: busy || !code.trim(),
+						onClick: join,
+						children: "Join"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+					className: "set-subtitle",
+					children: "Links"
+				}),
+				st.links.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint",
+					children: "No peer links yet."
+				}),
+				st.links.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerLinkCard, {
+					link: l,
+					busy,
+					run
+				}, l.link_id))
+			]
+		})
+	] });
+}
+function PeerLinkCard(props) {
+	const { link, busy, run } = props;
+	const base = "/api/peer/links/" + encodeURIComponent(link.link_id);
+	const [repo, setRepo] = (0, import_react.useState)("");
+	const [branch, setBranch] = (0, import_react.useState)("");
+	const [program, setProgram] = (0, import_react.useState)("claude");
+	const [target, setTarget] = (0, import_react.useState)("");
+	const [exportBranch, setExportBranch] = (0, import_react.useState)("peer/" + (link.peer_name || "work").replace(/[^A-Za-z0-9._-]+/g, "-"));
+	const [confirm, setConfirm] = (0, import_react.useState)("");
+	const [deleteFiles, setDeleteFiles] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-link-card",
+		"data-link-id": link.link_id,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: link.peer_name }),
+				" (",
+				link.role,
+				", ",
+				link.connected ? "connected" : "offline",
+				") · SAS ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+					className: "peer-sas",
+					children: link.sas
+				})
+			] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				children: "Compare the SAS with your peer by voice or chat. If it differs, unlink now."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Peer may"
+				}), PERM_LABELS.map(([key, label]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "check",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						checked: !!link.perms[key],
+						disabled: busy,
+						onChange: (e) => run(() => api(base + "/perms", { json: { [key]: e.target.checked } }))
+					}), label]
+				}, key))]
+			}),
+			link.shared ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					children: [
+						"Shared folder in session ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: link.session_title || "?" }),
+						"."
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							placeholder: "your repo to export into",
+							value: target,
+							onChange: (e) => setTarget(e.target.value)
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							placeholder: "peer/branch",
+							value: exportBranch,
+							onChange: (e) => setExportBranch(e.target.value)
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							disabled: busy || !target.trim() || !exportBranch.startsWith("peer/"),
+							onClick: () => run(() => api(base + "/export", { json: {
+								target_repo: target.trim(),
+								branch_name: exportBranch
+							} }), "Exported to " + exportBranch),
+							children: "Export"
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy,
+					onClick: () => setConfirm("unshare"),
+					children: "Unshare…"
+				})
+			] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						placeholder: "repo path to share",
+						value: repo,
+						onChange: (e) => setRepo(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						placeholder: "branch (optional)",
+						value: branch,
+						onChange: (e) => setBranch(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+						value: program,
+						onChange: (e) => setProgram(e.target.value),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "claude",
+							children: "claude"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "codex",
+							children: "codex"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: busy || !repo.trim(),
+						onClick: () => run(() => api(base + "/share", { json: {
+							repo_path: repo.trim(),
+							branch: branch.trim() || void 0,
+							program
+						} }), "Shared — the sandboxed session is starting"),
+						children: "Share a folder"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				disabled: busy,
+				onClick: () => setConfirm("unlink"),
+				children: "Unlink…"
+			}),
+			confirm && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: confirm === "unlink" ? `Unlink ${link.peer_name}?` : "Stop sharing this folder?",
+				body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "check",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						checked: deleteFiles,
+						onChange: (e) => setDeleteFiles(e.target.checked)
+					}), "also delete the shared folder"]
+				}),
+				confirmLabel: confirm === "unlink" ? "Unlink" : "Unshare",
+				busy,
+				onCancel: () => setConfirm(""),
+				onConfirm: () => {
+					const q = deleteFiles ? "?delete_files=1" : "";
+					const path = confirm === "unlink" ? base + q : base + "/share" + q;
+					setConfirm("");
+					run(() => api(path, { method: "DELETE" }), confirm === "unlink" ? "Unlinked" : "Unshared");
+				}
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/settings/screens/Connections.tsx
 var CONN_PILL = {
 	connected: "Connected",
@@ -69643,6 +70057,12 @@ var SCREENS = [
 		label: "Mobile",
 		group: "This device",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Mobile, { ...p })
+	},
+	{
+		key: "peer",
+		label: "Peer links",
+		group: "This device",
+		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerLinks, { ...p })
 	},
 	{
 		key: "doctor",

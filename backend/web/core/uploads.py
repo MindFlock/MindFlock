@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 
 
 def _server():
@@ -40,35 +41,93 @@ def _paste_dirs() -> list:
         except Exception:  # noqa: BLE001
             folder = getattr(inst, "Path", "") or ""
         if folder:
-            dirs.append(os.path.join(folder, ".mindflock_pastes"))
+            dirs.append(os.path.join(folder, WORKSPACE_PASTE_DIR))
     return dirs
 
 
-def _prune_pastes(base: str, keep: int = _PASTE_KEEP) -> None:
-    """Delete all but the ``keep`` newest ``paste-*`` files in ``base``.
+#: A workspace's paste folder. The session's agent owns everything in its
+#: workspace and may have replaced it with a symlink (a shared-folder (peer)
+#: session's agent is untrusted), so it is only ever reached through
+#: ``O_NOFOLLOW`` directory fds — never by path.
+WORKSPACE_PASTE_DIR = ".mindflock_pastes"
 
-    Only files this endpoint itself named (``paste-<stamp>-<hex>.<ext>``) are
-    ever touched, so a user file that wandered into the directory is safe.
-    Never raises."""
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def _prune_fd(dfd: int, keep: int) -> None:
+    """:func:`_prune_pastes` on an open directory fd: only regular
+    ``paste-*`` files directly in it, unlinked relative to the fd."""
     try:
-        names = os.listdir(base)
+        names = os.listdir(dfd)
     except OSError:
         return
     stamped = []
     for n in names:
         if not n.startswith("paste-"):
             continue
-        p = os.path.join(base, n)
         try:
-            stamped.append((os.path.getmtime(p), p))
+            st = os.stat(n, dir_fd=dfd, follow_symlinks=False)
         except OSError:
             continue
+        if stat.S_ISREG(st.st_mode):
+            stamped.append((st.st_mtime, n))
     victims = sorted(stamped)[:-keep] if keep > 0 else sorted(stamped)
-    for _, p in victims:
+    for _, n in victims:
         try:
-            os.remove(p)
+            os.unlink(n, dir_fd=dfd)
         except OSError:
             pass
+
+
+def _prune_pastes(base: str, keep: int = _PASTE_KEEP) -> None:
+    """Delete all but the ``keep`` newest ``paste-*`` files in ``base``.
+
+    Only files this endpoint itself named (``paste-<stamp>-<hex>.<ext>``) are
+    ever touched, so a user file that wandered into the directory is safe. A
+    ``base`` that is a symlink is left alone (a workspace's agent could point
+    it anywhere on the host). Never raises."""
+    try:
+        dfd = os.open(base, _DIR_FLAGS)
+    except OSError:
+        return
+    try:
+        _prune_fd(dfd, keep)
+    finally:
+        os.close(dfd)
+
+
+def write_workspace_paste(folder: str, filename: str, data: bytes) -> str:
+    """Store a paste as ``<folder>/.mindflock_pastes/<filename>`` and prune
+    that folder → the file's path.
+
+    Race-free against the workspace's own agent: the paste folder is opened
+    ``O_NOFOLLOW`` relative to ``folder`` and the file created ``O_EXCL |
+    O_NOFOLLOW`` relative to it, so a planted or swapped-in symlink makes this
+    raise ``OSError`` instead of writing (or pruning) outside the workspace."""
+    if not filename or "/" in filename or filename in (".", ".."):
+        raise OSError("bad paste name")
+    wfd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        try:
+            os.mkdir(WORKSPACE_PASTE_DIR, 0o700, dir_fd=wfd)
+        except FileExistsError:
+            pass
+        pfd = os.open(WORKSPACE_PASTE_DIR, _DIR_FLAGS, dir_fd=wfd)
+    finally:
+        os.close(wfd)
+    try:
+        fd = os.open(
+            filename,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=pfd,
+        )
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        _prune_fd(pfd, _PASTE_KEEP)
+    finally:
+        os.close(pfd)
+    return os.path.join(folder, WORKSPACE_PASTE_DIR, filename)
 
 
 def _clear_all_pastes() -> None:

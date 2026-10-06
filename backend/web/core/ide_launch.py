@@ -455,9 +455,22 @@ def launch_ide(path: str, argv: Optional[List[str]] = None) -> None:
     terminal editors are wrapped in a per-OS terminal emulator window. Raises
     :class:`IdeLaunchError` with remediation text when launching is impossible.
     """
+    path = str(path)
+    # A shared (peer-link) folder never opens in an editor: IDEs run tasks,
+    # extensions and workspace settings from the folder, outside the sandbox.
+    try:
+        from backend.peer import paths as _peer_paths
+
+        refused = _peer_paths.is_inside_peer_root(path)
+    except Exception:  # noqa: BLE001 — undecidable: refuse
+        refused = True
+    if refused:
+        raise IdeLaunchError(
+            "shared-folder (peer) sessions can't be opened in an editor — use "
+            "export to bring the work into your own repo"
+        )
     argv = list(argv) if argv else ide_cfg.ide_argv()
     spec = ide_cfg.spec_for(argv[0])
-    path = str(path)
     try:
         if spec is not None and spec.kind == "terminal":
             _launch_terminal(spec, argv, path)

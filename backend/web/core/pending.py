@@ -185,6 +185,7 @@ def rows(engine=None) -> list:
                 "parent": str(meta.get("parent") or ""),
                 "spawned": bool(meta.get("spawned")),
                 "playbook": "",
+                "peer_share": False,
                 "created_at": None,  # no session record exists yet
                 "diff_stat": None,
                 "workspace_missing": False,

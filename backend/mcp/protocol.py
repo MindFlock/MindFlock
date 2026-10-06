@@ -405,6 +405,22 @@ class _ProgressTicker(threading.Thread):
 # --------------------------------------------------------------------------- #
 # The server
 # --------------------------------------------------------------------------- #
+def _refuse_full_toolset_in_peer_mode(tools: List[Tool]) -> None:
+    """Fail closed: under ``MINDFLOCK_MCP_MODE=peer`` (a sandboxed shared-folder
+    session) a server may carry only the peer tools, whichever entry point
+    built it (``python -m backend.mcp`` switches; ``mindflock mcp`` doesn't)."""
+    if (os.environ.get("MINDFLOCK_MCP_MODE") or "").strip().lower() != "peer":
+        return
+    from backend.mcp.peer_tools import PEER_TOOL_NAMES
+
+    extra = sorted(t.name for t in tools if t.name not in PEER_TOOL_NAMES)
+    if extra:
+        raise RuntimeError(
+            "MINDFLOCK_MCP_MODE=peer: refusing to serve non-peer tools (%s)"
+            % ", ".join(extra[:5])
+        )
+
+
 class McpServer:
     """Reads requests from ``stdin`` (binary, line-framed) and writes
     responses/notifications to ``stdout`` (binary) until EOF.
@@ -426,6 +442,7 @@ class McpServer:
         max_concurrent: int = MAX_CONCURRENT_CALLS,
         progress_interval: float = PROGRESS_INTERVAL_S,
     ) -> None:
+        _refuse_full_toolset_in_peer_mode(tools)
         self.tools: Dict[str, Tool] = {t.name: t for t in tools}
         self._order = [t.name for t in tools]
         self.stdin = stdin

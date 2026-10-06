@@ -363,8 +363,16 @@ def test_ensure_agent_uses_launcher_when_present(rec, monkeypatch):
     rec.responses = {"has-session": FakeProc(1), "new-session": FakeProc(0)}
     prov = FakeProvider(natural=False)
     _wire_agent(monkeypatch, prov, marker=None, isfile=True)
+    # Only the launcher's own join (other path math — realpath — still works).
+    real_join = os.path.join
     monkeypatch.setattr(
-        agent_sessions.os.path, "join", lambda *a: "/wt/.mindflock_launch.sh"
+        agent_sessions.os.path,
+        "join",
+        lambda *a: (
+            "/wt/.mindflock_launch.sh"
+            if a and a[-1] == agent_sessions.provisioning.LAUNCHER_BASENAME
+            else real_join(*a)
+        ),
     )
 
     agent_sessions._ensure_agent_session(FakeInst(in_place=False), "Title")

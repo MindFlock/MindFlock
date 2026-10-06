@@ -433,6 +433,11 @@ def _live(instances: Dict[str, Any], now: Optional[float] = None) -> List[dict]:
                 continue
             if not inst.Started() or _is_paused(inst):
                 continue
+            # A shared-folder (peer) session runs sandboxed: no host hooks or
+            # guard files are written into its folder, and its feed (written
+            # there by the peer's agent) is never read as ours.
+            if getattr(inst, "PeerShare", ""):
+                continue
             wt = inst.GetWorktreePath()
         except Exception:  # noqa: BLE001
             continue

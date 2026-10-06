@@ -413,6 +413,9 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         # its first prompt — the rail shows its prompts' answer strip before
         # it has a child). "" for none.
         "playbook": getattr(inst, "Playbook", "") or "",
+        # A shared-folder (peer-link) session: sandboxed, and the host-side
+        # features (ship, shell, IDE, spawn, rename, …) are refused for it.
+        "peer_share": bool(getattr(inst, "PeerShare", "") or ""),
         # When this session record was created (epoch seconds, or None): a
         # title can be reused once its session is gone, and anything keyed by
         # title (a stored report FROM it, say) must not be credited to the

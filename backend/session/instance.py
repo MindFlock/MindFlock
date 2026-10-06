@@ -128,6 +128,7 @@ class InstanceOptions:
         parent: str = "",
         spawned: bool = False,
         playbook: str = "",
+        peer_share: str = "",
     ) -> None:
         self.title = title
         self.path = path
@@ -174,6 +175,8 @@ class InstanceOptions:
         self.spawned = spawned
         # Instance.Playbook.
         self.playbook = playbook
+        # Instance.PeerShare.
+        self.peer_share = peer_share
 
 
 class Instance:
@@ -230,6 +233,13 @@ class Instance:
         # dialog's "Split across workers" — an orchestrator from its first
         # prompt, before it has a child). Set once at create time.
         self.Playbook: str = ""
+        # Peer links: the share_id of the shared folder this session runs in
+        # ("" = an ordinary session). Set once at create time by the peer
+        # service, persisted. A PeerShare session's agent only ever launches
+        # inside the bubblewrap sandbox (fail closed — see
+        # :meth:`_peer_sandbox_launch`), and the web server refuses every
+        # host-side feature that would execute the folder's content.
+        self.PeerShare: str = ""
 
         # Unexported fields.
         self._diff_stats: Optional[git.DiffStats] = None
@@ -247,6 +257,9 @@ class Instance:
         # MindFlock MCP attach flags. A session loaded from storage has no
         # configured command (it relaunches the bare program), hence False.
         self._mcp_launch_attached: bool = False
+        # The sandboxed command _configure_peer_launch_command built (PeerShare
+        # sessions only); _peer_guard_launch checks tmux runs exactly this.
+        self._peer_launch_cmd: str = ""
         self._started: bool = False
         self._tmux_session: Optional[tmux.TmuxSession] = None
         self._git_worktree: Optional[git.GitWorktree] = None
@@ -281,6 +294,7 @@ class Instance:
             parent=getattr(self, "Parent", "") or "",
             spawned=bool(getattr(self, "Spawned", False)),
             playbook=getattr(self, "Playbook", "") or "",
+            peer_share=getattr(self, "PeerShare", "") or "",
         )
 
         if self._git_worktree is not None:
@@ -358,6 +372,7 @@ class Instance:
                 # Create new tmux session.
                 if self.ExtraEnv:
                     self._tmux_session.extra_env = dict(self.ExtraEnv)
+                self._peer_guard_launch(resume=False)
                 start_err = self._tmux_session.start(
                     self._git_worktree.GetWorktreePath()
                 )
@@ -536,6 +551,10 @@ class Instance:
         # stays the human binary name for has_updated() / trust-prompt
         # handling. tmux runs the command as a single argv element.
         # Best-effort: a failure here just falls back to running program.
+        if getattr(self, "PeerShare", ""):
+            # A shared-folder session: sandboxed, or not started (raises).
+            self._configure_peer_launch_command(resume=False)
+            return
         from backend import providers as _providers
         from backend.providers import LaunchContext as _LaunchContext
 
@@ -652,6 +671,70 @@ class Instance:
                 if log.ErrorLog is not None:
                     log.ErrorLog.Printf("failed to build launch command: %v", err)
         _mcp_attach.note_launch(_ctx.session_name, self._mcp_launch_attached)
+
+    def _configure_peer_launch_command(self, resume: bool) -> None:
+        """Set the launch command of a ``PeerShare`` session: the provider's
+        command with the PEER-mode MCP, wrapped in ``sandbox_exec``.
+
+        FAIL CLOSED, unlike the best-effort branches of
+        :meth:`_configure_launch_command`: the launch command is cleared first
+        and only set once the sandboxed command exists, and every failure
+        raises — the caller must not start tmux, since a bare
+        ``launch_command`` would run the bare (unsandboxed) program. Nothing of
+        the host's per-session env (port block, auth-profile overlay) rides
+        into the launch either.
+        """
+        from backend.peer import launch as _peer_launch
+        from backend.providers import mcp_attach as _mcp_attach
+
+        self._mcp_launch_attached = False
+        self._peer_launch_cmd = ""
+        self._tmux_session.launch_command = None
+        self.ExtraEnv = {}
+        try:
+            cmd = _peer_launch.build_command(
+                program=self.Program,
+                share_id=self.PeerShare,
+                session_name=self._tmux_session.sanitized_name,
+                launch_args=tuple(getattr(self, "LaunchArgs", ()) or ()),
+                resume=resume,
+            )
+        except Exception as err:  # noqa: BLE001
+            raise RuntimeError(
+                "shared-folder session not started: {}".format(_err_text(err))
+            ) from err
+        self._tmux_session.launch_command = cmd
+        self._peer_launch_cmd = cmd
+        self._mcp_launch_attached = True
+        _mcp_attach.note_launch(self._tmux_session.sanitized_name, True)
+
+    def _peer_guard_launch(self, resume: bool) -> None:
+        """Right before ANY ``tmux start`` of this instance: a ``PeerShare``
+        session must be about to run exactly the sandboxed command configured
+        in this process — otherwise (re)build it, which raises when it can't.
+        An ordinary session whose folder lies under the peer root is refused
+        outright (a copy / reopen / adopt of a shared folder would otherwise
+        run an unsandboxed agent there)."""
+        if not getattr(self, "PeerShare", ""):
+            try:
+                wt = self._git_worktree.GetWorktreePath() if self._git_worktree else ""
+            except Exception:  # noqa: BLE001
+                wt = ""
+            if wt and isinstance(wt, str):
+                from backend.peer import paths as _peer_paths
+
+                if _peer_paths.is_inside_peer_root(wt):
+                    raise RuntimeError(
+                        "refusing to start an unsandboxed session in a shared "
+                        "(peer) folder"
+                    )
+            return
+        cmd = getattr(self, "_peer_launch_cmd", "") or ""
+        if not cmd or self._tmux_session.launch_command != cmd:
+            self._configure_peer_launch_command(resume=resume)
+        if not self._tmux_session.launch_command:
+            raise RuntimeError("shared-folder session not started: no sandbox")
+        self._tmux_session.extra_env = {}
 
     def _cleanup_partial(self) -> None:
         """Tear down resources created by a Start() that failed before completion.
@@ -1029,6 +1112,9 @@ class Instance:
         """
         if self.ExtraEnv:
             self._tmux_session.extra_env = dict(self.ExtraEnv)
+        # A PeerShare session resumed (or loaded from storage, which has no
+        # configured command) must still launch sandboxed — or raise here.
+        self._peer_guard_launch(resume=True)
         start_err = self._tmux_session.start(self._git_worktree.GetWorktreePath())
         if start_err is None:
             # A new agent process: it has the MindFlock tools only when the
@@ -1206,6 +1292,13 @@ def new_instance(opts: InstanceOptions) -> Instance:
     except (OSError, ValueError) as err:
         raise RuntimeError("failed to get absolute path: {}".format(err)) from err
 
+    # Peer links: no session may be created on a path under the peer root
+    # unless it IS that share's sandboxed session, on exactly its folder,
+    # in place. Every creator (HTTP, MCP spawn, tickets, copies, reopen, team
+    # runs, the pipeline) comes through here, so this is the guard that holds
+    # when a route-level check is missed.
+    _check_peer_path(abs_path, getattr(opts, "peer_share", "") or "", opts)
+
     inst = Instance()
     inst.Title = opts.title
     inst.Status = Status.Ready
@@ -1244,7 +1337,31 @@ def new_instance(opts: InstanceOptions) -> Instance:
     inst.Parent = getattr(opts, "parent", "") or ""
     inst.Spawned = bool(getattr(opts, "spawned", False))
     inst.Playbook = getattr(opts, "playbook", "") or ""
+    inst.PeerShare = getattr(opts, "peer_share", "") or ""
     return inst
+
+
+def _check_peer_path(abs_path: str, peer_share: str, opts) -> None:
+    """Raise ``RuntimeError`` unless ``abs_path`` is fine for this session:
+    outside the peer root for an ordinary session; exactly the share's
+    ``work`` folder (in place, not provisioned) for a ``peer_share`` one."""
+    from backend.peer import paths as _peer_paths
+
+    if not peer_share:
+        if _peer_paths.is_inside_peer_root(abs_path):
+            raise RuntimeError(
+                "refusing to create a session inside the peer-link folder "
+                "(shared folders only run sandboxed, via their peer link)"
+            )
+        return
+    try:
+        work = _peer_paths.share_paths(peer_share)["work"]
+    except ValueError as err:
+        raise RuntimeError("bad peer share id") from err
+    if os.path.realpath(abs_path) != os.path.realpath(work):
+        raise RuntimeError("a shared-folder session must run in its share's folder")
+    if not getattr(opts, "in_place", False) or getattr(opts, "provisioned", False):
+        raise RuntimeError("a shared-folder session runs in place")
 
 
 class _InPlaceWorktree(git.GitWorktree):
@@ -1400,6 +1517,7 @@ def from_instance_data(data: InstanceData, attach: bool = True) -> Instance:
     inst.Parent = data.parent or ""
     inst.Spawned = bool(data.spawned)
     inst.Playbook = data.playbook or ""
+    inst.PeerShare = getattr(data, "peer_share", "") or ""
     inst._git_worktree = _worktree_from_data(data)
     inst._diff_stats = git.DiffStats(
         added=data.diff_stats.added,

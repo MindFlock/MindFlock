@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1200,6 +1201,111 @@ class ExtensionsSettings:
         return cls(disabled=_str_list(d.get("disabled")))
 
 
+#: Peer-link listener defaults (docs/peer-link.md). The port is the inviter's
+#: TLS listener — never the HTTP API's.
+PEER_DEFAULT_LISTEN_HOST = "0.0.0.0"
+PEER_DEFAULT_LISTEN_PORT = 8799
+_PEER_NAME_RE = re.compile(r"[^A-Za-z0-9 ._-]")
+
+
+def _peer_display_name(v: Any) -> str:
+    """A display name the way a peer will see it: ``[A-Za-z0-9 ._-]``, ≤ 32."""
+    return _PEER_NAME_RE.sub("", str(v or "")).strip()[:32]
+
+
+def _egress_hosts(v: Any) -> List[str]:
+    """Extra egress hosts for shared sessions: lowercase DNS names (an entry
+    starting with ``.`` allows subdomains), nothing else — no ports, schemes,
+    paths, wildcards or IP literals."""
+    out: List[str] = []
+    for h in _str_list(v):
+        h = h.lower()
+        if re.fullmatch(
+            r"\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+", h
+        ):
+            if h.rsplit(".", 1)[-1].isdigit():
+                continue  # an IP literal, not a name
+            if h not in out:
+                out.append(h)
+    return out
+
+
+@dataclass
+class PeerSettings:
+    """Peer links: pair-coding with another MindFlock instance.
+
+    * ``enabled`` — master switch (unset = off). Off: no listener, no dialing.
+    * ``listen_host`` / ``listen_port`` — where the INVITER's TLS listener
+      binds (default ``0.0.0.0:8799``); it only runs while an invite or a
+      listener-role link exists.
+    * ``display_name`` — the name the peer sees (default: the hostname).
+    * ``advertise_host`` — the address written into invite codes (the one
+      your peer dials); blank = Tailscale IPv4, else the LAN address.
+    * ``egress_allow`` — extra hosts the sandboxed agent may CONNECT to on
+      443, on top of its CLI's own API hosts.
+    """
+
+    enabled: Optional[bool] = None
+    listen_host: str = ""
+    listen_port: Optional[int] = None
+    display_name: str = ""
+    advertise_host: str = ""
+    egress_allow: List[str] = field(default_factory=list)
+
+    def effective(self) -> dict:
+        """Every field with its default applied."""
+        import socket
+
+        port = self.listen_port
+        if not isinstance(port, int) or not 0 < port < 65536:
+            port = PEER_DEFAULT_LISTEN_PORT
+        name = self.display_name or _peer_display_name(socket.gethostname())
+        return {
+            "enabled": self.enabled is True,
+            "listen_host": self.listen_host or PEER_DEFAULT_LISTEN_HOST,
+            "listen_port": port,
+            "display_name": name or "peer",
+            "advertise_host": self.advertise_host,
+            "egress_allow": list(self.egress_allow),
+        }
+
+    def to_dict(self) -> dict:
+        out: dict = {}
+        if self.enabled is not None:
+            out["enabled"] = self.enabled
+        if self.listen_host:
+            out["listen_host"] = self.listen_host
+        if self.listen_port is not None:
+            out["listen_port"] = self.listen_port
+        if self.display_name:
+            out["display_name"] = self.display_name
+        if self.advertise_host:
+            out["advertise_host"] = self.advertise_host
+        if self.egress_allow:
+            out["egress_allow"] = list(self.egress_allow)
+        return out
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PeerSettings":
+        port = _opt_int(d.get("listen_port"))
+        if port is not None and not 0 < port < 65536:
+            port = None
+        host = str(d.get("listen_host", "") or "").strip()
+        if host and not re.fullmatch(r"[A-Za-z0-9.:_-]{1,253}", host):
+            host = ""
+        adv = str(d.get("advertise_host", "") or "").strip()
+        if adv and not re.fullmatch(r"[A-Za-z0-9.:_-]{1,253}", adv):
+            adv = ""
+        return cls(
+            enabled=_opt_bool(d.get("enabled")),
+            listen_host=host,
+            listen_port=port,
+            display_name=_peer_display_name(d.get("display_name")),
+            advertise_host=adv,
+            egress_allow=_egress_hosts(d.get("egress_allow")),
+        )
+
+
 @dataclass
 class Settings:
     """The whole user settings document. All groups default to empty.
@@ -1224,6 +1330,7 @@ class Settings:
     general: GeneralSettings = field(default_factory=GeneralSettings)
     notifications: NotificationSettings = field(default_factory=NotificationSettings)
     extensions: ExtensionsSettings = field(default_factory=ExtensionsSettings)
+    peer: PeerSettings = field(default_factory=PeerSettings)
     schema_version: int = 1
 
     def to_dict(self) -> dict:
@@ -1252,6 +1359,7 @@ class Settings:
             "general": self.general,
             "notifications": self.notifications,
             "extensions": self.extensions,
+            "peer": self.peer,
         }
 
     @classmethod
@@ -1292,6 +1400,7 @@ class Settings:
             general=GeneralSettings.from_dict(_group(d, "general")),
             notifications=NotificationSettings.from_dict(_group(d, "notifications")),
             extensions=ExtensionsSettings.from_dict(_group(d, "extensions")),
+            peer=PeerSettings.from_dict(_group(d, "peer")),
             schema_version=version,
         )
 

@@ -22,7 +22,7 @@ import shutil
 from pathlib import Path
 from typing import Optional, Tuple
 
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, Request, WebSocket
 from fastapi.responses import JSONResponse
 
 from backend import doctor, providers
@@ -593,8 +593,20 @@ class SettingsAddon(Addon):
             return resp
 
         @router.post("/settings")
-        def post_settings(payload: dict) -> JSONResponse:
+        def post_settings(payload: dict, request: Request) -> JSONResponse:
             payload = payload or {}
+            # Peer links are managed from THIS machine only: another MindFlock
+            # device (tailnet remote control) may not widen the shared
+            # session's egress or turn the listener on (the /api/peer routes
+            # refuse it the same way).
+            if "peer" in payload:
+                from backend.web.core import remote as _remote
+
+                if _remote.from_remote(request):
+                    return JSONResponse(
+                        {"error": "peer settings can only be changed on this device"},
+                        status_code=403,
+                    )
 
             # The automated-PR-review / issue-handling toggles (github.enabled,
             # github.issues_enabled) are only read when the pipeline process
